@@ -17,6 +17,7 @@ use std::process::Command;
 use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
 use crate::OutputFormat;
 
+use super::library_search::{find_harmonyos_sdk, harmonyos_cross_env};
 use super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
 
 pub struct OptimizedLibs {
@@ -200,6 +201,27 @@ pub(super) fn build_optimized_libs(
     }
     if let Some(triple) = rust_target_triple(target) {
         cargo_cmd.arg("--target").arg(triple);
+    }
+    // HarmonyOS cross-compile needs the OHOS SDK's clang on PATH for C
+    // dependencies (notably libmimalloc-sys) — without --sysroot the build
+    // fails in build.rs with "'pthread.h' file not found".
+    if matches!(target, Some("harmonyos") | Some("harmonyos-simulator")) {
+        match find_harmonyos_sdk() {
+            Some(sdk) => {
+                for (k, v) in harmonyos_cross_env(&sdk, target) {
+                    cargo_cmd.env(k, v);
+                }
+            }
+            None => {
+                if matches!(format, OutputFormat::Text) {
+                    eprintln!(
+                        "  auto-optimize: OHOS SDK not found — set OHOS_SDK_HOME to the DevEco Studio \
+                         SDK root (the dir containing native/llvm/bin/clang). Skipping auto-optimize."
+                    );
+                }
+                return OptimizedLibs::empty();
+            }
+        }
     }
     if panic_abort_safe {
         // Override the workspace profile's `panic = "unwind"` for the

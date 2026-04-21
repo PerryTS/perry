@@ -53,6 +53,7 @@ pub(super) fn build_and_run_link(
     let is_ios = matches!(target, Some("ios-simulator") | Some("ios"));
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
     let is_android = matches!(target, Some("android"));
+    let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
     let is_linux = matches!(target, Some("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
     let is_windows = matches!(target, Some("windows"))
@@ -360,6 +361,37 @@ pub(super) fn build_and_run_link(
          // only exports individually-scoped symbols.
          .arg("-Wl,--warn-unresolved-symbols");
         c
+    } else if is_harmonyos {
+        // HarmonyOS NEXT: produce a musl-based ELF .so loaded by ArkTS via
+        // napi_module_register (the NAPI wrapper lands in PR B.2). Uses the
+        // OHOS SDK's clang from DevEco Studio; `--sysroot` + `-D__MUSL__`
+        // match Huawei's hvigor-cc-invocation conventions.
+        let sdk = super::library_search::find_harmonyos_sdk().ok_or_else(|| anyhow!(
+            "OHOS SDK not found. Install DevEco Studio or the standalone \
+             OpenHarmony SDK from https://developer.huawei.com/consumer/en/develop \
+             and set OHOS_SDK_HOME to the SDK root (the dir that contains \
+             native/llvm/bin/clang and native/sysroot/)."
+        ))?;
+        let clang = sdk.join("llvm").join("bin").join("clang");
+        if !clang.exists() {
+            return Err(anyhow!("OHOS SDK clang not found at: {}", clang.display()));
+        }
+        let clang_target = if target == Some("harmonyos-simulator") {
+            "x86_64-linux-ohos"
+        } else {
+            "aarch64-linux-ohos"
+        };
+        let mut c = Command::new(clang);
+        c.arg("-shared")
+         .arg("-fPIC")
+         .arg(format!("--target={}", clang_target))
+         .arg(format!("--sysroot={}", sdk.join("sysroot").display()))
+         .arg("-D__MUSL__")
+         // Same interposition rationale as the Android branch — ArkTS loads
+         // the .so into a host process that may expose its own `main`/malloc.
+         .arg("-Wl,-Bsymbolic")
+         .arg("-Wl,--warn-unresolved-symbols");
+        c
     } else if is_linux {
         // Linux target: when running on Linux natively, just use "cc".
         // When cross-compiling from macOS, pass -target for clang.
@@ -512,7 +544,7 @@ pub(super) fn build_and_run_link(
     // calls for every class method/getter during vtable registration. These
     // serve as linker roots that keep dynamically-dispatched methods alive.
     if !is_windows {
-        if is_android || is_linux {
+        if is_android || is_linux || is_harmonyos {
             cmd.arg("-Wl,--gc-sections");
         } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
             // ld64.lld called directly — no -Wl, prefix needed

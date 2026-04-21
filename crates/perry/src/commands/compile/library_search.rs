@@ -552,6 +552,109 @@ pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
     find_library(lib_name, target)
 }
 
+/// Locate the OpenHarmony SDK's `native/` directory — the one that contains
+/// `llvm/bin/clang` (the cross-compiler) and `sysroot/` (musl headers + libs).
+///
+/// Probes `$OHOS_SDK_HOME` first (user-supplied path; may point at either the
+/// SDK root or the `native/` subdir — we normalize). Falls back to DevEco
+/// Studio's default install locations per platform. Returns `None` if nothing
+/// resembling an OHOS SDK is present; the caller is expected to surface a
+/// remediation message naming the env var.
+pub(super) fn find_harmonyos_sdk() -> Option<PathBuf> {
+    fn normalize(p: PathBuf) -> Option<PathBuf> {
+        // Accept either `<sdk>` or `<sdk>/native` — we want the `native` dir
+        // so callers can unconditionally join `llvm/bin/clang` and `sysroot`.
+        if p.join("llvm").join("bin").exists() && p.join("sysroot").exists() {
+            return Some(p);
+        }
+        let native = p.join("native");
+        if native.join("llvm").join("bin").exists() && native.join("sysroot").exists() {
+            return Some(native);
+        }
+        // DevEco's layout nests the API-level dir: <root>/openharmony/<api>/native
+        if let Ok(entries) = std::fs::read_dir(p.join("openharmony")) {
+            for entry in entries.flatten() {
+                let candidate = entry.path().join("native");
+                if candidate.join("llvm").join("bin").exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+        None
+    }
+
+    if let Ok(env_path) = std::env::var("OHOS_SDK_HOME") {
+        if let Some(sdk) = normalize(PathBuf::from(env_path)) {
+            return Some(sdk);
+        }
+    }
+
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(h) = home {
+        // macOS default: DevEco Studio installs into ~/Library/Huawei/Sdk
+        candidates.push(h.join("Library/Huawei/Sdk"));
+        // Linux default
+        candidates.push(h.join("Huawei/Sdk"));
+    }
+    #[cfg(target_os = "windows")]
+    if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        candidates.push(PathBuf::from(userprofile).join("Huawei").join("Sdk"));
+    }
+
+    for c in candidates {
+        if let Some(sdk) = normalize(c) {
+            return Some(sdk);
+        }
+    }
+    None
+}
+
+/// Cross-compile env vars to pass to `cargo build` so `cc-rs` picks up the
+/// OHOS SDK's clang + musl sysroot for any C source in dependency build.rs
+/// scripts (notably `libmimalloc-sys`, which needs `pthread.h`).
+///
+/// Cargo reads both `CC_<triple>` and the underscored `CC_<TRIPLE>` form —
+/// `cc-rs` prefers the latter. We set both for robustness. Same for linker.
+pub(super) fn harmonyos_cross_env(sdk_native: &Path, target: Option<&str>) -> Vec<(String, String)> {
+    let (triple, clang_target) = match target {
+        Some("harmonyos-simulator") => ("x86_64-unknown-linux-ohos", "x86_64-linux-ohos"),
+        _ => ("aarch64-unknown-linux-ohos", "aarch64-linux-ohos"),
+    };
+    let clang = sdk_native.join("llvm").join("bin").join("clang");
+    let clangpp = sdk_native.join("llvm").join("bin").join("clang++");
+    let sysroot = sdk_native.join("sysroot");
+    let cflags = format!(
+        "--target={} --sysroot={} -D__MUSL__",
+        clang_target,
+        sysroot.display()
+    );
+    let rustflags = format!(
+        "-C link-arg=--target={} -C link-arg=--sysroot={}",
+        clang_target,
+        sysroot.display()
+    );
+    let triple_upper = triple.to_uppercase().replace('-', "_");
+    let triple_under = triple.replace('-', "_");
+
+    // CC + CXX: libmimalloc-sys compiles .c via CC and can fall into C++ paths
+    // via CXX for some builds — we set both to the OHOS SDK toolchain so neither
+    // escapes to the host `c++` (which lacks --sysroot and would fail with
+    // "'pthread.h' file not found").
+    vec![
+        (format!("CC_{}", triple), clang.display().to_string()),
+        (format!("CC_{}", triple_under), clang.display().to_string()),
+        (format!("CXX_{}", triple), clangpp.display().to_string()),
+        (format!("CXX_{}", triple_under), clangpp.display().to_string()),
+        (format!("CFLAGS_{}", triple), cflags.clone()),
+        (format!("CFLAGS_{}", triple_under), cflags.clone()),
+        (format!("CXXFLAGS_{}", triple), cflags.clone()),
+        (format!("CXXFLAGS_{}", triple_under), cflags),
+        (format!("CARGO_TARGET_{}_LINKER", triple_upper), clang.display().to_string()),
+        (format!("CARGO_TARGET_{}_RUSTFLAGS", triple_upper), rustflags),
+    ]
+}
+
 /// Search for a geisterhand library by name, checking both cross-compilation
 /// target dirs (target/geisterhand/{triple}/release/) and host dir (target/geisterhand/release/).
 pub(super) fn find_geisterhand_lib(name: &str, target: Option<&str>) -> Option<PathBuf> {

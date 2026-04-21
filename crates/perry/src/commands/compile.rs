@@ -29,9 +29,10 @@ use strip_dedup::strip_duplicate_objects_from_lib;
 use library_search::{
     build_geisterhand_libs,
     find_geisterhand_library, find_geisterhand_runtime, find_geisterhand_ui,
-    find_jsruntime_library, find_lld_link, find_library,
+    find_harmonyos_sdk, find_jsruntime_library, find_lld_link, find_library,
     find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
-    find_runtime_library, find_stdlib_library, find_ui_library, windows_pe_subsystem_flag,
+    find_runtime_library, find_stdlib_library, find_ui_library,
+    windows_pe_subsystem_flag,
 };
 use targets::{
     apple_sdk_version, compile_for_android_widget, compile_for_ios_widget,
@@ -1528,6 +1529,31 @@ pub fn run_with_parse_cache(
 
     let target = args.target.clone();
 
+    // Fail-fast for HarmonyOS: without the OHOS SDK we can't cross-compile the
+    // runtime or invoke the link, and the downstream error chain is two
+    // confusing messages instead of one. Check up front unless a prebuilt
+    // harmonyos runtime is already on disk (the npm-distribution case, once
+    // that ships). `find_runtime_library` is a borrowed-result, so we inspect
+    // without propagating errors.
+    if matches!(target.as_deref(), Some("harmonyos") | Some("harmonyos-simulator"))
+        && find_harmonyos_sdk().is_none()
+        && find_runtime_library(target.as_deref()).is_err()
+    {
+        anyhow::bail!(
+            "OHOS SDK not found. --target {} needs the OpenHarmony native SDK \
+             (clang + musl sysroot) to cross-compile perry-runtime.\n\n\
+             Install DevEco Studio from https://developer.huawei.com/consumer/en/develop \
+             (the SDK ships under Preferences → SDK Platforms → OpenHarmony), or \
+             download the standalone \"OpenHarmony SDK\" bundle.\n\n\
+             Then export OHOS_SDK_HOME pointing at the SDK root — the directory \
+             that contains `native/llvm/bin/clang` and `native/sysroot/`.\n\n\
+             Common defaults already probed:\n  \
+             - $HOME/Library/Huawei/Sdk  (macOS DevEco default)\n  \
+             - $HOME/Huawei/Sdk          (Linux DevEco default)",
+            target.as_deref().unwrap()
+        );
+    }
+
     // Pre-compute feature flags (moved out of parallel loop to avoid ctx mutation)
     let compiled_features: Vec<String> = if let Some(ref features_str) = args.features {
         let mut features: Vec<String> = features_str.split(',')
@@ -2530,19 +2556,20 @@ pub fn run_with_parse_cache(
         // Platform detection for nm tool and symbol prefix
         let _is_ios = matches!(target.as_deref(), Some("ios-simulator") | Some("ios"));
         let is_android = matches!(target.as_deref(), Some("android"));
+        let is_harmonyos = matches!(target.as_deref(), Some("harmonyos") | Some("harmonyos-simulator"));
         let is_linux = matches!(target.as_deref(), Some("linux")) || (!cfg!(target_os = "macos") && !cfg!(target_os = "windows") && target.is_none());
         let is_windows = matches!(target.as_deref(), Some("windows")) || (cfg!(target_os = "windows") && target.is_none());
         // Symbol prefix depends on object format:
         // Mach-O targets (macOS, iOS, watchOS, tvOS): nm shows `_` prefix
         // COFF (Windows targets): no prefix
-        // ELF (Linux/Android targets): no prefix
+        // ELF (Linux/Android/HarmonyOS targets): no prefix
         // Use TARGET (what we're compiling to), not HOST (what we're running on)
         let is_macho = matches!(target.as_deref(),
             Some("ios") | Some("ios-simulator") | Some("ios-widget") | Some("ios-widget-simulator") |
             Some("visionos") | Some("visionos-simulator") |
             Some("macos") | Some("watchos") | Some("watchos-simulator") |
             Some("tvos") | Some("tvos-simulator")
-        ) || (!is_windows && !is_linux && !is_android && cfg!(target_os = "macos"));
+        ) || (!is_windows && !is_linux && !is_android && !is_harmonyos && cfg!(target_os = "macos"));
         // Find the nm tool: use llvm-nm when cross-compiling (host nm can't read foreign object formats)
         let needs_llvm_nm = is_windows || (is_macho && !cfg!(target_os = "macos"));
         let nm_cmd = if needs_llvm_nm {
@@ -2726,6 +2753,12 @@ pub fn run_with_parse_cache(
             { PathBuf::from(format!("{}.dylib", stem)) }
             #[cfg(not(target_os = "macos"))]
             { PathBuf::from(format!("{}.so", stem)) }
+        } else if matches!(target.as_deref(), Some("harmonyos") | Some("harmonyos-simulator")) {
+            // HarmonyOS apps ship as .so loaded by the ArkTS runtime via
+            // napi_module_register — there is no standalone executable
+            // shipping shape. `lib` prefix matches the dlopen name used by
+            // the generated ArkTS shim (`import entry from 'libapp.so'`).
+            PathBuf::from(format!("lib{}.so", stem))
         } else if matches!(target.as_deref(), Some("windows"))
             || (target.is_none() && cfg!(target_os = "windows"))
         {
@@ -2791,6 +2824,7 @@ pub fn run_with_parse_cache(
     let is_ios = matches!(target.as_deref(), Some("ios-simulator") | Some("ios"));
     let is_visionos = matches!(target.as_deref(), Some("visionos-simulator") | Some("visionos"));
     let is_android = matches!(target.as_deref(), Some("android"));
+    let is_harmonyos = matches!(target.as_deref(), Some("harmonyos") | Some("harmonyos-simulator"));
     let is_linux = matches!(target.as_deref(), Some("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
     let _is_windows = matches!(target.as_deref(), Some("windows"))
@@ -2870,7 +2904,7 @@ pub fn run_with_parse_cache(
     let stdlib_lib = stdlib_lib_resolved.clone();
     let is_watchos = matches!(target.as_deref(), Some("watchos") | Some("watchos-simulator"));
     let is_tvos = matches!(target.as_deref(), Some("tvos") | Some("tvos-simulator"));
-    let jsruntime_lib = if !is_ios && !is_visionos && !is_android && !is_watchos && !is_tvos && (ctx.needs_js_runtime || args.enable_js_runtime) {
+    let jsruntime_lib = if !is_ios && !is_visionos && !is_android && !is_harmonyos && !is_watchos && !is_tvos && (ctx.needs_js_runtime || args.enable_js_runtime) {
         match find_jsruntime_library(target.as_deref()) {
             Some(lib) => {
                 match format {
@@ -2907,9 +2941,10 @@ pub fn run_with_parse_cache(
         format,
     )?;
 
-    // For Android, copy companion shared libraries (.so) next to the output binary
-    // so that perry-builder can pick them up and include them in the APK/AAB.
-    if is_android {
+    // For Android and HarmonyOS, copy companion shared libraries (.so) next to
+    // the output binary so the downstream bundler (APK/AAB for Android, HAP for
+    // HarmonyOS in PR B.3) can pick them up from the staging dir.
+    if is_android || is_harmonyos {
         if let Some(output_dir) = exe_path.parent() {
             for native_lib in &ctx.native_libraries {
                 if let Some(ref target_config) = native_lib.target_config {
