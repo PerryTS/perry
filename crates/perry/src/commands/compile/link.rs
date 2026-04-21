@@ -540,6 +540,84 @@ pub(super) fn build_and_run_link(
         cmd.arg(obj_path);
     }
 
+    // HarmonyOS: pick up native C objects that build.rs scripts emitted
+    // alongside the Rust artifacts. Rust's staticlib normally bundles these
+    // into libperry_runtime.a, but on our macOS→OHOS cross-build the
+    // `libmimalloc.a` wrapper ends up as a zero-member BSD-format archive
+    // (BSD ar's `__.SYMDEF SORTED` layout — macOS-host `ar` creates it,
+    // llvm-ar can't read it back), and rustc's "bundle native libs into
+    // the staticlib" path silently skips it. Without us forwarding the
+    // loose .o files to the final link, `libentry.so` ends up with
+    // `mi_malloc_aligned` marked UND, and the OHOS dynamic linker rejects
+    // dlopen with "symbol not found" at EntryAbility.onCreate time.
+    //
+    // We walk `target/<triple>/release/build/*/out/` and collect every
+    // loose .o. This is coarser than Rust's per-crate link-lib directive
+    // walking — it picks up .o files from any transitive C dep, not just
+    // mimalloc — but that's a feature: the set is tiny in practice
+    // (mimalloc is the only C dep in perry-runtime's closure today) and
+    // any that turn out unreferenced are dead-stripped via --gc-sections.
+    if is_harmonyos {
+        let triple = super::rust_target_triple(target).unwrap_or("aarch64-unknown-linux-ohos");
+        let build_roots: Vec<std::path::PathBuf> = {
+            let mut roots: Vec<std::path::PathBuf> = Vec::new();
+            // auto_rebuild emits into a perry-auto-<hash> dir; the workspace's
+            // own target/ is a fallback for non-auto flows.
+            if let Ok(entries) = std::fs::read_dir("target") {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    if name_str.starts_with("perry-auto-") || name_str == triple {
+                        roots.push(entry.path());
+                    }
+                }
+            }
+            // When invoked from outside the workspace, auto_rebuild still
+            // lands under the perry source tree's target/. Add that.
+            if let Some(ws_root) = super::find_perry_workspace_root() {
+                let ws_target = ws_root.join("target");
+                if let Ok(entries) = std::fs::read_dir(&ws_target) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name();
+                        let name_str = name.to_string_lossy();
+                        if name_str.starts_with("perry-auto-") {
+                            roots.push(entry.path());
+                        }
+                    }
+                }
+            }
+            roots
+        };
+        let mut native_objs: Vec<std::path::PathBuf> = Vec::new();
+        for root in &build_roots {
+            let build_dir = root.join(triple).join("release").join("build");
+            let entries = match std::fs::read_dir(&build_dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for crate_build in entries.flatten() {
+                let out_dir = crate_build.path().join("out");
+                // Walk the out/ dir recursively (cc-rs can nest into source-
+                // mirror subdirs like c_src/mimalloc/v2/src/).
+                if let Ok(walker) = walkdir::WalkDir::new(&out_dir).into_iter().collect::<Result<Vec<_>, _>>() {
+                    for entry in walker {
+                        if entry.file_type().is_file()
+                            && entry.path().extension().and_then(|e| e.to_str()) == Some("o")
+                        {
+                            native_objs.push(entry.path().to_path_buf());
+                        }
+                    }
+                }
+            }
+        }
+        if !native_objs.is_empty() && matches!(format, crate::OutputFormat::Text) {
+            println!("  harmonyos: linking {} build.rs native object(s)", native_objs.len());
+        }
+        for obj in native_objs {
+            cmd.arg(obj);
+        }
+    }
+
     // Dead code stripping — safe because compile_init() emits func_addr
     // calls for every class method/getter during vtable registration. These
     // serve as linker roots that keep dynamically-dispatched methods alive.

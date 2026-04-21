@@ -6,22 +6,43 @@
 //! compiles `.ets` → `.abc` via the SDK's ets-loader, zips the result as
 //! `foo.hap`, and optionally runs `hap-sign` with user-supplied credentials.
 //!
-//! All signing credentials come from env vars — no config file in v1:
+//! All signing credentials come from env vars — no config file in v1. The
+//! split into P12 keystore + cert chain + profile mirrors
+//! `hap-sign-tool.jar`'s `sign-app` CLI (README lines 297-314 of
+//! developtools_hapsigner); B.3 conflated cert chain with profile and had
+//! to be patched in B.4 when that was caught by audit.
 //!
-//!   PERRY_HARMONYOS_P12           — path to signing key (.p12)
-//!   PERRY_HARMONYOS_P12_PASSWORD  — password for the .p12
-//!   PERRY_HARMONYOS_PROFILE       — path to `.p7b` provisioning profile
-//!   PERRY_HARMONYOS_BUNDLE_NAME   — must match the cert's bundle name;
-//!                                    falls back to `com.perry.app.<stem>`
-//!                                    (which will only work with wildcard
-//!                                    certs — unusable for real deploys).
-//!   PERRY_HARMONYOS_HAPSIGN       — override path to the `hap-sign` binary;
-//!                                    default: <sdk>/toolchains/lib/hap-sign-tool.jar
-//!                                    (invoked via `java -jar ...`)
+//!   PERRY_HARMONYOS_P12            — path to signing key (.p12)
+//!   PERRY_HARMONYOS_P12_PASSWORD   — password for the .p12 (keystore)
+//!   PERRY_HARMONYOS_CERT           — path to app cert chain (.cer / .pem);
+//!                                     DevEco auto-signing names it
+//!                                     `<bundleName>.cer`. Distinct from
+//!                                     PROFILE.
+//!   PERRY_HARMONYOS_PROFILE        — path to signed provisioning profile
+//!                                     (.p7b). DevEco names it
+//!                                     `<bundleName>.p7b`.
+//!   PERRY_HARMONYOS_KEY_ALIAS      — alias inside the .p12 (defaults to
+//!                                     "debugKey", DevEco's convention).
+//!   PERRY_HARMONYOS_KEY_PASSWORD   — private-key password (often the same
+//!                                     as the keystore password; defaults
+//!                                     to PERRY_HARMONYOS_P12_PASSWORD).
+//!   PERRY_HARMONYOS_SIGN_ALG       — SHA256withECDSA | SHA384withECDSA
+//!                                     (default SHA256withECDSA).
+//!   PERRY_HARMONYOS_BUNDLE_NAME    — must match the cert's bundle name.
+//!                                     Falls back to `com.perry.app.<stem>`.
+//!   PERRY_HARMONYOS_HAPSIGN        — override path to hap-sign-tool.jar;
+//!                                     default: <sdk>/toolchains/lib/hap-sign-tool.jar
+//!                                     (invoked via `java -jar ...`).
 //!
-//! If any signing env var is unset, the HAP is emitted unsigned (`<stem>.unsigned.hap`)
-//! and a remediation message names the missing env vars. An unsigned HAP can't
-//! be installed via `hdc install`; this mode is for inspection + iteration.
+//! If PERRY_HARMONYOS_P12, _P12_PASSWORD, _CERT, or _PROFILE is unset, the
+//! HAP is emitted unsigned (`<stem>.unsigned.hap`) with a remediation
+//! message. An unsigned HAP won't install via `hdc install`.
+//!
+//! Alternative path (used during v0.5.129 first-emulator validation):
+//! copy the `.so` + `.ets` Perry emits into a DevEco Studio project and
+//! let DevEco's hvigor do the signing & install. Sidesteps the env-var
+//! dance entirely, at the cost of a two-step workflow. See the v0.5.129
+//! CLAUDE.md entry.
 
 use anyhow::{anyhow, Context, Result};
 use std::fs;
@@ -156,12 +177,14 @@ fn sanitize_bundle_segment(s: &str) -> String {
 }
 
 fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
-    // API level 11 is the HarmonyOS NEXT floor — API 10 = HarmonyOS 4.x,
-    // pre-NEXT. Target 12 covers the current DevEco 5.x SDK; `compatible`
-    // at 11 means we load on any NEXT device but opt-in to 12-only APIs
-    // when present. User-configurable is a follow-up.
+    // API level 11 is the HarmonyOS NEXT floor; compatible=11 keeps install
+    // open to any NEXT device. Target=21 matches DevEco 6.0.1's SDK
+    // (HarmonyOS 6.0.1(21)). Bumping target lets install-time verification
+    // see a HAP that's aware of 21-level APIs even though we don't use any.
+    // User-configurable (via $PERRY_HARMONYOS_TARGET_API or package.json) is
+    // a follow-up; 21 is the right default as of DevEco 6.x.
     const COMPAT_API: u32 = 11;
-    const TARGET_API: u32 = 12;
+    const TARGET_API: u32 = 21;
 
     // app.json5 requires minAPIVersion / targetAPIVersion / apiReleaseType
     // at the app level — install-time verification rejects HAPs without
@@ -200,7 +223,7 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
     "type": "entry",
     "description": "$string:module_desc",
     "mainElement": "EntryAbility",
-    "deviceTypes": ["phone", "tablet", "2in1"],
+    "deviceTypes": ["phone", "tablet", "2in1", "wearable"],
     "deliveryWithInstall": true,
     "installationFree": false,
     "abilities": [
@@ -216,7 +239,7 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
         "skills": [
           {{
             "entities": ["entity.system.home"],
-            "actions": ["action.system.home"]
+            "actions": ["ohos.want.action.home"]
           }}
         ]
       }}
@@ -250,7 +273,7 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
     }},
     "modules": [{{
       "mainAbility": "EntryAbility",
-      "deviceType": ["phone", "tablet", "2in1"],
+      "deviceType": ["phone", "tablet", "2in1", "wearable"],
       "abilities": [{{ "name": "EntryAbility", "label": "{stem}" }}],
       "distro": {{
         "moduleType": "entry",
@@ -264,7 +287,7 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
     }}]
   }},
   "packages": [{{
-    "deviceType": ["phone", "tablet", "2in1"],
+    "deviceType": ["phone", "tablet", "2in1", "wearable"],
     "moduleType": "entry",
     "deliveryWithInstall": true,
     "name": "entry"
