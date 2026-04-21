@@ -26,6 +26,10 @@ ios-game-loop = []
 # watchOS game loop: provides main() that spawns user code on game thread + WKApplicationMain.
 # For Metal/wgpu engines that need to own the draw surface (see crates/perry-runtime/src/watchos_game_loop.rs).
 watchos-game-loop = []
+# HarmonyOS NAPI entry: provides napi_module_register + a `run` export that
+# invokes Perry's compiled `main()`. Auto-enabled by the compiler when
+# --target harmonyos[-simulator] is passed (see crates/perry-runtime/src/ohos_napi.rs).
+ohos-napi = []
 
 [dependencies]
 thiserror.workspace = true

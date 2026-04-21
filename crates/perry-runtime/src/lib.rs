@@ -74,6 +74,8 @@ pub mod proxy;
 pub mod ios_game_loop;
 #[cfg(all(target_os = "watchos", feature = "watchos-game-loop"))]
 pub mod watchos_game_loop;
+#[cfg(feature = "ohos-napi")]
+pub mod ohos_napi;
 
 pub use value::JSValue;
 pub use promise::Promise;

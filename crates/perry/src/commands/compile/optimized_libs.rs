@@ -192,7 +192,7 @@ pub(super) fn build_optimized_libs(
     // `perry-runtime/Cargo.toml`) need `perry-runtime/<f>` passed through, not
     // `perry-stdlib/<f>` — they gate a Rust module, not an npm dep surface.
     for f in cli_features {
-        if f == "ios-game-loop" || f == "watchos-game-loop" {
+        if f == "ios-game-loop" || f == "watchos-game-loop" || f == "ohos-napi" {
             cross_features.push(format!("perry-runtime/{}", f));
         }
     }
