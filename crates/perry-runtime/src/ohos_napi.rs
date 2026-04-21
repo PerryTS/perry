@@ -117,10 +117,106 @@ unsafe extern "C" fn napi_init(
     exports
 }
 
-// ArkTS's `import entry from 'libperry_app.so'` matches this modname. If
-// the user customizes the output filename, the compiler also rewrites the
-// matching ArkTS shim's `import` to match.
-static MODNAME: &[u8] = b"entry\0";
+// OHOS's NativeModuleManager resolves `import X from 'libfoo.so'` by
+// stripping `lib`/`.so` from the filename and looking up a module whose
+// `nm_modname` equals the result. If they don't match, the import silently
+// no-ops and the ArkTS side crashes on first method access with a confusing
+// "cannot read property of undefined."
+//
+// Rather than hardcode a name (which locks users into a specific `-o` flag),
+// we derive the modname at load time via `dladdr` on the register function:
+// walk back from our own constructor address to the `.so` path, extract the
+// filename, strip `lib`/`.so`, copy into a static buffer. Works regardless
+// of what the user named their output.
+
+#[repr(C)]
+struct DlInfo {
+    dli_fname: *const c_char,
+    dli_fbase: *mut c_void,
+    dli_sname: *const c_char,
+    dli_saddr: *mut c_void,
+}
+
+extern "C" {
+    fn dladdr(addr: *const c_void, info: *mut DlInfo) -> c_int;
+    fn strlen(s: *const c_char) -> usize;
+}
+
+// 256 bytes is enough for any realistic `.so` filename. Static mut because
+// we only write once during .init_array (single-threaded), and it must
+// outlive napi_module_register's read of the pointer.
+const MODNAME_CAP: usize = 256;
+static mut MODNAME_BUF: [u8; MODNAME_CAP] = [0; MODNAME_CAP];
+
+/// Derive modname from the `.so` path reported by dladdr. Strips the
+/// leading `lib` and trailing `.so` if present; otherwise uses the
+/// filename as-is. Copies into the static buffer and returns a pointer
+/// suitable for `nm_modname`. Falls back to "entry" if dladdr fails.
+unsafe fn derive_modname() -> *const c_char {
+    // Fallback — also what DevEco's hvigor-generated template uses.
+    let fallback = b"entry\0";
+
+    let mut info: DlInfo = DlInfo {
+        dli_fname: ptr::null(),
+        dli_fbase: ptr::null_mut(),
+        dli_sname: ptr::null(),
+        dli_saddr: ptr::null_mut(),
+    };
+    let ok = dladdr(derive_modname as *const c_void, &mut info as *mut DlInfo);
+    let buf_ptr = &raw mut MODNAME_BUF as *mut u8;
+    if ok == 0 || info.dli_fname.is_null() {
+        std::ptr::copy_nonoverlapping(fallback.as_ptr(), buf_ptr, fallback.len());
+        return buf_ptr as *const c_char;
+    }
+
+    // Extract basename: the substring after the last '/'.
+    let fname_len = strlen(info.dli_fname);
+    let mut base = info.dli_fname;
+    let mut probe = info.dli_fname;
+    for _ in 0..fname_len {
+        if *probe == b'/' as c_char {
+            base = probe.add(1);
+        }
+        probe = probe.add(1);
+    }
+
+    // base now points at "libfoo.so" (or whatever). Strip "lib" prefix and
+    // ".so" suffix if present.
+    let base_len = strlen(base);
+    let mut start = base;
+    let mut len = base_len;
+    if len >= 3 {
+        let b0 = *start as u8;
+        let b1 = *start.add(1) as u8;
+        let b2 = *start.add(2) as u8;
+        if b0 == b'l' && b1 == b'i' && b2 == b'b' {
+            start = start.add(3);
+            len -= 3;
+        }
+    }
+    if len >= 3 {
+        let tail = start.add(len - 3);
+        let t0 = *tail as u8;
+        let t1 = *tail.add(1) as u8;
+        let t2 = *tail.add(2) as u8;
+        if t0 == b'.' && t1 == b's' && t2 == b'o' {
+            len -= 3;
+        }
+    }
+
+    // Clamp to buffer capacity leaving room for null terminator.
+    if len >= MODNAME_CAP {
+        len = MODNAME_CAP - 1;
+    }
+
+    // Zero the buffer (already zeroed at static init, but reassigning in
+    // case of repeated constructor runs — unlikely, but cheap).
+    std::ptr::write_bytes(buf_ptr, 0, MODNAME_CAP);
+    std::ptr::copy_nonoverlapping(start as *const u8, buf_ptr, len);
+    // Null terminator is implicit — buffer is zeroed.
+
+    buf_ptr as *const c_char
+}
 
 static mut NAPI_MODULE_DESC: NapiModule = NapiModule {
     nm_version: 1,
@@ -136,7 +232,7 @@ static mut NAPI_MODULE_DESC: NapiModule = NapiModule {
 extern "C" fn register_module() {
     unsafe {
         let desc_ptr = &raw mut NAPI_MODULE_DESC;
-        (*desc_ptr).nm_modname = MODNAME.as_ptr() as *const c_char;
+        (*desc_ptr).nm_modname = derive_modname();
         napi_module_register(desc_ptr);
     }
 }

@@ -91,16 +91,17 @@ pub fn build_hap(args: &HapBuildArgs) -> Result<HapBuildResult> {
             Ok(false) => {
                 if !args.quiet {
                     eprintln!(
-                        "  harmonyos: ets-loader not found in SDK — shipping .ets source. \
-                         The HAP will only install on a DevEco emulator with source-mode \
-                         enabled, not on a physical NEXT device."
+                        "  harmonyos: ets/ shipped as source. Physical NEXT devices only \
+                         execute .abc bytecode; this HAP will be rejected by `hdc install`. \
+                         Either install ets-loader (DevEco Studio ships it) or hand the \
+                         staging dir to hvigor to finish the build."
                     );
                 }
                 false
             }
             Err(e) => {
                 if !args.quiet {
-                    eprintln!("  harmonyos: ets-loader run failed ({}); shipping .ets source", e);
+                    eprintln!("  harmonyos: ets-loader run failed ({}); shipping .ets source.", e);
                 }
                 false
             }
@@ -155,6 +156,17 @@ fn sanitize_bundle_segment(s: &str) -> String {
 }
 
 fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
+    // API level 11 is the HarmonyOS NEXT floor — API 10 = HarmonyOS 4.x,
+    // pre-NEXT. Target 12 covers the current DevEco 5.x SDK; `compatible`
+    // at 11 means we load on any NEXT device but opt-in to 12-only APIs
+    // when present. User-configurable is a follow-up.
+    const COMPAT_API: u32 = 11;
+    const TARGET_API: u32 = 12;
+
+    // app.json5 requires minAPIVersion / targetAPIVersion / apiReleaseType
+    // at the app level — install-time verification rejects HAPs without
+    // these. `apiReleaseType` spelling is distinct from the `releaseType`
+    // key used inside pack.info — same semantics, different key name.
     let app_json = format!(
         r#"{{
   "app": {{
@@ -163,11 +175,16 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
     "versionCode": 1000000,
     "versionName": "1.0.0",
     "icon": "$media:icon",
-    "label": "$string:app_name"
+    "label": "$string:app_name",
+    "minAPIVersion": {compat},
+    "targetAPIVersion": {target},
+    "apiReleaseType": "Release"
   }}
 }}
 "#,
-        bundle = bundle_name
+        bundle = bundle_name,
+        compat = COMPAT_API,
+        target = TARGET_API,
     );
     fs::write(staging.join("app.json5"), app_json)?;
 
@@ -176,7 +193,7 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
   "module": {{
     "name": "entry",
     "type": "entry",
-    "description": "$string:app_name",
+    "description": "$string:module_desc",
     "mainElement": "EntryAbility",
     "deviceTypes": ["phone", "tablet", "2in1"],
     "deliveryWithInstall": true,
@@ -186,7 +203,7 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
       {{
         "name": "EntryAbility",
         "srcEntry": "./ets/entryability/EntryAbility.ets",
-        "description": "$string:app_name",
+        "description": "$string:EntryAbility_desc",
         "icon": "$media:icon",
         "label": "$string:EntryAbility_label",
         "startWindowIcon": "$media:icon",
@@ -206,18 +223,30 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
     );
     fs::write(staging.join("module.json5"), module_json)?;
 
-    // pack.info is what hap-sign / hdc use to validate the bundle. Mirrors
-    // hvigor's output for a minimal entry module.
+    // pack.info is parsed by developtools_packing_tool / hap-sign-tool as
+    // strict JSON (not JSON5 — no trailing commas). Critical shapes:
+    //
+    // * apiVersion lives under `summary.app.apiVersion`, NOT under each
+    //   module. The Java parser reads from the app-level path and silently
+    //   ignores a module-level duplicate.
+    // * `summary.modules[].name` and `.package` are the *module* name
+    //   ("entry") — they are NOT the bundleName. Confusingly, the top-level
+    //   app block below uses bundleName. This is the most common shape
+    //   bug in hand-rolled HAPs.
+    // * `deviceType` (singular) in both modules and packages; must match
+    //   the `deviceTypes` in module.json5 byte-for-byte or packing_tool's
+    //   HapVerify rejects before sign.
     let pack_info = format!(
         r#"{{
   "summary": {{
     "app": {{
       "bundleName": "{bundle}",
-      "version": {{ "code": 1000000, "name": "1.0.0" }}
+      "version": {{ "code": 1000000, "name": "1.0.0" }},
+      "apiVersion": {{ "compatible": {compat}, "releaseType": "Release", "target": {target} }}
     }},
     "modules": [{{
       "mainAbility": "EntryAbility",
-      "deviceTypes": ["phone", "tablet"],
+      "deviceType": ["phone", "tablet", "2in1"],
       "abilities": [{{ "name": "EntryAbility", "label": "{stem}" }}],
       "distro": {{
         "moduleType": "entry",
@@ -225,21 +254,23 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
         "deliveryWithInstall": true,
         "moduleName": "entry"
       }},
-      "apiVersion": {{ "compatible": 9, "releaseType": "Release", "target": 10 }},
-      "package": "{bundle}",
-      "name": "{bundle}"
+      "apiVersion": {{ "compatible": {compat}, "releaseType": "Release", "target": {target} }},
+      "package": "entry",
+      "name": "entry"
     }}]
   }},
   "packages": [{{
-    "deviceType": ["phone", "tablet"],
+    "deviceType": ["phone", "tablet", "2in1"],
     "moduleType": "entry",
     "deliveryWithInstall": true,
-    "name": "{bundle}"
+    "name": "entry"
   }}]
 }}
 "#,
         bundle = bundle_name,
         stem = stem,
+        compat = COMPAT_API,
+        target = TARGET_API,
     );
     fs::write(staging.join("pack.info"), pack_info)?;
 
@@ -259,7 +290,9 @@ fn write_resources(staging: &Path, stem: &str) -> Result<()> {
         r#"{{
   "string": [
     {{ "name": "app_name", "value": "{stem}" }},
-    {{ "name": "EntryAbility_label", "value": "{stem}" }}
+    {{ "name": "module_desc", "value": "{stem}" }},
+    {{ "name": "EntryAbility_label", "value": "{stem}" }},
+    {{ "name": "EntryAbility_desc", "value": "{stem}" }}
   ]
 }}
 "#
@@ -328,73 +361,97 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
 
 /// Compile `.ets` → `.abc` via the OHOS SDK's ets-loader. Returns `Ok(true)`
 /// if compilation ran, `Ok(false)` if the loader can't be located (caller
-/// falls back to shipping source).
+/// reports the HAP as non-installable — physical NEXT devices only execute
+/// `.abc`, there is no source-mode interpreter).
+///
+/// The real pipeline is two-stage: `ets-loader` (Node/rollup npm package)
+/// preprocesses `.ets` into bundled `.ts` with ArkUI decorators desugared,
+/// then `es2abc` (native binary shipped next to ets-loader) emits `.abc`.
+/// Calling `es2abc` directly on `.ets` does not work — it only accepts
+/// `js`/`ts`/`as` extensions.
+///
+/// For Phase 1 we invoke ets-loader via node, mirroring what hvigor does.
+/// If node isn't on PATH or ets-loader isn't at the expected SDK path,
+/// we fall back to shipping `.ets` source and let the caller decide what
+/// to do (typically: fail the HAP, or hand the staging dir to DevEco).
 fn compile_ets_to_abc(sdk_native: &Path, staging: &Path, quiet: bool) -> Result<bool> {
-    // Probe for the standalone Ark compiler first — it's a single binary
-    // and doesn't need `node` on PATH. Ships under a few paths depending
-    // on SDK version; walk a small set.
-    let es2abc_candidates = [
-        sdk_native.join("build-tools/ets-loader/bin/ark_ts2abc_bin/es2abc"),
-        sdk_native.join("toolchains/lib/ark_tools/bin/es2abc"),
-        sdk_native.join("toolchains/es2abc"),
-        sdk_native.join("llvm/bin/es2abc"),
-    ];
-    let es2abc = es2abc_candidates.iter().find(|p| p.exists());
+    // Locate ets-loader. DevEco 5.x ships it at:
+    //   <sdk_root>/<api-level>/openharmony/ets/build-tools/ets-loader/
+    // `find_harmonyos_sdk` returns the `native/` dir, so ets-loader is a
+    // sibling — up one level, over to `ets/`.
+    let api_level_root = sdk_native.parent();
+    let ets_loader_dir = api_level_root.map(|r| r.join("ets/build-tools/ets-loader"));
 
-    if let Some(tool) = es2abc {
-        if !quiet {
-            println!("  harmonyos: compiling ets/ via {}", tool.display());
-        }
-        run_es2abc_over_dir(tool, &staging.join("ets"))?;
-        return Ok(true);
-    }
+    let loader_main = ets_loader_dir.as_ref().map(|d| d.join("main.js"));
+    let loader_exists = loader_main.as_ref().map(|p| p.exists()).unwrap_or(false);
 
-    // Node-based fallback: ets-loader shipped as a JS package.
-    let ets_loader_main = sdk_native.join("build-tools/ets-loader/main.js");
-    if ets_loader_main.exists() {
+    if !loader_exists {
         if !quiet {
-            println!(
-                "  harmonyos: compiling ets/ via node {}",
-                ets_loader_main.display()
+            eprintln!(
+                "  harmonyos: ets-loader not found at {} — ets/ will ship as source.",
+                loader_main
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(SDK root unknown)".to_string()),
             );
         }
-        let status = Command::new("node")
-            .arg(&ets_loader_main)
-            .arg("--hap-mode=release")
-            .arg(staging.join("ets"))
-            .status()
-            .context("running ets-loader; is `node` on PATH?")?;
-        if !status.success() {
-            return Err(anyhow!("ets-loader exited with {}", status));
+        return Ok(false);
+    }
+    // Unwrap safety guaranteed by the loader_exists branch above.
+    let loader_main = loader_main.unwrap();
+    let ets_loader_dir = ets_loader_dir.unwrap();
+
+    // es2abc binary lives under ets-loader in a host-OS-specific subdir.
+    // We don't invoke it directly — ets-loader spawns it internally — but
+    // we validate it's present so we can fail early with a clear message
+    // rather than watching ets-loader fail halfway through.
+    let host_dir = if cfg!(target_os = "macos") {
+        "build-mac"
+    } else if cfg!(target_os = "windows") {
+        "build-win"
+    } else {
+        "build"
+    };
+    let es2abc_bin = ets_loader_dir.join(format!("bin/ark/{}/bin/es2abc", host_dir));
+    if !es2abc_bin.exists() {
+        if !quiet {
+            eprintln!(
+                "  harmonyos: es2abc not found at {} — ets-loader install may be incomplete.",
+                es2abc_bin.display()
+            );
         }
-        return Ok(true);
+        return Ok(false);
     }
 
-    Ok(false)
-}
-
-fn run_es2abc_over_dir(tool: &Path, ets_dir: &Path) -> Result<()> {
-    for entry in walkdir::WalkDir::new(ets_dir).into_iter().flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("ets") {
-            continue;
-        }
-        let out = path.with_extension("abc");
-        let status = Command::new(tool)
-            .arg("--module")
-            .arg("--merge-abc")
-            .arg(path)
-            .arg("--output")
-            .arg(&out)
-            .status()
-            .with_context(|| format!("invoking es2abc on {}", path.display()))?;
-        if !status.success() {
-            return Err(anyhow!("es2abc failed for {}", path.display()));
-        }
-        // Once bytecode is produced, drop the source — the HAP ships bytecode only.
-        let _ = fs::remove_file(path);
+    if !quiet {
+        println!(
+            "  harmonyos: compiling ets/ via node {}",
+            loader_main.display()
+        );
     }
-    Ok(())
+
+    // ets-loader expects to run from a DevEco project layout (it reads
+    // build-profile.json5 for entry paths, etc.). Our staging dir doesn't
+    // have that, so we synthesize the minimum ets-loader needs. A future
+    // PR can use hvigor proper to avoid this dance.
+    //
+    // For now: invoke with explicit --hap-mode=release and point it at
+    // our ets/ tree. This isn't the full hvigor flow, and may not work
+    // for all ets-loader versions — first on-device test will tell us.
+    let status = Command::new("node")
+        .arg(&loader_main)
+        .arg("--hap-mode=release")
+        .arg(staging.join("ets"))
+        .current_dir(staging)
+        .status()
+        .context(
+            "running ets-loader; is `node` on PATH? ets-loader is a Node package shipped \
+             with the OHOS SDK and requires a Node.js runtime to execute.",
+        )?;
+    if !status.success() {
+        return Err(anyhow!("ets-loader exited with {}", status));
+    }
+    Ok(true)
 }
 
 fn zip_staging(staging: &Path, output_hap: &Path) -> Result<()> {
@@ -430,12 +487,44 @@ fn sign_hap(
     sdk_native: Option<&Path>,
     quiet: bool,
 ) -> Result<PathBuf> {
+    // Six env vars now — the B.3 original conflated the cert chain and the
+    // provisioning profile into PERRY_HARMONYOS_PROFILE. `hap-sign-tool`
+    // requires them as two different files:
+    //   -appCertFile: end-entity → intermediate → root CA chain (.cer / .pem)
+    //   -profileFile: signed provisioning profile (.p7b)
+    // DevEco's "automatically generate signing files" flow writes both out
+    // separately; mapping them to different env vars lets users point
+    // perry at whatever DevEco produced.
     let p12 = std::env::var("PERRY_HARMONYOS_P12")
-        .map_err(|_| anyhow!("PERRY_HARMONYOS_P12 not set"))?;
+        .map_err(|_| anyhow!("PERRY_HARMONYOS_P12 not set (path to .p12 keystore)"))?;
     let p12_password = std::env::var("PERRY_HARMONYOS_P12_PASSWORD")
-        .map_err(|_| anyhow!("PERRY_HARMONYOS_P12_PASSWORD not set"))?;
+        .map_err(|_| anyhow!("PERRY_HARMONYOS_P12_PASSWORD not set (keystore password)"))?;
+    let cert_chain = std::env::var("PERRY_HARMONYOS_CERT")
+        .map_err(|_| anyhow!(
+            "PERRY_HARMONYOS_CERT not set (path to the cert chain .cer/.pem — DevEco \
+             auto-signing names it <bundleName>.cer). Distinct from PERRY_HARMONYOS_PROFILE."
+        ))?;
     let profile = std::env::var("PERRY_HARMONYOS_PROFILE")
-        .map_err(|_| anyhow!("PERRY_HARMONYOS_PROFILE not set"))?;
+        .map_err(|_| anyhow!(
+            "PERRY_HARMONYOS_PROFILE not set (path to the signed provisioning \
+             profile .p7b — DevEco auto-signing names it <bundleName>.p7b)."
+        ))?;
+
+    // -keyPwd unlocks the private-key entry inside the keystore. Often the
+    // same value as -keystorePwd, but `hap-sign-tool` expects them as
+    // separate args. DevEco-generated p12s always have a key password.
+    // Default to the keystore password if the caller didn't split them.
+    let key_password = std::env::var("PERRY_HARMONYOS_KEY_PASSWORD")
+        .unwrap_or_else(|_| p12_password.clone());
+
+    // DevEco's auto-signing writes the alias into build-profile.json5;
+    // a hardcoded string doesn't work. Default to "debugKey" (what DevEco
+    // uses for auto-generated debug certs) and let the caller override.
+    let key_alias = std::env::var("PERRY_HARMONYOS_KEY_ALIAS")
+        .unwrap_or_else(|_| "debugKey".to_string());
+
+    let sign_alg = std::env::var("PERRY_HARMONYOS_SIGN_ALG")
+        .unwrap_or_else(|_| "SHA256withECDSA".to_string());
 
     let hapsign = resolve_hapsign_tool(sdk_native)?;
     let signed = output_dir.join(format!("{}.hap", stem));
@@ -444,22 +533,27 @@ fn sign_hap(
         println!("  harmonyos: signing with {}", hapsign.display());
     }
 
-    // Huawei's hap-sign-tool.jar CLI: `sign-app` subcommand, standard args.
-    // See https://gitee.com/openharmony/developtools_hapsigner for the full
-    // arg set; this is the minimum viable invocation.
+    // Full `sign-app` invocation per developtools_hapsigner's CLI reference
+    // (README lines 297-314). `-profileSigned 1`, `-inForm zip`, `-signCode 1`
+    // are defaults but passed explicitly so behavior is identical across SDK
+    // versions that may have shifted defaults.
     let status = Command::new("java")
         .arg("-jar")
         .arg(&hapsign)
         .arg("sign-app")
-        .args(["-keyAlias", "perry-signing-key"])
-        .args(["-signAlg", "SHA256withECDSA"])
         .args(["-mode", "localSign"])
-        .args(["-appCertFile", &profile])
+        .args(["-keyAlias", &key_alias])
+        .args(["-keyPwd", &key_password])
+        .args(["-signAlg", &sign_alg])
+        .args(["-appCertFile", &cert_chain])
         .args(["-profileFile", &profile])
+        .args(["-profileSigned", "1"])
         .args(["-inFile", &unsigned.display().to_string()])
-        .args(["-outFile", &signed.display().to_string()])
+        .args(["-inForm", "zip"])
         .args(["-keystoreFile", &p12])
         .args(["-keystorePwd", &p12_password])
+        .args(["-outFile", &signed.display().to_string()])
+        .args(["-signCode", "1"])
         .status()
         .context("invoking hap-sign-tool via java; is `java` on PATH?")?;
 
@@ -497,7 +591,12 @@ mod tests {
         for var in [
             "PERRY_HARMONYOS_P12",
             "PERRY_HARMONYOS_P12_PASSWORD",
+            "PERRY_HARMONYOS_CERT",
             "PERRY_HARMONYOS_PROFILE",
+            "PERRY_HARMONYOS_KEY_ALIAS",
+            "PERRY_HARMONYOS_KEY_PASSWORD",
+            "PERRY_HARMONYOS_SIGN_ALG",
+            "PERRY_HARMONYOS_BUNDLE_NAME",
         ] {
             std::env::remove_var(var);
         }
@@ -551,13 +650,47 @@ mod tests {
         }
         assert_eq!(&buf[..8], b"\x89PNG\r\n\x1a\n");
 
-        // Bundle name fallback should include the sanitized stem.
+        // Bundle name fallback should include the sanitized stem, and the
+        // API-level triad (minAPIVersion / targetAPIVersion / apiReleaseType)
+        // must be present — install verification rejects HAPs missing these.
         let mut s = String::new();
         {
             let mut app = zip.by_name("app.json5").unwrap();
             app.read_to_string(&mut s).unwrap();
         }
         assert!(s.contains("com.perry.app.hi"), "bundle fallback: {}", s);
+        assert!(s.contains("\"minAPIVersion\""), "app.json5 missing minAPIVersion: {}", s);
+        assert!(s.contains("\"targetAPIVersion\""), "app.json5 missing targetAPIVersion: {}", s);
+        assert!(s.contains("\"apiReleaseType\": \"Release\""), "app.json5 missing apiReleaseType: {}", s);
+
+        // pack.info: the `summary.modules[0].name` and `.package` must be
+        // the *module* name ("entry"), not the bundleName. The apiVersion
+        // must live under `summary.app.apiVersion`. These are the most
+        // common bugs in hand-rolled HAPs.
+        let mut pack = String::new();
+        {
+            let mut p = zip.by_name("pack.info").unwrap();
+            p.read_to_string(&mut pack).unwrap();
+        }
+        // Quick structural check: parse as JSON and walk the paths.
+        let pack_json: serde_json::Value = serde_json::from_str(&pack)
+            .expect("pack.info must be valid JSON (strict, not JSON5)");
+        assert_eq!(
+            pack_json["summary"]["modules"][0]["name"], "entry",
+            "pack.info modules[0].name must be module name, not bundleName"
+        );
+        assert_eq!(
+            pack_json["summary"]["modules"][0]["package"], "entry",
+            "pack.info modules[0].package must be module name, not bundleName"
+        );
+        assert_eq!(
+            pack_json["packages"][0]["name"], "entry",
+            "pack.info packages[0].name must be module name, not bundleName"
+        );
+        assert!(
+            pack_json["summary"]["app"]["apiVersion"].is_object(),
+            "pack.info must have summary.app.apiVersion (not just under modules)"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
