@@ -581,10 +581,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 
     // Derive __platform__ number from target triple:
     //   0 = macOS, 1 = iOS, 2 = Android, 3 = Windows, 4 = Linux,
-    //   5 = Web, 6 = tvOS, 7 = watchOS, 8 = visionOS
+    //   5 = Web, 6 = tvOS, 7 = watchOS, 8 = visionOS, 9 = HarmonyOS
     let platform_number: f64 = {
         let t = triple.to_lowercase();
-        if t.contains("visionos") || t.contains("xros") { 8.0 }
+        // HarmonyOS check must precede the plain `linux` arm: the OHOS triple is
+        // `*-unknown-linux-ohos`, so a naive `contains("linux")` would classify it as 4.
+        if t.contains("ohos") { 9.0 }
+        else if t.contains("visionos") || t.contains("xros") { 8.0 }
         else if t.contains("watchos") { 7.0 }
         else if t.contains("ios") { 1.0 }
         else if t.contains("tvos") { 6.0 }
@@ -3522,6 +3525,8 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "watchos-simulator" => Some("arm64-apple-watchos10.0-simulator".to_string()),
         "tvos" => Some("aarch64-apple-tvos".to_string()),
         "tvos-simulator" => Some("arm64-apple-tvos17.0-simulator".to_string()),
+        "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),
+        "harmonyos-simulator" => Some("x86_64-unknown-linux-ohos".to_string()),
         "android" => Some("aarch64-unknown-linux-android".to_string()),
         "linux" => Some("x86_64-unknown-linux-gnu".to_string()),
         "linux-aarch64" => Some("aarch64-unknown-linux-gnu".to_string()),

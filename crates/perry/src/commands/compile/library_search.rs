@@ -433,6 +433,14 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
                         candidates.push(dir.join(&tvos_name));
                     }
                 }
+                if matches!(target, Some("harmonyos") | Some("harmonyos-simulator")) {
+                    if name.contains("_harmonyos") {
+                        candidates.push(dir.join(name));
+                    } else {
+                        let harmonyos_name = name.replace(".a", "_harmonyos.a");
+                        candidates.push(dir.join(&harmonyos_name));
+                    }
+                }
             }
         }
     } else {
@@ -527,6 +535,7 @@ pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
         Some("android") => "libperry_ui_android.a",
         Some("watchos-simulator") | Some("watchos") => "libperry_ui_watchos.a",
         Some("tvos-simulator") | Some("tvos") => "libperry_ui_tvos.a",
+        Some("harmonyos-simulator") | Some("harmonyos") => "libperry_ui_harmonyos.a",
         Some("linux") => "libperry_ui_gtk4.a",
         Some("macos") => "libperry_ui_macos.a",
         Some("windows") => "perry_ui_windows.lib",

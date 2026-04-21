@@ -341,6 +341,8 @@ fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         Some("watchos") => Some("arm64_32-apple-watchos"),
         Some("tvos-simulator") => Some("aarch64-apple-tvos-sim"),
         Some("tvos") => Some("aarch64-apple-tvos"),
+        Some("harmonyos") => Some("aarch64-unknown-linux-ohos"),
+        Some("harmonyos-simulator") => Some("x86_64-unknown-linux-ohos"),
         Some("android") => Some("aarch64-linux-android"),
         Some("linux") => Some("x86_64-unknown-linux-gnu"),
         Some("windows") => Some("x86_64-pc-windows-msvc"),
@@ -1537,7 +1539,8 @@ pub fn run_with_parse_cache(
             Some("visionos") | Some("visionos-simulator") |
             Some("android") |
             Some("watchos") | Some("watchos-simulator") |
-            Some("tvos") | Some("tvos-simulator")
+            Some("tvos") | Some("tvos-simulator") |
+            Some("harmonyos") | Some("harmonyos-simulator")
         );
         if is_mobile {
             features.retain(|f| f != "plugins");

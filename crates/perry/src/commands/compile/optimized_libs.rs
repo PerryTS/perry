@@ -382,6 +382,7 @@ pub(super) fn build_optimized_libs(
                 Some("android") => "perry-ui-android",
                 Some("watchos-simulator") | Some("watchos") => "perry-ui-watchos",
                 Some("tvos-simulator") | Some("tvos") => "perry-ui-tvos",
+                Some("harmonyos-simulator") | Some("harmonyos") => "perry-ui-harmonyos",
                 Some("linux") => "perry-ui-gtk4",
                 Some("windows") => "perry-ui-windows",
                 Some("macos") => "perry-ui-macos",

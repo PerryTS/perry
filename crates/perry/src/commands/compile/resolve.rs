@@ -136,6 +136,7 @@ pub(super) fn parse_native_library_manifest(
         Some("android") => "android",
         Some("tvos-simulator") | Some("tvos") => "tvos",
         Some("watchos-simulator") | Some("watchos") => "watchos",
+        Some("harmonyos-simulator") | Some("harmonyos") => "harmonyos",
         Some("linux") => "linux",
         Some("windows") => "windows",
         Some("web") => "web",
