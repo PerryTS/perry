@@ -188,6 +188,11 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
     );
     fs::write(staging.join("app.json5"), app_json)?;
 
+    // NOTE: `pages` is intentionally omitted. Phase 1 ships a UIAbility that
+    // runs perryEntry.run() in onCreate without loading any ArkUI page —
+    // there's no `windowStage.loadContent(...)` call. If `pages` were
+    // declared but the referenced page didn't exist in ets/, packing-tool
+    // would reject the HAP.
     let module_json = format!(
         r#"{{
   "module": {{
@@ -198,7 +203,6 @@ fn write_configs(staging: &Path, stem: &str, bundle_name: &str) -> Result<()> {
     "deviceTypes": ["phone", "tablet", "2in1"],
     "deliveryWithInstall": true,
     "installationFree": false,
-    "pages": "$profile:main_pages",
     "abilities": [
       {{
         "name": "EntryAbility",
@@ -282,7 +286,6 @@ fn write_resources(staging: &Path, stem: &str) -> Result<()> {
     fs::create_dir_all(base.join("media"))?;
     fs::create_dir_all(base.join("string"))?;
     fs::create_dir_all(base.join("color"))?;
-    fs::create_dir_all(base.join("profile"))?;
 
     fs::write(base.join("media").join("icon.png"), PLACEHOLDER_ICON_PNG)?;
 
@@ -307,12 +310,9 @@ fn write_resources(staging: &Path, stem: &str) -> Result<()> {
 "##;
     fs::write(base.join("color").join("color.json"), color_json)?;
 
-    // Tells the ArkTS runtime which page to load by default.
-    let pages_json = r#"{
-  "src": ["pages/Index"]
-}
-"#;
-    fs::write(base.join("profile").join("main_pages.json"), pages_json)?;
+    // Phase 1 has no pages (module.json5 omits the `pages` field), so no
+    // main_pages.json is emitted. PR C will reintroduce it when the
+    // TS→ArkTS emitter produces real `@Entry @Component` page components.
 
     // en_US / zh_CN string overrides are optional; OHOS falls back to base/.
     // Omitted here to keep the surface small.
@@ -359,52 +359,34 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Compile `.ets` → `.abc` via the OHOS SDK's ets-loader. Returns `Ok(true)`
-/// if compilation ran, `Ok(false)` if the loader can't be located (caller
-/// reports the HAP as non-installable — physical NEXT devices only execute
-/// `.abc`, there is no source-mode interpreter).
+/// Compile the staging `ets/` tree into a single `ets/modules.abc`, then
+/// delete the source `.ets` files. Returns `Ok(true)` if the bytecode was
+/// produced, `Ok(false)` if `es2abc` can't be located (caller ships source
+/// and warns — the resulting HAP won't install on a physical NEXT device).
 ///
-/// The real pipeline is two-stage: `ets-loader` (Node/rollup npm package)
-/// preprocesses `.ets` into bundled `.ts` with ArkUI decorators desugared,
-/// then `es2abc` (native binary shipped next to ets-loader) emits `.abc`.
-/// Calling `es2abc` directly on `.ets` does not work — it only accepts
-/// `js`/`ts`/`as` extensions.
+/// We invoke `es2abc` directly rather than going through `ets-loader`:
 ///
-/// For Phase 1 we invoke ets-loader via node, mirroring what hvigor does.
-/// If node isn't on PATH or ets-loader isn't at the expected SDK path,
-/// we fall back to shipping `.ets` source and let the caller decide what
-/// to do (typically: fail the HAP, or hand the staging dir to DevEco).
+/// * Phase 1 ArkTS is plain TypeScript (no `@Entry @Component struct`
+///   decorators, no ArkUI syntax extensions), so es2abc with `--extension
+///   ts` accepts the files as-is.
+/// * ets-loader needs a full DevEco project layout (`build-profile.json5`,
+///   several `aceModule*` env vars, etc.) — synthesizing all of that
+///   re-implements a chunk of hvigor.
+/// * Since Phase 1 emits exactly one `.ets` file (EntryAbility, no
+///   pages/Index), there's nothing for ets-loader's bundling to bundle.
+///
+/// When PR C adds the TS→ArkTS emitter it'll need ets-loader back — that
+/// emitter produces real `@Entry @Component struct` decorators that es2abc
+/// won't accept directly.
 fn compile_ets_to_abc(sdk_native: &Path, staging: &Path, quiet: bool) -> Result<bool> {
-    // Locate ets-loader. DevEco 5.x ships it at:
-    //   <sdk_root>/<api-level>/openharmony/ets/build-tools/ets-loader/
-    // `find_harmonyos_sdk` returns the `native/` dir, so ets-loader is a
-    // sibling — up one level, over to `ets/`.
-    let api_level_root = sdk_native.parent();
-    let ets_loader_dir = api_level_root.map(|r| r.join("ets/build-tools/ets-loader"));
+    let api_level_root = match sdk_native.parent() {
+        Some(p) => p,
+        None => return Ok(false),
+    };
+    let ets_loader_dir = api_level_root.join("ets/build-tools/ets-loader");
 
-    let loader_main = ets_loader_dir.as_ref().map(|d| d.join("main.js"));
-    let loader_exists = loader_main.as_ref().map(|p| p.exists()).unwrap_or(false);
-
-    if !loader_exists {
-        if !quiet {
-            eprintln!(
-                "  harmonyos: ets-loader not found at {} — ets/ will ship as source.",
-                loader_main
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "(SDK root unknown)".to_string()),
-            );
-        }
-        return Ok(false);
-    }
-    // Unwrap safety guaranteed by the loader_exists branch above.
-    let loader_main = loader_main.unwrap();
-    let ets_loader_dir = ets_loader_dir.unwrap();
-
-    // es2abc binary lives under ets-loader in a host-OS-specific subdir.
-    // We don't invoke it directly — ets-loader spawns it internally — but
-    // we validate it's present so we can fail early with a clear message
-    // rather than watching ets-loader fail halfway through.
+    // es2abc sits under ets-loader in a host-OS-specific subdir. `build-mac`
+    // on macOS, `build-win` on Windows, `build` on Linux.
     let host_dir = if cfg!(target_os = "macos") {
         "build-mac"
     } else if cfg!(target_os = "windows") {
@@ -412,45 +394,74 @@ fn compile_ets_to_abc(sdk_native: &Path, staging: &Path, quiet: bool) -> Result<
     } else {
         "build"
     };
-    let es2abc_bin = ets_loader_dir.join(format!("bin/ark/{}/bin/es2abc", host_dir));
-    if !es2abc_bin.exists() {
+    let exe_suffix = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let es2abc = ets_loader_dir.join(format!(
+        "bin/ark/{}/bin/es2abc{}",
+        host_dir, exe_suffix
+    ));
+    if !es2abc.exists() {
         if !quiet {
             eprintln!(
-                "  harmonyos: es2abc not found at {} — ets-loader install may be incomplete.",
-                es2abc_bin.display()
+                "  harmonyos: es2abc not found at {} — ets/ will ship as source.",
+                es2abc.display()
             );
         }
         return Ok(false);
     }
 
-    if !quiet {
-        println!(
-            "  harmonyos: compiling ets/ via node {}",
-            loader_main.display()
-        );
+    // Collect every .ets file under staging/ets/ into a single invocation.
+    // HAPs ship a single merged `ets/modules.abc`, not per-file .abc's.
+    let ets_dir = staging.join("ets");
+    let mut inputs: Vec<PathBuf> = Vec::new();
+    for entry in walkdir::WalkDir::new(&ets_dir).into_iter().flatten() {
+        if entry.file_type().is_file()
+            && entry.path().extension().and_then(|e| e.to_str()) == Some("ets")
+        {
+            inputs.push(entry.path().to_path_buf());
+        }
+    }
+    if inputs.is_empty() {
+        if !quiet {
+            eprintln!("  harmonyos: no .ets files found under {}", ets_dir.display());
+        }
+        return Ok(false);
     }
 
-    // ets-loader expects to run from a DevEco project layout (it reads
-    // build-profile.json5 for entry paths, etc.). Our staging dir doesn't
-    // have that, so we synthesize the minimum ets-loader needs. A future
-    // PR can use hvigor proper to avoid this dance.
-    //
-    // For now: invoke with explicit --hap-mode=release and point it at
-    // our ets/ tree. This isn't the full hvigor flow, and may not work
-    // for all ets-loader versions — first on-device test will tell us.
-    let status = Command::new("node")
-        .arg(&loader_main)
-        .arg("--hap-mode=release")
-        .arg(staging.join("ets"))
-        .current_dir(staging)
-        .status()
-        .context(
-            "running ets-loader; is `node` on PATH? ets-loader is a Node package shipped \
-             with the OHOS SDK and requires a Node.js runtime to execute.",
-        )?;
-    if !status.success() {
-        return Err(anyhow!("ets-loader exited with {}", status));
+    let modules_abc = ets_dir.join("modules.abc");
+    if !quiet {
+        println!(
+            "  harmonyos: {} .ets → modules.abc via {}",
+            inputs.len(),
+            es2abc.display()
+        );
     }
+    let status = Command::new(&es2abc)
+        .arg("--module")
+        .arg("--merge-abc")
+        .arg("--extension")
+        .arg("ts")
+        .arg("--output")
+        .arg(&modules_abc)
+        .args(&inputs)
+        .status()
+        .with_context(|| format!("invoking {}", es2abc.display()))?;
+    if !status.success() {
+        return Err(anyhow!("es2abc exited with {}", status));
+    }
+    if !modules_abc.exists() {
+        return Err(anyhow!(
+            "es2abc claimed success but {} wasn't written",
+            modules_abc.display()
+        ));
+    }
+
+    // Drop the .ets sources — the HAP ships bytecode only. Keep the
+    // directory structure (entryability/, pages/) empty so any tooling
+    // that walks `ets/` doesn't stumble on the absence.
+    for src in &inputs {
+        let _ = fs::remove_file(src);
+    }
+
     Ok(true)
 }
 
@@ -581,10 +592,8 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("ets/entryability")).unwrap();
-        fs::create_dir_all(tmp.join("ets/pages")).unwrap();
         fs::write(tmp.join("libhi.so"), b"fake so").unwrap();
         fs::write(tmp.join("ets/entryability/EntryAbility.ets"), "// ability").unwrap();
-        fs::write(tmp.join("ets/pages/Index.ets"), "// index").unwrap();
 
         // Scrub signing env so we stay on the unsigned path regardless of
         // whatever the host developer may have exported.
@@ -628,11 +637,9 @@ mod tests {
             "pack.info",
             "libs/arm64-v8a/libhi.so",
             "ets/entryability/EntryAbility.ets",
-            "ets/pages/Index.ets",
             "resources/base/media/icon.png",
             "resources/base/string/string.json",
             "resources/base/color/color.json",
-            "resources/base/profile/main_pages.json",
         ];
         for r in required {
             assert!(

@@ -765,6 +765,20 @@ pub(super) fn build_and_run_link(
            .arg("-lresolv")
            .arg("-lobjc")
            .arg("-lSystem");
+    } else if is_harmonyos {
+        // OpenHarmony system libraries. musl folds m/pthread/dl into libc.a so
+        // the -l flags are no-ops on the toolchain side; we emit them anyway
+        // because cargo's static archives reference them and the OHOS dynamic
+        // linker resolves them at load time.
+        cmd.arg("-Wl,--allow-multiple-definition")
+           .arg("-lm")
+           .arg("-lpthread")
+           .arg("-ldl");
+        // `libace_napi.z.so` provides napi_module_register + napi_create_*
+        // (consumed by perry-runtime/src/ohos_napi.rs). OHOS naming convention
+        // is `<name>.z.so` — the `-l` flag strips `lib` and `.so` but NOT the
+        // middle `.z`, so `-lace_napi.z` is the deliberate spelling.
+        cmd.arg("-lace_napi.z");
     } else if is_android {
         // Android system libraries
         cmd.arg("-Wl,--allow-multiple-definition")

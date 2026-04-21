@@ -4170,10 +4170,12 @@ pub fn run_with_parse_cache(
     }
 
     // Strip debug symbols from the final binary (reduces size significantly)
-    // Skip for iOS/Android cross-compilation — host strip can't handle foreign architectures
+    // Skip for iOS/Android/HarmonyOS cross-compilation — host strip can't handle
+    // foreign architectures (macOS BSD strip fails on ELF with the noisy
+    // "non-object and non-archive file" warning).
     // Skip for watchOS — bundling above already moved exe_path into the .app
     // Skip when PERRY_DEBUG_SYMBOLS=1 is set — keep symbols for crash debugging
-    if !is_dylib && !is_ios && !is_visionos && !is_tvos && !is_watchos
+    if !is_dylib && !is_ios && !is_visionos && !is_tvos && !is_watchos && !is_harmonyos
         && target.as_deref() != Some("android")
         && std::env::var("PERRY_DEBUG_SYMBOLS").is_err() {
         if ctx.needs_plugins {
