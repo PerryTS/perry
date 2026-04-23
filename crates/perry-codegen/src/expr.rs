@@ -5412,15 +5412,30 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_tanh", &[(DOUBLE, &v)]))
         }
-        // tan/asin/acos/atan: still stubs returning input (runtime has
-        // no wrappers yet, no LLVM intrinsics for these).
-        Expr::MathTan(o)
-        | Expr::MathAsin(o)
-        | Expr::MathAcos(o)
-        | Expr::MathAtan(o) => lower_expr(ctx, o),
+        Expr::MathTan(o) => {
+            let v = lower_expr(ctx, o)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_tan", &[(DOUBLE, &v)]))
+        }
+        Expr::MathAsin(o) => {
+            let v = lower_expr(ctx, o)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_asin", &[(DOUBLE, &v)]))
+        }
+        Expr::MathAcos(o) => {
+            let v = lower_expr(ctx, o)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_acos", &[(DOUBLE, &v)]))
+        }
+        Expr::MathAtan(o) => {
+            let v = lower_expr(ctx, o)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_atan", &[(DOUBLE, &v)]))
+        }
         Expr::MathAtan2(y, x) => {
-            let _ = lower_expr(ctx, y)?;
-            lower_expr(ctx, x)
+            let y_v = lower_expr(ctx, y)?;
+            let x_v = lower_expr(ctx, x)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_math_atan2",
+                &[(DOUBLE, &y_v), (DOUBLE, &x_v)],
+            ))
         }
 
         // -------- String.fromCharCode(code) --------
