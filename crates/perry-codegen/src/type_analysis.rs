@@ -152,7 +152,9 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // fast path (`js_bigint_cmp`) instead of fcmp-on-NaN.
         Expr::ProcessHrtimeBigint => Some(HirType::BigInt),
         // `BigInt(x)` / `0n` literal via StringCoerce paths.
-        Expr::BigInt(_) => Some(HirType::BigInt),
+        // `BigInt('123')` lowers to BigIntCoerce; refine so `const x = BigInt(str)`
+        // gets local type BigInt and `x === y` routes through js_bigint_cmp.
+        Expr::BigInt(_) | Expr::BigIntCoerce(_) => Some(HirType::BigInt),
         // `let l = new ClassName<...>()` — refine to Named(ClassName)
         // so subsequent `l.method()` dispatch goes through the class
         // method registry instead of the universal fallback. This is

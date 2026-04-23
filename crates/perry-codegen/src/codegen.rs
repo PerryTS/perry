@@ -2230,10 +2230,12 @@ fn compile_module_entry(
         let main_non_escaping_object_literals = crate::collectors::collect_non_escaping_object_literals(
             &hir.init, &main_boxed_vars, module_globals,
         );
+        let mut init_local_types: HashMap<u32, perry_types::Type> = HashMap::new();
+        crate::boxed_vars::collect_let_types_in_stmts(&hir.init, &mut init_local_types);
         let mut ctx = FnCtx {
             func: main,
             locals: HashMap::new(),
-            local_types: HashMap::new(),
+            local_types: init_local_types,
             current_block: 0,
             func_names,
             strings,
