@@ -283,7 +283,7 @@ pub unsafe extern "C" fn js_mysql2_pool_execute(
 
 /// Enum to hold different parameter value types
 #[derive(Clone, Debug)]
-enum ParamValue {
+pub(crate) enum ParamValue {
     Null,
     String(String),
     Number(f64),
@@ -292,7 +292,7 @@ enum ParamValue {
 }
 
 /// Extract parameter values from a JSValue array
-unsafe fn extract_params_from_jsvalue(params: JSValue) -> Vec<ParamValue> {
+pub(crate) unsafe fn extract_params_from_jsvalue(params: JSValue) -> Vec<ParamValue> {
     let mut result = Vec::new();
 
     let bits = params.bits();
