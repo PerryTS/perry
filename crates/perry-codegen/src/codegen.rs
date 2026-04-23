@@ -39,7 +39,7 @@ use crate::module::LlModule;
 use crate::runtime_decls;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{DOUBLE, I32, I64, LlvmType, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, I8, LlvmType, PTR, VOID};
 
 /// Options controlling code generation for a single module.
 #[derive(Debug, Clone, Default)]
@@ -1589,6 +1589,41 @@ fn compile_function(
         buffer_data_slots: HashMap::new(),
         buffer_alias_base,
     };
+
+    // Issue #92 follow-up: pre-register `buffer_data_slots` entries for
+    // `Buffer`-typed function parameters so that the readInt32BE/etc.
+    // intrinsic fast path in `lower_call.rs` fires on
+    // `function decode(row: Buffer) { row.readInt32BE(off) }` — the real
+    // Postgres-driver hot-path shape, not just the `const buf = Buffer.alloc(N)`
+    // micro-benchmark. Skipped when the param is reassigned (has_any_mutation
+    // covers LocalSet/Update/ARRAY_MUTATORS — `buf = ...`, `buf.fill(...)` etc.)
+    // because a cached data_ptr would go stale, and skipped for boxed params
+    // (same reason via cross-closure mutation). Uint8Array-typed params are
+    // deliberately excluded: a pre-existing crash surfaces when the same
+    // program defines both a Buffer-param and a Uint8Array-param function and
+    // then invokes them in sequence (reproducible on main without any of
+    // this extension's changes). Tracked separately; Buffer coverage alone
+    // hits the Postgres decode path which is the target workload here.
+    for p in &f.params {
+        let is_buffer_typed = matches!(
+            &p.ty,
+            perry_types::Type::Named(n) if n == "Buffer"
+        );
+        if !is_buffer_typed { continue; }
+        if ctx.boxed_vars.contains(&p.id) { continue; }
+        if crate::collectors::has_any_mutation(&f.body, p.id) { continue; }
+        let Some(param_slot) = ctx.locals.get(&p.id).cloned() else { continue };
+        let blk = ctx.block();
+        let arg_val = blk.load(DOUBLE, &param_slot);
+        let handle = crate::expr::unbox_to_i64(blk, &arg_val);
+        let handle_ptr = blk.inttoptr(I64, &handle);
+        let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, "8")]);
+        let buf_slot = ctx.func.alloca_entry(PTR);
+        ctx.block().store(PTR, &data_ptr, &buf_slot);
+        let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
+        ctx.buffer_data_slots.insert(p.id, (buf_slot, scope_idx));
+    }
+
     stmt::lower_stmts(&mut ctx, &f.body)
         .with_context(|| format!("lowering body of '{}'", f.name))?;
 

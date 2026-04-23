@@ -115,6 +115,10 @@
     "status": "ci-env",
     "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x"
   },
+  "test_buffer_numeric_read_intrinsic": {
+    "status": "ci-env",
+    "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x. Same SDK gap as test_gap_buffer_ops; exercises the #92 Buffer numeric-read intrinsic."
+  },
   "test_stress_nanbox": {
     "status": "bug",
     "reason": "NaN-boxing edge cases: typeof undefined inside specific stress patterns differs (run-to-run noise possible)"
