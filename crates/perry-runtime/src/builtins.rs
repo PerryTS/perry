@@ -1088,39 +1088,148 @@ pub extern "C" fn js_parse_float(str_ptr: *const StringHeader) -> f64 {
         let len = (*str_ptr).byte_len as usize;
         let data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let bytes = std::slice::from_raw_parts(data, len);
+        parse_float_bytes(bytes)
+    }
+}
 
-        if let Ok(s) = std::str::from_utf8(bytes) {
-            let trimmed = s.trim();
-            if trimmed.is_empty() {
-                return f64::NAN;
-            }
+/// Core parseFloat logic operating on raw bytes — no heap allocation.
+/// Exposed as `pub(crate)` so unit tests can call it directly.
+pub(crate) fn parse_float_bytes(bytes: &[u8]) -> f64 {
+    // JS spec: strip leading StrWhiteSpace (ASCII subset covers all common cases)
+    let bytes = bytes.trim_ascii_start();
+    if bytes.is_empty() {
+        return f64::NAN;
+    }
 
-            // Parse as much of the string as is a valid float
-            // JavaScript parseFloat stops at first invalid character
-            let valid_chars: String = trimmed.chars()
-                .scan(false, |seen_dot, c| {
-                    if c.is_ascii_digit() {
-                        Some(c)
-                    } else if c == '.' && !*seen_dot {
-                        *seen_dot = true;
-                        Some(c)
-                    } else if c == '-' || c == '+' {
-                        Some(c)
-                    } else if c == 'e' || c == 'E' {
-                        Some(c)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+    // Detect optional sign, then check for "Infinity"
+    let (neg, rest) = match bytes.first() {
+        Some(b'-') => (true, &bytes[1..]),
+        Some(b'+') => (false, &bytes[1..]),
+        _ => (false, bytes),
+    };
+    if rest.starts_with(b"Infinity") {
+        return if neg { f64::NEG_INFINITY } else { f64::INFINITY };
+    }
 
-            match valid_chars.parse::<f64>() {
-                Ok(n) => n,
-                Err(_) => f64::NAN,
-            }
-        } else {
-            f64::NAN
+    // Scan for the longest valid StrDecimalLiteral prefix — zero allocations.
+    let end = float_prefix_end(bytes);
+    if end == 0 {
+        return f64::NAN;
+    }
+
+    // bytes[..end] contains only ASCII chars (digits, sign, '.', 'e'/'E'), so
+    // from_utf8_unchecked is safe.
+    let s = unsafe { std::str::from_utf8_unchecked(&bytes[..end]) };
+    s.parse::<f64>().unwrap_or(f64::NAN)
+}
+
+/// Returns the byte length of the leading StrDecimalLiteral prefix in `bytes`.
+/// Returns 0 when no valid prefix exists (e.g. `"abc"`, `"."`, `"+"`).
+fn float_prefix_end(bytes: &[u8]) -> usize {
+    let mut i = 0;
+    let n = bytes.len();
+
+    // Optional sign
+    if i < n && (bytes[i] == b'-' || bytes[i] == b'+') {
+        i += 1;
+    }
+
+    // Integer digits
+    let int_start = i;
+    while i < n && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    let has_int = i > int_start;
+
+    // Optional fractional part
+    let mut has_frac = false;
+    if i < n && bytes[i] == b'.' {
+        i += 1;
+        let frac_start = i;
+        while i < n && bytes[i].is_ascii_digit() {
+            i += 1;
         }
+        has_frac = i > frac_start;
+    }
+
+    // Need at least one digit on either side of the (optional) decimal point
+    if !has_int && !has_frac {
+        return 0;
+    }
+
+    // Optional exponent — only consumed when at least one exponent digit follows
+    if i < n && (bytes[i] == b'e' || bytes[i] == b'E') {
+        let exp_start = i;
+        i += 1;
+        if i < n && (bytes[i] == b'-' || bytes[i] == b'+') {
+            i += 1;
+        }
+        let exp_digit_start = i;
+        while i < n && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == exp_digit_start {
+            i = exp_start; // backtrack: bare 'e' or 'e±' with no digits
+        }
+    }
+
+    i
+}
+
+#[cfg(test)]
+mod parse_float_tests {
+    use super::parse_float_bytes;
+
+    fn pf(s: &str) -> f64 {
+        parse_float_bytes(s.as_bytes())
+    }
+
+    #[test]
+    fn well_formed_inputs() {
+        assert_eq!(pf("3.14"), 3.14_f64);
+        assert_eq!(pf("1e10"), 1e10_f64);
+        assert_eq!(pf("-0.5"), -0.5_f64);
+        assert_eq!(pf("1234567890.12345"), 1234567890.12345_f64);
+        assert_eq!(pf("0"), 0.0_f64);
+        assert_eq!(pf("42"), 42.0_f64);
+        assert_eq!(pf(".5"), 0.5_f64);
+        assert_eq!(pf("5."), 5.0_f64);
+        assert_eq!(pf("+3.14"), 3.14_f64);
+    }
+
+    #[test]
+    fn leading_whitespace() {
+        assert_eq!(pf("  3.14"), 3.14_f64);
+        assert_eq!(pf("\t3.14"), 3.14_f64);
+        assert_eq!(pf("\n3.14"), 3.14_f64);
+    }
+
+    #[test]
+    fn trailing_junk() {
+        assert_eq!(pf("3.14abc"), 3.14_f64);
+        assert_eq!(pf("1e10xyz"), 1e10_f64);
+        assert_eq!(pf("42 extra"), 42.0_f64);
+        // bare 'e' with no exponent digits — stop before 'e'
+        assert_eq!(pf("1e"), 1.0_f64);
+        assert_eq!(pf("1e+"), 1.0_f64);
+    }
+
+    #[test]
+    fn invalid_inputs_return_nan() {
+        assert!(pf("abc").is_nan());
+        assert!(pf("").is_nan());
+        assert!(pf("   ").is_nan());
+        assert!(pf(".").is_nan());
+        assert!(pf("+").is_nan());
+        assert!(pf("-").is_nan());
+    }
+
+    #[test]
+    fn infinity_variants() {
+        assert_eq!(pf("Infinity"), f64::INFINITY);
+        assert_eq!(pf("-Infinity"), f64::NEG_INFINITY);
+        assert_eq!(pf("+Infinity"), f64::INFINITY);
+        assert_eq!(pf("  Infinity"), f64::INFINITY);
     }
 }
 
