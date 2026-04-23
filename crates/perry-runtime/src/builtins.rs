@@ -1469,13 +1469,16 @@ fn format_elapsed(dur: std::time::Duration) -> String {
 
 #[no_mangle]
 pub extern "C" fn js_console_time(label_ptr: *const StringHeader) {
+    // Capture wall-clock start before any string decoding or TLS overhead
+    // so the stored Instant reflects the call site, not the bookkeeping cost.
+    let start = Instant::now();
     let label = unsafe { label_from_str_ptr(label_ptr) };
     CONSOLE_TIMERS.with(|t| {
         let mut map = t.borrow_mut();
         if map.contains_key(&label) {
             eprintln!("Warning: Label '{}' already exists for console.time()", label);
         }
-        map.insert(label, Instant::now());
+        map.insert(label, start);
     });
 }
 

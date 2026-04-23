@@ -33,7 +33,7 @@
   },
   "test_gap_console_methods": {
     "status": "known_limitation",
-    "reason": "console.dir formatting, console.group indent, console.table differences"
+    "reason": "console.trace stack frame format differs (Node JS call frames vs native C frames); timer values normalized by parity script"
   },
   "test_gap_global_apis": {
     "status": "known_limitation",
