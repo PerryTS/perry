@@ -351,12 +351,13 @@ splitViewAddChild(split, content);
 App({ title: 'My App', width: 800, height: 500, body: split });
 ```
 
-**9 platforms from one codebase:**
+**10 target outputs from one codebase:**
 
 | Platform | Backend | Target Flag |
 |----------|---------|-------------|
 | macOS | AppKit (NSView) | *(default on macOS)* |
 | iOS / iPadOS | UIKit | `--target ios` / `--target ios-simulator` |
+| visionOS | UIKit (2D windows) | `--target visionos` / `--target visionos-simulator` |
 | tvOS | UIKit | `--target tvos` / `--target tvos-simulator` |
 | watchOS | WatchKit | `--target watchos` / `--target watchos-simulator` |
 | Android | Android Views (JNI) | `--target android` |
@@ -437,6 +438,8 @@ perry compile src/main.ts -o myapp
 # Mobile
 perry compile src/main.ts --target ios -o MyApp
 perry compile src/main.ts --target ios-simulator -o MyApp
+perry compile src/main.ts --target visionos -o MyApp
+perry compile src/main.ts --target visionos-simulator -o MyApp
 perry compile src/main.ts --target android -o MyApp
 
 # TV / Watch
@@ -671,8 +674,8 @@ await prisma.$disconnect();
 
 ```
 -o, --output <name>      Output file name
---target <target>        ios | ios-simulator | tvos | tvos-simulator |
-                         watchos | watchos-simulator | android |
+--target <target>        ios | ios-simulator | visionos | visionos-simulator |
+                         tvos | tvos-simulator | watchos | watchos-simulator | android |
                          web | wasm | ios-widget | android-widget |
                          wearos-tile | watchos-widget
 --output-type <type>     executable | dylib
@@ -790,6 +793,7 @@ Before tagging a major/minor bump, these must all pass:
 | **Linux musl** (x86_64 + aarch64) | Release build via `release-packages.yml`; spot-check a compiled `hello.ts` runs on Alpine | Build only |
 | **Windows** (x86_64 MSVC) | `scripts/run_doc_tests.ps1`; smoke-test `perry compile hello.ts -o hello.exe && .\hello.exe` | Build only |
 | **iOS Simulator** | `perry compile --target ios-simulator examples/widget_demo.ts && xcrun simctl install booted out.app` | No (Xcode required) |
+| **visionOS Simulator** | `perry compile --target visionos-simulator ...`, launch in Apple Vision Pro Simulator | No (Xcode required) |
 | **tvOS Simulator** | `perry compile --target tvos-simulator ...`, launch in Simulator | No (Xcode required) |
 | **watchOS Simulator** | `perry compile --target watchos-simulator ...` — requires `rustup toolchain install nightly` + `cargo +nightly -Zbuild-std` | No (Xcode + nightly required) |
 | **Android** | `perry compile --target android examples/widget_demo.ts`; install APK on emulator | No (NDK required) |

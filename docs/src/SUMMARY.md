@@ -50,6 +50,7 @@
 - [Overview](platforms/overview.md)
 - [macOS](platforms/macos.md)
 - [iOS](platforms/ios.md)
+- [visionOS](platforms/visionos.md)
 - [tvOS](platforms/tvos.md)
 - [watchOS](platforms/watchos.md)
 - [Android](platforms/android.md)

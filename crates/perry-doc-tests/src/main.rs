@@ -573,7 +573,7 @@ fn target_buildable_on_host(target: &str, host: &str) -> bool {
 /// Reason the target can't be built from this host, or None if it can.
 fn target_buildable_reason(target: &str, host: &str) -> Option<String> {
     match target {
-        "watchos" | "watchos-simulator" => {
+        "watchos" | "watchos-simulator" | "visionos" | "visionos-simulator" => {
             // Rust Tier-3 — requires nightly + `-Zbuild-std`. Skip in the
             // generic cross-compile until we wire up a dedicated job.
             Some(format!("target=`{target}` is Rust Tier-3 (nightly + -Zbuild-std); not yet wired"))
@@ -642,7 +642,7 @@ fn cross_compile_one(
     // For Apple bundle targets, perry produces `<out>.app/` alongside (or
     // replacing) the linked binary; check that directory for the artifact.
     let artifact_check = match target {
-        "ios" | "ios-simulator" | "tvos" | "tvos-simulator" | "watchos"
+        "ios" | "ios-simulator" | "visionos" | "visionos-simulator" | "tvos" | "tvos-simulator" | "watchos"
         | "watchos-simulator" | "ios-widget" | "ios-widget-simulator" => {
             out.with_extension("app")
         }

@@ -22,6 +22,8 @@ Use `--target` to cross-compile:
 | *(none)* | Current platform | Default behavior |
 | `ios-simulator` | iOS Simulator | ARM64 simulator binary |
 | `ios` | iOS Device | ARM64 device binary |
+| `visionos-simulator` | visionOS Simulator | Apple Vision Pro simulator build |
+| `visionos` | visionOS Device | Apple Vision Pro device build |
 | `android` | Android | ARM64/ARMv7 |
 | `ios-widget` | iOS Widget | WidgetKit extension (requires `--app-bundle-id`) |
 | `ios-widget-simulator` | iOS Widget (Sim) | Widget for simulator |
@@ -142,6 +144,9 @@ perry main.ts -o app
 
 # iOS app for simulator
 perry app.ts -o app --target ios-simulator
+
+# visionOS app for simulator
+perry app.ts -o app --target visionos-simulator
 
 # Web app (WASM with DOM bridge — alias: --target wasm)
 perry app.ts -o app --target web

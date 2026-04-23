@@ -12,7 +12,7 @@ use crate::{OutputFormat, Platform};
 #[derive(Args, Debug)]
 pub struct RunArgs {
     /// Positional args: [platform] [input]. Platform is one of: macos, ios,
-    /// watchos, tvos, android, linux, windows, web. If the first arg is not a
+    /// visionos, watchos, tvos, android, linux, windows, web. If the first arg is not a
     /// known platform it is treated as the input file/directory.
     pub positional: Vec<String>,
 
@@ -80,6 +80,7 @@ fn parse_platform(s: &str) -> Option<Platform> {
     match s.to_lowercase().as_str() {
         "macos" => Some(Platform::Macos),
         "ios" => Some(Platform::Ios),
+        "visionos" => Some(Platform::Visionos),
         "watchos" => Some(Platform::Watchos),
         "tvos" => Some(Platform::Tvos),
         "android" => Some(Platform::Android),
@@ -107,7 +108,13 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
     let (target, device_udid) = resolve_target(platform, &args)?;
 
     // 3. Decide local vs remote compilation
-    let needs_cross = matches!(target.as_deref(), Some("ios-simulator") | Some("ios") | Some("android") | Some("watchos-simulator") | Some("watchos") | Some("tvos-simulator") | Some("tvos"));
+    let needs_cross = matches!(target.as_deref(),
+        Some("ios-simulator") | Some("ios") |
+        Some("visionos-simulator") | Some("visionos") |
+        Some("android") |
+        Some("watchos-simulator") | Some("watchos") |
+        Some("tvos-simulator") | Some("tvos")
+    );
     let can_local = !needs_cross || can_compile_locally(target.as_deref());
 
     let use_remote = if args.remote {
@@ -174,7 +181,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
     let result = super::compile::run(compile_args, format, use_color, verbose)?;
 
     // Local iOS device builds need code signing before install
-    if target.as_deref() == Some("ios") {
+    if matches!(target.as_deref(), Some("ios") | Some("visionos")) {
         if let Some(udid) = device_udid.as_deref() {
             let config = super::publish::load_config();
             let rt = tokio::runtime::Runtime::new()?;
@@ -208,6 +215,8 @@ fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
     match target {
         Some("ios-simulator") => Some("aarch64-apple-ios-sim"),
         Some("ios") => Some("aarch64-apple-ios"),
+        Some("visionos-simulator") => Some("aarch64-apple-visionos-sim"),
+        Some("visionos") => Some("aarch64-apple-visionos"),
         Some("tvos-simulator") => Some("aarch64-apple-tvos-sim"),
         Some("tvos") => Some("aarch64-apple-tvos"),
         Some("android") => Some("aarch64-linux-android"),
@@ -627,7 +636,7 @@ async fn remote_build_and_launch(
     }
 
     // For iOS: extract .app from .ipa and install
-    if target == "ios-simulator" || target == "ios" {
+    if target == "ios-simulator" || target == "ios" || target == "visionos-simulator" || target == "visionos" {
         let app_dir = extract_app_from_ipa(&dest, &dist_dir)?;
         let udid = device_udid.ok_or_else(|| anyhow!("No device UDID for iOS launch"))?;
 
@@ -640,11 +649,11 @@ async fn remote_build_and_launch(
 
         // For device builds, re-sign with a local development identity
         // (the hub may have signed with a distribution profile)
-        if target == "ios" {
+        if target == "ios" || target == "visionos" {
             resign_for_development(&app_dir, &config, udid, format).await?;
         }
 
-        if target == "ios-simulator" {
+        if target == "ios-simulator" || target == "visionos-simulator" {
             launch_ios_simulator(&app_dir, &bundle_id, udid, format)
         } else {
             launch_ios_device(&app_dir, &bundle_id, udid, format)
@@ -1334,9 +1343,12 @@ fn read_app_metadata(project_root: &Path, input: &Path) -> (String, String) {
     let toml_bundle_id = toml_config
         .as_ref()
         .and_then(|t| {
-            // Check [ios].bundle_id, [macos].bundle_id, [app].bundle_id, [project].bundle_id, then top-level
-            t.get("ios")
+            // Check [visionos].bundle_id, [ios].bundle_id, [macos].bundle_id, [app].bundle_id, [project].bundle_id, then top-level
+            t.get("visionos")
                 .and_then(|i| i.get("bundle_id"))
+                .or_else(|| t.get("ios")
+                .and_then(|i| i.get("bundle_id"))
+                )
                 .or_else(|| t.get("macos").and_then(|m| m.get("bundle_id")))
                 .or_else(|| t.get("app").and_then(|a| a.get("bundle_id")))
                 .or_else(|| t.get("project").and_then(|p| p.get("bundle_id")))
@@ -1741,6 +1753,34 @@ fn resolve_target(platform: Option<Platform>, args: &RunArgs) -> Result<(Option<
             let (dev, target) = all.remove(selection);
             Ok((Some(target.to_string()), Some(dev.udid)))
         }
+        Some(Platform::Visionos) => {
+            if let Some(ref udid) = args.simulator {
+                return Ok((Some("visionos-simulator".to_string()), Some(udid.clone())));
+            }
+            if let Some(ref udid) = args.device {
+                return Ok((Some("visionos".to_string()), Some(udid.clone())));
+            }
+
+            let simulators = detect_booted_visionos_simulators().unwrap_or_default();
+
+            if simulators.is_empty() {
+                return Err(anyhow!(
+                    "No Apple Vision Pro simulators found.\n\
+                     Boot a simulator:  xcrun simctl boot <UDID>\n\
+                     Or specify one:    perry run visionos --simulator <UDID>"
+                ));
+            }
+
+            if simulators.len() == 1 {
+                let dev = simulators.into_iter().next().unwrap();
+                return Ok((Some("visionos-simulator".to_string()), Some(dev.udid)));
+            }
+
+            let names: Vec<String> = simulators.iter().map(|d| d.name.clone()).collect();
+            let selection = pick_from_list(&names, "Select Apple Vision Pro simulator")?;
+            let dev = &simulators[selection];
+            Ok((Some("visionos-simulator".to_string()), Some(dev.udid.clone())))
+        }
         Some(Platform::Watchos) => {
             if let Some(ref udid) = args.simulator {
                 return Ok((Some("watchos-simulator".to_string()), Some(udid.clone())));
@@ -1829,6 +1869,24 @@ fn launch(
                 .bundle_id
                 .as_deref()
                 .ok_or_else(|| anyhow!("No bundle ID found for iOS app"))?;
+            launch_ios_device(&result.output_path, bundle_id, udid, format)
+        }
+        "visionos-simulator" => {
+            let udid =
+                device_udid.ok_or_else(|| anyhow!("No simulator UDID — use --simulator <UDID>"))?;
+            let bundle_id = result
+                .bundle_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("No bundle ID found for visionOS app"))?;
+            launch_ios_simulator(&result.output_path, bundle_id, udid, format)
+        }
+        "visionos" => {
+            let udid =
+                device_udid.ok_or_else(|| anyhow!("No device UDID — use --device <UDID>"))?;
+            let bundle_id = result
+                .bundle_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("No bundle ID found for visionOS app"))?;
             launch_ios_device(&result.output_path, bundle_id, udid, format)
         }
         "watchos-simulator" => {
@@ -2363,6 +2421,48 @@ fn detect_booted_simulators() -> Result<Vec<DeviceInfo>> {
     let mut devices = Vec::new();
     if let Some(device_map) = json.get("devices").and_then(|d| d.as_object()) {
         for (_runtime, device_list) in device_map {
+            if let Some(arr) = device_list.as_array() {
+                for dev in arr {
+                    let state = dev.get("state").and_then(|s| s.as_str()).unwrap_or("");
+                    if state == "Booted" {
+                        if let (Some(udid), Some(name)) = (
+                            dev.get("udid").and_then(|s| s.as_str()),
+                            dev.get("name").and_then(|s| s.as_str()),
+                        ) {
+                            devices.push(DeviceInfo {
+                                udid: udid.to_string(),
+                                name: name.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(devices)
+}
+
+/// Detect booted Apple Watch simulators
+fn detect_booted_visionos_simulators() -> Result<Vec<DeviceInfo>> {
+    let output = Command::new("xcrun")
+        .args(["simctl", "list", "devices", "booted", "--json"])
+        .output()
+        .map_err(|e| anyhow!("Failed to run xcrun simctl: {}", e))?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
+
+    let mut devices = Vec::new();
+    if let Some(device_map) = json.get("devices").and_then(|d| d.as_object()) {
+        for (runtime, device_list) in device_map {
+            if !runtime.contains("visionOS") && !runtime.contains("xrOS") {
+                continue;
+            }
             if let Some(arr) = device_list.as_array() {
                 for dev in arr {
                     let state = dev.get("state").and_then(|s| s.as_str()).unwrap_or("");

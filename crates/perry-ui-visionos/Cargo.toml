@@ -1,0 +1,55 @@
+[package]
+name = "perry-ui-visionos"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = []
+plugins = []
+geisterhand = []
+
+[dependencies]
+perry-ui = { path = "../perry-ui" }
+perry-ui-testkit = { workspace = true }
+perry-runtime = { path = "../perry-runtime", default-features = false }
+block2 = "0.6"
+libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
+    "NSString",
+    "NSThread",
+    "NSRunLoop",
+    "NSURL",
+    "NSArray",
+    "NSError",
+] }
+objc2-core-foundation = { version = "0.3", features = [
+    "CFCGTypes",
+] }
+objc2-ui-kit = { version = "0.3", features = [
+    "UIApplication",
+    "UIWindow",
+    "UIWindowScene",
+    "UIScene",
+    "UISceneSession",
+    "UISceneConfiguration",
+    "UIView",
+    "UIViewController",
+    "UILabel",
+    "UIButton",
+    "UIStackView",
+    "UISwitch",
+    "UISlider",
+    "UIScrollView",
+    "UITextField",
+    "UITextView",
+    "UIColor",
+    "UIFont",
+    "UIControl",
+    "UIPasteboard",
+    "UIResponder",
+    "UIScreen",
+] }

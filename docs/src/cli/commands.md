@@ -52,6 +52,7 @@ Compile and launch your app in one step.
 ```bash
 perry run                          # Auto-detect entry file
 perry run ios                      # Run on iOS device/simulator
+perry run visionos                 # Run on Apple Vision Pro simulator/device
 perry run android                  # Run on Android device
 perry run -- --port 3000           # Forward args to your program
 ```
@@ -59,6 +60,7 @@ perry run -- --port 3000           # Forward args to your program
 | Argument / Flag | Description |
 |------|-------------|
 | `ios` | Target iOS (device or simulator) |
+| `visionos` | Target visionOS (device or simulator) |
 | `macos` | Target macOS (default on macOS host) |
 | `web` | Target web (opens in browser) |
 | `android` | Target Android device |
@@ -77,7 +79,7 @@ perry run -- --port 3000           # Forward args to your program
 
 **Device detection**: When targeting iOS, Perry auto-discovers available simulators (via `simctl`) and physical devices (via `devicectl`). For Android, it uses `adb`. When multiple targets are found, an interactive prompt lets you choose.
 
-**Remote build fallback**: If cross-compilation toolchains aren't installed locally (e.g., iOS targets on a machine without Xcode), `perry run ios` automatically falls back to Perry Hub's build server — it packages your project, uploads it, streams build progress via WebSocket, downloads the `.ipa`, and installs it on your device. Use `--local` or `--remote` to force either path.
+**Remote build fallback**: If cross-compilation toolchains aren't installed locally (e.g., Apple mobile targets on a machine without Xcode), `perry run ios` and `perry run visionos` can fall back to Perry Hub's build server when the backend supports the target. Use `--local` or `--remote` to force either path.
 
 ```bash
 # Run a CLI program
@@ -224,6 +226,7 @@ Build, sign, and distribute your app.
 ```bash
 perry publish macos
 perry publish ios
+perry publish visionos
 perry publish android
 ```
 
@@ -231,6 +234,7 @@ perry publish android
 |------|-------------|
 | `macos` | Build for macOS (App Store/notarization) |
 | `ios` | Build for iOS (App Store/TestFlight) |
+| `visionos` | Build for visionOS |
 | `android` | Build for Android (Google Play) |
 | `linux` | Build for Linux (AppImage/deb/rpm) |
 | `--server <URL>` | Build server (default: `https://hub.perryts.com`) |
@@ -271,6 +275,7 @@ Interactive credential wizard for app distribution.
 perry setup          # Show platform menu
 perry setup macos    # macOS setup
 perry setup ios      # iOS setup
+perry setup visionos # visionOS setup
 perry setup android  # Android setup
 ```
 

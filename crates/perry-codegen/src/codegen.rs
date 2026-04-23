@@ -511,12 +511,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     }
 
     // Derive __platform__ number from target triple:
-    //   0 = macOS, 1 = iOS, 2 = Android, 3 = Windows, 4 = Linux, 5 = watchOS, 6 = Web
+    //   0 = macOS, 1 = iOS, 2 = Android, 3 = Windows, 4 = Linux,
+    //   5 = Web, 6 = tvOS, 7 = watchOS, 8 = visionOS
     let platform_number: f64 = {
         let t = triple.to_lowercase();
-        if t.contains("watchos") { 5.0 }
+        if t.contains("visionos") || t.contains("xros") { 8.0 }
+        else if t.contains("watchos") { 7.0 }
         else if t.contains("ios") { 1.0 }
-        else if t.contains("tvos") { 1.0 }
+        else if t.contains("tvos") { 6.0 }
         else if t.contains("android") { 2.0 }
         else if t.contains("windows") || t.contains("mingw") || t.contains("msvc") { 3.0 }
         else if t.contains("linux") { 4.0 }
@@ -3116,8 +3118,9 @@ fn default_target_triple() -> String {
 ///
 /// Supported:
 ///  * `ios`, `ios-simulator`           → aarch64-apple-ios
-///  * `watchos`                         → arm64_32-apple-watchos (ILP32)
-///  * `watchos-simulator`               → arm64-apple-watchos10.0-simulator
+///  * `visionos`, `visionos-simulator` → arm64-apple-xros1.0{,-simulator}
+///  * `watchos`                        → arm64_32-apple-watchos (ILP32)
+///  * `watchos-simulator`              → arm64-apple-watchos10.0-simulator
 ///  * `tvos`, `tvos-simulator`         → aarch64-apple-tvos
 ///  * `android`                        → aarch64-unknown-linux-android
 ///  * `linux` (x86_64 alias)           → x86_64-unknown-linux-gnu
@@ -3130,6 +3133,8 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
     match name {
         "ios" => Some("aarch64-apple-ios".to_string()),
         "ios-simulator" => Some("arm64-apple-ios17.0-simulator".to_string()),
+        "visionos" => Some("arm64-apple-xros1.0".to_string()),
+        "visionos-simulator" => Some("arm64-apple-xros1.0-simulator".to_string()),
         "watchos" => Some("arm64_32-apple-watchos".to_string()),
         "watchos-simulator" => Some("arm64-apple-watchos10.0-simulator".to_string()),
         "tvos" => Some("aarch64-apple-tvos".to_string()),

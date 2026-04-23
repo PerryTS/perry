@@ -1,7 +1,7 @@
 // demonstrates: every cross-platform perry/ui widget in one window
 // docs: docs/src/ui/widgets.md
 // platforms: macos, linux, windows
-// targets: ios-simulator, tvos-simulator, web, wasm
+// targets: ios-simulator, visionos-simulator, tvos-simulator, web, wasm
 //
 // Rendered deterministically — no timers, no animations, no state changes.
 // Captured at fixed size (900x1400) so the screenshot diff is reproducible

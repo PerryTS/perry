@@ -1,7 +1,7 @@
 // demonstrates: minimal stateful UI — label + increment button
 // docs: docs/src/ui/state.md
 // platforms: macos, linux, windows
-// targets: ios-simulator, tvos-simulator, watchos-simulator, android, web, wasm
+// targets: ios-simulator, visionos-simulator, tvos-simulator, watchos-simulator, android, web, wasm
 
 import { App, VStack, Text, Button, State } from "perry/ui"
 

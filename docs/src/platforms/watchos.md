@@ -171,12 +171,12 @@ This shares App Store Connect credentials with iOS/macOS (same team, API key, is
 
 ## Platform Detection
 
-Use `__platform__ === 5` to detect watchOS at compile time:
+Use `__platform__ === 7` to detect watchOS at compile time:
 
 ```typescript,no-test
 declare const __platform__: number;
 
-if (__platform__ === 5) {
+if (__platform__ === 7) {
   console.log("Running on watchOS");
 }
 ```

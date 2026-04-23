@@ -290,6 +290,36 @@ iOS-specific configuration for `perry publish ios`, `perry run ios`, and `perry 
 
 ---
 
+### `[visionos]`
+
+visionOS-specific configuration for `perry publish visionos`, `perry run visionos`, and `perry compile --target visionos`/`--target visionos-simulator`.
+
+#### App Metadata
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bundle_id` | string | Falls back to `[app]`/`[project]`/`[ios]` | visionOS-specific bundle identifier |
+| `deployment_target` | string | `"1.0"` | Minimum visionOS version required |
+| `minimum_version` | string | — | Alias for `deployment_target` |
+| `entry` | string | Falls back to `[project]`/`[app]` | visionOS-specific entry file |
+| `encryption_exempt` | bool | `false` | If `true`, adds `ITSAppUsesNonExemptEncryption = false` to Info.plist |
+| `info_plist` | table | — | Custom key-value pairs merged into the generated Info.plist |
+
+#### Distribution / Signing
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `distribute` | string | — | Distribution method for visionOS builds |
+| `signing_identity` | string | Auto-detected from Keychain | Code signing identity |
+| `certificate` | string | Auto-exported from Keychain | Path to `.p12` distribution certificate |
+| `provisioning_profile` | string | — | Path to `.mobileprovision` file |
+| `team_id` | string | From `~/.perry/config.toml` | Apple Developer Team ID |
+| `key_id` | string | From `~/.perry/config.toml` | App Store Connect API key ID |
+| `issuer_id` | string | From `~/.perry/config.toml` | App Store Connect issuer ID |
+| `p8_key_path` | string | From `~/.perry/config.toml` | Path to `.p8` API key file |
+
+---
+
 ### `[android]`
 
 Android-specific configuration for `perry publish android`, `perry run android`, and `perry compile --target android`.

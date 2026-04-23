@@ -124,6 +124,7 @@ struct PerryToml {
     app: Option<AppConfig>,
     macos: Option<MacosConfig>,
     ios: Option<IosConfig>,
+    visionos: Option<VisionosConfig>,
     watchos: Option<WatchosConfig>,
     tvos: Option<TvosConfig>,
     android: Option<AndroidConfig>,
@@ -215,6 +216,24 @@ struct IosConfig {
     /// Custom Info.plist entries (key-value pairs added to the generated plist).
     /// Use for privacy descriptions, custom URL schemes, etc.
     /// Example: { NSMicrophoneUsageDescription = "Measures ambient sound levels" }
+    info_plist: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisionosConfig {
+    bundle_id: Option<String>,
+    deployment_target: Option<String>,
+    minimum_version: Option<String>,
+    distribute: Option<String>,
+    entry: Option<String>,
+    provisioning_profile: Option<String>,
+    certificate: Option<String>,
+    signing_identity: Option<String>,
+    team_id: Option<String>,
+    key_id: Option<String>,
+    issuer_id: Option<String>,
+    p8_key_path: Option<String>,
+    encryption_exempt: Option<bool>,
     info_plist: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -393,6 +412,14 @@ struct BuildManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     ios_info_plist: Option<std::collections::HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    visionos_deployment_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visionos_distribute: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visionos_encryption_exempt: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visionos_info_plist: Option<std::collections::HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     macos_distribute: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     macos_encryption_exempt: Option<bool>,
@@ -475,6 +502,7 @@ pub fn run(args: PublishArgs, format: OutputFormat, use_color: bool, _verbose: u
 
     let target_hint = match args.platform {
         Some(Platform::Ios) => Some("ios"),
+        Some(Platform::Visionos) => Some("visionos"),
         Some(Platform::Android) => Some("android"),
         Some(Platform::Linux) => Some("linux"),
         Some(Platform::Windows) => Some("windows"),
@@ -559,7 +587,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
 
         // Infer app_type from target
         let app_type = match args.platform {
-            Some(Platform::Ios) | Some(Platform::Android) | Some(Platform::Macos) | Some(Platform::Tvos) | Some(Platform::Web) | Some(Platform::Windows) => "gui",
+            Some(Platform::Ios) | Some(Platform::Visionos) | Some(Platform::Android) | Some(Platform::Macos) | Some(Platform::Tvos) | Some(Platform::Web) | Some(Platform::Windows) => "gui",
             _ => "server",
         };
 
@@ -626,6 +654,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
         match p {
             Platform::Macos => "macos".to_string(),
             Platform::Ios => "ios".to_string(),
+            Platform::Visionos => "visionos".to_string(),
             Platform::Watchos => "watchos".to_string(),
             Platform::Tvos => "tvos".to_string(),
             Platform::Android => "android".to_string(),
@@ -639,11 +668,12 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
     } else if interactive {
         prompt_target(saved.default_target.as_deref())
     } else {
-        bail!("No target specified. Use: perry publish <macos|ios|tvos|android|linux|windows|web>");
+        bail!("No target specified. Use: perry publish <macos|ios|visionos|tvos|android|linux|windows|web>");
     };
 
     let target_display = match target_name.as_str() {
         "ios" => "iOS",
+        "visionos" => "visionOS",
         "tvos" => "tvOS",
         "android" => "Android",
         "linux" => "Linux",
@@ -652,6 +682,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
         _ => "macOS",
     };
     let is_ios = target_name == "ios";
+    let is_visionos = target_name == "visionos";
     let is_tvos = target_name == "tvos";
     let is_android = target_name == "android";
     let is_linux = target_name == "linux";
@@ -675,6 +706,11 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
             .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
             .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
             .unwrap_or_else(|| "src/main_ios.ts".into())
+    } else if is_visionos {
+        config.visionos.as_ref().and_then(|i| i.entry.clone())
+            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
+            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
+            .unwrap_or_else(|| "src/main_visionos.ts".into())
     } else if is_tvos {
         config.tvos.as_ref().and_then(|t| t.entry.clone())
             .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
@@ -721,12 +757,12 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
     // Auto-increment build_number for targets that need monotonic build numbers
     let is_windows = target_name == "windows";
     let is_web = target_name == "web";
-    let is_macos = !is_ios && !is_tvos && !is_android && !is_linux && !is_windows && !is_web;
+    let is_macos = !is_ios && !is_visionos && !is_tvos && !is_android && !is_linux && !is_windows && !is_web;
     let macos_needs_upload = is_macos && matches!(
         macos_distribute.as_deref(),
         Some("appstore") | Some("both")
     );
-    let build_number = if is_ios || is_tvos || is_android || macos_needs_upload {
+    let build_number = if is_ios || is_visionos || is_tvos || is_android || macos_needs_upload {
         let n = toml_build_number + 1;
         if let Ok(content) = fs::read_to_string(&perry_toml_path) {
             let updated = if content.contains("build_number =") {
@@ -763,6 +799,13 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
             .or_else(|| project_bundle_id.clone())
             .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
             .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
+    } else if is_visionos {
+        config.visionos.as_ref().and_then(|i| i.bundle_id.clone())
+            .or_else(|| app_bundle_id.clone())
+            .or_else(|| project_bundle_id.clone())
+            .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
+            .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
+            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
     } else if is_tvos {
         config.tvos.as_ref().and_then(|t| t.bundle_id.clone())
             .or_else(|| app_bundle_id.clone())
@@ -780,7 +823,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
         .or_else(|| config.app.as_ref().and_then(|a| a.icons.as_ref()).and_then(|i| i.source.clone()));
 
     // Prompt for icon if missing and building for a platform that needs one
-    let needs_icon = is_ios || is_android
+    let needs_icon = is_ios || is_visionos || is_android
         || (is_macos && matches!(macos_distribute.as_deref(), Some("appstore") | Some("both")));
     if icon.is_none() && interactive && needs_icon {
         println!();
@@ -852,6 +895,12 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
     let mut ios_distribute = config.ios.as_ref().and_then(|i| i.distribute.clone());
     let ios_encryption_exempt = config.ios.as_ref().and_then(|i| i.encryption_exempt);
     let ios_info_plist = config.ios.as_ref().and_then(|i| i.info_plist.clone());
+    let visionos_deployment_target = config.visionos.as_ref().and_then(|i| {
+        i.deployment_target.clone().or_else(|| i.minimum_version.clone())
+    });
+    let visionos_distribute = config.visionos.as_ref().and_then(|i| i.distribute.clone());
+    let visionos_encryption_exempt = config.visionos.as_ref().and_then(|i| i.encryption_exempt);
+    let visionos_info_plist = config.visionos.as_ref().and_then(|i| i.info_plist.clone());
     let macos_encryption_exempt = config.macos.as_ref().and_then(|m| m.encryption_exempt);
 
     // Android-specific config from perry.toml
@@ -1712,7 +1761,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
     // Build manifest
     // For iOS/Android/macOS-appstore: version = build_number (CFBundleVersion), short_version = marketing version
     // For macOS-notarize/Linux: version = marketing version string, short_version = None
-    let (manifest_version, manifest_short_version) = if is_ios || is_android || macos_needs_upload {
+    let (manifest_version, manifest_short_version) = if is_ios || is_visionos || is_android || macos_needs_upload {
         (build_number.to_string(), Some(version.clone()))
     } else {
         (version.clone(), None)
@@ -1735,6 +1784,10 @@ async fn run_async(args: PublishArgs, format: OutputFormat, use_color: bool) -> 
         ios_distribute: if is_ios { ios_distribute } else { None },
         ios_encryption_exempt: if is_ios { ios_encryption_exempt } else { None },
         ios_info_plist: if is_ios { ios_info_plist } else { None },
+        visionos_deployment_target: if is_visionos { visionos_deployment_target } else { None },
+        visionos_distribute: if is_visionos { visionos_distribute } else { None },
+        visionos_encryption_exempt: if is_visionos { visionos_encryption_exempt } else { None },
+        visionos_info_plist: if is_visionos { visionos_info_plist } else { None },
         macos_distribute: if is_macos { macos_distribute } else { None },
         macos_encryption_exempt: if is_macos { macos_encryption_exempt } else { None },
         tvos_deployment_target: if is_tvos { config.tvos.as_ref().and_then(|t| t.deployment_target.clone()) } else { None },
@@ -2637,14 +2690,15 @@ pub(crate) fn prompt_input(prompt: &str, default: Option<&str>) -> Option<String
     }
 }
 
-/// Prompt for target platform selection. Returns "macos", "ios", "android", or "linux".
+/// Prompt for target platform selection.
 fn prompt_target(default: Option<&str>) -> String {
-    let options = &["macOS", "iOS", "tvOS", "Android", "Linux"];
+    let options = &["macOS", "iOS", "visionOS", "tvOS", "Android", "Linux"];
     let default_idx = match default {
         Some("ios") => 1,
-        Some("tvos") => 2,
-        Some("android") => 3,
-        Some("linux") => 4,
+        Some("visionos") => 2,
+        Some("tvos") => 3,
+        Some("android") => 4,
+        Some("linux") => 5,
         _ => 0,
     };
     let selection = Select::new()
@@ -2655,9 +2709,10 @@ fn prompt_target(default: Option<&str>) -> String {
         .unwrap_or(0);
     match selection {
         1 => "ios".into(),
-        2 => "tvos".into(),
-        3 => "android".into(),
-        4 => "linux".into(),
+        2 => "visionos".into(),
+        3 => "tvos".into(),
+        4 => "android".into(),
+        5 => "linux".into(),
         _ => "macos".into(),
     }
 }

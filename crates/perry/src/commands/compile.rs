@@ -804,6 +804,8 @@ fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
     match target {
         Some("ios-simulator") | Some("ios-widget-simulator") => Some("aarch64-apple-ios-sim"),
         Some("ios") | Some("ios-widget") => Some("aarch64-apple-ios"),
+        Some("visionos-simulator") => Some("aarch64-apple-visionos-sim"),
+        Some("visionos") => Some("aarch64-apple-visionos"),
         Some("watchos-simulator") => Some("aarch64-apple-watchos-sim"),
         Some("watchos") => Some("arm64_32-apple-watchos"),
         Some("tvos-simulator") => Some("aarch64-apple-tvos-sim"),
@@ -864,6 +866,8 @@ fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<PathBuf> {
         Some("windows")
     } else if lib_name.contains("_ios") {
         Some("ios")
+    } else if lib_name.contains("_visionos") {
+        Some("visionos")
     } else if lib_name.contains("_tvos") {
         Some("tvos")
     } else if lib_name.contains("_watchos") {
@@ -1343,6 +1347,14 @@ fn collect_library_candidates(name: &str, target: Option<&str>) -> Vec<PathBuf> 
                         candidates.push(dir.join(&ios_name));
                     }
                 }
+                if matches!(target, Some("visionos") | Some("visionos-simulator")) {
+                    if name.contains("_visionos") {
+                        candidates.push(dir.join(name));
+                    } else {
+                        let visionos_name = name.replace(".a", "_visionos.a");
+                        candidates.push(dir.join(&visionos_name));
+                    }
+                }
                 if matches!(target, Some("watchos") | Some("watchos-simulator")) {
                     if name.contains("_watchos") {
                         candidates.push(dir.join(name));
@@ -1459,6 +1471,7 @@ fn find_jsruntime_library(target: Option<&str>) -> Option<PathBuf> {
 fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
     let lib_name = match target {
         Some("ios-simulator") | Some("ios") => "libperry_ui_ios.a",
+        Some("visionos-simulator") | Some("visionos") => "libperry_ui_visionos.a",
         Some("android") => "libperry_ui_android.a",
         Some("watchos-simulator") | Some("watchos") => "libperry_ui_watchos.a",
         Some("tvos-simulator") | Some("tvos") => "libperry_ui_tvos.a",
@@ -1532,6 +1545,8 @@ fn find_geisterhand_runtime(target: Option<&str>) -> Option<PathBuf> {
 fn find_geisterhand_ui(target: Option<&str>) -> Option<PathBuf> {
     let name = if matches!(target, Some("ios-simulator") | Some("ios")) {
         "libperry_ui_ios.a"
+    } else if matches!(target, Some("visionos-simulator") | Some("visionos")) {
+        return None;
     } else if matches!(target, Some("android")) {
         "libperry_ui_android.a"
     } else if matches!(target, Some("linux")) || cfg!(target_os = "linux") {
@@ -1547,6 +1562,11 @@ fn find_geisterhand_ui(target: Option<&str>) -> Option<PathBuf> {
 /// Auto-build geisterhand-enabled libraries when they're missing.
 /// Uses a separate target dir (target/geisterhand/) to avoid mixing with normal builds.
 fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat) -> Result<()> {
+    if matches!(target, Some("visionos") | Some("visionos-simulator")) {
+        return Err(anyhow!(
+            "Geisterhand is not supported on visionOS yet."
+        ));
+    }
     // Determine which UI crate to build based on target platform
     let ui_crate = match target {
         Some("ios-simulator") | Some("ios") => "perry-ui-ios",
@@ -1959,6 +1979,7 @@ fn build_optimized_libs(
         if ctx.needs_ui {
             let ui_crate = match target {
                 Some("ios-simulator") | Some("ios") | Some("ios-widget") | Some("ios-widget-simulator") => "perry-ui-ios",
+                Some("visionos-simulator") | Some("visionos") => "perry-ui-visionos",
                 Some("android") => "perry-ui-android",
                 Some("watchos-simulator") | Some("watchos") => "perry-ui-watchos",
                 Some("tvos-simulator") | Some("tvos") => "perry-ui-tvos",
@@ -2094,6 +2115,7 @@ fn parse_native_library_manifest(
     // Parse target config
     let target_key = match target {
         Some("ios-simulator") | Some("ios") => "ios",
+        Some("visionos-simulator") | Some("visionos") => "visionos",
         Some("android") => "android",
         Some("tvos-simulator") | Some("tvos") => "tvos",
         Some("watchos-simulator") | Some("watchos") => "watchos",
@@ -3335,6 +3357,47 @@ fn find_watchos_swift_runtime() -> Option<PathBuf> {
     }
 
     None
+}
+
+fn find_visionos_swift_runtime() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("swift").join("PerryVisionApp.swift");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            if let Some(prefix) = dir.parent() {
+                let candidate = prefix.join("lib").join("perry").join("swift").join("PerryVisionApp.swift");
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    let source_candidate = PathBuf::from("crates/perry-ui-visionos/swift/PerryVisionApp.swift");
+    if source_candidate.exists() {
+        return Some(source_candidate);
+    }
+
+    None
+}
+
+fn apple_sdk_version(sdk: &str) -> Option<String> {
+    let output = Command::new("xcrun")
+        .args(["--sdk", sdk, "--show-sdk-version"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8(output.stdout).ok()?;
+    let version = version.trim();
+    if version.is_empty() {
+        None
+    } else {
+        Some(version.to_string())
+    }
 }
 
 /// Look up bundle_id from perry.toml for a specific section (e.g., "watchos", "ios", "app")
@@ -4980,7 +5043,13 @@ pub fn run_with_parse_cache(
             .map(|f| f.trim().to_string())
             .filter(|f| !f.is_empty())
             .collect();
-        let is_mobile = matches!(target.as_deref(), Some("ios") | Some("ios-simulator") | Some("android") | Some("watchos") | Some("watchos-simulator") | Some("tvos") | Some("tvos-simulator"));
+        let is_mobile = matches!(target.as_deref(),
+            Some("ios") | Some("ios-simulator") |
+            Some("visionos") | Some("visionos-simulator") |
+            Some("android") |
+            Some("watchos") | Some("watchos-simulator") |
+            Some("tvos") | Some("tvos-simulator")
+        );
         if is_mobile {
             features.retain(|f| f != "plugins");
         }
@@ -5616,6 +5685,7 @@ pub fn run_with_parse_cache(
         // Use TARGET (what we're compiling to), not HOST (what we're running on)
         let is_macho = matches!(target.as_deref(),
             Some("ios") | Some("ios-simulator") | Some("ios-widget") | Some("ios-widget-simulator") |
+            Some("visionos") | Some("visionos-simulator") |
             Some("macos") | Some("watchos") | Some("watchos-simulator") |
             Some("tvos") | Some("tvos-simulator")
         ) || (!is_windows && !is_linux && !is_android && cfg!(target_os = "macos"));
@@ -5865,6 +5935,7 @@ pub fn run_with_parse_cache(
     }
 
     let is_ios = matches!(target.as_deref(), Some("ios-simulator") | Some("ios"));
+    let is_visionos = matches!(target.as_deref(), Some("visionos-simulator") | Some("visionos"));
     let is_android = matches!(target.as_deref(), Some("android"));
     let is_linux = matches!(target.as_deref(), Some("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
@@ -5872,6 +5943,7 @@ pub fn run_with_parse_cache(
         || (target.is_none() && cfg!(target_os = "windows"));
     let is_cross_windows = is_windows && !cfg!(target_os = "windows");
     let is_cross_ios = is_ios && !cfg!(target_os = "macos");
+    let is_cross_visionos = is_visionos && !cfg!(target_os = "macos");
     let is_cross_macos = matches!(target.as_deref(), Some("macos")) && !cfg!(target_os = "macos");
     // Note: is_watchos and is_tvos are defined below (near jsruntime_lib); is_cross_tvos
     // is set after them so this block keeps all is_cross_* bindings together.
@@ -5951,7 +6023,7 @@ pub fn run_with_parse_cache(
     // Without this the is_tvos branch below would unconditionally call `xcrun`,
     // which only exists on macOS with Xcode.
     let is_cross_tvos = is_tvos && !cfg!(target_os = "macos");
-    let jsruntime_lib = if !is_ios && !is_android && !is_watchos && !is_tvos && (ctx.needs_js_runtime || args.enable_js_runtime) {
+    let jsruntime_lib = if !is_ios && !is_visionos && !is_android && !is_watchos && !is_tvos && (ctx.needs_js_runtime || args.enable_js_runtime) {
         match find_jsruntime_library(target.as_deref()) {
             Some(lib) => {
                 match format {
@@ -6069,6 +6141,57 @@ pub fn run_with_parse_cache(
              .arg(&swift_runtime);
             c
         }
+    } else if is_visionos && is_cross_visionos {
+        return Err(anyhow!(
+            "Local visionOS compilation requires Xcode on macOS. Use a macOS host or Perry Hub remote build."
+        ));
+    } else if is_visionos {
+        let sdk = if target.as_deref() == Some("visionos-simulator") { "xrsimulator" } else { "xros" };
+        let swiftc = String::from_utf8(
+            Command::new("xcrun").args(["--sdk", sdk, "--find", "swiftc"]).output()?.stdout
+        )?.trim().to_string();
+        let sysroot = String::from_utf8(
+            Command::new("xcrun").args(["--sdk", sdk, "--show-sdk-path"]).output()?.stdout
+        )?.trim().to_string();
+        let sdk_version = apple_sdk_version(sdk).unwrap_or_else(|| "1.0".to_string());
+        let triple = if target.as_deref() == Some("visionos-simulator") {
+            format!("arm64-apple-xros{}-simulator", sdk_version)
+        } else {
+            format!("arm64-apple-xros{}", sdk_version)
+        };
+        let swift_runtime = find_visionos_swift_runtime()
+            .ok_or_else(|| anyhow!(
+                "PerryVisionApp.swift not found. Expected next to perry binary or in source tree."
+            ))?;
+
+        let input_stem = args.input.file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| format!("{}_ts", s))
+            .unwrap_or_else(|| "main_ts".to_string());
+        if let Some(entry_obj) = obj_paths.iter().find(|f| {
+            f.file_stem().and_then(|s| s.to_str())
+                .map(|s| s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem)))
+                .unwrap_or(false)
+        }) {
+            let objcopy = std::env::var("HOME").ok()
+                .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
+                .filter(|p| p.exists())
+                .or_else(|| std::env::var("HOME").ok()
+                    .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
+                    .filter(|p| p.exists()))
+                .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
+            let _ = Command::new(&objcopy)
+                .args(["--redefine-sym", "_main=_perry_main_init"])
+                .arg(entry_obj)
+                .status();
+        }
+
+        let mut c = Command::new(swiftc);
+        c.arg("-target").arg(&triple)
+         .arg("-sdk").arg(&sysroot)
+         .arg("-parse-as-library")
+         .arg(&swift_runtime);
+        c
     } else if is_ios && is_cross_ios {
         // Cross-compile iOS from Linux using ld64.lld + Apple SDK sysroot
         let ld64 = find_llvm_tool("ld64.lld")
@@ -6332,10 +6455,10 @@ pub fn run_with_parse_cache(
     if !is_windows {
         if is_android || is_linux {
             cmd.arg("-Wl,--gc-sections");
-        } else if is_cross_ios || is_cross_macos || is_cross_tvos {
+        } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
             // ld64.lld called directly — no -Wl, prefix needed
             cmd.arg("-dead_strip");
-        } else if is_watchos {
+        } else if is_watchos || is_visionos {
             cmd.arg("-Xlinker").arg("-dead_strip");
         } else {
             // Native macOS/iOS via clang driver
@@ -6367,7 +6490,9 @@ pub fn run_with_parse_cache(
     // symbols (alloc, std::thread_local, etc.). The .a archive provides those
     // as a fallback — the linker only pulls object files from the .a that
     // resolve still-undefined symbols (first-definition-wins on macOS).
-    let skip_runtime = (is_android || is_watchos) && ctx.needs_ui && find_ui_library(target.as_deref()).is_some();
+    let skip_runtime = (is_android || is_watchos || is_visionos)
+        && ctx.needs_ui
+        && find_ui_library(target.as_deref()).is_some();
     if !skip_runtime {
         if let Some(ref jsruntime) = jsruntime_lib {
             cmd.arg(jsruntime);
@@ -6510,6 +6635,23 @@ pub fn run_with_parse_cache(
            .arg("-framework").arg("AVFoundation") // Camera capture (AVCaptureSession)
            .arg("-framework").arg("CoreMedia") // CMSampleBuffer
            .arg("-framework").arg("CoreVideo") // CVPixelBuffer
+           .arg("-liconv")
+           .arg("-lresolv")
+           .arg("-lobjc")
+           .arg("-lSystem");
+    } else if is_visionos {
+        cmd.arg("-framework").arg("SwiftUI")
+           .arg("-framework").arg("UIKit")
+           .arg("-framework").arg("Foundation")
+           .arg("-framework").arg("CoreGraphics")
+           .arg("-framework").arg("Security")
+           .arg("-framework").arg("CoreFoundation")
+           .arg("-framework").arg("SystemConfiguration")
+           .arg("-framework").arg("QuartzCore")
+           .arg("-framework").arg("AVFAudio")
+           .arg("-framework").arg("AVFoundation")
+           .arg("-framework").arg("CoreMedia")
+           .arg("-framework").arg("CoreVideo")
            .arg("-liconv")
            .arg("-lresolv")
            .arg("-lobjc")
@@ -6662,7 +6804,7 @@ pub fn run_with_parse_cache(
             // and --allow-multiple-definition (ELF) / /FORCE:MULTIPLE (COFF)
             // handles duplicate symbols safely. On Android, skip_runtime=true
             // means the UI lib is the sole provider of perry-runtime symbols.
-            let ui_lib = if is_windows || is_android {
+            let ui_lib = if is_windows || is_android || is_visionos {
                 ui_lib
             } else {
                 match strip_duplicate_objects_from_lib(&ui_lib) {
@@ -6685,7 +6827,7 @@ pub fn run_with_parse_cache(
 
             if is_watchos {
                 // SwiftUI/WatchKit already linked above
-            } else if is_ios || is_tvos {
+            } else if is_ios || is_visionos || is_tvos {
                 // UIKit already linked above
             } else if is_android {
                 // Allow multiple definitions from perry-runtime in both UI lib and native libs
@@ -6752,6 +6894,8 @@ pub fn run_with_parse_cache(
                 ("libperry_ui_watchos.a", "cargo build --release -p perry-ui-watchos --target arm64_32-apple-watchos")
             } else if is_tvos {
                 ("libperry_ui_tvos.a", "cargo build --release -p perry-ui-tvos --target aarch64-apple-tvos")
+            } else if is_visionos {
+                ("libperry_ui_visionos.a", "cargo build --release -p perry-ui-visionos --target aarch64-apple-visionos-sim")
             } else if is_ios {
                 ("libperry_ui_ios.a", "cargo build --release -p perry-ui-ios --target aarch64-apple-ios-sim")
             } else if is_android {
@@ -7685,6 +7829,216 @@ pub fn run_with_parse_cache(
                 println!("{}", serde_json::to_string(&result)?);
             }
         }
+    } else if is_visionos {
+        let app_dir = exe_path.with_extension("app");
+        let _ = fs::create_dir_all(&app_dir);
+        let bundle_exe = app_dir.join(exe_path.file_name().unwrap_or_default());
+        fs::copy(&exe_path, &bundle_exe)?;
+        let _ = fs::remove_file(&exe_path);
+
+        let exe_stem = exe_path.file_stem().and_then(|s| s.to_str()).unwrap_or(stem);
+        let bundle_id = lookup_bundle_id_from_toml(&args.input, "visionos")
+            .or_else(|| lookup_bundle_id_from_toml(&args.input, "app"))
+            .or_else(|| lookup_bundle_id_from_toml(&args.input, "ios"))
+            .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
+        result_bundle_id = Some(bundle_id.clone());
+        result_app_dir = Some(app_dir.clone());
+
+        let (app_version, app_build_number, deployment_target, encryption_exempt, custom_plist_entries) = (|| -> Option<(String, String, String, Option<bool>, String)> {
+            let mut dir = args.input.canonicalize().ok()?;
+            for _ in 0..5 {
+                dir = dir.parent()?.to_path_buf();
+                let toml_path = dir.join("perry.toml");
+                if !toml_path.exists() {
+                    continue;
+                }
+                let data = fs::read_to_string(&toml_path).ok()?;
+                let doc: toml::Table = data.parse().ok()?;
+                let project = doc.get("project").and_then(|v| v.as_table());
+                let visionos = doc.get("visionos").and_then(|v| v.as_table());
+                let version = project
+                    .and_then(|p| p.get("version"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("1.0.0")
+                    .to_string();
+                let build_number = project
+                    .and_then(|p| p.get("build_number"))
+                    .and_then(|v| v.as_integer().map(|n| n.to_string()).or_else(|| v.as_str().map(|s| s.to_string())))
+                    .unwrap_or_else(|| "1".to_string());
+                let deployment_target = visionos
+                    .and_then(|v| v.get("deployment_target").or_else(|| v.get("minimum_version")))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("1.0")
+                    .to_string();
+                let encryption_exempt = visionos
+                    .and_then(|v| v.get("encryption_exempt"))
+                    .and_then(|v| v.as_bool());
+                let mut entries = String::new();
+                if let Some(info_plist) = visionos
+                    .and_then(|v| v.get("info_plist"))
+                    .and_then(|v| v.as_table())
+                {
+                    for (key, value) in info_plist {
+                        if let Some(s) = value.as_str() {
+                            entries.push_str(&format!("    <key>{}</key>\n    <string>{}</string>\n", key, s));
+                        } else if let Some(b) = value.as_bool() {
+                            entries.push_str(&format!("    <key>{}</key>\n    <{}/>\n", key, if b { "true" } else { "false" }));
+                        } else if let Some(i) = value.as_integer() {
+                            entries.push_str(&format!("    <key>{}</key>\n    <integer>{}</integer>\n", key, i));
+                        }
+                    }
+                }
+                return Some((version, build_number, deployment_target, encryption_exempt, entries));
+            }
+            Some(("1.0.0".to_string(), "1".to_string(), "1.0".to_string(), None, String::new()))
+        })().unwrap();
+
+        let platform_name = if target.as_deref() == Some("visionos-simulator") {
+            "XRSimulator"
+        } else {
+            "XROS"
+        };
+
+        let mut info_plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>{exe_stem}</string>
+    <key>CFBundleIdentifier</key>
+    <string>{bundle_id}</string>
+    <key>CFBundleName</key>
+    <string>{exe_stem}</string>
+    <key>CFBundleVersion</key>
+    <string>{app_build_number}</string>
+    <key>CFBundleShortVersionString</key>
+    <string>{app_version}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>MinimumOSVersion</key>
+    <string>{deployment_target}</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>{platform_name}</string>
+    </array>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>7</integer>
+    </array>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <true/>
+        <key>UIApplicationPreferredDefaultSceneSessionRole</key>
+        <string>UIWindowSceneSessionRoleApplication</string>
+        <key>UISceneConfigurations</key>
+        <dict/>
+    </dict>
+</dict>
+</plist>"#
+        );
+
+        let usage_descriptions = concat!(
+            "    <key>NSCameraUsageDescription</key>\n",
+            "    <string>This app uses the camera to identify colors.</string>\n",
+            "    <key>NSMicrophoneUsageDescription</key>\n",
+            "    <string>This app uses the microphone to measure sound levels.</string>\n",
+        );
+        info_plist = info_plist.replace("</dict>\n</plist>", &format!("{}</dict>\n</plist>", usage_descriptions));
+
+        if let Some(exempt) = encryption_exempt {
+            let encryption_entry = format!(
+                "    <key>ITSAppUsesNonExemptEncryption</key>\n    <{}/>\n",
+                if exempt { "false" } else { "true" }
+            );
+            info_plist = info_plist.replace("</dict>\n</plist>", &format!("{}</dict>\n</plist>", encryption_entry));
+        }
+
+        if !custom_plist_entries.is_empty() {
+            info_plist = info_plist.replace("</dict>\n</plist>", &format!("{}</dict>\n</plist>", custom_plist_entries));
+        }
+
+        fs::write(app_dir.join("Info.plist"), info_plist)?;
+
+        let source_dir = args.input.canonicalize().ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        if let Some(src_dir) = &source_dir {
+            let mut project_root = src_dir.clone();
+            for _ in 0..5 {
+                if project_root.join("package.json").exists() || project_root.join("perry.toml").exists() { break; }
+                if let Some(parent) = project_root.parent() {
+                    project_root = parent.to_path_buf();
+                } else { break; }
+            }
+            fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+                fs::create_dir_all(dst)?;
+                for entry in fs::read_dir(src)? {
+                    let entry = entry?;
+                    let ty = entry.file_type()?;
+                    let dest_path = dst.join(entry.file_name());
+                    if ty.is_dir() {
+                        copy_dir_recursive(&entry.path(), &dest_path)?;
+                    } else {
+                        fs::copy(entry.path(), &dest_path)?;
+                    }
+                }
+                Ok(())
+            }
+            for dir_name in &["logo", "assets", "resources", "images"] {
+                let resource_dir = project_root.join(dir_name);
+                if resource_dir.is_dir() {
+                    let dest = app_dir.join(dir_name);
+                    let _ = copy_dir_recursive(&resource_dir, &dest);
+                }
+            }
+        }
+
+        if let (Some(ref table), Some(ref config)) = (&i18n_table, &i18n_config) {
+            if !table.keys.is_empty() {
+                for (locale_idx, locale) in config.locales.iter().enumerate() {
+                    let lproj_dir = app_dir.join(format!("{}.lproj", locale));
+                    let _ = fs::create_dir_all(&lproj_dir);
+                    let mut strings_content = String::new();
+                    for (key_idx, key) in table.keys.iter().enumerate() {
+                        let flat_idx = locale_idx * table.keys.len() + key_idx;
+                        let value = table.translations.get(flat_idx).cloned().unwrap_or_else(|| key.clone());
+                        let escaped_key = key.replace('\\', "\\\\").replace('"', "\\\"");
+                        let escaped_val = value.replace('\\', "\\\\").replace('"', "\\\"");
+                        strings_content.push_str(&format!("\"{}\" = \"{}\";\n", escaped_key, escaped_val));
+                    }
+                    let _ = fs::write(lproj_dir.join("Localizable.strings"), &strings_content);
+                }
+            }
+        }
+
+        match format {
+            OutputFormat::Text => {
+                println!("Wrote visionOS app bundle: {}", app_dir.display());
+                println!();
+                println!("To run on Apple Vision Pro Simulator:");
+                println!("  xcrun simctl install booted {}", app_dir.display());
+                println!("  xcrun simctl launch booted {}", bundle_id);
+            }
+            OutputFormat::Json => {
+                let result = serde_json::json!({
+                    "success": true,
+                    "output": app_dir.to_string_lossy(),
+                    "bundle_id": bundle_id,
+                    "native_modules": ctx.native_modules.len(),
+                    "js_modules": ctx.js_modules.len(),
+                });
+                println!("{}", serde_json::to_string(&result)?);
+            }
+        }
     } else if is_watchos {
         // Create watchOS .app bundle
         let app_dir = exe_path.with_extension("app");
@@ -7959,7 +8313,7 @@ pub fn run_with_parse_cache(
     // Strip debug symbols from the final binary (reduces size significantly)
     // Skip for iOS/Android cross-compilation — host strip can't handle foreign architectures
     // Skip when PERRY_DEBUG_SYMBOLS=1 is set — keep symbols for crash debugging
-    if !is_dylib && !is_ios && !is_tvos && target.as_deref() != Some("android")
+    if !is_dylib && !is_ios && !is_visionos && !is_tvos && target.as_deref() != Some("android")
         && std::env::var("PERRY_DEBUG_SYMBOLS").is_err() {
         if ctx.needs_plugins {
             // When plugins are enabled, use strip -x to keep exported symbols

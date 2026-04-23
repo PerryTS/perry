@@ -1,7 +1,7 @@
 // demonstrates: ImageSymbol for SF Symbol glyphs (macOS/iOS)
 // docs: docs/src/ui/widgets.md
 // platforms: macos
-// targets: ios-simulator, tvos-simulator
+// targets: ios-simulator, visionos-simulator, tvos-simulator
 
 import { App, HStack, ImageSymbol, widgetSetWidth, widgetSetHeight } from "perry/ui"
 
