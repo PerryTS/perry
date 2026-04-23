@@ -1164,6 +1164,17 @@ fn find_msvc_link_exe() -> Option<PathBuf> {
     find_llvm_tool("lld-link")
 }
 
+/// Returns the `/SUBSYSTEM:…` flag for MSVC `link.exe` / `lld-link`.
+///
+/// CLI programs must use `CONSOLE` (3) so the OS loader attaches stdin/stdout/stderr
+/// before `main()` runs. GUI programs use `WINDOWS` (2) to suppress the console
+/// window that would otherwise flash alongside the app window. Passing neither
+/// flag lets the linker pick a default, which historically resolved to `WINDOWS`
+/// for Perry builds and silently discarded all `console.log` output (issue #120).
+fn windows_pe_subsystem_flag(needs_ui: bool) -> &'static str {
+    if needs_ui { "/SUBSYSTEM:WINDOWS" } else { "/SUBSYSTEM:CONSOLE" }
+}
+
 /// Find MSVC library search paths (MSVC CRT, Windows SDK um, Windows SDK ucrt).
 /// Returns a semicolon-separated string suitable for the LIB environment variable.
 #[cfg(target_os = "windows")]
@@ -6237,14 +6248,10 @@ pub fn run_with_parse_cache(
             })
         };
         let mut c = Command::new(linker);
-        // CONSOLE for CLI programs so the loader attaches stdin/stdout/stderr
-        // before main() runs — otherwise println!() in js_console_log writes
-        // to a detached handle and nothing appears in the terminal (#108).
-        // WINDOWS for UI programs so no console flashes alongside the window.
-        // /ENTRY:mainCRTStartup works for both: Perry emits `int main()` and
-        // the MSVC CRT invokes it regardless of subsystem.
-        let subsystem = if ctx.needs_ui { "/SUBSYSTEM:WINDOWS" } else { "/SUBSYSTEM:CONSOLE" };
-        c.arg(subsystem)
+        // /ENTRY:mainCRTStartup works for both subsystems: Perry emits
+        // `int main()` and the MSVC CRT invokes it regardless of subsystem.
+        // See windows_pe_subsystem_flag() for subsystem selection rationale.
+        c.arg(windows_pe_subsystem_flag(ctx.needs_ui))
          .arg("/ENTRY:mainCRTStartup")
          .arg("/NOLOGO")
          // Perry generates large init functions for TS modules (one function
@@ -8401,5 +8408,24 @@ mod object_cache_tests {
         a.store(0x777, b"from-a");
         assert!(b.lookup(0x777).is_none());
         assert_eq!(a.lookup(0x777).as_deref(), Some(b"from-a".as_ref()));
+    }
+}
+
+#[cfg(test)]
+mod windows_link_tests {
+    use super::windows_pe_subsystem_flag;
+
+    // Regression guard for issue #120: without an explicit subsystem flag the
+    // MSVC linker historically defaulted to WINDOWS (2), silently detaching
+    // stdout/stderr so console.log output never reached the terminal.
+
+    #[test]
+    fn cli_build_uses_console_subsystem() {
+        assert_eq!(windows_pe_subsystem_flag(false), "/SUBSYSTEM:CONSOLE");
+    }
+
+    #[test]
+    fn ui_build_uses_windows_subsystem() {
+        assert_eq!(windows_pe_subsystem_flag(true), "/SUBSYSTEM:WINDOWS");
     }
 }
