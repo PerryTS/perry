@@ -27,6 +27,9 @@ pub const KIND_INT32: u8 = 4;
 pub const KIND_UINT32: u8 = 5;
 pub const KIND_FLOAT32: u8 = 6;
 pub const KIND_FLOAT64: u8 = 7;
+// Uint8ClampedArray: same element size as Uint8, but stores clamp to [0,255]
+// using ToUint8Clamp (round-half-to-even) instead of truncate-wrap.
+pub const KIND_UINT8_CLAMPED: u8 = 8;
 
 // Reserved class IDs for instanceof. Stay in the 0xFFFF00xx reserved range.
 pub const CLASS_ID_INT8_ARRAY: u32 = 0xFFFF0030;
@@ -37,11 +40,12 @@ pub const CLASS_ID_INT32_ARRAY: u32 = 0xFFFF0034;
 pub const CLASS_ID_UINT32_ARRAY: u32 = 0xFFFF0035;
 pub const CLASS_ID_FLOAT32_ARRAY: u32 = 0xFFFF0036;
 pub const CLASS_ID_FLOAT64_ARRAY: u32 = 0xFFFF0037;
+pub const CLASS_ID_UINT8_CLAMPED_ARRAY: u32 = 0xFFFF0038;
 
 #[inline]
 pub fn elem_size_for_kind(kind: u8) -> usize {
     match kind {
-        KIND_INT8 | KIND_UINT8 => 1,
+        KIND_INT8 | KIND_UINT8 | KIND_UINT8_CLAMPED => 1,
         KIND_INT16 | KIND_UINT16 => 2,
         KIND_INT32 | KIND_UINT32 | KIND_FLOAT32 => 4,
         KIND_FLOAT64 => 8,
@@ -60,6 +64,7 @@ pub fn class_id_for_kind(kind: u8) -> u32 {
         KIND_UINT32 => CLASS_ID_UINT32_ARRAY,
         KIND_FLOAT32 => CLASS_ID_FLOAT32_ARRAY,
         KIND_FLOAT64 => CLASS_ID_FLOAT64_ARRAY,
+        KIND_UINT8_CLAMPED => CLASS_ID_UINT8_CLAMPED_ARRAY,
         _ => 0,
     }
 }
@@ -75,6 +80,7 @@ pub fn name_for_kind(kind: u8) -> &'static str {
         KIND_UINT32 => "Uint32Array",
         KIND_FLOAT32 => "Float32Array",
         KIND_FLOAT64 => "Float64Array",
+        KIND_UINT8_CLAMPED => "Uint8ClampedArray",
         _ => "TypedArray",
     }
 }
@@ -174,8 +180,12 @@ pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
 fn jsvalue_to_f64(v: f64) -> f64 {
     let bits = v.to_bits();
     let top16 = bits >> 48;
-    // Plain double
-    if top16 < 0x7FF8 || (top16 == 0x7FF8 && bits == 0x7FF8_0000_0000_0000) {
+    // Plain double — positive, negative, ±Inf, and all NaN patterns that
+    // are NOT NaN-box tags. Tagged values occupy top16 in 0x7FFA..0x7FFF
+    // (BIGINT_TAG=0x7FFA, 0x7FFC=undefined/null/bool, POINTER_TAG=0x7FFD,
+    // INT32_TAG=0x7FFE, STRING_TAG=0x7FFF). Negative doubles (top16≥0x8000)
+    // and non-tag NaN patterns (top16 in 0x7FF8..0x7FF9) return as-is.
+    if top16 < 0x7FFA || top16 >= 0x8000 {
         return v;
     }
     // INT32 tag
@@ -231,6 +241,29 @@ unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
             v = v.rem_euclid(256);
             *base.add(off) = v as u8;
         }
+        KIND_UINT8_CLAMPED => {
+            // ToUint8Clamp: NaN → 0, v ≤ 0 → 0, v ≥ 255 → 255,
+            // otherwise round-half-to-even then clamp.
+            let byte = if value.is_nan() || value <= 0.0 {
+                0u8
+            } else if value >= 255.0 {
+                255u8
+            } else {
+                let f = value.floor();
+                let frac = value - f;
+                let rounded = if frac > 0.5 {
+                    f + 1.0
+                } else if frac < 0.5 {
+                    f
+                } else if f % 2.0 == 0.0 {
+                    f  // round half to even
+                } else {
+                    f + 1.0
+                };
+                rounded as u8
+            };
+            *base.add(off) = byte;
+        }
         KIND_INT16 => {
             let v = value as i32 as i16;
             *(base.add(off) as *mut i16) = v;
@@ -266,7 +299,7 @@ unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
     let off = idx * elem_size;
     match kind {
         KIND_INT8 => *(base.add(off) as *const i8) as f64,
-        KIND_UINT8 => *base.add(off) as f64,
+        KIND_UINT8 | KIND_UINT8_CLAMPED => *base.add(off) as f64,
         KIND_INT16 => *(base.add(off) as *const i16) as f64,
         KIND_UINT16 => *(base.add(off) as *const u16) as f64,
         KIND_INT32 => *(base.add(off) as *const i32) as f64,
@@ -283,6 +316,38 @@ unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut TypedArrayHeader {
     typed_array_alloc(kind as u8, length.max(0) as u32)
+}
+
+/// Allocate a typed array from a NaN-boxed JS value. Dispatches at runtime:
+/// - POINTER_TAG (0x7FFD) → create from the pointed-to array's elements
+/// - INT32_TAG  (0x7FFE) → use the tagged integer as the element count
+/// - plain f64 / NaN    → use the numeric value as the element count
+/// - anything else      → empty typed array
+///
+/// Mirrors `js_uint8array_new` for the generic typed-array constructor path.
+/// Used when the codegen cannot determine at compile time whether the single
+/// constructor argument is a length or a source array.
+#[no_mangle]
+pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHeader {
+    let bits = val.to_bits();
+    let top16 = (bits >> 48) as u16;
+    if top16 == 0x7FFD {
+        // POINTER_TAG — existing array pointer; copy its elements.
+        let arr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader;
+        return js_typed_array_new_from_array(kind, arr);
+    }
+    if top16 == 0x7FFE {
+        // INT32_TAG — lower 32 bits are the signed length.
+        let n = (bits & 0xFFFF_FFFF) as i32;
+        return typed_array_alloc(kind as u8, n.max(0) as u32);
+    }
+    if top16 < 0x7FFC || top16 > 0x7FFF {
+        // Plain IEEE double (including negative, NaN, ±Inf).
+        let len = if val.is_finite() && val >= 0.0 { val as i32 } else { 0 };
+        return typed_array_alloc(kind as u8, len.max(0) as u32);
+    }
+    // Undefined / null / bool / string → empty typed array.
+    typed_array_alloc(kind as u8, 0)
 }
 
 /// Allocate a typed array from a Perry array (each element coerced to the

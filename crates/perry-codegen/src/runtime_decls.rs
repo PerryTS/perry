@@ -547,10 +547,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `new Uint8Array(x)` runtime dispatch — handles the non-literal case
     // where `x` could be a number (length) or an array (source data).
     module.declare_function("js_uint8array_new", I64, &[DOUBLE]);
-    // Generic typed array runtime (Int8/16/32, Uint16/32, Float32/64).
+    // Generic typed array runtime (Int8/16/32, Uint16/32, Float32/64, Uint8Clamped).
     // Uint8Array piggybacks on the BufferHeader path.
     module.declare_function("js_typed_array_new_empty", I64, &[I32, I32]);
     module.declare_function("js_typed_array_new_from_array", I64, &[I32, I64]);
+    // Runtime-dispatched constructor: handles numeric length OR source-array arg.
+    module.declare_function("js_typed_array_new", I64, &[I32, DOUBLE]);
     module.declare_function("js_typed_array_length", I32, &[I64]);
     module.declare_function("js_typed_array_get", DOUBLE, &[I64, I32]);
     module.declare_function("js_typed_array_at", DOUBLE, &[I64, DOUBLE]);

@@ -316,6 +316,15 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
         crate::buffer::js_buffer_set(arr as *mut crate::buffer::BufferHeader, index as i32, value as i32);
         return;
     }
+    // Check if this is a typed array — route through per-kind store.
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        crate::typedarray::js_typed_array_set(
+            arr as *mut crate::typedarray::TypedArrayHeader,
+            index as i32,
+            value,
+        );
+        return;
+    }
     unsafe {
         let length = (*arr).length;
         if index >= length {
@@ -336,6 +345,15 @@ pub extern "C" fn js_array_set_f64_extend(arr: *mut ArrayHeader, index: u32, val
     // Check if this is actually a buffer (Uint8Array) — write individual bytes
     if crate::buffer::is_registered_buffer(arr as usize) {
         crate::buffer::js_buffer_set(arr as *mut crate::buffer::BufferHeader, index as i32, value as i32);
+        return arr;
+    }
+    // Check if this is a typed array — route through per-kind store (no extension).
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+        crate::typedarray::js_typed_array_set(
+            arr as *mut crate::typedarray::TypedArrayHeader,
+            index as i32,
+            value,
+        );
         return arr;
     }
     unsafe {

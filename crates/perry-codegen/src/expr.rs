@@ -1814,6 +1814,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let str_end_lbl = ctx.block().label.clone();
             ctx.block().br(&merge_lbl);
             // Numeric key → inline array-style read (offset 8+idx*8).
+            // Note: this path is semantically wrong for TypedArrays (variable
+            // element sizes) but is load-bearing for Object-with-numeric-keys
+            // (constMap[idx] = value) whose property storage happens to share
+            // this offset scheme. Typed-array numeric indexing uses a
+            // dedicated HIR path (TypedArrayGet / TypedArraySet); keep this
+            // inline read for the generic Object fallback to avoid regressing
+            // test_edge_enums_const / test_edge_iteration.
             ctx.current_block = num_idx;
             let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_box, I32);
             let idx_i64 = ctx.block().zext(I32, &idx_i32, I64);
@@ -2209,6 +2216,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             ctx.block().br(&merge_lbl);
             // Numeric key → inline array-style write (offset 8+idx*8).
+            // See IndexGet comment above: this fallback is wrong for TypedArray
+            // element sizes but is load-bearing for Object-with-numeric-keys
+            // storage, so we preserve the pre-#157 inline scheme here. Typed-
+            // array writes go through TypedArraySet which stores via
+            // `js_typed_array_set` with the correct per-kind width.
             ctx.current_block = num_set;
             {
                 let blk = ctx.block();
@@ -4767,11 +4779,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // `new Int32Array([1,2,3])` etc. — generic typed array constructor.
-        // Routes through `js_typed_array_new_from_array(kind, arr_handle)` for
-        // the array-from form, or `js_typed_array_new_empty(kind, length)`
-        // for the no-arg / numeric-length form. Result is a raw pointer
-        // bitcast to f64 (no NaN-box tag) — the runtime formatter and
-        // `js_array_*` dispatch helpers detect it via TYPED_ARRAY_REGISTRY.
+        // Routes through `js_typed_array_new_empty(kind, length)` for
+        // compile-time-constant numeric lengths, or `js_typed_array_new(kind, val)`
+        // for runtime-dispatched arguments (which inspects the NaN-box tag to
+        // distinguish a numeric length from a source-array pointer).
+        // Result is a raw pointer bitcast to f64 (no NaN-box tag) — the runtime
+        // formatter and `js_array_*` dispatch helpers detect it via TYPED_ARRAY_REGISTRY.
         Expr::TypedArrayNew { kind, arg } => {
             let kind_str = (*kind as i32).to_string();
             match arg {
@@ -4784,20 +4797,43 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     Ok(ctx.block().bitcast_i64_to_double(&p))
                 }
-                Some(arg_expr) => {
-                    // We always treat the single argument as an array literal
-                    // / array-typed expression — the test cases pass an inline
-                    // array literal `[1, 2, 3]`.
-                    let arr_box = lower_expr(ctx, arg_expr)?;
-                    let blk = ctx.block();
-                    let arr_handle = unbox_to_i64(blk, &arr_box);
-                    let p = blk.call(
-                        I64,
-                        "js_typed_array_new_from_array",
-                        &[(I32, &kind_str), (I64, &arr_handle)],
-                    );
-                    Ok(blk.bitcast_i64_to_double(&p))
-                }
+                Some(arg_expr) => match arg_expr.as_ref() {
+                    // Literal integer length: `new Int32Array(3)`.
+                    Expr::Integer(n) => {
+                        let len_str = (*n as i32).max(0).to_string();
+                        let p = ctx.block().call(
+                            I64,
+                            "js_typed_array_new_empty",
+                            &[(I32, &kind_str), (I32, &len_str)],
+                        );
+                        Ok(ctx.block().bitcast_i64_to_double(&p))
+                    }
+                    // Literal float that is a non-negative integer: `new Int32Array(3.0)`.
+                    Expr::Number(f)
+                        if f.fract() == 0.0 && *f >= 0.0 && *f < (i32::MAX as f64) =>
+                    {
+                        let len_str = (*f as i32).to_string();
+                        let p = ctx.block().call(
+                            I64,
+                            "js_typed_array_new_empty",
+                            &[(I32, &kind_str), (I32, &len_str)],
+                        );
+                        Ok(ctx.block().bitcast_i64_to_double(&p))
+                    }
+                    // Non-literal: dispatch at runtime based on the NaN-box tag.
+                    // `js_typed_array_new` detects POINTER_TAG → copy from array,
+                    // INT32_TAG / plain double → use as length.
+                    _ => {
+                        let val_box = lower_expr(ctx, arg_expr)?;
+                        let blk = ctx.block();
+                        let p = blk.call(
+                            I64,
+                            "js_typed_array_new",
+                            &[(I32, &kind_str), (DOUBLE, &val_box)],
+                        );
+                        Ok(blk.bitcast_i64_to_double(&p))
+                    }
+                },
             }
         }
 

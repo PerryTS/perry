@@ -10524,10 +10524,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         // new Uint8Array(buffer, byteOffset, length) etc.
                     }
 
-                    // Handle other typed-array constructors (Int8/16/32, Uint16/32, Float32/64).
-                    // Uint8Array stays on the Buffer path above.
+                    // Handle other typed-array constructors (Int8/16/32, Uint16/32, Float32/64,
+                    // Uint8ClampedArray). Uint8Array stays on the Buffer path above.
                     if let Some(kind) = crate::ir::typed_array_kind_for_name(class_name.as_str()) {
-                        if class_name != "Uint8Array" && class_name != "Uint8ClampedArray" {
+                        if class_name != "Uint8Array" {
                             let args = new_expr.args.as_ref()
                                 .map(|args| args.iter().map(|a| lower_expr(ctx, &a.expr)).collect::<Result<Vec<_>>>())
                                 .transpose()?
