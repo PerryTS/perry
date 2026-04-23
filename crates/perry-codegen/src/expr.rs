@@ -5155,9 +5155,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
 
-        // -------- performance.now() — use date.now() as a stand-in --------
+        // -------- performance.now() — sub-millisecond resolution --------
         Expr::PerformanceNow => {
-            Ok(ctx.block().call(DOUBLE, "js_date_now", &[]))
+            Ok(ctx.block().call(DOUBLE, "js_performance_now", &[]))
         }
 
         // -------- Object.getOwnPropertyNames(obj) --------
@@ -6218,6 +6218,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .call(I32, "js_value_is_promise", &[(DOUBLE, &promise_box)]);
             let is_promise_bool = ctx.block().icmp_ne(I32, &is_promise_i32, "0");
 
+            let drain_once_idx = ctx.new_block("await.drain_once");
             let check_idx = ctx.new_block("await.check");
             let wait_idx = ctx.new_block("await.wait");
             let settled_idx = ctx.new_block("await.settled");
@@ -6225,6 +6226,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let done_idx = ctx.new_block("await.done");
             let merge_idx = ctx.new_block("await.merge");
 
+            let drain_once_label = ctx.block_label(drain_once_idx);
             let check_label = ctx.block_label(check_idx);
             let wait_label = ctx.block_label(wait_idx);
             let settled_label = ctx.block_label(settled_idx);
@@ -6232,7 +6234,17 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let done_label = ctx.block_label(done_idx);
             let merge_label = ctx.block_label(merge_idx);
 
-            ctx.block().cond_br(&is_promise_bool, &check_label, &merge_label);
+            ctx.block().cond_br(&is_promise_bool, &drain_once_label, &merge_label);
+
+            // === drain_once ===
+            // Flush queueMicrotask callbacks before the first state check.
+            // When the promise is already settled (e.g. `await Promise.resolve()`)
+            // the wait loop below is never entered, so microtasks queued before
+            // this await would never fire. One drain here covers that path;
+            // the wait loop covers all subsequent ticks for pending promises.
+            ctx.current_block = drain_once_idx;
+            ctx.block().call_void("js_drain_queued_microtasks", &[]);
+            ctx.block().br(&check_label);
 
             // === check ===
             // Unbox the promise in each block that uses it — LLVM's
