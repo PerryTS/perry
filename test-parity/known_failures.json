@@ -123,6 +123,10 @@
     "status": "ci-env",
     "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x"
   },
+  "test_buffer_small_alloc": {
+    "status": "ci-env",
+    "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x. Same SDK gap as test_gap_buffer_ops; exercises the #92 Buffer.alloc small-buffer slab fast path."
+  },
   "test_buffer_numeric_read_intrinsic": {
     "status": "ci-env",
     "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x. Same SDK gap as test_gap_buffer_ops; exercises the #92 Buffer numeric-read intrinsic."

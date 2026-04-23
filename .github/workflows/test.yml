@@ -217,10 +217,10 @@ jobs:
           # - The macOS-14-only compile failures (test_gap_buffer_ops,
           #   test_gap_node_crypto_buffer, test_gap_typed_arrays,
           #   test_stress_buffer, test_stress_int_ops,
-          #   test_buffer_numeric_read_intrinsic) compile cleanly on
-          #   local macOS 15.x but fail on the GitHub macOS-14 runner
-          #   (SDK/linker version interaction). Tracked as `ci-env` in
-          #   `test-parity/known_failures.json`.
+          #   test_buffer_numeric_read_intrinsic, test_buffer_small_alloc)
+          #   compile cleanly on local macOS 15.x but fail on the GitHub
+          #   macOS-14 runner (SDK/linker version interaction). Tracked
+          #   as `ci-env` in `test-parity/known_failures.json`.
           # Space-separated skip list (associative arrays require bash
           # 4+; macOS-14 ships bash 3.2). Word-boundary match keeps
           # the substring lookup safe.
@@ -234,7 +234,8 @@ jobs:
             test_gap_typed_arrays \
             test_stress_buffer \
             test_stress_int_ops \
-            test_buffer_numeric_read_intrinsic "
+            test_buffer_numeric_read_intrinsic \
+            test_buffer_small_alloc "
 
           for f in test-files/*.ts; do
             [[ -d "$f" ]] && continue

@@ -44,8 +44,100 @@ pub fn register_buffer(ptr: *const BufferHeader) {
     BUFFER_REGISTRY.with(|r| r.borrow_mut().insert(ptr as usize));
 }
 
+// ----- Small-buffer slab allocator ----------------------------------------
+//
+// GC interaction:
+//   Buffers carry no GcHeader and are not tracked in MALLOC_STATE (the existing
+//   malloc path also never calls `dealloc` on individual buffers — they live for
+//   the lifetime of the thread). Slab blocks are malloc'd once and retained for
+//   the same duration. No GC behaviour changes.
+//
+// Registry:
+//   Large buffers (capacity >= SMALL_BUF_THRESHOLD) still go through
+//   `register_buffer` and appear in BUFFER_REGISTRY (HashSet).
+//   Small buffers skip the HashSet insert; `is_registered_buffer` instead
+//   performs a range-check against the (tiny) list of slab blocks — O(n_slabs),
+//   typically ≤ 5 entries for a 100k-iteration allocation loop.
+//   No false positives: slab blocks exclusively contain BufferHeader allocations
+//   and all callers of `is_registered_buffer` pass the header pointer (the
+//   NaN-boxed POINTER_TAG value always points to the header start, never to
+//   interior data bytes).
+
+/// Capacities strictly below this threshold use the slab fast path.
+pub const SMALL_BUF_THRESHOLD: u32 = 256;
+
+/// One slab block covers this many bytes of BufferHeader+data storage.
+/// 256 KB → ≥ 1 000 allocations of the max small size (255 bytes), or up to
+/// 32 768 allocations of the minimum (0 bytes / header only).
+const SLAB_CAPACITY: usize = 256 * 1024;
+
+/// Per-thread bump-pointer slab for small buffers.
+/// Raw pointers stored as `usize` to keep the type `Send + Sync`.
+struct SmallBufSlab {
+    /// Byte offset of the next free slot within the current slab block.
+    current: usize,
+    /// One-past-the-end offset (absolute address as usize) of the current block.
+    end: usize,
+    /// (start, end) address pair for every slab block allocated so far.
+    /// Used by `is_registered_buffer` to confirm an address is a small buffer.
+    ranges: Vec<(usize, usize)>,
+}
+
+thread_local! {
+    static SMALL_BUF_SLAB: RefCell<SmallBufSlab> = RefCell::new(SmallBufSlab {
+        current: 0,
+        end: 0,
+        ranges: Vec::new(),
+    });
+}
+
+fn buffer_alloc_small(capacity: u32) -> *mut BufferHeader {
+    let needed = std::mem::size_of::<BufferHeader>() + capacity as usize;
+    // Round up to 8-byte boundary so every header is naturally aligned.
+    let aligned = (needed + 7) & !7;
+
+    SMALL_BUF_SLAB.with(|slab_ref| {
+        let mut slab = slab_ref.borrow_mut();
+
+        if slab.current + aligned > slab.end {
+            // Current block exhausted (or first call): allocate a fresh slab.
+            let layout = Layout::from_size_align(SLAB_CAPACITY, 8).unwrap();
+            let block = unsafe { alloc(layout) };
+            if block.is_null() {
+                panic!("buffer: failed to allocate small-buffer slab ({} bytes)", SLAB_CAPACITY);
+            }
+            let block_start = block as usize;
+            let block_end = block_start + SLAB_CAPACITY;
+            slab.ranges.push((block_start, block_end));
+            slab.current = block_start;
+            slab.end = block_end;
+        }
+
+        let ptr = slab.current as *mut BufferHeader;
+        slab.current += aligned;
+
+        unsafe {
+            (*ptr).length = 0;
+            (*ptr).capacity = capacity;
+        }
+
+        ptr
+    })
+}
+
 /// Check if a pointer is a registered buffer (for instanceof Uint8Array)
 pub fn is_registered_buffer(addr: usize) -> bool {
+    // Fast path: address falls within a small-buffer slab block.  All bytes in
+    // a slab block belong exclusively to BufferHeader allocations, so any match
+    // is definitively a buffer pointer.
+    let in_slab = SMALL_BUF_SLAB.with(|slab_ref| {
+        let slab = slab_ref.borrow();
+        slab.ranges.iter().any(|&(start, end)| addr >= start && addr < end)
+    });
+    if in_slab {
+        return true;
+    }
+    // Slow path: large buffers tracked in the HashSet registry.
     BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
@@ -61,6 +153,11 @@ pub fn is_uint8array_buffer(addr: usize) -> bool {
 
 /// Allocate a buffer with the given capacity
 pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
+    // Fast path: small buffers come from a per-thread bump slab (no malloc,
+    // no HashSet insert).  Large buffers fall through to the existing malloc path.
+    if capacity < SMALL_BUF_THRESHOLD {
+        return buffer_alloc_small(capacity);
+    }
     let layout = buffer_layout(capacity as usize);
     unsafe {
         let ptr = alloc(layout) as *mut BufferHeader;
@@ -1427,6 +1524,49 @@ fn encode_base64(input: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_small_buffer_slab_unique_addresses() {
+        // Every allocation must occupy a distinct address (no overlap).
+        let n = 1000usize;
+        let mut ptrs: Vec<*mut BufferHeader> = Vec::new();
+        for i in 0..n {
+            let cap = (i % (SMALL_BUF_THRESHOLD as usize)) as u32;
+            let buf = buffer_alloc(cap);
+            assert!(!buf.is_null(), "slab alloc returned null at i={}", i);
+            ptrs.push(buf);
+        }
+        let addrs: HashSet<usize> = ptrs.iter().map(|&p| p as usize).collect();
+        assert_eq!(addrs.len(), n, "slab allocations must have unique addresses");
+    }
+
+    #[test]
+    fn test_small_buffer_slab_is_registered() {
+        // All slab-allocated buffers must be recognised as buffers.
+        for cap in [0u32, 1, 15, 16, 127, 255] {
+            let buf = buffer_alloc(cap);
+            assert!(
+                is_registered_buffer(buf as usize),
+                "cap={cap}: slab buffer not recognised by is_registered_buffer"
+            );
+            assert_eq!(
+                unsafe { (*buf).capacity }, cap,
+                "cap={cap}: wrong capacity stored in header"
+            );
+        }
+    }
+
+    #[test]
+    fn test_large_buffer_still_registered() {
+        // Buffers at or above the threshold still go through the HashSet path.
+        let buf = buffer_alloc(SMALL_BUF_THRESHOLD);
+        assert!(!buf.is_null());
+        assert!(
+            is_registered_buffer(buf as usize),
+            "large buffer not in BUFFER_REGISTRY"
+        );
+        assert_eq!(unsafe { (*buf).capacity }, SMALL_BUF_THRESHOLD);
+    }
 
     #[test]
     fn test_buffer_alloc() {
