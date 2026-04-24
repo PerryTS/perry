@@ -269,6 +269,15 @@ jobs:
       - name: Thread-primitive compile-error tests
         run: ./scripts/run_thread_tests.sh
 
+      # Fastify end-to-end integration (#174): launches a Perry-compiled
+      # Fastify server as a background process, curls four routes covering
+      # simple GET, path params, POST with JSON body + reply.code(), and
+      # 404 fallback. The docs Fastify example is marked no-test because
+      # app.listen() blocks forever; this script provides the coverage
+      # that the no-test tag would otherwise hide.
+      - name: Fastify integration tests
+        run: ./scripts/run_fastify_tests.sh
+
   # ---------------------------------------------------------------------------
   # Doc-example tests: compile + run every .ts under docs/examples/.
   # UI examples launch with PERRY_UI_TEST_MODE=1 so they auto-exit after one

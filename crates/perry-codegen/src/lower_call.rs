@@ -4510,7 +4510,11 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         runtime: "js_fastify_req_url", args: &[], ret: NR_STR },
     NativeModSig { module: "fastify", has_receiver: true, method: "params",
         class_filter: None,
-        runtime: "js_fastify_req_params", args: &[], ret: NR_STR },
+        // Returns the parsed path-params object (e.g. `{id: "42"}` for /users/:id),
+        // not the raw JSON string — `request.params.id` must be the value, not
+        // undefined. `js_fastify_req_params` (string) is still available via
+        // the lower-level FFI but isn't reachable from TypeScript.
+        runtime: "js_fastify_req_params_object", args: &[], ret: NR_F64 },
     NativeModSig { module: "fastify", has_receiver: true, method: "param",
         class_filter: None,
         runtime: "js_fastify_req_param", args: &[NA_JSV], ret: NR_STR },
@@ -4531,6 +4535,11 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         runtime: "js_fastify_req_get_user_data", args: &[], ret: NR_F64 },
     // Fastify reply methods
     NativeModSig { module: "fastify", has_receiver: true, method: "status",
+        class_filter: None,
+        runtime: "js_fastify_reply_status", args: &[NA_F64], ret: NR_PTR },
+    // `reply.code(N)` is an alias for `reply.status(N)` in npm Fastify. Without
+    // this row, `reply.code(201)` silently no-op'd and the HTTP status stayed 200.
+    NativeModSig { module: "fastify", has_receiver: true, method: "code",
         class_filter: None,
         runtime: "js_fastify_reply_status", args: &[NA_F64], ret: NR_PTR },
     NativeModSig { module: "fastify", has_receiver: true, method: "send",
