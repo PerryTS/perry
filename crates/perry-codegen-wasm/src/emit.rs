@@ -3742,14 +3742,20 @@ impl<'a> FuncEmitCtx<'a> {
             Stmt::For { init, condition, update, body } => {
                 // <init>
                 // block $break
-                //   loop $continue
+                //   loop $loop_top
                 //     <condition>
-                //     is_truthy ; i32.eqz ; br_if $break
-                //     <body>
+                //     is_truthy ; i32.eqz ; br_if $break   (rel=1, loop is directly inside block)
+                //     block $body_end                       ← continue targets this block's exit
+                //       <body>                             ← continue: br(rel) exits $body_end
+                //     end                                  ← fall through to update
                 //     <update> ; drop
-                //     br $continue
+                //     br 0                                 ← restart $loop_top (rel=0)
                 //   end
                 // end
+                //
+                // Wrapping the body in $body_end ensures `continue` falls through to
+                // the update expression before restarting, fixing the iterator-stuck
+                // bug when `continue` fires inside an if/else chain (issue #137).
                 if let Some(init_stmt) = init {
                     self.emit_stmt(func, init_stmt, in_returning_func);
                 }
@@ -3761,6 +3767,20 @@ impl<'a> FuncEmitCtx<'a> {
 
                 func.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
                 self.block_depth += 1;
+                // block_depth is now the loop's depth; Br(0) here restarts the loop.
+
+                if let Some(cond) = condition {
+                    self.emit_frame_begin(func, 1);
+                    self.emit_store_arg(func, 0, cond);
+                    self.emit_memcall_i32(func, "is_truthy", 1);
+                    func.instruction(&Instruction::I32Eqz);
+                    // loop is directly inside block, so break is always 1 level up
+                    func.instruction(&Instruction::BrIf(1));
+                }
+
+                // Inner block: continue targets this block's exit, then update runs.
+                func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+                self.block_depth += 1;
                 let continue_d = self.block_depth;
                 self.loop_depth.push(continue_d);
 
@@ -3769,17 +3789,15 @@ impl<'a> FuncEmitCtx<'a> {
                     true
                 } else { false };
 
-                if let Some(cond) = condition {
-                    self.emit_frame_begin(func, 1);
-                    self.emit_store_arg(func, 0, cond);
-                    self.emit_memcall_i32(func, "is_truthy", 1);
-                    func.instruction(&Instruction::I32Eqz);
-                    func.instruction(&Instruction::BrIf(1));
-                }
-
                 for s in body {
                     self.emit_stmt(func, s, in_returning_func);
                 }
+
+                // Close inner body block; continue lands here, then falls to update.
+                if label_pushed { self.label_stack.pop(); }
+                self.loop_depth.pop();
+                self.block_depth -= 1;
+                func.instruction(&Instruction::End);
 
                 if let Some(upd) = update {
                     self.emit_expr(func, upd);
@@ -3788,12 +3806,11 @@ impl<'a> FuncEmitCtx<'a> {
                     }
                 }
 
+                // Restart loop (block_depth == loop's depth, so rel=0).
                 func.instruction(&Instruction::Br(0));
                 self.block_depth -= 1;
                 func.instruction(&Instruction::End);
 
-                if label_pushed { self.label_stack.pop(); }
-                self.loop_depth.pop();
                 self.break_depth.pop();
                 self.block_depth -= 1;
                 func.instruction(&Instruction::End);
