@@ -761,6 +761,10 @@ pub enum Expr {
     Integer(i64), // Integer literal that fits in i64 (for optimization)
     BigInt(String), // Store as string to preserve precision
     String(String),
+    /// String literal containing WTF-8 bytes (lone surrogates U+D800..U+DFFF).
+    /// Raw WTF-8 bytes — cannot be represented as a valid Rust String.
+    /// Lowers to js_string_from_wtf8_bytes at runtime.
+    WtfString(Vec<u8>),
     /// Localizable string — resolved at compile time from locale files.
     /// The string_idx indexes into the global i18n string table (2D: [locale][key]).
     /// For parameterized strings like "Hello, {name}!", params contains the values to interpolate.

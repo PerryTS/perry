@@ -89,6 +89,8 @@ pub struct StringEntry {
     pub bytes_global: String,
     /// Symbol name of the mutable handle global (`.str.N.handle`).
     pub handle_global: String,
+    /// true = bytes contain WTF-8 lone surrogates; use js_string_from_wtf8_bytes at init.
+    pub is_wtf8: bool,
 }
 
 impl StringPool {
@@ -138,9 +140,44 @@ impl StringPool {
             escaped_ir,
             bytes_global,
             handle_global,
+            is_wtf8: false,
         };
         self.entries.push(entry);
         self.interned.insert(value.to_string(), idx);
+        idx
+    }
+
+    /// Intern a WTF-8 byte sequence (may contain lone surrogates).
+    /// Uses a separate key-space from normal strings (prefixed "wtf8:").
+    pub fn intern_wtf8(&mut self, bytes: &[u8]) -> u32 {
+        let key = format!("wtf8:{}", bytes.escape_ascii());
+        if let Some(&idx) = self.interned.get(&key) {
+            return idx;
+        }
+        let idx = self.entries.len() as u32;
+        let byte_len = bytes.len();
+        let escaped_ir = escape_for_llvm_ir(bytes);
+        let bytes_global = if self.module_prefix.is_empty() {
+            format!(".str.{}.bytes", idx)
+        } else {
+            format!("{}_.str.{}.bytes", self.module_prefix, idx)
+        };
+        let handle_global = if self.module_prefix.is_empty() {
+            format!(".str.{}.handle", idx)
+        } else {
+            format!("{}_.str.{}.handle", self.module_prefix, idx)
+        };
+        let entry = StringEntry {
+            idx,
+            value: key.clone(),
+            byte_len,
+            escaped_ir,
+            bytes_global,
+            handle_global,
+            is_wtf8: true,
+        };
+        self.entries.push(entry);
+        self.interned.insert(key, idx);
         idx
     }
 

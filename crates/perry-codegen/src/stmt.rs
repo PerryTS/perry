@@ -1386,7 +1386,8 @@ fn expr_preserves_array_length(
         | Expr::Bool(_)
         | Expr::Null
         | Expr::Undefined
-        | Expr::String(_) => true,
+        | Expr::String(_)
+        | Expr::WtfString(_) => true,
         // Default: conservative reject for HIR variants we haven't
         // analyzed. Better to lose the optimization than to silently
         // hoist past a body that mutates the array.

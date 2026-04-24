@@ -5,10 +5,12 @@
 pub struct StringHeader {
     /// Length in UTF-16 code units (JS `.length` semantics)
     pub utf16_len: u32,
-    /// Length in UTF-8 bytes
+    /// Length in bytes
     pub byte_len: u32,
     /// Capacity (allocated space for data)
     pub capacity: u32,
     /// Reference hint for in-place append optimization (0=shared, 1=unique)
     pub refcount: u32,
+    /// Bit flags: STRING_FLAG_HAS_LONE_SURROGATES = 1
+    pub flags: u32,
 }

@@ -651,6 +651,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx.block().load(DOUBLE, &handle_global))
         }
 
+        // WTF-8 string literals (contain lone surrogates U+D800..U+DFFF).
+        // Same hoisting strategy as Expr::String, but initialized via
+        // js_string_from_wtf8_bytes which sets STRING_FLAG_HAS_LONE_SURROGATES.
+        Expr::WtfString(bytes) => {
+            let idx = ctx.strings.intern_wtf8(bytes);
+            let entry = ctx.strings.entry(idx);
+            let handle_global = format!("@{}", entry.handle_global);
+            Ok(ctx.block().load(DOUBLE, &handle_global))
+        }
+
         // -------- Variables --------
         // LocalGet lookup order:
         //   1. Closure captures (when lowering inside a closure body) →

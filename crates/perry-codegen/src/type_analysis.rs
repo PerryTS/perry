@@ -94,6 +94,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::ObjectGetOwnPropertyNames(_) => Some(HirType::Array(Box::new(HirType::String))),
         Expr::ObjectGetOwnPropertySymbols(_) => Some(HirType::Array(Box::new(HirType::Any))),
         Expr::String(_)
+        | Expr::WtfString(_)
         | Expr::ArrayJoin { .. }
         | Expr::StringCoerce(_)
         | Expr::StringFromCodePoint(_)
@@ -638,7 +639,7 @@ pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// the string path when the value might actually be a number.
 pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
-        Expr::String(_) => true,
+        Expr::String(_) | Expr::WtfString(_) => true,
         Expr::LocalGet(id) => {
             matches!(ctx.local_types.get(id), Some(HirType::String))
         }
@@ -706,7 +707,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 
 pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
-        Expr::String(_) => true,
+        Expr::String(_) | Expr::WtfString(_) => true,
         Expr::LocalGet(id) => {
             match ctx.local_types.get(id) {
                 Some(HirType::String) => true,
@@ -1100,7 +1101,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::New { class_name, .. } if class_name == "Array" => {
             Some(HirType::Array(Box::new(HirType::Any)))
         }
-        Expr::String(_) => Some(HirType::String),
+        Expr::String(_) | Expr::WtfString(_) => Some(HirType::String),
         Expr::Number(_) | Expr::Integer(_) => Some(HirType::Number),
         Expr::Bool(_) => Some(HirType::Boolean),
         Expr::LocalGet(id) => ctx.local_types.get(id).cloned(),

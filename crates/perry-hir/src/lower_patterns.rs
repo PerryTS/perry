@@ -52,7 +52,15 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
                 Ok(Expr::Number(value))
             }
         }
-        ast::Lit::Str(s) => Ok(Expr::String(s.value.as_str().unwrap_or("").to_string())),
+        ast::Lit::Str(s) => {
+            if let Some(valid_utf8) = s.value.as_str() {
+                Ok(Expr::String(valid_utf8.to_string()))
+            } else {
+                // Lone surrogates (U+D800..U+DFFF): SWC stores them as WTF-8 bytes.
+                // as_str() returns None because they can't be represented as valid UTF-8.
+                Ok(Expr::WtfString(s.value.as_bytes().to_vec()))
+            }
+        }
         ast::Lit::Bool(b) => Ok(Expr::Bool(b.value)),
         ast::Lit::Null(_) => Ok(Expr::Null),
         ast::Lit::BigInt(bi) => Ok(Expr::BigInt(bi.value.to_string())),

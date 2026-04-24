@@ -1,18 +1,25 @@
 //! String runtime support for Perry
 //!
-//! Strings are heap-allocated UTF-8 sequences with capacity for efficient appending.
+//! Strings are heap-allocated UTF-8 (or WTF-8) sequences with capacity for efficient appending.
 //! Layout:
 //!   - StringHeader at the start (utf16_len at offset 0 for inline codegen access)
 //!   - Followed by `capacity` bytes of data (only `byte_len` bytes are valid)
+//!
+//! Strings containing lone surrogates (U+D800..U+DFFF) are stored as WTF-8 bytes and
+//! marked with STRING_FLAG_HAS_LONE_SURROGATES in the `flags` field.
 
 use std::ptr;
 use std::slice;
 use std::str;
 
+/// Flag: string bytes contain WTF-8 lone-surrogate sequences (U+D800..U+DFFF).
+/// Set by js_string_from_wtf8_bytes. Checked by isWellFormed/toWellFormed.
+pub const STRING_FLAG_HAS_LONE_SURROGATES: u32 = 1;
+
 /// A static empty string that can be used as a safe fallback for null pointers.
-/// Has utf16_len=0, byte_len=0, capacity=0, refcount=0 (shared).
+/// Has utf16_len=0, byte_len=0, capacity=0, refcount=0, flags=0 (shared).
 #[no_mangle]
-pub static PERRY_EMPTY_STRING: StringHeader = StringHeader { utf16_len: 0, byte_len: 0, capacity: 0, refcount: 0 };
+pub static PERRY_EMPTY_STRING: StringHeader = StringHeader { utf16_len: 0, byte_len: 0, capacity: 0, refcount: 0, flags: 0 };
 
 /// Get a pointer to the static empty string (for codegen null guards).
 #[no_mangle]
@@ -31,23 +38,27 @@ pub fn is_valid_string_ptr(p: *const StringHeader) -> bool {
 /// Header for heap-allocated strings
 ///
 /// `utf16_len` is at offset 0 so codegen can inline `.length` as a single i32 load.
-/// `byte_len` tracks the actual UTF-8 byte count for internal memcpy/slice operations.
+/// `byte_len` tracks the actual byte count for internal memcpy/slice operations.
 ///
 /// The `refcount` field enables in-place append optimization in `js_string_append`:
 /// - refcount=0: shared/unknown ownership — never mutated in-place (safe default)
 /// - refcount=1: unique owner — `js_string_append` can append in-place if capacity allows
 /// Only strings created by `js_string_append` get refcount=1. When a string pointer is
 /// copied to another variable, codegen calls `js_string_addref` to set refcount=0 (shared).
+///
+/// `flags`: STRING_FLAG_HAS_LONE_SURROGATES (=1) marks WTF-8 strings with lone surrogates.
 #[repr(C)]
 pub struct StringHeader {
     /// Length in UTF-16 code units (JS `.length` semantics). At offset 0 for inline codegen.
     pub utf16_len: u32,
-    /// Length in UTF-8 bytes (internal use for memcpy, capacity checks, etc.)
+    /// Length in bytes (internal use for memcpy, capacity checks, etc.)
     pub byte_len: u32,
     /// Capacity in bytes (allocated space for data)
     pub capacity: u32,
     /// Reference hint: 0=shared (never mutate in-place), 1=unique (in-place append OK)
     pub refcount: u32,
+    /// Bit flags: STRING_FLAG_HAS_LONE_SURROGATES = 1
+    pub flags: u32,
 }
 
 // ── UTF-8 ↔ UTF-16 conversion helpers ──────────────────────────────────
@@ -129,6 +140,7 @@ fn js_string_from_ascii_bytes(data: *const u8, len: u32) -> *mut StringHeader {
         (*ptr).byte_len = len;
         (*ptr).capacity = len;
         (*ptr).refcount = 0;
+        (*ptr).flags = 0;
         if len > 0 && !data.is_null() {
             let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
             ptr::copy_nonoverlapping(data, data_ptr, len as usize);
@@ -152,6 +164,7 @@ pub extern "C" fn js_string_from_bytes_with_capacity(data: *const u8, len: u32, 
         (*ptr).byte_len = len;
         (*ptr).capacity = capacity;
         (*ptr).refcount = 0; // shared by default — caller can set to 1 if uniquely owned
+        (*ptr).flags = 0;
 
         // Copy string data after header
         if len > 0 && !data.is_null() {
@@ -160,6 +173,64 @@ pub extern "C" fn js_string_from_bytes_with_capacity(data: *const u8, len: u32, 
         }
     }
 
+    ptr
+}
+
+/// Count UTF-16 code units for a WTF-8 byte slice without using from_utf8.
+/// Lone surrogate sequences (0xED 0xA0..0xBF 0x80..0xBF) each count as 1 unit,
+/// same as any other BMP codepoint. Astral sequences (4-byte) count as 2.
+#[inline]
+fn compute_utf16_len_wtf8(bytes: &[u8]) -> u32 {
+    let mut count = 0u32;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b < 0x80 {
+            count += 1;
+            i += 1;
+        } else if b < 0xC0 {
+            // continuation byte in lead position — skip
+            i += 1;
+        } else if b < 0xE0 {
+            count += 1;
+            i += 2;
+        } else if b < 0xF0 {
+            // 3-byte sequence: BMP codepoint or WTF-8 lone surrogate → 1 unit
+            count += 1;
+            i += 3;
+        } else {
+            // 4-byte sequence: astral codepoint → 2 UTF-16 units
+            count += 2;
+            i += 4;
+        }
+    }
+    count
+}
+
+/// Create a StringHeader from WTF-8 bytes (may contain lone-surrogate sequences).
+/// Sets STRING_FLAG_HAS_LONE_SURROGATES so isWellFormed()/toWellFormed() work correctly.
+#[no_mangle]
+pub extern "C" fn js_string_from_wtf8_bytes(data: *const u8, len: u32) -> *mut StringHeader {
+    let total_size = std::mem::size_of::<StringHeader>() + len as usize;
+    let raw = string_arena_alloc(total_size);
+    let ptr = raw as *mut StringHeader;
+    unsafe {
+        let bytes = if len > 0 && !data.is_null() {
+            slice::from_raw_parts(data, len as usize)
+        } else {
+            &[]
+        };
+        let u16len = compute_utf16_len_wtf8(bytes);
+        (*ptr).utf16_len = u16len;
+        (*ptr).byte_len = len;
+        (*ptr).capacity = len;
+        (*ptr).refcount = 0;
+        (*ptr).flags = STRING_FLAG_HAS_LONE_SURROGATES;
+        if len > 0 && !data.is_null() {
+            let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
+            ptr::copy_nonoverlapping(data, data_ptr, len as usize);
+        }
+    }
     ptr
 }
 
@@ -339,10 +410,13 @@ pub extern "C" fn js_string_concat(a: *const StringHeader, b: *const StringHeade
     let ptr = raw as *mut StringHeader;
 
     unsafe {
+        let flags_a = if is_valid_string_ptr(a) { (*a).flags } else { 0 };
+        let flags_b = if is_valid_string_ptr(b) { (*b).flags } else { 0 };
         (*ptr).utf16_len = u16len_a + u16len_b;
         (*ptr).byte_len = total_blen;
         (*ptr).capacity = total_blen;
         (*ptr).refcount = 0; // shared by default
+        (*ptr).flags = flags_a | flags_b;
 
         let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
 
@@ -433,6 +507,7 @@ pub extern "C" fn js_string_concat_value(
             (*ptr).byte_len = total_blen as u32;
             (*ptr).capacity = total_blen as u32;
             (*ptr).refcount = 0;
+            (*ptr).flags = if is_valid_string_ptr(prefix) { (*prefix).flags } else { 0 };
 
             let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
             if is_valid_string_ptr(prefix) && prefix_blen > 0 {
@@ -508,6 +583,7 @@ pub extern "C" fn js_value_concat_string(
             (*ptr).byte_len = total_blen as u32;
             (*ptr).capacity = total_blen as u32;
             (*ptr).refcount = 0;
+            (*ptr).flags = if is_valid_string_ptr(suffix) { (*suffix).flags } else { 0 };
 
             let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
             ptr::copy_nonoverlapping(num_buf.as_ptr(), data_ptr, num_len);
@@ -1351,6 +1427,7 @@ pub extern "C" fn js_string_locale_compare(
 
 /// String.prototype.isWellFormed() — returns NaN-boxed boolean.
 /// A string is well-formed if it contains no lone surrogates.
+/// Lone-surrogate strings are marked with STRING_FLAG_HAS_LONE_SURROGATES at construction.
 #[no_mangle]
 pub extern "C" fn js_string_is_well_formed(s: *const StringHeader) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
@@ -1358,70 +1435,67 @@ pub extern "C" fn js_string_is_well_formed(s: *const StringHeader) -> f64 {
     if !is_valid_string_ptr(s) {
         return f64::from_bits(TAG_TRUE);
     }
-    let str_data = string_as_str(s);
-    // Rust &str is always valid UTF-8, so it can never contain lone surrogates.
-    // The only way to construct an ill-formed string in Perry is via escape
-    // sequences like "\uD800" — those should be encoded as the WTF-8/CESU-8
-    // 3-byte sequence ED A0 80 (which is invalid UTF-8 and would have already
-    // been rejected by the parser). For safety we walk the UTF-16 view here.
-    let utf16: Vec<u16> = str_data.encode_utf16().collect();
-    let len = utf16.len();
-    let mut i = 0;
-    while i < len {
-        let unit = utf16[i];
-        if (0xD800..=0xDBFF).contains(&unit) {
-            // High surrogate — must be followed by a low surrogate
-            if i + 1 >= len {
-                return f64::from_bits(TAG_FALSE);
-            }
-            let next = utf16[i + 1];
-            if !(0xDC00..=0xDFFF).contains(&next) {
-                return f64::from_bits(TAG_FALSE);
-            }
-            i += 2;
-        } else if (0xDC00..=0xDFFF).contains(&unit) {
-            // Lone low surrogate
-            return f64::from_bits(TAG_FALSE);
-        } else {
-            i += 1;
-        }
+    let flags = unsafe { (*s).flags };
+    if flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+        return f64::from_bits(TAG_FALSE);
     }
     f64::from_bits(TAG_TRUE)
 }
 
-/// String.prototype.toWellFormed() — replaces lone surrogates with U+FFFD.
+/// String.prototype.toWellFormed() — replaces lone surrogates with U+FFFD (U+FFFD = EF BF BD).
+/// Works directly on WTF-8 bytes: replaces each 3-byte surrogate sequence
+/// (ED A0..BF 80..BF) with the 3-byte U+FFFD encoding.
 #[no_mangle]
 pub extern "C" fn js_string_to_well_formed(s: *const StringHeader) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(std::ptr::null(), 0);
     }
-    let str_data = string_as_str(s);
-    let utf16: Vec<u16> = str_data.encode_utf16().collect();
-    let len = utf16.len();
-    let mut fixed: Vec<u16> = Vec::with_capacity(len);
+    let flags = unsafe { (*s).flags };
+    let blen = unsafe { (*s).byte_len } as usize;
+    let data = string_data(s);
+    if flags & STRING_FLAG_HAS_LONE_SURROGATES == 0 {
+        // Well-formed UTF-8: return a copy without scanning
+        return js_string_from_bytes(data, blen as u32);
+    }
+    // Scan raw bytes and replace every WTF-8 lone-surrogate sequence with U+FFFD.
+    // WTF-8 surrogate: first byte = 0xED, second = 0xA0..=0xBF, third = 0x80..=0xBF.
+    let bytes = unsafe { slice::from_raw_parts(data, blen) };
+    let mut result: Vec<u8> = Vec::with_capacity(blen);
     let mut i = 0;
-    while i < len {
-        let unit = utf16[i];
-        if (0xD800..=0xDBFF).contains(&unit) {
-            if i + 1 < len && (0xDC00..=0xDFFF).contains(&utf16[i + 1]) {
-                fixed.push(unit);
-                fixed.push(utf16[i + 1]);
-                i += 2;
-                continue;
-            }
-            fixed.push(0xFFFD);
+    while i < blen {
+        let b = bytes[i];
+        if b == 0xED
+            && i + 2 < blen
+            && (0xA0..=0xBF).contains(&bytes[i + 1])
+            && (0x80..=0xBF).contains(&bytes[i + 2])
+        {
+            // Lone surrogate → U+FFFD (EF BF BD)
+            result.extend_from_slice(&[0xEF, 0xBF, 0xBD]);
+            i += 3;
+        } else if b < 0x80 {
+            result.push(b);
             i += 1;
-        } else if (0xDC00..=0xDFFF).contains(&unit) {
-            fixed.push(0xFFFD);
+        } else if b < 0xC0 {
+            result.push(b);
             i += 1;
+        } else if b < 0xE0 {
+            result.push(b);
+            if i + 1 < blen { result.push(bytes[i + 1]); }
+            i += 2;
+        } else if b < 0xF0 {
+            result.push(b);
+            if i + 1 < blen { result.push(bytes[i + 1]); }
+            if i + 2 < blen { result.push(bytes[i + 2]); }
+            i += 3;
         } else {
-            fixed.push(unit);
-            i += 1;
+            result.push(b);
+            if i + 1 < blen { result.push(bytes[i + 1]); }
+            if i + 2 < blen { result.push(bytes[i + 2]); }
+            if i + 3 < blen { result.push(bytes[i + 3]); }
+            i += 4;
         }
     }
-    let result = String::from_utf16(&fixed).unwrap_or_else(|_| str_data.to_string());
-    let bytes = result.as_bytes();
-    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    js_string_from_bytes(result.as_ptr(), result.len() as u32)
 }
 
 /// Print a string to stdout

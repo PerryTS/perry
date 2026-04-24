@@ -2641,9 +2641,14 @@ fn emit_string_pool(
         let handle_ref = format!("@{}", entry.handle_global);
         let len_str = entry.byte_len.to_string();
 
+        let init_fn = if entry.is_wtf8 {
+            "js_string_from_wtf8_bytes"
+        } else {
+            "js_string_from_bytes"
+        };
         let handle = blk.call(
             I64,
-            "js_string_from_bytes",
+            init_fn,
             &[(PTR, &bytes_ref), (I32, &len_str)],
         );
         let nanboxed = blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)]);

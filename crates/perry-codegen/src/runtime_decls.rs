@@ -39,6 +39,7 @@ pub fn declare_phase1(module: &mut LlModule) {
 
     // Strings (enough to produce string literals for later phases).
     module.declare_function("js_string_from_bytes", I64, &[PTR, I32]);
+    module.declare_function("js_string_from_wtf8_bytes", I64, &[PTR, I32]);
 
     // Type checks.
     module.declare_function("js_is_truthy", I32, &[DOUBLE]);
@@ -648,6 +649,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // subsequent method dispatch flows through HANDLE_METHOD_DISPATCH.
     module.declare_function("js_crypto_create_hash", DOUBLE, &[I64]);
     module.declare_function("js_string_from_bytes", I64, &[I64, I32]);
+    module.declare_function("js_string_from_wtf8_bytes", I64, &[I64, I32]);
     // Buffer.alloc(size, fill) — returns raw *mut BufferHeader.
     module.declare_function("js_buffer_alloc", I64, &[I32, I32]);
     // JSON full-featured stringify/parse (replacer + indent + reviver).

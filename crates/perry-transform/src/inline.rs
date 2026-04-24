@@ -1245,7 +1245,7 @@ fn try_inline_call(
 fn is_trivial_expr(expr: &Expr) -> bool {
     matches!(expr,
         Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_) |
-        Expr::String(_) | Expr::Null | Expr::Undefined |
+        Expr::String(_) | Expr::WtfString(_) | Expr::Null | Expr::Undefined |
         Expr::LocalGet(_) | Expr::GlobalGet(_)
     )
 }
