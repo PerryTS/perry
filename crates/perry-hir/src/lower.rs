@@ -5881,6 +5881,35 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             }
                         }
 
+                        // issue #195: WidgetCtor(...).modifierName(...) is silently dropped.
+                        // Reject at compile time so users discover the options-object form.
+                        if let ast::Expr::Call(inner_call) = member.obj.as_ref() {
+                            if let ast::Callee::Expr(inner_callee) = &inner_call.callee {
+                                if let ast::Expr::Ident(widget_ident) = inner_callee.as_ref() {
+                                    let widget_name = widget_ident.sym.as_ref();
+                                    if matches!(widget_name,
+                                        "Text" | "VStack" | "HStack" | "ZStack" |
+                                        "Image" | "Spacer" | "Divider" |
+                                        "ForEach" | "Label" | "Gauge"
+                                    ) {
+                                        if matches!(ctx.lookup_native_module(widget_name),
+                                            Some(("perry/ui", _))
+                                        ) {
+                                            if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                                                let modifier_name = method_ident.sym.as_ref();
+                                                if is_widget_modifier_name(modifier_name) {
+                                                    return Err(anyhow!(
+                                                        "modifier '{}' must be passed as an option-object on the widget constructor; use: {}(\"...\", {{ {}: ... }})",
+                                                        modifier_name, widget_name, modifier_name
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // Check for method calls on new Big/Decimal/BigNumber() expressions
                         // e.g., new Big("100").div(2)
                         if let Some(module_name) = detect_native_instance_expr(&member.obj) {
@@ -12654,6 +12683,19 @@ fn parse_modifiers_from_args(args: &[ast::ExprOrSpread], start_idx: usize) -> Ve
         }
     }
     modifiers
+}
+
+/// Returns true if `name` is a known widget modifier key (used to detect
+/// unsupported method-chain modifier calls, e.g. `Text("hi").font("title")`).
+fn is_widget_modifier_name(name: &str) -> bool {
+    matches!(name,
+        "font" | "fontWeight" | "weight" | "foregroundColor" | "color" | "foreground" |
+        "padding" | "cornerRadius" | "background" | "backgroundColor" |
+        "opacity" | "lineLimit" | "frame" | "minimumScaleFactor" |
+        "containerBackground" | "maxWidth" | "url" |
+        "bold" | "italic" | "underline" | "fontSize" |
+        "strikethrough" | "multilineTextAlignment" | "lineSpacing"
+    )
 }
 
 /// Parse a single modifier from key/value

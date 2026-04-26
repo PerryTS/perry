@@ -11,11 +11,13 @@ Text(`${entry.name}: ${entry.value}`)
 
 ### Text Modifiers
 
+Pass modifiers as a second argument options object — method-chain modifier syntax (e.g. `.font(...)`) produces a compile error:
+
 ```typescript,no-test
-const t = Text("Styled");
-t.font("title");       // .title, .headline, .body, .caption, etc.
-t.color("blue");       // Named color or hex
-t.bold();
+Text("Styled", { font: "title" })          // .title, .headline, .body, .caption, etc.
+Text("Styled", { color: "blue" })          // Named color or hex
+Text("Styled", { bold: true })
+Text("Styled", { font: "title", color: "blue", bold: true })  // combined
 ```
 
 ## Layout
