@@ -92,6 +92,17 @@ pub const NATIVE_MODULES: &[&str] = &[
     "decimal.js",
     "bignumber.js",
     "exponential-backoff",
+    // Lodash utility functions (named import form: import { chunk } from 'lodash')
+    "lodash",
+    // Date/time libraries
+    "dayjs",
+    "moment",
+    // Image processing
+    "sharp",
+    // HTML parsing
+    "cheerio",
+    // Job scheduling (npm 'cron' package; 'node-cron' is a separate alias below)
+    "cron",
     // HTTP framework
     "fastify",
     // Node.js built-in modules

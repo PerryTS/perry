@@ -220,6 +220,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_mkdtemp_sync", I64, &[DOUBLE]);
     // fs.rmdirSync(path) — returns i32 status.
     module.declare_function("js_fs_rmdir_sync", I32, &[DOUBLE]);
+    // fs.rmRecursive(path) — recursive remove; returns i32 (1=ok, 0=fail).
+    module.declare_function("js_fs_rm_recursive", I32, &[DOUBLE]);
     // fs.createWriteStream(path) — returns NaN-boxed stream object.
     module.declare_function("js_fs_create_write_stream", DOUBLE, &[DOUBLE]);
     // fs.createReadStream(path[, options]) — returns NaN-boxed stream object.

@@ -8258,6 +8258,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(ctx.block(), &bits))
         }
 
+        Expr::FsRmRecursive(path) => {
+            let p = lower_expr(ctx, path)?;
+            let _ = ctx.block().call(I32, "js_fs_rm_recursive", &[(DOUBLE, &p)]);
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+        }
+
         // -------- Unsupported (clear error) --------
         other => bail!(
             "perry-codegen Phase 2: expression {} not yet supported",
