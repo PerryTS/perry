@@ -2329,6 +2329,53 @@ fn find_node_modules(start: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Look up a bare package name in the nearest package.json's `dependencies` /
+/// `devDependencies` sections and, if the entry has a `file:` prefix, return the
+/// resolved directory path (NOT canonicalized — caller does that).
+///
+/// This is the fallback used when `node_modules/<pkg>` does not exist (e.g., the
+/// user manually removed the symlink, or `npm install` was not re-run after
+/// rewriting `package.json` to point at a new `file:` path).  It also covers
+/// the "file: dep inside the project root" shape described in #209:
+///
+///   "bloom": "file:./vendor/bloom/"   ← vendor/bloom may itself be a symlink
+///
+/// By resolving against the package.json directory (not through the node_modules
+/// symlink chain) we arrive at the same canonical target regardless of how many
+/// symlink hops npm left behind.
+fn find_file_dep_in_package_json(start: &Path, package_name: &str) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
+    loop {
+        let pkg_json = dir.join("package.json");
+        if pkg_json.exists() {
+            if let Ok(content) = fs::read_to_string(&pkg_json) {
+                if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
+                    for dep_section in &["dependencies", "devDependencies"] {
+                        if let Some(deps) = pkg.get(*dep_section).and_then(|d| d.as_object()) {
+                            if let Some(dep_val) = deps.get(package_name) {
+                                if let Some(dep_str) = dep_val.as_str() {
+                                    if let Some(file_path) = dep_str.strip_prefix("file:") {
+                                        // Trim trailing slash so dir.join() works cleanly
+                                        let resolved = dir.join(file_path.trim_end_matches('/'));
+                                        return Some(resolved);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Found a package.json but no matching file: dep for this package.
+            // Stop climbing — don't look in ancestor workspaces.
+            break;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
 /// Parse a package specifier into (package_name, subpath)
 fn parse_package_specifier(specifier: &str) -> (String, Option<String>) {
     if specifier.starts_with('@') {
@@ -2720,6 +2767,47 @@ fn resolve_import(
         }
     }
 
+    // Fallback: look for a `file:` entry in the nearest package.json.
+    //
+    // Handles two failure modes that the node_modules walk above cannot catch:
+    //
+    //   1. `node_modules/<pkg>` was removed (or npm install was not re-run after
+    //      changing package.json).  The manual repro in #209 hits this directly.
+    //
+    //   2. `node_modules/<pkg>` exists but points *inside* the project root via an
+    //      intermediate symlink (e.g. `node_modules/bloom -> ../vendor/bloom` where
+    //      `vendor/bloom` is itself a symlink or a real directory cloned by CI).
+    //      In that case the canonical path resolves to a path like
+    //      `/project/vendor/bloom/index.ts` — which is inside the project root but
+    //      outside any `node_modules/` component — so the `is_in_node_modules`
+    //      string check returns false and downstream classify-as-Interpreted guards
+    //      can misfire for JS files.  Resolving directly from `package.json` gives
+    //      us the same canonical target while keeping `package_dir` pointing at the
+    //      real package root (with its perry.nativeLibrary / perry.nativeModule
+    //      marker) so `has_perry_native_library` can read it without traversing a
+    //      potentially-confusing symlink chain.
+    if let Some(file_dep_dir) = find_file_dep_in_package_json(project_root, &package_name) {
+        if file_dep_dir.is_dir() {
+            if let Some(entry) = resolve_package_entry(&file_dep_dir, subpath.as_deref()) {
+                if has_perry_native_library(&file_dep_dir) {
+                    return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                }
+                if has_perry_native_module(&file_dep_dir) {
+                    return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                }
+                if compile_packages.contains(&package_name) {
+                    if let Some(src_entry) = resolve_package_source_entry(&file_dep_dir, subpath.as_deref()) {
+                        return Some((src_entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                    }
+                    if let Some(fallback_entry) = resolve_package_entry(&file_dep_dir, subpath.as_deref()) {
+                        return Some((fallback_entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                    }
+                }
+                return Some((entry.canonicalize().ok()?, ModuleKind::Interpreted));
+            }
+        }
+    }
+
     None
 }
 
@@ -2860,7 +2948,15 @@ fn collect_modules(
             } else {
                 false
             }
-        });
+        })
+        // A file whose canonical path resolves to inside a perry.nativeLibrary package
+        // but is NOT under any node_modules/ component (i.e., reached via a file: dep
+        // that places the package inside the project root, as in #209 "file:./vendor/bloom/")
+        // must still be compiled natively, not handed to the JS runtime.
+        // Guard with !is_in_node_modules so this branch never fires for the standard
+        // node_modules/ioredis, node_modules/ethers etc. paths that already have their
+        // own handling (is_perry_native above).
+        || (!is_in_node_modules && is_in_perry_native_package(&canonical));
     let should_use_js_runtime = (is_js_file(&canonical) && !is_in_compiled_pkg)
         || is_declaration_file(&canonical)
         || is_json
