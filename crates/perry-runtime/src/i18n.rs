@@ -634,35 +634,27 @@ fn format_number_locale(value: f64, fmt: &LocaleFormat) -> String {
     if value.is_nan() { return "NaN".to_string(); }
     if value.is_infinite() { return if value > 0.0 { "Infinity" } else { "-Infinity" }.to_string(); }
 
-    let is_negative = value < 0.0;
-    let abs = value.abs();
+    let is_negative = value.is_sign_negative();
 
-    // Split into integer and fractional parts
-    let int_part = abs.trunc() as u64;
-    let frac = abs.fract();
+    // Use Ryū via `{}` for minimum round-trip digits (matches JS semantics).
+    let s = format!("{}", value);
+    let (int_digits, frac_part) = match s.split_once('.') {
+        Some((i, f)) => (i.trim_start_matches('-').to_string(), Some(f.to_string())),
+        None => (s.trim_start_matches('-').to_string(), None),
+    };
 
-    // Format integer part with thousands separators
-    let int_str = int_part.to_string();
-    let mut grouped = String::with_capacity(int_str.len() + int_str.len() / 3);
-    for (i, ch) in int_str.chars().rev().enumerate() {
+    // Apply thousands grouping to the integer digits.
+    let mut grouped = String::with_capacity(int_digits.len() + int_digits.len() / 3 + 4);
+    for (i, ch) in int_digits.chars().rev().enumerate() {
         if i > 0 && i % 3 == 0 {
-            // Insert thousands separator in reverse
-            grouped.insert(0, fmt.thousands.chars().next().unwrap_or(','));
-            // Handle multi-byte separators
-            if fmt.thousands.len() > 1 {
-                grouped = format!("{}{}{}", &grouped[..0], fmt.thousands, &grouped[1..]);
-            }
+            grouped.insert_str(0, fmt.thousands);
         }
         grouped.insert(0, ch);
     }
 
-    let result = if frac == 0.0 {
-        grouped
-    } else {
-        // Format fractional part
-        let frac_str = format!("{:.10}", frac);
-        let frac_digits = frac_str.trim_start_matches("0.").trim_end_matches('0');
-        format!("{}{}{}", grouped, fmt.decimal, frac_digits)
+    let result = match frac_part {
+        Some(f) => format!("{}{}{}", grouped, fmt.decimal, f),
+        None => grouped,
     };
 
     if is_negative { format!("-{}", result) } else { result }
