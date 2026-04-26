@@ -2642,6 +2642,19 @@ pub(crate) fn lower_native_method_call(
         }
     }
 
+    // perry/plugin dispatch: loadPlugin, listPlugins, emitHook, etc.
+    if module == "perry/plugin" && object.is_none() {
+        if let Some(sig) = perry_plugin_table_lookup(method) {
+            return lower_perry_ui_table_call(ctx, sig, args);
+        }
+        bail!(
+            "perry/plugin: '{}' is not a known function (args: {}). \
+             Check types/perry/plugin/index.d.ts for the supported API surface.",
+            method,
+            args.len()
+        );
+    }
+
     if module == "perry/ui"
         && object.is_none()
         && method != "App"
@@ -2949,7 +2962,7 @@ pub(crate) fn lower_native_method_call(
                 }
             }
             let return_type = match sig.ret {
-                UiReturnKind::Widget => I64,
+                UiReturnKind::Widget | UiReturnKind::I64AsF64 => I64,
                 UiReturnKind::F64 => DOUBLE,
                 UiReturnKind::Void => crate::types::VOID,
                 UiReturnKind::Str => I64,
@@ -2974,6 +2987,10 @@ pub(crate) fn lower_native_method_call(
                     let raw = blk.call(I64, sig.runtime, &ref_args);
                     Ok(crate::expr::nanbox_string_inline(blk, &raw))
                 }
+                UiReturnKind::I64AsF64 => {
+                    let raw = blk.call(I64, sig.runtime, &ref_args);
+                    Ok(blk.sitofp(I64, &raw, DOUBLE))
+                }
             };
         }
         // Unknown instance method — fail the compile. Previously this
@@ -2988,6 +3005,82 @@ pub(crate) fn lower_native_method_call(
              See types/perry/ui/index.d.ts — widget styling uses free functions \
              like `textSetFontSize(label, 24)` and `widgetSetBackgroundColor(btn, r, g, b, a)`, \
              not instance-method setters.",
+            method,
+            args.len()
+        );
+    }
+
+    // perry/plugin PluginApi instance methods: `api.registerHook(...)`, `api.emit(...)`, etc.
+    // The HIR produces these with `object: Some(handle)` and `module: "perry/plugin"`.
+    if module == "perry/plugin" {
+        let recv_val = lower_expr(ctx, recv)?;
+        let blk = ctx.block();
+        let handle = unbox_to_i64(blk, &recv_val);
+        if let Some(sig) = perry_plugin_instance_method_lookup(method) {
+            let mut llvm_args: Vec<(crate::types::LlvmType, String)> = Vec::with_capacity(1 + args.len());
+            let mut runtime_param_types: Vec<crate::types::LlvmType> = Vec::with_capacity(1 + args.len());
+            llvm_args.push((I64, handle));
+            runtime_param_types.push(I64);
+            for (kind, arg) in sig.args.iter().zip(args.iter()) {
+                match kind {
+                    UiArgKind::Widget => {
+                        let v = lower_expr(ctx, arg)?;
+                        let blk = ctx.block();
+                        let h = unbox_to_i64(blk, &v);
+                        llvm_args.push((I64, h));
+                        runtime_param_types.push(I64);
+                    }
+                    UiArgKind::Str => {
+                        let h = get_raw_string_ptr(ctx, arg)?;
+                        llvm_args.push((I64, h));
+                        runtime_param_types.push(I64);
+                    }
+                    UiArgKind::F64 | UiArgKind::Closure => {
+                        let v = lower_expr(ctx, arg)?;
+                        llvm_args.push((DOUBLE, v));
+                        runtime_param_types.push(DOUBLE);
+                    }
+                    UiArgKind::I64Raw => {
+                        let v = lower_expr(ctx, arg)?;
+                        let blk = ctx.block();
+                        let i = blk.fptosi(DOUBLE, &v, I64);
+                        llvm_args.push((I64, i));
+                        runtime_param_types.push(I64);
+                    }
+                }
+            }
+            let return_type = match sig.ret {
+                UiReturnKind::Widget | UiReturnKind::I64AsF64 | UiReturnKind::Str => I64,
+                UiReturnKind::F64 => DOUBLE,
+                UiReturnKind::Void => crate::types::VOID,
+            };
+            ctx.pending_declares.push((sig.runtime.to_string(), return_type, runtime_param_types));
+            let ref_args: Vec<(crate::types::LlvmType, &str)> =
+                llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
+            let blk = ctx.block();
+            return match sig.ret {
+                UiReturnKind::Void => {
+                    blk.call_void(sig.runtime, &ref_args);
+                    Ok(double_literal(0.0))
+                }
+                UiReturnKind::Widget => {
+                    let raw = blk.call(I64, sig.runtime, &ref_args);
+                    Ok(crate::expr::nanbox_pointer_inline(blk, &raw))
+                }
+                UiReturnKind::F64 => Ok(blk.call(DOUBLE, sig.runtime, &ref_args)),
+                UiReturnKind::I64AsF64 => {
+                    let raw = blk.call(I64, sig.runtime, &ref_args);
+                    Ok(blk.sitofp(I64, &raw, DOUBLE))
+                }
+                UiReturnKind::Str => {
+                    let raw = blk.call(I64, sig.runtime, &ref_args);
+                    Ok(crate::expr::nanbox_string_inline(blk, &raw))
+                }
+            };
+        }
+        bail!(
+            "perry/plugin: '.{}(...)' is not a known PluginApi method (args: {}). \
+             See types/perry/plugin/index.d.ts for the supported API surface.",
             method,
             args.len()
         );
@@ -4710,6 +4803,9 @@ enum UiReturnKind {
     /// returned value reads back as a real string in `console.log`,
     /// template interpolation, and `typeof === "string"` checks.
     Str,
+    /// i64 result converted to plain JS number via `sitofp`. Used for integer
+    /// counts/IDs that the TS caller should see as a JS number (not a handle).
+    I64AsF64,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -5339,6 +5435,99 @@ fn perry_i18n_table_lookup(method: &str) -> Option<&'static UiSig> {
     PERRY_I18N_TABLE.iter().find(|s| s.method == method)
 }
 
+// =============================================================================
+// perry/plugin dispatch table
+// =============================================================================
+
+/// Receiver-less (host-side) functions exported from perry/plugin.
+/// These map `import { loadPlugin, listPlugins, … } from "perry/plugin"` to
+/// their `perry_plugin_*` runtime symbols. Arg shapes match plugin.rs exactly:
+/// strings are passed as NaN-boxed f64 (`UiArgKind::F64`) because the runtime
+/// calls `extract_string(nanboxed: f64)` internally — not raw pointer.
+static PERRY_PLUGIN_TABLE: &[UiSig] = &[
+    // loadPlugin(path) -> PluginId (NaN-boxed i64 handle, 0 on failure)
+    UiSig { method: "loadPlugin", runtime: "perry_plugin_load",
+            args: &[UiArgKind::F64], ret: UiReturnKind::Widget },
+    // unloadPlugin(id) -> void
+    UiSig { method: "unloadPlugin", runtime: "perry_plugin_unload",
+            args: &[UiArgKind::Widget], ret: UiReturnKind::Void },
+    // emitHook(hookName, context) -> context (possibly transformed by handlers)
+    UiSig { method: "emitHook", runtime: "perry_plugin_emit_hook",
+            args: &[UiArgKind::F64, UiArgKind::F64], ret: UiReturnKind::F64 },
+    // emitEvent(event, data) -> undefined
+    UiSig { method: "emitEvent", runtime: "perry_plugin_emit_event",
+            args: &[UiArgKind::F64, UiArgKind::F64], ret: UiReturnKind::F64 },
+    // invokeTool(name, args) -> handler return value
+    UiSig { method: "invokeTool", runtime: "perry_plugin_invoke_tool",
+            args: &[UiArgKind::F64, UiArgKind::F64], ret: UiReturnKind::F64 },
+    // setPluginConfig(key, value) -> undefined
+    UiSig { method: "setPluginConfig", runtime: "perry_plugin_set_config",
+            args: &[UiArgKind::F64, UiArgKind::F64], ret: UiReturnKind::F64 },
+    // discoverPlugins(dir) -> string[] of plugin paths
+    UiSig { method: "discoverPlugins", runtime: "perry_plugin_discover",
+            args: &[UiArgKind::F64], ret: UiReturnKind::F64 },
+    // listPlugins() -> { id, name, version, description }[]
+    UiSig { method: "listPlugins", runtime: "perry_plugin_list_plugins",
+            args: &[], ret: UiReturnKind::F64 },
+    // listHooks() -> string[]
+    UiSig { method: "listHooks", runtime: "perry_plugin_list_hooks",
+            args: &[], ret: UiReturnKind::F64 },
+    // listTools() -> { name, description, pluginId }[]
+    UiSig { method: "listTools", runtime: "perry_plugin_list_tools",
+            args: &[], ret: UiReturnKind::F64 },
+    // pluginCount() -> number
+    UiSig { method: "pluginCount", runtime: "perry_plugin_count",
+            args: &[], ret: UiReturnKind::I64AsF64 },
+    // initPlugins() -> void  (call once from main before loading plugins)
+    UiSig { method: "initPlugins", runtime: "perry_plugin_init",
+            args: &[], ret: UiReturnKind::Void },
+];
+
+/// Instance methods on a PluginApi handle returned by `loadPlugin`.
+/// The handle (NaN-boxed i64) is the receiver and is prepended as the
+/// first `i64` arg (`api_handle`) in every runtime call.
+static PERRY_PLUGIN_INSTANCE_TABLE: &[UiSig] = &[
+    // api.registerHook(hookName, handler) -> undefined
+    UiSig { method: "registerHook", runtime: "perry_plugin_register_hook",
+            args: &[UiArgKind::F64, UiArgKind::Closure], ret: UiReturnKind::F64 },
+    // api.registerHookEx(hookName, handler, priority, mode) -> undefined
+    UiSig { method: "registerHookEx", runtime: "perry_plugin_register_hook_ex",
+            args: &[UiArgKind::F64, UiArgKind::Closure, UiArgKind::I64Raw, UiArgKind::I64Raw],
+            ret: UiReturnKind::F64 },
+    // api.registerTool(name, description, handler) -> undefined
+    UiSig { method: "registerTool", runtime: "perry_plugin_register_tool",
+            args: &[UiArgKind::F64, UiArgKind::F64, UiArgKind::Closure], ret: UiReturnKind::F64 },
+    // api.registerService(name, startFn, stopFn) -> undefined
+    UiSig { method: "registerService", runtime: "perry_plugin_register_service",
+            args: &[UiArgKind::F64, UiArgKind::Closure, UiArgKind::Closure], ret: UiReturnKind::F64 },
+    // api.registerRoute(path, handler) -> undefined
+    UiSig { method: "registerRoute", runtime: "perry_plugin_register_route",
+            args: &[UiArgKind::F64, UiArgKind::Closure], ret: UiReturnKind::F64 },
+    // api.getConfig(key) -> any
+    UiSig { method: "getConfig", runtime: "perry_plugin_get_config",
+            args: &[UiArgKind::F64], ret: UiReturnKind::F64 },
+    // api.log(level, message) -> undefined   (level: 0=DEBUG,1=INFO,2=WARN,3=ERROR)
+    UiSig { method: "log", runtime: "perry_plugin_log",
+            args: &[UiArgKind::I64Raw, UiArgKind::F64], ret: UiReturnKind::F64 },
+    // api.setMetadata(name, version, description) -> undefined
+    UiSig { method: "setMetadata", runtime: "perry_plugin_set_metadata",
+            args: &[UiArgKind::F64, UiArgKind::F64, UiArgKind::F64], ret: UiReturnKind::F64 },
+    // api.on(event, handler) -> undefined
+    UiSig { method: "on", runtime: "perry_plugin_on",
+            args: &[UiArgKind::F64, UiArgKind::Closure], ret: UiReturnKind::F64 },
+    // api.emit(event, data) -> undefined
+    UiSig { method: "emit", runtime: "perry_plugin_emit",
+            args: &[UiArgKind::F64, UiArgKind::F64], ret: UiReturnKind::F64 },
+];
+
+fn perry_plugin_table_lookup(method: &str) -> Option<&'static UiSig> {
+    PERRY_PLUGIN_TABLE.iter().find(|s| s.method == method)
+}
+
+fn perry_plugin_instance_method_lookup(method: &str) -> Option<&'static UiSig> {
+    PERRY_PLUGIN_INSTANCE_TABLE.iter().find(|s| s.method == method)
+}
+
 /// Lower a perry/ui call described by `sig`. Walks each arg, applies
 /// the per-kind coercion to produce an LLVM SSA value of the right type,
 /// lazy-declares the runtime function, emits the call, and boxes the
@@ -5435,7 +5624,7 @@ fn lower_perry_ui_table_call(
     // libperry_ui_*.a symbol. Same pending_declares mechanism the
     // cross-module call site uses for `perry_fn_*`.
     let return_type = match sig.ret {
-        UiReturnKind::Widget => I64,
+        UiReturnKind::Widget | UiReturnKind::I64AsF64 => I64,
         UiReturnKind::F64 => DOUBLE,
         UiReturnKind::Void => crate::types::VOID,
         UiReturnKind::Str => I64,
@@ -5477,6 +5666,11 @@ fn lower_perry_ui_table_call(
             let blk = ctx.block();
             let raw = blk.call(I64, sig.runtime, &arg_slices);
             Ok(crate::expr::nanbox_string_inline(blk, &raw))
+        }
+        UiReturnKind::I64AsF64 => {
+            let blk = ctx.block();
+            let raw = blk.call(I64, sig.runtime, &arg_slices);
+            Ok(blk.sitofp(I64, &raw, DOUBLE))
         }
     }
 }
