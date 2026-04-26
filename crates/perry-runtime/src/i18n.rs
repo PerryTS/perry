@@ -840,3 +840,42 @@ pub extern "C" fn perry_i18n_format_time(timestamp: f64, locale_idx: i32) -> *mu
     let bytes = result.as_bytes();
     crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
+
+// Single-arg shims for the UiSig dispatch table in perry-codegen.
+// The table uses `args: &[UiArgKind::F64]` (one TS-side arg); locale comes
+// from the global LOCALE_INDEX set by perry_i18n_init().
+
+#[no_mangle]
+pub extern "C" fn perry_i18n_currency(value: f64) -> *mut crate::StringHeader {
+    perry_i18n_format_currency(value, LOCALE_INDEX.load(Ordering::Relaxed))
+}
+
+#[no_mangle]
+pub extern "C" fn perry_i18n_percent(value: f64) -> *mut crate::StringHeader {
+    perry_i18n_format_percent(value, LOCALE_INDEX.load(Ordering::Relaxed))
+}
+
+#[no_mangle]
+pub extern "C" fn perry_i18n_number(value: f64) -> *mut crate::StringHeader {
+    perry_i18n_format_number(value, LOCALE_INDEX.load(Ordering::Relaxed))
+}
+
+#[no_mangle]
+pub extern "C" fn perry_i18n_format_date_short(timestamp: f64) -> *mut crate::StringHeader {
+    perry_i18n_format_date(timestamp, 1, LOCALE_INDEX.load(Ordering::Relaxed))
+}
+
+#[no_mangle]
+pub extern "C" fn perry_i18n_format_date_long(timestamp: f64) -> *mut crate::StringHeader {
+    perry_i18n_format_date(timestamp, 2, LOCALE_INDEX.load(Ordering::Relaxed))
+}
+
+#[no_mangle]
+pub extern "C" fn perry_i18n_time(value: f64) -> *mut crate::StringHeader {
+    perry_i18n_format_time(value, LOCALE_INDEX.load(Ordering::Relaxed))
+}
+
+#[no_mangle]
+pub extern "C" fn perry_i18n_format_raw(value: f64) -> *mut crate::StringHeader {
+    crate::js_jsvalue_to_string(value)
+}

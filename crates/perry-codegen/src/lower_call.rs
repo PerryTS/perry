@@ -2407,6 +2407,12 @@ pub(crate) fn lower_native_method_call(
         }
     }
 
+    if module == "perry/i18n" && object.is_none() {
+        if let Some(sig) = perry_i18n_table_lookup(method) {
+            return lower_perry_ui_table_call(ctx, sig, args);
+        }
+    }
+
     // `perry/ui.App({ title, width, height, body, icon? })` — minimum-viable
     // dispatch so a perry/ui app actually launches an NSApplication and
     // shows a window. Pre-v0.5.10 this fell into the receiver-less early-
@@ -2904,6 +2910,7 @@ pub(crate) fn lower_native_method_call(
                 UiReturnKind::Widget => I64,
                 UiReturnKind::F64 => DOUBLE,
                 UiReturnKind::Void => crate::types::VOID,
+                UiReturnKind::Str => I64,
             };
             ctx.pending_declares.push((sig.runtime.to_string(), return_type, runtime_param_types));
             let ref_args: Vec<(crate::types::LlvmType, &str)> =
@@ -2920,6 +2927,10 @@ pub(crate) fn lower_native_method_call(
                 }
                 UiReturnKind::F64 => {
                     Ok(blk.call(DOUBLE, sig.runtime, &ref_args))
+                }
+                UiReturnKind::Str => {
+                    let raw = blk.call(I64, sig.runtime, &ref_args);
+                    Ok(nanbox_string_inline(blk, &raw))
                 }
             };
         }
@@ -4124,6 +4135,8 @@ enum UiReturnKind {
     F64,
     /// Void return: emit `call void` and return the `0.0` sentinel f64.
     Void,
+    /// String pointer (*mut StringHeader): NaN-box the i64 result with STRING_TAG.
+    Str,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -4651,6 +4664,27 @@ fn perry_system_table_lookup(method: &str) -> Option<&'static UiSig> {
     PERRY_SYSTEM_TABLE.iter().find(|s| s.method == method)
 }
 
+// =============================================================================
+// perry/i18n dispatch table
+// =============================================================================
+
+/// Maps the 7 perry/i18n format-wrapper names to their single-arg shim symbols
+/// in perry-runtime/src/i18n.rs. All take one F64 (NaN-boxed value) and
+/// return a *mut StringHeader (NaN-boxed as Str).
+static PERRY_I18N_TABLE: &[UiSig] = &[
+    UiSig { method: "Currency",     runtime: "perry_i18n_currency",          args: &[UiArgKind::F64], ret: UiReturnKind::Str },
+    UiSig { method: "Percent",      runtime: "perry_i18n_percent",           args: &[UiArgKind::F64], ret: UiReturnKind::Str },
+    UiSig { method: "FormatNumber", runtime: "perry_i18n_number",            args: &[UiArgKind::F64], ret: UiReturnKind::Str },
+    UiSig { method: "ShortDate",    runtime: "perry_i18n_format_date_short", args: &[UiArgKind::F64], ret: UiReturnKind::Str },
+    UiSig { method: "LongDate",     runtime: "perry_i18n_format_date_long",  args: &[UiArgKind::F64], ret: UiReturnKind::Str },
+    UiSig { method: "FormatTime",   runtime: "perry_i18n_time",              args: &[UiArgKind::F64], ret: UiReturnKind::Str },
+    UiSig { method: "Raw",          runtime: "perry_i18n_format_raw",        args: &[UiArgKind::F64], ret: UiReturnKind::Str },
+];
+
+fn perry_i18n_table_lookup(method: &str) -> Option<&'static UiSig> {
+    PERRY_I18N_TABLE.iter().find(|s| s.method == method)
+}
+
 /// Lower a perry/ui call described by `sig`. Walks each arg, applies
 /// the per-kind coercion to produce an LLVM SSA value of the right type,
 /// lazy-declares the runtime function, emits the call, and boxes the
@@ -4731,6 +4765,7 @@ fn lower_perry_ui_table_call(
         UiReturnKind::Widget => I64,
         UiReturnKind::F64 => DOUBLE,
         UiReturnKind::Void => crate::types::VOID,
+        UiReturnKind::Str => I64,
     };
     ctx.pending_declares.push((
         sig.runtime.to_string(),
@@ -4754,6 +4789,11 @@ fn lower_perry_ui_table_call(
         UiReturnKind::Void => {
             ctx.block().call_void(sig.runtime, &arg_slices);
             Ok(double_literal(0.0))
+        }
+        UiReturnKind::Str => {
+            let blk = ctx.block();
+            let raw = blk.call(I64, sig.runtime, &arg_slices);
+            Ok(nanbox_string_inline(blk, &raw))
         }
     }
 }
