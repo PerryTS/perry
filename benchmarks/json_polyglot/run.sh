@@ -13,8 +13,8 @@
 #   we collect every per-run wall-clock ms and emit median, p95,
 #   stddev (σ), min, and max — not "best-of-N" — so noise and outlier
 #   sensitivity are visible. RSS is captured per-run via
-#   /usr/bin/time -l (peak RSS, not average); we report the max
-#   observed peak across runs.
+#   /usr/bin/time (macOS: -l bytes; Linux: -v kbytes, normalised);
+#   we report the max observed peak across runs.
 #
 # CPU pinning:
 #   macOS: taskpolicy -t 0 -l 0 (sets throughput-tier 0 + latency-tier 0
@@ -48,6 +48,21 @@ KEEP=${KEEP:-0}
 NLOHMANN_INCLUDE=$(brew --prefix nlohmann-json 2>/dev/null || echo "")/include
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------------------
+# /usr/bin/time portability: macOS (BSD) uses -l, Linux (GNU) uses -v.
+# RSS_KB=1 means /usr/bin/time reports kilobytes; we normalise to bytes.
+# If TIME_FLAG is empty (unknown OS) or /usr/bin/time is absent, we skip the
+# wrapper and report 0 RSS rather than crashing.
+# ---------------------------------------------------------------------------
+case "$(uname -s)" in
+    Darwin) TIME_FLAG="-l"; RSS_KB=0 ;;
+    Linux)  TIME_FLAG="-v"; RSS_KB=1 ;;
+    *)      TIME_FLAG="";   RSS_KB=0 ;;
+esac
+if [[ ! -x /usr/bin/time ]]; then
+    TIME_FLAG=""
+fi
 
 # ---------------------------------------------------------------------------
 # Node-side TS stripper. Node measurements run on precompiled .mjs so we
@@ -197,15 +212,32 @@ run_bench() {
     for i in $(seq 1 "$RUNS"); do
         local stderr_file="$TMPDIR/stderr.$$.$i"
         local out
-        if [[ -n "$env_str" ]]; then
-            out=$(env $env_str "${PIN_CMD[@]}" /usr/bin/time -l "$@" 2>"$stderr_file" || true)
+        if [[ -n "$TIME_FLAG" ]]; then
+            if [[ -n "$env_str" ]]; then
+                out=$(env $env_str "${PIN_CMD[@]}" /usr/bin/time $TIME_FLAG "$@" 2>"$stderr_file" || true)
+            else
+                out=$("${PIN_CMD[@]}" /usr/bin/time $TIME_FLAG "$@" 2>"$stderr_file" || true)
+            fi
         else
-            out=$("${PIN_CMD[@]}" /usr/bin/time -l "$@" 2>"$stderr_file" || true)
+            if [[ -n "$env_str" ]]; then
+                out=$(env $env_str "${PIN_CMD[@]}" "$@" 2>"$stderr_file" || true)
+            else
+                out=$("${PIN_CMD[@]}" "$@" 2>"$stderr_file" || true)
+            fi
         fi
         local ms
         ms=$(printf '%s\n' "$out" | sed -n 's/^ms:\([0-9]*\)$/\1/p' | head -1)
         local rss_bytes
-        rss_bytes=$(grep "maximum resident set size" "$stderr_file" 2>/dev/null | awk '{print $1}')
+        # macOS (BSD time -l):  "N  maximum resident set size"  — value in bytes, first field
+        # Linux (GNU time -v):  "\tMaximum resident set size (kbytes): N"  — value in kbytes, last field
+        if grep -qi "maximum resident set size" "$stderr_file" 2>/dev/null; then
+            rss_bytes=$(grep -i "maximum resident set size" "$stderr_file" | awk '{print $NF}')
+            if [[ "$RSS_KB" -eq 1 ]]; then
+                rss_bytes=$(( rss_bytes * 1024 ))
+            fi
+        else
+            rss_bytes=0
+        fi
         rm -f "$stderr_file"
         [[ -z "$ms" ]] && continue
         [[ -z "$rss_bytes" ]] && rss_bytes=0
