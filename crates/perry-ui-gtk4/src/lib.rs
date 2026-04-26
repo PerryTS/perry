@@ -488,6 +488,18 @@ pub extern "C" fn perry_ui_button_set_text_color(handle: i64, r: f64, g: f64, b:
     widgets::button::set_text_color(handle, r, g, b, a);
 }
 
+/// Set the tint color of a button's image/icon.
+#[no_mangle]
+pub extern "C" fn perry_ui_button_set_content_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    widgets::button::set_content_tint_color(handle, r, g, b, a);
+}
+
+/// Set the position of the image relative to the label on a button.
+#[no_mangle]
+pub extern "C" fn perry_ui_button_set_image_position(handle: i64, position: i64) {
+    widgets::button::set_image_position(handle, position);
+}
+
 // =============================================================================
 // TextField Ops
 // =============================================================================
@@ -768,6 +780,12 @@ pub extern "C" fn perry_ui_widget_set_on_hover(handle: i64, callback: f64) {
     widgets::set_on_hover(handle, callback);
 }
 
+/// Set a single-click callback.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_on_click(handle: i64, callback: f64) {
+    widgets::set_on_click(handle, callback);
+}
+
 /// Set a double-click callback.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_on_double_click(handle: i64, callback: f64) {
@@ -874,6 +892,12 @@ pub extern "C" fn perry_ui_stack_set_distribution(handle: i64, distribution: f64
 #[no_mangle]
 pub extern "C" fn perry_ui_stack_set_alignment(handle: i64, alignment: f64) {
     widgets::set_alignment(handle, alignment as i64);
+}
+
+/// GTK4 already excludes non-visible children from layout — this is a no-op stub.
+#[no_mangle]
+pub extern "C" fn perry_ui_stack_set_detaches_hidden(handle: i64, flag: i64) {
+    widgets::set_detaches_hidden(handle, flag != 0);
 }
 
 /// Set the application icon.

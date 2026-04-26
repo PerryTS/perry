@@ -320,6 +320,29 @@ pub fn set_on_double_click(handle: i64, callback: f64) {
     }
 }
 
+/// Set a single-click callback on a widget.
+pub fn set_on_click(handle: i64, callback: f64) {
+    extern "C" {
+        fn js_closure_call0(closure: *const u8) -> f64;
+        fn js_nanbox_get_pointer(value: f64) -> i64;
+    }
+    if let Some(widget) = get_widget(handle) {
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(1);
+        let cb = callback;
+        gesture.connect_pressed(move |_gesture, n_press, _x, _y| {
+            if n_press == 1 {
+                let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
+                unsafe { js_closure_call0(ptr); }
+            }
+        });
+        widget.add_controller(gesture);
+    }
+}
+
+/// GTK4 already excludes non-visible children from layout — this is a no-op stub.
+pub fn set_detaches_hidden(_handle: i64, _detaches: bool) {}
+
 /// Animate the opacity of a widget. `duration_secs` is in seconds.
 pub fn animate_opacity(handle: i64, target: f64, duration_secs: f64) {
     use gtk4::glib;

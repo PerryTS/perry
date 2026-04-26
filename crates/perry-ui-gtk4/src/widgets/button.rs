@@ -88,6 +88,32 @@ pub fn set_title(handle: i64, title_ptr: *const u8) {
     }
 }
 
+/// Set the tint color of a button's image/icon via CSS (mirrors set_corner_radius pattern).
+pub fn set_content_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    if let Some(widget) = super::get_widget(handle) {
+        let rgba = format!(
+            "rgba({},{},{},{})",
+            (r * 255.0) as u8,
+            (g * 255.0) as u8,
+            (b * 255.0) as u8,
+            a
+        );
+        let class_name = format!("perry-ctc-{}", handle);
+        widget.add_css_class(&class_name);
+        let css = format!("button.{} image {{ color: {}; }}", class_name, rgba);
+        let provider = gtk4::CssProvider::new();
+        provider.load_from_data(&css);
+        gtk4::style_context_add_provider_for_display(
+            &widget.display(),
+            &provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER,
+        );
+    }
+}
+
+/// Reorder image relative to label. GTK4 no-op — button image not yet implemented on this backend.
+pub fn set_image_position(_handle: i64, _position: i64) {}
+
 /// Set the text color of a button's label via CSS.
 pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(widget) = super::get_widget(handle) {
