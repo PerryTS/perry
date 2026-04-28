@@ -8679,25 +8679,46 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
-        // `JsCreateCallback` deferred to a follow-up. The runtime FFI
-        // `js_create_callback(func_ptr, closure_env, param_count)` expects
-        // `func_ptr` to have signature `(closure_env: i64, args_ptr: *const f64,
-        // args_len: i64) -> f64` — see `native_callback_trampoline` in
-        // `crates/perry-jsruntime/src/interop.rs:993`. Perry closures use
-        // `(closure_ptr, arg0, arg1, ...)` per arity, so a per-arity adapter
-        // thunk (codegen-emitted or runtime-side dispatch) is needed before
-        // we can wire this. For now bail with a clear message so users
-        // hitting `arr.forEach(perryClosure)` style on JS-imported arrays
-        // see what's blocked instead of getting silently miscompiled output.
-        Expr::JsCreateCallback { .. } => bail!(
-            "perry-codegen: JsCreateCallback not yet implemented for the LLVM \
-             backend. Closures passed to JS-imported functions need an adapter \
-             between Perry's `(closure_ptr, arg0, ..)` calling convention and \
-             V8's `(closure_env, args_ptr, args_len)` trampoline. Workaround: \
-             rename the imported `.js` file to `.ts` (and adjust the import \
-             path) so the resolver classifies it as native — see issue #248 \
-             Phase 2B."
-        ),
+        // `JsCreateCallback` (issue #248 Phase 2B): wrap a Perry closure
+        // as a V8 callable. The runtime FFI
+        // `js_create_callback(func_ptr, closure_env, param_count)` registers
+        // a JS function whose trampoline (perry-jsruntime/src/interop.rs:993,
+        // `native_callback_trampoline`) calls
+        // `func_ptr(closure_env, args_ptr, args_len)` — but Perry closure
+        // bodies expect `(closure_ptr, arg0, arg1, ...)` per arity. Bridge
+        // is the `js_closure_call_array` runtime helper added alongside
+        // (`crates/perry-runtime/src/closure.rs`) which takes the i64
+        // closure pointer and dispatches to the right `js_closure_callN`
+        // based on `args_len`. Codegen passes:
+        //   func_ptr     = ptrtoint @js_closure_call_array to i64
+        //   closure_env  = unbox(closure)  — raw *ClosureHeader as i64
+        //   param_count  = static usize from HIR
+        // Result is a NaN-boxed JS handle (V8-handle tag 0x7FFB) that JS
+        // code can call like any other JS function.
+        Expr::JsCreateCallback { closure, param_count } => {
+            let closure_dbl = lower_expr(ctx, closure)?;
+            let blk = ctx.block();
+            let closure_i64 = unbox_to_i64(blk, &closure_dbl);
+            // ptrtoint of a function symbol: assigns a fresh SSA register
+            // and emits the conversion. The resulting i64 is the address
+            // of `js_closure_call_array`, which we hand to js_create_callback
+            // as its trampoline target.
+            let func_addr = blk.next_reg();
+            blk.emit_raw(format!(
+                "{} = ptrtoint ptr @js_closure_call_array to i64",
+                func_addr
+            ));
+            let pcount = (*param_count as i64).to_string();
+            Ok(blk.call(
+                DOUBLE,
+                "js_create_callback",
+                &[
+                    (I64, &func_addr),
+                    (I64, &closure_i64),
+                    (I64, &pcount),
+                ],
+            ))
+        }
 
         // -------- Unsupported (clear error) --------
         other => bail!(

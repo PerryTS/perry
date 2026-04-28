@@ -644,6 +644,83 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
     }
 }
 
+/// Adapter for V8's `native_callback_trampoline` (perry-jsruntime).
+///
+/// `js_create_callback(func_ptr, closure_env, param_count)` registers a JS
+/// callable whose trampoline invokes `func_ptr(closure_env, args_ptr,
+/// args_len)`. Perry closure bodies have signature
+/// `(closure_ptr, arg0, arg1, ...)` per arity instead, so the codegen
+/// arm for `Expr::JsCreateCallback` (issue #248 Phase 2B) passes
+/// `js_closure_call_array` as the trampoline `func_ptr` and the raw
+/// `*const ClosureHeader` (NaN-boxing stripped) as `closure_env`. The
+/// trampoline then ends up calling THIS function, which dispatches to
+/// the right `js_closure_callN` per `args_len`.
+///
+/// Mirrors `js_native_call_value` exactly but takes an i64 closure
+/// pointer (already unboxed) instead of an f64 NaN-boxed value, so the
+/// SysV-x64 / Win64 first-arg register lands in rdi/rcx (integer)
+/// rather than xmm0 — matching the trampoline's `extern "C"` int-arg
+/// expectation.
+#[no_mangle]
+pub unsafe extern "C" fn js_closure_call_array(
+    closure_env: i64,
+    args_ptr: *const f64,
+    args_len: i64,
+) -> f64 {
+    let closure = closure_env as *const ClosureHeader;
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let n = if args_len < 0 { 0 } else { args_len as usize };
+    // Perry's closure-body arithmetic uses plain `fadd`/`fmul`/etc on
+    // f64 inputs and assumes its arguments arrive as plain doubles, not
+    // NaN-boxed values. perry-jsruntime's `v8_to_native` (bridge.rs:215)
+    // NaN-boxes JS integers with INT32_TAG=0x7FFE. If we passed those
+    // bits straight through, the closure body's `fadd` would produce a
+    // NaN (whose payload happens to look like one of the operands when
+    // re-decoded by `console.log`'s tag-aware unbox — which is why
+    // `(a, b) => a + b` with `cb(10, 20)` returned 10 instead of 30
+    // pre-fix). Unbox at the dispatch boundary so the body sees a
+    // plain `20.0` not the NaN-boxed `0x7FFE_0000_0000_0014`. JS
+    // doubles (non-int32) already arrive as plain f64 from
+    // `v8_to_native`; only the INT32_TAG case needs unboxing here.
+    let a = |i: usize| {
+        if args_ptr.is_null() {
+            return 0.0;
+        }
+        let raw = *args_ptr.add(i);
+        let bits = raw.to_bits();
+        if (bits & 0xFFFF_0000_0000_0000) == 0x7FFE_0000_0000_0000 {
+            let int_val = (bits & 0xFFFF_FFFF) as i32;
+            return int_val as f64;
+        }
+        raw
+    };
+    match n {
+        0 => js_closure_call0(closure),
+        1 => js_closure_call1(closure, a(0)),
+        2 => js_closure_call2(closure, a(0), a(1)),
+        3 => js_closure_call3(closure, a(0), a(1), a(2)),
+        4 => js_closure_call4(closure, a(0), a(1), a(2), a(3)),
+        5 => js_closure_call5(closure, a(0), a(1), a(2), a(3), a(4)),
+        6 => js_closure_call6(closure, a(0), a(1), a(2), a(3), a(4), a(5)),
+        7 => js_closure_call7(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6)),
+        8 => js_closure_call8(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7)),
+        9 => js_closure_call9(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7), a(8)),
+        10 => js_closure_call10(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7), a(8), a(9)),
+        11 => js_closure_call11(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7), a(8), a(9), a(10)),
+        12 => js_closure_call12(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7), a(8), a(9), a(10), a(11)),
+        13 => js_closure_call13(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7), a(8), a(9), a(10), a(11), a(12)),
+        14 => js_closure_call14(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7), a(8), a(9), a(10), a(11), a(12), a(13)),
+        15 => js_closure_call15(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7), a(8), a(9), a(10), a(11), a(12), a(13), a(14)),
+        _ => js_closure_call16(
+            closure,
+            a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7),
+            a(8), a(9), a(10), a(11), a(12), a(13), a(14), a(15),
+        ),
+    }
+}
+
 /// V8 interop no-op stubs. Real implementations are in perry-jsruntime/src/interop.rs.
 /// These stubs ensure symbols are always available even when perry-jsruntime is not linked
 /// (iOS, Android, standalone builds). When perry-jsruntime IS linked, its strong symbols

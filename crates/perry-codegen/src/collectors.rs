@@ -727,6 +727,36 @@ fn collect_closures_in_expr(
         }
         Expr::ChildProcessGetProcessStatus(h) |
         Expr::ChildProcessKillProcess(h) => walk(h, seen, out),
+        // V8 / perry-jsruntime interop (issue #248). All of these can
+        // carry closures inside their args / value sub-exprs — without
+        // descending here, a closure passed to a JS-imported function
+        // (e.g. `arr.forEach(cb)` where `arr` is a JS array) would be
+        // referenced via `js_closure_alloc(@perry_closure_*)` but the
+        // body symbol would never be defined.
+        Expr::JsCreateCallback { closure, .. } => walk(closure, seen, out),
+        Expr::JsLoadModule { .. } => {}
+        Expr::JsGetExport { module_handle, .. } => walk(module_handle, seen, out),
+        Expr::JsCallFunction { module_handle, args, .. } => {
+            walk(module_handle, seen, out);
+            for a in args { walk(a, seen, out); }
+        }
+        Expr::JsCallMethod { object, args, .. } => {
+            walk(object, seen, out);
+            for a in args { walk(a, seen, out); }
+        }
+        Expr::JsGetProperty { object, .. } => walk(object, seen, out),
+        Expr::JsSetProperty { object, value, .. } => {
+            walk(object, seen, out);
+            walk(value, seen, out);
+        }
+        Expr::JsNew { module_handle, args, .. } => {
+            walk(module_handle, seen, out);
+            for a in args { walk(a, seen, out); }
+        }
+        Expr::JsNewFromHandle { constructor, args } => {
+            walk(constructor, seen, out);
+            for a in args { walk(a, seen, out); }
+        }
         // Reflect.* and other iterator/json wrappers — can carry callbacks.
         Expr::IteratorToArray(o) | Expr::ArrayIsArray(o) => walk(o, seen, out),
         Expr::JsonStringify(o) | Expr::JsonParse(o) => walk(o, seen, out),

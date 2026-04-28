@@ -1629,6 +1629,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== Closures / functions ==========
     module.declare_function("js_call_function", DOUBLE, &[I64, I64, I64, I64, I64]);
     module.declare_function("js_call_method", DOUBLE, &[DOUBLE, I64, I64, I64, I64]);
+    module.declare_function("js_closure_call_array", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_create_callback", DOUBLE, &[I64, I64, I64]);
 
     // ========== NaN-boxing / typeof / is_* ==========
