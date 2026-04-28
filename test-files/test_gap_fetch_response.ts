@@ -18,6 +18,9 @@
 // request body present: true
 // clone text: cloned body
 // arrayBuffer byteLength: 5
+// arrayBuffer first byte: 104
+// arrayBuffer last byte: 111
+// arrayBuffer toString: hello
 // blob size: 5
 // blob type: text/plain
 // Response.json static: 42
@@ -93,6 +96,12 @@ async function main(): Promise<void> {
   const r6 = new Response("hello");
   const ab = await r6.arrayBuffer();
   console.log("arrayBuffer byteLength: " + ab.byteLength);
+  // Verify body bytes survived (issue #227): the previous stub returned a
+  // metadata-only `{byteLength}` object with no real bytes.
+  const u8 = new Uint8Array(ab);
+  console.log("arrayBuffer first byte: " + u8[0]);
+  console.log("arrayBuffer last byte: " + u8[4]);
+  console.log("arrayBuffer toString: " + Buffer.from(ab).toString("utf8"));
 
   // --- Response.blob() ---
   const r7 = new Response("hello", { headers: { "Content-Type": "text/plain" } });

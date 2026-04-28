@@ -1013,32 +1013,45 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// response.arrayBuffer() — returns an object { byteLength: N, __isArrayBuffer: true }
-/// (Wrapped in a Promise via codegen await.) Resolved synchronously so
-/// the LLVM backend's await loop (which doesn't pump deferred
-/// resolutions) doesn't hang. See `js_fetch_response_text` for rationale.
+/// response.arrayBuffer() — returns a real BufferHeader holding the body bytes,
+/// NaN-boxed as POINTER_TAG so that `new Uint8Array(buf)` and `Buffer.from(buf)`
+/// see the actual byte contents. `.byteLength` / `.length` access routes through
+/// the BufferHeader property dispatch in `value.rs`. Resolved synchronously so
+/// the LLVM backend's await loop (which doesn't pump deferred resolutions)
+/// doesn't hang. See `js_fetch_response_text` for rationale.
 #[no_mangle]
 pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
     let id = handle as usize;
-    let body_len = {
+    let body: Vec<u8> = {
         let guard = FETCH_RESPONSES.lock().unwrap();
         match guard.get(&id) {
-            Some(resp) => resp.body.len(),
-            None => 0,
+            Some(resp) => resp.body.clone(),
+            None => Vec::new(),
         }
     };
-    // Allocate an object { byteLength: body_len }
-    let packed = b"byteLength\0".as_ptr();
-    let obj = js_object_alloc_with_shape(0x7FFE_FE01, 1, packed, 11);
-    perry_runtime::js_object_set_field(obj, 0, JSValue::number(body_len as f64));
-    let val = JSValue::object_ptr(obj as *mut u8);
+    let buf = perry_runtime::buffer::buffer_alloc(body.len() as u32);
+    (*buf).length = body.len() as u32;
+    if !body.is_empty() {
+        std::ptr::copy_nonoverlapping(
+            body.as_ptr(),
+            perry_runtime::buffer::buffer_data_mut(buf),
+            body.len(),
+        );
+    }
+    let val = JSValue::object_ptr(buf as *mut u8);
     perry_runtime::js_promise_resolve(promise, f64::from_bits(val.bits()));
     promise
 }
 
 /// response.blob() — returns an object { size: N, type: "..." }
 /// Resolved synchronously; see `js_fetch_response_text`.
+///
+/// TODO(#227 follow-up): body bytes are dropped here. A real Blob requires
+/// implementing `.arrayBuffer()` / `.text()` / `.bytes()` / `.slice()` instance
+/// methods plus codegen dispatch routing (`crates/perry-codegen/src/lower_call.rs`).
+/// Until that lands, users needing binary body bytes should call
+/// `response.arrayBuffer()` directly instead of `response.blob()`.
 #[no_mangle]
 pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();

@@ -385,10 +385,33 @@ pub extern "C" fn js_uint8array_alloc(length: i32) -> *mut BufferHeader {
 pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
     let bits = val.to_bits();
     let top16 = (bits >> 48) as u16;
-    // POINTER_TAG (0x7FFD) — an object/array pointer. Treat as source array.
+    // POINTER_TAG (0x7FFD) — an object/array/buffer pointer.
     if top16 == 0x7FFD {
-        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
-        return js_uint8array_from_array(ptr);
+        let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        // If the source is itself a Buffer / ArrayBuffer / Uint8Array, memcpy
+        // its bytes directly. Without this branch the catch-all would treat
+        // the BufferHeader as an ArrayHeader of f64s and produce garbage —
+        // notably breaks `new Uint8Array(await response.arrayBuffer())` since
+        // `js_response_array_buffer` returns a real BufferHeader (issue #227).
+        if is_registered_buffer(raw) {
+            let src = raw as *const BufferHeader;
+            unsafe {
+                let len = (*src).length;
+                let dst = buffer_alloc(len);
+                (*dst).length = len;
+                if len > 0 {
+                    ptr::copy_nonoverlapping(
+                        buffer_data(src),
+                        buffer_data_mut(dst),
+                        len as usize,
+                    );
+                }
+                mark_as_uint8array(dst as usize);
+                return dst;
+            }
+        }
+        // Otherwise treat as a numeric source array.
+        return js_uint8array_from_array(raw as *const ArrayHeader);
     }
     // Plain IEEE double (upper16 < 0x7FFC or > 0x7FFF) — numeric length.
     if top16 < 0x7FFC || top16 > 0x7FFF {
