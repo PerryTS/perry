@@ -223,6 +223,13 @@ for test_file in "$TEST_DIR"/*.ts; do
         ((COMPILE_FAIL++))
         COMPILE_FAILURES+=("$test_name")
         echo "" > "$perry_output_file"
+        # Persist the actual compile stderr so CI artifacts can be inspected
+        # to diagnose long-tail compile failures (e.g. the macOS-14 SDK gap
+        # tracked as `ci-env` in test-parity/known_failures.json). Pre-fix
+        # the parity runner only logged "compile error" with no detail and
+        # the macOS-14 family was diagnosed by inference, not data.
+        compile_log="$OUTPUT_DIR/${test_name}.compile_error.log"
+        printf "%s\n" "$compile_output" > "$compile_log"
         continue
     fi
 

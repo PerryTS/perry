@@ -237,6 +237,19 @@ jobs:
           name: parity-report
           path: test-parity/reports/latest.json
 
+      # Capture per-test compile stderr written by run_parity_tests.sh into
+      # `test-parity/output/*.compile_error.log` so the long-tail
+      # macOS-14-only compile failures (tracked as `ci-env` in
+      # known_failures.json) can finally be diagnosed by reading the actual
+      # error message rather than inferring from the test family.
+      - name: Upload compile-error logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-compile-errors-${{ runner.os }}
+          path: test-parity/output/*.compile_error.log
+          if-no-files-found: ignore
+
   # ---------------------------------------------------------------------------
   # Compile smoke test (all 130+ test files must compile)
   # ---------------------------------------------------------------------------
@@ -304,7 +317,11 @@ jobs:
           #   test_buffer_numeric_read_intrinsic, test_buffer_small_alloc)
           #   compile cleanly on local macOS 15.x but fail on the GitHub
           #   macOS-14 runner (SDK/linker version interaction). Tracked
-          #   as `ci-env` in `test-parity/known_failures.json`.
+          #   as `ci-env` in `test-parity/known_failures.json`. Stderr
+          #   is now captured by the parity job into the
+          #   `parity-compile-errors-*` artifact (sibling to this skip
+          #   list); inspect that artifact to see the actual link error
+          #   for any of these tests.
           # Space-separated skip list (associative arrays require bash
           # 4+; macOS-14 ships bash 3.2). Word-boundary match keeps
           # the substring lookup safe.
@@ -325,6 +342,12 @@ jobs:
             test_issue_227_array_buffer_bytes \
             test_gap_fetch_response "
 
+          # Capture compile stderr per test so the artifact upload below
+          # can preserve the actual error message — pre-fix the loop
+          # discarded stderr (`2>/dev/null`) so the macOS-14-only failures
+          # (tracked as `ci-env` in test-parity/known_failures.json) had to
+          # be diagnosed by inference rather than data.
+          mkdir -p /tmp/perry_smoke_logs
           for f in test-files/*.ts; do
             [[ -d "$f" ]] && continue
             name=$(basename "$f" .ts)
@@ -332,9 +355,10 @@ jobs:
               ((SKIP++))
               continue
             fi
-            if $PERRY "$f" -o "/tmp/perry_smoke_${name}" 2>/dev/null; then
+            err_log="/tmp/perry_smoke_logs/${name}.compile_error.log"
+            if $PERRY "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log"; then
               ((PASS++))
-              rm -f "/tmp/perry_smoke_${name}"
+              rm -f "/tmp/perry_smoke_${name}" "$err_log"
             else
               ((FAIL++))
               FAILURES+=("$name")
@@ -347,9 +371,25 @@ jobs:
             echo "Compile failures:"
             for f in "${FAILURES[@]}"; do
               echo "  - $f"
+              # Surface the head of each failure log directly in the job
+              # output so a quick scan reveals the underlying error without
+              # downloading the artifact.
+              if [[ -s "/tmp/perry_smoke_logs/${f}.compile_error.log" ]]; then
+                echo "    --- compile stderr (first 30 lines) ---"
+                head -n 30 "/tmp/perry_smoke_logs/${f}.compile_error.log" | sed 's/^/    /'
+                echo "    --- end ---"
+              fi
             done
             exit 1
           fi
+
+      - name: Upload compile-smoke error logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-smoke-error-logs
+          path: /tmp/perry_smoke_logs/*.compile_error.log
+          if-no-files-found: ignore
 
       # Thread-primitive compile-error tests (#146): checks that closures
       # passed to perry/thread primitives with outer-variable writes are
