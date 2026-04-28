@@ -1047,9 +1047,9 @@ pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut perry_run
 /// response.blob() — returns an object { size: N, type: "..." }
 /// Resolved synchronously; see `js_fetch_response_text`.
 ///
-/// TODO(#227 follow-up): body bytes are dropped here. A real Blob requires
-/// implementing `.arrayBuffer()` / `.text()` / `.bytes()` / `.slice()` instance
-/// methods plus codegen dispatch routing (`crates/perry-codegen/src/lower_call.rs`).
+/// TODO(#234): body bytes are dropped here. A real Blob requires implementing
+/// `.arrayBuffer()` / `.text()` / `.bytes()` / `.slice()` instance methods plus
+/// codegen dispatch routing (`crates/perry-codegen/src/lower_call.rs`).
 /// Until that lands, users needing binary body bytes should call
 /// `response.arrayBuffer()` directly instead of `response.blob()`.
 #[no_mangle]
