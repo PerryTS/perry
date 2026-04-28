@@ -8486,6 +8486,219 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
 
+        // -------- V8 / perry-jsruntime interop (issue #248) --------
+        // These variants are produced by perry-hir's `transform_js_imports`
+        // pass when a TS module imports from a `.js` file the resolver
+        // classifies as JS-runtime-loaded (see
+        // `crates/perry/src/commands/compile/collect_modules.rs:73`).
+        // The runtime FFIs live in `perry-jsruntime/src/interop.rs` and are
+        // declared above in runtime_decls.rs. JS values come back as
+        // NaN-boxed f64 with V8-handle tag 0x7FFB (handled inside
+        // perry-jsruntime — Perry codegen treats them as opaque doubles).
+        // Module handles are u64 (deno_core::ModuleId), bitcast through
+        // f64 in transit so they share the lower_expr return type.
+        //
+        // `JsCreateCallback` is intentionally not implemented here —
+        // see the bail comment near the catch-all below for the reason.
+
+        Expr::JsLoadModule { path } => {
+            let (bytes_global, byte_len) = {
+                let idx = ctx.strings.intern(path);
+                let entry = ctx.strings.entry(idx);
+                (format!("@{}", entry.bytes_global), entry.byte_len)
+            };
+            let blk = ctx.block();
+            let len_str = byte_len.to_string();
+            let handle_i64 = blk.call(
+                I64,
+                "js_load_module",
+                &[(PTR, &bytes_global), (I64, &len_str)],
+            );
+            // Pass as f64 to fit the lower_expr return contract; consumers
+            // (JsCallFunction/JsGetExport/JsNew) bitcast back to i64 before
+            // passing to runtime FFIs that expect a u64 handle.
+            Ok(blk.bitcast_i64_to_double(&handle_i64))
+        }
+
+        Expr::JsGetExport { module_handle, export_name } => {
+            let handle_dbl = lower_expr(ctx, module_handle)?;
+            let (bytes_global, byte_len) = {
+                let idx = ctx.strings.intern(export_name);
+                let entry = ctx.strings.entry(idx);
+                (format!("@{}", entry.bytes_global), entry.byte_len)
+            };
+            let blk = ctx.block();
+            let handle_i64 = blk.bitcast_double_to_i64(&handle_dbl);
+            let len_str = byte_len.to_string();
+            Ok(blk.call(
+                DOUBLE,
+                "js_get_export",
+                &[
+                    (I64, &handle_i64),
+                    (PTR, &bytes_global),
+                    (I64, &len_str),
+                ],
+            ))
+        }
+
+        Expr::JsCallFunction { module_handle, func_name, args } => {
+            let handle_dbl = lower_expr(ctx, module_handle)?;
+            let (bytes_global, byte_len) = {
+                let idx = ctx.strings.intern(func_name);
+                let entry = ctx.strings.entry(idx);
+                (format!("@{}", entry.bytes_global), entry.byte_len)
+            };
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+            let handle_i64 = ctx.block().bitcast_double_to_i64(&handle_dbl);
+            let (args_ptr, args_len_str) = lower_js_args_array(ctx, &lowered_args);
+            let len_str = byte_len.to_string();
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_call_function",
+                &[
+                    (I64, &handle_i64),
+                    (PTR, &bytes_global),
+                    (I64, &len_str),
+                    (PTR, &args_ptr),
+                    (I64, &args_len_str),
+                ],
+            ))
+        }
+
+        Expr::JsCallMethod { object, method_name, args } => {
+            let obj_dbl = lower_expr(ctx, object)?;
+            let (bytes_global, byte_len) = {
+                let idx = ctx.strings.intern(method_name);
+                let entry = ctx.strings.entry(idx);
+                (format!("@{}", entry.bytes_global), entry.byte_len)
+            };
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+            let (args_ptr, args_len_str) = lower_js_args_array(ctx, &lowered_args);
+            let len_str = byte_len.to_string();
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_call_method",
+                &[
+                    (DOUBLE, &obj_dbl),
+                    (PTR, &bytes_global),
+                    (I64, &len_str),
+                    (PTR, &args_ptr),
+                    (I64, &args_len_str),
+                ],
+            ))
+        }
+
+        Expr::JsGetProperty { object, property_name } => {
+            let obj_dbl = lower_expr(ctx, object)?;
+            let (bytes_global, byte_len) = {
+                let idx = ctx.strings.intern(property_name);
+                let entry = ctx.strings.entry(idx);
+                (format!("@{}", entry.bytes_global), entry.byte_len)
+            };
+            let len_str = byte_len.to_string();
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_get_property",
+                &[
+                    (DOUBLE, &obj_dbl),
+                    (PTR, &bytes_global),
+                    (I64, &len_str),
+                ],
+            ))
+        }
+
+        Expr::JsSetProperty { object, property_name, value } => {
+            let obj_dbl = lower_expr(ctx, object)?;
+            let val_dbl = lower_expr(ctx, value)?;
+            let (bytes_global, byte_len) = {
+                let idx = ctx.strings.intern(property_name);
+                let entry = ctx.strings.entry(idx);
+                (format!("@{}", entry.bytes_global), entry.byte_len)
+            };
+            let len_str = byte_len.to_string();
+            ctx.block().call_void(
+                "js_set_property",
+                &[
+                    (DOUBLE, &obj_dbl),
+                    (PTR, &bytes_global),
+                    (I64, &len_str),
+                    (DOUBLE, &val_dbl),
+                ],
+            );
+            Ok(val_dbl)
+        }
+
+        Expr::JsNew { module_handle, class_name, args } => {
+            let handle_dbl = lower_expr(ctx, module_handle)?;
+            let (bytes_global, byte_len) = {
+                let idx = ctx.strings.intern(class_name);
+                let entry = ctx.strings.entry(idx);
+                (format!("@{}", entry.bytes_global), entry.byte_len)
+            };
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+            let handle_i64 = ctx.block().bitcast_double_to_i64(&handle_dbl);
+            let (args_ptr, args_len_str) = lower_js_args_array(ctx, &lowered_args);
+            let len_str = byte_len.to_string();
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_new_instance",
+                &[
+                    (I64, &handle_i64),
+                    (PTR, &bytes_global),
+                    (I64, &len_str),
+                    (PTR, &args_ptr),
+                    (I64, &args_len_str),
+                ],
+            ))
+        }
+
+        Expr::JsNewFromHandle { constructor, args } => {
+            let ctor_dbl = lower_expr(ctx, constructor)?;
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+            let (args_ptr, args_len_str) = lower_js_args_array(ctx, &lowered_args);
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_new_from_handle",
+                &[
+                    (DOUBLE, &ctor_dbl),
+                    (PTR, &args_ptr),
+                    (I64, &args_len_str),
+                ],
+            ))
+        }
+
+        // `JsCreateCallback` deferred to a follow-up. The runtime FFI
+        // `js_create_callback(func_ptr, closure_env, param_count)` expects
+        // `func_ptr` to have signature `(closure_env: i64, args_ptr: *const f64,
+        // args_len: i64) -> f64` — see `native_callback_trampoline` in
+        // `crates/perry-jsruntime/src/interop.rs:993`. Perry closures use
+        // `(closure_ptr, arg0, arg1, ...)` per arity, so a per-arity adapter
+        // thunk (codegen-emitted or runtime-side dispatch) is needed before
+        // we can wire this. For now bail with a clear message so users
+        // hitting `arr.forEach(perryClosure)` style on JS-imported arrays
+        // see what's blocked instead of getting silently miscompiled output.
+        Expr::JsCreateCallback { .. } => bail!(
+            "perry-codegen: JsCreateCallback not yet implemented for the LLVM \
+             backend. Closures passed to JS-imported functions need an adapter \
+             between Perry's `(closure_ptr, arg0, ..)` calling convention and \
+             V8's `(closure_env, args_ptr, args_len)` trampoline. Workaround: \
+             rename the imported `.js` file to `.ts` (and adjust the import \
+             path) so the resolver classifies it as native — see issue #248 \
+             Phase 2B."
+        ),
+
         // -------- Unsupported (clear error) --------
         other => bail!(
             "perry-codegen Phase 2: expression {} not yet supported",
@@ -8807,6 +9020,32 @@ pub(crate) fn buffer_alias_metadata_suffix(scope_idx: u32) -> String {
     let scope_list = 201 + scope_idx;
     let noalias_list = 301 + scope_idx;
     format!(", !alias.scope !{}, !noalias !{}", scope_list, noalias_list)
+}
+
+/// Marshal a vector of already-lowered NaN-boxed args into a stack
+/// alloca'd `[N x double]` and return `(args_ptr, args_len_str)` ready
+/// for an FFI call expecting `(*const f64, usize)`. Empty input returns
+/// `("null", "0")` so the FFI sees a null pointer + 0 length.
+///
+/// Issue #167: the alloca is hoisted to the function entry block via
+/// `alloca_entry_array` so every per-iteration call inside a loop
+/// reuses one stack slot instead of permanently shrinking the stack.
+fn lower_js_args_array(ctx: &mut FnCtx<'_>, lowered_args: &[String]) -> (String, String) {
+    if lowered_args.is_empty() {
+        return ("null".to_string(), "0".to_string());
+    }
+    let n = lowered_args.len();
+    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+    for (i, v) in lowered_args.iter().enumerate() {
+        let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+        ctx.block().store(DOUBLE, v, &slot);
+    }
+    let ptr_reg = ctx.block().next_reg();
+    ctx.block().emit_raw(format!(
+        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+        ptr_reg, n, buf
+    ));
+    (ptr_reg, n.to_string())
 }
 
 /// Unbox a NaN-boxed double into a raw i64 pointer via inline

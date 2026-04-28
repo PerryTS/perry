@@ -275,6 +275,12 @@ pub(crate) struct CrossModuleCtx {
     pub needs_geisterhand: bool,
     /// Port the Geisterhand inspector listens on when `needs_geisterhand`.
     pub geisterhand_port: u16,
+    /// Whether the project pulls in `libperry_jsruntime.a` because some
+    /// `.ts` module imports from a `.js` file the resolver classified as
+    /// JS-runtime-loaded (issue #248). Threaded through so the entry-module
+    /// init prelude can emit the `js_runtime_init()` call before any
+    /// `js_load_module` / `js_call_function` site fires.
+    pub needs_js_runtime: bool,
     /// Compile-time constant values for module globals. Maps LocalId → f64
     /// for variables like `__platform__` whose value is known at compile time.
     /// Used by `lower_if` to constant-fold platform checks and skip emitting
@@ -682,6 +688,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         needs_stdlib: opts.needs_stdlib,
         needs_geisterhand: opts.needs_geisterhand,
         geisterhand_port: opts.geisterhand_port,
+        needs_js_runtime: opts.needs_js_runtime,
         compile_time_constants,
         clamp3_functions: hir.functions.iter()
             .filter_map(|f| crate::collectors::detect_clamp3(f).map(|_| f.id))
@@ -2520,6 +2527,16 @@ fn compile_module_entry(
             // the runtime-only link doesn't pull in the stub symbol.
             if cross_module.needs_stdlib {
                 blk.call_void("js_stdlib_init_dispatch", &[]);
+            }
+            // Issue #248 Phase 2: bootstrap the V8/perry-jsruntime runtime
+            // before any `js_load_module` / `js_call_function` site fires.
+            // Without this, the runtime's per-thread JsRuntimeState is None
+            // and every interop FFI bails with `[js_load_module] no JS
+            // runtime state!` while silently returning undefined. Gated on
+            // `needs_js_runtime` so non-interop builds don't pull in the
+            // V8 init cost.
+            if cross_module.needs_js_runtime {
+                blk.call_void("js_runtime_init", &[]);
             }
             // Start the Geisterhand HTTP inspector if requested. The
             // port comes from `--geisterhand-port` (default 7676). Calling
