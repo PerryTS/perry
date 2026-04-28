@@ -28,7 +28,7 @@ pub use perry_stdlib;
 
 use deno_core::{JsRuntime, RuntimeOptions};
 use once_cell::sync::OnceCell;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::runtime::Runtime as TokioRuntime;
@@ -40,6 +40,33 @@ thread_local! {
     /// Thread-local V8 runtime instance
     /// JsRuntime is not Send, so it must be thread-local
     static JS_RUNTIME: RefCell<Option<JsRuntimeState>> = const { RefCell::new(None) };
+
+    /// Issue #255 — re-entrancy escape hatch. While the outer `with_runtime`
+    /// holds the `JS_RUNTIME.borrow_mut()` lock, V8 can call back into Perry
+    /// (via `native_callback_trampoline` → Perry closure body), which may
+    /// then call FFIs like `js_get_property` that themselves go through
+    /// `with_runtime` again. Pre-fix the inner `borrow_mut()` panicked with
+    /// "RefCell already borrowed". This raw-pointer mirror lets the inner
+    /// call reuse the outer's `&mut JsRuntimeState` instead of trying to
+    /// acquire a second borrow. Lifetime: the pointer is valid only while
+    /// the outer `with_runtime` body is on the stack; a Drop guard clears
+    /// it on normal return AND on panic-unwind.
+    static REENTRY_PTR: Cell<*mut JsRuntimeState> = const { Cell::new(std::ptr::null_mut()) };
+
+    /// Issue #255 — V8 scope passthrough for callback re-entrancy. When V8
+    /// invokes `native_callback_trampoline`, it gives us a live
+    /// `&mut HandleScope` on the call stack. Re-entrant FFIs (`js_get_property`,
+    /// `js_set_property`, etc. called from inside the Perry callback) MUST
+    /// use that scope rather than calling `state.runtime.handle_scope()` —
+    /// the latter clashes with deno_core's internal scope tracking and
+    /// V8 panics with "active scope can't be dropped" on the inner scope's
+    /// Drop. The trampoline stashes its scope pointer here on entry and
+    /// clears it on exit (via Drop guard); FFIs check this stash and use
+    /// the trampoline's scope directly when non-null. The pointer's `'static`
+    /// lifetime is a lie — it's only valid while the trampoline frame is
+    /// on the stack — but that's exactly the window where re-entrant FFIs
+    /// can be called.
+    static REENTRY_SCOPE_PTR: Cell<*mut std::ffi::c_void> = const { Cell::new(std::ptr::null_mut()) };
 }
 
 /// State for the JS runtime
@@ -117,8 +144,69 @@ pub fn get_tokio_runtime() -> &'static TokioRuntime {
     })
 }
 
+/// Issue #255 — set the trampoline's V8 scope as the re-entrancy escape
+/// hatch. Returns a guard that clears the stash on Drop (LIFO so nested
+/// trampoline invocations restore the previous scope).
+///
+/// **Safety**: caller must guarantee that `scope` outlives every FFI call
+/// that might check the stash. In practice this is always true: the
+/// trampoline holds `&mut HandleScope` on its stack frame while invoking
+/// the Perry callback, and re-entrant FFIs only fire while the callback
+/// is running.
+pub struct TrampolineScopeGuard {
+    prev: *mut std::ffi::c_void,
+}
+
+impl Drop for TrampolineScopeGuard {
+    fn drop(&mut self) {
+        REENTRY_SCOPE_PTR.with(|p| p.set(self.prev));
+    }
+}
+
+pub fn stash_trampoline_scope(scope: &mut deno_core::v8::HandleScope) -> TrampolineScopeGuard {
+    let prev = REENTRY_SCOPE_PTR.with(|p| p.get());
+    let scope_ptr = scope as *mut deno_core::v8::HandleScope as *mut std::ffi::c_void;
+    REENTRY_SCOPE_PTR.with(|p| p.set(scope_ptr));
+    TrampolineScopeGuard { prev }
+}
+
+/// Issue #255 — try to get the trampoline's stashed V8 scope for
+/// re-entrant FFI calls. Returns `Some(&mut HandleScope)` when called
+/// from inside a `native_callback_trampoline` invocation,
+/// `None` otherwise.
+///
+/// **Safety**: the returned reference is only valid for the duration of
+/// the current synchronous call chain (until the trampoline's stack
+/// frame is unwound). Don't store it across `await` points or threads.
+///
+/// # Safety
+///
+/// Caller must ensure the returned reference doesn't outlive the
+/// trampoline frame that stashed it.
+pub unsafe fn try_trampoline_scope<'a>() -> Option<&'a mut deno_core::v8::HandleScope<'a>> {
+    let stashed = REENTRY_SCOPE_PTR.with(|p| p.get());
+    if stashed.is_null() {
+        return None;
+    }
+    // Cast back to a HandleScope reference. The lifetime 'a is unconstrained
+    // here — it's the caller's responsibility to use the reference only
+    // within the trampoline's frame lifetime.
+    let scope: &mut deno_core::v8::HandleScope<'_> =
+        &mut *(stashed as *mut deno_core::v8::HandleScope<'_>);
+    Some(std::mem::transmute(scope))
+}
+
 /// Initialize the JS runtime for the current thread
 pub fn ensure_runtime_initialized() {
+    // Issue #255 — short-circuit when re-entered from a V8 callback.
+    // The outer `with_runtime` already holds the borrow + has stashed its
+    // `&mut JsRuntimeState` in `REENTRY_PTR`; doing `borrow_mut` here
+    // again would panic. Since the state must already be initialized
+    // (we couldn't be inside `with_runtime` otherwise), there's nothing
+    // to do.
+    if REENTRY_PTR.with(|p| !p.get().is_null()) {
+        return;
+    }
     JS_RUNTIME.with(|cell| {
         let mut opt = cell.borrow_mut();
         if opt.is_none() {
@@ -127,20 +215,61 @@ pub fn ensure_runtime_initialized() {
     });
 }
 
-/// Execute a closure with the JS runtime
+/// Execute a closure with the JS runtime.
+///
+/// **Re-entrancy (issue #255):** safe to call from inside a V8 callback
+/// invoked while another `with_runtime` body is on the stack. The inner
+/// call detects the outer's stashed `REENTRY_PTR` and reuses the same
+/// `&mut JsRuntimeState` instead of trying to acquire a second
+/// `RefCell::borrow_mut`. This is the standard callback-driven
+/// re-entrancy pattern: the outer `&mut` reference is paused (control
+/// is in V8 → trampoline → Perry callback) while the inner reference
+/// is active, so they never alias in time.
 pub fn with_runtime<F, R>(f: F) -> R
 where
     F: FnOnce(&mut JsRuntimeState) -> R,
 {
+    // Re-entrant fast path: outer with_runtime is still on the stack;
+    // reuse its &mut via the stashed raw pointer instead of borrowing again.
+    let stashed = REENTRY_PTR.with(|p| p.get());
+    if !stashed.is_null() {
+        // SAFETY: REENTRY_PTR is non-null only while the outer
+        // `with_runtime` body holds the RefCell borrow AND its &mut is
+        // suspended on the call stack. The outer reference can't be used
+        // concurrently because control is here, not at the outer's site.
+        // The Drop guard below clears the pointer on return / panic so
+        // the next outer call sees null again.
+        let state = unsafe { &mut *stashed };
+        return f(state);
+    }
+
     ensure_runtime_initialized();
     JS_RUNTIME.with(|cell| {
         let mut opt = cell.borrow_mut();
         let state = opt.as_mut().expect("Runtime should be initialized");
+        let state_ptr: *mut JsRuntimeState = state;
+
+        // Stash the pointer so re-entrant calls (V8 → Perry callback →
+        // js_get_property → with_runtime) take the fast path above.
+        REENTRY_PTR.with(|p| p.set(state_ptr));
+        // Guard clears the pointer on normal return AND on panic-unwind.
+        // Without this, a panic during `f` would leave a dangling pointer
+        // that the next thread-local user would dereference.
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                REENTRY_PTR.with(|p| p.set(std::ptr::null_mut()));
+            }
+        }
+        let _guard = Guard;
+
         f(state)
     })
 }
 
-/// Execute an async closure with the JS runtime
+/// Execute an async closure with the JS runtime.
+///
+/// Same re-entrancy semantics as `with_runtime` (issue #255).
 pub fn with_runtime_async<F, Fut, R>(f: F) -> R
 where
     F: FnOnce(&mut JsRuntimeState) -> Fut,
@@ -148,10 +277,35 @@ where
 {
     let tokio_rt = get_tokio_runtime();
     tokio_rt.block_on(async {
+        // Re-entrant fast path mirrors with_runtime.
+        let stashed = REENTRY_PTR.with(|p| p.get());
+        if !stashed.is_null() {
+            // SAFETY: same as with_runtime — REENTRY_PTR is non-null only
+            // while the outer with_runtime/with_runtime_async body holds
+            // the borrow.
+            let state = unsafe { &mut *stashed };
+            return tokio::task::block_in_place(|| {
+                let local_rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create local Tokio runtime");
+                local_rt.block_on(f(state))
+            });
+        }
+
         ensure_runtime_initialized();
         JS_RUNTIME.with(|cell| {
             let mut opt = cell.borrow_mut();
             let state = opt.as_mut().expect("Runtime should be initialized");
+            let state_ptr: *mut JsRuntimeState = state;
+            REENTRY_PTR.with(|p| p.set(state_ptr));
+            struct Guard;
+            impl Drop for Guard {
+                fn drop(&mut self) {
+                    REENTRY_PTR.with(|p| p.set(std::ptr::null_mut()));
+                }
+            }
+            let _guard = Guard;
             // Use a dedicated current-thread Tokio runtime to avoid thread pool starvation deadlock.
             // The outer block_on holds a worker thread; using Handle::current().block_on() would
             // create a nested block_on on the same runtime, deadlocking if async JS operations

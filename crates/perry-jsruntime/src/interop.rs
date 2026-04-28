@@ -684,33 +684,51 @@ pub extern "C" fn js_handle_object_get_property(
         Err(_) => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
 
+    // Issue #255: when called from inside a V8 callback trampoline,
+    // reuse the trampoline's scope rather than creating a new one via
+    // `state.runtime.handle_scope()`. The latter clashes with V8's
+    // scope-stack tracking under deno_core (panics with "active scope
+    // can't be dropped" when the inner scope drops). The trampoline
+    // stashes its scope ptr in REENTRY_SCOPE_PTR; this branch picks
+    // it up. Outside a callback, fall through to the normal path.
+    if let Some(scope) = unsafe { crate::try_trampoline_scope() } {
+        return get_property_with_scope(scope, object_ptr, property_name);
+    }
+
     with_runtime(|state| {
         let scope = &mut state.runtime.handle_scope();
-
-        // Convert the object pointer to a V8 object
-        let obj_val = native_to_v8(scope, object_ptr);
-        if !obj_val.is_object() {
-            eprintln!("[js_handle_object_get_property] value is not an object!");
-            return f64::from_bits(0x7FFC_0000_0000_0001);
-        }
-
-        let obj = obj_val.to_object(scope).unwrap();
-
-        // Get the property
-        let key = match v8::String::new(scope, property_name) {
-            Some(k) => k,
-            None => return f64::from_bits(0x7FFC_0000_0000_0001),
-        };
-
-        let prop_val = match obj.get(scope, key.into()) {
-            Some(v) => v,
-            None => {
-                return f64::from_bits(0x7FFC_0000_0000_0001);
-            }
-        };
-
-        v8_to_native(scope, prop_val)
+        get_property_with_scope(scope, object_ptr, property_name)
     })
+}
+
+/// Shared body of `js_handle_object_get_property` parameterized over the
+/// V8 scope to use — extracted so both the normal path (creates a scope
+/// from the runtime) and the trampoline-reuse path (issue #255) share
+/// the same logic.
+fn get_property_with_scope(
+    scope: &mut v8::HandleScope,
+    object_ptr: f64,
+    property_name: &str,
+) -> f64 {
+    let obj_val = native_to_v8(scope, object_ptr);
+    if !obj_val.is_object() {
+        eprintln!("[js_handle_object_get_property] value is not an object!");
+        return f64::from_bits(0x7FFC_0000_0000_0001);
+    }
+
+    let obj = obj_val.to_object(scope).unwrap();
+
+    let key = match v8::String::new(scope, property_name) {
+        Some(k) => k,
+        None => return f64::from_bits(0x7FFC_0000_0000_0001),
+    };
+
+    let prop_val = match obj.get(scope, key.into()) {
+        Some(v) => v,
+        None => return f64::from_bits(0x7FFC_0000_0000_0001),
+    };
+
+    v8_to_native(scope, prop_val)
 }
 
 /// Convert a JavaScript handle value to a native string
@@ -1029,6 +1047,15 @@ fn native_callback_trampoline(
         let arg = args.get(i);
         native_args.push(v8_to_native(scope, arg));
     }
+
+    // Issue #255: stash this scope so re-entrant FFIs (e.g. js_get_property
+    // called from inside the Perry callback to read `ctx.deltaTime`) can
+    // reuse it instead of calling state.runtime.handle_scope() — which
+    // V8's scope tracking rejects with "active scope can't be dropped"
+    // because we'd be creating a new scope above the one V8 itself has
+    // active for this trampoline call. Guard auto-restores any prior
+    // stashed scope on Drop, so nested trampoline invocations work.
+    let _scope_guard = crate::stash_trampoline_scope(scope);
 
     // Call the native function
     // Function signature: fn(closure_env: i64, args_ptr: *const f64, args_len: i64) -> f64
