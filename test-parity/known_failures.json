@@ -78,5 +78,9 @@
   "test_json_lazy_predicates": {
     "status": "bug",
     "reason": "`Array.isArray()` returns false on the result of `[...].map(fn)` (Perry: `map-result-isArray:false`, Node: `map-result-isArray:true`). The map-returned shape isn't being recognized by the isArray predicate — likely a missing tag check or the map fast path returns a different runtime type than the isArray fast path expects. Distinct from the typed-array gap; affects the hot Array.prototype.map → Array.isArray idiom that lazy-iterator libraries (lodash etc.) lean on."
+  },
+  "test_issue_227_array_buffer_bytes": {
+    "status": "ci-env",
+    "reason": "Regression test added by #227 fix (response.arrayBuffer() body bytes — js_response_array_buffer copy-into-BufferHeader + js_uint8array_new buffer-source detection branch). Same compile-fail-on-CI / passes-locally pattern as the rest of the Buffer/Uint8Array family (test_gap_buffer_ops, test_buffer_small_alloc, test_inline_uint8array_param, etc.) — macOS-14 runner SDK/linker gap. The fix itself is verified locally byte-for-byte against `node --experimental-strip-types`; cargo test runtime+stdlib clean."
   }
 }

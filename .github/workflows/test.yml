@@ -321,7 +321,8 @@ jobs:
             test_buffer_numeric_read_intrinsic \
             test_buffer_small_alloc \
             test_inline_uint8array_param \
-            test_issue_167_loop_alloca_stack_eat "
+            test_issue_167_loop_alloca_stack_eat \
+            test_issue_227_array_buffer_bytes "
 
           for f in test-files/*.ts; do
             [[ -d "$f" ]] && continue
