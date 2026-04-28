@@ -27,33 +27,9 @@
     "status": "skip",
     "reason": "Compile failure — TLS connect not implemented"
   },
-  "test_gap_buffer_ops": {
-    "status": "ci-env",
-    "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x. Likely SDK/linker version interaction; perry CLI itself is fine"
-  },
-  "test_gap_node_crypto_buffer": {
-    "status": "ci-env",
-    "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x. Same SDK gap as test_gap_buffer_ops"
-  },
-  "test_gap_typed_arrays": {
-    "status": "ci-env",
-    "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x. Same SDK gap as test_gap_buffer_ops"
-  },
-  "test_stress_buffer": {
-    "status": "ci-env",
-    "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x"
-  },
   "test_stress_int_ops": {
     "status": "bug",
     "reason": "Console.log array-of-numbers inspection format: Node right-aligns + computes per-line count via util.inspect (`[\n   0,  1,  4,  9, 16,\n  25, 36, 49, 64, 81\n]`); Perry packs without padding 4 per line. NaN/Infinity ToInt32 coercion (`(NaN) | 0`, etc.) was fixed at v0.5.279 — that bug had `is_known_finite` accepting any `Expr::Number(_)` regardless of finite-ness; now checks `n.is_finite()`."
-  },
-  "test_buffer_small_alloc": {
-    "status": "ci-env",
-    "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x. Same SDK gap as test_gap_buffer_ops; exercises the #92 Buffer.alloc small-buffer slab fast path."
-  },
-  "test_buffer_numeric_read_intrinsic": {
-    "status": "ci-env",
-    "reason": "Compile-fails on macOS-14 CI runner, passes locally on macOS 15.x. Same SDK gap as test_gap_buffer_ops; exercises the #92 Buffer numeric-read intrinsic."
   },
   "test_gap_console_methods": {
     "status": "ci-env",
@@ -63,14 +39,6 @@
     "status": "bug",
     "reason": "Multiple distinct Promise issues remaining after v0.5.283 fix (which addressed (a) microtask FIFO ordering — TASK_QUEUE was a Vec with .pop() → LIFO; switched to VecDeque + pop_front, and (b) `.then(h)` / `.catch(h)` not catching throws inside h — microtask runner now wraps closure call in setjmp): (1) `new Promise<T>((resolve, reject) => ...)` constructor body not running (lines `constructor resolve: 99` / `constructor reject: constructor-err` missing from output); (2) `Promise.any` produces no output (any/any-all-rejected/any-errors-length lines missing); (3) `.then(p => Promise.resolve(...))` doesn't unwrap inner Promise (logs `Promise { <pending> }` instead of resolved value); (4) `.finally(() => ...).then(v => ...)` value-passing wrong (Perry: `finally value: 0`, Node: `finally value: done`)."
   },
-  "test_inline_uint8array_param": {
-    "status": "bug",
-    "reason": "Regression test added by v0.5.314 (#169 fix in perry-transform substitute_locals). The test compiles successfully locally but compile-fails on CI runners — likely an SDK/linker version interaction shared with the test_gap_buffer_ops family. The underlying Uint8Array param substitution fix landed in 976c3eb5; this test documents the case but the CI env exhibits a separate compile-fail mode. Pair-investigate with test_issue_167_loop_alloca_stack_eat."
-  },
-  "test_issue_167_loop_alloca_stack_eat": {
-    "status": "bug",
-    "reason": "Regression test added by v0.5.316 (#167 fix hoisting js_native_call_method args alloca to entry block). Same compile-fail-on-CI / passes-locally pattern as test_inline_uint8array_param — both tests are about Buffer/Uint8Array codepaths and likely share the macOS-14 SDK gap."
-  },
   "test_gap_array_methods": {
     "status": "known_limitation",
     "reason": "TypedArray.prototype.at() returns undefined instead of element values on Int32Array / Float64Array (e.g. `Int32Array.at(0)` → undefined where Node returns 1). Categorical typed-array gap, same family as test_gap_typed_arrays — Perry's .at() codegen fast path is wired for regular Array but not for the TypedArray instance shapes. Was passing 26/28 at v0.5.319 after the SSO-unboxing fix transitively flipped it; regressed somewhere in v0.5.319→v0.5.343 (likely an SSO/typed-array interaction in the bulk extraction series). Stale CLAUDE.md TypeScript-Parity-Status header still reads 26/28 — actual is 25/28 with array_methods/console_methods/typed_arrays failing."
@@ -78,17 +46,5 @@
   "test_json_lazy_predicates": {
     "status": "bug",
     "reason": "`Array.isArray()` returns false on the result of `[...].map(fn)` (Perry: `map-result-isArray:false`, Node: `map-result-isArray:true`). The map-returned shape isn't being recognized by the isArray predicate — likely a missing tag check or the map fast path returns a different runtime type than the isArray fast path expects. Distinct from the typed-array gap; affects the hot Array.prototype.map → Array.isArray idiom that lazy-iterator libraries (lodash etc.) lean on."
-  },
-  "test_issue_227_array_buffer_bytes": {
-    "status": "ci-env",
-    "reason": "Regression test added by #227 fix (response.arrayBuffer() body bytes — js_response_array_buffer copy-into-BufferHeader + js_uint8array_new buffer-source detection branch). Same compile-fail-on-CI / passes-locally pattern as the rest of the Buffer/Uint8Array family (test_gap_buffer_ops, test_buffer_small_alloc, test_inline_uint8array_param, etc.) — macOS-14 runner SDK/linker gap. The fix itself is verified locally byte-for-byte against `node --experimental-strip-types`; cargo test runtime+stdlib clean."
-  },
-  "test_gap_fetch_response": {
-    "status": "ci-env",
-    "reason": "PR #232 (issue #227 follow-up) added `Buffer.from(ab).toString(\"utf8\")` byte-level assertions to the previously-passing `arrayBuffer byteLength: 5` check. The Buffer pull-in trips the same macOS-14 SDK/linker gap as the rest of the Buffer family (test_gap_buffer_ops, test_buffer_small_alloc, test_issue_227_array_buffer_bytes, etc.). Compiles and runs byte-for-byte clean on local macOS 15.x+; only the macOS-14 GitHub runner is affected."
-  },
-  "test_issue_234_blob_methods": {
-    "status": "ci-env",
-    "reason": "Regression test added by issue #234 fix (real Blob with arrayBuffer/text/bytes/slice). Includes a `Buffer.from(blob.arrayBuffer())` round-trip (multi-byte UTF-8 case) which trips the same macOS-14 SDK/linker gap as the rest of the Buffer family (test_gap_buffer_ops, test_buffer_small_alloc, test_issue_227_array_buffer_bytes, test_gap_fetch_response). Compiles and runs byte-for-byte against `node --experimental-strip-types` on local macOS 15.x+; only the macOS-14 GitHub runner is affected."
   }
 }

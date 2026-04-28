@@ -11,7 +11,7 @@
 //! gets garbage back (see anvil README §48 bug hunt).
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, I1, I32, I64, PTR, VOID};
 
 /// Declare the minimum set of runtime functions needed by Phase 1
 /// (`console.log(42)`):
@@ -119,6 +119,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("llvm.ceil.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.fabs.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.copysign.f64", DOUBLE, &[DOUBLE, DOUBLE]);
+    // `llvm.assume` — used by Buffer index-set/get fast paths
+    // (`crates/perry-codegen/src/expr.rs::Expr::BufferIndexSet/Get` etc.)
+    // and the Buffer numeric-read intrinsics
+    // (`lower_call.rs::lower_buffer_numeric_read`) for branchless bounds
+    // checks. Apple Clang ≥21 (Xcode 26) auto-recognises the intrinsic
+    // even when undeclared in the IR, but Apple Clang 15 (LLVM 17 — what
+    // ships on the macOS-14 GitHub runner via Xcode 15.x) errors with
+    // `error: use of undefined value '@llvm.assume'`. This was the actual
+    // root cause of the long-tail of `ci-env` Buffer/typed-array test
+    // skips in `test-parity/known_failures.json` — diagnosed via the
+    // compile-stderr capture artifact added in the previous commit.
+    module.declare_function("llvm.assume", VOID, &[I1]);
     // Keep js_math_pow for now — Math.pow has overflow / NaN
     // semantics that the libm pow doesn't quite match.
 

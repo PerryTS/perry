@@ -311,17 +311,21 @@ jobs:
           #   the platform widgets.
           # - test_timer: hangs on the runtime event loop under the
           #   no-arg compile path.
-          # - The macOS-14-only compile failures (test_gap_buffer_ops,
-          #   test_gap_node_crypto_buffer, test_gap_typed_arrays,
-          #   test_stress_buffer, test_stress_int_ops,
-          #   test_buffer_numeric_read_intrinsic, test_buffer_small_alloc)
-          #   compile cleanly on local macOS 15.x but fail on the GitHub
-          #   macOS-14 runner (SDK/linker version interaction). Tracked
-          #   as `ci-env` in `test-parity/known_failures.json`. Stderr
-          #   is now captured by the parity job into the
-          #   `parity-compile-errors-*` artifact (sibling to this skip
-          #   list); inspect that artifact to see the actual link error
-          #   for any of these tests.
+          #
+          # The 11-entry Buffer/typed-array `ci-env` skip family that
+          # previously lived here (test_gap_buffer_ops, test_buffer_*,
+          # test_inline_uint8array_param, test_issue_167_*,
+          # test_issue_227_*, test_gap_fetch_response,
+          # test_issue_234_blob_methods, etc.) has been removed as of
+          # this PR: the actual root cause was a missing
+          # `module.declare_function("llvm.assume", VOID, &[I1])` in
+          # `crates/perry-codegen/src/runtime_decls.rs`. Apple Clang
+          # ≥21 (Xcode 26 / local) auto-recognised the intrinsic;
+          # Apple Clang 15 (macos-14 runner / Xcode 15.x / LLVM 17)
+          # errored with `error: use of undefined value '@llvm.assume'`.
+          # Not an SDK gap — a long-standing latent codegen bug
+          # diagnosed via the compile-stderr capture artifact added in
+          # PR #239 (now part of main).
           # Space-separated skip list (associative arrays require bash
           # 4+; macOS-14 ships bash 3.2). Word-boundary match keeps
           # the substring lookup safe.
@@ -329,19 +333,7 @@ jobs:
             test_ui_comprehensive \
             test_ui_controls \
             test_ui_phase4 \
-            test_timer \
-            test_gap_buffer_ops \
-            test_gap_node_crypto_buffer \
-            test_gap_typed_arrays \
-            test_stress_buffer \
-            test_stress_int_ops \
-            test_buffer_numeric_read_intrinsic \
-            test_buffer_small_alloc \
-            test_inline_uint8array_param \
-            test_issue_167_loop_alloca_stack_eat \
-            test_issue_227_array_buffer_bytes \
-            test_issue_234_blob_methods \
-            test_gap_fetch_response "
+            test_timer "
 
           # Capture compile stderr per test so the artifact upload below
           # can preserve the actual error message — pre-fix the loop
