@@ -11,7 +11,7 @@
 
 use anyhow::{anyhow, Result};
 use perry_hir::ModuleKind;
-use perry_transform::{inline_functions, transform_generators};
+use perry_transform::{inline_functions, transform_async_to_generator, transform_generators};
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
@@ -176,6 +176,14 @@ pub(super) fn collect_modules(
     if !skip_transforms {
         // Apply function inlining optimization
         inline_functions(&mut hir_module);
+
+        // Issue #256: rewrite plain async functions into generators with
+        // was_plain_async set, so the generator transform below produces
+        // a state machine wrapped in an async-step driver. Must run AFTER
+        // inline_functions (so inlined async bodies are also rewritten)
+        // and BEFORE transform_generators (which consumes the generator
+        // shape we produce).
+        transform_async_to_generator(&mut hir_module);
 
         // Transform generator functions into state machines
         transform_generators(&mut hir_module);

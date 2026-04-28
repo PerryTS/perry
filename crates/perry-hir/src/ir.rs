@@ -677,6 +677,12 @@ pub struct Function {
     pub captures: Vec<LocalId>,
     /// Decorators applied to this function/method
     pub decorators: Vec<Decorator>,
+    /// Issue #256: true if this function was originally a plain async function
+    /// that the async_to_generator pre-pass rewrote into a generator. The
+    /// generator state-machine transform reads this flag and wraps the
+    /// resulting iterator in an async-step driver so the function returns
+    /// a Promise that respects spec microtask ordering.
+    pub was_plain_async: bool,
 }
 
 /// A function parameter

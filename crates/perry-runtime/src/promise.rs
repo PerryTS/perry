@@ -383,7 +383,29 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                         let result = crate::closure::js_closure_call1(callback, value);
                         crate::exception::js_try_end();
                         if !(*promise).next.is_null() {
-                            js_promise_resolve((*promise).next, result);
+                            // Spec: when a .then callback returns a thenable
+                            // (a Promise), the chained `next` promise must
+                            // adopt the thenable's eventual state, not store
+                            // the Promise pointer as its value. Issue #256:
+                            // pre-fix Perry's runtime stored the Promise
+                            // pointer directly, so the async-step driver's
+                            // recursive `step()` returns produced
+                            // `Promise<Promise<...>>` chains that never
+                            // unwrapped to the real value. Without this
+                            // unwrap, `await fn()` of an async function with
+                            // multiple `await`s observes a Pending Promise as
+                            // the resolved value.
+                            if js_value_is_promise(result) != 0 {
+                                let inner = crate::value::js_nanbox_get_pointer(result)
+                                    as *mut Promise;
+                                if !inner.is_null() && inner != (*promise).next {
+                                    js_promise_resolve_with_promise((*promise).next, inner);
+                                } else {
+                                    js_promise_resolve((*promise).next, result);
+                                }
+                            } else {
+                                js_promise_resolve((*promise).next, result);
+                            }
                         }
                     } else {
                         // Callback threw — convert to rejection of next

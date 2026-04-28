@@ -39,6 +39,44 @@ fn compute_max_local_id(module: &Module) -> LocalId {
     for global in &module.globals {
         max_id = max_id.max(global.id);
     }
+    // Also scan class member bodies — they share the LocalId namespace.
+    // The v0.5.323 issue #212 fix allocates method-local rebind ids per
+    // class method per captured outer local; without this scan, the
+    // generator transform's freshly-allocated state/done/sent/wrapper
+    // ids could collide with those rebind ids and corrupt unrelated
+    // class-method codegen.
+    for class in &module.classes {
+        for method in &class.methods {
+            for param in &method.params {
+                max_id = max_id.max(param.id);
+            }
+            scan_stmts_for_max_local(&method.body, &mut max_id);
+        }
+        for static_method in &class.static_methods {
+            for param in &static_method.params {
+                max_id = max_id.max(param.id);
+            }
+            scan_stmts_for_max_local(&static_method.body, &mut max_id);
+        }
+        if let Some(ctor) = &class.constructor {
+            for param in &ctor.params {
+                max_id = max_id.max(param.id);
+            }
+            scan_stmts_for_max_local(&ctor.body, &mut max_id);
+        }
+        for getter in &class.getters {
+            for param in &getter.1.params {
+                max_id = max_id.max(param.id);
+            }
+            scan_stmts_for_max_local(&getter.1.body, &mut max_id);
+        }
+        for setter in &class.setters {
+            for param in &setter.1.params {
+                max_id = max_id.max(param.id);
+            }
+            scan_stmts_for_max_local(&setter.1.body, &mut max_id);
+        }
+    }
     max_id
 }
 
@@ -335,6 +373,68 @@ fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
 }
 
 /// Allocate a fresh local ID.
+/// Recursively rewrite `Stmt::Let { id, init: Some(...) }` to
+/// `Stmt::Expr(LocalSet(id, init))` for any id in `hoisted_ids`. Walks
+/// into nested control-flow (For init/body, While body, If branches,
+/// Try body/catch/finally, Switch case bodies, Labeled body) so a Let
+/// nested inside a for-of's desugared loop body still gets routed
+/// through the captured box. Issue #256.
+fn rewrite_hoisted_lets_in_stmts(
+    stmts: &mut [Stmt],
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) {
+    for stmt in stmts.iter_mut() {
+        rewrite_hoisted_lets_in_stmt(stmt, hoisted_ids);
+    }
+}
+
+fn rewrite_hoisted_lets_in_stmt(
+    stmt: &mut Stmt,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) {
+    if let Stmt::Let { id, init: Some(init_expr), .. } = stmt {
+        if hoisted_ids.contains(id) {
+            *stmt = Stmt::Expr(Expr::LocalSet(*id, Box::new(init_expr.clone())));
+            return;
+        }
+    }
+    match stmt {
+        Stmt::If { then_branch, else_branch, .. } => {
+            rewrite_hoisted_lets_in_stmts(then_branch, hoisted_ids);
+            if let Some(eb) = else_branch {
+                rewrite_hoisted_lets_in_stmts(eb, hoisted_ids);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            rewrite_hoisted_lets_in_stmts(body, hoisted_ids);
+        }
+        Stmt::For { init, body, .. } => {
+            if let Some(i) = init {
+                rewrite_hoisted_lets_in_stmt(i, hoisted_ids);
+            }
+            rewrite_hoisted_lets_in_stmts(body, hoisted_ids);
+        }
+        Stmt::Try { body, catch, finally } => {
+            rewrite_hoisted_lets_in_stmts(body, hoisted_ids);
+            if let Some(c) = catch {
+                rewrite_hoisted_lets_in_stmts(&mut c.body, hoisted_ids);
+            }
+            if let Some(f) = finally {
+                rewrite_hoisted_lets_in_stmts(f, hoisted_ids);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases.iter_mut() {
+                rewrite_hoisted_lets_in_stmts(&mut case.body, hoisted_ids);
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            rewrite_hoisted_lets_in_stmt(body, hoisted_ids);
+        }
+        _ => {}
+    }
+}
+
 fn alloc_local(next_id: &mut u32) -> LocalId {
     let id = *next_id;
     *next_id += 1;
@@ -469,14 +569,15 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
     // variables inside state bodies. Without this, the Let creates a fresh local that
     // shadows the captured box, and subsequent mutations in other states don't see the
     // update.
+    //
+    // Issue #256: must recurse into nested control-flow (For/While/If/Try/Switch
+    // bodies). A for-of loop inside a state body desugars to a `for (let i = 0;
+    // i < arr.length; ++i) { let v = arr[i]; ... }` shape; without the recursion
+    // the inner `let v` and `let i` stay as Lets and create shadow slots that
+    // hide the outer captured box. Manifested as `for (const v of arr) sum += v`
+    // returning sum=0 inside transformed async functions (test_issue_233).
     for state in &mut states {
-        for stmt in &mut state.body {
-            if let Stmt::Let { id, init: Some(init_expr), .. } = stmt {
-                if hoisted_ids.contains(id) {
-                    *stmt = Stmt::Expr(Expr::LocalSet(*id, Box::new(init_expr.clone())));
-                }
-            }
-        }
+        rewrite_hoisted_lets_in_stmts(&mut state.body, &hoisted_ids);
     }
 
     // Build the if-chain inside while(true)
@@ -732,15 +833,280 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
         is_async: false,
     };
 
-    // return { next: <closure>, return: <closure>, throw: <closure> }
-    new_body.push(Stmt::Return(Some(Expr::Object(vec![
+    // Build the iterator object expression.
+    let iter_obj = Expr::Object(vec![
         ("next".to_string(), next_closure),
         ("return".to_string(), return_closure),
         ("throw".to_string(), throw_closure),
-    ]))));
+    ]);
+
+    if func.was_plain_async {
+        // Issue #256: this function was originally a plain async function;
+        // the async_to_generator pre-pass rewrote await→yield. Wrap the
+        // iterator in an async-step driver so the function returns a
+        // Promise that respects spec microtask ordering. See
+        // `build_async_step_driver` for the structure.
+        let wrapper_stmts = build_async_step_driver(iter_obj, next_local_id, next_func_id);
+        for s in wrapper_stmts {
+            new_body.push(s);
+        }
+        func.was_plain_async = false; // consumed
+    } else {
+        // Plain generator: return the iterator object directly.
+        new_body.push(Stmt::Return(Some(iter_obj)));
+    }
 
     func.body = new_body;
     func.is_generator = false;
+}
+
+/// Build the async-step driver (issue #256). Returns the statements that
+/// take the place of the plain `return iter_obj` that a normal generator
+/// would emit. Equivalent TypeScript:
+///
+/// ```ts
+/// const __iter = <iter_obj>;
+/// let __step;
+/// __step = (value, isError) => {
+///     let r;
+///     try {
+///         r = isError ? __iter.throw(value) : __iter.next(value);
+///     } catch (e) {
+///         return Promise.reject(e);
+///     }
+///     if (r.done) return Promise.resolve(r.value);
+///     return Promise.resolve(r.value).then(
+///         v => __step(v, false),
+///         e => __step(e, true),
+///     );
+/// };
+/// return __step(undefined, false);
+/// ```
+///
+/// The two-step `let __step; __step = ...;` pattern is required because
+/// Perry's closure-capture analysis silently produces `NaN` for the
+/// `const f = (...)=>f(...)` form (verified at v0.5.362 — see issue #256
+/// background investigation). With the two-step pattern, the closure
+/// captures `__step` mutably; by the time `__step(undefined, false)` is
+/// invoked at the outer return site, the box holds the closure value and
+/// the recursive references inside `.then` callbacks resolve correctly.
+fn build_async_step_driver(
+    iter_obj: Expr,
+    next_local_id: &mut u32,
+    next_func_id: &mut u32,
+) -> Vec<Stmt> {
+    let iter_id = alloc_local(next_local_id);
+    let step_id = alloc_local(next_local_id);
+
+    // Step closure params + locals
+    let value_param_id = alloc_local(next_local_id);
+    let is_error_param_id = alloc_local(next_local_id);
+    let r_id = alloc_local(next_local_id);
+    let catch_e_id = alloc_local(next_local_id);
+
+    // Inner .then arrow params
+    let then_v_param_id = alloc_local(next_local_id);
+    let then_e_param_id = alloc_local(next_local_id);
+
+    let step_func_id = { let id = *next_func_id; *next_func_id += 1; id };
+    let then_v_func_id = { let id = *next_func_id; *next_func_id += 1; id };
+    let then_e_func_id = { let id = *next_func_id; *next_func_id += 1; id };
+
+    let any_ty = Type::Any;
+    let bool_ty = Type::Boolean;
+
+    // Helper builders
+    let promise_global = || Expr::GlobalGet(0);
+    let promise_resolve = |arg: Expr| Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(promise_global()),
+            property: "resolve".to_string(),
+        }),
+        args: vec![arg],
+        type_args: vec![],
+    };
+    let promise_reject = |arg: Expr| Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(promise_global()),
+            property: "reject".to_string(),
+        }),
+        args: vec![arg],
+        type_args: vec![],
+    };
+
+    // Build the two .then arrows: (v) => __step(v, false) and (e) => __step(e, true)
+    let then_v_arrow = Expr::Closure {
+        func_id: then_v_func_id,
+        params: vec![perry_hir::Param {
+            id: then_v_param_id,
+            name: "__step_v".to_string(),
+            ty: any_ty.clone(),
+            is_rest: false,
+            default: None,
+        }],
+        return_type: any_ty.clone(),
+        body: vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::LocalGet(step_id)),
+            args: vec![Expr::LocalGet(then_v_param_id), Expr::Bool(false)],
+            type_args: vec![],
+        }))],
+        captures: vec![step_id],
+        mutable_captures: vec![step_id],
+        captures_this: false,
+        enclosing_class: None,
+        is_async: false,
+    };
+    let then_e_arrow = Expr::Closure {
+        func_id: then_e_func_id,
+        params: vec![perry_hir::Param {
+            id: then_e_param_id,
+            name: "__step_e".to_string(),
+            ty: any_ty.clone(),
+            is_rest: false,
+            default: None,
+        }],
+        return_type: any_ty.clone(),
+        body: vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::LocalGet(step_id)),
+            args: vec![Expr::LocalGet(then_e_param_id), Expr::Bool(true)],
+            type_args: vec![],
+        }))],
+        captures: vec![step_id],
+        mutable_captures: vec![step_id],
+        captures_this: false,
+        enclosing_class: None,
+        is_async: false,
+    };
+
+    // step body
+    //   let r;
+    //   try {
+    //       r = isError ? __iter.throw(value) : __iter.next(value);
+    //   } catch (e) {
+    //       return Promise.reject(e);
+    //   }
+    //   if (r.done) return Promise.resolve(r.value);
+    //   return Promise.resolve(r.value).then(<then_v>, <then_e>);
+    let iter_throw_call = Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(iter_id)),
+            property: "throw".to_string(),
+        }),
+        args: vec![Expr::LocalGet(value_param_id)],
+        type_args: vec![],
+    };
+    let iter_next_call = Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(iter_id)),
+            property: "next".to_string(),
+        }),
+        args: vec![Expr::LocalGet(value_param_id)],
+        type_args: vec![],
+    };
+    let dispatch_iter = Expr::Conditional {
+        condition: Box::new(Expr::LocalGet(is_error_param_id)),
+        then_expr: Box::new(iter_throw_call),
+        else_expr: Box::new(iter_next_call),
+    };
+
+    let step_body: Vec<Stmt> = vec![
+        // let r;
+        Stmt::Let {
+            id: r_id,
+            name: "__step_r".to_string(),
+            ty: any_ty.clone(),
+            mutable: true,
+            init: None,
+        },
+        // try { r = ...; } catch (e) { return Promise.reject(e); }
+        Stmt::Try {
+            body: vec![Stmt::Expr(Expr::LocalSet(r_id, Box::new(dispatch_iter)))],
+            catch: Some(CatchClause {
+                param: Some((catch_e_id, "__step_catch_e".to_string())),
+                body: vec![Stmt::Return(Some(promise_reject(Expr::LocalGet(catch_e_id))))],
+            }),
+            finally: None,
+        },
+        // if (r.done) return Promise.resolve(r.value);
+        Stmt::If {
+            condition: Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(r_id)),
+                property: "done".to_string(),
+            },
+            then_branch: vec![Stmt::Return(Some(promise_resolve(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(r_id)),
+                property: "value".to_string(),
+            })))],
+            else_branch: None,
+        },
+        // return Promise.resolve(r.value).then(<then_v>, <then_e>);
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(promise_resolve(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(r_id)),
+                    property: "value".to_string(),
+                })),
+                property: "then".to_string(),
+            }),
+            args: vec![then_v_arrow, then_e_arrow],
+            type_args: vec![],
+        })),
+    ];
+
+    let step_closure = Expr::Closure {
+        func_id: step_func_id,
+        params: vec![
+            perry_hir::Param {
+                id: value_param_id,
+                name: "__step_value".to_string(),
+                ty: any_ty.clone(),
+                is_rest: false,
+                default: None,
+            },
+            perry_hir::Param {
+                id: is_error_param_id,
+                name: "__step_is_error".to_string(),
+                ty: bool_ty.clone(),
+                is_rest: false,
+                default: None,
+            },
+        ],
+        return_type: any_ty.clone(),
+        body: step_body,
+        captures: vec![iter_id, step_id],
+        mutable_captures: vec![step_id],
+        captures_this: false,
+        enclosing_class: None,
+        is_async: false,
+    };
+
+    // Outer wrapper:
+    //   let __iter = <iter_obj>;
+    //   let __step;        // declared, init=undefined
+    //   __step = <step_closure>;
+    //   return __step(undefined, false);
+    vec![
+        Stmt::Let {
+            id: iter_id,
+            name: "__async_iter".to_string(),
+            ty: any_ty.clone(),
+            mutable: false,
+            init: Some(iter_obj),
+        },
+        Stmt::Let {
+            id: step_id,
+            name: "__async_step".to_string(),
+            ty: any_ty.clone(),
+            mutable: true,
+            init: None,
+        },
+        Stmt::Expr(Expr::LocalSet(step_id, Box::new(step_closure))),
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::LocalGet(step_id)),
+            args: vec![Expr::Undefined, Expr::Bool(false)],
+            type_args: vec![],
+        })),
+    ]
 }
 
 struct State {
@@ -1008,10 +1374,26 @@ fn linearize_body(
             // first catch encountered will run on .throw(). Catches themselves
             // must not yield — they run to completion inside the throw closure.
             Stmt::Try { body, catch, finally }
-                if body_contains_yield(body) =>
+                if body_contains_yield(body)
+                    || finally.as_ref().map_or(false, |f| body_contains_yield(f)) =>
             {
-                // Linearize the try body directly (yields become normal states)
-                linearize_body(body, states, current, state_num, state_id, next_local_id, sent_id, catches);
+                // Issue #256: widen the guard to also fire when yields live ONLY
+                // in the finally block. `await using` desugars to
+                // `try { body } finally { await dispose() }` — the body may have
+                // no awaits while the finally has one, and pre-fix this fell into
+                // the catch-all which compiled the whole try/finally as a single
+                // unit inside one state — the yield-in-finally then hit the
+                // codegen `Expr::Yield => double_literal(0.0)` arm and the await
+                // was silently fire-and-forgotten.
+                if body_contains_yield(body) {
+                    // Linearize the try body directly (yields become normal states)
+                    linearize_body(body, states, current, state_num, state_id, next_local_id, sent_id, catches);
+                } else {
+                    // Body has no yields: push as-is to current state.
+                    for s in body {
+                        current.push(s.clone());
+                    }
+                }
 
                 // Stash the catch so transform_generator_function can inline it
                 // into the .throw() closure later.
@@ -1020,10 +1402,15 @@ fn linearize_body(
                     catches.push((param_id, catch_clause.body.clone()));
                 }
 
-                // Finally block always runs
+                // Finally block: linearize if it has yields (await-using path),
+                // otherwise push as-is.
                 if let Some(fin) = finally {
-                    for s in fin {
-                        current.push(s.clone());
+                    if body_contains_yield(fin) {
+                        linearize_body(fin, states, current, state_num, state_id, next_local_id, sent_id, catches);
+                    } else {
+                        for s in fin {
+                            current.push(s.clone());
+                        }
                     }
                 }
             }
