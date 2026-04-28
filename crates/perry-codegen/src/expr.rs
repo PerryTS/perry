@@ -3082,6 +3082,77 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(new_box)
         }
 
+        // `arr.push(...src)` — HIR variant carrying the destination
+        // array's LocalId and the source expression (any iterable, in
+        // practice an array or Set). Mirrors `Expr::ArrayPush` above:
+        // load the destination from its slot, unbox both pointers, call
+        // the runtime's `js_array_concat` (which walks the source and
+        // calls `js_array_push_f64` per element + already handles
+        // Set sources via SET_REGISTRY), NaN-box the realloc-aware
+        // return pointer, and write back to whichever storage backs
+        // `array_id`. Issue #248.
+        Expr::ArrayPushSpread { array_id, source } => {
+            let src_box = lower_expr(ctx, source)?;
+            let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
+            let blk = ctx.block();
+            let dst_handle = unbox_to_i64(blk, &arr_box);
+            let src_handle = unbox_to_i64(blk, &src_box);
+            let new_handle = blk.call(
+                I64,
+                "js_array_concat",
+                &[(I64, &dst_handle), (I64, &src_handle)],
+            );
+            let new_box = nanbox_pointer_inline(blk, &new_handle);
+            if ctx.boxed_vars.contains(array_id) {
+                if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
+                    let closure_ptr = ctx
+                        .current_closure_ptr
+                        .clone()
+                        .ok_or_else(|| anyhow!("ArrayPushSpread boxed captured but no current_closure_ptr"))?;
+                    let idx_str = capture_idx.to_string();
+                    let blk = ctx.block();
+                    let cap_dbl = blk.call(
+                        DOUBLE,
+                        "js_closure_get_capture_f64",
+                        &[(I64, &closure_ptr), (I32, &idx_str)],
+                    );
+                    let box_ptr = blk.bitcast_double_to_i64(&cap_dbl);
+                    blk.call_void(
+                        "js_box_set",
+                        &[(I64, &box_ptr), (DOUBLE, &new_box)],
+                    );
+                } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
+                    let blk = ctx.block();
+                    let box_dbl = blk.load(DOUBLE, &slot);
+                    let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
+                    blk.call_void(
+                        "js_box_set",
+                        &[(I64, &box_ptr), (DOUBLE, &new_box)],
+                    );
+                }
+                return Ok(new_box);
+            }
+            if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
+                let closure_ptr = ctx
+                    .current_closure_ptr
+                    .clone()
+                    .ok_or_else(|| anyhow!("ArrayPushSpread captured but no current_closure_ptr"))?;
+                let idx_str = capture_idx.to_string();
+                ctx.block().call_void(
+                    "js_closure_set_capture_f64",
+                    &[(I64, &closure_ptr), (I32, &idx_str), (DOUBLE, &new_box)],
+                );
+            } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
+                ctx.block().store(DOUBLE, &new_box, &slot);
+            } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
+                let g_ref = format!("@{}", global_name);
+                ctx.block().store(DOUBLE, &new_box, &g_ref);
+            } else {
+                return Err(anyhow!("ArrayPushSpread({}): local not in scope", array_id));
+            }
+            Ok(new_box)
+        }
+
         // -------- Closures (Phase D.1) --------
         // `function() { ... }` / `(x) => { ... }` — allocate a closure
         // object pointing at a pre-emitted function body, populate
