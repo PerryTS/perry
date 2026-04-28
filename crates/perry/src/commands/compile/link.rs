@@ -855,8 +855,12 @@ pub(super) fn build_and_run_link(
            .arg("runtimeobject.lib")
            .arg("iphlpapi.lib");
     } else {
-        // macOS frameworks for runtime (sysinfo, etc.) and V8
-        if cfg!(target_os = "macos") || is_cross_macos {
+        // macOS frameworks for runtime (sysinfo, etc.) and V8.
+        // Gate on `!is_harmonyos` so the macOS host doesn't leak its
+        // frameworks into ELF cross-compile targets that fall through this
+        // `else` branch — `cfg!(target_os = "macos")` is true whenever we're
+        // running ON macOS, regardless of the actual target.
+        if (cfg!(target_os = "macos") || is_cross_macos) && !is_harmonyos {
             cmd.arg("-framework").arg("Security")
                .arg("-framework").arg("CoreFoundation")
                .arg("-framework").arg("SystemConfiguration")

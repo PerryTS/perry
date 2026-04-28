@@ -3023,19 +3023,46 @@ pub fn run_with_parse_cache(
         format,
     )?;
 
-    // HarmonyOS: emit the ArkTS EntryAbility + Index page next to the .so.
-    // The HAP bundler (PR B.3) copies both the .so and these .ets files into
-    // the final .hap. The `import` statement in Index.ets is templated off
-    // the actual output filename so it matches at dlopen time.
+    // HarmonyOS: emit the ArkTS EntryAbility + Index page next to the .so,
+    // then bundle everything into a .hap. The ArkTS shim's import name is
+    // templated off the actual .so filename so it matches at dlopen time.
     if is_harmonyos {
         if let Some(output_dir) = exe_path.parent() {
             let so_filename = exe_path.file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("libperry_app.so");
-            if let Err(e) = emit_harmonyos_arkts_stubs(output_dir, so_filename) {
-                eprintln!("Warning: failed to emit ArkTS shim: {}", e);
-            } else if matches!(format, OutputFormat::Text) {
-                println!("Wrote ArkTS shim: {}/ets/", output_dir.display());
+            let stem = exe_path.file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("app")
+                .trim_start_matches("lib");
+            match emit_harmonyos_arkts_stubs(output_dir, so_filename) {
+                Err(e) => eprintln!("Warning: failed to emit ArkTS shim: {}", e),
+                Ok(()) => {
+                    if matches!(format, OutputFormat::Text) {
+                        println!("Wrote ArkTS shim: {}/ets/", output_dir.display());
+                    }
+                    let sdk = find_harmonyos_sdk();
+                    let hap_args = crate::commands::harmonyos_hap::HapBuildArgs {
+                        so_path: &exe_path,
+                        ets_dir: &output_dir.join("ets"),
+                        stem,
+                        sdk_native: sdk.as_deref(),
+                        quiet: !matches!(format, OutputFormat::Text),
+                    };
+                    match crate::commands::harmonyos_hap::build_hap(&hap_args) {
+                        Ok(res) => {
+                            if matches!(format, OutputFormat::Text) {
+                                println!(
+                                    "Wrote HAP: {} ({}, ets: {})",
+                                    res.hap_path.display(),
+                                    if res.signed { "signed" } else { "unsigned" },
+                                    if res.abc_compiled { "bytecode" } else { "source" },
+                                );
+                            }
+                        }
+                        Err(e) => eprintln!("Warning: HAP assembly failed: {}", e),
+                    }
+                }
             }
         }
     }

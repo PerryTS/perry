@@ -592,10 +592,27 @@ pub(super) fn find_harmonyos_sdk() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok().map(PathBuf::from);
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(h) = home {
-        // macOS default: DevEco Studio installs into ~/Library/Huawei/Sdk
+        // macOS default: DevEco Studio's "system image" + tooling SDK
+        // installs into ~/Library/Huawei/Sdk — but the native cross-compiler
+        // (clang + musl sysroot) actually lives inside the DevEco-Studio.app
+        // bundle, not under the user's Library/Huawei dir. Probe the user
+        // dir first in case someone unpacked a standalone OHOS SDK there,
+        // then fall through to the bundle.
         candidates.push(h.join("Library/Huawei/Sdk"));
         // Linux default
         candidates.push(h.join("Huawei/Sdk"));
+    }
+    // macOS: DevEco Studio bundles the native cross-toolchain inside its
+    // .app at `Contents/sdk/default/openharmony/native`. The "default"
+    // segment is the active SDK profile selected in DevEco's prefs UI;
+    // multi-profile installs may have other names alongside it (we'd
+    // need to enumerate `Contents/sdk/*/openharmony/native` for those —
+    // deferred until a user reports a non-default profile).
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(PathBuf::from(
+            "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/native"
+        ));
     }
     #[cfg(target_os = "windows")]
     if let Ok(userprofile) = std::env::var("USERPROFILE") {
