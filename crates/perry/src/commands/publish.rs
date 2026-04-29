@@ -2500,6 +2500,8 @@ pub(crate) struct PerryConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) android: Option<AndroidSavedConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) harmonyos: Option<HarmonyosSavedConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) telemetry: Option<crate::telemetry::TelemetryConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) beta: Option<BetaConfig>,
@@ -2531,6 +2533,42 @@ pub(crate) struct AndroidSavedConfig {
     pub(crate) key_alias: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) google_play_key_path: Option<String>,
+}
+
+/// HarmonyOS signing materials. Populated by `perry setup harmonyos`.
+///
+/// The p12 password is stored plaintext in `~/.perry/config.toml` (the file is
+/// already protected by the user's home dir perms; macOS-Keychain integration
+/// is a future improvement). DevEco itself stores the same password
+/// AES-encrypted in `build-profile.json5` with a machine-bound key that isn't
+/// extractable to external tools — so the wizard prompts the user once and
+/// caches it here for subsequent compiles.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct HarmonyosSavedConfig {
+    /// Path to the .p12 keystore (typically `~/.ohos/config/default_*.p12`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) p12_path: Option<String>,
+    /// Plaintext password for the .p12 keystore. Same value is used as the
+    /// key password — DevEco's auto-generated debug cert uses one password
+    /// for both store and key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) p12_password: Option<String>,
+    /// Path to the provisioning profile (.p7b).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) profile_path: Option<String>,
+    /// Path to the cert chain (.cer / .pem). hap-sign-tool requires this as
+    /// `-appCertFile`, distinct from `-profileFile`. DevEco's auto-signing
+    /// names it `<bundleName>.cer`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cert_path: Option<String>,
+    /// bundleName the profile is bound to (e.g. `com.example.myapplication`).
+    /// Auto-extracted from the .p7b's embedded JSON.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) bundle_name: Option<String>,
+    /// Key alias inside the .p12 (DevEco's auto-generated cert uses
+    /// `debugKey`; users with their own keystore may have a different alias).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) key_alias: Option<String>,
 }
 
 pub(crate) fn config_path() -> PathBuf {

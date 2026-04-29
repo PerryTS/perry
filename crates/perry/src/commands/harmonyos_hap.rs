@@ -95,8 +95,16 @@ pub fn build_hap(args: &HapBuildArgs) -> Result<HapBuildResult> {
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(&staging)?;
 
+    // Saved config from `perry setup harmonyos` (`~/.perry/config.toml`).
+    // Used as a fallback when env vars aren't set so users only need to set
+    // up signing once, not for every compile.
+    let saved = super::publish::load_config();
+    let saved_h = saved.harmonyos.as_ref();
+
     let bundle_name = std::env::var("PERRY_HARMONYOS_BUNDLE_NAME")
-        .unwrap_or_else(|_| format!("com.perry.app.{}", sanitize_bundle_segment(args.stem)));
+        .ok()
+        .or_else(|| saved_h.and_then(|h| h.bundle_name.clone()))
+        .unwrap_or_else(|| format!("com.perry.app.{}", sanitize_bundle_segment(args.stem)));
 
     write_configs(&staging, args.stem, &bundle_name)?;
     write_resources(&staging, args.stem)?;
@@ -529,17 +537,38 @@ fn sign_hap(
     // DevEco's "automatically generate signing files" flow writes both out
     // separately; mapping them to different env vars lets users point
     // perry at whatever DevEco produced.
+    //
+    // Each value falls through env var → saved config (`~/.perry/config.toml`,
+    // populated by `perry setup harmonyos`). The wizard saves the user once;
+    // env vars override on a per-invocation basis (CI, multi-cert workflows).
+    let saved = super::publish::load_config();
+    let saved_h = saved.harmonyos.as_ref();
+
     let p12 = std::env::var("PERRY_HARMONYOS_P12")
-        .map_err(|_| anyhow!("PERRY_HARMONYOS_P12 not set (path to .p12 keystore)"))?;
+        .ok()
+        .or_else(|| saved_h.and_then(|h| h.p12_path.clone()))
+        .ok_or_else(|| anyhow!(
+            "PERRY_HARMONYOS_P12 not set (path to .p12 keystore). \
+             Run `perry setup harmonyos` once to configure, or export the env var."
+        ))?;
     let p12_password = std::env::var("PERRY_HARMONYOS_P12_PASSWORD")
-        .map_err(|_| anyhow!("PERRY_HARMONYOS_P12_PASSWORD not set (keystore password)"))?;
+        .ok()
+        .or_else(|| saved_h.and_then(|h| h.p12_password.clone()))
+        .ok_or_else(|| anyhow!(
+            "PERRY_HARMONYOS_P12_PASSWORD not set (keystore password). \
+             Run `perry setup harmonyos` once to configure."
+        ))?;
     let cert_chain = std::env::var("PERRY_HARMONYOS_CERT")
-        .map_err(|_| anyhow!(
+        .ok()
+        .or_else(|| saved_h.and_then(|h| h.cert_path.clone()))
+        .ok_or_else(|| anyhow!(
             "PERRY_HARMONYOS_CERT not set (path to the cert chain .cer/.pem — DevEco \
              auto-signing names it <bundleName>.cer). Distinct from PERRY_HARMONYOS_PROFILE."
         ))?;
     let profile = std::env::var("PERRY_HARMONYOS_PROFILE")
-        .map_err(|_| anyhow!(
+        .ok()
+        .or_else(|| saved_h.and_then(|h| h.profile_path.clone()))
+        .ok_or_else(|| anyhow!(
             "PERRY_HARMONYOS_PROFILE not set (path to the signed provisioning \
              profile .p7b — DevEco auto-signing names it <bundleName>.p7b)."
         ))?;
@@ -555,7 +584,9 @@ fn sign_hap(
     // a hardcoded string doesn't work. Default to "debugKey" (what DevEco
     // uses for auto-generated debug certs) and let the caller override.
     let key_alias = std::env::var("PERRY_HARMONYOS_KEY_ALIAS")
-        .unwrap_or_else(|_| "debugKey".to_string());
+        .ok()
+        .or_else(|| saved_h.and_then(|h| h.key_alias.clone()))
+        .unwrap_or_else(|| "debugKey".to_string());
 
     let sign_alg = std::env::var("PERRY_HARMONYOS_SIGN_ALG")
         .unwrap_or_else(|_| "SHA256withECDSA".to_string());
