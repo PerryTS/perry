@@ -875,10 +875,11 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     }
                 }
                 "finally" => {
-                    // .finally(cb) — the callback takes no args and its
-                    // return value is ignored. We pass it as on_fulfilled
-                    // and on_rejected both set to the same closure; the
-                    // runtime handles the "ignore return" semantics.
+                    // .finally(cb) — per spec: call cb() ignoring its return value,
+                    // then propagate the upstream value/reason unchanged.
+                    // Routes through js_promise_finally which wraps cb in
+                    // fulfill/reject proxy closures that call cb() and then
+                    // return the upstream value (or re-throw the upstream reason).
                     if !args.is_empty() {
                         let promise_box = lower_expr(ctx, object)?;
                         let on_finally_box = lower_expr(ctx, &args[0])?;
@@ -887,10 +888,9 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                         let on_finally_handle = unbox_to_i64(blk, &on_finally_box);
                         let new_promise = blk.call(
                             I64,
-                            "js_promise_then",
+                            "js_promise_finally",
                             &[
                                 (I64, &promise_handle),
-                                (I64, &on_finally_handle),
                                 (I64, &on_finally_handle),
                             ],
                         );

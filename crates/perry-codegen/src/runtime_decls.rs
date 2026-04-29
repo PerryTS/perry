@@ -791,6 +791,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_promise_resolved", I64, &[DOUBLE]);
     module.declare_function("js_promise_rejected", I64, &[DOUBLE]);
     module.declare_function("js_promise_then", I64, &[I64, I64, I64]);
+    module.declare_function("js_promise_finally", I64, &[I64, I64]);
     module.declare_function("js_promise_all", I64, &[I64]);
     module.declare_function("js_promise_race", I64, &[I64]);
     module.declare_function("js_promise_any", I64, &[I64]);

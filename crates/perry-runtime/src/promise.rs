@@ -306,16 +306,178 @@ pub extern "C" fn js_promise_catch(
     js_promise_then(promise, ptr::null(), on_rejected)
 }
 
-/// Register finally callback, returns a new promise for chaining
-/// This is equivalent to .finally(onFinally) in JavaScript
+/// Register finally callback, returns a new promise for chaining.
+/// This is equivalent to .finally(onFinally) in JavaScript.
+///
+/// Per spec, `.finally(cb)` must:
+///   - Call `cb()` (ignoring its return value)
+///   - Propagate the upstream fulfilled VALUE (not cb's return) to `next`
+///   - Re-reject with the upstream rejection REASON if the upstream rejected
+///
+/// The spec (and Node.js) requires `.finally(cb)` to take ONE more microtask
+/// tick than a plain `.then(cb)`.  We achieve this by setting `promise.next =
+/// null` so the microtask runner does NOT resolve `next` after invoking the
+/// wrapper callback — the wrappers resolve `next` themselves, via an extra
+/// `js_promise_then(resolved_promise, passthrough)` hop that adds one queue
+/// entry before `next` settles.
+///
+/// Capture layout for each wrapper: [on_finally, next_promise_ptr]
+/// Capture layout for passthrough closures: [next_promise_ptr, value_or_reason]
 #[no_mangle]
 pub extern "C" fn js_promise_finally(
     promise: *mut Promise,
     on_finally: ClosurePtr,
 ) -> *mut Promise {
-    // For finally, we pass the same callback for both fulfilled and rejected
-    // The finally callback doesn't receive any arguments in JS
-    js_promise_then(promise, on_finally, on_finally)
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+
+    // Create the `next` promise that callers chain off.
+    let next = js_promise_new();
+    let next_i64 = next as i64;
+
+    // Build the fulfilled wrapper: captures [on_finally, next].
+    let fulfill_wrap = js_closure_alloc(finally_fulfill_wrapper as *const u8, 2);
+    js_closure_set_capture_ptr(fulfill_wrap, 0, on_finally as i64);
+    js_closure_set_capture_ptr(fulfill_wrap, 1, next_i64);
+
+    // Build the rejected wrapper: captures [on_finally, next].
+    let reject_wrap = js_closure_alloc(finally_reject_wrapper as *const u8, 2);
+    js_closure_set_capture_ptr(reject_wrap, 0, on_finally as i64);
+    js_closure_set_capture_ptr(reject_wrap, 1, next_i64);
+
+    // Register wrappers on `promise`.  Crucially, set `promise.next = null`
+    // so the microtask runner does NOT attempt to resolve `next` after calling
+    // the wrapper — each wrapper handles `next` settlement itself via the
+    // extra-tick passthrough pattern.
+    unsafe {
+        (*promise).on_fulfilled = fulfill_wrap;
+        (*promise).on_rejected = reject_wrap;
+        (*promise).next = ptr::null_mut(); // wrappers own next; runner must not touch it
+
+        // If the promise is already settled, push its task now.
+        match (*promise).state {
+            PromiseState::Fulfilled => {
+                TASK_QUEUE.with(|q| {
+                    q.borrow_mut().push_back((promise, (*promise).value, true));
+                });
+            }
+            PromiseState::Rejected => {
+                TASK_QUEUE.with(|q| {
+                    q.borrow_mut().push_back((promise, (*promise).reason, false));
+                });
+            }
+            PromiseState::Pending => {}
+        }
+    }
+
+    next
+}
+
+/// Fulfilled-path wrapper for `.finally()`.
+/// Captures [on_finally, next_promise].
+/// Called with the upstream fulfilled `value`.
+/// Runs `on_finally()`, then resolves `next` with `value` via ONE extra
+/// microtask hop (matching Node.js `.finally()` microtask depth).
+extern "C" fn finally_fulfill_wrapper(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    use crate::closure::{js_closure_alloc, js_closure_get_capture_ptr,
+                         js_closure_set_capture_ptr};
+
+    let on_finally = js_closure_get_capture_ptr(closure, 0)
+        as *const crate::closure::ClosureHeader;
+    let next = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+
+    // Call the user's finally callback (ignoring its return value).
+    if !on_finally.is_null() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        unsafe { crate::closure::js_closure_call1(on_finally, undef); }
+    }
+
+    // Add one extra microtask tick before settling `next` by registering a
+    // passthrough closure on an already-resolved promise.  The runner will
+    // enqueue it, call it next iteration, and THEN `next` gets resolved.
+    if !next.is_null() {
+        let pass = js_closure_alloc(finally_passthrough_fulfill as *const u8, 2);
+        js_closure_set_capture_ptr(pass, 0, next as i64);
+        crate::closure::js_closure_set_capture_f64(pass, 1, value);
+
+        let undef_promise = js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
+        // js_promise_then returns a new (discarded) promise; the side-effect
+        // is enqueuing `pass` to run in the next microtask iteration.
+        js_promise_then(undef_promise, pass, ptr::null());
+    }
+
+    // Return undefined.  Since promise.next is null (set in js_promise_finally),
+    // the runner will not try to resolve anything with this return value.
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Passthrough closure for the extra hop in finally_fulfill_wrapper.
+/// Captures [next_promise_ptr (i64), value (f64)].
+/// Resolves `next` with `value`.
+extern "C" fn finally_passthrough_fulfill(
+    closure: *const crate::closure::ClosureHeader,
+    _: f64,
+) -> f64 {
+    use crate::closure::{js_closure_get_capture_ptr, js_closure_get_capture_f64};
+    let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let value = js_closure_get_capture_f64(closure, 1);
+    if !next.is_null() {
+        js_promise_resolve(next, value);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Rejected-path wrapper for `.finally()`.
+/// Captures [on_finally, next_promise].
+/// Called with the upstream rejection `reason`.
+/// Runs `on_finally()`, then rejects `next` with `reason` via ONE extra
+/// microtask hop.
+extern "C" fn finally_reject_wrapper(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    use crate::closure::{js_closure_alloc, js_closure_get_capture_ptr,
+                         js_closure_set_capture_ptr};
+
+    let on_finally = js_closure_get_capture_ptr(closure, 0)
+        as *const crate::closure::ClosureHeader;
+    let next = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+
+    // Call the user's finally callback (ignoring its return value).
+    if !on_finally.is_null() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        unsafe { crate::closure::js_closure_call1(on_finally, undef); }
+    }
+
+    // Add one extra microtask tick before rejecting `next`.
+    if !next.is_null() {
+        let pass = js_closure_alloc(finally_passthrough_reject as *const u8, 2);
+        js_closure_set_capture_ptr(pass, 0, next as i64);
+        crate::closure::js_closure_set_capture_f64(pass, 1, reason);
+
+        let undef_promise = js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
+        js_promise_then(undef_promise, pass, ptr::null());
+    }
+
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Passthrough closure for the extra hop in finally_reject_wrapper.
+/// Captures [next_promise_ptr (i64), reason (f64)].
+/// Rejects `next` with `reason`.
+extern "C" fn finally_passthrough_reject(
+    closure: *const crate::closure::ClosureHeader,
+    _: f64,
+) -> f64 {
+    use crate::closure::{js_closure_get_capture_ptr, js_closure_get_capture_f64};
+    let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let reason = js_closure_get_capture_f64(closure, 1);
+    if !next.is_null() {
+        js_promise_reject(next, reason);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// Process all pending promise callbacks (run microtasks)
@@ -951,30 +1113,39 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
         return result_promise;
     }
 
-    // For each promise, attach resolve/reject handlers that settle the result promise
+    // For each promise, attach resolve/reject handlers that settle the result promise.
+    // Per the spec, even when an input promise is already settled we MUST route the
+    // resolution through the microtask queue (by registering `.then` handlers) rather
+    // than calling js_promise_resolve synchronously.  The synchronous short-circuit was
+    // causing race / any results to appear too early in the output when compared against
+    // Node's microtask-ordered output.
     for i in 0..count {
         let promise_f64 = js_array_get_f64(promises_arr, i);
         // Discriminate via GC-header obj_type — string/bigint NaN-boxed
         // values would otherwise pass through pointer extraction and crash
         // js_promise_then.
         if js_value_is_promise(promise_f64) == 0 {
-            // Non-promise value — resolve immediately with the value
-            js_promise_resolve(result_promise, promise_f64);
-            return result_promise;
+            // Non-promise value — wrap as an already-resolved promise so the
+            // resolution goes through the normal microtask path.
+            let wrapped = js_promise_resolved(promise_f64);
+            let resolve_closure = js_closure_alloc(
+                promise_race_resolve_handler as *const u8,
+                1,
+            );
+            js_closure_set_capture_ptr(resolve_closure, 0, result_promise as i64);
+            let reject_closure = js_closure_alloc(
+                promise_race_reject_handler as *const u8,
+                1,
+            );
+            js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
+            js_promise_then(wrapped, resolve_closure, reject_closure);
+            continue;
         }
         let promise_ptr = js_nanbox_get_pointer(promise_f64) as *mut Promise;
 
-        // Check if already settled — resolve/reject immediately
-        let state = unsafe { (*promise_ptr).state };
-        if matches!(state, PromiseState::Fulfilled) {
-            js_promise_resolve(result_promise, unsafe { (*promise_ptr).value });
-            return result_promise;
-        } else if matches!(state, PromiseState::Rejected) {
-            js_promise_reject(result_promise, unsafe { (*promise_ptr).reason });
-            return result_promise;
-        }
-
-        // Create resolve handler closure (captures result_promise)
+        // Always use js_promise_then even for already-settled promises.
+        // This ensures race resolution goes through the microtask queue,
+        // matching the spec-mandated ordering vs other pending callbacks.
         let resolve_closure = js_closure_alloc(
             promise_race_resolve_handler as *const u8,
             1, // 1 capture: result_promise
@@ -988,7 +1159,8 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
         );
         js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
 
-        // Attach handlers via then
+        // Attach handlers via then — if the input is already settled this will
+        // push a microtask rather than resolving result_promise synchronously.
         js_promise_then(promise_ptr, resolve_closure, reject_closure);
     }
 

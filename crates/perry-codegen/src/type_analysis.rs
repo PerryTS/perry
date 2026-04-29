@@ -870,11 +870,15 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// - Async function calls (return type is Promise)
 pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
-        Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
-            Some(HirType::Promise(_))
-        ),
-        // Promise.resolve / reject / all / race / allSettled
+        Expr::LocalGet(id) => match ctx.local_types.get(id) {
+            Some(HirType::Promise(_)) => true,
+            // `const p: Promise<T> = ...` is lowered as Generic { base: "Promise", ... }
+            // by the HIR when the source annotation is `Promise<T>` rather than the
+            // async-function return inference path (which produces HirType::Promise).
+            Some(HirType::Generic { base, .. }) if base == "Promise" => true,
+            _ => false,
+        },
+        // Promise.resolve / reject / all / race / allSettled / any
         Expr::Call { callee, .. } => match callee.as_ref() {
             Expr::PropertyGet { object, property } => {
                 // `Promise.resolve(...)` etc. — GlobalGet receiver with
@@ -882,7 +886,7 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
                     && matches!(
                         property.as_str(),
-                        "resolve" | "reject" | "all" | "race" | "allSettled"
+                        "resolve" | "reject" | "all" | "race" | "allSettled" | "any"
                     )
                 {
                     return true;
