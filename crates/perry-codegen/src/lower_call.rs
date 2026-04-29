@@ -405,6 +405,29 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 ctx.block().call_void("js_gc_collect", &[]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
+            // JSX runtime calls: `jsx(type, props)` and `jsxs(type, props)`.
+            // The HIR lowers <div>…</div> to ExternFuncRef { name: "jsx" } and
+            // <div><a/><b/></div> (multiple children) to "jsxs".  The first arg
+            // is the element type (a string literal for HTML tags, or a NaN-boxed
+            // function/class reference for components); the second arg is a
+            // NaN-boxed props object (or TAG_NULL).  Both are passed as DOUBLE so
+            // the ABI is uniform regardless of whether the type arg is a string or
+            // a component reference — avoiding the PTR vs DOUBLE divergence that
+            // the generic ExternFuncRef path would otherwise produce for string
+            // literals.  The runtime stubs `js_jsx`/`js_jsxs` are no-op link
+            // stubs that return TAG_UNDEFINED; real JSX rendering should be
+            // implemented by importing a JSX runtime package (e.g. react or
+            // preact) via the `perry.compilePackages` mechanism.
+            "jsx" | "jsxs" => {
+                let runtime_fn = if name == "jsx" { "js_jsx" } else { "js_jsxs" };
+                let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered.push(lower_expr(ctx, a)?);
+                }
+                let arg_slices: Vec<(crate::types::LlvmType, &str)> =
+                    lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                return Ok(ctx.block().call(DOUBLE, runtime_fn, &arg_slices));
+            }
             _ => {}
         }
         // perry/system dispatch: map JS names (isDarkMode, getDeviceIdiom,

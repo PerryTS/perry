@@ -61,6 +61,7 @@ pub mod child_process;
 pub mod json;
 pub mod json_tape;
 pub mod i18n;
+pub mod jsx;
 pub mod weakref;
 pub mod static_plugins;
 #[cfg(not(feature = "stdlib"))]

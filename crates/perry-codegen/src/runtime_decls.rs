@@ -1746,4 +1746,16 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // through `array_from_async_step`.
     module.declare_function("js_object_group_by", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_array_from_async", DOUBLE, &[DOUBLE]);
+
+    // ========== JSX runtime stubs (issue #277) ==========
+    // `js_jsx(type, props)` and `js_jsxs(type, props)` are no-op stubs that
+    // let TSX/JSX files compile and link without a real JSX runtime package.
+    // The codegen intercepts ExternFuncRef { name: "jsx" } / "jsxs" in
+    // `lower_call.rs` and routes them here with both args as DOUBLE
+    // (NaN-boxed), bypassing the string→PTR conversion the generic path
+    // would apply to string literals.  When a real JSX runtime is imported
+    // via `perry.compilePackages` the imported symbol takes precedence and
+    // these stubs are never called.
+    module.declare_function("js_jsx", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_jsxs", DOUBLE, &[DOUBLE, DOUBLE]);
 }
