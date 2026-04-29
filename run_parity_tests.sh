@@ -146,9 +146,23 @@ normalize_output() {
         sed -E 's/([0-9]+\.[0-9]{10})[0-9]+/\1/g' | \
         # Normalize console.time/timeLog/timeEnd output: the elapsed value
         # will always differ between Node.js (JIT) and Perry (native LLVM).
-        # Strip the numeric portion, keeping only label and unit so both
-        # sides compare as "label: <timer>".
-        sed -E 's/^([^:]+): [0-9]+(\.[0-9]+)?(ms|s)$/\1: <timer>/g' | \
+        # Covers ms, s, and μs (microseconds — emitted on fast macOS-14 ARM
+        # runners when timer duration is < 1 ms, e.g. timerA/timerB in
+        # test_gap_console_methods which have no work between start and end).
+        # The optional [[:space:]]* handles Node.js v18's "N.NNN ms" format
+        # (space before unit); v22 produces "N.NNNms" without.
+        sed -E 's/^([^:]+): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)$/\1: <timer>/g' | \
+        # Normalize console.trace output: strip stack frame lines so only
+        # the "Trace: <message>" header survives for comparison.
+        # Node.js emits "    at <symbol> (<location>)" JS stack frames;
+        # Perry emits "    N: <symbol>" native frame headers, indented
+        # "             at <file:line>" continuation lines, and
+        # "        (… N more identical frames)" dedup-collapse lines.
+        # All three shapes have leading whitespace; the distinguishing
+        # suffixes are "at ", a digit+colon, or a literal "(…".
+        sed -E '/^[[:space:]]+at /d' | \
+        sed -E '/^[[:space:]]+[0-9]+: /d' | \
+        sed -E '/^[[:space:]]+[(].*more identical frames[)]/d' | \
         # Remove trailing empty lines
         sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
 }
