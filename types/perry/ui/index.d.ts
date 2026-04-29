@@ -662,6 +662,23 @@ export function addKeyboardShortcut(
     callback: () => void,
 ): void;
 
+/**
+ * Register a system-wide hotkey that fires even when the app is backgrounded.
+ *
+ * **Modifier bits:** `1` = Cmd/Ctrl, `2` = Shift, `4` = Option/Alt, `8` =
+ * Control (macOS only). Combine by adding — `3` = Cmd+Shift, etc.
+ *
+ * **Platform support:**
+ * - macOS — real Carbon `RegisterEventHotKey` implementation.
+ * - Linux / Windows / iOS / tvOS / visionOS / watchOS / Android — logs + no-op;
+ *   global hotkeys require OS-level portal/hook APIs that differ per platform.
+ */
+export function registerGlobalHotkey(
+    key: string,
+    modifiers: number,
+    callback: () => void,
+): void;
+
 // ---------------------------------------------------------------------------
 // App lifecycle hooks
 // ---------------------------------------------------------------------------

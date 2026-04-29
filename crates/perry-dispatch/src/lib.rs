@@ -504,6 +504,10 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
     // `modifiers` is a bitfield: 1=Cmd, 2=Shift, 4=Option, 8=Control.
     MethodRow { method: "addKeyboardShortcut", runtime: "perry_ui_add_keyboard_shortcut",
             args: &[ArgKind::Str, ArgKind::F64, ArgKind::Closure], ret: ReturnKind::Void },
+    // System-wide hotkey — fires even when the app is backgrounded.
+    // Real Carbon `RegisterEventHotKey` impl on macOS; no-op stub on all other platforms.
+    MethodRow { method: "registerGlobalHotkey", runtime: "perry_ui_register_global_hotkey",
+            args: &[ArgKind::Str, ArgKind::F64, ArgKind::Closure], ret: ReturnKind::Void },
 
     // ---- App lifecycle hooks ----
     MethodRow { method: "onTerminate", runtime: "perry_ui_app_on_terminate",

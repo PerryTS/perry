@@ -3093,6 +3093,9 @@ function perry_ui_alert(title, message, buttons, callback) {
 }
 
 // ---------- Keyboard ----------
+function perry_ui_register_global_hotkey(_key, _modifiers, _callback) {
+  // Global hotkeys require OS-level hook APIs not available in a browser context.
+}
 function perry_ui_add_keyboard_shortcut(key, modifiers, callback) {
   document.addEventListener("keydown", (e) => {
     const mods = modifiers || 0;
@@ -3285,7 +3288,7 @@ const __perryUiDispatch = {
   // Dialog
   perry_ui_open_file_dialog, perry_ui_open_folder_dialog, perry_ui_save_file_dialog, perry_ui_alert,
   // Keyboard
-  perry_ui_add_keyboard_shortcut,
+  perry_ui_register_global_hotkey, perry_ui_add_keyboard_shortcut,
   // Sheet
   perry_ui_sheet_create, perry_ui_sheet_present, perry_ui_sheet_dismiss,
   // Toolbar

@@ -52,9 +52,19 @@ Keyboard shortcuts are also available on [menu items](menus.md):
 {{#include ../../examples/ui/events/snippets.ts:menu-shortcut}}
 ```
 
-> **Global hotkeys** (system-wide, fire even when the app is in the background)
-> exist in the macOS runtime FFI but are not yet wired into the cross-platform
-> codegen, so there is no TS-callable surface for them yet.
+### Global Hotkeys
+
+Register a hotkey that fires system-wide, even when the app is in the
+background:
+
+```typescript
+{{#include ../../examples/ui/events/snippets.ts:global-hotkey}}
+```
+
+**Platform support:** macOS uses Carbon `RegisterEventHotKey` (real
+implementation). Linux, Windows, iOS, tvOS, visionOS, watchOS, and Android
+log the registration and no-op — global hotkeys on those platforms require
+OS-level portal / hook APIs that vary per OS.
 
 ## Clipboard
 
