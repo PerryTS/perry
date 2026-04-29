@@ -4027,13 +4027,14 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         runtime: "js_ws_close_client", args: &[NA_F64], ret: NR_VOID },
 
     // ========== Raw TCP sockets (net) + TLS ==========
-    // Factory: `net.createConnection(host, port)` returns a Socket handle.
+    // Factory: `net.createConnection(port, host)` returns a Socket handle.
+    // Argument order matches Node.js: port (number) first, host (string) second.
     // HIR lowering at crates/perry-hir/src/lower.rs registers the return
     // value as class "Socket" so subsequent methods dispatch via the
     // class_filter entries below.
     NativeModSig { module: "net", has_receiver: false, method: "createConnection",
         class_filter: None,
-        runtime: "js_net_socket_connect", args: &[NA_STR, NA_F64], ret: NR_PTR },
+        runtime: "js_net_socket_connect", args: &[NA_F64, NA_STR], ret: NR_PTR },
     NativeModSig { module: "net", has_receiver: true, method: "write",
         class_filter: Some("Socket"),
         runtime: "js_net_socket_write", args: &[NA_PTR], ret: NR_VOID },

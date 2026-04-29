@@ -15,7 +15,7 @@ let received = '';
 let done = false;
 let upgraded = false;
 
-const sock = net.createConnection(HOST, PORT);
+const sock = net.createConnection(PORT, HOST);
 
 sock.on('connect', () => {
     console.log('plain connect ok');

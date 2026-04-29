@@ -77,13 +77,11 @@ SKIP_TESTS=(
     "test_fs"               # fs module needs import
     "test_path"             # path module needs import
     "test_integration_app"  # uses fs module
-    # Network tests — require a live TCP/TLS server on the host. CI runners
-    # don't host one, so these consistently fail with `Connection refused`
-    # against any hard-coded address. Skip in environments where the
-    # server isn't available; both Perry and Node hit the same error so
-    # the diff is just network-noise.
-    "test_net_min"
-    "test_net_socket"
+    # Network tests — test_net_upgrade_tls requires a TLS upgrade server
+    # (separate scope, tracked as #275).  test_tls_connect requires an
+    # outbound internet connection to example.com:443.  Both are skipped
+    # unconditionally.  test_net_min and test_net_socket are handled by
+    # the echo-server lifecycle below and are NOT listed here.
     "test_net_upgrade_tls"
     "test_tls_connect"
     # Timing benchmarks — print Date.now() deltas which differ
@@ -174,6 +172,55 @@ fi
 echo -e "${GREEN}Compiler and runtime built successfully${NC}"
 echo ""
 echo "Running parity tests (backend: $BACKEND_LABEL)..."
+echo ""
+
+# ---------------------------------------------------------------------------
+# Echo server lifecycle (port 17891) — required by test_net_min and
+# test_net_socket.  We spawn it in the background, wait up to 5 s for it to
+# accept connections, and register a cleanup trap so it always gets killed on
+# script exit regardless of how the script terminates.
+# ---------------------------------------------------------------------------
+ECHO_SERVER_PID=""
+ECHO_SERVER_SCRIPT="$SCRIPT_DIR/test-files/test_net_echo_server.py"
+
+start_echo_server() {
+    if ! command -v python3 &>/dev/null; then
+        echo "Warning: python3 not found — test_net_min / test_net_socket will fail parity"
+        return
+    fi
+    if [[ ! -f "$ECHO_SERVER_SCRIPT" ]]; then
+        echo "Warning: $ECHO_SERVER_SCRIPT not found — test_net_min / test_net_socket will fail parity"
+        return
+    fi
+    python3 "$ECHO_SERVER_SCRIPT" &
+    ECHO_SERVER_PID=$!
+    # Poll up to 5 s (50 × 100 ms) for the server to accept connections.
+    local ready=0
+    for _i in $(seq 1 50); do
+        if nc -z 127.0.0.1 17891 2>/dev/null; then
+            ready=1
+            break
+        fi
+        sleep 0.1
+    done
+    if [[ $ready -eq 1 ]]; then
+        echo "Echo server started on 127.0.0.1:17891 (PID $ECHO_SERVER_PID)"
+    else
+        echo "Warning: echo server did not become ready in 5 s — net tests may fail parity"
+    fi
+}
+
+stop_echo_server() {
+    if [[ -n "$ECHO_SERVER_PID" ]]; then
+        kill "$ECHO_SERVER_PID" 2>/dev/null
+        wait "$ECHO_SERVER_PID" 2>/dev/null
+        ECHO_SERVER_PID=""
+    fi
+}
+
+trap stop_echo_server EXIT
+
+start_echo_server
 echo ""
 
 # JSON report data

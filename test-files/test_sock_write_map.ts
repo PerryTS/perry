@@ -31,7 +31,7 @@ const CONN_MAP = new Map<number, { sock: net.Socket }>();
 let phase = 0;
 let done = false;
 
-const sock = net.createConnection(ECHO_HOST, ECHO_PORT);
+const sock = net.createConnection(ECHO_PORT, ECHO_HOST);
 CONN_MAP.set(1, { sock });
 
 sock.on('connect', () => {

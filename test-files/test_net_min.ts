@@ -5,7 +5,7 @@ import * as net from 'net';
 
 console.log('importing net ok');
 
-const sock = net.createConnection('127.0.0.1', 17891);
+const sock = net.createConnection(17891, '127.0.0.1');
 
 console.log('createConnection returned');
 

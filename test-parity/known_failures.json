@@ -15,14 +15,6 @@
     "status": "known_limitation",
     "reason": "Async generators, for-await-of, Promise.allSettled not implemented (segfault)"
   },
-  "test_net_min": {
-    "status": "skip",
-    "reason": "Requires live network socket"
-  },
-  "test_net_socket": {
-    "status": "skip",
-    "reason": "Requires live network socket"
-  },
   "test_net_upgrade_tls": {
     "status": "skip",
     "reason": "Requires TLS/network infrastructure"

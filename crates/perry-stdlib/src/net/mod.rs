@@ -284,15 +284,16 @@ fn build_tls_connector_insecure() -> Result<TlsConnector, String> {
     Ok(TlsConnector::from(Arc::new(config)))
 }
 
-// ─── FFI: net.createConnection(host, port) ───────────────────────────────────
+// ─── FFI: net.createConnection(port, host) ───────────────────────────────────
 
-/// `net.createConnection(host, port)` — returns a handle immediately;
+/// `net.createConnection(port, host)` — returns a handle immediately;
 /// connection happens in the background and emits `'connect'` or `'error'`.
 ///
+/// Argument order matches Node.js: port (number) first, host (string) second.
 /// Signature matches NATIVE_MODULE_TABLE entry
-/// `{ module: "net", method: "createConnection", args: &[NA_STR, NA_F64], ret: NR_PTR }`.
+/// `{ module: "net", method: "createConnection", args: &[NA_F64, NA_STR], ret: NR_PTR }`.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_connect(host_ptr: i64, port: f64) -> i64 {
+pub unsafe extern "C" fn js_net_socket_connect(port: f64, host_ptr: i64) -> i64 {
     let host = match string_from_header_i64(host_ptr) {
         Some(h) => h,
         None => return 0,

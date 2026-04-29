@@ -20,7 +20,7 @@ let received = '';
 let seen_connect = false;
 let seen_close = false;
 
-const sock = createConnection(ECHO_HOST, ECHO_PORT);
+const sock = createConnection(ECHO_PORT, ECHO_HOST);
 
 sock.on('connect', () => {
     seen_connect = true;
