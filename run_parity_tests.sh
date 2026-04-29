@@ -41,7 +41,49 @@ run_with_timeout() {
     fi
 }
 
-# Counters
+# ── TLS-upgrade companion server (issue #275) ──────────────────────────────
+# Spawned once per test_net_upgrade_tls* test; killed immediately after.
+# Uses a self-signed cert; test calls upgradeToTLS(host, verify=0) so cert
+# validation is intentionally disabled on the client side.
+
+TLS_UPGRADE_SERVER_PID=""
+
+start_tls_upgrade_server() {
+    python3 "$SCRIPT_DIR/test-files/test_net_upgrade_tls_server.py" --port 17892 &
+    TLS_UPGRADE_SERVER_PID=$!
+    # Wait up to 3 s for the port to open.
+    local i
+    for i in $(seq 1 30); do
+        nc -z 127.0.0.1 17892 2>/dev/null && return 0
+        sleep 0.1
+    done
+    echo -e "${YELLOW}WARN${NC}  TLS-upgrade server did not come up in time (pid $TLS_UPGRADE_SERVER_PID)" >&2
+    return 1
+}
+
+stop_tls_upgrade_server() {
+    if [[ -n "$TLS_UPGRADE_SERVER_PID" ]]; then
+        kill "$TLS_UPGRADE_SERVER_PID" 2>/dev/null || true
+        wait "$TLS_UPGRADE_SERVER_PID" 2>/dev/null || true
+        TLS_UPGRADE_SERVER_PID=""
+    fi
+}
+
+# ── Perry-specific expected-output tests ────────────────────────────────────
+# Some tests use Perry APIs that don't map 1:1 to Node.js (e.g. Perry's
+# net.createConnection(host, port) vs Node.js's (port, host)).  For these,
+# instead of comparing to Node.js, we compare Perry's output against a
+# stored expected file in test-parity/expected/<test_name>.txt.
+# Node.js is still run; if it exits non-zero we record NODE_FAIL and skip;
+# if it exits 0 but with a different output we fall through to the expected-
+# file comparison (not a parity fail — the incompatibility is intentional).
+EXPECTED_DIR="$SCRIPT_DIR/test-parity/expected"
+
+has_expected_output() {
+    [[ -f "$EXPECTED_DIR/${1}.txt" ]]
+}
+
+# ── Counters ────────────────────────────────────────────────────────────────
 PARITY_PASS=0
 PARITY_FAIL=0
 COMPILE_FAIL=0
@@ -77,12 +119,11 @@ SKIP_TESTS=(
     "test_fs"               # fs module needs import
     "test_path"             # path module needs import
     "test_integration_app"  # uses fs module
-    # Network tests — test_net_upgrade_tls requires a TLS upgrade server
-    # (separate scope, tracked as #275).  test_tls_connect requires an
-    # outbound internet connection to example.com:443.  Both are skipped
-    # unconditionally.  test_net_min and test_net_socket are handled by
-    # the echo-server lifecycle below and are NOT listed here.
-    "test_net_upgrade_tls"
+    # Network tests — test_net_min and test_net_socket are handled by the
+    # plain TCP echo-server lifecycle (start_echo_server / stop_echo_server,
+    # added in #286). test_net_upgrade_tls is handled by the TLS-upgrade
+    # companion server spawned inline below (#288). test_tls_connect needs
+    # outbound HTTPS to example.com:443 — skip unconditionally.
     "test_tls_connect"
     # Timing benchmarks — print Date.now() deltas which differ
     # run-to-run. Both perry and node produce correct output;
@@ -265,6 +306,14 @@ for test_file in "$TEST_DIR"/*.ts; do
         continue
     fi
 
+    # Spawn per-test companion servers when needed.
+    # test_net_upgrade_tls* — plain→TLS upgrade server on port 17892 (issue #275).
+    local_server_pid=""
+    if [[ "$test_name" == test_net_upgrade_tls* ]]; then
+        start_tls_upgrade_server
+        local_server_pid="$TLS_UPGRADE_SERVER_PID"
+    fi
+
     # Run with Node.js
     node_output=$(run_with_timeout 10 node --experimental-strip-types "$test_file" 2>&1)
     node_exit=$?
@@ -273,6 +322,7 @@ for test_file in "$TEST_DIR"/*.ts; do
         # Node.js failed - might be expected for some tests
         echo -e "${YELLOW}SKIP${NC}  $test_name (Node.js error: exit $node_exit)"
         ((NODE_FAIL++))
+        [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
         continue
     fi
 
@@ -299,6 +349,7 @@ for test_file in "$TEST_DIR"/*.ts; do
         # the macOS-14 family was diagnosed by inference, not data.
         compile_log="$OUTPUT_DIR/${test_name}.compile_error.log"
         printf "%s\n" "$compile_output" > "$compile_log"
+        [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
         continue
     fi
 
@@ -309,25 +360,49 @@ for test_file in "$TEST_DIR"/*.ts; do
     # Save Perry output
     echo "$perry_output" > "$perry_output_file"
 
-    # Normalize both outputs for comparison
-    node_normalized=$(normalize_output "$node_output")
-    perry_normalized=$(normalize_output "$perry_output")
-
-    # Compare outputs
-    if [[ "$node_normalized" == "$perry_normalized" ]]; then
-        echo -e "${GREEN}PASS${NC}  $test_name"
-        ((PARITY_PASS++))
-        status="pass"
+    # For tests that have a stored expected-output file (Perry-specific APIs
+    # that don't map 1:1 to Node.js), compare Perry output against the file
+    # instead of against Node.js.  This lets us verify Perry's behaviour
+    # end-to-end without requiring Node.js to speak the same API.
+    if has_expected_output "$test_name"; then
+        expected_normalized=$(normalize_output "$(cat "$EXPECTED_DIR/${test_name}.txt")")
+        perry_normalized=$(normalize_output "$perry_output")
+        if [[ "$perry_normalized" == "$expected_normalized" ]]; then
+            echo -e "${GREEN}PASS${NC}  $test_name (expected-output)"
+            ((PARITY_PASS++))
+            status="pass"
+        else
+            echo -e "${RED}FAIL${NC}  $test_name (expected-output mismatch)"
+            ((PARITY_FAIL++))
+            PARITY_FAILURES+=("$test_name")
+            status="fail"
+            echo "       Expected: $(cat "$EXPECTED_DIR/${test_name}.txt" | head -1)"
+            echo "       Perry:    $(echo "$perry_output" | head -1)"
+        fi
     else
-        echo -e "${RED}FAIL${NC}  $test_name (output mismatch)"
-        ((PARITY_FAIL++))
-        PARITY_FAILURES+=("$test_name")
-        status="fail"
+        # Normalize both outputs for comparison
+        node_normalized=$(normalize_output "$node_output")
+        perry_normalized=$(normalize_output "$perry_output")
 
-        # Show diff for failures (first few lines)
-        echo "       Node.js:    $(echo "$node_output" | head -1)"
-        echo "       Perry:  $(echo "$perry_output" | head -1)"
+        # Compare outputs
+        if [[ "$node_normalized" == "$perry_normalized" ]]; then
+            echo -e "${GREEN}PASS${NC}  $test_name"
+            ((PARITY_PASS++))
+            status="pass"
+        else
+            echo -e "${RED}FAIL${NC}  $test_name (output mismatch)"
+            ((PARITY_FAIL++))
+            PARITY_FAILURES+=("$test_name")
+            status="fail"
+
+            # Show diff for failures (first few lines)
+            echo "       Node.js:    $(echo "$node_output" | head -1)"
+            echo "       Perry:  $(echo "$perry_output" | head -1)"
+        fi
     fi
+
+    # Stop any per-test companion server that was started for this test.
+    [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
 
     # Clean up binary
     rm -f "$perry_binary"

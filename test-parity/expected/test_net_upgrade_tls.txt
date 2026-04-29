@@ -1,0 +1,6 @@
+plain connect ok
+server negotiation byte: S
+upgrading to TLS...
+tls upgrade ok
+echo over TLS: hello-after-upgrade
+OK
