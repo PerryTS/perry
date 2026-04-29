@@ -112,7 +112,20 @@ pub(super) fn parse_native_library_manifest(
 
     let native_lib = pkg.get("perry")?.get("nativeLibrary")?;
 
-    // Parse functions
+    // Parse functions.
+    //
+    // Valid `returns` values (codegen dispatch in lower_call.rs):
+    //   "string" / "ptr"  → PTR return (*const u8 / *const StringHeader);
+    //                        NaN-boxed as STRING_TAG.  Use when Rust fn is
+    //                        declared `-> *const u8`.
+    //   "i64_str"         → I64 return that IS a *StringHeader address;
+    //                        NaN-boxed as STRING_TAG without sitofp.  Use
+    //                        when Rust fn is declared `-> i64` but the value
+    //                        is a string pointer (closes issue #222).
+    //   "i64"             → I64 return; sitofp → JS number.  Opaque handles,
+    //                        counts, etc.
+    //   "void"            → no return value.
+    //   (anything else)   → treated as f64 (Perry double ABI).
     let functions: Vec<NativeFunctionDecl> = native_lib.get("functions")?
         .as_array()?
         .iter()

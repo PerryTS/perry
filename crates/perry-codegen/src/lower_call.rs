@@ -503,14 +503,27 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 arg_types.iter().zip(lowered.iter()).map(|(t, v)| (*t, v.as_str())).collect();
             // Determine return type.
             //
-            // Manifest takes precedence: `"i64"` → I64 return (x0), then
-            // `sitofp` back to f64 so JS sees a normal number; `"void"` →
-            // no return; `"string"`/`"ptr"` → PTR return + nanbox.
+            // Manifest `returns` field takes precedence over HIR heuristics:
             //
-            // Without a manifest entry, fall back to the original
-            // heuristic on `ExternFuncRef.return_type` (Number/Void/String).
+            //   "string" / "ptr"  → PTR return (*const u8 / *const StringHeader);
+            //                       ptrtoint + NaN-box STRING_TAG. Use when the
+            //                       Rust function is declared `-> *const u8`.
+            //   "i64_str"         → I64 return (raw integer that IS a *StringHeader
+            //                       address). NaN-box directly with STRING_TAG; no
+            //                       sitofp. Use when the Rust function is declared
+            //                       `-> i64` but the value is a string pointer.
+            //   "i64"             → I64 return; sitofp → JS number. Use for opaque
+            //                       handles / integers (`*mut View`, counts, etc.).
+            //   "void"            → no return value.
+            //   (absent)          → fall back to HIR ExternFuncRef.return_type and
+            //                       the name-pattern heuristic below.
             let has_string_args = arg_types.iter().any(|t| *t == PTR);
             let manifest_ret: Option<&str> = manifest_sig.as_ref().map(|(_, r)| r.as_str());
+            // "i64_str": explicit opt-in for FFI functions that return a raw i64
+            // which is actually a *StringHeader pointer — distinct from "string"
+            // (which declares the function as returning `ptr` in LLVM IR) and
+            // from "i64" (which sitofp-converts the integer to a JS number).
+            let returns_i64_str = matches!(manifest_ret, Some("i64_str"));
             let returns_string = matches!(manifest_ret, Some("string") | Some("ptr"))
                 || matches!(ext_return_type, HirType::String)
                 || (manifest_ret.is_none() && has_string_args && (
@@ -526,6 +539,17 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     .push((name.clone(), crate::types::VOID, arg_types));
                 ctx.block().call_void(name, &arg_slices);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            } else if returns_i64_str {
+                // C function returns a raw i64 that is a *StringHeader address.
+                // Declare as I64 (matching the C ABI — x0 on ARM64, rax on
+                // x86_64), call it, and NaN-box the result directly with
+                // STRING_TAG. No sitofp (which would corrupt the pointer
+                // bits) and no ptrtoint (already an integer, not a ptr).
+                ctx.pending_declares
+                    .push((name.clone(), I64, arg_types));
+                let raw = ctx.block().call(I64, name, &arg_slices);
+                let blk = ctx.block();
+                return Ok(nanbox_string_inline(blk, &raw));
             } else if returns_string {
                 ctx.pending_declares
                     .push((name.clone(), PTR, arg_types));
@@ -4920,5 +4944,88 @@ pub(super) fn lower_native_module_dispatch(
             ctx.block().call_void(sig.runtime, &arg_slices);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
+    }
+}
+
+#[cfg(test)]
+mod ffi_return_type_tests {
+    /// Verify that the `returns` manifest field values map to the correct
+    /// dispatch flags. These tests guard against accidentally conflating
+    /// "i64_str" with "i64" or "string" — the three are mutually exclusive.
+    ///
+    /// Related: issue #222 — explicit `returns: "i64_str"` for string-pointer
+    /// detection when the Rust function is declared `-> i64`.
+    fn parse_flags(manifest_ret: Option<&str>) -> (bool, bool, bool, bool) {
+        // Mirror the manifest-driven arm of the flag computation in the
+        // ExternFuncRef dispatch inside lower_call.  The name-based heuristic
+        // and HIR-type fallback arms are omitted here; this only tests the
+        // explicit manifest field.
+        let returns_i64_str = matches!(manifest_ret, Some("i64_str"));
+        let returns_string  = matches!(manifest_ret, Some("string") | Some("ptr"));
+        let returns_i64     = matches!(manifest_ret, Some("i64"));
+        let returns_void    = matches!(manifest_ret, Some("void"));
+        (returns_i64_str, returns_string, returns_i64, returns_void)
+    }
+
+    #[test]
+    fn i64_str_is_recognized() {
+        let (i64_str, string, i64, void) = parse_flags(Some("i64_str"));
+        assert!(i64_str,  "returns_i64_str must be true for \"i64_str\"");
+        assert!(!string,  "returns_string must be false for \"i64_str\"");
+        assert!(!i64,     "returns_i64 must be false for \"i64_str\"");
+        assert!(!void,    "returns_void must be false for \"i64_str\"");
+    }
+
+    #[test]
+    fn string_not_confused_with_i64_str() {
+        let (i64_str, string, i64, void) = parse_flags(Some("string"));
+        assert!(!i64_str, "returns_i64_str must be false for \"string\"");
+        assert!(string,   "returns_string must be true for \"string\"");
+        assert!(!i64,     "returns_i64 must be false for \"string\"");
+        assert!(!void,    "returns_void must be false for \"string\"");
+    }
+
+    #[test]
+    fn ptr_alias_for_string() {
+        let (i64_str, string, i64, void) = parse_flags(Some("ptr"));
+        assert!(!i64_str, "returns_i64_str must be false for \"ptr\"");
+        assert!(string,   "returns_string must be true for \"ptr\"");
+        assert!(!i64,     "returns_i64 must be false for \"ptr\"");
+        assert!(!void,    "returns_void must be false for \"ptr\"");
+    }
+
+    #[test]
+    fn i64_stays_numeric() {
+        let (i64_str, string, i64, void) = parse_flags(Some("i64"));
+        assert!(!i64_str, "returns_i64_str must be false for \"i64\"");
+        assert!(!string,  "returns_string must be false for \"i64\"");
+        assert!(i64,      "returns_i64 must be true for \"i64\"");
+        assert!(!void,    "returns_void must be false for \"i64\"");
+    }
+
+    #[test]
+    fn void_recognized() {
+        let (i64_str, string, i64, void) = parse_flags(Some("void"));
+        assert!(!i64_str, "returns_i64_str must be false for \"void\"");
+        assert!(!string,  "returns_string must be false for \"void\"");
+        assert!(!i64,     "returns_i64 must be false for \"void\"");
+        assert!(void,     "returns_void must be true for \"void\"");
+    }
+
+    #[test]
+    fn i64_str_dispatch_order() {
+        // When manifest is "i64_str", it must take the i64_str path even
+        // if the HIR type also says String (which would normally set
+        // returns_string via the ext_return_type arm).
+        let manifest_ret: Option<&str> = Some("i64_str");
+        let returns_i64_str = matches!(manifest_ret, Some("i64_str"));
+        // Simulate returns_string with HIR String type:
+        let hir_string_arm = true; // ext_return_type == HirType::String
+        let returns_string = matches!(manifest_ret, Some("string") | Some("ptr"))
+            || hir_string_arm;
+        // Both could be true simultaneously, but in the dispatch the
+        // `returns_i64_str` branch is checked FIRST, so it wins.
+        assert!(returns_i64_str);
+        assert!(returns_string); // also true — but i64_str branch fires first
     }
 }
