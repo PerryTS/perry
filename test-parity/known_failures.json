@@ -15,10 +15,6 @@
     "status": "skip",
     "reason": "Requires TLS/network infrastructure"
   },
-  "test_tls_connect": {
-    "status": "skip",
-    "reason": "Compile failure — TLS connect not implemented"
-  },
   "test_stress_promises": {
     "status": "bug",
     "reason": "Multiple distinct Promise issues remaining after v0.5.283 fix (which addressed (a) microtask FIFO ordering — TASK_QUEUE was a Vec with .pop() → LIFO; switched to VecDeque + pop_front, and (b) `.then(h)` / `.catch(h)` not catching throws inside h — microtask runner now wraps closure call in setjmp): (1) `new Promise<T>((resolve, reject) => ...)` constructor body not running (lines `constructor resolve: 99` / `constructor reject: constructor-err` missing from output); (2) `Promise.any` produces no output (any/any-all-rejected/any-errors-length lines missing); (3) `.then(p => Promise.resolve(...))` doesn't unwrap inner Promise (logs `Promise { <pending> }` instead of resolved value); (4) `.finally(() => ...).then(v => ...)` value-passing wrong (Perry: `finally value: 0`, Node: `finally value: done`)."

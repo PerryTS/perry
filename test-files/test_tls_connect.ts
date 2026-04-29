@@ -2,6 +2,9 @@
 // Sends a raw HTTP/1.1 GET and verifies we receive a 200 response.
 // Proves the full stdlib TLS path: rustls + rustls-native-certs + handshake +
 // encrypted read/write through the Transport enum.
+//
+// Uses github.com because it reliably returns HTTP/1.1 200 OK from cloud
+// worker IPs (example.com is CDN-blocked for datacenter ranges).
 
 import * as tls from 'tls';
 
