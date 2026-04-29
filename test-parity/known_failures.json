@@ -51,8 +51,4 @@
     "status": "known_limitation",
     "reason": "Categorical typed-array gap documented in CLAUDE.md TypeScript-Parity-Status header (`typed_arrays (categorical gap)`). Perry's TypedArray instance shapes (Int8Array / Uint8Array / Int16Array / Uint16Array / Int32Array / Uint32Array / Float32Array / Float64Array) don't fully cover the prototype surface that JS code expects. Same family as `test_gap_array_methods`'s `.at()` issue. Tracked separately as the broader TypedArray completeness work."
   },
-  "test_json_lazy_predicates": {
-    "status": "bug",
-    "reason": "`Array.isArray()` returns false on the result of `[...].map(fn)` (Perry: `map-result-isArray:false`, Node: `map-result-isArray:true`). The map-returned shape isn't being recognized by the isArray predicate — likely a missing tag check or the map fast path returns a different runtime type than the isArray fast path expects. Distinct from the typed-array gap; affects the hot Array.prototype.map → Array.isArray idiom that lazy-iterator libraries (lodash etc.) lean on."
-  }
 }

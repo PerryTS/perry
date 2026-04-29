@@ -3191,6 +3191,42 @@ pub unsafe extern "C" fn js_native_call_method(
             return dispatch_buffer_method(raw_ptr, method_name, args_ptr, args_len);
         }
 
+        // Array method dispatch: when the object is a real or lazy array at runtime,
+        // dispatch callback-bearing array methods directly to the array runtime helpers.
+        // This covers the `anyTypedVar.map(fn)` / `anyTypedVar.filter(fn)` pattern where
+        // the HIR lowering conservatively skipped Expr::ArrayMap/Filter because the
+        // receiver's static type was `any` and the method name overlaps with user-class
+        // method names — see the `is_class_overlapping_method` guard in expr_call.rs
+        // (issue #267). The GC type check here ensures we only intercept when the
+        // value is actually an array; user-class instances with a `.map` closure field
+        // fall through to the object-field scan below unchanged.
+        if raw_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let arr_gc_hdr = (raw_ptr as *const u8)
+                .sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            let arr_obj_type = (*arr_gc_hdr).obj_type;
+            if arr_obj_type == crate::gc::GC_TYPE_ARRAY
+                || arr_obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            {
+                match method_name {
+                    "map" if args_len >= 1 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
+                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        let result = crate::array::js_array_map(arr, cb_ptr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    "filter" if args_len >= 1 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
+                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        let result = crate::array::js_array_filter(arr, cb_ptr);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
+                    _ => {} // not a handled array method — fall through to object dispatch
+                }
+            }
+        }
+
         // Check if this is a native module namespace object (e.g., fs, os, path)
         let obj = jsval.as_pointer::<ObjectHeader>();
         // Validate GcHeader to confirm this is actually an object before reading class_id
