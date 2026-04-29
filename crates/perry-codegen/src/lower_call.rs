@@ -6,7 +6,7 @@ use anyhow::{bail, Result};
 use perry_hir::Expr;
 use perry_types::Type as HirType;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, variant_name, FnCtx};
+use crate::expr::{lower_expr, nanbox_bigint_inline, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, variant_name, FnCtx};
 use crate::lower_array_method::lower_array_method;
 
 // Tier 1.3 (v0.5.332): the perry/ui, perry/ui-instance, perry/system,
@@ -3652,6 +3652,9 @@ enum NativeRetKind {
     /// caller (and `JSON.stringify`, string-comparison, etc.) needs the
     /// STRING_TAG to recognize it as a string rather than a heap object.
     Str,
+    /// Returns `*mut BigIntHeader` → NaN-box as BIGINT (0x7FFA tag). Use
+    /// for functions like `parseEther`/`parseUnits` that return bigint values.
+    BigInt,
     /// Returns f64 → pass through (NaN-boxed JSValue).
     F64,
     /// Returns i32 → ignored, return TAG_UNDEFINED.
@@ -3682,6 +3685,7 @@ const NA_PTR: NativeArgKind = NativeArgKind::PtrI64;
 const NA_JSV: NativeArgKind = NativeArgKind::JsvalI64;
 const NR_PTR: NativeRetKind = NativeRetKind::Ptr;
 const NR_STR: NativeRetKind = NativeRetKind::Str;
+const NR_BIGINT: NativeRetKind = NativeRetKind::BigInt;
 const NR_F64: NativeRetKind = NativeRetKind::F64;
 const NR_I32: NativeRetKind = NativeRetKind::I32Void;
 const NR_VOID: NativeRetKind = NativeRetKind::Void;
@@ -4629,6 +4633,24 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         class_filter: None, runtime: "js_worker_threads_parent_port", args: &[], ret: NR_F64 },
     NativeModSig { module: "worker_threads", has_receiver: true, method: "postMessage",
         class_filter: None, runtime: "js_worker_threads_post_message", args: &[NA_F64], ret: NR_F64 },
+
+    // ========== ethers ==========
+    // Utility functions (receiver-less, no class filter).
+    NativeModSig { module: "ethers", has_receiver: false, method: "getAddress",
+        class_filter: None, runtime: "js_ethers_get_address", args: &[NA_STR], ret: NR_STR },
+    NativeModSig { module: "ethers", has_receiver: false, method: "formatEther",
+        class_filter: None, runtime: "js_ethers_format_ether", args: &[NA_PTR], ret: NR_STR },
+    NativeModSig { module: "ethers", has_receiver: false, method: "formatUnits",
+        class_filter: None, runtime: "js_ethers_format_units", args: &[NA_PTR, NA_F64], ret: NR_STR },
+    NativeModSig { module: "ethers", has_receiver: false, method: "parseEther",
+        class_filter: None, runtime: "js_ethers_parse_ether", args: &[NA_STR], ret: NR_BIGINT },
+    NativeModSig { module: "ethers", has_receiver: false, method: "parseUnits",
+        class_filter: None, runtime: "js_ethers_parse_units", args: &[NA_STR, NA_F64], ret: NR_BIGINT },
+    // Wallet.createRandom() — static method on the Wallet class.
+    // class_filter matches `Wallet` so `ethers.Wallet.createRandom()` in HIR
+    // (which lowers to class_name="Wallet", method="createRandom") resolves here.
+    NativeModSig { module: "ethers", has_receiver: false, method: "createRandom",
+        class_filter: Some("Wallet"), runtime: "js_ethers_wallet_create_random", args: &[], ret: NR_PTR },
 ];
 
 /// Walk a statement to collect LocalIds declared inside a closure body —
@@ -4879,7 +4901,7 @@ pub(super) fn lower_native_module_dispatch(
 
     // Determine return type for the declare
     let ret_type = match sig.ret {
-        NativeRetKind::Ptr | NativeRetKind::Str => I64,
+        NativeRetKind::Ptr | NativeRetKind::Str | NativeRetKind::BigInt => I64,
         NativeRetKind::F64 => DOUBLE,
         NativeRetKind::I32Void => I32,
         NativeRetKind::Void => crate::types::VOID,
@@ -4908,6 +4930,12 @@ pub(super) fn lower_native_module_dispatch(
             let boxed = nanbox_string_inline(blk, &raw);
             let null_val = double_literal(f64::from_bits(crate::nanbox::TAG_NULL));
             Ok(blk.select(crate::types::I1, &is_null, DOUBLE, &null_val, &boxed))
+        }
+        NativeRetKind::BigInt => {
+            // Returned raw *mut BigIntHeader — NaN-box with BIGINT_TAG (0x7FFA).
+            let blk = ctx.block();
+            let raw = blk.call(I64, sig.runtime, &arg_slices);
+            Ok(nanbox_bigint_inline(blk, &raw))
         }
         NativeRetKind::F64 => {
             Ok(ctx.block().call(DOUBLE, sig.runtime, &arg_slices))

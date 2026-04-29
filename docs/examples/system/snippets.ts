@@ -17,6 +17,7 @@ import { App, VStack, Text } from "perry/ui"
 import {
     isDarkMode,
     getDeviceModel, getDeviceIdiom,
+    getLocale, getAppIcon,
     openURL,
     keychainSave, keychainGet, keychainDelete,
     preferencesGet, preferencesSet,
@@ -46,6 +47,18 @@ if (isDarkMode()) {
 console.log(`device idiom: ${getDeviceIdiom()}`)
 console.log(`device model: ${getDeviceModel()}`)
 // ANCHOR_END: device
+
+// ANCHOR: locale
+const locale = getLocale()
+console.log(`locale: ${locale}`)
+// ANCHOR_END: locale
+
+// ANCHOR: app-icon
+// Returns a Widget handle for the app icon image.
+// Pass "" to use the default bundle icon; pass a specific asset path on disk otherwise.
+const iconWidget = getAppIcon("")
+console.log(`icon widget handle: ${iconWidget}`)
+// ANCHOR_END: app-icon
 
 // ANCHOR: open-url
 openURL("https://example.com")

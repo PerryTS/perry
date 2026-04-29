@@ -64,6 +64,24 @@ function cryptoExample(): void {
 }
 // ANCHOR_END: crypto-node
 
+// ANCHOR: ethers
+import { ethers } from "ethers"
+
+function ethersExample(): void {
+    // Utility functions
+    const addr = ethers.getAddress("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+    const wei = ethers.parseEther("1.5")
+    const ether = ethers.formatEther(wei)
+    console.log(`checksum: ${addr}`)
+    console.log(`1.5 ether in wei → formatted back: ${ether}`)
+
+    // Create a random wallet
+    const wallet = ethers.Wallet.createRandom()
+    console.log(`address: ${wallet.address}`)
+    console.log(`privateKey length: ${wallet.privateKey.length}`)
+}
+// ANCHOR_END: ethers
+
 // Reference everything so unused-import elimination doesn't strip the imports.
-const _keep = [bcryptExample, argon2Example, jwtExample, cryptoExample]
+const _keep = [bcryptExample, argon2Example, jwtExample, cryptoExample, ethersExample]
 console.log(`crypto-snippets: ${_keep.length}`)

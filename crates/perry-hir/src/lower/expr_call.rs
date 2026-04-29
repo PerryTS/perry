@@ -190,6 +190,30 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                         }
                     }
 
+                    // Check for module.Class.staticMethod() pattern (e.g., ethers.Wallet.createRandom())
+                    if let ast::Expr::Member(outer_member) = expr.as_ref() {
+                        if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+                            if let ast::Expr::Ident(mod_ident) = inner_member.obj.as_ref() {
+                                let mod_name = mod_ident.sym.to_string();
+                                if let Some((module_name, _)) = ctx.lookup_native_module(&mod_name) {
+                                    if let ast::MemberProp::Ident(class_ident) = &inner_member.prop {
+                                        let class_name = class_ident.sym.to_string();
+                                        if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
+                                            let method_name = method_ident.sym.to_string();
+                                            return Ok(Expr::NativeMethodCall {
+                                                module: module_name.to_string(),
+                                                class_name: Some(class_name),
+                                                object: None,
+                                                method: method_name,
+                                                args,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Check for native module method calls (e.g., mysql.createConnection())
                     if let ast::Expr::Member(member) = expr.as_ref() {
                         if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {

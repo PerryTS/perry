@@ -15,6 +15,18 @@ export function getDeviceIdiom(): string;
 /** Returns the device model identifier (e.g. "iPhone13,4"). */
 export function getDeviceModel(): string;
 
+/** Returns the BCP 47 locale tag for the device's primary language (e.g. "en-US", "fr-FR"). */
+export function getLocale(): string;
+
+/**
+ * Returns a Widget handle rendering the application's icon at the given path,
+ * or 0 on platforms where app-icon retrieval is not supported.
+ *
+ * On macOS/iOS the path is the `.icns` / `.png` asset path inside the app bundle.
+ * Pass an empty string `""` to use the app bundle's default icon.
+ */
+export function getAppIcon(path: string): import("perry/ui").Widget;
+
 // ---------------------------------------------------------------------------
 // URL
 // ---------------------------------------------------------------------------

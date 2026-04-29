@@ -681,6 +681,10 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
             args: &[ArgKind::F64], ret: ReturnKind::F64 },
     MethodRow { method: "getDeviceModel", runtime: "perry_system_get_device_model",
             args: &[], ret: ReturnKind::F64 },
+    MethodRow { method: "getLocale", runtime: "perry_system_get_locale",
+            args: &[], ret: ReturnKind::Str },
+    MethodRow { method: "getAppIcon", runtime: "perry_system_get_app_icon",
+            args: &[ArgKind::Str], ret: ReturnKind::Widget },
 ];
 pub static PERRY_I18N_TABLE: &[MethodRow] = &[
     MethodRow { method: "Currency",     runtime: "perry_i18n_format_currency_default",

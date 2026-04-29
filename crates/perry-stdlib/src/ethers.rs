@@ -2,7 +2,10 @@
 //!
 //! Provides formatUnits, parseUnits, parseEther, formatEther, getAddress, and other ethers utilities.
 
-use perry_runtime::{js_string_from_bytes, js_bigint_from_string, BigIntHeader, StringHeader};
+use perry_runtime::{
+    js_string_from_bytes, js_bigint_from_string, js_object_alloc, js_object_set_field_by_name,
+    BigIntHeader, StringHeader, ObjectHeader,
+};
 
 /// getAddress(address: string) -> string
 /// Returns the checksummed address (EIP-55 format).
@@ -26,6 +29,58 @@ pub extern "C" fn js_ethers_get_address(str_ptr: *const StringHeader) -> *mut St
             let s = "0x0000000000000000000000000000000000000000";
             js_string_from_bytes(s.as_ptr(), s.len() as u32)
         }
+    }
+}
+
+/// Wallet.createRandom() -> { address: string, privateKey: string }
+/// Generates a random Ethereum wallet with a cryptographically random private key.
+/// The address is derived as the last 20 bytes of keccak256(private_key_bytes),
+/// formatted with EIP-55 checksum encoding.
+#[no_mangle]
+pub extern "C" fn js_ethers_wallet_create_random() -> *mut ObjectHeader {
+    use rand::Rng;
+    let pk_bytes: [u8; 32] = rand::thread_rng().gen();
+
+    // Derive address: keccak256(private_key_bytes)[12..32] = 20-byte address
+    let hash = keccak256(&pk_bytes);
+    let addr_bytes = &hash[12..32];
+
+    let hex_chars = b"0123456789abcdef";
+
+    // Format private key as "0x" + 64 hex chars
+    let mut pk_hex = Vec::<u8>::with_capacity(66);
+    pk_hex.extend_from_slice(b"0x");
+    for &b in &pk_bytes {
+        pk_hex.push(hex_chars[(b >> 4) as usize]);
+        pk_hex.push(hex_chars[(b & 0x0f) as usize]);
+    }
+
+    // Build lowercase address hex then apply EIP-55 checksum
+    let mut addr_lower = String::with_capacity(40);
+    for &b in addr_bytes {
+        addr_lower.push(hex_chars[(b >> 4) as usize] as char);
+        addr_lower.push(hex_chars[(b & 0x0f) as usize] as char);
+    }
+    let addr_checksummed = to_checksum_address(&addr_lower);
+
+    // NaN-box a StringHeader pointer with STRING_TAG
+    const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+    let nanbox_str = |ptr: *mut StringHeader| -> f64 {
+        f64::from_bits(STRING_TAG | (ptr as u64 & 0x0000_FFFF_FFFF_FFFF))
+    };
+
+    unsafe {
+        let obj = js_object_alloc(0, 2);
+
+        let key_addr_str = js_string_from_bytes(b"address".as_ptr(), 7);
+        let val_addr_str = js_string_from_bytes(addr_checksummed.as_ptr(), addr_checksummed.len() as u32);
+        js_object_set_field_by_name(obj, key_addr_str, nanbox_str(val_addr_str));
+
+        let key_pk_str = js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        let val_pk_str = js_string_from_bytes(pk_hex.as_ptr(), pk_hex.len() as u32);
+        js_object_set_field_by_name(obj, key_pk_str, nanbox_str(val_pk_str));
+
+        obj
     }
 }
 
