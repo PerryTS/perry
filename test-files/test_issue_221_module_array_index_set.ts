@@ -24,13 +24,21 @@
 // return `undefined` for the gap; that's a documented divergence in the
 // runtime helper, not something this fix should change).
 
+// Exact repro from issue body: fill() writes and reads, read() reads only.
 const A: string[] = [];
-function fillA(): void {
+function fill(): void {
   for (let i = 0; i < 5; i = i + 1) {
     A[i] = "v" + i.toString();
   }
+  console.log("[fill] A.length =", A.length, "A[0]=", A[0], "A[2]=", A[2]);
 }
+function read(): void {
+  console.log("[read] A.length =", A.length, "A[0]=", A[0], "A[2]=", A[2]);
+}
+fill();
+read();
 
+// Additional cases:
 const N: number[] = [];
 function fillN(): void {
   for (let i = 0; i < 4; i = i + 1) N[i] = i * 10;
@@ -44,12 +52,10 @@ function fillO(): void {
   for (let i = 0; i < 3; i = i + 1) O[i] = { id: i };
 }
 
-fillA();
 fillN();
 extendM();
 fillO();
 
-console.log("A:", A.length, A[0], A[2], A[4]);
 console.log("N:", N.length, N[0], N[3]);
 console.log("M:", M.length, M[0], M[1], M[5]);
 console.log("O[0].id:", (O[0] as { id: number }).id, "O[2].id:", (O[2] as { id: number }).id);
