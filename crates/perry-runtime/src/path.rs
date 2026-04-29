@@ -25,7 +25,10 @@ fn string_to_js(s: &str) -> *mut StringHeader {
 /// run the joined path through the same normalization helper as
 /// `path.normalize`.
 #[no_mangle]
-pub extern "C" fn js_path_join(a_ptr: *const StringHeader, b_ptr: *const StringHeader) -> *mut StringHeader {
+pub extern "C" fn js_path_join(
+    a_ptr: *const StringHeader,
+    b_ptr: *const StringHeader,
+) -> *mut StringHeader {
     unsafe {
         let a = string_from_header(a_ptr).unwrap_or_default();
         let b = string_from_header(b_ptr).unwrap_or_default();
@@ -99,7 +102,11 @@ pub extern "C" fn js_path_is_absolute(path_ptr: *const StringHeader) -> i32 {
             Some(s) => s,
             None => return 0,
         };
-        if Path::new(&path_str).is_absolute() { 1 } else { 0 }
+        if Path::new(&path_str).is_absolute() {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -159,7 +166,11 @@ fn normalize_str(input: &str) -> String {
         }
         out.push(seg);
     }
-    let mut result = if is_absolute { String::from("/") } else { String::new() };
+    let mut result = if is_absolute {
+        String::from("/")
+    } else {
+        String::new()
+    };
     result.push_str(&out.join("/"));
     if result.is_empty() {
         return ".".to_string();
@@ -193,7 +204,11 @@ pub extern "C" fn js_path_relative(
         let to_norm = normalize_str(&to);
         let from_segs: Vec<&str> = from_norm.split('/').filter(|s| !s.is_empty()).collect();
         let to_segs: Vec<&str> = to_norm.split('/').filter(|s| !s.is_empty()).collect();
-        let common = from_segs.iter().zip(to_segs.iter()).take_while(|(a, b)| a == b).count();
+        let common = from_segs
+            .iter()
+            .zip(to_segs.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
         let ups = from_segs.len() - common;
         let mut parts: Vec<&str> = std::iter::repeat("..").take(ups).collect();
         parts.extend(to_segs[common..].iter().copied());
@@ -298,11 +313,15 @@ pub extern "C" fn js_path_format(obj_f64: f64) -> *mut StringHeader {
     // dir takes precedence over root; name+ext fallback when base missing
     let mut result = if !dir.is_empty() {
         let mut s = dir.clone();
-        if !s.ends_with('/') { s.push('/'); }
+        if !s.ends_with('/') {
+            s.push('/');
+        }
         s
     } else if !root.is_empty() {
         let mut s = root.clone();
-        if !s.ends_with('/') { s.push('/'); }
+        if !s.ends_with('/') {
+            s.push('/');
+        }
         s
     } else {
         String::new()

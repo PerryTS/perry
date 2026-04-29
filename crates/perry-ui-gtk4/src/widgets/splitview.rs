@@ -26,7 +26,10 @@ pub fn create(_left_width: f64) -> i64 {
 /// an `index` arg; on GTK4 we ignore it because `Paned` only has two
 /// fixed slots — child order is determined by call order.
 pub fn add_child(parent_handle: i64, child_handle: i64, _index: i64) {
-    if let (Some(parent), Some(child)) = (super::get_widget(parent_handle), super::get_widget(child_handle)) {
+    if let (Some(parent), Some(child)) = (
+        super::get_widget(parent_handle),
+        super::get_widget(child_handle),
+    ) {
         let Some(paned) = parent.downcast_ref::<Paned>() else {
             eprintln!("perry-ui-gtk4: splitview_add_child called on non-Paned parent");
             return;

@@ -1,30 +1,30 @@
-pub mod text;
 pub mod button;
-pub mod vstack;
-pub mod hstack;
-pub mod spacer;
+pub mod canvas;
 pub mod divider;
+pub mod form;
+pub mod hstack;
+pub mod image;
+pub mod navstack;
+pub mod picker;
+pub mod progressview;
+pub mod qrcode;
+pub mod scrollview;
+pub mod securefield;
+pub mod slider;
+pub mod spacer;
+pub mod splitview;
+pub mod tabbar;
+pub mod text;
 pub mod textarea;
 pub mod textfield;
-pub mod securefield;
 pub mod toggle;
-pub mod slider;
-pub mod scrollview;
-pub mod canvas;
-pub mod progressview;
-pub mod image;
-pub mod picker;
-pub mod form;
-pub mod navstack;
+pub mod vstack;
 pub mod zstack;
-pub mod tabbar;
-pub mod qrcode;
-pub mod splitview;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2_foundation::NSObjectProtocol;
-use objc2_ui_kit::{UIView, UIStackView};
+use objc2_ui_kit::{UIStackView, UIView};
 use std::cell::RefCell;
 use std::ffi::c_void;
 
@@ -59,7 +59,9 @@ fn alloc_string_result(s: &str, out_len: *mut usize) -> *mut u8 {
     let bytes = s.as_bytes();
     let len = bytes.len();
     let buf = unsafe { libc::malloc(len) as *mut u8 };
-    if buf.is_null() { return std::ptr::null_mut(); }
+    if buf.is_null() {
+        return std::ptr::null_mut();
+    }
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
         *out_len = len;
@@ -71,7 +73,9 @@ fn alloc_string_result(s: &str, out_len: *mut usize) -> *mut u8 {
 #[cfg(feature = "geisterhand")]
 #[no_mangle]
 pub extern "C" fn perry_ui_read_widget_value(handle: i64, out_len: *mut usize) -> *mut u8 {
-    unsafe { *out_len = 0; }
+    unsafe {
+        *out_len = 0;
+    }
     if let Some(view) = get_widget(handle) {
         unsafe {
             if let Some(tf_cls) = objc2::runtime::AnyClass::get(c"UITextField") {
@@ -79,7 +83,8 @@ pub extern "C" fn perry_ui_read_widget_value(handle: i64, out_len: *mut usize) -
                 if is_tf {
                     let val: *const objc2::runtime::AnyObject = objc2::msg_send![&*view, text];
                     if !val.is_null() {
-                        let ns: &objc2_foundation::NSString = &*(val as *const objc2_foundation::NSString);
+                        let ns: &objc2_foundation::NSString =
+                            &*(val as *const objc2_foundation::NSString);
                         return alloc_string_result(&ns.to_string(), out_len);
                     }
                 }
@@ -131,7 +136,9 @@ pub extern "C" fn perry_ui_query_widget_tree(out_len: *mut usize) -> *mut u8 {
     let len = bytes.len();
     let buf = unsafe { libc::malloc(len) as *mut u8 };
     if buf.is_null() {
-        unsafe { *out_len = 0; }
+        unsafe {
+            *out_len = 0;
+        }
         return std::ptr::null_mut();
     }
     unsafe {
@@ -170,7 +177,8 @@ pub fn clear_children(handle: i64) {
             false
         };
         if is_stack {
-            let stack: &UIStackView = unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
+            let stack: &UIStackView =
+                unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
 
             // Phase 1: Snapshot subviews into a Vec (avoid iterator invalidation)
             let subviews = stack.arrangedSubviews();
@@ -186,17 +194,20 @@ pub fn clear_children(handle: i64) {
             }
 
             // Phase 2: Collect handles for cleanup
-            let handles: Vec<i64> = views.iter().filter_map(|sv| {
-                WIDGETS.with(|w| {
-                    let widgets = w.borrow();
-                    for (idx, widget) in widgets.iter().enumerate() {
-                        if std::ptr::eq(Retained::as_ptr(widget), &**sv as *const UIView) {
-                            return Some((idx + 1) as i64);
+            let handles: Vec<i64> = views
+                .iter()
+                .filter_map(|sv| {
+                    WIDGETS.with(|w| {
+                        let widgets = w.borrow();
+                        for (idx, widget) in widgets.iter().enumerate() {
+                            if std::ptr::eq(Retained::as_ptr(widget), &**sv as *const UIView) {
+                                return Some((idx + 1) as i64);
+                            }
                         }
-                    }
-                    None
+                        None
+                    })
                 })
-            }).collect();
+                .collect();
 
             // Phase 3: Remove views in reverse order
             for sv in views.iter().rev() {
@@ -210,7 +221,9 @@ pub fn clear_children(handle: i64) {
             for h in &handles {
                 HEIGHT_CONSTRAINTS.with(|hc| {
                     if let Some(old) = hc.borrow_mut().remove(h) {
-                        unsafe { let _: () = objc2::msg_send![&*old, setActive: false]; }
+                        unsafe {
+                            let _: () = objc2::msg_send![&*old, setActive: false];
+                        }
                     }
                 });
             }
@@ -228,7 +241,8 @@ pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
         };
 
         if is_stack {
-            let stack: &UIStackView = unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
+            let stack: &UIStackView =
+                unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
             unsafe {
                 let _: () = objc2::msg_send![stack, insertArrangedSubview: &*child, atIndex: index as usize];
             }
@@ -249,7 +263,8 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
         };
 
         if is_stack {
-            let stack: &UIStackView = unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
+            let stack: &UIStackView =
+                unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
             stack.addArrangedSubview(&child);
         } else {
             // Non-stack parent (e.g. ZStack/plain UIView): pin child to fill parent
@@ -266,7 +281,12 @@ type CGFloat = f64;
 
 extern "C" {
     fn CGColorRelease(color: *mut c_void);
-    fn CGColorCreateSRGB(red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) -> *mut c_void;
+    fn CGColorCreateSRGB(
+        red: CGFloat,
+        green: CGFloat,
+        blue: CGFloat,
+        alpha: CGFloat,
+    ) -> *mut c_void;
 }
 
 /// Create a retained CGColor from RGBA using CGColorCreateSRGB (iOS 14+).
@@ -300,17 +320,24 @@ fn gradient_bg_class() -> &'static AnyClass {
         unsafe {
             extern "C" {
                 fn objc_allocateClassPair(
-                    superclass: *const AnyClass, name: *const std::ffi::c_char, extra: usize
+                    superclass: *const AnyClass,
+                    name: *const std::ffi::c_char,
+                    extra: usize,
                 ) -> *mut AnyClass;
                 fn objc_registerClassPair(cls: *mut AnyClass);
                 fn class_addMethod(
-                    cls: *mut AnyClass, sel: objc2::runtime::Sel,
-                    imp: *const std::ffi::c_void, types: *const std::ffi::c_char,
+                    cls: *mut AnyClass,
+                    sel: objc2::runtime::Sel,
+                    imp: *const std::ffi::c_void,
+                    types: *const std::ffi::c_char,
                 ) -> bool;
             }
             let superclass = AnyClass::get(c"UIView").unwrap();
             let cls = objc_allocateClassPair(superclass, c"PerryGradientBGView".as_ptr(), 0);
-            assert!(!cls.is_null(), "Failed to allocate PerryGradientBGView class");
+            assert!(
+                !cls.is_null(),
+                "Failed to allocate PerryGradientBGView class"
+            );
 
             // Override layoutSubviews to resize all sublayers to layer.bounds
             extern "C" fn layout_subviews(this: &AnyObject, _cmd: objc2::runtime::Sel) {
@@ -320,7 +347,9 @@ fn gradient_bg_class() -> &'static AnyClass {
                     let _: () = objc2::msg_send![super(this, sup), layoutSubviews];
                     // Resize all sublayers to match layer bounds
                     let layer: *mut AnyObject = objc2::msg_send![this, layer];
-                    if layer.is_null() { return; }
+                    if layer.is_null() {
+                        return;
+                    }
                     let bounds: objc2_core_foundation::CGRect = objc2::msg_send![layer, bounds];
                     let sublayers: *mut AnyObject = objc2::msg_send![layer, sublayers];
                     if !sublayers.is_null() {
@@ -349,8 +378,16 @@ fn gradient_bg_class() -> &'static AnyClass {
 /// This ensures the CAGradientLayer always matches the view bounds, even when the
 /// parent starts at zero size (common during init before Auto Layout resolves).
 pub fn set_background_gradient(
-    handle: i64, r1: f64, g1: f64, b1: f64, a1: f64,
-    r2: f64, g2: f64, b2: f64, a2: f64, direction: f64,
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
+    direction: f64,
 ) {
     if let Some(view) = get_widget(handle) {
         unsafe {
@@ -371,7 +408,8 @@ pub fn set_background_gradient(
             let bg_cls = gradient_bg_class();
             let bg_view: *mut AnyObject = objc2::msg_send![bg_cls, new];
             let _: () = objc2::msg_send![bg_view, setTag: 9999isize];
-            let _: () = objc2::msg_send![bg_view, setTranslatesAutoresizingMaskIntoConstraints: false];
+            let _: () =
+                objc2::msg_send![bg_view, setTranslatesAutoresizingMaskIntoConstraints: false];
             let _: () = objc2::msg_send![bg_view, setUserInteractionEnabled: false];
 
             // Insert as subview at index 0 (behind arranged subviews / content)
@@ -388,8 +426,10 @@ pub fn set_background_gradient(
             let p_top: *mut AnyObject = objc2::msg_send![&*view, topAnchor];
             let p_bottom: *mut AnyObject = objc2::msg_send![&*view, bottomAnchor];
 
-            let c1: *mut AnyObject = objc2::msg_send![bg_leading, constraintEqualToAnchor: p_leading];
-            let c2: *mut AnyObject = objc2::msg_send![bg_trailing, constraintEqualToAnchor: p_trailing];
+            let c1: *mut AnyObject =
+                objc2::msg_send![bg_leading, constraintEqualToAnchor: p_leading];
+            let c2: *mut AnyObject =
+                objc2::msg_send![bg_trailing, constraintEqualToAnchor: p_trailing];
             let c3: *mut AnyObject = objc2::msg_send![bg_top, constraintEqualToAnchor: p_top];
             let c4: *mut AnyObject = objc2::msg_send![bg_bottom, constraintEqualToAnchor: p_bottom];
 
@@ -400,8 +440,8 @@ pub fn set_background_gradient(
 
             // Create CAGradientLayer on the background view
             let bg_layer: *mut AnyObject = objc2::msg_send![bg_view, layer];
-            let gradient_cls = AnyClass::get(c"CAGradientLayer")
-                .expect("CAGradientLayer class not found");
+            let gradient_cls =
+                AnyClass::get(c"CAGradientLayer").expect("CAGradientLayer class not found");
             let gradient: *mut AnyObject = objc2::msg_send![gradient_cls, layer];
 
             // Create colors
@@ -501,7 +541,8 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
         };
 
         if is_stack {
-            let stack: &UIStackView = unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
+            let stack: &UIStackView =
+                unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
             unsafe {
                 let _: () = objc2::msg_send![stack, removeArrangedSubview: &*child];
             }
@@ -519,7 +560,8 @@ pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
             false
         };
         if is_stack {
-            let stack: &UIStackView = unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
+            let stack: &UIStackView =
+                unsafe { &*(Retained::as_ptr(&parent) as *const UIStackView) };
             let subviews = stack.arrangedSubviews();
             let from = from_index as usize;
             if from < subviews.len() {
@@ -541,7 +583,9 @@ pub fn match_parent_width(child_handle: i64) {
     if let Some(child) = get_widget(child_handle) {
         unsafe {
             let stack_cls = AnyClass::get(c"UIStackView");
-            if stack_cls.is_none() { return; }
+            if stack_cls.is_none() {
+                return;
+            }
             let stack_cls = stack_cls.unwrap();
             let mut sv: *const UIView = objc2::msg_send![&*child, superview];
             let mut found_stack: *const UIView = std::ptr::null();
@@ -555,12 +599,16 @@ pub fn match_parent_width(child_handle: i64) {
                 sv = objc2::msg_send![sv, superview];
                 depth += 1;
             }
-            if found_stack.is_null() { return; }
+            if found_stack.is_null() {
+                return;
+            }
             let child_width: Retained<AnyObject> = objc2::msg_send![&*child, widthAnchor];
             // Use layoutMarginsGuide so the constraint respects the parent's padding/edge insets
-            let margins_guide: Retained<AnyObject> = objc2::msg_send![found_stack, layoutMarginsGuide];
+            let margins_guide: Retained<AnyObject> =
+                objc2::msg_send![found_stack, layoutMarginsGuide];
             let stack_width: Retained<AnyObject> = objc2::msg_send![&*margins_guide, widthAnchor];
-            let c: Retained<AnyObject> = objc2::msg_send![&*child_width, constraintEqualToAnchor: &*stack_width];
+            let c: Retained<AnyObject> =
+                objc2::msg_send![&*child_width, constraintEqualToAnchor: &*stack_width];
             let _: () = objc2::msg_send![&*c, setActive: true];
         }
     }
@@ -572,13 +620,17 @@ pub fn match_parent_height(child_handle: i64) {
     if let Some(child) = get_widget(child_handle) {
         unsafe {
             let superview_ptr: *const UIView = objc2::msg_send![&*child, superview];
-            if superview_ptr.is_null() { return; }
+            if superview_ptr.is_null() {
+                return;
+            }
             let child_top: Retained<AnyObject> = objc2::msg_send![&*child, topAnchor];
             let child_bottom: Retained<AnyObject> = objc2::msg_send![&*child, bottomAnchor];
             let parent_top: Retained<AnyObject> = objc2::msg_send![superview_ptr, topAnchor];
             let parent_bottom: Retained<AnyObject> = objc2::msg_send![superview_ptr, bottomAnchor];
-            let top_c: Retained<AnyObject> = objc2::msg_send![&*child_top, constraintEqualToAnchor: &*parent_top];
-            let bot_c: Retained<AnyObject> = objc2::msg_send![&*child_bottom, constraintEqualToAnchor: &*parent_bottom];
+            let top_c: Retained<AnyObject> =
+                objc2::msg_send![&*child_top, constraintEqualToAnchor: &*parent_top];
+            let bot_c: Retained<AnyObject> =
+                objc2::msg_send![&*child_bottom, constraintEqualToAnchor: &*parent_bottom];
             let _: () = objc2::msg_send![&*top_c, setActive: true];
             let _: () = objc2::msg_send![&*bot_c, setActive: true];
         }

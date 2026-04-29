@@ -13,9 +13,9 @@
 //!   function identity_number(x: number): number { return x; }
 //!   function identity_string(x: string): string { return x; }
 
-use std::collections::{HashMap, HashSet, VecDeque};
-use perry_types::{FuncId, ObjectType, Type};
 use crate::ir::*;
+use perry_types::{FuncId, ObjectType, Type};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Pre-built index for O(1) lookups into module collections.
 /// Built once from the original module state before any specializations are added.
@@ -30,22 +30,32 @@ struct ModuleIndex {
 
 impl ModuleIndex {
     fn new(module: &Module) -> Self {
-        let func_by_id: HashMap<FuncId, usize> = module.functions.iter()
+        let func_by_id: HashMap<FuncId, usize> = module
+            .functions
+            .iter()
             .enumerate()
             .map(|(i, f)| (f.id, i))
             .collect();
 
-        let class_by_name: HashMap<String, usize> = module.classes.iter()
+        let class_by_name: HashMap<String, usize> = module
+            .classes
+            .iter()
             .enumerate()
             .map(|(i, c)| (c.name.clone(), i))
             .collect();
 
-        let interface_by_name: HashMap<String, usize> = module.interfaces.iter()
+        let interface_by_name: HashMap<String, usize> = module
+            .interfaces
+            .iter()
             .enumerate()
             .map(|(i, iface)| (iface.name.clone(), i))
             .collect();
 
-        Self { func_by_id, class_by_name, interface_by_name }
+        Self {
+            func_by_id,
+            class_by_name,
+            interface_by_name,
+        }
     }
 }
 
@@ -99,15 +109,9 @@ struct ClassSpecRequest {
 impl MonomorphizationContext {
     pub fn new(module: &Module) -> Self {
         // Find the highest existing func_id and class_id
-        let max_func_id = module.functions.iter()
-            .map(|f| f.id)
-            .max()
-            .unwrap_or(0);
+        let max_func_id = module.functions.iter().map(|f| f.id).max().unwrap_or(0);
 
-        let max_class_id = module.classes.iter()
-            .map(|c| c.id)
-            .max()
-            .unwrap_or(0);
+        let max_class_id = module.classes.iter().map(|c| c.id).max().unwrap_or(0);
 
         Self {
             specialized_funcs: HashMap::new(),
@@ -159,7 +163,11 @@ impl MonomorphizationContext {
 
     /// Request specialization of a class with given type arguments
     /// Returns the specialized class name
-    pub fn request_class_specialization(&mut self, class_name: &str, type_args: Vec<Type>) -> String {
+    pub fn request_class_specialization(
+        &mut self,
+        class_name: &str,
+        type_args: Vec<Type>,
+    ) -> String {
         let mangled_args = mangle_type_args(&type_args);
         let key = (class_name.to_string(), mangled_args);
 
@@ -168,7 +176,8 @@ impl MonomorphizationContext {
         }
 
         let new_name = generate_specialized_name(class_name, &type_args);
-        self.specialized_classes.insert(key.clone(), new_name.clone());
+        self.specialized_classes
+            .insert(key.clone(), new_name.clone());
 
         if !self.processed_classes.contains(&key) {
             self.class_work_queue.push_back(ClassSpecRequest {
@@ -184,7 +193,8 @@ impl MonomorphizationContext {
 
 /// Mangle type arguments to a string for use as a hash key
 fn mangle_type_args(type_args: &[Type]) -> String {
-    type_args.iter()
+    type_args
+        .iter()
         .map(|t| mangle_type(t))
         .collect::<Vec<_>>()
         .join("_")
@@ -197,9 +207,7 @@ fn generate_specialized_name(base_name: &str, type_args: &[Type]) -> String {
         return base_name.to_string();
     }
 
-    let type_suffix: Vec<String> = type_args.iter()
-        .map(|t| mangle_type(t))
-        .collect();
+    let type_suffix: Vec<String> = type_args.iter().map(|t| mangle_type(t)).collect();
 
     format!("{}${}", base_name, type_suffix.join("_"))
 }
@@ -270,13 +278,17 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
         Expr::Object(_) | Expr::ObjectSpread { .. } => Some(Type::Object(ObjectType::default())),
 
         // Function calls - try to get return type
-        Expr::Call { callee, type_args, .. } => {
+        Expr::Call {
+            callee, type_args, ..
+        } => {
             if let Expr::FuncRef(func_id) = callee.as_ref() {
                 if let Some(&fi) = idx.func_by_id.get(func_id) {
                     let func = &module.functions[fi];
                     // If explicit type args provided, substitute them
                     if !type_args.is_empty() && !func.type_params.is_empty() {
-                        let subs: HashMap<String, Type> = func.type_params.iter()
+                        let subs: HashMap<String, Type> = func
+                            .type_params
+                            .iter()
                             .zip(type_args.iter())
                             .map(|(p, t)| (p.name.clone(), t.clone()))
                             .collect();
@@ -290,9 +302,7 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
         }
 
         // New expressions - return the class type
-        Expr::New { class_name, .. } => {
-            Some(Type::Named(class_name.clone()))
-        }
+        Expr::New { class_name, .. } => Some(Type::Named(class_name.clone())),
 
         // Await unwraps a Promise
         Expr::Await(inner) => {
@@ -304,25 +314,31 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
         }
 
         // Conditional returns the type of branches (assuming they match)
-        Expr::Conditional { then_expr, .. } => {
-            infer_expr_type(then_expr, module, idx)
-        }
+        Expr::Conditional { then_expr, .. } => infer_expr_type(then_expr, module, idx),
 
         // Binary operations
-        Expr::Binary { op, .. } => {
-            match op {
-                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div |
-                BinaryOp::Mod | BinaryOp::Pow => Some(Type::Number),
-                BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor |
-                BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr => Some(Type::Number),
-            }
-        }
+        Expr::Binary { op, .. } => match op {
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::Pow => Some(Type::Number),
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::UShr => Some(Type::Number),
+        },
 
         // Comparisons return boolean
         Expr::Compare { .. } => Some(Type::Boolean),
 
         // Logical operators
-        Expr::Logical { op, left, right, .. } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             match op {
                 LogicalOp::And | LogicalOp::Or => {
                     // Returns one of the operands, try to infer from left
@@ -338,12 +354,10 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
         }
 
         // Unary operations
-        Expr::Unary { op, .. } => {
-            match op {
-                UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot => Some(Type::Number),
-                UnaryOp::Not => Some(Type::Boolean),
-            }
-        }
+        Expr::Unary { op, .. } => match op {
+            UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot => Some(Type::Number),
+            UnaryOp::Not => Some(Type::Boolean),
+        },
 
         // TypeOf always returns string
         Expr::TypeOf(_) => Some(Type::String),
@@ -361,11 +375,7 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
 
 /// Unify a parameter type with an argument type, collecting type variable bindings.
 /// Returns true if unification succeeded.
-fn unify_types(
-    param_ty: &Type,
-    arg_ty: &Type,
-    bindings: &mut HashMap<String, Type>,
-) -> bool {
+fn unify_types(param_ty: &Type, arg_ty: &Type, bindings: &mut HashMap<String, Type>) -> bool {
     match (param_ty, arg_ty) {
         // Type variable - bind it to the argument type
         (Type::TypeVar(name), ty) => {
@@ -380,23 +390,21 @@ fn unify_types(
         }
 
         // Array types - unify element types
-        (Type::Array(p_elem), Type::Array(a_elem)) => {
-            unify_types(p_elem, a_elem, bindings)
-        }
+        (Type::Array(p_elem), Type::Array(a_elem)) => unify_types(p_elem, a_elem, bindings),
 
         // Tuple types - unify element-wise
         (Type::Tuple(p_elems), Type::Tuple(a_elems)) => {
             if p_elems.len() != a_elems.len() {
                 return false;
             }
-            p_elems.iter().zip(a_elems.iter())
+            p_elems
+                .iter()
+                .zip(a_elems.iter())
                 .all(|(p, a)| unify_types(p, a, bindings))
         }
 
         // Promise types - unify inner types
-        (Type::Promise(p_inner), Type::Promise(a_inner)) => {
-            unify_types(p_inner, a_inner, bindings)
-        }
+        (Type::Promise(p_inner), Type::Promise(a_inner)) => unify_types(p_inner, a_inner, bindings),
 
         // Union types - arg must be one of the union members
         (Type::Union(p_types), arg) => {
@@ -405,12 +413,22 @@ fn unify_types(
         }
 
         // Generic types - unify base and type args
-        (Type::Generic { base: p_base, type_args: p_args },
-         Type::Generic { base: a_base, type_args: a_args }) => {
+        (
+            Type::Generic {
+                base: p_base,
+                type_args: p_args,
+            },
+            Type::Generic {
+                base: a_base,
+                type_args: a_args,
+            },
+        ) => {
             if p_base != a_base || p_args.len() != a_args.len() {
                 return false;
             }
-            p_args.iter().zip(a_args.iter())
+            p_args
+                .iter()
+                .zip(a_args.iter())
                 .all(|(p, a)| unify_types(p, a, bindings))
         }
 
@@ -504,8 +522,8 @@ fn type_contains_type_var(ty: &Type) -> bool {
         Type::Union(types) => types.iter().any(type_contains_type_var),
         Type::Generic { type_args, .. } => type_args.iter().any(type_contains_type_var),
         Type::Function(ft) => {
-            ft.params.iter().any(|(_, t, _)| type_contains_type_var(t)) ||
-            type_contains_type_var(&ft.return_type)
+            ft.params.iter().any(|(_, t, _)| type_contains_type_var(t))
+                || type_contains_type_var(&ft.return_type)
         }
         _ => false,
     }
@@ -563,37 +581,41 @@ fn infer_type_args_for_class(
 /// Substitute type parameters with concrete types in a type
 pub fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
     match ty {
-        Type::TypeVar(name) => {
-            substitutions.get(name).cloned().unwrap_or_else(|| ty.clone())
-        }
-        Type::Array(elem) => {
-            Type::Array(Box::new(substitute_type(elem, substitutions)))
-        }
-        Type::Tuple(elems) => {
-            Type::Tuple(elems.iter().map(|e| substitute_type(e, substitutions)).collect())
-        }
-        Type::Promise(inner) => {
-            Type::Promise(Box::new(substitute_type(inner, substitutions)))
-        }
-        Type::Union(types) => {
-            Type::Union(types.iter().map(|t| substitute_type(t, substitutions)).collect())
-        }
-        Type::Generic { base, type_args } => {
-            Type::Generic {
-                base: base.clone(),
-                type_args: type_args.iter().map(|t| substitute_type(t, substitutions)).collect(),
-            }
-        }
-        Type::Function(func_type) => {
-            Type::Function(perry_types::FunctionType {
-                params: func_type.params.iter()
-                    .map(|(name, ty, opt)| (name.clone(), substitute_type(ty, substitutions), *opt))
-                    .collect(),
-                return_type: Box::new(substitute_type(&func_type.return_type, substitutions)),
-                is_async: func_type.is_async,
-                is_generator: func_type.is_generator,
-            })
-        }
+        Type::TypeVar(name) => substitutions
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| ty.clone()),
+        Type::Array(elem) => Type::Array(Box::new(substitute_type(elem, substitutions))),
+        Type::Tuple(elems) => Type::Tuple(
+            elems
+                .iter()
+                .map(|e| substitute_type(e, substitutions))
+                .collect(),
+        ),
+        Type::Promise(inner) => Type::Promise(Box::new(substitute_type(inner, substitutions))),
+        Type::Union(types) => Type::Union(
+            types
+                .iter()
+                .map(|t| substitute_type(t, substitutions))
+                .collect(),
+        ),
+        Type::Generic { base, type_args } => Type::Generic {
+            base: base.clone(),
+            type_args: type_args
+                .iter()
+                .map(|t| substitute_type(t, substitutions))
+                .collect(),
+        },
+        Type::Function(func_type) => Type::Function(perry_types::FunctionType {
+            params: func_type
+                .params
+                .iter()
+                .map(|(name, ty, opt)| (name.clone(), substitute_type(ty, substitutions), *opt))
+                .collect(),
+            return_type: Box::new(substitute_type(&func_type.return_type, substitutions)),
+            is_async: func_type.is_async,
+            is_generator: func_type.is_generator,
+        }),
         // Primitive types don't need substitution
         _ => ty.clone(),
     }
@@ -637,9 +659,7 @@ pub fn check_constraint(
 ) -> Result<(), ConstraintError> {
     match constraint {
         // Named constraint - check if concrete type is or implements the interface
-        Type::Named(name) => {
-            check_named_constraint(type_param, concrete_type, name, module, idx)
-        }
+        Type::Named(name) => check_named_constraint(type_param, concrete_type, name, module, idx),
 
         // Primitive constraints - simple type checking
         Type::Number | Type::String | Type::Boolean | Type::BigInt => {
@@ -853,7 +873,9 @@ fn types_satisfy(actual: &Type, expected: &Type) -> bool {
     match (actual, expected) {
         (Type::Any, _) | (_, Type::Any) => true,
         (Type::Unknown, _) | (_, Type::Unknown) => true,
-        (Type::Number, Type::Number) | (Type::Int32, Type::Number) | (Type::Number, Type::Int32) => true,
+        (Type::Number, Type::Number)
+        | (Type::Int32, Type::Number)
+        | (Type::Number, Type::Int32) => true,
         (Type::String, Type::String) => true,
         (Type::Boolean, Type::Boolean) => true,
         (Type::BigInt, Type::BigInt) => true,
@@ -915,17 +937,30 @@ pub fn check_class_constraints(
 fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
     match expr {
         // Literals don't need substitution
-        Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) |
-        Expr::Integer(_) | Expr::BigInt(_) | Expr::String(_) => expr.clone(),
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::BigInt(_)
+        | Expr::String(_) => expr.clone(),
 
         // Variables
         Expr::LocalGet(id) => Expr::LocalGet(*id),
-        Expr::LocalSet(id, val) => Expr::LocalSet(*id, Box::new(substitute_expr(val, substitutions))),
+        Expr::LocalSet(id, val) => {
+            Expr::LocalSet(*id, Box::new(substitute_expr(val, substitutions)))
+        }
         Expr::GlobalGet(id) => Expr::GlobalGet(*id),
-        Expr::GlobalSet(id, val) => Expr::GlobalSet(*id, Box::new(substitute_expr(val, substitutions))),
+        Expr::GlobalSet(id, val) => {
+            Expr::GlobalSet(*id, Box::new(substitute_expr(val, substitutions)))
+        }
 
         // Update
-        Expr::Update { id, op, prefix } => Expr::Update { id: *id, op: *op, prefix: *prefix },
+        Expr::Update { id, op, prefix } => Expr::Update {
+            id: *id,
+            op: *op,
+            prefix: *prefix,
+        },
 
         // Operations
         Expr::Binary { op, left, right } => Expr::Binary {
@@ -949,26 +984,51 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
         },
 
         // Function call
-        Expr::Call { callee, args, type_args } => Expr::Call {
+        Expr::Call {
+            callee,
+            args,
+            type_args,
+        } => Expr::Call {
             callee: Box::new(substitute_expr(callee, substitutions)),
-            args: args.iter().map(|a| substitute_expr(a, substitutions)).collect(),
-            type_args: type_args.iter().map(|t| substitute_type(t, substitutions)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
+            type_args: type_args
+                .iter()
+                .map(|t| substitute_type(t, substitutions))
+                .collect(),
         },
 
         // References
         Expr::FuncRef(id) => Expr::FuncRef(*id),
-        Expr::ExternFuncRef { name, param_types, return_type } => Expr::ExternFuncRef {
+        Expr::ExternFuncRef {
+            name,
+            param_types,
+            return_type,
+        } => Expr::ExternFuncRef {
             name: name.clone(),
             param_types: param_types.clone(),
             return_type: return_type.clone(),
         },
         Expr::NativeModuleRef(name) => Expr::NativeModuleRef(name.clone()),
-        Expr::NativeMethodCall { module, class_name, object, method, args } => Expr::NativeMethodCall {
+        Expr::NativeMethodCall {
+            module,
+            class_name,
+            object,
+            method,
+            args,
+        } => Expr::NativeMethodCall {
             module: module.clone(),
             class_name: class_name.clone(),
-            object: object.as_ref().map(|o| Box::new(substitute_expr(o, substitutions))),
+            object: object
+                .as_ref()
+                .map(|o| Box::new(substitute_expr(o, substitutions))),
             method: method.clone(),
-            args: args.iter().map(|a| substitute_expr(a, substitutions)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
         },
 
         // Property access
@@ -976,12 +1036,21 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
         },
-        Expr::PropertySet { object, property, value } => Expr::PropertySet {
+        Expr::PropertySet {
+            object,
+            property,
+            value,
+        } => Expr::PropertySet {
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
             value: Box::new(substitute_expr(value, substitutions)),
         },
-        Expr::PropertyUpdate { object, property, op, prefix } => Expr::PropertyUpdate {
+        Expr::PropertyUpdate {
+            object,
+            property,
+            op,
+            prefix,
+        } => Expr::PropertyUpdate {
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
             op: *op,
@@ -993,7 +1062,11 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
             object: Box::new(substitute_expr(object, substitutions)),
             index: Box::new(substitute_expr(index, substitutions)),
         },
-        Expr::IndexSet { object, index, value } => Expr::IndexSet {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => Expr::IndexSet {
             object: Box::new(substitute_expr(object, substitutions)),
             index: Box::new(substitute_expr(index, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
@@ -1001,23 +1074,43 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
 
         // Literals
         Expr::Object(props) => Expr::Object(
-            props.iter().map(|(k, v)| (k.clone(), substitute_expr(v, substitutions))).collect()
+            props
+                .iter()
+                .map(|(k, v)| (k.clone(), substitute_expr(v, substitutions)))
+                .collect(),
         ),
         Expr::ObjectSpread { parts } => Expr::ObjectSpread {
-            parts: parts.iter().map(|(k, v)| (k.clone(), substitute_expr(v, substitutions))).collect()
+            parts: parts
+                .iter()
+                .map(|(k, v)| (k.clone(), substitute_expr(v, substitutions)))
+                .collect(),
         },
         Expr::Array(elems) => Expr::Array(
-            elems.iter().map(|e| substitute_expr(e, substitutions)).collect()
+            elems
+                .iter()
+                .map(|e| substitute_expr(e, substitutions))
+                .collect(),
         ),
         Expr::ArraySpread(elems) => Expr::ArraySpread(
-            elems.iter().map(|e| match e {
-                ArrayElement::Expr(expr) => ArrayElement::Expr(substitute_expr(expr, substitutions)),
-                ArrayElement::Spread(expr) => ArrayElement::Spread(substitute_expr(expr, substitutions)),
-            }).collect()
+            elems
+                .iter()
+                .map(|e| match e {
+                    ArrayElement::Expr(expr) => {
+                        ArrayElement::Expr(substitute_expr(expr, substitutions))
+                    }
+                    ArrayElement::Spread(expr) => {
+                        ArrayElement::Spread(substitute_expr(expr, substitutions))
+                    }
+                })
+                .collect(),
         ),
 
         // Conditional
-        Expr::Conditional { condition, then_expr, else_expr } => Expr::Conditional {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => Expr::Conditional {
             condition: Box::new(substitute_expr(condition, substitutions)),
             then_expr: Box::new(substitute_expr(then_expr, substitutions)),
             else_expr: Box::new(substitute_expr(else_expr, substitutions)),
@@ -1027,7 +1120,9 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
         Expr::TypeOf(inner) => Expr::TypeOf(Box::new(substitute_expr(inner, substitutions))),
         Expr::Void(inner) => Expr::Void(Box::new(substitute_expr(inner, substitutions))),
         Expr::Yield { value, delegate } => Expr::Yield {
-            value: value.as_ref().map(|v| Box::new(substitute_expr(v, substitutions))),
+            value: value
+                .as_ref()
+                .map(|v| Box::new(substitute_expr(v, substitutions))),
             delegate: *delegate,
         },
         Expr::InstanceOf { expr, ty } => Expr::InstanceOf {
@@ -1039,43 +1134,75 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
         Expr::Await(inner) => Expr::Await(Box::new(substitute_expr(inner, substitutions))),
 
         // New
-        Expr::New { class_name, args, type_args } => Expr::New {
+        Expr::New {
+            class_name,
+            args,
+            type_args,
+        } => Expr::New {
             class_name: class_name.clone(),
-            args: args.iter().map(|a| substitute_expr(a, substitutions)).collect(),
-            type_args: type_args.iter().map(|t| substitute_type(t, substitutions)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
+            type_args: type_args
+                .iter()
+                .map(|t| substitute_type(t, substitutions))
+                .collect(),
         },
 
         // Class/Enum references
         Expr::ClassRef(name) => Expr::ClassRef(name.clone()),
-        Expr::EnumMember { enum_name, member_name } => Expr::EnumMember {
+        Expr::EnumMember {
+            enum_name,
+            member_name,
+        } => Expr::EnumMember {
             enum_name: enum_name.clone(),
             member_name: member_name.clone(),
         },
 
         // Static field/method access
-        Expr::StaticFieldGet { class_name, field_name } => Expr::StaticFieldGet {
+        Expr::StaticFieldGet {
+            class_name,
+            field_name,
+        } => Expr::StaticFieldGet {
             class_name: class_name.clone(),
             field_name: field_name.clone(),
         },
-        Expr::StaticFieldSet { class_name, field_name, value } => Expr::StaticFieldSet {
+        Expr::StaticFieldSet {
+            class_name,
+            field_name,
+            value,
+        } => Expr::StaticFieldSet {
             class_name: class_name.clone(),
             field_name: field_name.clone(),
             value: Box::new(substitute_expr(value, substitutions)),
         },
-        Expr::StaticMethodCall { class_name, method_name, args } => Expr::StaticMethodCall {
+        Expr::StaticMethodCall {
+            class_name,
+            method_name,
+            args,
+        } => Expr::StaticMethodCall {
             class_name: class_name.clone(),
             method_name: method_name.clone(),
-            args: args.iter().map(|a| substitute_expr(a, substitutions)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
         },
 
         // This/Super
         Expr::This => Expr::This,
         Expr::SuperCall(args) => Expr::SuperCall(
-            args.iter().map(|a| substitute_expr(a, substitutions)).collect()
+            args.iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
         ),
         Expr::SuperMethodCall { method, args } => Expr::SuperMethodCall {
             method: method.clone(),
-            args: args.iter().map(|a| substitute_expr(a, substitutions)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
         },
 
         // Environment
@@ -1084,14 +1211,22 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
         Expr::ProcessMemoryUsage => Expr::ProcessMemoryUsage,
 
         // File system
-        Expr::FsReadFileSync(path) => Expr::FsReadFileSync(Box::new(substitute_expr(path, substitutions))),
+        Expr::FsReadFileSync(path) => {
+            Expr::FsReadFileSync(Box::new(substitute_expr(path, substitutions)))
+        }
         Expr::FsWriteFileSync(path, content) => Expr::FsWriteFileSync(
             Box::new(substitute_expr(path, substitutions)),
             Box::new(substitute_expr(content, substitutions)),
         ),
-        Expr::FsExistsSync(path) => Expr::FsExistsSync(Box::new(substitute_expr(path, substitutions))),
-        Expr::FsMkdirSync(path) => Expr::FsMkdirSync(Box::new(substitute_expr(path, substitutions))),
-        Expr::FsUnlinkSync(path) => Expr::FsUnlinkSync(Box::new(substitute_expr(path, substitutions))),
+        Expr::FsExistsSync(path) => {
+            Expr::FsExistsSync(Box::new(substitute_expr(path, substitutions)))
+        }
+        Expr::FsMkdirSync(path) => {
+            Expr::FsMkdirSync(Box::new(substitute_expr(path, substitutions)))
+        }
+        Expr::FsUnlinkSync(path) => {
+            Expr::FsUnlinkSync(Box::new(substitute_expr(path, substitutions)))
+        }
         Expr::FsAppendFileSync(path, content) => Expr::FsAppendFileSync(
             Box::new(substitute_expr(path, substitutions)),
             Box::new(substitute_expr(content, substitutions)),
@@ -1102,11 +1237,21 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
             Box::new(substitute_expr(a, substitutions)),
             Box::new(substitute_expr(b, substitutions)),
         ),
-        Expr::PathDirname(path) => Expr::PathDirname(Box::new(substitute_expr(path, substitutions))),
-        Expr::PathBasename(path) => Expr::PathBasename(Box::new(substitute_expr(path, substitutions))),
-        Expr::PathExtname(path) => Expr::PathExtname(Box::new(substitute_expr(path, substitutions))),
-        Expr::PathResolve(path) => Expr::PathResolve(Box::new(substitute_expr(path, substitutions))),
-        Expr::PathIsAbsolute(path) => Expr::PathIsAbsolute(Box::new(substitute_expr(path, substitutions))),
+        Expr::PathDirname(path) => {
+            Expr::PathDirname(Box::new(substitute_expr(path, substitutions)))
+        }
+        Expr::PathBasename(path) => {
+            Expr::PathBasename(Box::new(substitute_expr(path, substitutions)))
+        }
+        Expr::PathExtname(path) => {
+            Expr::PathExtname(Box::new(substitute_expr(path, substitutions)))
+        }
+        Expr::PathResolve(path) => {
+            Expr::PathResolve(Box::new(substitute_expr(path, substitutions)))
+        }
+        Expr::PathIsAbsolute(path) => {
+            Expr::PathIsAbsolute(Box::new(substitute_expr(path, substitutions)))
+        }
 
         // Array methods
         Expr::ArrayPush { array_id, value } => Expr::ArrayPush {
@@ -1134,13 +1279,25 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
         Expr::ArraySlice { array, start, end } => Expr::ArraySlice {
             array: Box::new(substitute_expr(array, substitutions)),
             start: Box::new(substitute_expr(start, substitutions)),
-            end: end.as_ref().map(|e| Box::new(substitute_expr(e, substitutions))),
+            end: end
+                .as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
         },
-        Expr::ArraySplice { array_id, start, delete_count, items } => Expr::ArraySplice {
+        Expr::ArraySplice {
+            array_id,
+            start,
+            delete_count,
+            items,
+        } => Expr::ArraySplice {
             array_id: *array_id,
             start: Box::new(substitute_expr(start, substitutions)),
-            delete_count: delete_count.as_ref().map(|d| Box::new(substitute_expr(d, substitutions))),
-            items: items.iter().map(|i| substitute_expr(i, substitutions)).collect(),
+            delete_count: delete_count
+                .as_ref()
+                .map(|d| Box::new(substitute_expr(d, substitutions))),
+            items: items
+                .iter()
+                .map(|i| substitute_expr(i, substitutions))
+                .collect(),
         },
         Expr::ArrayForEach { array, callback } => Expr::ArrayForEach {
             array: Box::new(substitute_expr(array, substitutions)),
@@ -1166,19 +1323,33 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
             array: Box::new(substitute_expr(array, substitutions)),
             comparator: Box::new(substitute_expr(comparator, substitutions)),
         },
-        Expr::ArrayReduce { array, callback, initial } => Expr::ArrayReduce {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        } => Expr::ArrayReduce {
             array: Box::new(substitute_expr(array, substitutions)),
             callback: Box::new(substitute_expr(callback, substitutions)),
-            initial: initial.as_ref().map(|i| Box::new(substitute_expr(i, substitutions))),
+            initial: initial
+                .as_ref()
+                .map(|i| Box::new(substitute_expr(i, substitutions))),
         },
-        Expr::ArrayReduceRight { array, callback, initial } => Expr::ArrayReduceRight {
+        Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => Expr::ArrayReduceRight {
             array: Box::new(substitute_expr(array, substitutions)),
             callback: Box::new(substitute_expr(callback, substitutions)),
-            initial: initial.as_ref().map(|i| Box::new(substitute_expr(i, substitutions))),
+            initial: initial
+                .as_ref()
+                .map(|i| Box::new(substitute_expr(i, substitutions))),
         },
         Expr::ArrayJoin { array, separator } => Expr::ArrayJoin {
             array: Box::new(substitute_expr(array, substitutions)),
-            separator: separator.as_ref().map(|s| Box::new(substitute_expr(s, substitutions))),
+            separator: separator
+                .as_ref()
+                .map(|s| Box::new(substitute_expr(s, substitutions))),
         },
         Expr::ArrayFlat { array } => Expr::ArrayFlat {
             array: Box::new(substitute_expr(array, substitutions)),
@@ -1188,41 +1359,68 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
         },
         Expr::ArrayToSorted { array, comparator } => Expr::ArrayToSorted {
             array: Box::new(substitute_expr(array, substitutions)),
-            comparator: comparator.as_ref().map(|c| Box::new(substitute_expr(c, substitutions))),
+            comparator: comparator
+                .as_ref()
+                .map(|c| Box::new(substitute_expr(c, substitutions))),
         },
-        Expr::ArrayToSpliced { array, start, delete_count, items } => Expr::ArrayToSpliced {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => Expr::ArrayToSpliced {
             array: Box::new(substitute_expr(array, substitutions)),
             start: Box::new(substitute_expr(start, substitutions)),
             delete_count: Box::new(substitute_expr(delete_count, substitutions)),
-            items: items.iter().map(|i| substitute_expr(i, substitutions)).collect(),
+            items: items
+                .iter()
+                .map(|i| substitute_expr(i, substitutions))
+                .collect(),
         },
-        Expr::ArrayWith { array, index, value } => Expr::ArrayWith {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => Expr::ArrayWith {
             array: Box::new(substitute_expr(array, substitutions)),
             index: Box::new(substitute_expr(index, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
         },
-        Expr::ArrayCopyWithin { array_id, target, start, end } => Expr::ArrayCopyWithin {
+        Expr::ArrayCopyWithin {
+            array_id,
+            target,
+            start,
+            end,
+        } => Expr::ArrayCopyWithin {
             array_id: *array_id,
             target: Box::new(substitute_expr(target, substitutions)),
             start: Box::new(substitute_expr(start, substitutions)),
-            end: end.as_ref().map(|e| Box::new(substitute_expr(e, substitutions))),
+            end: end
+                .as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
         },
-        Expr::ArrayEntries(array) => Expr::ArrayEntries(Box::new(substitute_expr(array, substitutions))),
+        Expr::ArrayEntries(array) => {
+            Expr::ArrayEntries(Box::new(substitute_expr(array, substitutions)))
+        }
         Expr::ArrayKeys(array) => Expr::ArrayKeys(Box::new(substitute_expr(array, substitutions))),
-        Expr::ArrayValues(array) => Expr::ArrayValues(Box::new(substitute_expr(array, substitutions))),
+        Expr::ArrayValues(array) => {
+            Expr::ArrayValues(Box::new(substitute_expr(array, substitutions)))
+        }
 
         // String methods
         Expr::StringSplit(string, delimiter) => Expr::StringSplit(
             Box::new(substitute_expr(string, substitutions)),
             Box::new(substitute_expr(delimiter, substitutions)),
         ),
-        Expr::StringFromCharCode(code) => Expr::StringFromCharCode(
-            Box::new(substitute_expr(code, substitutions)),
-        ),
+        Expr::StringFromCharCode(code) => {
+            Expr::StringFromCharCode(Box::new(substitute_expr(code, substitutions)))
+        }
 
         // Map operations
         Expr::MapNew => Expr::MapNew,
-        Expr::MapNewFromArray(expr) => Expr::MapNewFromArray(Box::new(substitute_expr(expr, substitutions))),
+        Expr::MapNewFromArray(expr) => {
+            Expr::MapNewFromArray(Box::new(substitute_expr(expr, substitutions)))
+        }
         Expr::MapSet { map, key, value } => Expr::MapSet {
             map: Box::new(substitute_expr(map, substitutions)),
             key: Box::new(substitute_expr(key, substitutions)),
@@ -1248,7 +1446,9 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
 
         // Set operations
         Expr::SetNew => Expr::SetNew,
-        Expr::SetNewFromArray(expr) => Expr::SetNewFromArray(Box::new(substitute_expr(expr, substitutions))),
+        Expr::SetNewFromArray(expr) => {
+            Expr::SetNewFromArray(Box::new(substitute_expr(expr, substitutions)))
+        }
         Expr::SetAdd { set_id, value } => Expr::SetAdd {
             set_id: *set_id,
             value: Box::new(substitute_expr(value, substitutions)),
@@ -1267,7 +1467,9 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
 
         // JSON operations
         Expr::JsonParse(expr) => Expr::JsonParse(Box::new(substitute_expr(expr, substitutions))),
-        Expr::JsonStringify(expr) => Expr::JsonStringify(Box::new(substitute_expr(expr, substitutions))),
+        Expr::JsonStringify(expr) => {
+            Expr::JsonStringify(Box::new(substitute_expr(expr, substitutions)))
+        }
 
         // Math operations
         Expr::MathFloor(expr) => Expr::MathFloor(Box::new(substitute_expr(expr, substitutions))),
@@ -1284,59 +1486,106 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
             Box::new(substitute_expr(b, substitutions)),
         ),
         Expr::MathMin(args) => Expr::MathMin(
-            args.iter().map(|a| substitute_expr(a, substitutions)).collect()
+            args.iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
         ),
         Expr::MathMax(args) => Expr::MathMax(
-            args.iter().map(|a| substitute_expr(a, substitutions)).collect()
+            args.iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
         ),
         Expr::MathMinSpread(e) => Expr::MathMinSpread(Box::new(substitute_expr(e, substitutions))),
         Expr::MathMaxSpread(e) => Expr::MathMaxSpread(Box::new(substitute_expr(e, substitutions))),
         Expr::MathRandom => Expr::MathRandom,
 
         // Crypto operations
-        Expr::CryptoRandomBytes(expr) => Expr::CryptoRandomBytes(Box::new(substitute_expr(expr, substitutions))),
+        Expr::CryptoRandomBytes(expr) => {
+            Expr::CryptoRandomBytes(Box::new(substitute_expr(expr, substitutions)))
+        }
         Expr::CryptoRandomUUID => Expr::CryptoRandomUUID,
-        Expr::CryptoSha256(expr) => Expr::CryptoSha256(Box::new(substitute_expr(expr, substitutions))),
+        Expr::CryptoSha256(expr) => {
+            Expr::CryptoSha256(Box::new(substitute_expr(expr, substitutions)))
+        }
         Expr::CryptoMd5(expr) => Expr::CryptoMd5(Box::new(substitute_expr(expr, substitutions))),
 
         // Date operations
         Expr::DateNow => Expr::DateNow,
-        Expr::DateNew(timestamp) => Expr::DateNew(timestamp.as_ref().map(|ts| Box::new(substitute_expr(ts, substitutions)))),
-        Expr::DateGetTime(date) => Expr::DateGetTime(Box::new(substitute_expr(date, substitutions))),
-        Expr::DateToISOString(date) => Expr::DateToISOString(Box::new(substitute_expr(date, substitutions))),
-        Expr::DateGetFullYear(date) => Expr::DateGetFullYear(Box::new(substitute_expr(date, substitutions))),
-        Expr::DateGetMonth(date) => Expr::DateGetMonth(Box::new(substitute_expr(date, substitutions))),
-        Expr::DateGetDate(date) => Expr::DateGetDate(Box::new(substitute_expr(date, substitutions))),
-        Expr::DateGetHours(date) => Expr::DateGetHours(Box::new(substitute_expr(date, substitutions))),
-        Expr::DateGetMinutes(date) => Expr::DateGetMinutes(Box::new(substitute_expr(date, substitutions))),
-        Expr::DateGetSeconds(date) => Expr::DateGetSeconds(Box::new(substitute_expr(date, substitutions))),
-        Expr::DateGetMilliseconds(date) => Expr::DateGetMilliseconds(Box::new(substitute_expr(date, substitutions))),
+        Expr::DateNew(timestamp) => Expr::DateNew(
+            timestamp
+                .as_ref()
+                .map(|ts| Box::new(substitute_expr(ts, substitutions))),
+        ),
+        Expr::DateGetTime(date) => {
+            Expr::DateGetTime(Box::new(substitute_expr(date, substitutions)))
+        }
+        Expr::DateToISOString(date) => {
+            Expr::DateToISOString(Box::new(substitute_expr(date, substitutions)))
+        }
+        Expr::DateGetFullYear(date) => {
+            Expr::DateGetFullYear(Box::new(substitute_expr(date, substitutions)))
+        }
+        Expr::DateGetMonth(date) => {
+            Expr::DateGetMonth(Box::new(substitute_expr(date, substitutions)))
+        }
+        Expr::DateGetDate(date) => {
+            Expr::DateGetDate(Box::new(substitute_expr(date, substitutions)))
+        }
+        Expr::DateGetHours(date) => {
+            Expr::DateGetHours(Box::new(substitute_expr(date, substitutions)))
+        }
+        Expr::DateGetMinutes(date) => {
+            Expr::DateGetMinutes(Box::new(substitute_expr(date, substitutions)))
+        }
+        Expr::DateGetSeconds(date) => {
+            Expr::DateGetSeconds(Box::new(substitute_expr(date, substitutions)))
+        }
+        Expr::DateGetMilliseconds(date) => {
+            Expr::DateGetMilliseconds(Box::new(substitute_expr(date, substitutions)))
+        }
 
         // Sequence
         Expr::Sequence(exprs) => Expr::Sequence(
-            exprs.iter().map(|e| substitute_expr(e, substitutions)).collect()
+            exprs
+                .iter()
+                .map(|e| substitute_expr(e, substitutions))
+                .collect(),
         ),
 
         // Closure
-        Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, enclosing_class, is_async } => {
-            Expr::Closure {
-                func_id: *func_id,
-                params: params.iter().map(|p| Param {
+        Expr::Closure {
+            func_id,
+            params,
+            return_type,
+            body,
+            captures,
+            mutable_captures,
+            captures_this,
+            enclosing_class,
+            is_async,
+        } => Expr::Closure {
+            func_id: *func_id,
+            params: params
+                .iter()
+                .map(|p| Param {
                     id: p.id,
                     name: p.name.clone(),
                     ty: substitute_type(&p.ty, substitutions),
-                    default: p.default.as_ref().map(|d| substitute_expr(d, substitutions)),
+                    default: p
+                        .default
+                        .as_ref()
+                        .map(|d| substitute_expr(d, substitutions)),
                     is_rest: p.is_rest,
-                }).collect(),
-                return_type: substitute_type(return_type, substitutions),
-                body: substitute_stmts(body, substitutions),
-                captures: captures.clone(),
-                mutable_captures: mutable_captures.clone(),
-                captures_this: *captures_this,
-                enclosing_class: enclosing_class.clone(),
-                is_async: *is_async,
-            }
-        }
+                })
+                .collect(),
+            return_type: substitute_type(return_type, substitutions),
+            body: substitute_stmts(body, substitutions),
+            captures: captures.clone(),
+            mutable_captures: mutable_captures.clone(),
+            captures_this: *captures_this,
+            enclosing_class: enclosing_class.clone(),
+            is_async: *is_async,
+        },
 
         // RegExp operations
         Expr::RegExp { pattern, flags } => Expr::RegExp {
@@ -1351,7 +1600,11 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
             string: Box::new(substitute_expr(string, substitutions)),
             regex: Box::new(substitute_expr(regex, substitutions)),
         },
-        Expr::StringReplace { string, pattern, replacement } => Expr::StringReplace {
+        Expr::StringReplace {
+            string,
+            pattern,
+            replacement,
+        } => Expr::StringReplace {
             string: Box::new(substitute_expr(string, substitutions)),
             pattern: Box::new(substitute_expr(pattern, substitutions)),
             replacement: Box::new(substitute_expr(replacement, substitutions)),
@@ -1359,11 +1612,17 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
 
         // Object.keys/values/entries
         Expr::ObjectKeys(obj) => Expr::ObjectKeys(Box::new(substitute_expr(obj, substitutions))),
-        Expr::ObjectValues(obj) => Expr::ObjectValues(Box::new(substitute_expr(obj, substitutions))),
-        Expr::ObjectEntries(obj) => Expr::ObjectEntries(Box::new(substitute_expr(obj, substitutions))),
+        Expr::ObjectValues(obj) => {
+            Expr::ObjectValues(Box::new(substitute_expr(obj, substitutions)))
+        }
+        Expr::ObjectEntries(obj) => {
+            Expr::ObjectEntries(Box::new(substitute_expr(obj, substitutions)))
+        }
 
         // Array.isArray / Array.from
-        Expr::ArrayIsArray(value) => Expr::ArrayIsArray(Box::new(substitute_expr(value, substitutions))),
+        Expr::ArrayIsArray(value) => {
+            Expr::ArrayIsArray(Box::new(substitute_expr(value, substitutions)))
+        }
         Expr::ArrayFrom(value) => Expr::ArrayFrom(Box::new(substitute_expr(value, substitutions))),
         Expr::ArrayFromMapped { iterable, map_fn } => Expr::ArrayFromMapped {
             iterable: Box::new(substitute_expr(iterable, substitutions)),
@@ -1373,31 +1632,62 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
         // Global built-in functions
         Expr::ParseInt { string, radix } => Expr::ParseInt {
             string: Box::new(substitute_expr(string, substitutions)),
-            radix: radix.as_ref().map(|r| Box::new(substitute_expr(r, substitutions))),
+            radix: radix
+                .as_ref()
+                .map(|r| Box::new(substitute_expr(r, substitutions))),
         },
-        Expr::ParseFloat(string) => Expr::ParseFloat(Box::new(substitute_expr(string, substitutions))),
-        Expr::NumberCoerce(value) => Expr::NumberCoerce(Box::new(substitute_expr(value, substitutions))),
-        Expr::BigIntCoerce(value) => Expr::BigIntCoerce(Box::new(substitute_expr(value, substitutions))),
-        Expr::StringCoerce(value) => Expr::StringCoerce(Box::new(substitute_expr(value, substitutions))),
+        Expr::ParseFloat(string) => {
+            Expr::ParseFloat(Box::new(substitute_expr(string, substitutions)))
+        }
+        Expr::NumberCoerce(value) => {
+            Expr::NumberCoerce(Box::new(substitute_expr(value, substitutions)))
+        }
+        Expr::BigIntCoerce(value) => {
+            Expr::BigIntCoerce(Box::new(substitute_expr(value, substitutions)))
+        }
+        Expr::StringCoerce(value) => {
+            Expr::StringCoerce(Box::new(substitute_expr(value, substitutions)))
+        }
         Expr::IsNaN(value) => Expr::IsNaN(Box::new(substitute_expr(value, substitutions))),
-        Expr::IsUndefinedOrBareNan(value) => Expr::IsUndefinedOrBareNan(Box::new(substitute_expr(value, substitutions))),
+        Expr::IsUndefinedOrBareNan(value) => {
+            Expr::IsUndefinedOrBareNan(Box::new(substitute_expr(value, substitutions)))
+        }
         Expr::IsFinite(value) => Expr::IsFinite(Box::new(substitute_expr(value, substitutions))),
-        Expr::StaticPluginResolve(value) => Expr::StaticPluginResolve(Box::new(substitute_expr(value, substitutions))),
+        Expr::StaticPluginResolve(value) => {
+            Expr::StaticPluginResolve(Box::new(substitute_expr(value, substitutions)))
+        }
         // JS Runtime expressions - pass through unchanged (no type substitution needed)
         Expr::JsLoadModule { path } => Expr::JsLoadModule { path: path.clone() },
-        Expr::JsGetExport { module_handle, export_name } => Expr::JsGetExport {
+        Expr::JsGetExport {
+            module_handle,
+            export_name,
+        } => Expr::JsGetExport {
             module_handle: Box::new(substitute_expr(module_handle, substitutions)),
             export_name: export_name.clone(),
         },
-        Expr::JsCallFunction { module_handle, func_name, args } => Expr::JsCallFunction {
+        Expr::JsCallFunction {
+            module_handle,
+            func_name,
+            args,
+        } => Expr::JsCallFunction {
             module_handle: Box::new(substitute_expr(module_handle, substitutions)),
             func_name: func_name.clone(),
-            args: args.iter().map(|a| substitute_expr(a, substitutions)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
         },
-        Expr::JsCallMethod { object, method_name, args } => Expr::JsCallMethod {
+        Expr::JsCallMethod {
+            object,
+            method_name,
+            args,
+        } => Expr::JsCallMethod {
             object: Box::new(substitute_expr(object, substitutions)),
             method_name: method_name.clone(),
-            args: args.iter().map(|a| substitute_expr(a, substitutions)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
         },
         // OS module expressions - pass through unchanged
         Expr::OsPlatform => Expr::OsPlatform,
@@ -1417,13 +1707,22 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
 
 /// Substitute types in statements
 fn substitute_stmts(stmts: &[Stmt], substitutions: &HashMap<String, Type>) -> Vec<Stmt> {
-    stmts.iter().map(|stmt| substitute_stmt(stmt, substitutions)).collect()
+    stmts
+        .iter()
+        .map(|stmt| substitute_stmt(stmt, substitutions))
+        .collect()
 }
 
 /// Substitute types in a single statement
 fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
     match stmt {
-        Stmt::Let { id, name, ty, mutable, init } => Stmt::Let {
+        Stmt::Let {
+            id,
+            name,
+            ty,
+            mutable,
+            init,
+        } => Stmt::Let {
             id: *id,
             name: name.clone(),
             ty: substitute_type(ty, substitutions),
@@ -1431,11 +1730,19 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
             init: init.as_ref().map(|e| substitute_expr(e, substitutions)),
         },
         Stmt::Expr(expr) => Stmt::Expr(substitute_expr(expr, substitutions)),
-        Stmt::Return(expr) => Stmt::Return(expr.as_ref().map(|e| substitute_expr(e, substitutions))),
-        Stmt::If { condition, then_branch, else_branch } => Stmt::If {
+        Stmt::Return(expr) => {
+            Stmt::Return(expr.as_ref().map(|e| substitute_expr(e, substitutions)))
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => Stmt::If {
             condition: substitute_expr(condition, substitutions),
             then_branch: substitute_stmts(then_branch, substitutions),
-            else_branch: else_branch.as_ref().map(|b| substitute_stmts(b, substitutions)),
+            else_branch: else_branch
+                .as_ref()
+                .map(|b| substitute_stmts(b, substitutions)),
         },
         Stmt::While { condition, body } => Stmt::While {
             condition: substitute_expr(condition, substitutions),
@@ -1449,9 +1756,18 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
             label: label.clone(),
             body: Box::new(substitute_stmt(body, substitutions)),
         },
-        Stmt::For { init, condition, update, body } => Stmt::For {
-            init: init.as_ref().map(|s| Box::new(substitute_stmt(s, substitutions))),
-            condition: condition.as_ref().map(|e| substitute_expr(e, substitutions)),
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => Stmt::For {
+            init: init
+                .as_ref()
+                .map(|s| Box::new(substitute_stmt(s, substitutions))),
+            condition: condition
+                .as_ref()
+                .map(|e| substitute_expr(e, substitutions)),
             update: update.as_ref().map(|e| substitute_expr(e, substitutions)),
             body: substitute_stmts(body, substitutions),
         },
@@ -1460,7 +1776,11 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
         Stmt::LabeledBreak(label) => Stmt::LabeledBreak(label.clone()),
         Stmt::LabeledContinue(label) => Stmt::LabeledContinue(label.clone()),
         Stmt::Throw(expr) => Stmt::Throw(substitute_expr(expr, substitutions)),
-        Stmt::Try { body, catch, finally } => Stmt::Try {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => Stmt::Try {
             body: substitute_stmts(body, substitutions),
             catch: catch.as_ref().map(|c| CatchClause {
                 param: c.param.clone(),
@@ -1468,24 +1788,27 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
             }),
             finally: finally.as_ref().map(|f| substitute_stmts(f, substitutions)),
         },
-        Stmt::Switch { discriminant, cases } => Stmt::Switch {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => Stmt::Switch {
             discriminant: substitute_expr(discriminant, substitutions),
-            cases: cases.iter().map(|c| SwitchCase {
-                test: c.test.as_ref().map(|t| substitute_expr(t, substitutions)),
-                body: substitute_stmts(&c.body, substitutions),
-            }).collect(),
+            cases: cases
+                .iter()
+                .map(|c| SwitchCase {
+                    test: c.test.as_ref().map(|t| substitute_expr(t, substitutions)),
+                    body: substitute_stmts(&c.body, substitutions),
+                })
+                .collect(),
         },
     }
 }
 
 /// Create a specialized version of a function
-pub fn specialize_function(
-    func: &Function,
-    type_args: &[Type],
-    new_id: FuncId,
-) -> Function {
+pub fn specialize_function(func: &Function, type_args: &[Type], new_id: FuncId) -> Function {
     // Build substitution map from type params to concrete types
-    let substitutions: HashMap<String, Type> = func.type_params
+    let substitutions: HashMap<String, Type> = func
+        .type_params
         .iter()
         .zip(type_args.iter())
         .map(|(param, arg)| (param.name.clone(), arg.clone()))
@@ -1498,13 +1821,20 @@ pub fn specialize_function(
         id: new_id,
         name: specialized_name,
         type_params: Vec::new(), // Specialized function has no type params
-        params: func.params.iter().map(|p| Param {
-            id: p.id,
-            name: p.name.clone(),
-            ty: substitute_type(&p.ty, &substitutions),
-            default: p.default.as_ref().map(|d| substitute_expr(d, &substitutions)),
-            is_rest: p.is_rest,
-        }).collect(),
+        params: func
+            .params
+            .iter()
+            .map(|p| Param {
+                id: p.id,
+                name: p.name.clone(),
+                ty: substitute_type(&p.ty, &substitutions),
+                default: p
+                    .default
+                    .as_ref()
+                    .map(|d| substitute_expr(d, &substitutions)),
+                is_rest: p.is_rest,
+            })
+            .collect(),
         return_type: substitute_type(&func.return_type, &substitutions),
         body: substitute_stmts(&func.body, &substitutions),
         is_async: func.is_async,
@@ -1517,13 +1847,10 @@ pub fn specialize_function(
 }
 
 /// Create a specialized version of a class
-pub fn specialize_class(
-    class: &Class,
-    type_args: &[Type],
-    new_id: ClassId,
-) -> Class {
+pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> Class {
     // Build substitution map from type params to concrete types
-    let substitutions: HashMap<String, Type> = class.type_params
+    let substitutions: HashMap<String, Type> = class
+        .type_params
         .iter()
         .zip(type_args.iter())
         .map(|(param, arg)| (param.name.clone(), arg.clone()))
@@ -1537,98 +1864,139 @@ pub fn specialize_class(
         id: new_id,
         name: specialized_name,
         type_params: Vec::new(), // Specialized class has no type params
-        extends: class.extends, // TODO: Handle generic extends
+        extends: class.extends,  // TODO: Handle generic extends
         extends_name: class.extends_name.clone(),
         native_extends: class.native_extends.clone(),
-        fields: class.fields.iter().map(|f| ClassField {
-            name: f.name.clone(),
-            ty: substitute_type(&f.ty, &substitutions),
-            init: f.init.as_ref().map(|e| substitute_expr(e, &substitutions)),
-            is_private: f.is_private,
-            is_readonly: f.is_readonly,
-        }).collect(),
-        constructor: class.constructor.as_ref().map(|ctor| {
-            Function {
-                id: ctor.id,
-                name: ctor_name.clone(),
-                type_params: Vec::new(),
-                params: ctor.params.iter().map(|p| Param {
+        fields: class
+            .fields
+            .iter()
+            .map(|f| ClassField {
+                name: f.name.clone(),
+                ty: substitute_type(&f.ty, &substitutions),
+                init: f.init.as_ref().map(|e| substitute_expr(e, &substitutions)),
+                is_private: f.is_private,
+                is_readonly: f.is_readonly,
+            })
+            .collect(),
+        constructor: class.constructor.as_ref().map(|ctor| Function {
+            id: ctor.id,
+            name: ctor_name.clone(),
+            type_params: Vec::new(),
+            params: ctor
+                .params
+                .iter()
+                .map(|p| Param {
                     id: p.id,
                     name: p.name.clone(),
                     ty: substitute_type(&p.ty, &substitutions),
-                    default: p.default.as_ref().map(|d| substitute_expr(d, &substitutions)),
+                    default: p
+                        .default
+                        .as_ref()
+                        .map(|d| substitute_expr(d, &substitutions)),
                     is_rest: p.is_rest,
-                }).collect(),
-                return_type: Type::Void,
-                body: substitute_stmts(&ctor.body, &substitutions),
-                is_async: false,
-                is_generator: false,
-                was_plain_async: false,
-                is_exported: false,
-                captures: ctor.captures.clone(),
-                decorators: ctor.decorators.clone(),
-            }
+                })
+                .collect(),
+            return_type: Type::Void,
+            body: substitute_stmts(&ctor.body, &substitutions),
+            is_async: false,
+            is_generator: false,
+            was_plain_async: false,
+            is_exported: false,
+            captures: ctor.captures.clone(),
+            decorators: ctor.decorators.clone(),
         }),
-        methods: class.methods.iter().map(|m| {
-            Function {
-                id: m.id,
-                name: m.name.clone(),
-                type_params: m.type_params.clone(), // Methods can still be generic
-                params: m.params.iter().map(|p| Param {
-                    id: p.id,
-                    name: p.name.clone(),
-                    ty: substitute_type(&p.ty, &substitutions),
-                    default: p.default.as_ref().map(|d| substitute_expr(d, &substitutions)),
-                    is_rest: p.is_rest,
-                }).collect(),
-                return_type: substitute_type(&m.return_type, &substitutions),
-                body: substitute_stmts(&m.body, &substitutions),
-                is_async: m.is_async,
-                is_generator: m.is_generator,
-                was_plain_async: false,
-                is_exported: false,
-                captures: m.captures.clone(),
-                decorators: m.decorators.clone(),
-            }
-        }).collect(),
-        getters: class.getters.iter().map(|(name, f)| {
-            (name.clone(), Function {
-                id: f.id,
-                name: f.name.clone(),
-                type_params: Vec::new(),
-                params: Vec::new(),
-                return_type: substitute_type(&f.return_type, &substitutions),
-                body: substitute_stmts(&f.body, &substitutions),
-                is_async: false,
-                is_generator: false,
-                was_plain_async: false,
-                is_exported: false,
-                captures: f.captures.clone(),
-                decorators: f.decorators.clone(),
+        methods: class
+            .methods
+            .iter()
+            .map(|m| {
+                Function {
+                    id: m.id,
+                    name: m.name.clone(),
+                    type_params: m.type_params.clone(), // Methods can still be generic
+                    params: m
+                        .params
+                        .iter()
+                        .map(|p| Param {
+                            id: p.id,
+                            name: p.name.clone(),
+                            ty: substitute_type(&p.ty, &substitutions),
+                            default: p
+                                .default
+                                .as_ref()
+                                .map(|d| substitute_expr(d, &substitutions)),
+                            is_rest: p.is_rest,
+                        })
+                        .collect(),
+                    return_type: substitute_type(&m.return_type, &substitutions),
+                    body: substitute_stmts(&m.body, &substitutions),
+                    is_async: m.is_async,
+                    is_generator: m.is_generator,
+                    was_plain_async: false,
+                    is_exported: false,
+                    captures: m.captures.clone(),
+                    decorators: m.decorators.clone(),
+                }
             })
-        }).collect(),
-        setters: class.setters.iter().map(|(name, f)| {
-            (name.clone(), Function {
-                id: f.id,
-                name: f.name.clone(),
-                type_params: Vec::new(),
-                params: f.params.iter().map(|p| Param {
-                    id: p.id,
-                    name: p.name.clone(),
-                    ty: substitute_type(&p.ty, &substitutions),
-                    default: p.default.as_ref().map(|d| substitute_expr(d, &substitutions)),
-                    is_rest: p.is_rest,
-                }).collect(),
-                return_type: Type::Void,
-                body: substitute_stmts(&f.body, &substitutions),
-                is_async: false,
-                is_generator: false,
-                was_plain_async: false,
-                is_exported: false,
-                captures: f.captures.clone(),
-                decorators: f.decorators.clone(),
+            .collect(),
+        getters: class
+            .getters
+            .iter()
+            .map(|(name, f)| {
+                (
+                    name.clone(),
+                    Function {
+                        id: f.id,
+                        name: f.name.clone(),
+                        type_params: Vec::new(),
+                        params: Vec::new(),
+                        return_type: substitute_type(&f.return_type, &substitutions),
+                        body: substitute_stmts(&f.body, &substitutions),
+                        is_async: false,
+                        is_generator: false,
+                        was_plain_async: false,
+                        is_exported: false,
+                        captures: f.captures.clone(),
+                        decorators: f.decorators.clone(),
+                    },
+                )
             })
-        }).collect(),
+            .collect(),
+        setters: class
+            .setters
+            .iter()
+            .map(|(name, f)| {
+                (
+                    name.clone(),
+                    Function {
+                        id: f.id,
+                        name: f.name.clone(),
+                        type_params: Vec::new(),
+                        params: f
+                            .params
+                            .iter()
+                            .map(|p| Param {
+                                id: p.id,
+                                name: p.name.clone(),
+                                ty: substitute_type(&p.ty, &substitutions),
+                                default: p
+                                    .default
+                                    .as_ref()
+                                    .map(|d| substitute_expr(d, &substitutions)),
+                                is_rest: p.is_rest,
+                            })
+                            .collect(),
+                        return_type: Type::Void,
+                        body: substitute_stmts(&f.body, &substitutions),
+                        is_async: false,
+                        is_generator: false,
+                        was_plain_async: false,
+                        is_exported: false,
+                        captures: f.captures.clone(),
+                        decorators: f.decorators.clone(),
+                    },
+                )
+            })
+            .collect(),
         static_fields: class.static_fields.clone(),
         static_methods: class.static_methods.clone(),
         is_exported: class.is_exported,
@@ -1662,9 +2030,14 @@ pub fn monomorphize_module(module: &mut Module) {
             if let Some(&fi) = idx.func_by_id.get(&request.original_id) {
                 let original = &module.functions[fi];
                 // Check type parameter constraints
-                if let Err(errors) = check_function_constraints(original, &request.type_args, module, &idx) {
+                if let Err(errors) =
+                    check_function_constraints(original, &request.type_args, module, &idx)
+                {
                     for err in errors {
-                        eprintln!("Warning: Constraint violation in function '{}': {:?}", original.name, err);
+                        eprintln!(
+                            "Warning: Constraint violation in function '{}': {:?}",
+                            original.name, err
+                        );
                     }
                     // Continue with specialization even on constraint errors (for now)
                 }
@@ -1686,9 +2059,14 @@ pub fn monomorphize_module(module: &mut Module) {
             if let Some(&ci) = idx.class_by_name.get(&request.original_name) {
                 let original = &module.classes[ci];
                 // Check type parameter constraints
-                if let Err(errors) = check_class_constraints(original, &request.type_args, module, &idx) {
+                if let Err(errors) =
+                    check_class_constraints(original, &request.type_args, module, &idx)
+                {
                     for err in errors {
-                        eprintln!("Warning: Constraint violation in class '{}': {:?}", original.name, err);
+                        eprintln!(
+                            "Warning: Constraint violation in class '{}': {:?}",
+                            original.name, err
+                        );
                     }
                     // Continue with specialization even on constraint errors (for now)
                 }
@@ -1731,13 +2109,23 @@ fn collect_instantiations(module: &Module, ctx: &mut MonomorphizationContext, id
     collect_instantiations_in_stmts(&module.init, ctx, module, idx);
 }
 
-fn collect_instantiations_in_stmts(stmts: &[Stmt], ctx: &mut MonomorphizationContext, module: &Module, idx: &ModuleIndex) {
+fn collect_instantiations_in_stmts(
+    stmts: &[Stmt],
+    ctx: &mut MonomorphizationContext,
+    module: &Module,
+    idx: &ModuleIndex,
+) {
     for stmt in stmts {
         collect_instantiations_in_stmt(stmt, ctx, module, idx);
     }
 }
 
-fn collect_instantiations_in_stmt(stmt: &Stmt, ctx: &mut MonomorphizationContext, module: &Module, idx: &ModuleIndex) {
+fn collect_instantiations_in_stmt(
+    stmt: &Stmt,
+    ctx: &mut MonomorphizationContext,
+    module: &Module,
+    idx: &ModuleIndex,
+) {
     match stmt {
         Stmt::Let { init, .. } => {
             if let Some(expr) = init {
@@ -1750,7 +2138,11 @@ fn collect_instantiations_in_stmt(stmt: &Stmt, ctx: &mut MonomorphizationContext
                 collect_instantiations_in_expr(e, ctx, module, idx);
             }
         }
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             collect_instantiations_in_expr(condition, ctx, module, idx);
             collect_instantiations_in_stmts(then_branch, ctx, module, idx);
             if let Some(else_b) = else_branch {
@@ -1768,7 +2160,12 @@ fn collect_instantiations_in_stmt(stmt: &Stmt, ctx: &mut MonomorphizationContext
         Stmt::Labeled { body, .. } => {
             collect_instantiations_in_stmt(body, ctx, module, idx);
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
                 collect_instantiations_in_stmt(init_stmt, ctx, module, idx);
             }
@@ -1781,7 +2178,11 @@ fn collect_instantiations_in_stmt(stmt: &Stmt, ctx: &mut MonomorphizationContext
             collect_instantiations_in_stmts(body, ctx, module, idx);
         }
         Stmt::Throw(expr) => collect_instantiations_in_expr(expr, ctx, module, idx),
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             collect_instantiations_in_stmts(body, ctx, module, idx);
             if let Some(c) = catch {
                 collect_instantiations_in_stmts(&c.body, ctx, module, idx);
@@ -1790,7 +2191,10 @@ fn collect_instantiations_in_stmt(stmt: &Stmt, ctx: &mut MonomorphizationContext
                 collect_instantiations_in_stmts(f, ctx, module, idx);
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             collect_instantiations_in_expr(discriminant, ctx, module, idx);
             for case in cases {
                 if let Some(ref test) = case.test {
@@ -1803,10 +2207,19 @@ fn collect_instantiations_in_stmt(stmt: &Stmt, ctx: &mut MonomorphizationContext
     }
 }
 
-fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext, module: &Module, idx: &ModuleIndex) {
+fn collect_instantiations_in_expr(
+    expr: &Expr,
+    ctx: &mut MonomorphizationContext,
+    module: &Module,
+    idx: &ModuleIndex,
+) {
     match expr {
         // Check for generic function calls
-        Expr::Call { callee, args, type_args } => {
+        Expr::Call {
+            callee,
+            args,
+            type_args,
+        } => {
             // First collect in the callee and args
             collect_instantiations_in_expr(callee, ctx, module, idx);
             for arg in args {
@@ -1836,7 +2249,11 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
         }
 
         // Check for generic class instantiation
-        Expr::New { class_name, args, type_args } => {
+        Expr::New {
+            class_name,
+            args,
+            type_args,
+        } => {
             for arg in args {
                 collect_instantiations_in_expr(arg, ctx, module, idx);
             }
@@ -1866,8 +2283,9 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
         Expr::LocalSet(_, val) | Expr::GlobalSet(_, val) => {
             collect_instantiations_in_expr(val, ctx, module, idx);
         }
-        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } |
-        Expr::Logical { left, right, .. } => {
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
             collect_instantiations_in_expr(left, ctx, module, idx);
             collect_instantiations_in_expr(right, ctx, module, idx);
         }
@@ -1888,7 +2306,11 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
             collect_instantiations_in_expr(object, ctx, module, idx);
             collect_instantiations_in_expr(index, ctx, module, idx);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             collect_instantiations_in_expr(object, ctx, module, idx);
             collect_instantiations_in_expr(index, ctx, module, idx);
             collect_instantiations_in_expr(value, ctx, module, idx);
@@ -1911,12 +2333,20 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
         Expr::ArraySpread(elems) => {
             for e in elems {
                 match e {
-                    ArrayElement::Expr(expr) => collect_instantiations_in_expr(expr, ctx, module, idx),
-                    ArrayElement::Spread(expr) => collect_instantiations_in_expr(expr, ctx, module, idx),
+                    ArrayElement::Expr(expr) => {
+                        collect_instantiations_in_expr(expr, ctx, module, idx)
+                    }
+                    ArrayElement::Spread(expr) => {
+                        collect_instantiations_in_expr(expr, ctx, module, idx)
+                    }
                 }
             }
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             collect_instantiations_in_expr(condition, ctx, module, idx);
             collect_instantiations_in_expr(then_expr, ctx, module, idx);
             collect_instantiations_in_expr(else_expr, ctx, module, idx);
@@ -1924,7 +2354,9 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
         Expr::TypeOf(inner) => collect_instantiations_in_expr(inner, ctx, module, idx),
         Expr::Void(inner) => collect_instantiations_in_expr(inner, ctx, module, idx),
         Expr::Yield { value, .. } => {
-            if let Some(v) = value { collect_instantiations_in_expr(v, ctx, module, idx); }
+            if let Some(v) = value {
+                collect_instantiations_in_expr(v, ctx, module, idx);
+            }
         }
         Expr::InstanceOf { expr, .. } => collect_instantiations_in_expr(expr, ctx, module, idx),
         Expr::Await(inner) => collect_instantiations_in_expr(inner, ctx, module, idx),
@@ -1954,10 +2386,16 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
             collect_instantiations_in_expr(a, ctx, module, idx);
             collect_instantiations_in_expr(b, ctx, module, idx);
         }
-        Expr::PathDirname(p) | Expr::PathBasename(p) | Expr::PathExtname(p) | Expr::PathResolve(p) | Expr::PathIsAbsolute(p) => {
+        Expr::PathDirname(p)
+        | Expr::PathBasename(p)
+        | Expr::PathExtname(p)
+        | Expr::PathResolve(p)
+        | Expr::PathIsAbsolute(p) => {
             collect_instantiations_in_expr(p, ctx, module, idx);
         }
-        Expr::ArrayPush { value, .. } | Expr::ArrayUnshift { value, .. } | Expr::ArrayPushSpread { source: value, .. } => {
+        Expr::ArrayPush { value, .. }
+        | Expr::ArrayUnshift { value, .. }
+        | Expr::ArrayPushSpread { source: value, .. } => {
             collect_instantiations_in_expr(value, ctx, module, idx);
         }
         Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
@@ -1971,7 +2409,12 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
                 collect_instantiations_in_expr(e, ctx, module, idx);
             }
         }
-        Expr::ArraySplice { array_id: _, start, delete_count, items } => {
+        Expr::ArraySplice {
+            array_id: _,
+            start,
+            delete_count,
+            items,
+        } => {
             collect_instantiations_in_expr(start, ctx, module, idx);
             if let Some(dc) = delete_count {
                 collect_instantiations_in_expr(dc, ctx, module, idx);
@@ -1988,7 +2431,9 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
             collect_instantiations_in_expr(code, ctx, module, idx);
         }
         Expr::MapNew => {}
-        Expr::MapNewFromArray(expr) => { collect_instantiations_in_expr(expr, ctx, module, idx); }
+        Expr::MapNewFromArray(expr) => {
+            collect_instantiations_in_expr(expr, ctx, module, idx);
+        }
         Expr::MapSet { map, key, value } => {
             collect_instantiations_in_expr(map, ctx, module, idx);
             collect_instantiations_in_expr(key, ctx, module, idx);
@@ -1998,12 +2443,17 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
             collect_instantiations_in_expr(map, ctx, module, idx);
             collect_instantiations_in_expr(key, ctx, module, idx);
         }
-        Expr::MapSize(map) | Expr::MapClear(map) |
-        Expr::MapEntries(map) | Expr::MapKeys(map) | Expr::MapValues(map) => {
+        Expr::MapSize(map)
+        | Expr::MapClear(map)
+        | Expr::MapEntries(map)
+        | Expr::MapKeys(map)
+        | Expr::MapValues(map) => {
             collect_instantiations_in_expr(map, ctx, module, idx);
         }
         Expr::SetNew => {}
-        Expr::SetNewFromArray(expr) => { collect_instantiations_in_expr(expr, ctx, module, idx); }
+        Expr::SetNewFromArray(expr) => {
+            collect_instantiations_in_expr(expr, ctx, module, idx);
+        }
         Expr::SetAdd { set_id: _, value } => {
             collect_instantiations_in_expr(value, ctx, module, idx);
         }
@@ -2019,9 +2469,14 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
             collect_instantiations_in_expr(expr, ctx, module, idx);
         }
         // Math operations
-        Expr::MathFloor(expr) | Expr::MathCeil(expr) | Expr::MathRound(expr) |
-        Expr::MathAbs(expr) | Expr::MathSqrt(expr) |
-        Expr::MathLog(expr) | Expr::MathLog2(expr) | Expr::MathLog10(expr) => {
+        Expr::MathFloor(expr)
+        | Expr::MathCeil(expr)
+        | Expr::MathRound(expr)
+        | Expr::MathAbs(expr)
+        | Expr::MathSqrt(expr)
+        | Expr::MathLog(expr)
+        | Expr::MathLog2(expr)
+        | Expr::MathLog10(expr) => {
             collect_instantiations_in_expr(expr, ctx, module, idx);
         }
         Expr::MathPow(base, exp) | Expr::MathImul(base, exp) => {
@@ -2049,10 +2504,15 @@ fn collect_instantiations_in_expr(expr: &Expr, ctx: &mut MonomorphizationContext
                 collect_instantiations_in_expr(ts, ctx, module, idx);
             }
         }
-        Expr::DateGetTime(date) | Expr::DateToISOString(date) |
-        Expr::DateGetFullYear(date) | Expr::DateGetMonth(date) | Expr::DateGetDate(date) |
-        Expr::DateGetHours(date) | Expr::DateGetMinutes(date) | Expr::DateGetSeconds(date) |
-        Expr::DateGetMilliseconds(date) => {
+        Expr::DateGetTime(date)
+        | Expr::DateToISOString(date)
+        | Expr::DateGetFullYear(date)
+        | Expr::DateGetMonth(date)
+        | Expr::DateGetDate(date)
+        | Expr::DateGetHours(date)
+        | Expr::DateGetMinutes(date)
+        | Expr::DateGetSeconds(date)
+        | Expr::DateGetMilliseconds(date) => {
             collect_instantiations_in_expr(date, ctx, module, idx);
         }
         Expr::Sequence(exprs) => {
@@ -2093,21 +2553,35 @@ struct InferenceLookup {
 
 impl InferenceLookup {
     fn from_module(module: &Module) -> Self {
-        let funcs = module.functions.iter()
-            .map(|f| (f.id, FuncInfo {
-                id: f.id,
-                type_params: f.type_params.clone(),
-                params: f.params.clone(),
-                return_type: f.return_type.clone(),
-            }))
+        let funcs = module
+            .functions
+            .iter()
+            .map(|f| {
+                (
+                    f.id,
+                    FuncInfo {
+                        id: f.id,
+                        type_params: f.type_params.clone(),
+                        params: f.params.clone(),
+                        return_type: f.return_type.clone(),
+                    },
+                )
+            })
             .collect();
 
-        let classes = module.classes.iter()
-            .map(|c| (c.name.clone(), ClassInfo {
-                name: c.name.clone(),
-                type_params: c.type_params.clone(),
-                constructor_params: c.constructor.as_ref().map(|ctor| ctor.params.clone()),
-            }))
+        let classes = module
+            .classes
+            .iter()
+            .map(|c| {
+                (
+                    c.name.clone(),
+                    ClassInfo {
+                        name: c.name.clone(),
+                        type_params: c.type_params.clone(),
+                        constructor_params: c.constructor.as_ref().map(|ctor| ctor.params.clone()),
+                    },
+                )
+            })
             .collect();
 
         Self { funcs, classes }
@@ -2141,13 +2615,21 @@ fn update_call_sites(module: &mut Module, ctx: &MonomorphizationContext) {
     update_call_sites_in_stmts(&mut module.init, ctx, &lookup);
 }
 
-fn update_call_sites_in_stmts(stmts: &mut [Stmt], ctx: &MonomorphizationContext, lookup: &InferenceLookup) {
+fn update_call_sites_in_stmts(
+    stmts: &mut [Stmt],
+    ctx: &MonomorphizationContext,
+    lookup: &InferenceLookup,
+) {
     for stmt in stmts {
         update_call_sites_in_stmt(stmt, ctx, lookup);
     }
 }
 
-fn update_call_sites_in_stmt(stmt: &mut Stmt, ctx: &MonomorphizationContext, lookup: &InferenceLookup) {
+fn update_call_sites_in_stmt(
+    stmt: &mut Stmt,
+    ctx: &MonomorphizationContext,
+    lookup: &InferenceLookup,
+) {
     match stmt {
         Stmt::Let { init, .. } => {
             if let Some(expr) = init {
@@ -2160,7 +2642,11 @@ fn update_call_sites_in_stmt(stmt: &mut Stmt, ctx: &MonomorphizationContext, loo
                 update_call_sites_in_expr(e, ctx, lookup);
             }
         }
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             update_call_sites_in_expr(condition, ctx, lookup);
             update_call_sites_in_stmts(then_branch, ctx, lookup);
             if let Some(else_b) = else_branch {
@@ -2178,7 +2664,12 @@ fn update_call_sites_in_stmt(stmt: &mut Stmt, ctx: &MonomorphizationContext, loo
         Stmt::Labeled { body, .. } => {
             update_call_sites_in_stmt(body, ctx, lookup);
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
                 update_call_sites_in_stmt(init_stmt, ctx, lookup);
             }
@@ -2191,7 +2682,11 @@ fn update_call_sites_in_stmt(stmt: &mut Stmt, ctx: &MonomorphizationContext, loo
             update_call_sites_in_stmts(body, ctx, lookup);
         }
         Stmt::Throw(expr) => update_call_sites_in_expr(expr, ctx, lookup),
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             update_call_sites_in_stmts(body, ctx, lookup);
             if let Some(c) = catch {
                 update_call_sites_in_stmts(&mut c.body, ctx, lookup);
@@ -2200,7 +2695,10 @@ fn update_call_sites_in_stmt(stmt: &mut Stmt, ctx: &MonomorphizationContext, loo
                 update_call_sites_in_stmts(f, ctx, lookup);
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             update_call_sites_in_expr(discriminant, ctx, lookup);
             for case in cases {
                 if let Some(ref mut test) = case.test {
@@ -2213,10 +2711,18 @@ fn update_call_sites_in_stmt(stmt: &mut Stmt, ctx: &MonomorphizationContext, loo
     }
 }
 
-fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, lookup: &InferenceLookup) {
+fn update_call_sites_in_expr(
+    expr: &mut Expr,
+    ctx: &MonomorphizationContext,
+    lookup: &InferenceLookup,
+) {
     match expr {
         // Update generic function calls to use specialized version
-        Expr::Call { callee, args, type_args } => {
+        Expr::Call {
+            callee,
+            args,
+            type_args,
+        } => {
             // First update the callee and args recursively
             update_call_sites_in_expr(callee, ctx, lookup);
             for arg in args.iter_mut() {
@@ -2252,7 +2758,11 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
         }
 
         // Update generic class instantiation to use specialized class
-        Expr::New { class_name, args, type_args } => {
+        Expr::New {
+            class_name,
+            args,
+            type_args,
+        } => {
             for arg in args.iter_mut() {
                 update_call_sites_in_expr(arg, ctx, lookup);
             }
@@ -2286,8 +2796,9 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
         Expr::LocalSet(_, val) | Expr::GlobalSet(_, val) => {
             update_call_sites_in_expr(val, ctx, lookup);
         }
-        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } |
-        Expr::Logical { left, right, .. } => {
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
             update_call_sites_in_expr(left, ctx, lookup);
             update_call_sites_in_expr(right, ctx, lookup);
         }
@@ -2308,7 +2819,11 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
             update_call_sites_in_expr(object, ctx, lookup);
             update_call_sites_in_expr(index, ctx, lookup);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             update_call_sites_in_expr(object, ctx, lookup);
             update_call_sites_in_expr(index, ctx, lookup);
             update_call_sites_in_expr(value, ctx, lookup);
@@ -2336,7 +2851,11 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
                 }
             }
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             update_call_sites_in_expr(condition, ctx, lookup);
             update_call_sites_in_expr(then_expr, ctx, lookup);
             update_call_sites_in_expr(else_expr, ctx, lookup);
@@ -2344,7 +2863,9 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
         Expr::TypeOf(inner) => update_call_sites_in_expr(inner, ctx, lookup),
         Expr::Void(inner) => update_call_sites_in_expr(inner, ctx, lookup),
         Expr::Yield { value, .. } => {
-            if let Some(v) = value { update_call_sites_in_expr(v, ctx, lookup); }
+            if let Some(v) = value {
+                update_call_sites_in_expr(v, ctx, lookup);
+            }
         }
         Expr::InstanceOf { expr, .. } => update_call_sites_in_expr(expr, ctx, lookup),
         Expr::Await(inner) => update_call_sites_in_expr(inner, ctx, lookup),
@@ -2382,10 +2903,16 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
             update_call_sites_in_expr(a, ctx, lookup);
             update_call_sites_in_expr(b, ctx, lookup);
         }
-        Expr::PathDirname(p) | Expr::PathBasename(p) | Expr::PathExtname(p) | Expr::PathResolve(p) | Expr::PathIsAbsolute(p) => {
+        Expr::PathDirname(p)
+        | Expr::PathBasename(p)
+        | Expr::PathExtname(p)
+        | Expr::PathResolve(p)
+        | Expr::PathIsAbsolute(p) => {
             update_call_sites_in_expr(p, ctx, lookup);
         }
-        Expr::ArrayPush { value, .. } | Expr::ArrayUnshift { value, .. } | Expr::ArrayPushSpread { source: value, .. } => {
+        Expr::ArrayPush { value, .. }
+        | Expr::ArrayUnshift { value, .. }
+        | Expr::ArrayPushSpread { source: value, .. } => {
             update_call_sites_in_expr(value, ctx, lookup);
         }
         Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
@@ -2399,7 +2926,12 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
                 update_call_sites_in_expr(e, ctx, lookup);
             }
         }
-        Expr::ArraySplice { array_id: _, start, delete_count, items } => {
+        Expr::ArraySplice {
+            array_id: _,
+            start,
+            delete_count,
+            items,
+        } => {
             update_call_sites_in_expr(start, ctx, lookup);
             if let Some(dc) = delete_count {
                 update_call_sites_in_expr(dc, ctx, lookup);
@@ -2416,7 +2948,9 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
             update_call_sites_in_expr(code, ctx, lookup);
         }
         Expr::MapNew => {}
-        Expr::MapNewFromArray(expr) => { update_call_sites_in_expr(expr, ctx, lookup); }
+        Expr::MapNewFromArray(expr) => {
+            update_call_sites_in_expr(expr, ctx, lookup);
+        }
         Expr::MapSet { map, key, value } => {
             update_call_sites_in_expr(map, ctx, lookup);
             update_call_sites_in_expr(key, ctx, lookup);
@@ -2426,12 +2960,17 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
             update_call_sites_in_expr(map, ctx, lookup);
             update_call_sites_in_expr(key, ctx, lookup);
         }
-        Expr::MapSize(map) | Expr::MapClear(map) |
-        Expr::MapEntries(map) | Expr::MapKeys(map) | Expr::MapValues(map) => {
+        Expr::MapSize(map)
+        | Expr::MapClear(map)
+        | Expr::MapEntries(map)
+        | Expr::MapKeys(map)
+        | Expr::MapValues(map) => {
             update_call_sites_in_expr(map, ctx, lookup);
         }
         Expr::SetNew => {}
-        Expr::SetNewFromArray(expr) => { update_call_sites_in_expr(expr, ctx, lookup); }
+        Expr::SetNewFromArray(expr) => {
+            update_call_sites_in_expr(expr, ctx, lookup);
+        }
         Expr::SetAdd { set_id: _, value } => {
             update_call_sites_in_expr(value, ctx, lookup);
         }
@@ -2447,9 +2986,14 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
             update_call_sites_in_expr(expr, ctx, lookup);
         }
         // Math operations
-        Expr::MathFloor(expr) | Expr::MathCeil(expr) | Expr::MathRound(expr) |
-        Expr::MathAbs(expr) | Expr::MathSqrt(expr) |
-        Expr::MathLog(expr) | Expr::MathLog2(expr) | Expr::MathLog10(expr) => {
+        Expr::MathFloor(expr)
+        | Expr::MathCeil(expr)
+        | Expr::MathRound(expr)
+        | Expr::MathAbs(expr)
+        | Expr::MathSqrt(expr)
+        | Expr::MathLog(expr)
+        | Expr::MathLog2(expr)
+        | Expr::MathLog10(expr) => {
             update_call_sites_in_expr(expr, ctx, lookup);
         }
         Expr::MathPow(base, exp) | Expr::MathImul(base, exp) => {
@@ -2477,10 +3021,15 @@ fn update_call_sites_in_expr(expr: &mut Expr, ctx: &MonomorphizationContext, loo
                 update_call_sites_in_expr(ts, ctx, lookup);
             }
         }
-        Expr::DateGetTime(date) | Expr::DateToISOString(date) |
-        Expr::DateGetFullYear(date) | Expr::DateGetMonth(date) | Expr::DateGetDate(date) |
-        Expr::DateGetHours(date) | Expr::DateGetMinutes(date) | Expr::DateGetSeconds(date) |
-        Expr::DateGetMilliseconds(date) => {
+        Expr::DateGetTime(date)
+        | Expr::DateToISOString(date)
+        | Expr::DateGetFullYear(date)
+        | Expr::DateGetMonth(date)
+        | Expr::DateGetDate(date)
+        | Expr::DateGetHours(date)
+        | Expr::DateGetMinutes(date)
+        | Expr::DateGetSeconds(date)
+        | Expr::DateGetMilliseconds(date) => {
             update_call_sites_in_expr(date, ctx, lookup);
         }
         Expr::Sequence(exprs) => {
@@ -2595,11 +3144,15 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
 
         Expr::Object(_) | Expr::ObjectSpread { .. } => Some(Type::Object(ObjectType::default())),
 
-        Expr::Call { callee, type_args, .. } => {
+        Expr::Call {
+            callee, type_args, ..
+        } => {
             if let Expr::FuncRef(func_id) = callee.as_ref() {
                 if let Some(func_info) = lookup.funcs.get(func_id) {
                     if !type_args.is_empty() && !func_info.type_params.is_empty() {
-                        let subs: HashMap<String, Type> = func_info.type_params.iter()
+                        let subs: HashMap<String, Type> = func_info
+                            .type_params
+                            .iter()
                             .zip(type_args.iter())
                             .map(|(p, t)| (p.name.clone(), t.clone()))
                             .collect();
@@ -2613,27 +3166,30 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
 
         Expr::New { class_name, .. } => Some(Type::Named(class_name.clone())),
 
-        Expr::Binary { op, .. } => {
-            match op {
-                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div |
-                BinaryOp::Mod | BinaryOp::Pow | BinaryOp::BitAnd | BinaryOp::BitOr |
-                BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr => Some(Type::Number),
-            }
-        }
+        Expr::Binary { op, .. } => match op {
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::Pow
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::UShr => Some(Type::Number),
+        },
 
         Expr::Compare { .. } => Some(Type::Boolean),
 
-        Expr::Logical { left, right, .. } => {
-            infer_expr_type_from_lookup(left, lookup)
-                .or_else(|| infer_expr_type_from_lookup(right, lookup))
-        }
+        Expr::Logical { left, right, .. } => infer_expr_type_from_lookup(left, lookup)
+            .or_else(|| infer_expr_type_from_lookup(right, lookup)),
 
-        Expr::Unary { op, .. } => {
-            match op {
-                UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot => Some(Type::Number),
-                UnaryOp::Not => Some(Type::Boolean),
-            }
-        }
+        Expr::Unary { op, .. } => match op {
+            UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot => Some(Type::Number),
+            UnaryOp::Not => Some(Type::Boolean),
+        },
 
         Expr::TypeOf(_) => Some(Type::String),
         Expr::Void(_) => Some(Type::Void),
@@ -2656,9 +3212,8 @@ fn fill_default_arguments(module: &mut Module) {
     let mut ctor_defaults: HashMap<String, Vec<Option<Expr>>> = HashMap::new();
     for class in &module.classes {
         if let Some(ref ctor) = class.constructor {
-            let defaults: Vec<Option<Expr>> = ctor.params.iter()
-                .map(|p| p.default.clone())
-                .collect();
+            let defaults: Vec<Option<Expr>> =
+                ctor.params.iter().map(|p| p.default.clone()).collect();
             ctor_defaults.insert(class.name.clone(), defaults);
         }
     }
@@ -2701,7 +3256,11 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, ctor_defaults: &HashMap<String, Vec<Op
                 fill_defaults_in_expr(e, ctor_defaults);
             }
         }
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             fill_defaults_in_expr(condition, ctor_defaults);
             fill_defaults_in_stmts(then_branch, ctor_defaults);
             if let Some(else_b) = else_branch {
@@ -2719,7 +3278,12 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, ctor_defaults: &HashMap<String, Vec<Op
         Stmt::Labeled { body, .. } => {
             fill_defaults_in_stmt(body, ctor_defaults);
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
                 fill_defaults_in_stmt(init_stmt, ctor_defaults);
             }
@@ -2732,7 +3296,11 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, ctor_defaults: &HashMap<String, Vec<Op
             fill_defaults_in_stmts(body, ctor_defaults);
         }
         Stmt::Throw(expr) => fill_defaults_in_expr(expr, ctor_defaults),
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             fill_defaults_in_stmts(body, ctor_defaults);
             if let Some(ref mut c) = catch {
                 fill_defaults_in_stmts(&mut c.body, ctor_defaults);
@@ -2741,7 +3309,10 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, ctor_defaults: &HashMap<String, Vec<Op
                 fill_defaults_in_stmts(f, ctor_defaults);
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             fill_defaults_in_expr(discriminant, ctor_defaults);
             for case in cases {
                 fill_defaults_in_stmts(&mut case.body, ctor_defaults);
@@ -2753,7 +3324,9 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, ctor_defaults: &HashMap<String, Vec<Op
 
 fn fill_defaults_in_expr(expr: &mut Expr, ctor_defaults: &HashMap<String, Vec<Option<Expr>>>) {
     match expr {
-        Expr::New { class_name, args, .. } => {
+        Expr::New {
+            class_name, args, ..
+        } => {
             // First, recurse into the arguments
             for arg in args.iter_mut() {
                 fill_defaults_in_expr(arg, ctor_defaults);
@@ -2782,8 +3355,9 @@ fn fill_defaults_in_expr(expr: &mut Expr, ctor_defaults: &HashMap<String, Vec<Op
         Expr::LocalSet(_, val) | Expr::GlobalSet(_, val) => {
             fill_defaults_in_expr(val, ctor_defaults);
         }
-        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } |
-        Expr::Logical { left, right, .. } => {
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
             fill_defaults_in_expr(left, ctor_defaults);
             fill_defaults_in_expr(right, ctor_defaults);
         }
@@ -2793,7 +3367,11 @@ fn fill_defaults_in_expr(expr: &mut Expr, ctor_defaults: &HashMap<String, Vec<Op
         Expr::Update { .. } => {
             // Update expressions (++/--) don't contain sub-expressions
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             fill_defaults_in_expr(condition, ctor_defaults);
             fill_defaults_in_expr(then_expr, ctor_defaults);
             fill_defaults_in_expr(else_expr, ctor_defaults);
@@ -2823,7 +3401,11 @@ fn fill_defaults_in_expr(expr: &mut Expr, ctor_defaults: &HashMap<String, Vec<Op
             fill_defaults_in_expr(object, ctor_defaults);
             fill_defaults_in_expr(index, ctor_defaults);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             fill_defaults_in_expr(object, ctor_defaults);
             fill_defaults_in_expr(index, ctor_defaults);
             fill_defaults_in_expr(value, ctor_defaults);
@@ -2848,7 +3430,9 @@ fn fill_defaults_in_expr(expr: &mut Expr, ctor_defaults: &HashMap<String, Vec<Op
             fill_defaults_in_expr(inner, ctor_defaults);
         }
         Expr::Yield { value, .. } => {
-            if let Some(v) = value { fill_defaults_in_expr(v, ctor_defaults); }
+            if let Some(v) = value {
+                fill_defaults_in_expr(v, ctor_defaults);
+            }
         }
         Expr::InstanceOf { expr, .. } => {
             fill_defaults_in_expr(expr, ctor_defaults);
@@ -2923,7 +3507,10 @@ mod tests {
             Type::Number
         );
         assert_eq!(
-            substitute_type(&Type::Array(Box::new(Type::TypeVar("T".to_string()))), &subs),
+            substitute_type(
+                &Type::Array(Box::new(Type::TypeVar("T".to_string()))),
+                &subs
+            ),
             Type::Array(Box::new(Type::Number))
         );
     }
@@ -2971,17 +3558,34 @@ mod tests {
         monomorphize_module(&mut module);
 
         // Verify that a specialized function was created
-        assert_eq!(module.functions.len(), 2, "Should have original + specialized function");
+        assert_eq!(
+            module.functions.len(),
+            2,
+            "Should have original + specialized function"
+        );
 
         // Find the specialized function
-        let specialized = module.functions.iter()
+        let specialized = module
+            .functions
+            .iter()
             .find(|f| f.name == "identity$num")
             .expect("Specialized function identity$num should exist");
 
         // Verify the specialized function has correct types
-        assert!(specialized.type_params.is_empty(), "Specialized function should have no type params");
-        assert_eq!(specialized.params[0].ty, Type::Number, "Param should be Number");
-        assert_eq!(specialized.return_type, Type::Number, "Return type should be Number");
+        assert!(
+            specialized.type_params.is_empty(),
+            "Specialized function should have no type params"
+        );
+        assert_eq!(
+            specialized.params[0].ty,
+            Type::Number,
+            "Param should be Number"
+        );
+        assert_eq!(
+            specialized.return_type,
+            Type::Number,
+            "Return type should be Number"
+        );
     }
 
     #[test]
@@ -3026,12 +3630,22 @@ mod tests {
         monomorphize_module(&mut module);
 
         // Check that the call site was updated to use the specialized function
-        if let Stmt::Expr(Expr::Call { callee, type_args, .. }) = &module.init[0] {
+        if let Stmt::Expr(Expr::Call {
+            callee, type_args, ..
+        }) = &module.init[0]
+        {
             if let Expr::FuncRef(func_id) = callee.as_ref() {
                 // The call should now reference the specialized function (id >= 1000)
-                assert!(*func_id >= 1000, "Call should reference specialized function, got id {}", func_id);
+                assert!(
+                    *func_id >= 1000,
+                    "Call should reference specialized function, got id {}",
+                    func_id
+                );
                 // Type args should be cleared
-                assert!(type_args.is_empty(), "Type args should be cleared after monomorphization");
+                assert!(
+                    type_args.is_empty(),
+                    "Type args should be cleared after monomorphization"
+                );
             } else {
                 panic!("Expected FuncRef callee");
             }
@@ -3082,23 +3696,49 @@ mod tests {
         monomorphize_module(&mut module);
 
         // Verify that a specialized function was created even without explicit type args
-        assert_eq!(module.functions.len(), 2, "Should have original + specialized function");
+        assert_eq!(
+            module.functions.len(),
+            2,
+            "Should have original + specialized function"
+        );
 
         // Find the specialized function
-        let specialized = module.functions.iter()
+        let specialized = module
+            .functions
+            .iter()
             .find(|f| f.name == "identity$num")
-            .expect("Specialized function identity$num should exist (inferred from Number argument)");
+            .expect(
+                "Specialized function identity$num should exist (inferred from Number argument)",
+            );
 
         // Verify the specialized function has correct types
-        assert!(specialized.type_params.is_empty(), "Specialized function should have no type params");
-        assert_eq!(specialized.params[0].ty, Type::Number, "Param should be Number");
-        assert_eq!(specialized.return_type, Type::Number, "Return type should be Number");
+        assert!(
+            specialized.type_params.is_empty(),
+            "Specialized function should have no type params"
+        );
+        assert_eq!(
+            specialized.params[0].ty,
+            Type::Number,
+            "Param should be Number"
+        );
+        assert_eq!(
+            specialized.return_type,
+            Type::Number,
+            "Return type should be Number"
+        );
 
         // Check that the call site was updated to use the specialized function
-        if let Stmt::Expr(Expr::Call { callee, type_args, .. }) = &module.init[0] {
+        if let Stmt::Expr(Expr::Call {
+            callee, type_args, ..
+        }) = &module.init[0]
+        {
             if let Expr::FuncRef(func_id) = callee.as_ref() {
                 // The call should now reference the specialized function (id >= 1000)
-                assert!(*func_id >= 1000, "Call should reference specialized function, got id {}", func_id);
+                assert!(
+                    *func_id >= 1000,
+                    "Call should reference specialized function, got id {}",
+                    func_id
+                );
                 // Type args should remain empty
                 assert!(type_args.is_empty(), "Type args should be empty");
             } else {
@@ -3151,12 +3791,24 @@ mod tests {
         monomorphize_module(&mut module);
 
         // Find the specialized function
-        let specialized = module.functions.iter()
+        let specialized = module
+            .functions
+            .iter()
             .find(|f| f.name == "identity$str")
-            .expect("Specialized function identity$str should exist (inferred from String argument)");
+            .expect(
+                "Specialized function identity$str should exist (inferred from String argument)",
+            );
 
         // Verify the specialized function has correct types
-        assert_eq!(specialized.params[0].ty, Type::String, "Param should be String");
-        assert_eq!(specialized.return_type, Type::String, "Return type should be String");
+        assert_eq!(
+            specialized.params[0].ty,
+            Type::String,
+            "Param should be String"
+        );
+        assert_eq!(
+            specialized.return_type,
+            Type::String,
+            "Return type should be String"
+        );
     }
 }

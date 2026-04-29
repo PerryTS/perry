@@ -2,7 +2,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_app_kit::{NSButton, NSView};
-use objc2_foundation::{NSObject, NSString, MainThreadMarker};
+use objc2_foundation::{MainThreadMarker, NSObject, NSString};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -77,12 +77,7 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
     let ns_string = NSString::from_str(label);
 
     unsafe {
-        let button = NSButton::buttonWithTitle_target_action(
-            &ns_string,
-            None,
-            None,
-            mtm,
-        );
+        let button = NSButton::buttonWithTitle_target_action(&ns_string, None, None, mtm);
         let _: () = msg_send![&*button, setAccessibilityLabel: &*ns_string];
 
         // Create our target object and wire it up
@@ -107,7 +102,9 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
         let handle = super::register_widget(view);
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
             perry_geisterhand_register(handle, 0, 0, on_press, label_ptr);
         }
         handle
@@ -127,7 +124,7 @@ pub fn set_bordered(handle: i64, bordered: bool) {
             if !bordered {
                 // Set plain bezel style to avoid visual artifacts
                 let _: () = msg_send![btn, setBezelStyle: 0i64]; // NSBezelStyleRounded = 0, avoids shadow
-                // Re-apply attributed title (setBordered resets it)
+                                                                 // Re-apply attributed title (setBordered resets it)
                 if !attr_title.is_null() {
                     let _: () = msg_send![btn, setAttributedTitle: attr_title];
                 }
@@ -201,7 +198,8 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
                     configurationWithScale: 3_isize  // NSImageSymbolScaleLarge
                 ];
                 if !config.is_null() {
-                    let sized_img: *mut AnyObject = msg_send![img, imageWithSymbolConfiguration: config];
+                    let sized_img: *mut AnyObject =
+                        msg_send![img, imageWithSymbolConfiguration: config];
                     if !sized_img.is_null() {
                         let _: () = msg_send![btn, setImage: sized_img];
                     } else {

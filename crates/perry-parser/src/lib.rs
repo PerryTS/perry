@@ -88,9 +88,12 @@ pub fn parse_typescript_with_cache(
     for error in parser.take_errors() {
         let span = Span::new(file_id, error.span().lo.0, error.span().hi.0);
         diagnostics.push(
-            Diagnostic::warning(DiagnosticCode::ParseError, format!("{}", error.kind().msg()))
-                .with_span(span)
-                .build(),
+            Diagnostic::warning(
+                DiagnosticCode::ParseError,
+                format!("{}", error.kind().msg()),
+            )
+            .with_span(span)
+            .build(),
         );
     }
 

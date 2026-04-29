@@ -4,9 +4,9 @@ use perry_runtime::{js_array_get_jsvalue, js_array_length, js_promise_new, JSVal
 use sqlx::postgres::PgConnection;
 use sqlx::{Connection, Row};
 
-use crate::common::{register_handle, Handle};
-use super::result::{rows_to_pg_result, empty_pg_result};
+use super::result::{empty_pg_result, rows_to_pg_result};
 use super::types::{parse_pg_config, PgConfig};
+use crate::common::{register_handle, Handle};
 
 /// Wrapper around PgConnection that we can store in the handle registry.
 ///
@@ -192,8 +192,12 @@ pub unsafe extern "C" fn js_pg_client_query(
     };
 
     // Determine command type from SQL
-    let command = sql.trim().split_whitespace().next()
-        .unwrap_or("SELECT").to_uppercase();
+    let command = sql
+        .trim()
+        .split_whitespace()
+        .next()
+        .unwrap_or("SELECT")
+        .to_uppercase();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::get_handle_mut;
@@ -270,7 +274,8 @@ unsafe fn extract_params_from_jsvalue(params: JSValue) -> Vec<ParamValue> {
             let str_ptr = element.as_string_ptr();
             if !str_ptr.is_null() {
                 let len = (*str_ptr).byte_len as usize;
-                let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<perry_runtime::StringHeader>());
+                let data_ptr =
+                    (str_ptr as *const u8).add(std::mem::size_of::<perry_runtime::StringHeader>());
                 let bytes = std::slice::from_raw_parts(data_ptr, len);
                 ParamValue::String(String::from_utf8_lossy(bytes).to_string())
             } else {
@@ -282,7 +287,8 @@ unsafe fn extract_params_from_jsvalue(params: JSValue) -> Vec<ParamValue> {
                 let str_ptr = perry_runtime::bigint::js_bigint_to_string(bigint_ptr);
                 if !str_ptr.is_null() {
                     let len = (*str_ptr).byte_len as usize;
-                    let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<perry_runtime::StringHeader>());
+                    let data_ptr = (str_ptr as *const u8)
+                        .add(std::mem::size_of::<perry_runtime::StringHeader>());
                     let bytes = std::slice::from_raw_parts(data_ptr, len);
                     ParamValue::String(String::from_utf8_lossy(bytes).to_string())
                 } else {
@@ -349,8 +355,12 @@ pub unsafe extern "C" fn js_pg_client_query_params(
     };
 
     let param_values = extract_params_from_jsvalue(params);
-    let command = sql.trim().split_whitespace().next()
-        .unwrap_or("SELECT").to_uppercase();
+    let command = sql
+        .trim()
+        .split_whitespace()
+        .next()
+        .unwrap_or("SELECT")
+        .to_uppercase();
     let is_select = is_row_returning_query(&sql);
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {

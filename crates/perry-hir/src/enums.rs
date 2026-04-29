@@ -7,7 +7,10 @@ use std::collections::BTreeMap;
 
 use crate::ir::*;
 
-pub fn fix_imported_enums(module: &mut Module, imported_enums: &BTreeMap<String, Vec<(String, EnumValue)>>) {
+pub fn fix_imported_enums(
+    module: &mut Module,
+    imported_enums: &BTreeMap<String, Vec<(String, EnumValue)>>,
+) {
     if imported_enums.is_empty() {
         return;
     }
@@ -28,14 +31,23 @@ pub fn fix_imported_enums(module: &mut Module, imported_enums: &BTreeMap<String,
     fix_imported_enums_in_stmts(&mut module.init, imported_enums);
 }
 
-pub(crate) fn fix_imported_enums_in_stmts(stmts: &mut Vec<Stmt>, enums: &BTreeMap<String, Vec<(String, EnumValue)>>) {
+pub(crate) fn fix_imported_enums_in_stmts(
+    stmts: &mut Vec<Stmt>,
+    enums: &BTreeMap<String, Vec<(String, EnumValue)>>,
+) {
     for stmt in stmts.iter_mut() {
         match stmt {
-            Stmt::Let { init: Some(expr), .. } => fix_imported_enums_in_expr(expr, enums),
+            Stmt::Let {
+                init: Some(expr), ..
+            } => fix_imported_enums_in_expr(expr, enums),
             Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
                 fix_imported_enums_in_expr(expr, enums);
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 fix_imported_enums_in_expr(condition, enums);
                 fix_imported_enums_in_stmts(then_branch, enums);
                 if let Some(else_b) = else_branch {
@@ -46,7 +58,12 @@ pub(crate) fn fix_imported_enums_in_stmts(stmts: &mut Vec<Stmt>, enums: &BTreeMa
                 fix_imported_enums_in_expr(condition, enums);
                 fix_imported_enums_in_stmts(body, enums);
             }
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 if let Some(init_stmt) = init {
                     let mut v = vec![*init_stmt.clone()];
                     fix_imported_enums_in_stmts(&mut v, enums);
@@ -54,11 +71,18 @@ pub(crate) fn fix_imported_enums_in_stmts(stmts: &mut Vec<Stmt>, enums: &BTreeMa
                         **init_stmt = v.remove(0);
                     }
                 }
-                if let Some(cond) = condition { fix_imported_enums_in_expr(cond, enums); }
-                if let Some(upd) = update { fix_imported_enums_in_expr(upd, enums); }
+                if let Some(cond) = condition {
+                    fix_imported_enums_in_expr(cond, enums);
+                }
+                if let Some(upd) = update {
+                    fix_imported_enums_in_expr(upd, enums);
+                }
                 fix_imported_enums_in_stmts(body, enums);
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 fix_imported_enums_in_expr(discriminant, enums);
                 for case in cases {
                     if let Some(test) = &mut case.test {
@@ -67,7 +91,11 @@ pub(crate) fn fix_imported_enums_in_stmts(stmts: &mut Vec<Stmt>, enums: &BTreeMa
                     fix_imported_enums_in_stmts(&mut case.body, enums);
                 }
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 fix_imported_enums_in_stmts(body, enums);
                 if let Some(catch_clause) = catch {
                     fix_imported_enums_in_stmts(&mut catch_clause.body, enums);
@@ -81,7 +109,10 @@ pub(crate) fn fix_imported_enums_in_stmts(stmts: &mut Vec<Stmt>, enums: &BTreeMa
     }
 }
 
-pub(crate) fn fix_imported_enums_in_expr(expr: &mut Expr, enums: &BTreeMap<String, Vec<(String, EnumValue)>>) {
+pub(crate) fn fix_imported_enums_in_expr(
+    expr: &mut Expr,
+    enums: &BTreeMap<String, Vec<(String, EnumValue)>>,
+) {
     match expr {
         // The key pattern: PropertyGet on an ExternFuncRef that's actually an enum
         Expr::PropertyGet { object, property } => {
@@ -118,40 +149,57 @@ pub(crate) fn fix_imported_enums_in_expr(expr: &mut Expr, enums: &BTreeMap<Strin
             fix_imported_enums_in_expr(object, enums);
             fix_imported_enums_in_expr(value, enums);
         }
-        Expr::Binary { left, right, .. } | Expr::Logical { left, right, .. } |
-        Expr::Compare { left, right, .. } => {
+        Expr::Binary { left, right, .. }
+        | Expr::Logical { left, right, .. }
+        | Expr::Compare { left, right, .. } => {
             fix_imported_enums_in_expr(left, enums);
             fix_imported_enums_in_expr(right, enums);
         }
         Expr::Unary { operand, .. } => {
             fix_imported_enums_in_expr(operand, enums);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             fix_imported_enums_in_expr(condition, enums);
             fix_imported_enums_in_expr(then_expr, enums);
             fix_imported_enums_in_expr(else_expr, enums);
         }
         Expr::Call { callee, args, .. } => {
             fix_imported_enums_in_expr(callee, enums);
-            for arg in args { fix_imported_enums_in_expr(arg, enums); }
+            for arg in args {
+                fix_imported_enums_in_expr(arg, enums);
+            }
         }
         Expr::Array(elements) => {
-            for elem in elements { fix_imported_enums_in_expr(elem, enums); }
+            for elem in elements {
+                fix_imported_enums_in_expr(elem, enums);
+            }
         }
         Expr::IndexGet { object, index } => {
             fix_imported_enums_in_expr(object, enums);
             fix_imported_enums_in_expr(index, enums);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             fix_imported_enums_in_expr(object, enums);
             fix_imported_enums_in_expr(index, enums);
             fix_imported_enums_in_expr(value, enums);
         }
         Expr::Object(fields) => {
-            for (_, value) in fields { fix_imported_enums_in_expr(value, enums); }
+            for (_, value) in fields {
+                fix_imported_enums_in_expr(value, enums);
+            }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, value) in parts { fix_imported_enums_in_expr(value, enums); }
+            for (_, value) in parts {
+                fix_imported_enums_in_expr(value, enums);
+            }
         }
         Expr::LocalSet(_, value) => {
             fix_imported_enums_in_expr(value, enums);
@@ -160,10 +208,14 @@ pub(crate) fn fix_imported_enums_in_expr(expr: &mut Expr, enums: &BTreeMap<Strin
             fix_imported_enums_in_stmts(body, enums);
         }
         Expr::NativeMethodCall { args, .. } => {
-            for arg in args { fix_imported_enums_in_expr(arg, enums); }
+            for arg in args {
+                fix_imported_enums_in_expr(arg, enums);
+            }
         }
         Expr::New { args, .. } => {
-            for arg in args { fix_imported_enums_in_expr(arg, enums); }
+            for arg in args {
+                fix_imported_enums_in_expr(arg, enums);
+            }
         }
         Expr::Await(inner) | Expr::TypeOf(inner) => {
             fix_imported_enums_in_expr(inner, enums);
@@ -171,4 +223,3 @@ pub(crate) fn fix_imported_enums_in_expr(expr: &mut Expr, enums: &BTreeMap<Strin
         _ => {}
     }
 }
-

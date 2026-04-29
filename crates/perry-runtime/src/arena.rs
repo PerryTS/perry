@@ -4,8 +4,8 @@
 //! Objects allocated here are not individually freed - the entire arena
 //! can be reset at once (e.g., at end of program or during GC).
 
-use std::cell::UnsafeCell;
 use std::alloc::{alloc, Layout};
+use std::cell::UnsafeCell;
 
 /// Size of each arena block (1 MB — issue #179 tier 1 #1).
 ///
@@ -50,7 +50,9 @@ const BLOCK_SIZE: usize = 1 * 1024 * 1024;
 
 /// Create a block of at least the given size (for oversized allocations)
 fn alloc_block(min_size: usize) -> ArenaBlock {
-    let size = if min_size <= BLOCK_SIZE { BLOCK_SIZE } else {
+    let size = if min_size <= BLOCK_SIZE {
+        BLOCK_SIZE
+    } else {
         // Round up to next multiple of BLOCK_SIZE
         ((min_size + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE
     };
@@ -124,7 +126,9 @@ impl Drop for Arena {
                 continue;
             }
             let layout = std::alloc::Layout::from_size_align(block.size, 16).unwrap();
-            unsafe { std::alloc::dealloc(block.data, layout); }
+            unsafe {
+                std::alloc::dealloc(block.data, layout);
+            }
         }
     }
 }
@@ -162,7 +166,9 @@ impl Arena {
         // we'd push a fresh block on the very first overflow even
         // though blocks `current+1..n_blocks` are all empty.
         for i in 0..self.blocks.len() {
-            if i == self.current { continue; }
+            if i == self.current {
+                continue;
+            }
             if let Some(ptr) = self.blocks[i].alloc(size, align) {
                 self.current = i;
                 // Resync inline state to the new current block.
@@ -205,7 +211,8 @@ impl Arena {
         };
         self.current = new_idx;
 
-        self.blocks[self.current].alloc(size, align)
+        self.blocks[self.current]
+            .alloc(size, align)
             .expect("Fresh block should have space")
     }
 }
@@ -275,9 +282,9 @@ thread_local! {
 /// at hard-coded byte offsets (0/8/16). Do not reorder.
 #[repr(C)]
 pub struct InlineArenaState {
-    pub data: *mut u8,    // offset  0  — current block's data pointer
-    pub offset: usize,    // offset  8  — bump pointer (mutated inline)
-    pub size: usize,      // offset 16  — current block's size
+    pub data: *mut u8, // offset  0  — current block's data pointer
+    pub offset: usize, // offset  8  — bump pointer (mutated inline)
+    pub size: usize,   // offset 16  — current block's size
 }
 
 /// Get the per-thread inline arena state pointer. Called once per JS
@@ -421,7 +428,7 @@ pub fn arena_alloc_longlived(size: usize, align: usize) -> *mut u8 {
 /// (the cache's root scanner keeps them marked), so there's nothing to
 /// re-add to the free list.
 pub fn arena_alloc_gc_longlived(size: usize, align: usize, obj_type: u8) -> *mut u8 {
-    use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_FLAG_ARENA};
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
     let total = GC_HEADER_SIZE + size;
     let raw = arena_alloc_longlived(total, align);
@@ -459,7 +466,7 @@ pub fn arena_alloc_old(size: usize, align: usize) -> *mut u8 {
 /// `arena_alloc_gc_longlived` for the same shape on the longlived
 /// arena — only the backing region differs.
 pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
-    use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_FLAG_ARENA};
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
     let total = GC_HEADER_SIZE + size;
     let raw = arena_alloc_old(total, align);
@@ -487,7 +494,7 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
 /// behind a cold branch.
 #[inline(always)]
 pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
-    use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_FLAG_ARENA};
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
     // Hot path: bump-allocate from the current arena block, skipping the
     // free-list walk entirely. The free-list-nonempty `Cell` is a single
@@ -799,7 +806,12 @@ pub fn arena_walk_objects_filtered(
     // `general_n + longlived_n..` per the global block-index plan.
     OLD_ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
-        walk_region(&arena.blocks, general_n + longlived_n, &mut block_filter, &mut callback);
+        walk_region(
+            &arena.blocks,
+            general_n + longlived_n,
+            &mut block_filter,
+            &mut callback,
+        );
     });
 }
 
@@ -1014,10 +1026,21 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) {
         const DEALLOC_DEAD_CYCLES: u32 = 2;
         let mut deallocated_ranges: Vec<(usize, usize)> = Vec::new();
         for (i, block) in arena.blocks.iter_mut().enumerate() {
-            if block.data.is_null() { continue; }
-            if i == current { block.dead_cycles = 0; continue; }
-            if i >= keep_low && i <= current { block.dead_cycles = 0; continue; }
-            if block.offset != 0 { block.dead_cycles = 0; continue; }
+            if block.data.is_null() {
+                continue;
+            }
+            if i == current {
+                block.dead_cycles = 0;
+                continue;
+            }
+            if i >= keep_low && i <= current {
+                block.dead_cycles = 0;
+                continue;
+            }
+            if block.offset != 0 {
+                block.dead_cycles = 0;
+                continue;
+            }
             block.dead_cycles += 1;
             if block.dead_cycles >= DEALLOC_DEAD_CYCLES {
                 let layout = Layout::from_size_align(block.size, 16).unwrap();
@@ -1049,7 +1072,8 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) {
                 let total: usize = deallocated_ranges.iter().map(|&(_, s)| s).sum();
                 eprintln!(
                     "[gc-dealloc] freed {} blocks ({} bytes) back to OS",
-                    deallocated_ranges.len(), total
+                    deallocated_ranges.len(),
+                    total
                 );
             }
         }
@@ -1188,7 +1212,7 @@ pub fn pointer_in_old_gen(addr: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gc::{GC_HEADER_SIZE, GC_TYPE_STRING, GC_TYPE_ARRAY};
+    use crate::gc::{GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_STRING};
 
     /// Issue #179: a longlived-arena allocation must not land inside any
     /// general-arena block. This is the architectural guarantee behind
@@ -1223,7 +1247,10 @@ mod tests {
         let gen_in_general = general_ranges
             .iter()
             .any(|&(base, size)| gen_ptr >= base && gen_ptr < base + size);
-        assert!(gen_in_general, "general alloc {gen_ptr:#x} not in any general block");
+        assert!(
+            gen_in_general,
+            "general alloc {gen_ptr:#x} not in any general block"
+        );
     }
 
     /// Walker + block-index contract: longlived objects get global
@@ -1305,7 +1332,9 @@ mod tests {
                 assert!(
                     old_header < base || old_header >= end,
                     "old-gen alloc landed inside a nursery block (got {:x}, block [{:x}, {:x}))",
-                    old_header, base, end,
+                    old_header,
+                    base,
+                    end,
                 );
             }
         });
@@ -1352,7 +1381,8 @@ mod tests {
         assert!(
             idx >= boundary,
             "old-gen block index {} should be >= longlived_end() {}",
-            idx, boundary,
+            idx,
+            boundary,
         );
     }
 
@@ -1380,6 +1410,9 @@ mod tests {
                 }
             }
         });
-        assert!(still_alive, "old-gen alloc not located in any old-gen block");
+        assert!(
+            still_alive,
+            "old-gen alloc not located in any old-gen block"
+        );
     }
 }

@@ -25,7 +25,12 @@ extern "C" {
 fn log(msg: &str) {
     let c_msg = std::ffi::CString::new(msg).unwrap_or_default();
     unsafe {
-        __android_log_print(3, b"PerryCamera\0".as_ptr(), b"%s\0".as_ptr(), c_msg.as_ptr());
+        __android_log_print(
+            3,
+            b"PerryCamera\0".as_ptr(),
+            b"%s\0".as_ptr(),
+            c_msg.as_ptr(),
+        );
     }
 }
 
@@ -46,14 +51,20 @@ pub fn create() -> i64 {
         Ok(v) => v,
         Err(e) => {
             log(&format!("[camera] failed to create TextureView: {:?}", e));
-            unsafe { env.pop_local_frame(&JObject::null()); }
+            unsafe {
+                env.pop_local_frame(&JObject::null());
+            }
             return 0;
         }
     };
 
-    let global = env.new_global_ref(texture_view).expect("Failed to create global ref");
+    let global = env
+        .new_global_ref(texture_view)
+        .expect("Failed to create global ref");
     let handle = widgets::register_widget(global);
-    unsafe { env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&JObject::null());
+    }
 
     log(&format!("[camera] created TextureView, handle={}", handle));
     handle
@@ -72,9 +83,8 @@ pub fn start(handle: i64) {
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
 
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
 
     let _ = env.call_static_method(
@@ -89,7 +99,9 @@ pub fn start(handle: i64) {
         let _ = env.exception_clear();
     }
 
-    unsafe { env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&JObject::null());
+    }
     log("[camera] start called");
 }
 
@@ -98,9 +110,8 @@ pub fn stop(_handle: i64) {
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(8);
 
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
 
     let _ = env.call_static_method(bridge_cls, "stopCamera", "()V", &[]);
@@ -109,7 +120,9 @@ pub fn stop(_handle: i64) {
         let _ = env.exception_clear();
     }
 
-    unsafe { env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&JObject::null());
+    }
     log("[camera] stopped");
 }
 
@@ -118,9 +131,8 @@ pub fn freeze(_handle: i64) {
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(8);
 
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
 
     let _ = env.call_static_method(bridge_cls, "freezeCamera", "()V", &[]);
@@ -129,7 +141,9 @@ pub fn freeze(_handle: i64) {
         let _ = env.exception_clear();
     }
 
-    unsafe { env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&JObject::null());
+    }
     log("[camera] frozen");
 }
 
@@ -138,9 +152,8 @@ pub fn unfreeze(_handle: i64) {
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(8);
 
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
 
     let _ = env.call_static_method(bridge_cls, "unfreezeCamera", "()V", &[]);
@@ -149,7 +162,9 @@ pub fn unfreeze(_handle: i64) {
         let _ = env.exception_clear();
     }
 
-    unsafe { env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&JObject::null());
+    }
     log("[camera] unfrozen");
 }
 
@@ -160,9 +175,8 @@ pub fn sample_color(x: f64, y: f64) -> f64 {
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(8);
 
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
 
     let result = env.call_static_method(
@@ -174,12 +188,16 @@ pub fn sample_color(x: f64, y: f64) -> f64 {
 
     if env.exception_check().unwrap_or(false) {
         let _ = env.exception_clear();
-        unsafe { env.pop_local_frame(&JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&JObject::null());
+        }
         return -1.0;
     }
 
     let value = result.map(|v| v.d().unwrap_or(-1.0)).unwrap_or(-1.0);
-    unsafe { env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&JObject::null());
+    }
     value
 }
 
@@ -198,9 +216,8 @@ pub fn set_on_tap(handle: i64, callback_f64: f64) {
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
 
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
 
     let _ = env.call_static_method(
@@ -214,6 +231,8 @@ pub fn set_on_tap(handle: i64, callback_f64: f64) {
         let _ = env.exception_clear();
     }
 
-    unsafe { env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&JObject::null());
+    }
     log(&format!("[camera] set_on_tap: key={}", key));
 }

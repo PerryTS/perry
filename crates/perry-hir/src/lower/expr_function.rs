@@ -34,7 +34,9 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     let scope_mark = ctx.enter_scope();
 
     // Track which locals exist before entering the closure scope
-    let outer_locals: Vec<(String, LocalId)> = ctx.locals.iter()
+    let outer_locals: Vec<(String, LocalId)> = ctx
+        .locals
+        .iter()
         .map(|(name, id, _)| (name.clone(), *id))
         .collect();
 
@@ -79,7 +81,11 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
                 _ => None,
             };
             if let Some((module, class)) = native_info {
-                ctx.register_native_instance(param.name.clone(), module.to_string(), class.to_string());
+                ctx.register_native_instance(
+                    param.name.clone(),
+                    module.to_string(),
+                    class.to_string(),
+                );
             }
         }
     }
@@ -183,7 +189,9 @@ pub(super) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     let scope_mark = ctx.enter_scope();
 
     // Track which locals exist before entering the closure scope
-    let outer_locals: Vec<(String, LocalId)> = ctx.locals.iter()
+    let outer_locals: Vec<(String, LocalId)> = ctx
+        .locals
+        .iter()
         .map(|(name, id, _)| (name.clone(), *id))
         .collect();
 
@@ -305,15 +313,13 @@ fn compute_closure_captures(
 
     // Filter to only include outer locals (not parameters or locals
     // defined within the closure).
-    let outer_local_ids: std::collections::HashSet<LocalId> = outer_locals.iter()
-        .map(|(_, id)| *id)
-        .collect();
-    let param_ids: std::collections::HashSet<LocalId> = params.iter()
-        .map(|p| p.id)
-        .collect();
+    let outer_local_ids: std::collections::HashSet<LocalId> =
+        outer_locals.iter().map(|(_, id)| *id).collect();
+    let param_ids: std::collections::HashSet<LocalId> = params.iter().map(|p| p.id).collect();
 
     // Find unique captures: refs that are in outer_locals but not params.
-    let mut captures: Vec<LocalId> = all_refs.into_iter()
+    let mut captures: Vec<LocalId> = all_refs
+        .into_iter()
         .filter(|id| outer_local_ids.contains(id) && !param_ids.contains(id))
         .collect();
     captures.sort();
@@ -326,7 +332,8 @@ fn compute_closure_captures(
         collect_assigned_locals_stmt(stmt, &mut all_assigned);
     }
     let assigned_set: std::collections::HashSet<LocalId> = all_assigned.into_iter().collect();
-    let mutable_captures: Vec<LocalId> = captures.iter()
+    let mutable_captures: Vec<LocalId> = captures
+        .iter()
         .filter(|id| assigned_set.contains(id) || ctx.var_hoisted_ids.contains(id))
         .copied()
         .collect();

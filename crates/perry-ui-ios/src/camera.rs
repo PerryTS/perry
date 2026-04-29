@@ -6,11 +6,11 @@
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{msg_send, Encode, Encoding, RefEncode};
-use objc2_ui_kit::UIView;
 use objc2_core_foundation::CGRect;
+use objc2_ui_kit::UIView;
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicPtr, AtomicBool, Ordering};
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use crate::widgets;
 
@@ -122,9 +122,11 @@ fn register_camera_delegate() {
             }
 
             // captureOutput:didOutputSampleBuffer:fromConnection: — type: v@:@@@
-            let sel = sel_registerName(c"captureOutput:didOutputSampleBuffer:fromConnection:".as_ptr());
+            let sel =
+                sel_registerName(c"captureOutput:didOutputSampleBuffer:fromConnection:".as_ptr());
             class_addMethod(
-                cls, sel,
+                cls,
+                sel,
                 did_output_sample_buffer as *const c_void,
                 c"v@:@@@".as_ptr(),
             );
@@ -156,7 +158,9 @@ fn camera_view_class() -> *const c_void {
                     let _: () = msg_send![super(this, sup), layoutSubviews];
                     // Resize all sublayers to match layer bounds
                     let layer: *mut AnyObject = msg_send![this, layer];
-                    if layer.is_null() { return; }
+                    if layer.is_null() {
+                        return;
+                    }
                     let bounds: CGRect = msg_send![layer, bounds];
                     let sublayers: *mut AnyObject = msg_send![layer, sublayers];
                     if !sublayers.is_null() {
@@ -193,29 +197,48 @@ fn register_tap_handler_class() -> *const c_void {
             let cls = objc_allocateClassPair(superclass, c"PerryCameraTapHandler".as_ptr(), 0);
             assert!(!cls.is_null());
 
-            extern "C" fn handle_tap(this: *mut AnyObject, _cmd: *const c_void, recognizer: *mut AnyObject) {
+            extern "C" fn handle_tap(
+                this: *mut AnyObject,
+                _cmd: *const c_void,
+                recognizer: *mut AnyObject,
+            ) {
                 unsafe {
                     // Get the view from the gesture recognizer
                     let view: *mut AnyObject = msg_send![recognizer, view];
-                    if view.is_null() { return; }
+                    if view.is_null() {
+                        return;
+                    }
 
                     // Get location in view
                     #[repr(C)]
                     #[derive(Copy, Clone)]
-                    struct CGPoint { x: f64, y: f64 }
+                    struct CGPoint {
+                        x: f64,
+                        y: f64,
+                    }
                     unsafe impl Encode for CGPoint {
-                        const ENCODING: Encoding = Encoding::Struct("CGPoint", &[Encoding::Double, Encoding::Double]);
+                        const ENCODING: Encoding =
+                            Encoding::Struct("CGPoint", &[Encoding::Double, Encoding::Double]);
                     }
                     unsafe impl RefEncode for CGPoint {
-                        const ENCODING_REF: Encoding = Encoding::Pointer(&<Self as Encode>::ENCODING);
+                        const ENCODING_REF: Encoding =
+                            Encoding::Pointer(&<Self as Encode>::ENCODING);
                     }
 
                     let point: CGPoint = msg_send![recognizer, locationInView: view];
                     let bounds: CGRect = msg_send![view, bounds];
 
                     // Normalize to 0-1
-                    let norm_x = if bounds.size.width > 0.0 { point.x / bounds.size.width } else { 0.5 };
-                    let norm_y = if bounds.size.height > 0.0 { point.y / bounds.size.height } else { 0.5 };
+                    let norm_x = if bounds.size.width > 0.0 {
+                        point.x / bounds.size.width
+                    } else {
+                        0.5
+                    };
+                    let norm_y = if bounds.size.height > 0.0 {
+                        point.y / bounds.size.height
+                    } else {
+                        0.5
+                    };
 
                     // Dispatch callback on main queue
                     TAP_CALLBACK.with(|cb| {
@@ -308,7 +331,8 @@ pub fn start(_handle: i64) {
 
         // Get default video device (back camera)
         let media_type = objc2_foundation::NSString::from_str("vide");
-        let device: *mut AnyObject = msg_send![device_cls, defaultDeviceWithMediaType: &*media_type];
+        let device: *mut AnyObject =
+            msg_send![device_cls, defaultDeviceWithMediaType: &*media_type];
         if device.is_null() {
             crate::ws_log!("[camera] no video device found");
             return;
@@ -317,7 +341,8 @@ pub fn start(_handle: i64) {
         // Create input
         let input_cls = AnyClass::get(c"AVCaptureDeviceInput").unwrap();
         let mut error: *mut AnyObject = std::ptr::null_mut();
-        let input: *mut AnyObject = msg_send![input_cls, deviceInputWithDevice: device error: &mut error];
+        let input: *mut AnyObject =
+            msg_send![input_cls, deviceInputWithDevice: device error: &mut error];
         if input.is_null() || !error.is_null() {
             crate::ws_log!("[camera] failed to create device input");
             return;
@@ -403,18 +428,30 @@ pub fn start(_handle: i64) {
         dispatch_async(global_queue, &*start_block as *const _ as *const c_void);
 
         // Store session, preview layer, and delegate
-        CAPTURE_SESSION.with(|s| { *s.borrow_mut() = Some(session); });
-        PREVIEW_LAYER.with(|p| { *p.borrow_mut() = Some(preview); });
-        DELEGATE_INSTANCE.with(|d| { *d.borrow_mut() = Some(delegate); });
+        CAPTURE_SESSION.with(|s| {
+            *s.borrow_mut() = Some(session);
+        });
+        PREVIEW_LAYER.with(|p| {
+            *p.borrow_mut() = Some(preview);
+        });
+        DELEGATE_INSTANCE.with(|d| {
+            *d.borrow_mut() = Some(delegate);
+        });
 
         // Update video orientation to match current device orientation
         update_video_orientation();
 
         // Register for orientation change notifications so preview stays correct on iPad rotation
-        let nc: *mut AnyObject = msg_send![AnyClass::get(c"NSNotificationCenter").unwrap(), defaultCenter];
+        let nc: *mut AnyObject = msg_send![
+            AnyClass::get(c"NSNotificationCenter").unwrap(),
+            defaultCenter
+        ];
         let device_cls = AnyClass::get(c"UIDevice").unwrap();
         let current_device: *mut AnyObject = msg_send![device_cls, currentDevice];
-        let _: () = msg_send![current_device, beginGeneratingDeviceOrientationNotifications];
+        let _: () = msg_send![
+            current_device,
+            beginGeneratingDeviceOrientationNotifications
+        ];
 
         // Use a block-based observer for orientation changes
         let name = objc2_foundation::NSString::from_str("UIDeviceOrientationDidChangeNotification");
@@ -438,7 +475,9 @@ fn update_video_orientation() {
         PREVIEW_LAYER.with(|p| {
             if let Some(preview) = p.borrow().as_ref() {
                 let connection: *mut AnyObject = msg_send![&**preview, connection];
-                if connection.is_null() { return; }
+                if connection.is_null() {
+                    return;
+                }
 
                 let device_cls = AnyClass::get(c"UIDevice").unwrap();
                 let current_device: *mut AnyObject = msg_send![device_cls, currentDevice];
@@ -448,10 +487,10 @@ fn update_video_orientation() {
                 // UIDeviceOrientation: 1=portrait, 2=portraitUpsideDown, 3=landscapeLeft, 4=landscapeRight
                 // AVCaptureVideoOrientation: 1=portrait, 2=portraitUpsideDown, 3=landscapeRight, 4=landscapeLeft
                 let video_orientation: i64 = match device_orientation {
-                    1 => 1, // Portrait
-                    2 => 2, // PortraitUpsideDown
-                    3 => 4, // LandscapeLeft device → LandscapeLeft video (AVCapture swaps L/R)
-                    4 => 3, // LandscapeRight device → LandscapeRight video
+                    1 => 1,      // Portrait
+                    2 => 2,      // PortraitUpsideDown
+                    3 => 4,      // LandscapeLeft device → LandscapeLeft video (AVCapture swaps L/R)
+                    4 => 3,      // LandscapeRight device → LandscapeRight video
                     _ => return, // Unknown/faceUp/faceDown — keep current
                 };
 
@@ -474,7 +513,9 @@ pub fn stop(_handle: i64) {
     // Release the latest buffer
     let old = LATEST_BUFFER.swap(std::ptr::null_mut(), Ordering::Release);
     if !old.is_null() {
-        unsafe { CFRelease(old); }
+        unsafe {
+            CFRelease(old);
+        }
     }
     FROZEN.store(false, Ordering::Relaxed);
 }

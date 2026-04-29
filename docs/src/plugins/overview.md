@@ -36,7 +36,7 @@ perry my-plugin.ts --output-type dylib -o my-plugin.dylib
 
 ### Host Application
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/plugins/host_snippets.ts:imports}}
 
 {{#include ../../examples/plugins/host_snippets.ts:load}}

@@ -1,6 +1,6 @@
-use jni::objects::{JObject, JValue};
 use crate::app::str_from_header;
 use crate::jni_bridge;
+use jni::objects::{JObject, JValue};
 
 /// Create a TextView. Returns widget handle.
 pub fn create(text_ptr: *const u8) -> i64 {
@@ -9,11 +9,13 @@ pub fn create(text_ptr: *const u8) -> i64 {
     let _ = env.push_local_frame(32);
 
     let activity = super::get_activity(&mut env);
-    let text_view = env.new_object(
-        "android/widget/TextView",
-        "(Landroid/content/Context;)V",
-        &[JValue::Object(&activity)],
-    ).expect("Failed to create TextView");
+    let text_view = env
+        .new_object(
+            "android/widget/TextView",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        )
+        .expect("Failed to create TextView");
 
     let jstr = env.new_string(text).expect("Failed to create JNI string");
     let _ = env.call_method(
@@ -23,9 +25,13 @@ pub fn create(text_ptr: *const u8) -> i64 {
         &[JValue::Object(&jstr)],
     );
 
-    let global = env.new_global_ref(text_view).expect("Failed to create global ref");
+    let global = env
+        .new_global_ref(text_view)
+        .expect("Failed to create global ref");
     let handle = super::register_widget(global);
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     handle
 }
 
@@ -41,7 +47,9 @@ pub fn set_text_str(handle: i64, text: &str) {
             "(Ljava/lang/CharSequence;)V",
             &[JValue::Object(&jstr)],
         );
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 
@@ -67,7 +75,9 @@ pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             "(I)V",
             &[JValue::Int(color)],
         );
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 
@@ -83,7 +93,9 @@ pub fn set_font_size(handle: i64, size: f64) {
             "(IF)V",
             &[JValue::Int(2), JValue::Float(size as f32)],
         );
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 
@@ -115,7 +127,9 @@ pub fn set_font_weight(handle: i64, _size: f64, weight: f64) {
             }
         }
 
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 
@@ -135,12 +149,16 @@ pub fn set_font_family(handle: i64, family_ptr: *const u8) {
 
         let jfamily = env.new_string(family_name).expect("family string");
         // Typeface.create(String, int) → Typeface
-        let typeface = env.call_static_method(
-            "android/graphics/Typeface",
-            "create",
-            "(Ljava/lang/String;I)Landroid/graphics/Typeface;",
-            &[JValue::Object(&jfamily), JValue::Int(0)], // NORMAL=0
-        ).expect("Typeface.create").l().expect("typeface");
+        let typeface = env
+            .call_static_method(
+                "android/graphics/Typeface",
+                "create",
+                "(Ljava/lang/String;I)Landroid/graphics/Typeface;",
+                &[JValue::Object(&jfamily), JValue::Int(0)], // NORMAL=0
+            )
+            .expect("Typeface.create")
+            .l()
+            .expect("typeface");
 
         let _ = env.call_method(
             view_ref.as_obj(),
@@ -149,7 +167,9 @@ pub fn set_font_family(handle: i64, family_ptr: *const u8) {
             &[JValue::Object(&typeface)],
         );
 
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 
@@ -161,15 +181,32 @@ pub fn set_wraps(handle: i64, max_width: f64) {
         let _ = env.push_local_frame(16);
         if max_width > 0.0 {
             // Enable wrapping
-            let _ = env.call_method(view_ref.as_obj(), "setSingleLine", "(Z)V", &[JValue::Bool(0)]);
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                "setSingleLine",
+                "(Z)V",
+                &[JValue::Bool(0)],
+            );
             // Set max width in dp → px
             let max_px = super::dp_to_px(&mut env, max_width as f32);
-            let _ = env.call_method(view_ref.as_obj(), "setMaxWidth", "(I)V", &[JValue::Int(max_px)]);
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                "setMaxWidth",
+                "(I)V",
+                &[JValue::Int(max_px)],
+            );
         } else {
             // Disable wrapping
-            let _ = env.call_method(view_ref.as_obj(), "setSingleLine", "(Z)V", &[JValue::Bool(1)]);
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                "setSingleLine",
+                "(Z)V",
+                &[JValue::Bool(1)],
+            );
         }
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 
@@ -184,7 +221,9 @@ pub fn set_selectable(handle: i64, selectable: bool) {
             "(Z)V",
             &[JValue::Bool(selectable as u8)],
         );
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 
@@ -211,16 +250,13 @@ pub fn set_decoration(handle: i64, decoration: i64) {
                         2 => 16,
                         _ => 0,
                     };
-                    let _ = env.call_method(
-                        &paint_obj,
-                        "setFlags",
-                        "(I)V",
-                        &[JValue::Int(flag)],
-                    );
+                    let _ = env.call_method(&paint_obj, "setFlags", "(I)V", &[JValue::Int(flag)]);
                     let _ = env.call_method(view_ref.as_obj(), "invalidate", "()V", &[]);
                 }
             }
         }
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }

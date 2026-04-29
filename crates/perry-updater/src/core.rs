@@ -4,11 +4,11 @@
 //! compare, hash + Ed25519 verification, and sentinel state. Per-OS install
 //! / relaunch / path resolution lives in the sibling `desktop` module.
 
-use perry_runtime::{js_string_from_bytes, StringHeader};
 use perry_runtime::buffer::BufferHeader;
+use perry_runtime::{js_string_from_bytes, StringHeader};
 
-use sha2::{Digest, Sha256};
 use base64::Engine as _;
+use sha2::{Digest, Sha256};
 
 // The Ed25519 verify primitive lives in `perry-stdlib::crypto` (alongside
 // SHA, HMAC, AES, X25519, etc.) — this crate routes through that single
@@ -97,7 +97,11 @@ pub extern "C" fn perry_updater_verify_hash(file_path_val: i64, expected_hex_val
         None => return 0,
     };
 
-    if actual == expected { 1 } else { 0 }
+    if actual == expected {
+        1
+    } else {
+        0
+    }
 }
 
 fn compute_sha256_hex(path: &str) -> Option<String> {
@@ -221,12 +225,12 @@ pub extern "C" fn perry_updater_verify_signature(
         if digest_buf.is_null() || sig_buf.is_null() || pk_buf.is_null() {
             return 0;
         }
-        let ok = js_crypto_ed25519_verify(
-            digest_buf as i64,
-            sig_buf as i64,
-            pk_buf as i64,
-        );
-        if ok == 1 { 1 } else { 0 }
+        let ok = js_crypto_ed25519_verify(digest_buf as i64, sig_buf as i64, pk_buf as i64);
+        if ok == 1 {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -348,7 +352,7 @@ pub extern "C" fn perry_updater_sha256_buffer(buf_ptr: i64) -> *mut BufferHeader
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{SigningKey, Signer, Verifier, VerifyingKey, Signature};
+    use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
     // The production `perry_updater_verify_signature` extern-calls
     // `js_crypto_ed25519_verify`, which is provided by perry-stdlib at
@@ -360,11 +364,7 @@ mod tests {
     // streaming, base64 decode, and buffer marshaling — just routed
     // through this in-test verifier instead of the stdlib one.
     #[no_mangle]
-    pub extern "C" fn js_crypto_ed25519_verify(
-        msg_ptr: i64,
-        sig_ptr: i64,
-        pk_ptr: i64,
-    ) -> i32 {
+    pub extern "C" fn js_crypto_ed25519_verify(msg_ptr: i64, sig_ptr: i64, pk_ptr: i64) -> i32 {
         unsafe fn read_buf_bytes(ptr: i64) -> Option<Vec<u8>> {
             if ptr == 0 {
                 return None;
@@ -375,9 +375,15 @@ mod tests {
             Some(std::slice::from_raw_parts(data, len).to_vec())
         }
         unsafe {
-            let Some(msg) = read_buf_bytes(msg_ptr) else { return 0 };
-            let Some(sig_bytes) = read_buf_bytes(sig_ptr) else { return 0 };
-            let Some(pk_bytes) = read_buf_bytes(pk_ptr) else { return 0 };
+            let Some(msg) = read_buf_bytes(msg_ptr) else {
+                return 0;
+            };
+            let Some(sig_bytes) = read_buf_bytes(sig_ptr) else {
+                return 0;
+            };
+            let Some(pk_bytes) = read_buf_bytes(pk_ptr) else {
+                return 0;
+            };
             if sig_bytes.len() != 64 || pk_bytes.len() != 32 {
                 return 0;
             }
@@ -386,8 +392,14 @@ mod tests {
             let signature = Signature::from_bytes(&sig_arr);
             let mut pk_arr = [0u8; 32];
             pk_arr.copy_from_slice(&pk_bytes);
-            let Ok(vk) = VerifyingKey::from_bytes(&pk_arr) else { return 0 };
-            if vk.verify(&msg, &signature).is_ok() { 1 } else { 0 }
+            let Ok(vk) = VerifyingKey::from_bytes(&pk_arr) else {
+                return 0;
+            };
+            if vk.verify(&msg, &signature).is_ok() {
+                1
+            } else {
+                0
+            }
         }
     }
 
@@ -412,20 +424,35 @@ mod tests {
 
     #[test]
     fn semver_compare_basic() {
-        assert_eq!(perry_updater_compare_versions(make_str("1.0.0"), make_str("1.0.1")), -1);
-        assert_eq!(perry_updater_compare_versions(make_str("1.0.0"), make_str("1.0.0")), 0);
-        assert_eq!(perry_updater_compare_versions(make_str("2.0.0"), make_str("1.9.9")), 1);
+        assert_eq!(
+            perry_updater_compare_versions(make_str("1.0.0"), make_str("1.0.1")),
+            -1
+        );
+        assert_eq!(
+            perry_updater_compare_versions(make_str("1.0.0"), make_str("1.0.0")),
+            0
+        );
+        assert_eq!(
+            perry_updater_compare_versions(make_str("2.0.0"), make_str("1.9.9")),
+            1
+        );
     }
 
     #[test]
     fn semver_compare_prerelease() {
         // 1.0.0-beta < 1.0.0
-        assert_eq!(perry_updater_compare_versions(make_str("1.0.0-beta"), make_str("1.0.0")), -1);
+        assert_eq!(
+            perry_updater_compare_versions(make_str("1.0.0-beta"), make_str("1.0.0")),
+            -1
+        );
     }
 
     #[test]
     fn semver_compare_invalid() {
-        assert_eq!(perry_updater_compare_versions(make_str("notaversion"), make_str("1.0.0")), -2);
+        assert_eq!(
+            perry_updater_compare_versions(make_str("notaversion"), make_str("1.0.0")),
+            -2
+        );
     }
 
     #[test]
@@ -460,7 +487,8 @@ mod tests {
 
     #[test]
     fn signature_verify_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("perry-updater-sig-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("perry-updater-sig-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("payload.bin");
         let body = b"signed binary contents";
@@ -510,13 +538,17 @@ mod tests {
 
     #[test]
     fn sentinel_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("perry-updater-sent-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("perry-updater-sent-test-{}", std::process::id()));
         let path = dir.join("subdir/updater.sentinel");
         let path_str = path.to_string_lossy().to_string();
 
         let payload = r#"{"prevExePath":"/tmp/old","stagedAt":"2026-04-27","restartCount":0,"state":"armed"}"#;
 
-        assert_eq!(perry_updater_write_sentinel(make_str(&path_str), make_str(payload)), 1);
+        assert_eq!(
+            perry_updater_write_sentinel(make_str(&path_str), make_str(payload)),
+            1
+        );
 
         let read = read_str(perry_updater_read_sentinel(make_str(&path_str)));
         assert_eq!(read, payload);

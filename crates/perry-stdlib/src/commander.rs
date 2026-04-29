@@ -10,11 +10,10 @@
 //! invoked the `.action()` callback, never linked subcommands to their
 //! parent, and never printed help. The docs example silently no-op'd.
 
-use perry_runtime::{
-    js_object_alloc, js_object_set_field_by_name, js_string_from_bytes,
-    ClosureHeader, StringHeader,
-};
 use perry_runtime::closure::js_closure_call1;
+use perry_runtime::{
+    js_object_alloc, js_object_set_field_by_name, js_string_from_bytes, ClosureHeader, StringHeader,
+};
 use std::collections::HashMap;
 
 use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle};
@@ -22,10 +21,10 @@ use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle}
 // NaN-box tags. Mirror perry-runtime/src/value.rs constants. Duplicated
 // here because they're not exported across crate boundaries; if either
 // definition drifts the runtime tests catch it before this code does.
-const POINTER_TAG: u64  = 0x7FFD_0000_0000_0000;
-const STRING_TAG:  u64  = 0x7FFF_0000_0000_0000;
-const TAG_TRUE:    u64  = 0x7FFC_0000_0000_0004;
-const TAG_FALSE:   u64  = 0x7FFC_0000_0000_0003;
+const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 
 #[inline(always)]
 fn nanbox_pointer(addr: u64) -> u64 {
@@ -144,7 +143,10 @@ pub extern "C" fn js_commander_new() -> Handle {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_commander_name(handle: Handle, name_ptr: *const StringHeader) -> Handle {
+pub unsafe extern "C" fn js_commander_name(
+    handle: Handle,
+    name_ptr: *const StringHeader,
+) -> Handle {
     if let Some(name) = string_from_header(name_ptr) {
         if let Some(cmd) = get_handle_mut::<CommanderHandle>(handle) {
             cmd.name = name;
@@ -154,7 +156,10 @@ pub unsafe extern "C" fn js_commander_name(handle: Handle, name_ptr: *const Stri
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_commander_description(handle: Handle, desc_ptr: *const StringHeader) -> Handle {
+pub unsafe extern "C" fn js_commander_description(
+    handle: Handle,
+    desc_ptr: *const StringHeader,
+) -> Handle {
     if let Some(desc) = string_from_header(desc_ptr) {
         if let Some(cmd) = get_handle_mut::<CommanderHandle>(handle) {
             cmd.description = desc;
@@ -164,7 +169,10 @@ pub unsafe extern "C" fn js_commander_description(handle: Handle, desc_ptr: *con
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_commander_version(handle: Handle, version_ptr: *const StringHeader) -> Handle {
+pub unsafe extern "C" fn js_commander_version(
+    handle: Handle,
+    version_ptr: *const StringHeader,
+) -> Handle {
     if let Some(version) = string_from_header(version_ptr) {
         if let Some(cmd) = get_handle_mut::<CommanderHandle>(handle) {
             cmd.version = version;
@@ -227,7 +235,10 @@ pub extern "C" fn js_commander_action(handle: Handle, callback: i64) -> Handle {
 /// sub-handle so chained `.command("x").option(...).action(...)` accrues
 /// state on the subcommand, not the parent.
 #[no_mangle]
-pub unsafe extern "C" fn js_commander_command(handle: Handle, name_ptr: *const StringHeader) -> Handle {
+pub unsafe extern "C" fn js_commander_command(
+    handle: Handle,
+    name_ptr: *const StringHeader,
+) -> Handle {
     let sub_name = string_from_header(name_ptr).unwrap_or_default();
     let sub_handle = register_handle(CommanderHandle::new());
     if let Some(parent) = get_handle_mut::<CommanderHandle>(handle) {
@@ -267,14 +278,17 @@ fn parse_and_dispatch(handle: Handle, args: &[String]) {
             cmd.args.clear();
             for opt in &cmd.options {
                 if let Some(ref dv) = opt.default_value {
-                    cmd.parsed_values.insert(opt.long.clone(), ParsedValue::Str(dv.clone()));
+                    cmd.parsed_values
+                        .insert(opt.long.clone(), ParsedValue::Str(dv.clone()));
                 }
             }
             ParseSnapshot {
                 name: cmd.name.clone(),
                 description: cmd.description.clone(),
                 version: cmd.version.clone(),
-                options: cmd.options.iter()
+                options: cmd
+                    .options
+                    .iter()
                     .map(|o| OptionMeta {
                         short: o.short,
                         long: o.long.clone(),
@@ -368,13 +382,15 @@ fn parse_and_dispatch(handle: Handle, args: &[String]) {
 
 fn set_str(handle: Handle, key: &str, value: &str) {
     if let Some(cmd) = get_handle_mut::<CommanderHandle>(handle) {
-        cmd.parsed_values.insert(key.to_string(), ParsedValue::Str(value.to_string()));
+        cmd.parsed_values
+            .insert(key.to_string(), ParsedValue::Str(value.to_string()));
     }
 }
 
 fn set_bool(handle: Handle, key: &str, value: bool) {
     if let Some(cmd) = get_handle_mut::<CommanderHandle>(handle) {
-        cmd.parsed_values.insert(key.to_string(), ParsedValue::Bool(value));
+        cmd.parsed_values
+            .insert(key.to_string(), ParsedValue::Bool(value));
     }
 }
 
@@ -445,7 +461,11 @@ fn print_help(s: &ParseSnapshot) {
         println!("{}", s.description);
         println!();
     }
-    let prog = if s.name.is_empty() { "<program>".to_string() } else { s.name.clone() };
+    let prog = if s.name.is_empty() {
+        "<program>".to_string()
+    } else {
+        s.name.clone()
+    };
     let usage_tail = if s.subcommands.is_empty() {
         "[options]".to_string()
     } else {
@@ -461,7 +481,7 @@ fn print_help(s: &ParseSnapshot) {
         let placeholder = if opt.is_flag { "" } else { " <value>" };
         let flag_str = match opt.short {
             Some(ch) => format!("-{}, --{}{}", ch, opt.long, placeholder),
-            None     => format!("--{}{}", opt.long, placeholder),
+            None => format!("--{}{}", opt.long, placeholder),
         };
         println!("  {:<24}  {}", flag_str, opt.description);
     }
@@ -484,7 +504,10 @@ pub extern "C" fn js_commander_opts(handle: Handle) -> Handle {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_commander_get_option(handle: Handle, name_ptr: *const StringHeader) -> *const StringHeader {
+pub unsafe extern "C" fn js_commander_get_option(
+    handle: Handle,
+    name_ptr: *const StringHeader,
+) -> *const StringHeader {
     let name = match string_from_header(name_ptr) {
         Some(n) => n,
         None => return std::ptr::null(),
@@ -498,7 +521,10 @@ pub unsafe extern "C" fn js_commander_get_option(handle: Handle, name_ptr: *cons
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_commander_get_option_number(handle: Handle, name_ptr: *const StringHeader) -> f64 {
+pub unsafe extern "C" fn js_commander_get_option_number(
+    handle: Handle,
+    name_ptr: *const StringHeader,
+) -> f64 {
     let name = match string_from_header(name_ptr) {
         Some(n) => n,
         None => return f64::NAN,
@@ -512,7 +538,10 @@ pub unsafe extern "C" fn js_commander_get_option_number(handle: Handle, name_ptr
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_commander_get_option_bool(handle: Handle, name_ptr: *const StringHeader) -> f64 {
+pub unsafe extern "C" fn js_commander_get_option_bool(
+    handle: Handle,
+    name_ptr: *const StringHeader,
+) -> f64 {
     let name = match string_from_header(name_ptr) {
         Some(n) => n,
         None => return f64::from_bits(TAG_FALSE),
@@ -520,7 +549,7 @@ pub unsafe extern "C" fn js_commander_get_option_bool(handle: Handle, name_ptr: 
     if let Some(cmd) = get_handle_mut::<CommanderHandle>(handle) {
         match cmd.parsed_values.get(&name) {
             Some(ParsedValue::Bool(true)) => return f64::from_bits(TAG_TRUE),
-            Some(ParsedValue::Str(_))     => return f64::from_bits(TAG_TRUE),
+            Some(ParsedValue::Str(_)) => return f64::from_bits(TAG_TRUE),
             _ => {}
         }
     }

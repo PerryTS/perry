@@ -43,9 +43,7 @@ pub fn create(min: f64, max: f64, initial: f64, on_change: f64) -> i64 {
     });
 
     scale.connect_value_changed(move |scale| {
-        let closure_f64 = SLIDER_CALLBACKS.with(|cbs| {
-            cbs.borrow().get(&callback_id).copied()
-        });
+        let closure_f64 = SLIDER_CALLBACKS.with(|cbs| cbs.borrow().get(&callback_id).copied());
         if let Some(closure_f64) = closure_f64 {
             let value = scale.value();
             let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };

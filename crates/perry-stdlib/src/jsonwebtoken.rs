@@ -3,8 +3,8 @@
 //! Native implementation of the 'jsonwebtoken' npm package.
 //! Provides JWT sign, verify, and decode functionality.
 
-use perry_runtime::{js_string_from_bytes, StringHeader};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use perry_runtime::{js_string_from_bytes, StringHeader};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -115,7 +115,13 @@ pub unsafe extern "C" fn js_jwt_sign(
         None => return 0,
     };
     let key = EncodingKey::from_secret(secret.as_bytes());
-    sign_common(payload_ptr, expires_in_secs, Algorithm::HS256, &key, kid_ptr)
+    sign_common(
+        payload_ptr,
+        expires_in_secs,
+        Algorithm::HS256,
+        &key,
+        kid_ptr,
+    )
 }
 
 /// Sign a payload to create a JWT (ES256)
@@ -142,7 +148,13 @@ pub unsafe extern "C" fn js_jwt_sign_es256(
             return 0;
         }
     };
-    sign_common(payload_ptr, expires_in_secs, Algorithm::ES256, &key, kid_ptr)
+    sign_common(
+        payload_ptr,
+        expires_in_secs,
+        Algorithm::ES256,
+        &key,
+        kid_ptr,
+    )
 }
 
 /// Sign a payload to create a JWT (RS256)
@@ -168,7 +180,13 @@ pub unsafe extern "C" fn js_jwt_sign_rs256(
             return 0;
         }
     };
-    sign_common(payload_ptr, expires_in_secs, Algorithm::RS256, &key, kid_ptr)
+    sign_common(
+        payload_ptr,
+        expires_in_secs,
+        Algorithm::RS256,
+        &key,
+        kid_ptr,
+    )
 }
 
 /// Verify and decode a JWT
@@ -194,7 +212,11 @@ pub unsafe extern "C" fn js_jwt_verify(
         }
     };
 
-    eprintln!("[jwt-verify] token_len={} secret_len={}", token.len(), secret.len());
+    eprintln!(
+        "[jwt-verify] token_len={} secret_len={}",
+        token.len(),
+        secret.len()
+    );
 
     let key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
@@ -205,8 +227,12 @@ pub unsafe extern "C" fn js_jwt_verify(
     match decode::<Claims>(&token, &key, &validation) {
         Ok(token_data) => {
             // Return the claims as JSON
-            let json = serde_json::to_string(&token_data.claims).unwrap_or_else(|_| "{}".to_string());
-            eprintln!("[jwt-verify] success, claims={}", &json[..json.len().min(80)]);
+            let json =
+                serde_json::to_string(&token_data.claims).unwrap_or_else(|_| "{}".to_string());
+            eprintln!(
+                "[jwt-verify] success, claims={}",
+                &json[..json.len().min(80)]
+            );
             js_string_from_bytes(json.as_ptr(), json.len() as u32)
         }
         Err(e) => {

@@ -48,9 +48,7 @@ pub fn create(_label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
     });
 
     dropdown.connect_selected_notify(move |dd| {
-        let closure_f64 = PICKER_CALLBACKS.with(|cbs| {
-            cbs.borrow().get(&callback_id).copied()
-        });
+        let closure_f64 = PICKER_CALLBACKS.with(|cbs| cbs.borrow().get(&callback_id).copied());
         if let Some(closure_f64) = closure_f64 {
             let selected = dd.selected() as f64;
             let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };

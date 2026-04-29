@@ -6,10 +6,10 @@ use perry_runtime::{js_promise_new, JSValue, Promise};
 use sqlx::mysql::MySqlConnection;
 use sqlx::Connection;
 
-use crate::common::{register_handle, get_handle_mut, Handle};
-use super::pool::{MysqlPoolConnectionHandle, ParamValue, extract_params_from_jsvalue};
-use super::result::{RawQueryResult, QueryOutcome, is_row_returning_query};
+use super::pool::{extract_params_from_jsvalue, MysqlPoolConnectionHandle, ParamValue};
+use super::result::{is_row_returning_query, QueryOutcome, RawQueryResult};
 use super::types::parse_mysql_config;
+use crate::common::{get_handle_mut, register_handle, Handle};
 
 /// Default timeout for connecting to the database (in seconds)
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
@@ -56,7 +56,12 @@ pub unsafe extern "C" fn js_mysql2_create_connection(config_f: f64) -> *mut Prom
         let url = mysql_config.to_url();
 
         // Wrap connection in a timeout to prevent indefinite hangs
-        match timeout(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS), MySqlConnection::connect(&url)).await {
+        match timeout(
+            Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS),
+            MySqlConnection::connect(&url),
+        )
+        .await
+        {
             Ok(Ok(conn)) => {
                 let handle = register_handle(MysqlConnectionHandle::new(conn));
                 // NaN-box the handle with POINTER_TAG so it can be properly extracted later
@@ -87,7 +92,12 @@ pub unsafe extern "C" fn js_mysql2_connection_end(conn_handle: Handle) -> *mut P
 
         if let Some(mut wrapper) = take_handle::<MysqlConnectionHandle>(conn_handle) {
             if let Some(conn) = wrapper.take() {
-                match timeout(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS), conn.close()).await {
+                match timeout(
+                    Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS),
+                    conn.close(),
+                )
+                .await
+                {
                     Ok(Ok(())) => Ok(JSValue::undefined().bits()),
                     Ok(Err(e)) => Err(format!("Failed to close connection: {}", e)),
                     Err(_) => {
@@ -128,7 +138,6 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
         let bytes = std::slice::from_raw_parts(data_ptr, len);
         String::from_utf8_lossy(bytes).to_string()
     };
-
 
     let is_select = is_row_returning_query(&sql);
 
@@ -214,9 +223,7 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
 
             Err("Invalid connection handle".to_string())
         },
-        |outcome: QueryOutcome| {
-            outcome.to_jsvalue().bits()
-        },
+        |outcome: QueryOutcome| outcome.to_jsvalue().bits(),
     );
 
     promise
@@ -265,19 +272,45 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
                         };
                     }
                     if is_select {
-                        match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query.fetch_all(conn)).await {
-                            Ok(Ok(rows)) => return Ok(QueryOutcome::Rows(RawQueryResult::from_mysql_rows(rows))),
+                        match timeout(
+                            Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
+                            query.fetch_all(conn),
+                        )
+                        .await
+                        {
+                            Ok(Ok(rows)) => {
+                                return Ok(QueryOutcome::Rows(RawQueryResult::from_mysql_rows(
+                                    rows,
+                                )))
+                            }
                             Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => return Err(format!("Query timed out after {} seconds", DEFAULT_QUERY_TIMEOUT_SECS)),
+                            Err(_) => {
+                                return Err(format!(
+                                    "Query timed out after {} seconds",
+                                    DEFAULT_QUERY_TIMEOUT_SECS
+                                ))
+                            }
                         }
                     } else {
-                        match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query.execute(conn)).await {
-                            Ok(Ok(result)) => return Ok(QueryOutcome::Executed {
-                                affected_rows: result.rows_affected(),
-                                last_insert_id: result.last_insert_id(),
-                            }),
+                        match timeout(
+                            Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
+                            query.execute(conn),
+                        )
+                        .await
+                        {
+                            Ok(Ok(result)) => {
+                                return Ok(QueryOutcome::Executed {
+                                    affected_rows: result.rows_affected(),
+                                    last_insert_id: result.last_insert_id(),
+                                })
+                            }
                             Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => return Err(format!("Query timed out after {} seconds", DEFAULT_QUERY_TIMEOUT_SECS)),
+                            Err(_) => {
+                                return Err(format!(
+                                    "Query timed out after {} seconds",
+                                    DEFAULT_QUERY_TIMEOUT_SECS
+                                ))
+                            }
                         }
                     }
                 } else {
@@ -299,19 +332,45 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
                         };
                     }
                     if is_select {
-                        match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query.fetch_all(&mut **conn)).await {
-                            Ok(Ok(rows)) => return Ok(QueryOutcome::Rows(RawQueryResult::from_mysql_rows(rows))),
+                        match timeout(
+                            Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
+                            query.fetch_all(&mut **conn),
+                        )
+                        .await
+                        {
+                            Ok(Ok(rows)) => {
+                                return Ok(QueryOutcome::Rows(RawQueryResult::from_mysql_rows(
+                                    rows,
+                                )))
+                            }
                             Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => return Err(format!("Query timed out after {} seconds", DEFAULT_QUERY_TIMEOUT_SECS)),
+                            Err(_) => {
+                                return Err(format!(
+                                    "Query timed out after {} seconds",
+                                    DEFAULT_QUERY_TIMEOUT_SECS
+                                ))
+                            }
                         }
                     } else {
-                        match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query.execute(&mut **conn)).await {
-                            Ok(Ok(result)) => return Ok(QueryOutcome::Executed {
-                                affected_rows: result.rows_affected(),
-                                last_insert_id: result.last_insert_id(),
-                            }),
+                        match timeout(
+                            Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
+                            query.execute(&mut **conn),
+                        )
+                        .await
+                        {
+                            Ok(Ok(result)) => {
+                                return Ok(QueryOutcome::Executed {
+                                    affected_rows: result.rows_affected(),
+                                    last_insert_id: result.last_insert_id(),
+                                })
+                            }
                             Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => return Err(format!("Query timed out after {} seconds", DEFAULT_QUERY_TIMEOUT_SECS)),
+                            Err(_) => {
+                                return Err(format!(
+                                    "Query timed out after {} seconds",
+                                    DEFAULT_QUERY_TIMEOUT_SECS
+                                ))
+                            }
                         }
                     }
                 } else {
@@ -321,9 +380,7 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
 
             Err("Invalid connection handle".to_string())
         },
-        |outcome: QueryOutcome| {
-            outcome.to_jsvalue().bits()
-        },
+        |outcome: QueryOutcome| outcome.to_jsvalue().bits(),
     );
 
     promise
@@ -331,7 +388,9 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
 
 /// connection.beginTransaction() -> Promise<void>
 #[no_mangle]
-pub unsafe extern "C" fn js_mysql2_connection_begin_transaction(conn_handle: Handle) -> *mut Promise {
+pub unsafe extern "C" fn js_mysql2_connection_begin_transaction(
+    conn_handle: Handle,
+) -> *mut Promise {
     let promise = js_promise_new();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
@@ -341,7 +400,12 @@ pub unsafe extern "C" fn js_mysql2_connection_begin_transaction(conn_handle: Han
         if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
             if let Some(conn) = wrapper.connection.as_mut() {
                 let query_future = sqlx::query("BEGIN").execute(conn);
-                match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
+                match timeout(
+                    Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
+                    query_future,
+                )
+                .await
+                {
                     Ok(Ok(_)) => Ok(JSValue::undefined().bits()),
                     Ok(Err(e)) => Err(format!("Failed to begin transaction: {}", e)),
                     Err(_) => Err(format!(
@@ -372,7 +436,12 @@ pub unsafe extern "C" fn js_mysql2_connection_commit(conn_handle: Handle) -> *mu
         if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
             if let Some(conn) = wrapper.connection.as_mut() {
                 let query_future = sqlx::query("COMMIT").execute(conn);
-                match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
+                match timeout(
+                    Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
+                    query_future,
+                )
+                .await
+                {
                     Ok(Ok(_)) => Ok(JSValue::undefined().bits()),
                     Ok(Err(e)) => Err(format!("Failed to commit transaction: {}", e)),
                     Err(_) => Err(format!(
@@ -403,7 +472,12 @@ pub unsafe extern "C" fn js_mysql2_connection_rollback(conn_handle: Handle) -> *
         if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
             if let Some(conn) = wrapper.connection.as_mut() {
                 let query_future = sqlx::query("ROLLBACK").execute(conn);
-                match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
+                match timeout(
+                    Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
+                    query_future,
+                )
+                .await
+                {
                     Ok(Ok(_)) => Ok(JSValue::undefined().bits()),
                     Ok(Err(e)) => Err(format!("Failed to rollback transaction: {}", e)),
                     Err(_) => Err(format!(

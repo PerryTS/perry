@@ -7,7 +7,7 @@ import {
     VStack, HStack, Spacer,
     Text, Button,
     State,
-    addKeyboardShortcut,
+    addKeyboardShortcut, registerGlobalHotkey,
     widgetSetOnClick, widgetSetOnHover, widgetSetOnDoubleClick,
     clipboardRead, clipboardWrite,
     menuCreate, menuAddItem,
@@ -52,6 +52,19 @@ addKeyboardShortcut("s", 3, () => {
     log.set("Save as...")
 })
 // ANCHOR_END: keyboard
+
+// ANCHOR: global-hotkey
+// System-wide: fires even when the app is in the background.
+// macOS: real Carbon RegisterEventHotKey. Other platforms: no-op.
+registerGlobalHotkey("F5", 0, () => {
+    log.set("Global F5 hotkey fired")
+})
+
+// Cmd+Shift+G (modifiers: 1=Cmd + 2=Shift = 3)
+registerGlobalHotkey("g", 3, () => {
+    log.set("Global Cmd+Shift+G fired")
+})
+// ANCHOR_END: global-hotkey
 
 // ANCHOR: menu-shortcut
 const fileMenu = menuCreate()

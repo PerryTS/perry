@@ -9,9 +9,9 @@ use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::DataExchange::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::System::Ole::CF_UNICODETEXT;
-#[cfg(target_os = "windows")]
 use windows::Win32::System::Memory::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Ole::CF_UNICODETEXT;
 
 /// Extract a &str from a *const StringHeader pointer.
 fn str_from_header(ptr: *const u8) -> &'static str {
@@ -61,7 +61,8 @@ pub fn read() -> f64 {
 
             // Create a Perry string
             let bytes = text.as_bytes();
-            let str_ptr = perry_runtime::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            let str_ptr =
+                perry_runtime::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
             js_nanbox_string(str_ptr as i64)
         }
     }

@@ -3,9 +3,9 @@
 //! Native implementation of the 'moment' npm package using chrono.
 //! Provides date/time manipulation with moment.js compatible API.
 
+use crate::common::{get_handle, register_handle, Handle};
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, TimeZone, Timelike, Utc};
 use perry_runtime::{js_string_from_bytes, StringHeader};
-use crate::common::{get_handle, register_handle, Handle};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -92,16 +92,11 @@ pub unsafe extern "C" fn js_moment_parse(date_str_ptr: *const StringHeader) -> f
     let datetime = date_str
         .parse::<DateTime<Utc>>()
         .or_else(|_| {
-            NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d %H:%M:%S")
-                .map(|dt| dt.and_utc())
+            NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d %H:%M:%S").map(|dt| dt.and_utc())
         })
+        .or_else(|_| NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d").map(|dt| dt.and_utc()))
         .or_else(|_| {
-            NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d")
-                .map(|dt| dt.and_utc())
-        })
-        .or_else(|_| {
-            NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%dT%H:%M:%S")
-                .map(|dt| dt.and_utc())
+            NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%dT%H:%M:%S").map(|dt| dt.and_utc())
         });
 
     match datetime {
@@ -129,7 +124,8 @@ pub unsafe extern "C" fn js_moment_format(
     format_ptr: *const StringHeader,
 ) -> *mut StringHeader {
     let handle = f64_to_handle(handle);
-    let format_str = string_from_header(format_ptr).unwrap_or_else(|| "YYYY-MM-DDTHH:mm:ssZ".to_string());
+    let format_str =
+        string_from_header(format_ptr).unwrap_or_else(|| "YYYY-MM-DDTHH:mm:ssZ".to_string());
 
     if let Some(moment) = get_handle::<MomentHandle>(handle) {
         // Convert moment.js format to chrono format
@@ -324,21 +320,19 @@ pub unsafe extern "C" fn js_moment_start_of(handle: f64, unit_ptr: *const String
     if let Some(moment) = get_handle::<MomentHandle>(handle) {
         let dt = moment.datetime;
         let new_datetime = match unit.as_str() {
-            "year" | "years" | "y" => {
-                Utc.with_ymd_and_hms(dt.year(), 1, 1, 0, 0, 0).unwrap()
-            }
-            "month" | "months" | "M" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0).unwrap()
-            }
-            "day" | "days" | "d" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 0, 0, 0).unwrap()
-            }
-            "hour" | "hours" | "h" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 0, 0).unwrap()
-            }
-            "minute" | "minutes" | "m" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), 0).unwrap()
-            }
+            "year" | "years" | "y" => Utc.with_ymd_and_hms(dt.year(), 1, 1, 0, 0, 0).unwrap(),
+            "month" | "months" | "M" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0)
+                .unwrap(),
+            "day" | "days" | "d" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 0, 0, 0)
+                .unwrap(),
+            "hour" | "hours" | "h" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 0, 0)
+                .unwrap(),
+            "minute" | "minutes" | "m" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), 0)
+                .unwrap(),
             _ => dt,
         };
 
@@ -361,28 +355,28 @@ pub unsafe extern "C" fn js_moment_end_of(handle: f64, unit_ptr: *const StringHe
     if let Some(moment) = get_handle::<MomentHandle>(handle) {
         let dt = moment.datetime;
         let new_datetime = match unit.as_str() {
-            "year" | "years" | "y" => {
-                Utc.with_ymd_and_hms(dt.year(), 12, 31, 23, 59, 59).unwrap()
-            }
+            "year" | "years" | "y" => Utc.with_ymd_and_hms(dt.year(), 12, 31, 23, 59, 59).unwrap(),
             "month" | "months" | "M" => {
                 let last_day = NaiveDateTime::new(
                     chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month() + 1, 1)
-                        .unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(dt.year() + 1, 1, 1).unwrap())
+                        .unwrap_or_else(|| {
+                            chrono::NaiveDate::from_ymd_opt(dt.year() + 1, 1, 1).unwrap()
+                        })
                         .pred_opt()
                         .unwrap(),
                     chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap(),
                 );
                 last_day.and_utc()
             }
-            "day" | "days" | "d" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 23, 59, 59).unwrap()
-            }
-            "hour" | "hours" | "h" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 59, 59).unwrap()
-            }
-            "minute" | "minutes" | "m" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), 59).unwrap()
-            }
+            "day" | "days" | "d" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 23, 59, 59)
+                .unwrap(),
+            "hour" | "hours" | "h" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 59, 59)
+                .unwrap(),
+            "minute" | "minutes" | "m" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), 59)
+                .unwrap(),
             _ => dt,
         };
 
@@ -515,7 +509,11 @@ pub unsafe extern "C" fn js_moment_is_same(
         } else {
             moment.datetime == other.datetime
         };
-        return if result { f64::from_bits(TAG_TRUE) } else { f64::from_bits(TAG_FALSE) };
+        return if result {
+            f64::from_bits(TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
     }
 
     f64::from_bits(TAG_FALSE)

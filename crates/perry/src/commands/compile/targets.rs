@@ -34,7 +34,8 @@ pub(super) fn generate_js_bundle(ctx: &CompilationContext, output_dir: &Path) ->
 
     for (specifier, module) in &ctx.js_modules {
         // Escape the source code for embedding
-        let escaped_source = module.source
+        let escaped_source = module
+            .source
             .replace('\\', "\\\\")
             .replace('`', "\\`")
             .replace("${", "\\${");
@@ -50,8 +51,14 @@ pub(super) fn generate_js_bundle(ctx: &CompilationContext, output_dir: &Path) ->
 }
 
 /// Compile for iOS widget target: emit SwiftUI source for WidgetKit extension
-pub(super) fn compile_for_ios_widget(ctx: &CompilationContext, args: &CompileArgs, format: OutputFormat) -> Result<CompileResult> {
-    let app_bundle_id = args.app_bundle_id.as_deref()
+pub(super) fn compile_for_ios_widget(
+    ctx: &CompilationContext,
+    args: &CompileArgs,
+    format: OutputFormat,
+) -> Result<CompileResult> {
+    let app_bundle_id = args
+        .app_bundle_id
+        .as_deref()
         .ok_or_else(|| anyhow!("--app-bundle-id is required for ios-widget target"))?;
 
     // Collect all widget declarations from all modules
@@ -67,8 +74,11 @@ pub(super) fn compile_for_ios_widget(ctx: &CompilationContext, args: &CompileArg
     }
 
     match format {
-        OutputFormat::Text => println!("Generating WidgetKit extension ({} widget{})...",
-            widgets.len(), if widgets.len() == 1 { "" } else { "s" }),
+        OutputFormat::Text => println!(
+            "Generating WidgetKit extension ({} widget{})...",
+            widgets.len(),
+            if widgets.len() == 1 { "" } else { "s" }
+        ),
         OutputFormat::Json => {}
     }
 
@@ -76,7 +86,9 @@ pub(super) fn compile_for_ios_widget(ctx: &CompilationContext, args: &CompileArg
     let output_dir = if let Some(ref out) = args.output {
         out.clone()
     } else {
-        let stem = args.input.file_stem()
+        let stem = args
+            .input
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("widget");
         PathBuf::from(format!("{}_widget", stem))
@@ -105,9 +117,7 @@ pub(super) fn compile_for_ios_widget(ctx: &CompilationContext, args: &CompileArg
     }
 
     // Report results
-    let total_size: usize = all_swift_files.iter()
-        .map(|(_, s)| s.len())
-        .sum();
+    let total_size: usize = all_swift_files.iter().map(|(_, s)| s.len()).sum();
 
     match format {
         OutputFormat::Text => {
@@ -124,7 +134,10 @@ pub(super) fn compile_for_ios_widget(ctx: &CompilationContext, args: &CompileArg
             } else {
                 "iphoneos"
             };
-            println!("  xcrun --sdk {} swiftc -target arm64-apple-ios17.0 \\", sdk);
+            println!(
+                "  xcrun --sdk {} swiftc -target arm64-apple-ios17.0 \\",
+                sdk
+            );
             for (name, _) in &all_swift_files {
                 println!("    {}/{} \\", output_dir.display(), name);
             }
@@ -132,8 +145,12 @@ pub(super) fn compile_for_ios_widget(ctx: &CompilationContext, args: &CompileArg
             println!("    -o {}/WidgetExtension", output_dir.display());
         }
         OutputFormat::Json => {
-            println!("{{\"output\": \"{}\", \"widgets\": {}, \"size\": {}, \"target\": \"ios-widget\"}}",
-                output_dir.display(), widgets.len(), total_size);
+            println!(
+                "{{\"output\": \"{}\", \"widgets\": {}, \"size\": {}, \"target\": \"ios-widget\"}}",
+                output_dir.display(),
+                widgets.len(),
+                total_size
+            );
         }
     }
 
@@ -148,8 +165,14 @@ pub(super) fn compile_for_ios_widget(ctx: &CompilationContext, args: &CompileArg
 }
 
 /// Compile for watchOS widget target: emit SwiftUI + native timeline (accessory families)
-pub(super) fn compile_for_watchos_widget(ctx: &CompilationContext, args: &CompileArgs, format: OutputFormat) -> Result<CompileResult> {
-    let app_bundle_id = args.app_bundle_id.as_deref()
+pub(super) fn compile_for_watchos_widget(
+    ctx: &CompilationContext,
+    args: &CompileArgs,
+    format: OutputFormat,
+) -> Result<CompileResult> {
+    let app_bundle_id = args
+        .app_bundle_id
+        .as_deref()
         .ok_or_else(|| anyhow!("--app-bundle-id is required for watchos-widget target"))?;
 
     let mut widgets: Vec<&perry_hir::ir::WidgetDecl> = Vec::new();
@@ -164,15 +187,20 @@ pub(super) fn compile_for_watchos_widget(ctx: &CompilationContext, args: &Compil
     }
 
     match format {
-        OutputFormat::Text => println!("Generating watchOS WidgetKit extension ({} complication{})...",
-            widgets.len(), if widgets.len() == 1 { "" } else { "s" }),
+        OutputFormat::Text => println!(
+            "Generating watchOS WidgetKit extension ({} complication{})...",
+            widgets.len(),
+            if widgets.len() == 1 { "" } else { "s" }
+        ),
         OutputFormat::Json => {}
     }
 
     let output_dir = if let Some(ref out) = args.output {
         out.clone()
     } else {
-        let stem = args.input.file_stem()
+        let stem = args
+            .input
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("widget");
         PathBuf::from(format!("{}_watchos_widget", stem))
@@ -212,7 +240,10 @@ pub(super) fn compile_for_watchos_widget(ctx: &CompilationContext, args: &Compil
             } else {
                 "watchos"
             };
-            println!("  xcrun --sdk {} swiftc -target arm64-apple-watchos9.0 \\", sdk);
+            println!(
+                "  xcrun --sdk {} swiftc -target arm64-apple-watchos9.0 \\",
+                sdk
+            );
             for (name, _) in &all_swift_files {
                 println!("    {}/{} \\", output_dir.display(), name);
             }
@@ -225,7 +256,11 @@ pub(super) fn compile_for_watchos_widget(ctx: &CompilationContext, args: &Compil
         }
     }
 
-    let target_str = args.target.as_deref().unwrap_or("watchos-widget").to_string();
+    let target_str = args
+        .target
+        .as_deref()
+        .unwrap_or("watchos-widget")
+        .to_string();
     Ok(CompileResult {
         output_path: output_dir,
         target: target_str,
@@ -246,7 +281,11 @@ pub(super) fn find_watchos_swift_runtime() -> Option<PathBuf> {
             }
             // Also check ../lib/perry/swift/
             if let Some(prefix) = dir.parent() {
-                let candidate = prefix.join("lib").join("perry").join("swift").join("PerryWatchApp.swift");
+                let candidate = prefix
+                    .join("lib")
+                    .join("perry")
+                    .join("swift")
+                    .join("PerryWatchApp.swift");
                 if candidate.exists() {
                     return Some(candidate);
                 }
@@ -271,7 +310,11 @@ pub(super) fn find_visionos_swift_runtime() -> Option<PathBuf> {
                 return Some(candidate);
             }
             if let Some(prefix) = dir.parent() {
-                let candidate = prefix.join("lib").join("perry").join("swift").join("PerryVisionApp.swift");
+                let candidate = prefix
+                    .join("lib")
+                    .join("perry")
+                    .join("swift")
+                    .join("PerryVisionApp.swift");
                 if candidate.exists() {
                     return Some(candidate);
                 }
@@ -313,7 +356,8 @@ pub(super) fn lookup_bundle_id_from_toml(input: &std::path::Path, section: &str)
         if toml_path.exists() {
             let data = fs::read_to_string(&toml_path).ok()?;
             let doc: toml::Table = data.parse().ok()?;
-            let bid = doc.get(section)
+            let bid = doc
+                .get(section)
                 .and_then(|s| s.get("bundle_id"))
                 .or_else(|| doc.get("bundle_id"))
                 .and_then(|v| v.as_str())
@@ -365,14 +409,15 @@ pub(super) fn compile_metallib_for_bundle(
         Some("ios") => "iphoneos",
         Some("tvos-simulator") => "appletvsimulator",
         Some("tvos") => "appletvos",
-        other => return Err(anyhow!(
-            "metal_sources is only supported on ios/tvos/watchos (got {:?})",
-            other
-        )),
+        other => {
+            return Err(anyhow!(
+                "metal_sources is only supported on ios/tvos/watchos (got {:?})",
+                other
+            ))
+        }
     };
 
-    let air_dir = std::env::temp_dir()
-        .join(format!("perry_metal_{}", std::process::id()));
+    let air_dir = std::env::temp_dir().join(format!("perry_metal_{}", std::process::id()));
     std::fs::create_dir_all(&air_dir).ok();
 
     let mut air_files: Vec<PathBuf> = Vec::new();
@@ -404,7 +449,8 @@ pub(super) fn compile_metallib_for_bundle(
 
     let metallib_out = app_dir.join("default.metallib");
     let mut link_cmd = Command::new("xcrun");
-    link_cmd.args(["-sdk", metal_sdk, "metallib", "-o"])
+    link_cmd
+        .args(["-sdk", metal_sdk, "metallib", "-o"])
         .arg(&metallib_out);
     for air in &air_files {
         link_cmd.arg(air);
@@ -426,7 +472,11 @@ pub(super) fn compile_metallib_for_bundle(
 }
 
 /// Compile for Android widget target: emit Kotlin/Glance source + JNI bridge
-pub(super) fn compile_for_android_widget(ctx: &CompilationContext, args: &CompileArgs, format: OutputFormat) -> Result<CompileResult> {
+pub(super) fn compile_for_android_widget(
+    ctx: &CompilationContext,
+    args: &CompileArgs,
+    format: OutputFormat,
+) -> Result<CompileResult> {
     let mut widgets: Vec<&perry_hir::ir::WidgetDecl> = Vec::new();
     for (_, hir_module) in &ctx.native_modules {
         for widget in &hir_module.widgets {
@@ -441,15 +491,20 @@ pub(super) fn compile_for_android_widget(ctx: &CompilationContext, args: &Compil
     let app_package = args.app_bundle_id.as_deref().unwrap_or("com.perry.widget");
 
     match format {
-        OutputFormat::Text => println!("Generating Android Glance widget ({} widget{})...",
-            widgets.len(), if widgets.len() == 1 { "" } else { "s" }),
+        OutputFormat::Text => println!(
+            "Generating Android Glance widget ({} widget{})...",
+            widgets.len(),
+            if widgets.len() == 1 { "" } else { "s" }
+        ),
         OutputFormat::Json => {}
     }
 
     let output_dir = if let Some(ref out) = args.output {
         out.clone()
     } else {
-        let stem = args.input.file_stem()
+        let stem = args
+            .input
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("widget");
         PathBuf::from(format!("{}_android_widget", stem))
@@ -470,8 +525,15 @@ pub(super) fn compile_for_android_widget(ctx: &CompilationContext, args: &Compil
         }
 
         // Write widget_info XML
-        let safe_name = widget.kind.rsplit('.').next().unwrap_or("widget").to_lowercase();
-        let xml_path = output_dir.join("xml").join(format!("widget_info_{}.xml", safe_name));
+        let safe_name = widget
+            .kind
+            .rsplit('.')
+            .next()
+            .unwrap_or("widget")
+            .to_lowercase();
+        let xml_path = output_dir
+            .join("xml")
+            .join(format!("widget_info_{}.xml", safe_name));
         fs::write(&xml_path, &bundle.widget_info_xml)?;
 
         // Write manifest snippet
@@ -492,7 +554,10 @@ pub(super) fn compile_for_android_widget(ctx: &CompilationContext, args: &Compil
             println!("Total: {:.1} KB Kotlin source", total_size as f64 / 1024.0);
             println!();
             println!("Add the generated files to your Android/Gradle project:");
-            println!("  1. Copy *.kt files to app/src/main/java/{}/", app_package.replace('.', "/"));
+            println!(
+                "  1. Copy *.kt files to app/src/main/java/{}/",
+                app_package.replace('.', "/")
+            );
             println!("  2. Copy xml/ to app/src/main/res/xml/");
             println!("  3. Merge AndroidManifest_snippet.xml into your AndroidManifest.xml");
             println!("  4. Add Glance dependency: implementation \"androidx.glance:glance-appwidget:1.1.0\"");
@@ -513,7 +578,11 @@ pub(super) fn compile_for_android_widget(ctx: &CompilationContext, args: &Compil
 }
 
 /// Compile for Wear OS tile target: emit Kotlin Tiles source + JNI bridge
-pub(super) fn compile_for_wearos_tile(ctx: &CompilationContext, args: &CompileArgs, format: OutputFormat) -> Result<CompileResult> {
+pub(super) fn compile_for_wearos_tile(
+    ctx: &CompilationContext,
+    args: &CompileArgs,
+    format: OutputFormat,
+) -> Result<CompileResult> {
     let mut widgets: Vec<&perry_hir::ir::WidgetDecl> = Vec::new();
     for (_, hir_module) in &ctx.native_modules {
         for widget in &hir_module.widgets {
@@ -528,15 +597,20 @@ pub(super) fn compile_for_wearos_tile(ctx: &CompilationContext, args: &CompileAr
     let app_package = args.app_bundle_id.as_deref().unwrap_or("com.perry.tile");
 
     match format {
-        OutputFormat::Text => println!("Generating Wear OS tile ({} tile{})...",
-            widgets.len(), if widgets.len() == 1 { "" } else { "s" }),
+        OutputFormat::Text => println!(
+            "Generating Wear OS tile ({} tile{})...",
+            widgets.len(),
+            if widgets.len() == 1 { "" } else { "s" }
+        ),
         OutputFormat::Json => {}
     }
 
     let output_dir = if let Some(ref out) = args.output {
         out.clone()
     } else {
-        let stem = args.input.file_stem()
+        let stem = args
+            .input
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("tile");
         PathBuf::from(format!("{}_wearos_tile", stem))
@@ -571,10 +645,15 @@ pub(super) fn compile_for_wearos_tile(ctx: &CompilationContext, args: &CompileAr
             println!("Total: {:.1} KB Kotlin source", total_size as f64 / 1024.0);
             println!();
             println!("Add the generated files to your Wear OS/Gradle project:");
-            println!("  1. Copy *.kt files to app/src/main/java/{}/", app_package.replace('.', "/"));
+            println!(
+                "  1. Copy *.kt files to app/src/main/java/{}/",
+                app_package.replace('.', "/")
+            );
             println!("  2. Merge AndroidManifest_snippet.xml into your AndroidManifest.xml");
             println!("  3. Add dependencies:");
-            println!("     implementation \"com.google.android.horologist:horologist-tiles:0.6.5\"");
+            println!(
+                "     implementation \"com.google.android.horologist:horologist-tiles:0.6.5\""
+            );
             println!("     implementation \"androidx.wear.tiles:tiles-material:1.4.0\"");
         }
         OutputFormat::Json => {
@@ -593,13 +672,20 @@ pub(super) fn compile_for_wearos_tile(ctx: &CompilationContext, args: &CompileAr
 }
 
 /// Compile for web target: emit JavaScript + HTML instead of native code
-pub(super) fn compile_for_web(ctx: &CompilationContext, args: &CompileArgs, format: OutputFormat) -> Result<CompileResult> {
+pub(super) fn compile_for_web(
+    ctx: &CompilationContext,
+    args: &CompileArgs,
+    format: OutputFormat,
+) -> Result<CompileResult> {
     match format {
         OutputFormat::Text => println!("Generating JavaScript for web target..."),
         OutputFormat::Json => {}
     }
 
-    let entry_path = args.input.canonicalize().unwrap_or_else(|_| args.input.clone());
+    let entry_path = args
+        .input
+        .canonicalize()
+        .unwrap_or_else(|_| args.input.clone());
 
     // Build topologically sorted module list (dependencies before dependents)
     let mut sorted_paths: Vec<PathBuf> = Vec::new();
@@ -628,7 +714,9 @@ pub(super) fn compile_for_web(ctx: &CompilationContext, args: &CompileArgs, form
             visiting: &mut HashSet<PathBuf>,
             sorted: &mut Vec<PathBuf>,
         ) {
-            if visited.contains(path) || visiting.contains(path) { return; }
+            if visited.contains(path) || visiting.contains(path) {
+                return;
+            }
             visiting.insert(path.clone());
             if let Some(module_deps) = deps.get(path) {
                 for dep in module_deps {
@@ -643,7 +731,13 @@ pub(super) fn compile_for_web(ctx: &CompilationContext, args: &CompileArgs, form
         let mut all: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
         all.sort();
         for path in &all {
-            topo_visit(path, &path_to_deps, &mut visited_set, &mut visiting_set, &mut sorted_paths);
+            topo_visit(
+                path,
+                &path_to_deps,
+                &mut visited_set,
+                &mut visiting_set,
+                &mut sorted_paths,
+            );
         }
     }
 
@@ -654,14 +748,18 @@ pub(super) fn compile_for_web(ctx: &CompilationContext, args: &CompileArgs, form
     sorted_paths.push(entry_path.clone());
 
     // Build module list for JS codegen
-    let modules: Vec<(String, perry_hir::Module)> = sorted_paths.iter()
+    let modules: Vec<(String, perry_hir::Module)> = sorted_paths
+        .iter()
         .filter_map(|path| {
-            ctx.native_modules.get(path).map(|m| (m.name.clone(), m.clone()))
+            ctx.native_modules
+                .get(path)
+                .map(|m| (m.name.clone(), m.clone()))
         })
         .collect();
 
     // Determine output title from entry filename
-    let title = args.input
+    let title = args
+        .input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Perry App");
@@ -678,7 +776,11 @@ pub(super) fn compile_for_web(ctx: &CompilationContext, args: &CompileArgs, form
             out.clone()
         }
     } else {
-        let stem = args.input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+        let stem = args
+            .input
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
         PathBuf::from(format!("{}.html", stem))
     };
 
@@ -687,11 +789,18 @@ pub(super) fn compile_for_web(ctx: &CompilationContext, args: &CompileArgs, form
     let file_size = fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
     match format {
         OutputFormat::Text => {
-            println!("Web output: {} ({:.1} KB)", output_path.display(), file_size as f64 / 1024.0);
+            println!(
+                "Web output: {} ({:.1} KB)",
+                output_path.display(),
+                file_size as f64 / 1024.0
+            );
         }
         OutputFormat::Json => {
-            println!("{{\"output\": \"{}\", \"size\": {}, \"target\": \"web\"}}",
-                output_path.display(), file_size);
+            println!(
+                "{{\"output\": \"{}\", \"size\": {}, \"target\": \"web\"}}",
+                output_path.display(),
+                file_size
+            );
         }
     }
 
@@ -705,13 +814,20 @@ pub(super) fn compile_for_web(ctx: &CompilationContext, args: &CompileArgs, form
 }
 
 /// Compile for WebAssembly target: emit WASM binary + JS runtime bridge
-pub(super) fn compile_for_wasm(ctx: &CompilationContext, args: &CompileArgs, format: OutputFormat) -> Result<CompileResult> {
+pub(super) fn compile_for_wasm(
+    ctx: &CompilationContext,
+    args: &CompileArgs,
+    format: OutputFormat,
+) -> Result<CompileResult> {
     match format {
         OutputFormat::Text => println!("Generating WebAssembly..."),
         OutputFormat::Json => {}
     }
 
-    let entry_path = args.input.canonicalize().unwrap_or_else(|_| args.input.clone());
+    let entry_path = args
+        .input
+        .canonicalize()
+        .unwrap_or_else(|_| args.input.clone());
 
     // Build topologically sorted module list (same as web target)
     let mut sorted_paths: Vec<PathBuf> = Vec::new();
@@ -740,7 +856,9 @@ pub(super) fn compile_for_wasm(ctx: &CompilationContext, args: &CompileArgs, for
             visiting: &mut HashSet<PathBuf>,
             sorted: &mut Vec<PathBuf>,
         ) {
-            if visited.contains(path) || visiting.contains(path) { return; }
+            if visited.contains(path) || visiting.contains(path) {
+                return;
+            }
             visiting.insert(path.clone());
             if let Some(module_deps) = deps.get(path) {
                 for dep in module_deps {
@@ -755,7 +873,13 @@ pub(super) fn compile_for_wasm(ctx: &CompilationContext, args: &CompileArgs, for
         let mut all: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
         all.sort();
         for path in &all {
-            topo_visit_wasm(path, &path_to_deps, &mut visited_set, &mut visiting_set, &mut sorted_paths);
+            topo_visit_wasm(
+                path,
+                &path_to_deps,
+                &mut visited_set,
+                &mut visiting_set,
+                &mut sorted_paths,
+            );
         }
     }
 
@@ -765,13 +889,17 @@ pub(super) fn compile_for_wasm(ctx: &CompilationContext, args: &CompileArgs, for
     }
     sorted_paths.push(entry_path.clone());
 
-    let modules: Vec<(String, perry_hir::Module)> = sorted_paths.iter()
+    let modules: Vec<(String, perry_hir::Module)> = sorted_paths
+        .iter()
         .filter_map(|path| {
-            ctx.native_modules.get(path).map(|m| (m.name.clone(), m.clone()))
+            ctx.native_modules
+                .get(path)
+                .map(|m| (m.name.clone(), m.clone()))
         })
         .collect();
 
-    let title = args.input
+    let title = args
+        .input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Perry App");
@@ -788,7 +916,11 @@ pub(super) fn compile_for_wasm(ctx: &CompilationContext, args: &CompileArgs, for
             out.clone()
         }
     } else {
-        let stem = args.input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+        let stem = args
+            .input
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
         PathBuf::from(format!("{}.html", stem))
     };
 
@@ -805,11 +937,18 @@ pub(super) fn compile_for_wasm(ctx: &CompilationContext, args: &CompileArgs, for
     let file_size = fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
     match format {
         OutputFormat::Text => {
-            println!("WASM output: {} ({:.1} KB)", output_path.display(), file_size as f64 / 1024.0);
+            println!(
+                "WASM output: {} ({:.1} KB)",
+                output_path.display(),
+                file_size as f64 / 1024.0
+            );
         }
         OutputFormat::Json => {
-            println!("{{\"output\": \"{}\", \"size\": {}, \"target\": \"wasm\"}}",
-                output_path.display(), file_size);
+            println!(
+                "{{\"output\": \"{}\", \"size\": {}, \"target\": \"wasm\"}}",
+                output_path.display(),
+                file_size
+            );
         }
     }
 

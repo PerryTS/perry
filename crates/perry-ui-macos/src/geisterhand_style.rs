@@ -33,14 +33,7 @@ const ENABLED: u32 = 9;
 /// - scalar props read `a0` and ignore `a1` / `a2` / `a3`
 /// - bool props read `a0 != 0.0`
 #[no_mangle]
-pub extern "C" fn apply_style(
-    handle: i64,
-    prop_id: u32,
-    a0: f64,
-    a1: f64,
-    a2: f64,
-    a3: f64,
-) {
+pub extern "C" fn apply_style(handle: i64, prop_id: u32, a0: f64, a1: f64, a2: f64, a3: f64) {
     match prop_id {
         BACKGROUND_COLOR => widgets::set_background_color(handle, a0, a1, a2, a3),
         COLOR => widgets::text::set_color(handle, a0, a1, a2, a3),

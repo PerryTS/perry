@@ -87,21 +87,22 @@ pub fn collect_source_files(path: &Path) -> Result<HashMap<String, String>> {
     if path.is_file() {
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         files.insert(name, content);
         return Ok(files);
     }
 
-    for entry in WalkDir::new(path)
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            !matches!(
-                name.as_ref(),
-                "node_modules" | ".git" | "dist" | "target" | ".perry" | "build" | ".next"
-            )
-        })
-    {
+    for entry in WalkDir::new(path).into_iter().filter_entry(|e| {
+        let name = e.file_name().to_string_lossy();
+        !matches!(
+            name.as_ref(),
+            "node_modules" | ".git" | "dist" | "target" | ".perry" | "build" | ".next"
+        )
+    }) {
         let entry = entry?;
         if !entry.file_type().is_file() {
             continue;
@@ -256,7 +257,11 @@ fn grade_style(grade: &str) -> console::StyledObject<&str> {
 fn display_audit_results(audit: &AuditResponse, fail_on: &str) {
     eprintln!();
     let pass = !grade_fails_threshold(&audit.grade, fail_on);
-    let icon = if pass { style("✓").green() } else { style("✗").red() };
+    let icon = if pass {
+        style("✓").green()
+    } else {
+        style("✗").red()
+    };
     eprintln!(
         "  {} Audit grade: {}  ({} finding{})",
         icon,
@@ -266,13 +271,21 @@ fn display_audit_results(audit: &AuditResponse, fail_on: &str) {
     );
 
     if audit.summary.critical > 0 {
-        eprintln!("    {} critical: {}", style("●").red().bold(), audit.summary.critical);
+        eprintln!(
+            "    {} critical: {}",
+            style("●").red().bold(),
+            audit.summary.critical
+        );
     }
     if audit.summary.high > 0 {
         eprintln!("    {} high: {}", style("●").red(), audit.summary.high);
     }
     if audit.summary.medium > 0 {
-        eprintln!("    {} medium: {}", style("●").yellow(), audit.summary.medium);
+        eprintln!(
+            "    {} medium: {}",
+            style("●").yellow(),
+            audit.summary.medium
+        );
     }
     if audit.summary.low > 0 {
         eprintln!("    {} low: {}", style("●").dim(), audit.summary.low);

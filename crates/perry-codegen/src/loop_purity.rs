@@ -57,21 +57,30 @@ fn stmt_is_pure(s: &Stmt) -> bool {
         Stmt::Expr(e) => expr_is_pure(e),
         Stmt::Let { init, .. } => init.as_ref().map_or(true, expr_is_pure),
         Stmt::Return(_) | Stmt::Throw(_) => false,
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             expr_is_pure(condition)
                 && then_branch.iter().all(stmt_is_pure)
-                && else_branch.as_ref().map_or(true, |b| b.iter().all(stmt_is_pure))
+                && else_branch
+                    .as_ref()
+                    .map_or(true, |b| b.iter().all(stmt_is_pure))
         }
         // Nested loops: their own lowering applies the same analysis,
         // so reporting the outer body as pure when the inner is pure
         // is consistent (the inner loop will also get its barrier).
-        Stmt::While { condition, body } => {
-            expr_is_pure(condition) && body.iter().all(stmt_is_pure)
-        }
+        Stmt::While { condition, body } => expr_is_pure(condition) && body.iter().all(stmt_is_pure),
         Stmt::DoWhile { body, condition } => {
             expr_is_pure(condition) && body.iter().all(stmt_is_pure)
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             init.as_deref().map_or(true, stmt_is_pure)
                 && condition.as_ref().map_or(true, expr_is_pure)
                 && update.as_ref().map_or(true, expr_is_pure)
@@ -83,8 +92,7 @@ fn stmt_is_pure(s: &Stmt) -> bool {
         // surrounding loop's structure may not run linearly. Safe to
         // treat as pure — a loop whose body only does break/continue
         // and pure ops is still observably empty.
-        Stmt::Break | Stmt::Continue
-        | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
+        Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
         // Conservative for everything else (Try with catch can run
         // arbitrary code; Switch can have any case body).
         _ => false,
@@ -101,7 +109,11 @@ fn collect_body_declared_locals(body: &[Stmt], out: &mut HashSet<u32>) {
             Stmt::Let { id, .. } => {
                 out.insert(*id);
             }
-            Stmt::If { then_branch, else_branch, .. } => {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 collect_body_declared_locals(then_branch, out);
                 if let Some(eb) = else_branch {
                     collect_body_declared_locals(eb, out);
@@ -116,7 +128,11 @@ fn collect_body_declared_locals(body: &[Stmt], out: &mut HashSet<u32>) {
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 collect_body_declared_locals(body, out);
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 collect_body_declared_locals(body, out);
                 if let Some(c) = catch {
                     if let Some((id, _)) = &c.param {
@@ -152,25 +168,43 @@ fn body_writes_outside(body: &[Stmt], body_locals: &HashSet<u32>) -> bool {
 fn stmt_writes_outside(s: &Stmt, body_locals: &HashSet<u32>) -> bool {
     match s {
         Stmt::Expr(e) | Stmt::Throw(e) => expr_writes_outside(e, body_locals),
-        Stmt::Let { init, .. } => init.as_ref().map_or(false, |e| expr_writes_outside(e, body_locals)),
-        Stmt::Return(opt) => opt.as_ref().map_or(false, |e| expr_writes_outside(e, body_locals)),
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::Let { init, .. } => init
+            .as_ref()
+            .map_or(false, |e| expr_writes_outside(e, body_locals)),
+        Stmt::Return(opt) => opt
+            .as_ref()
+            .map_or(false, |e| expr_writes_outside(e, body_locals)),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             expr_writes_outside(condition, body_locals)
                 || body_writes_outside(then_branch, body_locals)
-                || else_branch.as_ref().map_or(false, |eb| body_writes_outside(eb, body_locals))
+                || else_branch
+                    .as_ref()
+                    .map_or(false, |eb| body_writes_outside(eb, body_locals))
         }
         Stmt::While { condition, body } => {
-            expr_writes_outside(condition, body_locals)
-                || body_writes_outside(body, body_locals)
+            expr_writes_outside(condition, body_locals) || body_writes_outside(body, body_locals)
         }
         Stmt::DoWhile { body, condition } => {
-            body_writes_outside(body, body_locals)
-                || expr_writes_outside(condition, body_locals)
+            body_writes_outside(body, body_locals) || expr_writes_outside(condition, body_locals)
         }
-        Stmt::For { init, condition, update, body } => {
-            init.as_deref().map_or(false, |s| stmt_writes_outside(s, body_locals))
-                || condition.as_ref().map_or(false, |e| expr_writes_outside(e, body_locals))
-                || update.as_ref().map_or(false, |e| expr_writes_outside(e, body_locals))
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref()
+                .map_or(false, |s| stmt_writes_outside(s, body_locals))
+                || condition
+                    .as_ref()
+                    .map_or(false, |e| expr_writes_outside(e, body_locals))
+                || update
+                    .as_ref()
+                    .map_or(false, |e| expr_writes_outside(e, body_locals))
                 || body_writes_outside(body, body_locals)
         }
         Stmt::Labeled { body, .. } => stmt_writes_outside(body, body_locals),
@@ -192,7 +226,11 @@ fn expr_writes_outside(e: &Expr, body_locals: &HashSet<u32>) -> bool {
         Expr::Unary { operand, .. } | Expr::Void(operand) | Expr::TypeOf(operand) => {
             expr_writes_outside(operand, body_locals)
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             expr_writes_outside(condition, body_locals)
                 || expr_writes_outside(then_expr, body_locals)
                 || expr_writes_outside(else_expr, body_locals)
@@ -204,10 +242,19 @@ fn expr_writes_outside(e: &Expr, body_locals: &HashSet<u32>) -> bool {
 fn expr_is_pure(e: &Expr) -> bool {
     match e {
         // Literals and pure reads.
-        Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_)
-        | Expr::Integer(_) | Expr::BigInt(_) | Expr::String(_)
-        | Expr::This | Expr::LocalGet(_) | Expr::GlobalGet(_)
-        | Expr::FuncRef(_) | Expr::ClassRef(_) | Expr::EnumMember { .. } => true,
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::BigInt(_)
+        | Expr::String(_)
+        | Expr::This
+        | Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::FuncRef(_)
+        | Expr::ClassRef(_)
+        | Expr::EnumMember { .. } => true,
 
         // Local mutations are pure at the LLVM level (alloca-promoted).
         // GlobalSet writes to a module global and IS observable.
@@ -224,9 +271,11 @@ fn expr_is_pure(e: &Expr) -> bool {
         Expr::Unary { operand, .. } => expr_is_pure(operand),
         Expr::Compare { left, right, .. } => expr_is_pure(left) && expr_is_pure(right),
         Expr::Logical { left, right, .. } => expr_is_pure(left) && expr_is_pure(right),
-        Expr::Conditional { condition, then_expr, else_expr } => {
-            expr_is_pure(condition) && expr_is_pure(then_expr) && expr_is_pure(else_expr)
-        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => expr_is_pure(condition) && expr_is_pure(then_expr) && expr_is_pure(else_expr),
         Expr::TypeOf(operand) => expr_is_pure(operand),
         Expr::Void(operand) => expr_is_pure(operand),
 

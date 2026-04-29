@@ -28,10 +28,7 @@ pub struct GlanceWidgetBundle {
 /// - {Name}ConfigActivity.kt: Configuration Activity (if config_params non-empty)
 /// - widget_info_{name}.xml: AppWidgetProvider metadata
 /// - AndroidManifest snippet
-pub fn compile_widget_glance(
-    widget: &WidgetDecl,
-    app_package: &str,
-) -> Result<GlanceWidgetBundle> {
+pub fn compile_widget_glance(widget: &WidgetDecl, app_package: &str) -> Result<GlanceWidgetBundle> {
     let safe_name = sanitize_kind(&widget.kind);
     let mut kotlin_files = Vec::new();
 

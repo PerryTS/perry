@@ -34,7 +34,12 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
     let picture = gtk4::Picture::for_filename(&resolved);
     picture.set_can_shrink(true);
     let handle = super::register_widget(picture.clone().upcast());
-    IMAGE_WIDGETS.with(|w| w.borrow_mut().insert(handle, ImageKind::File(picture, Some(resolved.to_string_lossy().to_string()))));
+    IMAGE_WIDGETS.with(|w| {
+        w.borrow_mut().insert(
+            handle,
+            ImageKind::File(picture, Some(resolved.to_string_lossy().to_string())),
+        )
+    });
     handle
 }
 
@@ -58,9 +63,9 @@ pub fn set_size(handle: i64, width: f64, height: f64) {
                     let h = height as i32;
                     // Load a scaled Pixbuf so the Picture renders at the exact size
                     if let Some(path) = path {
-                        if let Ok(pixbuf) = gtk4::gdk_pixbuf::Pixbuf::from_file_at_scale(
-                            path, w, h, true,
-                        ) {
+                        if let Ok(pixbuf) =
+                            gtk4::gdk_pixbuf::Pixbuf::from_file_at_scale(path, w, h, true)
+                        {
                             let texture = gtk4::gdk::Texture::for_pixbuf(&pixbuf);
                             picture.set_paintable(Some(&texture));
                         }

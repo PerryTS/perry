@@ -4,13 +4,13 @@
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::HBRUSH;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, register_widget_with_layout};
+use super::{register_widget_with_layout, WidgetKind};
 
 #[cfg(target_os = "windows")]
 static ZSTACK_CLASS_REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -41,7 +41,12 @@ fn ensure_class_registered() {
 }
 
 #[cfg(target_os = "windows")]
-unsafe extern "system" fn zstack_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn zstack_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
@@ -60,7 +65,10 @@ pub fn create() -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
-                0, 0, 100, 100,
+                0,
+                0,
+                100,
+                100,
                 super::get_parking_hwnd(),
                 None,
                 HINSTANCE::from(hinstance),

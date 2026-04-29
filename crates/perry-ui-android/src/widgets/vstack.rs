@@ -1,5 +1,5 @@
-use jni::objects::JValue;
 use crate::jni_bridge;
+use jni::objects::JValue;
 
 /// Create a LinearLayout with VERTICAL orientation.
 pub fn create(spacing: f64) -> i64 {
@@ -7,11 +7,13 @@ pub fn create(spacing: f64) -> i64 {
     let _ = env.push_local_frame(32);
     let activity = super::get_activity(&mut env);
 
-    let layout = env.new_object(
-        "android/widget/LinearLayout",
-        "(Landroid/content/Context;)V",
-        &[JValue::Object(&activity)],
-    ).expect("Failed to create LinearLayout");
+    let layout = env
+        .new_object(
+            "android/widget/LinearLayout",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        )
+        .expect("Failed to create LinearLayout");
 
     // VERTICAL = 1
     let _ = env.call_method(&layout, "setOrientation", "(I)V", &[JValue::Int(1)]);
@@ -21,9 +23,8 @@ pub fn create(spacing: f64) -> i64 {
     // showDividers + dividerPadding, or we handle spacing in add_child.
     // For simplicity, store spacing and apply as margins on children via PerryBridge.
     let spacing_px = super::dp_to_px(&mut env, spacing as f32);
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
     let _ = env.call_static_method(
         bridge_cls,
@@ -37,11 +38,13 @@ pub fn create(spacing: f64) -> i64 {
     // LayoutParams: MATCH_PARENT width, WRAP_CONTENT height
     // Height defaults to WRAP_CONTENT so VStacks don't expand to fill parents.
     // Use widgetMatchParentHeight() to opt-in to filling (e.g. root appBody).
-    let params = env.new_object(
-        "android/widget/LinearLayout$LayoutParams",
-        "(II)V",
-        &[JValue::Int(-1), JValue::Int(-2)], // MATCH_PARENT width, WRAP_CONTENT height
-    ).expect("Failed to create LayoutParams");
+    let params = env
+        .new_object(
+            "android/widget/LinearLayout$LayoutParams",
+            "(II)V",
+            &[JValue::Int(-1), JValue::Int(-2)], // MATCH_PARENT width, WRAP_CONTENT height
+        )
+        .expect("Failed to create LayoutParams");
     let _ = env.call_method(
         &layout,
         "setLayoutParams",
@@ -49,9 +52,13 @@ pub fn create(spacing: f64) -> i64 {
         &[JValue::Object(&params)],
     );
 
-    let global = env.new_global_ref(layout).expect("Failed to create global ref");
+    let global = env
+        .new_global_ref(layout)
+        .expect("Failed to create global ref");
     let handle = super::register_widget(global);
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     handle
 }
 
@@ -61,19 +68,20 @@ pub fn create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right:
     let _ = env.push_local_frame(32);
     let activity = super::get_activity(&mut env);
 
-    let layout = env.new_object(
-        "android/widget/LinearLayout",
-        "(Landroid/content/Context;)V",
-        &[JValue::Object(&activity)],
-    ).expect("Failed to create LinearLayout");
+    let layout = env
+        .new_object(
+            "android/widget/LinearLayout",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        )
+        .expect("Failed to create LinearLayout");
 
     // VERTICAL = 1
     let _ = env.call_method(&layout, "setOrientation", "(I)V", &[JValue::Int(1)]);
 
     let spacing_px = super::dp_to_px(&mut env, spacing as f32);
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
     let _ = env.call_static_method(
         bridge_cls,
@@ -91,14 +99,21 @@ pub fn create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right:
         &layout,
         "setPadding",
         "(IIII)V",
-        &[JValue::Int(left_px), JValue::Int(top_px), JValue::Int(right_px), JValue::Int(bottom_px)],
+        &[
+            JValue::Int(left_px),
+            JValue::Int(top_px),
+            JValue::Int(right_px),
+            JValue::Int(bottom_px),
+        ],
     );
 
-    let params = env.new_object(
-        "android/widget/LinearLayout$LayoutParams",
-        "(II)V",
-        &[JValue::Int(-1), JValue::Int(-2)],
-    ).expect("Failed to create LayoutParams");
+    let params = env
+        .new_object(
+            "android/widget/LinearLayout$LayoutParams",
+            "(II)V",
+            &[JValue::Int(-1), JValue::Int(-2)],
+        )
+        .expect("Failed to create LayoutParams");
     let _ = env.call_method(
         &layout,
         "setLayoutParams",
@@ -106,8 +121,12 @@ pub fn create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right:
         &[JValue::Object(&params)],
     );
 
-    let global = env.new_global_ref(layout).expect("Failed to create global ref");
+    let global = env
+        .new_global_ref(layout)
+        .expect("Failed to create global ref");
     let handle = super::register_widget(global);
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     handle
 }

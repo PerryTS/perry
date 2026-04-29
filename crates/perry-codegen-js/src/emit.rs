@@ -3,7 +3,7 @@
 //! Recursively translates HIR statements and expressions into JavaScript source code.
 
 use perry_hir::ir::*;
-use perry_types::{FuncId, LocalId, GlobalId};
+use perry_types::{FuncId, GlobalId, LocalId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as FmtWrite;
 
@@ -70,13 +70,16 @@ impl JsEmitter {
         }
         for class in &module.classes {
             if let Some(ctor) = &class.constructor {
-                self.func_names.insert(ctor.id, format!("_ctor_{}", class.name));
+                self.func_names
+                    .insert(ctor.id, format!("_ctor_{}", class.name));
             }
             for method in &class.methods {
-                self.func_names.insert(method.id, format!("{}_{}", class.name, method.name));
+                self.func_names
+                    .insert(method.id, format!("{}_{}", class.name, method.name));
             }
             for method in &class.static_methods {
-                self.func_names.insert(method.id, format!("{}_static_{}", class.name, method.name));
+                self.func_names
+                    .insert(method.id, format!("{}_static_{}", class.name, method.name));
             }
         }
 
@@ -165,21 +168,30 @@ impl JsEmitter {
     // --- Name generation ---
 
     fn sanitize_name(&mut self, name: &str) -> String {
-        let sanitized: String = name.chars().map(|c| {
-            if c.is_alphanumeric() || c == '_' || c == '$' { c } else { '_' }
-        }).collect();
+        let sanitized: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' || c == '$' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
 
         // Avoid JS reserved words
         let result = match sanitized.as_str() {
-            "abstract" | "arguments" | "await" | "boolean" | "break" | "byte" | "case" | "catch" |
-            "char" | "class" | "const" | "continue" | "debugger" | "default" | "delete" | "do" |
-            "double" | "else" | "enum" | "eval" | "export" | "extends" | "false" | "final" |
-            "finally" | "float" | "for" | "function" | "goto" | "if" | "implements" | "import" |
-            "in" | "instanceof" | "int" | "interface" | "let" | "long" | "native" | "new" |
-            "null" | "package" | "private" | "protected" | "public" | "return" | "short" |
-            "static" | "super" | "switch" | "synchronized" | "this" | "throw" | "throws" |
-            "transient" | "true" | "try" | "typeof" | "undefined" | "var" | "void" |
-            "volatile" | "while" | "with" | "yield" => format!("_{}", sanitized),
+            "abstract" | "arguments" | "await" | "boolean" | "break" | "byte" | "case"
+            | "catch" | "char" | "class" | "const" | "continue" | "debugger" | "default"
+            | "delete" | "do" | "double" | "else" | "enum" | "eval" | "export" | "extends"
+            | "false" | "final" | "finally" | "float" | "for" | "function" | "goto" | "if"
+            | "implements" | "import" | "in" | "instanceof" | "int" | "interface" | "let"
+            | "long" | "native" | "new" | "null" | "package" | "private" | "protected"
+            | "public" | "return" | "short" | "static" | "super" | "switch" | "synchronized"
+            | "this" | "throw" | "throws" | "transient" | "true" | "try" | "typeof"
+            | "undefined" | "var" | "void" | "volatile" | "while" | "with" | "yield" => {
+                format!("_{}", sanitized)
+            }
             _ => sanitized,
         };
 
@@ -199,7 +211,9 @@ impl JsEmitter {
                 let mut counter = 2;
                 loop {
                     n = format!("{}_{}", base, counter);
-                    if !self.used_names.contains(&n) { break; }
+                    if !self.used_names.contains(&n) {
+                        break;
+                    }
                     counter += 1;
                 }
                 n
@@ -213,15 +227,24 @@ impl JsEmitter {
     }
 
     fn get_local_name(&self, id: LocalId) -> String {
-        self.local_names.get(&id).cloned().unwrap_or_else(|| format!("_l{}", id))
+        self.local_names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| format!("_l{}", id))
     }
 
     fn get_global_name(&self, id: GlobalId) -> String {
-        self.global_names.get(&id).cloned().unwrap_or_else(|| format!("_g{}", id))
+        self.global_names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| format!("_g{}", id))
     }
 
     fn get_func_name(&self, id: FuncId) -> String {
-        self.func_names.get(&id).cloned().unwrap_or_else(|| format!("_f{}", id))
+        self.func_names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| format!("_f{}", id))
     }
 
     fn make_func_name(&mut self, name: &str, id: FuncId) -> String {
@@ -267,7 +290,9 @@ impl JsEmitter {
         self.write_indent();
         let _ = write!(self.output, "const {} = Object.freeze({{", en.name);
         for (i, member) in en.members.iter().enumerate() {
-            if i > 0 { self.output.push_str(", "); }
+            if i > 0 {
+                self.output.push_str(", ");
+            }
             match &member.value {
                 EnumValue::Number(n) => {
                     let _ = write!(self.output, "{}: {}", member.name, n);
@@ -466,7 +491,9 @@ impl JsEmitter {
 
     fn emit_params(&mut self, params: &[Param]) {
         for (i, param) in params.iter().enumerate() {
-            if i > 0 { self.output.push_str(", "); }
+            if i > 0 {
+                self.output.push_str(", ");
+            }
             if param.is_rest {
                 self.output.push_str("...");
             }
@@ -483,7 +510,13 @@ impl JsEmitter {
 
     pub fn emit_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { id, name, mutable, init, .. } => {
+            Stmt::Let {
+                id,
+                name,
+                mutable,
+                init,
+                ..
+            } => {
                 self.write_indent();
                 let var_name = self.make_local_name(name, *id);
                 if *mutable {
@@ -516,7 +549,11 @@ impl JsEmitter {
                     self.output.push_str("return;\n");
                 }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 self.write_indent();
                 self.output.push_str("if (");
                 self.emit_expr(condition);
@@ -566,13 +603,24 @@ impl JsEmitter {
                 // Emit the body statement without extra indentation prefix
                 self.emit_stmt(body);
             }
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 self.write_indent();
                 self.output.push_str("for (");
                 if let Some(init_stmt) = init {
                     // For init is a statement, but we emit it inline without semicolon
                     match init_stmt.as_ref() {
-                        Stmt::Let { id, name, mutable, init: let_init, .. } => {
+                        Stmt::Let {
+                            id,
+                            name,
+                            mutable,
+                            init: let_init,
+                            ..
+                        } => {
                             let var_name = self.make_local_name(name, *id);
                             if *mutable {
                                 let _ = write!(self.output, "let {}", var_name);
@@ -626,7 +674,11 @@ impl JsEmitter {
                 self.emit_expr(expr);
                 self.output.push_str(";\n");
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 self.writeln("try {");
                 self.indent += 1;
                 for s in body {
@@ -657,7 +709,10 @@ impl JsEmitter {
                 }
                 self.writeln("}");
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 self.write_indent();
                 self.output.push_str("switch (");
                 self.emit_expr(discriminant);
@@ -2761,7 +2816,14 @@ impl JsEmitter {
 
     // --- Native method call mapping ---
 
-    fn emit_native_method_call(&mut self, module: &str, class_name: Option<&str>, object: Option<&Expr>, method: &str, args: &[Expr]) {
+    fn emit_native_method_call(
+        &mut self,
+        module: &str,
+        class_name: Option<&str>,
+        object: Option<&Expr>,
+        method: &str,
+        args: &[Expr],
+    ) {
         let normalized_module = module.strip_prefix("node:").unwrap_or(module);
 
         match normalized_module {
@@ -2778,7 +2840,9 @@ impl JsEmitter {
             _ if method == "setTimeout" => {
                 self.output.push_str("setTimeout(");
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(arg);
                 }
                 self.output.push(')');
@@ -2786,7 +2850,9 @@ impl JsEmitter {
             _ if method == "setInterval" => {
                 self.output.push_str("setInterval(");
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(arg);
                 }
                 self.output.push(')');
@@ -2794,7 +2860,9 @@ impl JsEmitter {
             _ if method == "clearTimeout" => {
                 self.output.push_str("clearTimeout(");
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(arg);
                 }
                 self.output.push(')');
@@ -2802,7 +2870,9 @@ impl JsEmitter {
             _ if method == "clearInterval" => {
                 self.output.push_str("clearInterval(");
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(arg);
                 }
                 self.output.push(')');
@@ -2813,7 +2883,9 @@ impl JsEmitter {
                     "readFileSync" => {
                         self.output.push_str("__perry.fs_readFileSync(");
                         for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
                             self.emit_expr(arg);
                         }
                         self.output.push(')');
@@ -2821,7 +2893,9 @@ impl JsEmitter {
                     "readdirSync" => {
                         self.output.push_str("__perry.fs_readdirSync(");
                         for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
                             self.emit_expr(arg);
                         }
                         self.output.push(')');
@@ -2829,7 +2903,9 @@ impl JsEmitter {
                     "isDirectory" => {
                         self.output.push_str("__perry.fs_isDirectory(");
                         for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
                             self.emit_expr(arg);
                         }
                         self.output.push(')');
@@ -2837,7 +2913,9 @@ impl JsEmitter {
                     "existsSync" => {
                         self.output.push_str("__perry.fs_existsSync(");
                         for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
                             self.emit_expr(arg);
                         }
                         self.output.push(')');
@@ -2845,7 +2923,9 @@ impl JsEmitter {
                     "writeFileSync" => {
                         self.output.push_str("__perry.fs_writeFileSync(");
                         for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
                             self.emit_expr(arg);
                         }
                         self.output.push(')');
@@ -2853,7 +2933,9 @@ impl JsEmitter {
                     "mkdirSync" => {
                         self.output.push_str("__perry.fs_mkdirSync(");
                         for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
                             self.emit_expr(arg);
                         }
                         self.output.push(')');
@@ -2861,7 +2943,9 @@ impl JsEmitter {
                     "unlinkSync" => {
                         self.output.push_str("__perry.fs_unlinkSync(");
                         for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
                             self.emit_expr(arg);
                         }
                         self.output.push(')');
@@ -2869,88 +2953,120 @@ impl JsEmitter {
                     "appendFileSync" => {
                         self.output.push_str("__perry.fs_appendFileSync(");
                         for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
                             self.emit_expr(arg);
                         }
                         self.output.push(')');
                     }
                     _ => {
                         // Graceful fallback — log warning instead of throwing
-                        let _ = write!(self.output, "(console.warn('fs.{} not available in browser'), \"\")", method);
+                        let _ = write!(
+                            self.output,
+                            "(console.warn('fs.{} not available in browser'), \"\")",
+                            method
+                        );
                     }
                 }
             }
             // --- child_process (stub in browser) ---
-            "child_process" => {
-                match method {
-                    "execSync" => {
-                        self.output.push_str("__perry.child_process_execSync(");
-                        for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
-                            self.emit_expr(arg);
+            "child_process" => match method {
+                "execSync" => {
+                    self.output.push_str("__perry.child_process_execSync(");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
                         }
-                        self.output.push(')');
+                        self.emit_expr(arg);
                     }
-                    _ => {
-                        let _ = write!(self.output, "(console.warn('child_process.{} not available in browser'), \"\")", method);
-                    }
+                    self.output.push(')');
                 }
-            }
+                _ => {
+                    let _ = write!(
+                        self.output,
+                        "(console.warn('child_process.{} not available in browser'), \"\")",
+                        method
+                    );
+                }
+            },
             // --- node-fetch (Perry native SSE streaming → Fetch API on web) ---
-            "node-fetch" => {
-                match method {
-                    "streamStart" => {
-                        self.output.push_str("__perry.stream_start(");
-                        for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
-                            self.emit_expr(arg);
+            "node-fetch" => match method {
+                "streamStart" => {
+                    self.output.push_str("__perry.stream_start(");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
                         }
-                        self.output.push(')');
+                        self.emit_expr(arg);
                     }
-                    "streamPoll" => {
-                        self.output.push_str("__perry.stream_poll(");
-                        for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
-                            self.emit_expr(arg);
-                        }
-                        self.output.push(')');
-                    }
-                    "streamStatus" => {
-                        self.output.push_str("__perry.stream_status(");
-                        for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
-                            self.emit_expr(arg);
-                        }
-                        self.output.push(')');
-                    }
-                    "streamClose" => {
-                        self.output.push_str("__perry.stream_close(");
-                        for (i, arg) in args.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
-                            self.emit_expr(arg);
-                        }
-                        self.output.push(')');
-                    }
-                    _ => {
-                        let _ = write!(self.output, "(console.warn('node-fetch.{} not available in browser'), \"\")", method);
-                    }
+                    self.output.push(')');
                 }
-            }
+                "streamPoll" => {
+                    self.output.push_str("__perry.stream_poll(");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.emit_expr(arg);
+                    }
+                    self.output.push(')');
+                }
+                "streamStatus" => {
+                    self.output.push_str("__perry.stream_status(");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.emit_expr(arg);
+                    }
+                    self.output.push(')');
+                }
+                "streamClose" => {
+                    self.output.push_str("__perry.stream_close(");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.emit_expr(arg);
+                    }
+                    self.output.push(')');
+                }
+                _ => {
+                    let _ = write!(
+                        self.output,
+                        "(console.warn('node-fetch.{} not available in browser'), \"\")",
+                        method
+                    );
+                }
+            },
             // --- child_process: spawnBackground (stub) ---
             _ if method == "spawnBackground" => {
-                self.output.push_str("(console.warn('spawnBackground not available in browser'), 0)");
+                self.output
+                    .push_str("(console.warn('spawnBackground not available in browser'), 0)");
             }
             // --- Fastify/HTTP (throw in browser) ---
             "fastify" | "ws" | "mysql2" | "mysql2/promise" | "pg" | "net" | "worker_threads" => {
-                let _ = write!(self.output, "((() => {{ throw new Error('{} not available in browser'); }})())", normalized_module);
+                let _ = write!(
+                    self.output,
+                    "((() => {{ throw new Error('{} not available in browser'); }})())",
+                    normalized_module
+                );
             }
             // --- Events module ---
-            "events" if method == "on" || method == "addEventListener" || method == "emit" || method == "removeListener" => {
+            "events"
+                if method == "on"
+                    || method == "addEventListener"
+                    || method == "emit"
+                    || method == "removeListener" =>
+            {
                 if let Some(obj) = object {
                     self.emit_expr(obj);
                     let _ = write!(self.output, ".{}(", method);
                     for (i, arg) in args.iter().enumerate() {
-                        if i > 0 { self.output.push_str(", "); }
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
                         self.emit_expr(arg);
                     }
                     self.output.push(')');
@@ -2964,7 +3080,9 @@ impl JsEmitter {
                     self.emit_expr(obj);
                     let _ = write!(self.output, ".{}(", method);
                     for (i, arg) in args.iter().enumerate() {
-                        if i > 0 { self.output.push_str(", "); }
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
                         self.emit_expr(arg);
                     }
                     self.output.push(')');
@@ -2972,7 +3090,9 @@ impl JsEmitter {
                     // Static-style call - just emit as function call
                     let _ = write!(self.output, "{}(", method);
                     for (i, arg) in args.iter().enumerate() {
-                        if i > 0 { self.output.push_str(", "); }
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
                         self.emit_expr(arg);
                     }
                     self.output.push(')');
@@ -2984,7 +3104,9 @@ impl JsEmitter {
     fn emit_console_call(&mut self, method: &str, args: &[Expr]) {
         let _ = write!(self.output, "console.{}(", method);
         for (i, arg) in args.iter().enumerate() {
-            if i > 0 { self.output.push_str(", "); }
+            if i > 0 {
+                self.output.push_str(", ");
+            }
             self.emit_expr(arg);
         }
         self.output.push(')');
@@ -2994,7 +3116,9 @@ impl JsEmitter {
         match method {
             "openURL" | "open_url" => {
                 self.output.push_str("window.open(");
-                if let Some(a) = args.first() { self.emit_expr(a); }
+                if let Some(a) = args.first() {
+                    self.emit_expr(a);
+                }
                 self.output.push_str(", '_blank')");
             }
             "isDarkMode" | "is_dark_mode" => {
@@ -3002,14 +3126,20 @@ impl JsEmitter {
             }
             "preferencesGet" | "preferences_get" => {
                 self.output.push_str("(localStorage.getItem(");
-                if let Some(a) = args.first() { self.emit_expr(a); }
+                if let Some(a) = args.first() {
+                    self.emit_expr(a);
+                }
                 self.output.push_str(") || '')");
             }
             "preferencesSet" | "preferences_set" => {
                 self.output.push_str("localStorage.setItem(");
-                if let Some(a) = args.first() { self.emit_expr(a); }
+                if let Some(a) = args.first() {
+                    self.emit_expr(a);
+                }
                 self.output.push_str(", ");
-                if let Some(a) = args.get(1) { self.emit_expr(a); }
+                if let Some(a) = args.get(1) {
+                    self.emit_expr(a);
+                }
                 self.output.push(')');
             }
             "audioStart" | "audio_start" => {
@@ -3026,19 +3156,31 @@ impl JsEmitter {
             }
             "audioGetWaveformSamples" | "audio_get_waveform" => {
                 self.output.push_str("perry_system_audio_get_waveform(");
-                if let Some(a) = args.first() { self.emit_expr(a); }
+                if let Some(a) = args.first() {
+                    self.emit_expr(a);
+                }
                 self.output.push(')');
             }
             "getDeviceModel" | "get_device_model" => {
                 self.output.push_str("perry_system_get_device_model()");
             }
             _ => {
-                let _ = write!(self.output, "console.warn('perry/system.{} not available in browser')", method);
+                let _ = write!(
+                    self.output,
+                    "console.warn('perry/system.{} not available in browser')",
+                    method
+                );
             }
         }
     }
 
-    fn emit_ui_method_call(&mut self, class_name: Option<&str>, object: Option<&Expr>, method: &str, args: &[Expr]) {
+    fn emit_ui_method_call(
+        &mut self,
+        class_name: Option<&str>,
+        object: Option<&Expr>,
+        method: &str,
+        args: &[Expr],
+    ) {
         // Map perry/ui methods to __perry.perry_ui_* calls
         let ui_fn = match method {
             // Widget creation
@@ -3086,7 +3228,9 @@ impl JsEmitter {
             "Canvas" | "canvas_create" => "perry_ui_canvas_create",
             // Child management
             "addChild" | "widget_add_child" => "perry_ui_widget_add_child",
-            "removeAllChildren" | "widget_remove_all_children" => "perry_ui_widget_remove_all_children",
+            "removeAllChildren" | "widget_remove_all_children" => {
+                "perry_ui_widget_remove_all_children"
+            }
             // Styling
             "setBackground" | "set_background" => "perry_ui_set_background",
             "setForeground" | "set_foreground" => "perry_ui_set_foreground",
@@ -3115,7 +3259,9 @@ impl JsEmitter {
             "createState" | "state_create" => {
                 self.output.push_str("__perry.stateCreate(");
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { self.output.push_str(", "); }
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
                     self.emit_expr(arg);
                 }
                 self.output.push(')');
@@ -3123,13 +3269,17 @@ impl JsEmitter {
             }
             "get" if class_name.map_or(false, |c| c == "State") => {
                 self.output.push_str("__perry.stateGet(");
-                if let Some(obj) = object { self.emit_expr(obj); }
+                if let Some(obj) = object {
+                    self.emit_expr(obj);
+                }
                 self.output.push(')');
                 return;
             }
             "set" if class_name.map_or(false, |c| c == "State") => {
                 self.output.push_str("__perry.stateSet(");
-                if let Some(obj) = object { self.emit_expr(obj); }
+                if let Some(obj) = object {
+                    self.emit_expr(obj);
+                }
                 for arg in args {
                     self.output.push_str(", ");
                     self.emit_expr(arg);
@@ -3139,7 +3289,9 @@ impl JsEmitter {
             }
             "value" if class_name.map_or(false, |c| c == "State") => {
                 self.output.push_str("__perry.stateGet(");
-                if let Some(obj) = object { self.emit_expr(obj); }
+                if let Some(obj) = object {
+                    self.emit_expr(obj);
+                }
                 self.output.push(')');
                 return;
             }
@@ -3218,7 +3370,9 @@ impl JsEmitter {
             // Menu
             "menuCreate" | "menu_create" => "perry_ui_menu_create",
             "menuAddItem" | "menu_add_item" => "perry_ui_menu_add_item",
-            "menuAddStandardAction" | "menu_add_standard_action" => "perry_ui_menu_add_standard_action",
+            "menuAddStandardAction" | "menu_add_standard_action" => {
+                "perry_ui_menu_add_standard_action"
+            }
             "menuClear" | "menu_clear" => "perry_ui_menu_clear",
             "menuAddSeparator" | "menu_add_separator" => "perry_ui_menu_add_separator",
             "menuAddSubmenu" | "menu_add_submenu" => "perry_ui_menu_add_submenu",
@@ -3244,10 +3398,14 @@ impl JsEmitter {
                     let _ = write!(self.output, "__perry.perry_ui_{}(", method);
                     if let Some(obj) = object {
                         self.emit_expr(obj);
-                        if !args.is_empty() { self.output.push_str(", "); }
+                        if !args.is_empty() {
+                            self.output.push_str(", ");
+                        }
                     }
                     for (i, arg) in args.iter().enumerate() {
-                        if i > 0 { self.output.push_str(", "); }
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
                         self.emit_expr(arg);
                     }
                     self.output.push(')');
@@ -3264,7 +3422,9 @@ impl JsEmitter {
             first = false;
         }
         for arg in args {
-            if !first { self.output.push_str(", "); }
+            if !first {
+                self.output.push_str(", ");
+            }
             self.emit_expr(arg);
             first = false;
         }
@@ -3284,7 +3444,9 @@ impl JsEmitter {
         self.output.push_str(func);
         self.output.push('(');
         for (i, arg) in args.iter().enumerate() {
-            if i > 0 { self.output.push_str(", "); }
+            if i > 0 {
+                self.output.push_str(", ");
+            }
             self.emit_expr(arg);
         }
         self.output.push(')');
@@ -3314,7 +3476,9 @@ impl JsEmitter {
 
 /// Check if a string is a valid JavaScript identifier
 fn is_valid_identifier(s: &str) -> bool {
-    if s.is_empty() { return false; }
+    if s.is_empty() {
+        return false;
+    }
     let mut chars = s.chars();
     let first = chars.next().unwrap();
     if !first.is_alphabetic() && first != '_' && first != '$' {
@@ -3347,11 +3511,44 @@ fn gen_short_name(n: usize) -> String {
 fn is_js_reserved(s: &str) -> bool {
     matches!(
         s,
-        "do" | "if" | "in" | "for" | "let" | "new" | "try" | "var" | "case" | "else"
-        | "enum" | "null" | "this" | "true" | "void" | "with" | "break" | "catch"
-        | "class" | "const" | "false" | "super" | "throw" | "while" | "yield"
-        | "delete" | "export" | "import" | "return" | "switch" | "typeof"
-        | "default" | "extends" | "finally" | "continue" | "debugger"
-        | "function" | "arguments" | "instanceof" | "of"
+        "do" | "if"
+            | "in"
+            | "for"
+            | "let"
+            | "new"
+            | "try"
+            | "var"
+            | "case"
+            | "else"
+            | "enum"
+            | "null"
+            | "this"
+            | "true"
+            | "void"
+            | "with"
+            | "break"
+            | "catch"
+            | "class"
+            | "const"
+            | "false"
+            | "super"
+            | "throw"
+            | "while"
+            | "yield"
+            | "delete"
+            | "export"
+            | "import"
+            | "return"
+            | "switch"
+            | "typeof"
+            | "default"
+            | "extends"
+            | "finally"
+            | "continue"
+            | "debugger"
+            | "function"
+            | "arguments"
+            | "instanceof"
+            | "of"
     )
 }

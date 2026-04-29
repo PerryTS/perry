@@ -13,8 +13,8 @@
 //! row in the centralised tables resolves via the public lookup helper.
 
 use perry_dispatch::{
-    ui_method_to_runtime, PERRY_I18N_TABLE, PERRY_SYSTEM_TABLE,
-    PERRY_UI_INSTANCE_TABLE, PERRY_UI_TABLE,
+    ui_method_to_runtime, PERRY_I18N_TABLE, PERRY_SYSTEM_TABLE, PERRY_UI_INSTANCE_TABLE,
+    PERRY_UI_TABLE,
 };
 
 #[test]

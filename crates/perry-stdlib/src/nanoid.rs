@@ -3,8 +3,8 @@
 //! Native implementation of the 'nanoid' npm package.
 //! Generates short, URL-friendly unique IDs.
 
-use perry_runtime::{js_string_from_bytes, StringHeader};
 use nanoid::nanoid;
+use perry_runtime::{js_string_from_bytes, StringHeader};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {

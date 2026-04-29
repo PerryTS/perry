@@ -6,13 +6,13 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::HBRUSH;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, register_widget_with_layout};
+use super::{register_widget_with_layout, WidgetKind};
 
 fn str_from_header(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
@@ -36,26 +36,29 @@ static NAVSTACK_CLASS_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 #[cfg(target_os = "windows")]
 fn ensure_class_registered() {
-    NAVSTACK_CLASS_REGISTERED.call_once(|| {
-        unsafe {
-            let hinstance = GetModuleHandleW(None).unwrap();
-            let class_name = to_wide("PerryNavStack");
-            let wc = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(navstack_wnd_proc),
-                hInstance: hinstance.into(),
-                hbrBackground: HBRUSH(std::ptr::null_mut()),
-                lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
-                ..Default::default()
-            };
-            RegisterClassExW(&wc);
-        }
+    NAVSTACK_CLASS_REGISTERED.call_once(|| unsafe {
+        let hinstance = GetModuleHandleW(None).unwrap();
+        let class_name = to_wide("PerryNavStack");
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(navstack_wnd_proc),
+            hInstance: hinstance.into(),
+            hbrBackground: HBRUSH(std::ptr::null_mut()),
+            lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
+            ..Default::default()
+        };
+        RegisterClassExW(&wc);
     });
 }
 
 #[cfg(target_os = "windows")]
-unsafe extern "system" fn navstack_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn navstack_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
@@ -89,7 +92,10 @@ pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
-                0, 0, 100, 100,
+                0,
+                0,
+                100,
+                100,
                 super::get_parking_hwnd(),
                 None,
                 HINSTANCE::from(hinstance),
@@ -97,15 +103,19 @@ pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
             )
             .unwrap();
 
-            let handle = register_widget_with_layout(hwnd, WidgetKind::NavStack, 0.0, (0.0, 0.0, 0.0, 0.0));
+            let handle =
+                register_widget_with_layout(hwnd, WidgetKind::NavStack, 0.0, (0.0, 0.0, 0.0, 0.0));
 
             // Add the initial body as a child
             super::add_child(handle, body_handle);
 
             NAV_STACKS.with(|stacks| {
-                stacks.borrow_mut().insert(handle, NavStackState {
-                    pages: vec![NavPage { title, body_handle }],
-                });
+                stacks.borrow_mut().insert(
+                    handle,
+                    NavStackState {
+                        pages: vec![NavPage { title, body_handle }],
+                    },
+                );
             });
 
             handle
@@ -114,14 +124,18 @@ pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
 
     #[cfg(not(target_os = "windows"))]
     {
-        let handle = register_widget_with_layout(0, WidgetKind::NavStack, 0.0, (0.0, 0.0, 0.0, 0.0));
+        let handle =
+            register_widget_with_layout(0, WidgetKind::NavStack, 0.0, (0.0, 0.0, 0.0, 0.0));
 
         super::add_child(handle, body_handle);
 
         NAV_STACKS.with(|stacks| {
-            stacks.borrow_mut().insert(handle, NavStackState {
-                pages: vec![NavPage { title, body_handle }],
-            });
+            stacks.borrow_mut().insert(
+                handle,
+                NavStackState {
+                    pages: vec![NavPage { title, body_handle }],
+                },
+            );
         });
 
         handle

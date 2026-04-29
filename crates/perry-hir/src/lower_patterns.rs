@@ -3,13 +3,13 @@
 //! Contains functions for lowering literals, assignment targets, binding names,
 //! parameter destructuring, and other pattern-related utilities.
 
+use crate::ir::*;
+use crate::lower::{lower_expr, LoweringContext};
+use crate::lower_types::*;
 use anyhow::{anyhow, Result};
 use perry_types::{LocalId, Type};
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
-use crate::ir::*;
-use crate::lower::{LoweringContext, lower_expr};
-use crate::lower_types::*;
 
 pub(crate) fn unescape_template(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -43,10 +43,7 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
         ast::Lit::Num(n) => {
             let value = n.value;
             // Check if this is an integer that fits in i64
-            if value.fract() == 0.0
-                && value >= i64::MIN as f64
-                && value <= i64::MAX as f64
-            {
+            if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
                 Ok(Expr::Integer(value as i64))
             } else {
                 Ok(Expr::Number(value))
@@ -74,14 +71,20 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
 
 /// Convert an assignment target to an expression for reading its current value
 /// Used for compound assignment operators like += to read the current value before modifying
-pub(crate) fn lower_assign_target_to_expr(ctx: &mut LoweringContext, target: &ast::AssignTarget) -> Result<Expr> {
+pub(crate) fn lower_assign_target_to_expr(
+    ctx: &mut LoweringContext,
+    target: &ast::AssignTarget,
+) -> Result<Expr> {
     match target {
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
             let name = ident.id.sym.to_string();
             if let Some(id) = ctx.lookup_local(&name) {
                 Ok(Expr::LocalGet(id))
             } else {
-                Err(anyhow!("Undefined variable in compound assignment: {}", name))
+                Err(anyhow!(
+                    "Undefined variable in compound assignment: {}",
+                    name
+                ))
             }
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) => {
@@ -171,27 +174,27 @@ pub(crate) fn get_pat_name(pat: &ast::Pat) -> Result<String> {
 /// Extract the type annotation from a Pat (for arrow function parameters)
 pub(crate) fn get_pat_type(pat: &ast::Pat, ctx: &LoweringContext) -> Type {
     match pat {
-        ast::Pat::Ident(ident) => {
-            ident.type_ann.as_ref()
-                .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
-                .unwrap_or(Type::Any)
-        }
+        ast::Pat::Ident(ident) => ident
+            .type_ann
+            .as_ref()
+            .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
+            .unwrap_or(Type::Any),
         ast::Pat::Assign(assign) => get_pat_type(&assign.left, ctx),
-        ast::Pat::Rest(rest) => {
-            rest.type_ann.as_ref()
-                .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
-                .unwrap_or(Type::Any)
-        }
-        ast::Pat::Array(arr) => {
-            arr.type_ann.as_ref()
-                .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
-                .unwrap_or(Type::Any)
-        }
-        ast::Pat::Object(obj) => {
-            obj.type_ann.as_ref()
-                .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
-                .unwrap_or(Type::Any)
-        }
+        ast::Pat::Rest(rest) => rest
+            .type_ann
+            .as_ref()
+            .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
+            .unwrap_or(Type::Any),
+        ast::Pat::Array(arr) => arr
+            .type_ann
+            .as_ref()
+            .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
+            .unwrap_or(Type::Any),
+        ast::Pat::Object(obj) => obj
+            .type_ann
+            .as_ref()
+            .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
+            .unwrap_or(Type::Any),
         _ => Type::Any,
     }
 }
@@ -212,12 +215,7 @@ pub(crate) fn generate_param_destructuring_stmts(
 ) -> Result<Vec<Stmt>> {
     match pat {
         ast::Pat::Array(_) | ast::Pat::Object(_) => {
-            crate::destructuring::lower_pattern_binding(
-                ctx,
-                pat,
-                Expr::LocalGet(param_id),
-                false,
-            )
+            crate::destructuring::lower_pattern_binding(ctx, pat, Expr::LocalGet(param_id), false)
         }
         _ => Ok(Vec::new()),
     }
@@ -288,7 +286,11 @@ pub(crate) fn pre_scan_fastify_handler_params(
         _ => return None,
     };
     let req_name = arrow.params.first().and_then(|p| pat_ident_name(p))?;
-    let reply_name = arrow.params.get(1).and_then(|p| pat_ident_name(p)).unwrap_or_default();
+    let reply_name = arrow
+        .params
+        .get(1)
+        .and_then(|p| pat_ident_name(p))
+        .unwrap_or_default();
     Some((req_name, reply_name))
 }
 
@@ -387,4 +389,3 @@ pub(crate) fn is_require_builtin_module(expr: &ast::Expr) -> Option<String> {
     }
     None
 }
-

@@ -10,7 +10,9 @@ use gtk4::prelude::*;
 /// Returns null on failure.
 #[no_mangle]
 pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
-    unsafe { *out_len = 0; }
+    unsafe {
+        *out_len = 0;
+    }
 
     // Get the stored application window
     let window = crate::app::APP_WINDOW.with(|aw| aw.borrow().clone());
@@ -31,11 +33,7 @@ pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
 
     // Create a snapshot and render the paintable into it
     let snapshot = gtk4::Snapshot::new();
-    paintable.snapshot(
-        &snapshot,
-        width as f64,
-        height as f64,
-    );
+    paintable.snapshot(&snapshot, width as f64, height as f64);
 
     // Convert snapshot to a render node
     let node = match snapshot.to_node() {

@@ -199,7 +199,13 @@ unsafe fn call_closure_1(handler_bits: u64, arg: f64) -> f64 {
 /// Register a hook handler (default: priority=10, mode=filter)
 #[no_mangle]
 pub extern "C" fn perry_plugin_register_hook(api_handle: i64, hook_name: f64, handler: f64) -> f64 {
-    perry_plugin_register_hook_ex(api_handle, hook_name, handler, DEFAULT_PRIORITY as i64, HOOK_MODE_FILTER as i64)
+    perry_plugin_register_hook_ex(
+        api_handle,
+        hook_name,
+        handler,
+        DEFAULT_PRIORITY as i64,
+        HOOK_MODE_FILTER as i64,
+    )
 }
 
 /// Register a hook handler with explicit priority and mode
@@ -232,7 +238,12 @@ pub extern "C" fn perry_plugin_register_hook_ex(
 
 /// Register a tool with name, description, and handler closure
 #[no_mangle]
-pub extern "C" fn perry_plugin_register_tool(api_handle: i64, name: f64, desc: f64, handler: f64) -> f64 {
+pub extern "C" fn perry_plugin_register_tool(
+    api_handle: i64,
+    name: f64,
+    desc: f64,
+    handler: f64,
+) -> f64 {
     let tool_name = unsafe { extract_string(name) };
     let tool_desc = unsafe { extract_string(desc) };
     let mut reg = REGISTRY.lock().unwrap();
@@ -249,7 +260,12 @@ pub extern "C" fn perry_plugin_register_tool(api_handle: i64, name: f64, desc: f
 
 /// Register a service with start/stop functions
 #[no_mangle]
-pub extern "C" fn perry_plugin_register_service(api_handle: i64, name: f64, start_fn: f64, stop_fn: f64) -> f64 {
+pub extern "C" fn perry_plugin_register_service(
+    api_handle: i64,
+    name: f64,
+    start_fn: f64,
+    stop_fn: f64,
+) -> f64 {
     let svc_name = unsafe { extract_string(name) };
     let mut reg = REGISTRY.lock().unwrap();
     if let Some(plugin_id) = reg.plugin_id_for_handle(api_handle) {
@@ -306,7 +322,12 @@ pub extern "C" fn perry_plugin_log(_api_handle: i64, level: i64, message: f64) -
 
 /// Set plugin metadata (name, version, description)
 #[no_mangle]
-pub extern "C" fn perry_plugin_set_metadata(api_handle: i64, name: f64, version: f64, description: f64) -> f64 {
+pub extern "C" fn perry_plugin_set_metadata(
+    api_handle: i64,
+    name: f64,
+    version: f64,
+    description: f64,
+) -> f64 {
     let meta_name = unsafe { extract_string(name) };
     let meta_version = unsafe { extract_string(version) };
     let meta_desc = unsafe { extract_string(description) };
@@ -329,10 +350,13 @@ pub extern "C" fn perry_plugin_on(api_handle: i64, event: f64, handler: f64) -> 
     let event_name = unsafe { extract_string(event) };
     let mut reg = REGISTRY.lock().unwrap();
     if let Some(plugin_id) = reg.plugin_id_for_handle(api_handle) {
-        reg.events.entry(event_name).or_default().push(EventRegistration {
-            plugin_id,
-            handler_closure: handler.to_bits(),
-        });
+        reg.events
+            .entry(event_name)
+            .or_default()
+            .push(EventRegistration {
+                plugin_id,
+                handler_closure: handler.to_bits(),
+            });
     }
     f64::from_bits(JSValue::undefined().bits())
 }
@@ -430,7 +454,9 @@ pub extern "C" fn perry_plugin_load(path_val: f64) -> i64 {
         reg.active_api_handles.remove(&api_handle);
 
         if result != 0 {
-            let display_name = reg.plugins.iter()
+            let display_name = reg
+                .plugins
+                .iter()
                 .find(|p| p.id == plugin_id)
                 .and_then(|p| p.metadata.as_ref())
                 .map(|m| format!("{} v{}", m.name, m.version))
@@ -462,7 +488,11 @@ pub extern "C" fn perry_plugin_unload(plugin_id_val: i64) {
     reg.remove_plugin_registrations(plugin_id);
 
     let handle = entry.lib_handle.0;
-    let name = entry.metadata.as_ref().map(|m| m.name.clone()).unwrap_or(entry.path_name.clone());
+    let name = entry
+        .metadata
+        .as_ref()
+        .map(|m| m.name.clone())
+        .unwrap_or(entry.path_name.clone());
     drop(reg);
 
     unsafe {
@@ -542,7 +572,9 @@ pub extern "C" fn perry_plugin_emit_event(event: f64, data: f64) -> f64 {
     };
 
     for handler_bits in handlers {
-        unsafe { call_closure_1(handler_bits, data); }
+        unsafe {
+            call_closure_1(handler_bits, data);
+        }
     }
     f64::from_bits(JSValue::undefined().bits())
 }
@@ -555,7 +587,8 @@ pub extern "C" fn perry_plugin_invoke_tool(name: f64, args: f64) -> f64 {
 
     let handler_bits: Option<u64> = {
         let reg = REGISTRY.lock().unwrap();
-        reg.tools.iter()
+        reg.tools
+            .iter()
             .find(|t| t.name == tool_name)
             .map(|t| t.handler_closure)
     };
@@ -603,7 +636,8 @@ pub extern "C" fn perry_plugin_discover(dir_path: f64) -> f64 {
 
         if is_plugin {
             if let Some(path_str) = path.to_str() {
-                let s = crate::string::js_string_from_bytes(path_str.as_ptr(), path_str.len() as u32);
+                let s =
+                    crate::string::js_string_from_bytes(path_str.as_ptr(), path_str.len() as u32);
                 let nanboxed = JSValue::string_ptr(s);
                 unsafe {
                     crate::array::js_array_push_f64(arr, f64::from_bits(nanboxed.bits()));
@@ -630,30 +664,46 @@ pub extern "C" fn perry_plugin_list_plugins() -> f64 {
             // id
             let id_key = crate::string::js_string_from_bytes("id\0".as_ptr(), 2);
             crate::array::js_array_push(keys_arr, JSValue::string_ptr(id_key));
-            let fields = (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut f64;
+            let fields = (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+                as *mut f64;
             *fields = plugin.id as f64;
 
             // name
             let name_key = crate::string::js_string_from_bytes("name\0".as_ptr(), 4);
             crate::array::js_array_push(keys_arr, JSValue::string_ptr(name_key));
-            let name_str = plugin.metadata.as_ref().map(|m| m.name.as_str()).unwrap_or(&plugin.path_name);
+            let name_str = plugin
+                .metadata
+                .as_ref()
+                .map(|m| m.name.as_str())
+                .unwrap_or(&plugin.path_name);
             *fields.add(1) = make_nanboxed_string(name_str);
 
             // version
             let ver_key = crate::string::js_string_from_bytes("version\0".as_ptr(), 7);
             crate::array::js_array_push(keys_arr, JSValue::string_ptr(ver_key));
-            let version = plugin.metadata.as_ref().map(|m| m.version.as_str()).unwrap_or("0.0.0");
+            let version = plugin
+                .metadata
+                .as_ref()
+                .map(|m| m.version.as_str())
+                .unwrap_or("0.0.0");
             *fields.add(2) = make_nanboxed_string(version);
 
             // description
             let desc_key = crate::string::js_string_from_bytes("description\0".as_ptr(), 11);
             crate::array::js_array_push(keys_arr, JSValue::string_ptr(desc_key));
-            let desc = plugin.metadata.as_ref().map(|m| m.description.as_str()).unwrap_or("");
+            let desc = plugin
+                .metadata
+                .as_ref()
+                .map(|m| m.description.as_str())
+                .unwrap_or("");
             *fields.add(3) = make_nanboxed_string(desc);
 
             (*obj).keys_array = keys_arr;
 
-            crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::pointer(obj as *const u8).bits()));
+            crate::array::js_array_push_f64(
+                arr,
+                f64::from_bits(JSValue::pointer(obj as *const u8).bits()),
+            );
         }
     }
 
@@ -689,7 +739,8 @@ pub extern "C" fn perry_plugin_list_tools() -> f64 {
 
             let name_key = crate::string::js_string_from_bytes("name\0".as_ptr(), 4);
             crate::array::js_array_push(keys_arr, JSValue::string_ptr(name_key));
-            let fields = (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut f64;
+            let fields = (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+                as *mut f64;
             *fields = make_nanboxed_string(&tool.name);
 
             let desc_key = crate::string::js_string_from_bytes("description\0".as_ptr(), 11);
@@ -702,7 +753,10 @@ pub extern "C" fn perry_plugin_list_tools() -> f64 {
 
             (*obj).keys_array = keys_arr;
 
-            crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::pointer(obj as *const u8).bits()));
+            crate::array::js_array_push_f64(
+                arr,
+                f64::from_bits(JSValue::pointer(obj as *const u8).bits()),
+            );
         }
     }
 

@@ -47,16 +47,17 @@ pub fn run(args: AppStoreArgs) -> Result<()> {
         AppStoreCommand::UpdateNotes { text, locale } => {
             update_notes(&toml_path, &content, &text, locale.as_deref())
         }
-        AppStoreCommand::ShowNotes => {
-            show_notes(&content)
-        }
-        AppStoreCommand::ClearNotes => {
-            clear_notes(&toml_path, &content)
-        }
+        AppStoreCommand::ShowNotes => show_notes(&content),
+        AppStoreCommand::ClearNotes => clear_notes(&toml_path, &content),
     }
 }
 
-fn update_notes(toml_path: &std::path::Path, content: &str, text: &str, locale: Option<&str>) -> Result<()> {
+fn update_notes(
+    toml_path: &std::path::Path,
+    content: &str,
+    text: &str,
+    locale: Option<&str>,
+) -> Result<()> {
     // Parse existing TOML to find i18n locales
     let parsed: toml::Value = toml::from_str(content)?;
 
@@ -64,10 +65,15 @@ fn update_notes(toml_path: &std::path::Path, content: &str, text: &str, locale: 
         vec![loc.to_string()]
     } else {
         // Get locales from [i18n] section, fall back to just "en"
-        parsed.get("i18n")
+        parsed
+            .get("i18n")
             .and_then(|i| i.get("locales"))
             .and_then(|l| l.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_else(|| vec!["en".to_string()])
     };
 
@@ -89,10 +95,16 @@ fn update_notes(toml_path: &std::path::Path, content: &str, text: &str, locale: 
         let start = content.find("[release_notes]").unwrap();
         // Find the next section header after [release_notes]
         let rest = &content[start + "[release_notes]".len()..];
-        let end = rest.find("\n[")
+        let end = rest
+            .find("\n[")
             .map(|pos| start + "[release_notes]".len() + pos)
             .unwrap_or(content.len());
-        format!("{}{}{}", &content[..start].trim_end(), notes_section, &content[end..])
+        format!(
+            "{}{}{}",
+            &content[..start].trim_end(),
+            notes_section,
+            &content[end..]
+        )
     } else {
         format!("{}\n{}", content.trim_end(), notes_section)
     };
@@ -101,7 +113,15 @@ fn update_notes(toml_path: &std::path::Path, content: &str, text: &str, locale: 
 
     println!("Updated release notes for {} locale(s):", locales.len());
     for loc in &locales {
-        println!("  {} — {}", loc, if text.len() > 60 { format!("{}...", &text[..57]) } else { text.to_string() });
+        println!(
+            "  {} — {}",
+            loc,
+            if text.len() > 60 {
+                format!("{}...", &text[..57])
+            } else {
+                text.to_string()
+            }
+        );
     }
     Ok(())
 }
@@ -134,7 +154,8 @@ fn clear_notes(toml_path: &std::path::Path, content: &str) -> Result<()> {
 
     let start = content.find("[release_notes]").unwrap();
     let rest = &content[start + "[release_notes]".len()..];
-    let end = rest.find("\n[")
+    let end = rest
+        .find("\n[")
         .map(|pos| start + "[release_notes]".len() + pos)
         .unwrap_or(content.len());
     let new_content = format!("{}{}", content[..start].trim_end(), &content[end..]);

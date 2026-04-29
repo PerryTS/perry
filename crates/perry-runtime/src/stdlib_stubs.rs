@@ -9,9 +9,9 @@
 //! When perry-stdlib IS linked, its real implementations are used instead
 //! (the linker picks stdlib over runtime since only one is ever linked).
 
-use std::ptr;
-use crate::string::StringHeader;
 use crate::promise::Promise;
+use crate::string::StringHeader;
+use std::ptr;
 
 // === WebSocket stubs ===
 // On iOS, perry-stdlib provides the real WebSocket implementation (using
@@ -21,9 +21,9 @@ use crate::promise::Promise;
 // be shadowed by the no-op stubs.
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 mod ws_stubs {
-    use std::ptr;
-    use crate::string::StringHeader;
     use crate::promise::Promise;
+    use crate::string::StringHeader;
+    use std::ptr;
 
     #[no_mangle]
     pub extern "C" fn js_ws_connect(_url_ptr: *const StringHeader) -> *mut Promise {
@@ -62,7 +62,11 @@ mod ws_stubs {
     }
 
     #[no_mangle]
-    pub extern "C" fn js_ws_on(_handle: i64, _event_name_ptr: *const StringHeader, _callback_ptr: i64) -> i64 {
+    pub extern "C" fn js_ws_on(
+        _handle: i64,
+        _event_name_ptr: *const StringHeader,
+        _callback_ptr: i64,
+    ) -> i64 {
         0
     }
 

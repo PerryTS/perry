@@ -67,7 +67,10 @@ unsafe extern "C" fn did_update_locations(
         return;
     }
     let coord: CLLocationCoordinate2D = get_coordinate(location);
-    println!("[location] got coordinates: {}, {}", coord.latitude, coord.longitude);
+    println!(
+        "[location] got coordinates: {}, {}",
+        coord.latitude, coord.longitude
+    );
     invoke_callback(coord.latitude, coord.longitude);
 }
 
@@ -126,7 +129,9 @@ unsafe extern "C" fn did_change_authorization(
         }
     } else if status == 2 {
         // 2 = denied
-        unsafe { invoke_callback(f64::NAN, f64::NAN); }
+        unsafe {
+            invoke_callback(f64::NAN, f64::NAN);
+        }
     }
     // status 0 = notDetermined — wait for user to respond
     // status 1 = restricted — wait or fail
@@ -149,15 +154,30 @@ fn register_location_delegate() {
 
             // locationManager:didUpdateLocations: — type: v@:@@
             let sel1 = sel_registerName(c"locationManager:didUpdateLocations:".as_ptr());
-            class_addMethod(cls, sel1, did_update_locations as *const std::ffi::c_void, c"v@:@@".as_ptr());
+            class_addMethod(
+                cls,
+                sel1,
+                did_update_locations as *const std::ffi::c_void,
+                c"v@:@@".as_ptr(),
+            );
 
             // locationManager:didFailWithError: — type: v@:@@
             let sel2 = sel_registerName(c"locationManager:didFailWithError:".as_ptr());
-            class_addMethod(cls, sel2, did_fail_with_error as *const std::ffi::c_void, c"v@:@@".as_ptr());
+            class_addMethod(
+                cls,
+                sel2,
+                did_fail_with_error as *const std::ffi::c_void,
+                c"v@:@@".as_ptr(),
+            );
 
             // locationManagerDidChangeAuthorization: — type: v@:@
             let sel3 = sel_registerName(c"locationManagerDidChangeAuthorization:".as_ptr());
-            class_addMethod(cls, sel3, did_change_authorization as *const std::ffi::c_void, c"v@:@".as_ptr());
+            class_addMethod(
+                cls,
+                sel3,
+                did_change_authorization as *const std::ffi::c_void,
+                c"v@:@".as_ptr(),
+            );
 
             objc_registerClassPair(cls);
         }
@@ -167,7 +187,10 @@ fn register_location_delegate() {
 /// Request a one-shot location. Callback receives (lat, lon) on success or (NaN, NaN) on error.
 /// Handles authorization automatically — if not determined, requests When In Use first.
 pub fn request_location(callback: f64) {
-    println!("[location] request_location called, callback bits: {:016x}", callback.to_bits());
+    println!(
+        "[location] request_location called, callback bits: {:016x}",
+        callback.to_bits()
+    );
     register_location_delegate();
 
     // Store the callback
@@ -177,7 +200,8 @@ pub fn request_location(callback: f64) {
 
     unsafe {
         // Create CLLocationManager
-        let mgr_cls = AnyClass::get(c"CLLocationManager").expect("CLLocationManager not found — link CoreLocation.framework");
+        let mgr_cls = AnyClass::get(c"CLLocationManager")
+            .expect("CLLocationManager not found — link CoreLocation.framework");
         let manager: Retained<AnyObject> = msg_send![mgr_cls, new];
         println!("[location] CLLocationManager created");
 
@@ -194,8 +218,12 @@ pub fn request_location(callback: f64) {
         println!("[location] authorization status: {}", status);
 
         // Retain manager and delegate so they stay alive
-        RETAINED_MANAGER.with(|m| { *m.borrow_mut() = Some(manager.clone()); });
-        RETAINED_DELEGATE.with(|d| { *d.borrow_mut() = Some(delegate); });
+        RETAINED_MANAGER.with(|m| {
+            *m.borrow_mut() = Some(manager.clone());
+        });
+        RETAINED_DELEGATE.with(|d| {
+            *d.borrow_mut() = Some(delegate);
+        });
 
         if status == 3 || status == 4 {
             println!("[location] already authorized, requesting location");
@@ -204,7 +232,10 @@ pub fn request_location(callback: f64) {
             println!("[location] not determined, requesting authorization");
             let _: () = msg_send![&*manager, requestWhenInUseAuthorization];
         } else {
-            println!("[location] denied/restricted (status={}), sending NaN", status);
+            println!(
+                "[location] denied/restricted (status={}), sending NaN",
+                status
+            );
             invoke_callback(f64::NAN, f64::NAN);
         }
     }

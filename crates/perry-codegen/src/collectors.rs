@@ -38,7 +38,11 @@ pub(crate) fn has_any_mutation(stmts: &[perry_hir::Stmt], id: u32) -> bool {
                     return true;
                 }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 if expr_has_mutation(condition, id) {
                     return true;
                 }
@@ -59,7 +63,12 @@ pub(crate) fn has_any_mutation(stmts: &[perry_hir::Stmt], id: u32) -> bool {
                     return true;
                 }
             }
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 if let Some(init_stmt) = init {
                     if has_any_mutation(std::slice::from_ref(init_stmt), id) {
                         return true;
@@ -79,7 +88,11 @@ pub(crate) fn has_any_mutation(stmts: &[perry_hir::Stmt], id: u32) -> bool {
                     return true;
                 }
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 if has_any_mutation(body, id) {
                     return true;
                 }
@@ -94,7 +107,10 @@ pub(crate) fn has_any_mutation(stmts: &[perry_hir::Stmt], id: u32) -> bool {
                     }
                 }
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 if expr_has_mutation(discriminant, id) {
                     return true;
                 }
@@ -133,26 +149,35 @@ fn is_local_get_chain(e: &perry_hir::Expr, id: u32) -> bool {
 fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
     use perry_hir::{ArrayElement, CallArg, Expr};
     const ARRAY_MUTATORS: &[&str] = &[
-        "push", "pop", "shift", "unshift", "splice", "sort", "reverse",
-        "fill", "copyWithin",
+        "push",
+        "pop",
+        "shift",
+        "unshift",
+        "splice",
+        "sort",
+        "reverse",
+        "fill",
+        "copyWithin",
     ];
     match e {
-        Expr::LocalSet(tgt, value) => {
-            *tgt == id || expr_has_mutation(value, id)
-        }
+        Expr::LocalSet(tgt, value) => *tgt == id || expr_has_mutation(value, id),
         Expr::Update { id: tgt, .. } => *tgt == id,
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             is_local_get_chain(object, id)
                 || expr_has_mutation(object, id)
                 || expr_has_mutation(index, id)
                 || expr_has_mutation(value, id)
         }
-        Expr::NativeMethodCall { object: Some(obj), method, args, .. }
-            if ARRAY_MUTATORS.contains(&method.as_str())
-                && is_local_get_chain(obj, id) =>
-        {
-            true
-        }
+        Expr::NativeMethodCall {
+            object: Some(obj),
+            method,
+            args,
+            ..
+        } if ARRAY_MUTATORS.contains(&method.as_str()) && is_local_get_chain(obj, id) => true,
         Expr::NativeMethodCall { object, args, .. } => {
             if let Some(o) = object {
                 if expr_has_mutation(o, id) {
@@ -188,7 +213,11 @@ fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
                 CallArg::Expr(e) | CallArg::Spread(e) => expr_has_mutation(e, id),
             })
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             expr_has_mutation(condition, id)
                 || expr_has_mutation(then_expr, id)
                 || expr_has_mutation(else_expr, id)
@@ -208,13 +237,18 @@ fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         Expr::Object(props) => props.iter().any(|(_, v)| expr_has_mutation(v, id)),
         Expr::Closure { body, .. } => has_any_mutation(body, id),
         Expr::Sequence(es) => es.iter().any(|e| expr_has_mutation(e, id)),
-        Expr::ArrayPush { array_id, value } => {
-            *array_id == id || expr_has_mutation(value, id)
-        }
-        Expr::ArraySplice { array_id, start, delete_count, items } => {
+        Expr::ArrayPush { array_id, value } => *array_id == id || expr_has_mutation(value, id),
+        Expr::ArraySplice {
+            array_id,
+            start,
+            delete_count,
+            items,
+        } => {
             *array_id == id
                 || expr_has_mutation(start, id)
-                || delete_count.as_ref().map_or(false, |d| expr_has_mutation(d, id))
+                || delete_count
+                    .as_ref()
+                    .map_or(false, |d| expr_has_mutation(d, id))
                 || items.iter().any(|it| expr_has_mutation(it, id))
         }
         _ => false,
@@ -246,7 +280,11 @@ pub(crate) fn collect_closures_in_stmts(
                     collect_closures_in_expr(e, seen, out);
                 }
             }
-            perry_hir::Stmt::If { condition, then_branch, else_branch } => {
+            perry_hir::Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 collect_closures_in_expr(condition, seen, out);
                 collect_closures_in_stmts(then_branch, seen, out);
                 if let Some(eb) = else_branch {
@@ -261,7 +299,12 @@ pub(crate) fn collect_closures_in_stmts(
                 collect_closures_in_stmts(body, seen, out);
                 collect_closures_in_expr(condition, seen, out);
             }
-            perry_hir::Stmt::For { init, condition, update, body } => {
+            perry_hir::Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 if let Some(init_stmt) = init {
                     collect_closures_in_stmts(std::slice::from_ref(init_stmt), seen, out);
                 }
@@ -273,7 +316,10 @@ pub(crate) fn collect_closures_in_stmts(
                 }
                 collect_closures_in_stmts(body, seen, out);
             }
-            perry_hir::Stmt::Switch { discriminant, cases } => {
+            perry_hir::Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 collect_closures_in_expr(discriminant, seen, out);
                 for case in cases {
                     if let Some(test) = &case.test {
@@ -282,7 +328,11 @@ pub(crate) fn collect_closures_in_stmts(
                     collect_closures_in_stmts(&case.body, seen, out);
                 }
             }
-            perry_hir::Stmt::Try { body, catch, finally } => {
+            perry_hir::Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 collect_closures_in_stmts(body, seen, out);
                 if let Some(c) = catch {
                     collect_closures_in_stmts(&c.body, seen, out);
@@ -309,8 +359,8 @@ fn collect_closures_in_expr(
     // local closure rather than a method so we can keep the same
     // recursion entry point.
     let walk = |sub: &Expr,
-                    seen: &mut HashSet<perry_types::FuncId>,
-                    out: &mut Vec<(perry_types::FuncId, Expr)>| {
+                seen: &mut HashSet<perry_types::FuncId>,
+                out: &mut Vec<(perry_types::FuncId, Expr)>| {
         collect_closures_in_expr(sub, seen, out);
     };
     match e {
@@ -331,7 +381,11 @@ fn collect_closures_in_expr(
         Expr::Unary { operand, .. } | Expr::Void(operand) | Expr::TypeOf(operand) => {
             walk(operand, seen, out);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             walk(condition, seen, out);
             walk(then_expr, seen, out);
             walk(else_expr, seen, out);
@@ -360,7 +414,11 @@ fn collect_closures_in_expr(
             walk(object, seen, out);
             walk(index, seen, out);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             walk(object, seen, out);
             walk(index, seen, out);
             walk(value, seen, out);
@@ -398,8 +456,16 @@ fn collect_closures_in_expr(
             walk(array, seen, out);
             walk(callback, seen, out);
         }
-        Expr::ArrayReduce { array, callback, initial }
-        | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             walk(array, seen, out);
             walk(callback, seen, out);
             if let Some(init) = initial {
@@ -432,7 +498,12 @@ fn collect_closures_in_expr(
             walk(array, seen, out);
             walk(value, seen, out);
         }
-        Expr::ArraySplice { start, delete_count, items, .. } => {
+        Expr::ArraySplice {
+            start,
+            delete_count,
+            items,
+            ..
+        } => {
             walk(start, seen, out);
             if let Some(d) = delete_count {
                 walk(d, seen, out);
@@ -451,7 +522,12 @@ fn collect_closures_in_expr(
             }
         }
         Expr::ArrayToReversed { array } | Expr::ArrayFlat { array } => walk(array, seen, out),
-        Expr::ArrayToSpliced { array, start, delete_count, items } => {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => {
             walk(array, seen, out);
             walk(start, seen, out);
             walk(delete_count, seen, out);
@@ -459,12 +535,18 @@ fn collect_closures_in_expr(
                 walk(it, seen, out);
             }
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             walk(array, seen, out);
             walk(index, seen, out);
             walk(value, seen, out);
         }
-        Expr::ArrayCopyWithin { target, start, end, .. } => {
+        Expr::ArrayCopyWithin {
+            target, start, end, ..
+        } => {
             walk(target, seen, out);
             walk(start, seen, out);
             if let Some(e) = end {
@@ -506,13 +588,17 @@ fn collect_closures_in_expr(
         }
         Expr::ArrayFrom(o) | Expr::Uint8ArrayFrom(o) => walk(o, seen, out),
         Expr::TypedArrayNew { arg, .. } => {
-            if let Some(a) = arg { walk(a, seen, out); }
+            if let Some(a) = arg {
+                walk(a, seen, out);
+            }
         }
         Expr::ArrayFromMapped { iterable, map_fn } => {
             walk(iterable, seen, out);
             walk(map_fn, seen, out);
         }
-        Expr::FsExistsSync(p) | Expr::FsReadFileBinary(p) | Expr::FsUnlinkSync(p) => walk(p, seen, out),
+        Expr::FsExistsSync(p) | Expr::FsReadFileBinary(p) | Expr::FsUnlinkSync(p) => {
+            walk(p, seen, out)
+        }
         Expr::ParseInt { string, radix } => {
             walk(string, seen, out);
             if let Some(r) = radix {
@@ -650,7 +736,12 @@ fn collect_closures_in_expr(
         Expr::WeakRefNew(o) | Expr::WeakRefDeref(o) | Expr::FinalizationRegistryNew(o) => {
             walk(o, seen, out);
         }
-        Expr::FinalizationRegistryRegister { registry, target, held, token } => {
+        Expr::FinalizationRegistryRegister {
+            registry,
+            target,
+            held,
+            token,
+        } => {
             walk(registry, seen, out);
             walk(target, seen, out);
             walk(held, seen, out);
@@ -675,7 +766,12 @@ fn collect_closures_in_expr(
         }
         // fetch(url, { method, body, headers }) — headers values can be
         // computed expressions containing closures (rare but legal).
-        Expr::FetchWithOptions { url, method, body, headers } => {
+        Expr::FetchWithOptions {
+            url,
+            method,
+            body,
+            headers,
+        } => {
             walk(url, seen, out);
             walk(method, seen, out);
             walk(body, seen, out);
@@ -687,7 +783,11 @@ fn collect_closures_in_expr(
             walk(url, seen, out);
             walk(auth_header, seen, out);
         }
-        Expr::FetchPostWithAuth { url, auth_header, body } => {
+        Expr::FetchPostWithAuth {
+            url,
+            auth_header,
+            body,
+        } => {
             walk(url, seen, out);
             walk(auth_header, seen, out);
             walk(body, seen, out);
@@ -701,32 +801,66 @@ fn collect_closures_in_expr(
         }
         // Yield expressions wrap an inner value that may itself be a closure.
         Expr::Yield { value, .. } => {
-            if let Some(v) = value { walk(v, seen, out); }
+            if let Some(v) = value {
+                walk(v, seen, out);
+            }
         }
         // Child process expressions — walk all sub-expressions.
         Expr::ChildProcessExecSync { command, options } => {
             walk(command, seen, out);
-            if let Some(o) = options { walk(o, seen, out); }
+            if let Some(o) = options {
+                walk(o, seen, out);
+            }
         }
-        Expr::ChildProcessSpawnSync { command, args, options } |
-        Expr::ChildProcessSpawn { command, args, options } => {
-            walk(command, seen, out);
-            if let Some(a) = args { walk(a, seen, out); }
-            if let Some(o) = options { walk(o, seen, out); }
+        Expr::ChildProcessSpawnSync {
+            command,
+            args,
+            options,
         }
-        Expr::ChildProcessExec { command, options, callback } => {
+        | Expr::ChildProcessSpawn {
+            command,
+            args,
+            options,
+        } => {
             walk(command, seen, out);
-            if let Some(o) = options { walk(o, seen, out); }
-            if let Some(c) = callback { walk(c, seen, out); }
+            if let Some(a) = args {
+                walk(a, seen, out);
+            }
+            if let Some(o) = options {
+                walk(o, seen, out);
+            }
         }
-        Expr::ChildProcessSpawnBackground { command, args, log_file, env_json } => {
+        Expr::ChildProcessExec {
+            command,
+            options,
+            callback,
+        } => {
             walk(command, seen, out);
-            if let Some(a) = args { walk(a, seen, out); }
+            if let Some(o) = options {
+                walk(o, seen, out);
+            }
+            if let Some(c) = callback {
+                walk(c, seen, out);
+            }
+        }
+        Expr::ChildProcessSpawnBackground {
+            command,
+            args,
+            log_file,
+            env_json,
+        } => {
+            walk(command, seen, out);
+            if let Some(a) = args {
+                walk(a, seen, out);
+            }
             walk(log_file, seen, out);
-            if let Some(e) = env_json { walk(e, seen, out); }
+            if let Some(e) = env_json {
+                walk(e, seen, out);
+            }
         }
-        Expr::ChildProcessGetProcessStatus(h) |
-        Expr::ChildProcessKillProcess(h) => walk(h, seen, out),
+        Expr::ChildProcessGetProcessStatus(h) | Expr::ChildProcessKillProcess(h) => {
+            walk(h, seen, out)
+        }
         // V8 / perry-jsruntime interop (issue #248). All of these can
         // carry closures inside their args / value sub-exprs — without
         // descending here, a closure passed to a JS-imported function
@@ -736,34 +870,56 @@ fn collect_closures_in_expr(
         Expr::JsCreateCallback { closure, .. } => walk(closure, seen, out),
         Expr::JsLoadModule { .. } => {}
         Expr::JsGetExport { module_handle, .. } => walk(module_handle, seen, out),
-        Expr::JsCallFunction { module_handle, args, .. } => {
+        Expr::JsCallFunction {
+            module_handle,
+            args,
+            ..
+        } => {
             walk(module_handle, seen, out);
-            for a in args { walk(a, seen, out); }
+            for a in args {
+                walk(a, seen, out);
+            }
         }
         Expr::JsCallMethod { object, args, .. } => {
             walk(object, seen, out);
-            for a in args { walk(a, seen, out); }
+            for a in args {
+                walk(a, seen, out);
+            }
         }
         Expr::JsGetProperty { object, .. } => walk(object, seen, out),
         Expr::JsSetProperty { object, value, .. } => {
             walk(object, seen, out);
             walk(value, seen, out);
         }
-        Expr::JsNew { module_handle, args, .. } => {
+        Expr::JsNew {
+            module_handle,
+            args,
+            ..
+        } => {
             walk(module_handle, seen, out);
-            for a in args { walk(a, seen, out); }
+            for a in args {
+                walk(a, seen, out);
+            }
         }
         Expr::JsNewFromHandle { constructor, args } => {
             walk(constructor, seen, out);
-            for a in args { walk(a, seen, out); }
+            for a in args {
+                walk(a, seen, out);
+            }
         }
         // Reflect.* and other iterator/json wrappers — can carry callbacks.
         Expr::IteratorToArray(o) | Expr::ArrayIsArray(o) => walk(o, seen, out),
         Expr::JsonStringify(o) | Expr::JsonParse(o) => walk(o, seen, out),
         Expr::JsonParseTyped { text, .. } => walk(text, seen, out),
-        Expr::JsonStringifyPretty { value, replacer, space } => {
+        Expr::JsonStringifyPretty {
+            value,
+            replacer,
+            space,
+        } => {
             walk(value, seen, out);
-            if let Some(r) = replacer { walk(r, seen, out); }
+            if let Some(r) = replacer {
+                walk(r, seen, out);
+            }
             walk(space, seen, out);
         }
         _ => {}
@@ -790,7 +946,11 @@ pub(crate) fn collect_let_ids(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>)
             perry_hir::Stmt::Let { id, .. } => {
                 out.insert(*id);
             }
-            perry_hir::Stmt::If { then_branch, else_branch, .. } => {
+            perry_hir::Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 collect_let_ids(then_branch, out);
                 if let Some(eb) = else_branch {
                     collect_let_ids(eb, out);
@@ -827,7 +987,11 @@ pub(crate) fn collect_ref_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut Hash
                     collect_ref_ids_in_expr(e, out);
                 }
             }
-            perry_hir::Stmt::If { condition, then_branch, else_branch } => {
+            perry_hir::Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 collect_ref_ids_in_expr(condition, out);
                 collect_ref_ids_in_stmts(then_branch, out);
                 if let Some(eb) = else_branch {
@@ -842,7 +1006,12 @@ pub(crate) fn collect_ref_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut Hash
                 collect_ref_ids_in_stmts(body, out);
                 collect_ref_ids_in_expr(condition, out);
             }
-            perry_hir::Stmt::For { init, condition, update, body } => {
+            perry_hir::Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 if let Some(init_stmt) = init {
                     collect_ref_ids_in_stmts(std::slice::from_ref(init_stmt), out);
                 }
@@ -971,7 +1140,11 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(a, out);
             }
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             walk(condition, out);
             walk(then_expr, out);
             walk(else_expr, out);
@@ -986,7 +1159,11 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(object, out);
             walk(index, out);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             walk(object, out);
             walk(index, out);
             walk(value, out);
@@ -998,7 +1175,12 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
             out.insert(*id);
         }
-        Expr::ArraySplice { array_id, start, delete_count, items } => {
+        Expr::ArraySplice {
+            array_id,
+            start,
+            delete_count,
+            items,
+        } => {
             out.insert(*array_id);
             walk(start, out);
             if let Some(d) = delete_count {
@@ -1022,7 +1204,10 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         }
         Expr::ArrayMap { array, callback }
         | Expr::ArrayFilter { array, callback }
-        | Expr::ArraySort { array, comparator: callback }
+        | Expr::ArraySort {
+            array,
+            comparator: callback,
+        }
         | Expr::ArrayFind { array, callback }
         | Expr::ArrayFindIndex { array, callback }
         | Expr::ArrayFindLast { array, callback }
@@ -1032,8 +1217,16 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(array, out);
             walk(callback, out);
         }
-        Expr::ArrayReduce { array, callback, initial }
-        | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             walk(array, out);
             walk(callback, out);
             if let Some(init) = initial {
@@ -1172,13 +1365,19 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(array, out);
             walk(index, out);
         }
-        Expr::Uint8ArraySet { array, index, value } => {
+        Expr::Uint8ArraySet {
+            array,
+            index,
+            value,
+        } => {
             walk(array, out);
             walk(index, out);
             walk(value, out);
         }
         Expr::TypedArrayNew { arg, .. } => {
-            if let Some(a) = arg { walk(a, out); }
+            if let Some(a) = arg {
+                walk(a, out);
+            }
         }
         Expr::ObjectGroupBy { items, key_fn } => {
             walk(items, out);
@@ -1188,8 +1387,7 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(iterable, out);
             walk(map_fn, out);
         }
-        Expr::RegExpTest { regex, string }
-        | Expr::RegExpExec { regex, string } => {
+        Expr::RegExpTest { regex, string } | Expr::RegExpExec { regex, string } => {
             walk(regex, out);
             walk(string, out);
         }
@@ -1209,7 +1407,12 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(f, out);
             }
         }
-        Expr::FinalizationRegistryRegister { registry, target, held, token } => {
+        Expr::FinalizationRegistryRegister {
+            registry,
+            target,
+            held,
+            token,
+        } => {
             walk(registry, out);
             walk(target, out);
             walk(held, out);
@@ -1252,8 +1455,7 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(array, out);
             walk(value, out);
         }
-        Expr::ArraySome { array, callback }
-        | Expr::ArrayEvery { array, callback } => {
+        Expr::ArraySome { array, callback } | Expr::ArrayEvery { array, callback } => {
             walk(array, out);
             walk(callback, out);
         }
@@ -1263,7 +1465,12 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(c, out);
             }
         }
-        Expr::ArrayToSpliced { array, start, delete_count, items } => {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => {
             walk(array, out);
             walk(start, out);
             walk(delete_count, out);
@@ -1271,12 +1478,21 @@ fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(it, out);
             }
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             walk(array, out);
             walk(index, out);
             walk(value, out);
         }
-        Expr::ArrayCopyWithin { array_id, target, start, end } => {
+        Expr::ArrayCopyWithin {
+            array_id,
+            target,
+            start,
+            end,
+        } => {
             out.insert(*array_id);
             walk(target, out);
             walk(start, out);
@@ -1391,9 +1607,15 @@ pub(crate) fn collect_pointer_typed_locals(
                     out.insert(*id, *next_slot);
                     *next_slot += 1;
                 }
-                Stmt::If { then_branch, else_branch, .. } => {
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
                     walk(then_branch, out, next_slot);
-                    if let Some(eb) = else_branch { walk(eb, out, next_slot); }
+                    if let Some(eb) = else_branch {
+                        walk(eb, out, next_slot);
+                    }
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                     walk(body, out, next_slot);
@@ -1404,7 +1626,11 @@ pub(crate) fn collect_pointer_typed_locals(
                     }
                     walk(body, out, next_slot);
                 }
-                Stmt::Try { body, catch, finally } => {
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
                     walk(body, out, next_slot);
                     if let Some(c) = catch {
                         if let Some((id, _)) = &c.param {
@@ -1415,12 +1641,18 @@ pub(crate) fn collect_pointer_typed_locals(
                         }
                         walk(&c.body, out, next_slot);
                     }
-                    if let Some(fb) = finally { walk(fb, out, next_slot); }
+                    if let Some(fb) = finally {
+                        walk(fb, out, next_slot);
+                    }
                 }
                 Stmt::Switch { cases, .. } => {
-                    for c in cases { walk(&c.body, out, next_slot); }
+                    for c in cases {
+                        walk(&c.body, out, next_slot);
+                    }
                 }
-                Stmt::Labeled { body, .. } => walk(std::slice::from_ref(body.as_ref()), out, next_slot),
+                Stmt::Labeled { body, .. } => {
+                    walk(std::slice::from_ref(body.as_ref()), out, next_slot)
+                }
                 _ => {}
             }
         }
@@ -1450,7 +1682,11 @@ fn walk_index_uses_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
                     walk_index_uses_in_expr(e, out);
                 }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 walk_index_uses_in_expr(condition, out);
                 walk_index_uses_in_stmts(then_branch, out);
                 if let Some(eb) = else_branch {
@@ -1465,7 +1701,12 @@ fn walk_index_uses_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
                 walk_index_uses_in_stmts(body, out);
                 walk_index_uses_in_expr(condition, out);
             }
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 if let Some(i) = init {
                     walk_index_uses_in_stmts(std::slice::from_ref(i), out);
                 }
@@ -1477,7 +1718,11 @@ fn walk_index_uses_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
                 }
                 walk_index_uses_in_stmts(body, out);
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 walk_index_uses_in_stmts(body, out);
                 if let Some(c) = catch {
                     walk_index_uses_in_stmts(&c.body, out);
@@ -1486,7 +1731,10 @@ fn walk_index_uses_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
                     walk_index_uses_in_stmts(f, out);
                 }
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 walk_index_uses_in_expr(discriminant, out);
                 for c in cases {
                     if let Some(t) = &c.test {
@@ -1520,7 +1768,11 @@ fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk_index_uses_in_expr(object, out);
             walk_index_uses_in_expr(index, out);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             collect_index_refs(index, out);
             walk_index_uses_in_expr(object, out);
             walk_index_uses_in_expr(index, out);
@@ -1536,7 +1788,11 @@ fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk_index_uses_in_expr(buffer, out);
             walk_index_uses_in_expr(index, out);
         }
-        Expr::BufferIndexSet { buffer, index, value } => {
+        Expr::BufferIndexSet {
+            buffer,
+            index,
+            value,
+        } => {
             collect_index_refs(index, out);
             walk_index_uses_in_expr(buffer, out);
             walk_index_uses_in_expr(index, out);
@@ -1547,7 +1803,11 @@ fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk_index_uses_in_expr(array, out);
             walk_index_uses_in_expr(index, out);
         }
-        Expr::Uint8ArraySet { array, index, value } => {
+        Expr::Uint8ArraySet {
+            array,
+            index,
+            value,
+        } => {
             collect_index_refs(index, out);
             walk_index_uses_in_expr(array, out);
             walk_index_uses_in_expr(index, out);
@@ -1558,7 +1818,11 @@ fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk_index_uses_in_expr(array, out);
             walk_index_uses_in_expr(index, out);
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             collect_index_refs(index, out);
             walk_index_uses_in_expr(array, out);
             walk_index_uses_in_expr(index, out);
@@ -1594,7 +1858,11 @@ fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::NumberCoerce(operand) => {
             walk_index_uses_in_expr(operand, out);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             walk_index_uses_in_expr(condition, out);
             walk_index_uses_in_expr(then_expr, out);
             walk_index_uses_in_expr(else_expr, out);
@@ -1690,7 +1958,13 @@ pub(crate) fn collect_integer_locals(
     let mut flat_row_alias_ids: HashSet<u32> = HashSet::new();
     collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
 
-    collect_integer_let_ids(stmts, &mut candidates, flat_const_ids, &flat_row_alias_ids, clamp_fn_ids);
+    collect_integer_let_ids(
+        stmts,
+        &mut candidates,
+        flat_const_ids,
+        &flat_row_alias_ids,
+        clamp_fn_ids,
+    );
 
     // Iterate to a fixed point (issue #49): `is_int32_producing_expr` now
     // recognizes `LocalGet(id)` as int-producing when `id` is itself
@@ -1702,8 +1976,12 @@ pub(crate) fn collect_integer_locals(
     loop {
         let mut disqualified: HashSet<u32> = HashSet::new();
         collect_non_int_localset_ids_in_stmts(
-            stmts, &mut disqualified, &candidates,
-            flat_const_ids, &flat_row_alias_ids, clamp_fn_ids,
+            stmts,
+            &mut disqualified,
+            &candidates,
+            flat_const_ids,
+            &flat_row_alias_ids,
+            clamp_fn_ids,
         );
         let before = candidates.len();
         candidates.retain(|id| !disqualified.contains(id));
@@ -1722,14 +2000,23 @@ fn collect_flat_row_aliases(
     use perry_hir::{Expr, Stmt};
     for s in stmts {
         match s {
-            Stmt::Let { id, init: Some(Expr::IndexGet { object, .. }), mutable: false, .. } => {
+            Stmt::Let {
+                id,
+                init: Some(Expr::IndexGet { object, .. }),
+                mutable: false,
+                ..
+            } => {
                 if let Expr::LocalGet(const_id) = object.as_ref() {
                     if flat_const_ids.contains(const_id) {
                         out.insert(*id);
                     }
                 }
             }
-            Stmt::If { then_branch, else_branch, .. } => {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 collect_flat_row_aliases(then_branch, flat_const_ids, out);
                 if let Some(eb) = else_branch {
                     collect_flat_row_aliases(eb, flat_const_ids, out);
@@ -1737,9 +2024,7 @@ fn collect_flat_row_aliases(
             }
             Stmt::For { init, body, .. } => {
                 if let Some(init_stmt) = init {
-                    collect_flat_row_aliases(
-                        std::slice::from_ref(init_stmt), flat_const_ids, out,
-                    );
+                    collect_flat_row_aliases(std::slice::from_ref(init_stmt), flat_const_ids, out);
                 }
                 collect_flat_row_aliases(body, flat_const_ids, out);
             }
@@ -1797,8 +2082,19 @@ fn is_int32_producing_expr(
         Expr::Binary { op, left, right }
             if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
         {
-            is_int32_producing_expr(left, known_int_locals, flat_const_ids, flat_row_alias_ids, clamp_fn_ids)
-                && is_int32_producing_expr(right, known_int_locals, flat_const_ids, flat_row_alias_ids, clamp_fn_ids)
+            is_int32_producing_expr(
+                left,
+                known_int_locals,
+                flat_const_ids,
+                flat_row_alias_ids,
+                clamp_fn_ids,
+            ) && is_int32_producing_expr(
+                right,
+                known_int_locals,
+                flat_const_ids,
+                flat_row_alias_ids,
+                clamp_fn_ids,
+            )
         }
         Expr::Call { callee, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
@@ -1860,8 +2156,15 @@ fn is_bitwise_expr(e: &perry_hir::Expr) -> bool {
     use perry_hir::{BinaryOp, Expr};
     matches!(
         e,
-        Expr::Binary { op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
-            | BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr, .. }
+        Expr::Binary {
+            op: BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+                | BinaryOp::UShr,
+            ..
+        }
     )
 }
 
@@ -1875,8 +2178,12 @@ fn collect_integer_let_ids(
     use perry_hir::{Expr, Stmt};
     for s in stmts {
         match s {
-            Stmt::Let { id, init: Some(init), mutable, .. }
-                if matches!(init, Expr::Integer(_))
+            Stmt::Let {
+                id,
+                init: Some(init),
+                mutable,
+                ..
+            } if matches!(init, Expr::Integer(_))
                     || is_flat_const_indexget(init, flat_const_ids, flat_row_alias_ids)
                     || is_clamp_call(init, clamp_fn_ids)
                     // Seed immutable (const) Lets whose init is a bitwise expression.
@@ -1892,42 +2199,109 @@ fn collect_integer_let_ids(
                     // i32-slot write goes through `lower_expr_as_i32` +
                     // `sitofp` and loses the high bit (e.g. `-1 >>> 0` should
                     // be 4294967295 but the i32 slot reads back as -1).
-                    || (*mutable && matches!(init, Expr::Binary { op: perry_hir::BinaryOp::BitOr, right, .. } if matches!(right.as_ref(), Expr::Integer(0))))
- =>
+                    || (*mutable && matches!(init, Expr::Binary { op: perry_hir::BinaryOp::BitOr, right, .. } if matches!(right.as_ref(), Expr::Integer(0)))) =>
             {
                 out.insert(*id);
             }
-            Stmt::If { then_branch, else_branch, .. } => {
-                collect_integer_let_ids(then_branch, out, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_integer_let_ids(
+                    then_branch,
+                    out,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
                 if let Some(eb) = else_branch {
-                    collect_integer_let_ids(eb, out, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_integer_let_ids(
+                        eb,
+                        out,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
             }
             Stmt::For { init, body, .. } => {
                 if let Some(init_stmt) = init {
-                    collect_integer_let_ids(std::slice::from_ref(init_stmt), out, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_integer_let_ids(
+                        std::slice::from_ref(init_stmt),
+                        out,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
-                collect_integer_let_ids(body, out, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                collect_integer_let_ids(
+                    body,
+                    out,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_integer_let_ids(body, out, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                collect_integer_let_ids(
+                    body,
+                    out,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
             }
-            Stmt::Try { body, catch, finally } => {
-                collect_integer_let_ids(body, out, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_integer_let_ids(
+                    body,
+                    out,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
                 if let Some(c) = catch {
-                    collect_integer_let_ids(&c.body, out, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_integer_let_ids(
+                        &c.body,
+                        out,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
                 if let Some(f) = finally {
-                    collect_integer_let_ids(f, out, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_integer_let_ids(
+                        f,
+                        out,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
             }
             Stmt::Switch { cases, .. } => {
                 for c in cases {
-                    collect_integer_let_ids(&c.body, out, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_integer_let_ids(
+                        &c.body,
+                        out,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
             }
             Stmt::Labeled { body, .. } => {
-                collect_integer_let_ids(std::slice::from_ref(body.as_ref()), out, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                collect_integer_let_ids(
+                    std::slice::from_ref(body.as_ref()),
+                    out,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
             }
             _ => {}
         }
@@ -1952,7 +2326,12 @@ fn collect_non_int_localset_ids_in_stmts(
     clamp_fn_ids: &HashSet<u32>,
 ) {
     collect_localset_ids_in_stmts_filtered(
-        stmts, out, Some(known_int_locals), flat_const_ids, flat_row_alias_ids, clamp_fn_ids,
+        stmts,
+        out,
+        Some(known_int_locals),
+        flat_const_ids,
+        flat_row_alias_ids,
+        clamp_fn_ids,
     );
 }
 
@@ -1972,35 +2351,112 @@ fn collect_localset_ids_in_stmts_filtered(
     use perry_hir::Stmt;
     for s in stmts {
         match s {
-            Stmt::Expr(e) | Stmt::Throw(e) => {
-                collect_localset_ids_in_expr_filtered(e, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids)
-            }
+            Stmt::Expr(e) | Stmt::Throw(e) => collect_localset_ids_in_expr_filtered(
+                e,
+                out,
+                filter,
+                flat_const_ids,
+                flat_row_alias_ids,
+                clamp_fn_ids,
+            ),
             Stmt::Return(opt) => {
                 if let Some(e) = opt {
-                    collect_localset_ids_in_expr_filtered(e, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_localset_ids_in_expr_filtered(
+                        e,
+                        out,
+                        filter,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
             }
             Stmt::Let { init, .. } => {
                 if let Some(e) = init {
-                    collect_localset_ids_in_expr_filtered(e, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_localset_ids_in_expr_filtered(
+                        e,
+                        out,
+                        filter,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
-                collect_localset_ids_in_expr_filtered(condition, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
-                collect_localset_ids_in_stmts_filtered(then_branch, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                collect_localset_ids_in_expr_filtered(
+                    condition,
+                    out,
+                    filter,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
+                collect_localset_ids_in_stmts_filtered(
+                    then_branch,
+                    out,
+                    filter,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
                 if let Some(eb) = else_branch {
-                    collect_localset_ids_in_stmts_filtered(eb, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_localset_ids_in_stmts_filtered(
+                        eb,
+                        out,
+                        filter,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
             }
             Stmt::While { condition, body } => {
-                collect_localset_ids_in_expr_filtered(condition, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
-                collect_localset_ids_in_stmts_filtered(body, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                collect_localset_ids_in_expr_filtered(
+                    condition,
+                    out,
+                    filter,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
+                collect_localset_ids_in_stmts_filtered(
+                    body,
+                    out,
+                    filter,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
             }
             Stmt::DoWhile { body, condition } => {
-                collect_localset_ids_in_stmts_filtered(body, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
-                collect_localset_ids_in_expr_filtered(condition, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                collect_localset_ids_in_stmts_filtered(
+                    body,
+                    out,
+                    filter,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
+                collect_localset_ids_in_expr_filtered(
+                    condition,
+                    out,
+                    filter,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
             }
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 if let Some(init_stmt) = init {
                     collect_localset_ids_in_stmts_filtered(
                         std::slice::from_ref(init_stmt),
@@ -2012,29 +2468,99 @@ fn collect_localset_ids_in_stmts_filtered(
                     );
                 }
                 if let Some(cond) = condition {
-                    collect_localset_ids_in_expr_filtered(cond, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_localset_ids_in_expr_filtered(
+                        cond,
+                        out,
+                        filter,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
                 if let Some(upd) = update {
-                    collect_localset_ids_in_expr_filtered(upd, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_localset_ids_in_expr_filtered(
+                        upd,
+                        out,
+                        filter,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
-                collect_localset_ids_in_stmts_filtered(body, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                collect_localset_ids_in_stmts_filtered(
+                    body,
+                    out,
+                    filter,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
             }
-            Stmt::Try { body, catch, finally } => {
-                collect_localset_ids_in_stmts_filtered(body, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_localset_ids_in_stmts_filtered(
+                    body,
+                    out,
+                    filter,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
                 if let Some(c) = catch {
-                    collect_localset_ids_in_stmts_filtered(&c.body, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_localset_ids_in_stmts_filtered(
+                        &c.body,
+                        out,
+                        filter,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
                 if let Some(f) = finally {
-                    collect_localset_ids_in_stmts_filtered(f, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_localset_ids_in_stmts_filtered(
+                        f,
+                        out,
+                        filter,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
             }
-            Stmt::Switch { discriminant, cases } => {
-                collect_localset_ids_in_expr_filtered(discriminant, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                collect_localset_ids_in_expr_filtered(
+                    discriminant,
+                    out,
+                    filter,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
                 for c in cases {
                     if let Some(t) = &c.test {
-                        collect_localset_ids_in_expr_filtered(t, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                        collect_localset_ids_in_expr_filtered(
+                            t,
+                            out,
+                            filter,
+                            flat_const_ids,
+                            flat_row_alias_ids,
+                            clamp_fn_ids,
+                        );
                     }
-                    collect_localset_ids_in_stmts_filtered(&c.body, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+                    collect_localset_ids_in_stmts_filtered(
+                        &c.body,
+                        out,
+                        filter,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
                 }
             }
             Stmt::Labeled { body, .. } => {
@@ -2067,12 +2593,26 @@ fn collect_localset_ids_in_expr_filtered(
 ) {
     use perry_hir::{ArrayElement, CallArg, Expr};
     let walk = |sub: &Expr, out: &mut HashSet<u32>| {
-        collect_localset_ids_in_expr_filtered(sub, out, filter, flat_const_ids, flat_row_alias_ids, clamp_fn_ids);
+        collect_localset_ids_in_expr_filtered(
+            sub,
+            out,
+            filter,
+            flat_const_ids,
+            flat_row_alias_ids,
+            clamp_fn_ids,
+        );
     };
     match e {
         Expr::LocalSet(id, value) => {
             match filter {
-                Some(known) if is_int32_producing_expr(value, known, flat_const_ids, flat_row_alias_ids, clamp_fn_ids) => {}
+                Some(known)
+                    if is_int32_producing_expr(
+                        value,
+                        known,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    ) => {}
                 _ => {
                     out.insert(*id);
                 }
@@ -2177,7 +2717,11 @@ fn collect_localset_ids_in_expr_filtered(
                 walk(a, out);
             }
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             walk(condition, out);
             walk(then_expr, out);
             walk(else_expr, out);
@@ -2192,13 +2736,22 @@ fn collect_localset_ids_in_expr_filtered(
             walk(object, out);
             walk(index, out);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             walk(object, out);
             walk(index, out);
             walk(value, out);
         }
         Expr::ArrayPush { value, .. } => walk(value, out),
-        Expr::ArraySplice { start, delete_count, items, .. } => {
+        Expr::ArraySplice {
+            start,
+            delete_count,
+            items,
+            ..
+        } => {
             walk(start, out);
             if let Some(d) = delete_count {
                 walk(d, out);
@@ -2221,7 +2774,10 @@ fn collect_localset_ids_in_expr_filtered(
         }
         Expr::ArrayMap { array, callback }
         | Expr::ArrayFilter { array, callback }
-        | Expr::ArraySort { array, comparator: callback }
+        | Expr::ArraySort {
+            array,
+            comparator: callback,
+        }
         | Expr::ArrayFind { array, callback }
         | Expr::ArrayFindIndex { array, callback }
         | Expr::ArrayFindLast { array, callback }
@@ -2231,8 +2787,16 @@ fn collect_localset_ids_in_expr_filtered(
             walk(array, out);
             walk(callback, out);
         }
-        Expr::ArrayReduce { array, callback, initial }
-        | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             walk(array, out);
             walk(callback, out);
             if let Some(init) = initial {
@@ -2358,13 +2922,19 @@ fn collect_localset_ids_in_expr_filtered(
             walk(array, out);
             walk(index, out);
         }
-        Expr::Uint8ArraySet { array, index, value } => {
+        Expr::Uint8ArraySet {
+            array,
+            index,
+            value,
+        } => {
             walk(array, out);
             walk(index, out);
             walk(value, out);
         }
         Expr::TypedArrayNew { arg, .. } => {
-            if let Some(a) = arg { walk(a, out); }
+            if let Some(a) = arg {
+                walk(a, out);
+            }
         }
         Expr::ObjectGroupBy { items, key_fn } => {
             walk(items, out);
@@ -2374,8 +2944,7 @@ fn collect_localset_ids_in_expr_filtered(
             walk(iterable, out);
             walk(map_fn, out);
         }
-        Expr::RegExpTest { regex, string }
-        | Expr::RegExpExec { regex, string } => {
+        Expr::RegExpTest { regex, string } | Expr::RegExpExec { regex, string } => {
             walk(regex, out);
             walk(string, out);
         }
@@ -2395,7 +2964,12 @@ fn collect_localset_ids_in_expr_filtered(
                 walk(f, out);
             }
         }
-        Expr::FinalizationRegistryRegister { registry, target, held, token } => {
+        Expr::FinalizationRegistryRegister {
+            registry,
+            target,
+            held,
+            token,
+        } => {
             walk(registry, out);
             walk(target, out);
             walk(held, out);
@@ -2412,60 +2986,163 @@ fn collect_localset_ids_in_expr_filtered(
     }
 }
 
-
 // -------- Integer specialization for pure numeric recursive functions --------
 
-use perry_hir::{Expr, Stmt, Function, BinaryOp};
+use perry_hir::{BinaryOp, Expr, Function, Stmt};
 
 /// Detect a 3-param clamp pattern: `if (v < lo) return lo; if (v > hi) return hi; return v;`
 /// Returns (v_param_id, lo_param_id, hi_param_id) if the function matches.
 pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
-    if f.is_async || f.is_generator || f.params.len() != 3 { return None; }
-    if !matches!(f.return_type, perry_types::Type::Number) { return None; }
-    if f.body.len() != 3 { return None; }
+    if f.is_async || f.is_generator || f.params.len() != 3 {
+        return None;
+    }
+    if !matches!(f.return_type, perry_types::Type::Number) {
+        return None;
+    }
+    if f.body.len() != 3 {
+        return None;
+    }
     let (v_id, lo_id, hi_id) = (f.params[0].id, f.params[1].id, f.params[2].id);
     // [0] If { cond: Compare(Lt, v, lo), then: [Return(lo)] }
-    if let Stmt::If { condition: Expr::Compare { op: perry_hir::CompareOp::Lt, left, right }, then_branch, else_branch: None } = &f.body[0] {
-        if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == v_id) { return None; }
-        if !matches!(right.as_ref(), Expr::LocalGet(id) if *id == lo_id) { return None; }
-        if then_branch.len() != 1 { return None; }
-        if !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id))) if *id == lo_id) { return None; }
-    } else { return None; }
+    if let Stmt::If {
+        condition:
+            Expr::Compare {
+                op: perry_hir::CompareOp::Lt,
+                left,
+                right,
+            },
+        then_branch,
+        else_branch: None,
+    } = &f.body[0]
+    {
+        if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == v_id) {
+            return None;
+        }
+        if !matches!(right.as_ref(), Expr::LocalGet(id) if *id == lo_id) {
+            return None;
+        }
+        if then_branch.len() != 1 {
+            return None;
+        }
+        if !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id))) if *id == lo_id) {
+            return None;
+        }
+    } else {
+        return None;
+    }
     // [1] If { cond: Compare(Gt, v, hi), then: [Return(hi)] }
-    if let Stmt::If { condition: Expr::Compare { op: perry_hir::CompareOp::Gt, left, right }, then_branch, else_branch: None } = &f.body[1] {
-        if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == v_id) { return None; }
-        if !matches!(right.as_ref(), Expr::LocalGet(id) if *id == hi_id) { return None; }
-        if then_branch.len() != 1 { return None; }
-        if !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id))) if *id == hi_id) { return None; }
-    } else { return None; }
+    if let Stmt::If {
+        condition:
+            Expr::Compare {
+                op: perry_hir::CompareOp::Gt,
+                left,
+                right,
+            },
+        then_branch,
+        else_branch: None,
+    } = &f.body[1]
+    {
+        if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == v_id) {
+            return None;
+        }
+        if !matches!(right.as_ref(), Expr::LocalGet(id) if *id == hi_id) {
+            return None;
+        }
+        if then_branch.len() != 1 {
+            return None;
+        }
+        if !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id))) if *id == hi_id) {
+            return None;
+        }
+    } else {
+        return None;
+    }
     // [2] Return(v)
-    if !matches!(&f.body[2], Stmt::Return(Some(Expr::LocalGet(id))) if *id == v_id) { return None; }
+    if !matches!(&f.body[2], Stmt::Return(Some(Expr::LocalGet(id))) if *id == v_id) {
+        return None;
+    }
     Some((v_id, lo_id, hi_id))
 }
 
 /// Detect a 1-param clampU8 pattern: `if (v < 0) return 0; if (v > 255) return 255; return v|0;`
 pub fn detect_clamp_u8(f: &Function) -> bool {
-    if f.is_async || f.is_generator || f.params.len() != 1 { return false; }
-    if f.body.len() != 3 { return false; }
+    if f.is_async || f.is_generator || f.params.len() != 1 {
+        return false;
+    }
+    if f.body.len() != 3 {
+        return false;
+    }
     let v_id = f.params[0].id;
-    if let Stmt::If { condition: Expr::Compare { op: perry_hir::CompareOp::Lt, left, right }, then_branch, else_branch: None } = &f.body[0] {
-        if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == v_id) { return false; }
-        if !matches!(right.as_ref(), Expr::Integer(0)) { return false; }
-        if !matches!(then_branch.as_slice(), [Stmt::Return(Some(Expr::Integer(0)))]) { return false; }
-    } else { return false; }
-    if let Stmt::If { condition: Expr::Compare { op: perry_hir::CompareOp::Gt, left, right }, then_branch, else_branch: None } = &f.body[1] {
-        if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == v_id) { return false; }
-        if !matches!(right.as_ref(), Expr::Integer(255)) { return false; }
-        if !matches!(then_branch.as_slice(), [Stmt::Return(Some(Expr::Integer(255)))]) { return false; }
-    } else { return false; }
+    if let Stmt::If {
+        condition:
+            Expr::Compare {
+                op: perry_hir::CompareOp::Lt,
+                left,
+                right,
+            },
+        then_branch,
+        else_branch: None,
+    } = &f.body[0]
+    {
+        if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == v_id) {
+            return false;
+        }
+        if !matches!(right.as_ref(), Expr::Integer(0)) {
+            return false;
+        }
+        if !matches!(
+            then_branch.as_slice(),
+            [Stmt::Return(Some(Expr::Integer(0)))]
+        ) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    if let Stmt::If {
+        condition:
+            Expr::Compare {
+                op: perry_hir::CompareOp::Gt,
+                left,
+                right,
+            },
+        then_branch,
+        else_branch: None,
+    } = &f.body[1]
+    {
+        if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == v_id) {
+            return false;
+        }
+        if !matches!(right.as_ref(), Expr::Integer(255)) {
+            return false;
+        }
+        if !matches!(
+            then_branch.as_slice(),
+            [Stmt::Return(Some(Expr::Integer(255)))]
+        ) {
+            return false;
+        }
+    } else {
+        return false;
+    }
     true
 }
 
 /// A function is i64-specializable if it's a pure numeric recursive fn.
 pub fn is_integer_specializable(f: &Function) -> bool {
-    if f.is_async || f.is_generator { return false; }
-    if !matches!(f.return_type, perry_types::Type::Number) { return false; }
-    if !f.params.iter().all(|p| matches!(p.ty, perry_types::Type::Number)) { return false; }
+    if f.is_async || f.is_generator {
+        return false;
+    }
+    if !matches!(f.return_type, perry_types::Type::Number) {
+        return false;
+    }
+    if !f
+        .params
+        .iter()
+        .all(|p| matches!(p.ty, perry_types::Type::Number))
+    {
+        return false;
+    }
     i64s_stmts(&f.body, f.id)
 }
 /// Detect functions that always return an integer value (all return paths
@@ -2473,20 +3150,34 @@ pub fn is_integer_specializable(f: &Function) -> bool {
 /// treated as int-producing at call sites, enabling the i32 fast path for
 /// `h = userImul(h, p)` style patterns.
 pub fn returns_integer(f: &Function) -> bool {
-    if f.is_async || f.is_generator { return false; }
-    if !matches!(f.return_type, perry_types::Type::Number) { return false; }
+    if f.is_async || f.is_generator {
+        return false;
+    }
+    if !matches!(f.return_type, perry_types::Type::Number) {
+        return false;
+    }
     returns_int_stmts(&f.body)
 }
 fn returns_int_stmts(ss: &[Stmt]) -> bool {
     for s in ss {
         match s {
             Stmt::Return(Some(e)) => {
-                if !returns_int_expr(e) { return false; }
+                if !returns_int_expr(e) {
+                    return false;
+                }
             }
-            Stmt::If { then_branch, else_branch, .. } => {
-                if !returns_int_stmts(then_branch) { return false; }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                if !returns_int_stmts(then_branch) {
+                    return false;
+                }
                 if let Some(eb) = else_branch {
-                    if !returns_int_stmts(eb) { return false; }
+                    if !returns_int_stmts(eb) {
+                        return false;
+                    }
                 }
             }
             _ => {}
@@ -2497,9 +3188,15 @@ fn returns_int_stmts(ss: &[Stmt]) -> bool {
 fn returns_int_expr(e: &Expr) -> bool {
     match e {
         Expr::Integer(_) => true,
-        Expr::Binary { op, .. } => matches!(op,
-            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
-            | BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr),
+        Expr::Binary { op, .. } => matches!(
+            op,
+            BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+                | BinaryOp::UShr
+        ),
         Expr::MathImul(_, _) => true,
         _ => false,
     }
@@ -2509,9 +3206,15 @@ fn i64s_stmts(ss: &[Stmt], sid: u32) -> bool {
     ss.iter().all(|s| match s {
         Stmt::Return(Some(e)) => i64s_expr(e, sid),
         Stmt::Return(None) => true,
-        Stmt::If { condition, then_branch, else_branch } =>
-            i64s_expr(condition, sid) && i64s_stmts(then_branch, sid)
-            && else_branch.as_ref().map_or(true, |eb| i64s_stmts(eb, sid)),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            i64s_expr(condition, sid)
+                && i64s_stmts(then_branch, sid)
+                && else_branch.as_ref().map_or(true, |eb| i64s_stmts(eb, sid))
+        }
         Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } => i64s_expr(e, sid),
         Stmt::Let { init: None, .. } => true,
         _ => false,
@@ -2520,29 +3223,33 @@ fn i64s_stmts(ss: &[Stmt], sid: u32) -> bool {
 fn i64s_expr(e: &Expr, sid: u32) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) | Expr::LocalGet(_) => true,
-        Expr::Binary { op, left, right } =>
+        Expr::Binary { op, left, right } => {
             matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
-            && i64s_expr(left, sid) && i64s_expr(right, sid),
-        Expr::Compare { left, right, .. } =>
-            i64s_expr(left, sid) && i64s_expr(right, sid),
-        Expr::Call { callee, args, .. } =>
+                && i64s_expr(left, sid)
+                && i64s_expr(right, sid)
+        }
+        Expr::Compare { left, right, .. } => i64s_expr(left, sid) && i64s_expr(right, sid),
+        Expr::Call { callee, args, .. } => {
             matches!(callee.as_ref(), Expr::FuncRef(id) if *id == sid)
-            && args.iter().all(|a| i64s_expr(a, sid)),
-        Expr::Conditional { condition, then_expr, else_expr } =>
-            i64s_expr(condition, sid) && i64s_expr(then_expr, sid) && i64s_expr(else_expr, sid),
+                && args.iter().all(|a| i64s_expr(a, sid))
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => i64s_expr(condition, sid) && i64s_expr(then_expr, sid) && i64s_expr(else_expr, sid),
         _ => false,
     }
 }
 
 /// Emit an i64-specialized function directly as LLVM IR text.
-pub fn emit_i64_function(
-    llmod: &mut crate::module::LlModule,
-    f: &Function,
-    i64_name: &str,
-) {
+pub fn emit_i64_function(llmod: &mut crate::module::LlModule, f: &Function, i64_name: &str) {
     use crate::types::I64;
     let params: Vec<(crate::types::LlvmType, String)> = f
-        .params.iter().map(|p| (I64, format!("%arg{}", p.id))).collect();
+        .params
+        .iter()
+        .map(|p| (I64, format!("%arg{}", p.id)))
+        .collect();
     let lf = llmod.define_function(i64_name, I64, params);
     lf.force_inline = true;
     let _ = lf.create_block("entry");
@@ -2555,22 +3262,43 @@ pub fn emit_i64_function(
             locals.insert(p.id, slot);
         }
     }
-    let mut cx = I64Cx { f: lf, cur: 0, locals, sn: i64_name.to_string(), sid: f.id };
+    let mut cx = I64Cx {
+        f: lf,
+        cur: 0,
+        locals,
+        sn: i64_name.to_string(),
+        sid: f.id,
+    };
     i64_body(&mut cx, &f.body);
     if !cx.f.block_mut(cx.cur).unwrap().is_terminated() {
         cx.f.block_mut(cx.cur).unwrap().ret(I64, "0");
     }
 }
-struct I64Cx<'a> { f: &'a mut crate::function::LlFunction, cur: usize, locals: std::collections::HashMap<u32, String>, sn: String, sid: u32 }
+struct I64Cx<'a> {
+    f: &'a mut crate::function::LlFunction,
+    cur: usize,
+    locals: std::collections::HashMap<u32, String>,
+    sn: String,
+    sid: u32,
+}
 
 fn i64_body(cx: &mut I64Cx<'_>, ss: &[Stmt]) {
     use crate::types::I64;
     for s in ss {
-        if cx.f.block_mut(cx.cur).unwrap().is_terminated() { break; }
+        if cx.f.block_mut(cx.cur).unwrap().is_terminated() {
+            break;
+        }
         match s {
-            Stmt::Return(Some(e)) => { let v = i64_val(cx, e); cx.f.block_mut(cx.cur).unwrap().ret(I64, &v); }
-            Stmt::Return(None) => { cx.f.block_mut(cx.cur).unwrap().ret(I64, "0"); }
-            Stmt::Let { id, init: Some(e), .. } => {
+            Stmt::Return(Some(e)) => {
+                let v = i64_val(cx, e);
+                cx.f.block_mut(cx.cur).unwrap().ret(I64, &v);
+            }
+            Stmt::Return(None) => {
+                cx.f.block_mut(cx.cur).unwrap().ret(I64, "0");
+            }
+            Stmt::Let {
+                id, init: Some(e), ..
+            } => {
                 let v = i64_val(cx, e);
                 let slot = cx.f.block_mut(cx.cur).unwrap().alloca(I64);
                 cx.f.block_mut(cx.cur).unwrap().store(I64, &v, &slot);
@@ -2581,23 +3309,48 @@ fn i64_body(cx: &mut I64Cx<'_>, ss: &[Stmt]) {
                 cx.f.block_mut(cx.cur).unwrap().store(I64, "0", &slot);
                 cx.locals.insert(*id, slot);
             }
-            Stmt::Expr(e) => { let _ = i64_val(cx, e); }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::Expr(e) => {
+                let _ = i64_val(cx, e);
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 let cond = i64_cond(cx, condition);
                 let _ = cx.f.create_block("i64.then");
                 let ti = cx.f.num_blocks() - 1;
                 let tl = cx.f.blocks()[ti].label.clone();
-                let ei = if else_branch.is_some() { let _ = cx.f.create_block("i64.else"); cx.f.num_blocks() - 1 } else { 0 };
-                let el = if else_branch.is_some() { cx.f.blocks()[ei].label.clone() } else { String::new() };
+                let ei = if else_branch.is_some() {
+                    let _ = cx.f.create_block("i64.else");
+                    cx.f.num_blocks() - 1
+                } else {
+                    0
+                };
+                let el = if else_branch.is_some() {
+                    cx.f.blocks()[ei].label.clone()
+                } else {
+                    String::new()
+                };
                 let _ = cx.f.create_block("i64.merge");
                 let mi = cx.f.num_blocks() - 1;
                 let ml = cx.f.blocks()[mi].label.clone();
                 let target_else = if else_branch.is_some() { &el } else { &ml };
-                cx.f.block_mut(cx.cur).unwrap().cond_br(&cond, &tl, target_else);
+                cx.f.block_mut(cx.cur)
+                    .unwrap()
+                    .cond_br(&cond, &tl, target_else);
                 cx.cur = ti;
                 i64_body(cx, then_branch);
-                if !cx.f.block_mut(cx.cur).unwrap().is_terminated() { cx.f.block_mut(cx.cur).unwrap().br(&ml); }
-                if let Some(eb) = else_branch { cx.cur = ei; i64_body(cx, eb); if !cx.f.block_mut(cx.cur).unwrap().is_terminated() { cx.f.block_mut(cx.cur).unwrap().br(&ml); } }
+                if !cx.f.block_mut(cx.cur).unwrap().is_terminated() {
+                    cx.f.block_mut(cx.cur).unwrap().br(&ml);
+                }
+                if let Some(eb) = else_branch {
+                    cx.cur = ei;
+                    i64_body(cx, eb);
+                    if !cx.f.block_mut(cx.cur).unwrap().is_terminated() {
+                        cx.f.block_mut(cx.cur).unwrap().br(&ml);
+                    }
+                }
                 cx.cur = mi;
             }
             _ => {}
@@ -2607,7 +3360,8 @@ fn i64_body(cx: &mut I64Cx<'_>, ss: &[Stmt]) {
 fn i64_cond(cx: &mut I64Cx<'_>, e: &Expr) -> String {
     use crate::types::I64;
     if let Expr::Compare { op, left, right } = e {
-        let l = i64_val(cx, left); let r = i64_val(cx, right);
+        let l = i64_val(cx, left);
+        let r = i64_val(cx, right);
         let blk = cx.f.block_mut(cx.cur).unwrap();
         return match op {
             perry_hir::CompareOp::Le => blk.icmp_sle(I64, &l, &r),
@@ -2618,7 +3372,8 @@ fn i64_cond(cx: &mut I64Cx<'_>, e: &Expr) -> String {
             perry_hir::CompareOp::Ne | perry_hir::CompareOp::LooseNe => blk.icmp_ne(I64, &l, &r),
         };
     }
-    let v = i64_val(cx, e); cx.f.block_mut(cx.cur).unwrap().icmp_ne(I64, &v, "0")
+    let v = i64_val(cx, e);
+    cx.f.block_mut(cx.cur).unwrap().icmp_ne(I64, &v, "0")
 }
 fn i64_val(cx: &mut I64Cx<'_>, e: &Expr) -> String {
     use crate::types::I64;
@@ -2626,20 +3381,33 @@ fn i64_val(cx: &mut I64Cx<'_>, e: &Expr) -> String {
         Expr::Integer(n) => n.to_string(),
         Expr::Number(n) => (*n as i64).to_string(),
         Expr::LocalGet(id) => {
-            if let Some(slot) = cx.locals.get(id).cloned() { cx.f.block_mut(cx.cur).unwrap().load(I64, &slot) }
-            else { "0".to_string() }
+            if let Some(slot) = cx.locals.get(id).cloned() {
+                cx.f.block_mut(cx.cur).unwrap().load(I64, &slot)
+            } else {
+                "0".to_string()
+            }
         }
         Expr::Binary { op, left, right } => {
-            let l = i64_val(cx, left); let r = i64_val(cx, right);
+            let l = i64_val(cx, left);
+            let r = i64_val(cx, right);
             let blk = cx.f.block_mut(cx.cur).unwrap();
-            match op { BinaryOp::Add => blk.add(I64, &l, &r), BinaryOp::Sub => blk.sub(I64, &l, &r), BinaryOp::Mul => blk.mul(I64, &l, &r), _ => "0".to_string() }
+            match op {
+                BinaryOp::Add => blk.add(I64, &l, &r),
+                BinaryOp::Sub => blk.sub(I64, &l, &r),
+                BinaryOp::Mul => blk.mul(I64, &l, &r),
+                _ => "0".to_string(),
+            }
         }
         Expr::Call { callee, args, .. } => {
             if let Expr::FuncRef(id) = callee.as_ref() {
                 if *id == cx.sid {
                     let mut lo: Vec<(crate::types::LlvmType, String)> = Vec::new();
-                    for a in args { let v = i64_val(cx, a); lo.push((I64, v)); }
-                    let refs: Vec<(crate::types::LlvmType, &str)> = lo.iter().map(|(t, v)| (*t, v.as_str())).collect();
+                    for a in args {
+                        let v = i64_val(cx, a);
+                        lo.push((I64, v));
+                    }
+                    let refs: Vec<(crate::types::LlvmType, &str)> =
+                        lo.iter().map(|(t, v)| (*t, v.as_str())).collect();
                     let nm = cx.sn.clone();
                     return cx.f.block_mut(cx.cur).unwrap().call(I64, &nm, &refs);
                 }
@@ -2662,8 +3430,6 @@ pub(crate) fn collect_non_escaping_news(
     module_globals: &std::collections::HashMap<u32, String>,
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
 ) -> std::collections::HashMap<u32, String> {
-    
-
     // Pass 1: find candidates — Let bindings of New that aren't boxed/global.
     let mut candidates: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
     find_new_candidates(stmts, boxed_vars, module_globals, &mut candidates);
@@ -2737,12 +3503,20 @@ fn find_new_candidates(
     use perry_hir::{Expr, Stmt};
     for s in stmts {
         match s {
-            Stmt::Let { id, init: Some(Expr::New { class_name, .. }), .. } => {
+            Stmt::Let {
+                id,
+                init: Some(Expr::New { class_name, .. }),
+                ..
+            } => {
                 if !boxed_vars.contains(id) && !module_globals.contains_key(id) {
                     candidates.insert(*id, class_name.clone());
                 }
             }
-            Stmt::If { then_branch, else_branch, .. } => {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 find_new_candidates(then_branch, boxed_vars, module_globals, candidates);
                 if let Some(eb) = else_branch {
                     find_new_candidates(eb, boxed_vars, module_globals, candidates);
@@ -2762,7 +3536,11 @@ fn find_new_candidates(
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 find_new_candidates(body, boxed_vars, module_globals, candidates);
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 find_new_candidates(body, boxed_vars, module_globals, candidates);
                 if let Some(c) = catch {
                     find_new_candidates(&c.body, boxed_vars, module_globals, candidates);
@@ -2799,7 +3577,9 @@ fn check_escapes_in_stmts(
     use perry_hir::Stmt;
     for s in stmts {
         match s {
-            Stmt::Expr(e) | Stmt::Throw(e) => check_escapes_in_expr(e, candidates, classes, escaped),
+            Stmt::Expr(e) | Stmt::Throw(e) => {
+                check_escapes_in_expr(e, candidates, classes, escaped)
+            }
             Stmt::Return(opt) => {
                 if let Some(e) = opt {
                     check_escapes_in_expr(e, candidates, classes, escaped);
@@ -2810,7 +3590,11 @@ fn check_escapes_in_stmts(
                     check_escapes_in_expr(e, candidates, classes, escaped);
                 }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 check_escapes_in_expr(condition, candidates, classes, escaped);
                 check_escapes_in_stmts(then_branch, candidates, classes, escaped);
                 if let Some(eb) = else_branch {
@@ -2825,7 +3609,12 @@ fn check_escapes_in_stmts(
                 check_escapes_in_stmts(body, candidates, classes, escaped);
                 check_escapes_in_expr(condition, candidates, classes, escaped);
             }
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 if let Some(init_stmt) = init {
                     check_escapes_in_stmts(
                         std::slice::from_ref(init_stmt),
@@ -2842,7 +3631,10 @@ fn check_escapes_in_stmts(
                 }
                 check_escapes_in_stmts(body, candidates, classes, escaped);
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 check_escapes_in_expr(discriminant, candidates, classes, escaped);
                 for case in cases {
                     if let Some(test) = &case.test {
@@ -2851,7 +3643,11 @@ fn check_escapes_in_stmts(
                     check_escapes_in_stmts(&case.body, candidates, classes, escaped);
                 }
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 check_escapes_in_stmts(body, candidates, classes, escaped);
                 if let Some(c) = catch {
                     check_escapes_in_stmts(&c.body, candidates, classes, escaped);
@@ -2923,7 +3719,11 @@ fn check_escapes_in_expr(
         // property is a setter (which dispatches as a real method call
         // and needs a heap-resident `this`). Otherwise treat as a plain
         // field write; value must not self-reference the candidate.
-        Expr::PropertySet { object, value, property } => {
+        Expr::PropertySet {
+            object,
+            value,
+            property,
+        } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(class_name) = candidates.get(id) {
                     if is_class_setter(classes, class_name, property) {
@@ -2947,7 +3747,9 @@ fn check_escapes_in_expr(
 
         // Safe uses: PropertyUpdate on a candidate local — *unless* the
         // property is a getter+setter pair (both fire on `obj.x++`).
-        Expr::PropertyUpdate { object, property, .. } => {
+        Expr::PropertyUpdate {
+            object, property, ..
+        } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(class_name) = candidates.get(id) {
                     if is_class_getter(classes, class_name, property)
@@ -3008,31 +3810,54 @@ fn check_escapes_in_expr(
             check_escapes_in_expr(left, candidates, classes, escaped);
             check_escapes_in_expr(right, candidates, classes, escaped);
         }
-        Expr::Unary { operand, .. } | Expr::Void(operand) | Expr::TypeOf(operand)
-        | Expr::Await(operand) | Expr::Delete(operand)
-        | Expr::StringCoerce(operand) | Expr::BooleanCoerce(operand)
-        | Expr::NumberCoerce(operand) | Expr::IsFinite(operand)
-        | Expr::IsNaN(operand) | Expr::NumberIsNaN(operand)
-        | Expr::NumberIsFinite(operand) | Expr::NumberIsInteger(operand)
-        | Expr::IsUndefinedOrBareNan(operand) | Expr::ParseFloat(operand)
-        | Expr::ObjectKeys(operand) | Expr::ObjectValues(operand)
-        | Expr::ObjectEntries(operand) | Expr::SetSize(operand)
-        | Expr::MathSqrt(operand) | Expr::MathFloor(operand)
-        | Expr::MathCeil(operand) | Expr::MathRound(operand)
-        | Expr::MathAbs(operand) | Expr::MathMinSpread(operand)
-        | Expr::MathMaxSpread(operand) | Expr::ArrayFrom(operand)
-        | Expr::Uint8ArrayFrom(operand) | Expr::JsonParse(operand)
-        | Expr::JsonStringify(operand) | Expr::IteratorToArray(operand)
-        | Expr::WeakRefNew(operand) | Expr::WeakRefDeref(operand)
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::Await(operand)
+        | Expr::Delete(operand)
+        | Expr::StringCoerce(operand)
+        | Expr::BooleanCoerce(operand)
+        | Expr::NumberCoerce(operand)
+        | Expr::IsFinite(operand)
+        | Expr::IsNaN(operand)
+        | Expr::NumberIsNaN(operand)
+        | Expr::NumberIsFinite(operand)
+        | Expr::NumberIsInteger(operand)
+        | Expr::IsUndefinedOrBareNan(operand)
+        | Expr::ParseFloat(operand)
+        | Expr::ObjectKeys(operand)
+        | Expr::ObjectValues(operand)
+        | Expr::ObjectEntries(operand)
+        | Expr::SetSize(operand)
+        | Expr::MathSqrt(operand)
+        | Expr::MathFloor(operand)
+        | Expr::MathCeil(operand)
+        | Expr::MathRound(operand)
+        | Expr::MathAbs(operand)
+        | Expr::MathMinSpread(operand)
+        | Expr::MathMaxSpread(operand)
+        | Expr::ArrayFrom(operand)
+        | Expr::Uint8ArrayFrom(operand)
+        | Expr::JsonParse(operand)
+        | Expr::JsonStringify(operand)
+        | Expr::IteratorToArray(operand)
+        | Expr::WeakRefNew(operand)
+        | Expr::WeakRefDeref(operand)
         | Expr::FinalizationRegistryNew(operand)
-        | Expr::StructuredClone(operand) | Expr::QueueMicrotask(operand)
-        | Expr::ProcessNextTick(operand) | Expr::ArrayIsArray(operand) => {
+        | Expr::StructuredClone(operand)
+        | Expr::QueueMicrotask(operand)
+        | Expr::ProcessNextTick(operand)
+        | Expr::ArrayIsArray(operand) => {
             check_escapes_in_expr(operand, candidates, classes, escaped);
         }
         Expr::JsonParseTyped { text, .. } => {
             check_escapes_in_expr(text, candidates, classes, escaped);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             check_escapes_in_expr(condition, candidates, classes, escaped);
             check_escapes_in_expr(then_expr, candidates, classes, escaped);
             check_escapes_in_expr(else_expr, candidates, classes, escaped);
@@ -3085,7 +3910,11 @@ fn check_escapes_in_expr(
             check_escapes_in_expr(object, candidates, classes, escaped);
             check_escapes_in_expr(index, candidates, classes, escaped);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             check_escapes_in_expr(object, candidates, classes, escaped);
             check_escapes_in_expr(index, candidates, classes, escaped);
             check_escapes_in_expr(value, candidates, classes, escaped);
@@ -3124,12 +3953,23 @@ fn check_escapes_in_expr(
         | Expr::ArrayFindLastIndex { array, callback }
         | Expr::ArrayForEach { array, callback }
         | Expr::ArrayFlatMap { array, callback }
-        | Expr::ArraySort { array, comparator: callback } => {
+        | Expr::ArraySort {
+            array,
+            comparator: callback,
+        } => {
             check_escapes_in_expr(array, candidates, classes, escaped);
             check_escapes_in_expr(callback, candidates, classes, escaped);
         }
-        Expr::ArrayReduce { array, callback, initial }
-        | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             check_escapes_in_expr(array, candidates, classes, escaped);
             check_escapes_in_expr(callback, candidates, classes, escaped);
             if let Some(init) = initial {
@@ -3147,7 +3987,12 @@ fn check_escapes_in_expr(
                 escaped.insert(*id);
             }
         }
-        Expr::ArraySplice { array_id, start, delete_count, items } => {
+        Expr::ArraySplice {
+            array_id,
+            start,
+            delete_count,
+            items,
+        } => {
             if candidates.contains_key(array_id) {
                 escaped.insert(*array_id);
             }
@@ -3190,7 +4035,9 @@ fn check_escapes_in_expr(
             check_escapes_in_expr(set, candidates, classes, escaped);
             check_escapes_in_expr(value, candidates, classes, escaped);
         }
-        Expr::MathPow(a, b) | Expr::PathJoin(a, b) | Expr::ObjectIs(a, b)
+        Expr::MathPow(a, b)
+        | Expr::PathJoin(a, b)
+        | Expr::ObjectIs(a, b)
         | Expr::ObjectHasOwn(a, b) => {
             check_escapes_in_expr(a, candidates, classes, escaped);
             check_escapes_in_expr(b, candidates, classes, escaped);
@@ -3228,7 +4075,12 @@ fn check_escapes_in_expr(
                 check_escapes_in_expr(a, candidates, classes, escaped);
             }
         }
-        Expr::FetchWithOptions { url, method, body, headers } => {
+        Expr::FetchWithOptions {
+            url,
+            method,
+            body,
+            headers,
+        } => {
             check_escapes_in_expr(url, candidates, classes, escaped);
             check_escapes_in_expr(method, candidates, classes, escaped);
             check_escapes_in_expr(body, candidates, classes, escaped);
@@ -3236,7 +4088,8 @@ fn check_escapes_in_expr(
                 check_escapes_in_expr(v, candidates, classes, escaped);
             }
         }
-        Expr::SuperCall(args) | Expr::StaticMethodCall { args, .. }
+        Expr::SuperCall(args)
+        | Expr::StaticMethodCall { args, .. }
         | Expr::SuperMethodCall { args, .. } => {
             for a in args {
                 check_escapes_in_expr(a, candidates, classes, escaped);
@@ -3284,12 +4137,22 @@ fn check_escapes_in_expr(
             check_escapes_in_expr(event, candidates, classes, escaped);
             check_escapes_in_expr(handler, candidates, classes, escaped);
         }
-        Expr::FsWriteFileSync(a, b) | Expr::JsonParseReviver { text: a, reviver: b }
-        | Expr::JsonParseWithReviver(a, b) | Expr::PathRelative(a, b) => {
+        Expr::FsWriteFileSync(a, b)
+        | Expr::JsonParseReviver {
+            text: a,
+            reviver: b,
+        }
+        | Expr::JsonParseWithReviver(a, b)
+        | Expr::PathRelative(a, b) => {
             check_escapes_in_expr(a, candidates, classes, escaped);
             check_escapes_in_expr(b, candidates, classes, escaped);
         }
-        Expr::FinalizationRegistryRegister { registry, target, held, token } => {
+        Expr::FinalizationRegistryRegister {
+            registry,
+            target,
+            held,
+            token,
+        } => {
             check_escapes_in_expr(registry, candidates, classes, escaped);
             check_escapes_in_expr(target, candidates, classes, escaped);
             check_escapes_in_expr(held, candidates, classes, escaped);
@@ -3301,7 +4164,11 @@ fn check_escapes_in_expr(
             check_escapes_in_expr(registry, candidates, classes, escaped);
             check_escapes_in_expr(token, candidates, classes, escaped);
         }
-        Expr::ArrayFromMapped { iterable, map_fn } | Expr::ObjectGroupBy { items: iterable, key_fn: map_fn } => {
+        Expr::ArrayFromMapped { iterable, map_fn }
+        | Expr::ObjectGroupBy {
+            items: iterable,
+            key_fn: map_fn,
+        } => {
             check_escapes_in_expr(iterable, candidates, classes, escaped);
             check_escapes_in_expr(map_fn, candidates, classes, escaped);
         }
@@ -3311,11 +4178,19 @@ fn check_escapes_in_expr(
                 check_escapes_in_expr(c, candidates, classes, escaped);
             }
         }
-        Expr::ArrayToReversed { array } | Expr::ArrayFlat { array }
-        | Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
+        Expr::ArrayToReversed { array }
+        | Expr::ArrayFlat { array }
+        | Expr::ArrayEntries(array)
+        | Expr::ArrayKeys(array)
+        | Expr::ArrayValues(array) => {
             check_escapes_in_expr(array, candidates, classes, escaped);
         }
-        Expr::ArrayToSpliced { array, start, delete_count, items } => {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => {
             check_escapes_in_expr(array, candidates, classes, escaped);
             check_escapes_in_expr(start, candidates, classes, escaped);
             check_escapes_in_expr(delete_count, candidates, classes, escaped);
@@ -3323,12 +4198,18 @@ fn check_escapes_in_expr(
                 check_escapes_in_expr(it, candidates, classes, escaped);
             }
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             check_escapes_in_expr(array, candidates, classes, escaped);
             check_escapes_in_expr(index, candidates, classes, escaped);
             check_escapes_in_expr(value, candidates, classes, escaped);
         }
-        Expr::ArrayCopyWithin { target, start, end, .. } => {
+        Expr::ArrayCopyWithin {
+            target, start, end, ..
+        } => {
             check_escapes_in_expr(target, candidates, classes, escaped);
             check_escapes_in_expr(start, candidates, classes, escaped);
             if let Some(e) = end {
@@ -3353,8 +4234,16 @@ fn check_escapes_in_expr(
                 check_escapes_in_expr(o, candidates, classes, escaped);
             }
         }
-        Expr::ChildProcessSpawnSync { command, args, options }
-        | Expr::ChildProcessSpawn { command, args, options } => {
+        Expr::ChildProcessSpawnSync {
+            command,
+            args,
+            options,
+        }
+        | Expr::ChildProcessSpawn {
+            command,
+            args,
+            options,
+        } => {
             check_escapes_in_expr(command, candidates, classes, escaped);
             if let Some(a) = args {
                 check_escapes_in_expr(a, candidates, classes, escaped);
@@ -3363,7 +4252,11 @@ fn check_escapes_in_expr(
                 check_escapes_in_expr(o, candidates, classes, escaped);
             }
         }
-        Expr::ChildProcessExec { command, options, callback } => {
+        Expr::ChildProcessExec {
+            command,
+            options,
+            callback,
+        } => {
             check_escapes_in_expr(command, candidates, classes, escaped);
             if let Some(o) = options {
                 check_escapes_in_expr(o, candidates, classes, escaped);
@@ -3372,7 +4265,12 @@ fn check_escapes_in_expr(
                 check_escapes_in_expr(c, candidates, classes, escaped);
             }
         }
-        Expr::ChildProcessSpawnBackground { command, args, log_file, env_json } => {
+        Expr::ChildProcessSpawnBackground {
+            command,
+            args,
+            log_file,
+            env_json,
+        } => {
             check_escapes_in_expr(command, candidates, classes, escaped);
             if let Some(a) = args {
                 check_escapes_in_expr(a, candidates, classes, escaped);
@@ -3389,14 +4287,22 @@ fn check_escapes_in_expr(
             check_escapes_in_expr(url, candidates, classes, escaped);
             check_escapes_in_expr(auth_header, candidates, classes, escaped);
         }
-        Expr::FetchPostWithAuth { url, auth_header, body } => {
+        Expr::FetchPostWithAuth {
+            url,
+            auth_header,
+            body,
+        } => {
             check_escapes_in_expr(url, candidates, classes, escaped);
             check_escapes_in_expr(auth_header, candidates, classes, escaped);
             check_escapes_in_expr(body, candidates, classes, escaped);
         }
         Expr::SetNewFromArray(arr) => check_escapes_in_expr(arr, candidates, classes, escaped),
         Expr::Atob(o) | Expr::Btoa(o) => check_escapes_in_expr(o, candidates, classes, escaped),
-        Expr::JsonStringifyPretty { value, replacer, space } => {
+        Expr::JsonStringifyPretty {
+            value,
+            replacer,
+            space,
+        } => {
             check_escapes_in_expr(value, candidates, classes, escaped);
             if let Some(r) = replacer {
                 check_escapes_in_expr(r, candidates, classes, escaped);
@@ -3408,12 +4314,25 @@ fn check_escapes_in_expr(
             check_escapes_in_expr(b, candidates, classes, escaped);
         }
         // Leaf expressions that don't contain LocalGet — no escape possible
-        Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_) | Expr::String(_)
-        | Expr::Undefined | Expr::Null | Expr::This | Expr::FuncRef(_)
-        | Expr::ClassRef(_) | Expr::ExternFuncRef { .. } | Expr::GlobalGet(_)
-        | Expr::DateNow | Expr::MapNew | Expr::SetNew | Expr::EnumMember { .. }
-        | Expr::StaticFieldGet { .. } | Expr::RegExp { .. }
-        | Expr::Uint8ArrayNew(None) | Expr::ErrorNew(None)
+        Expr::Integer(_)
+        | Expr::Number(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Undefined
+        | Expr::Null
+        | Expr::This
+        | Expr::FuncRef(_)
+        | Expr::ClassRef(_)
+        | Expr::ExternFuncRef { .. }
+        | Expr::GlobalGet(_)
+        | Expr::DateNow
+        | Expr::MapNew
+        | Expr::SetNew
+        | Expr::EnumMember { .. }
+        | Expr::StaticFieldGet { .. }
+        | Expr::RegExp { .. }
+        | Expr::Uint8ArrayNew(None)
+        | Expr::ErrorNew(None)
         | Expr::BigInt(_) => {}
         // Catch-all: conservatively mark any candidate referenced in an
         // unrecognized expression as escaped. This is safe — just misses
@@ -3434,12 +4353,19 @@ fn expr_contains_local_get(e: &perry_hir::Expr, target_id: u32) -> bool {
         | Expr::Logical { left, right, .. } => {
             expr_contains_local_get(left, target_id) || expr_contains_local_get(right, target_id)
         }
-        Expr::Unary { operand, .. } | Expr::Void(operand) | Expr::TypeOf(operand)
-        | Expr::Await(operand) | Expr::StringCoerce(operand) | Expr::NumberCoerce(operand)
-        | Expr::BooleanCoerce(operand) | Expr::Delete(operand) => {
-            expr_contains_local_get(operand, target_id)
-        }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::Await(operand)
+        | Expr::StringCoerce(operand)
+        | Expr::NumberCoerce(operand)
+        | Expr::BooleanCoerce(operand)
+        | Expr::Delete(operand) => expr_contains_local_get(operand, target_id),
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             expr_contains_local_get(condition, target_id)
                 || expr_contains_local_get(then_expr, target_id)
                 || expr_contains_local_get(else_expr, target_id)
@@ -3455,17 +4381,24 @@ fn expr_contains_local_get(e: &perry_hir::Expr, target_id: u32) -> bool {
             expr_contains_local_get(object, target_id) || expr_contains_local_get(value, target_id)
         }
         Expr::IndexGet { object, index } => {
-            expr_contains_local_get(object, target_id)
-                || expr_contains_local_get(index, target_id)
+            expr_contains_local_get(object, target_id) || expr_contains_local_get(index, target_id)
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             expr_contains_local_get(object, target_id)
                 || expr_contains_local_get(index, target_id)
                 || expr_contains_local_get(value, target_id)
         }
         Expr::LocalSet(_, value) => expr_contains_local_get(value, target_id),
-        Expr::Array(elements) => elements.iter().any(|e| expr_contains_local_get(e, target_id)),
-        Expr::Object(props) => props.iter().any(|(_, v)| expr_contains_local_get(v, target_id)),
+        Expr::Array(elements) => elements
+            .iter()
+            .any(|e| expr_contains_local_get(e, target_id)),
+        Expr::Object(props) => props
+            .iter()
+            .any(|(_, v)| expr_contains_local_get(v, target_id)),
         Expr::New { args, .. } => args.iter().any(|a| expr_contains_local_get(a, target_id)),
         Expr::Sequence(es) => es.iter().any(|e| expr_contains_local_get(e, target_id)),
         Expr::Update { id, .. } => *id == target_id,
@@ -3561,7 +4494,11 @@ fn find_array_candidates(
     use perry_hir::{Expr, Stmt};
     for s in stmts {
         match s {
-            Stmt::Let { id, init: Some(Expr::Array(elements)), .. } => {
+            Stmt::Let {
+                id,
+                init: Some(Expr::Array(elements)),
+                ..
+            } => {
                 if !boxed_vars.contains(id) && !module_globals.contains_key(id) {
                     let n = elements.len();
                     if n >= 1 && n <= MAX_SCALAR_ARRAY_LEN {
@@ -3569,7 +4506,11 @@ fn find_array_candidates(
                     }
                 }
             }
-            Stmt::If { then_branch, else_branch, .. } => {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 find_array_candidates(then_branch, boxed_vars, module_globals, candidates);
                 if let Some(eb) = else_branch {
                     find_array_candidates(eb, boxed_vars, module_globals, candidates);
@@ -3589,7 +4530,11 @@ fn find_array_candidates(
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 find_array_candidates(body, boxed_vars, module_globals, candidates);
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 find_array_candidates(body, boxed_vars, module_globals, candidates);
                 if let Some(c) = catch {
                     find_array_candidates(&c.body, boxed_vars, module_globals, candidates);
@@ -3635,7 +4580,11 @@ fn check_array_escapes_in_stmts(
                     check_array_escapes_in_expr(e, candidates, escaped);
                 }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 check_array_escapes_in_expr(condition, candidates, escaped);
                 check_array_escapes_in_stmts(then_branch, candidates, escaped);
                 if let Some(eb) = else_branch {
@@ -3650,7 +4599,12 @@ fn check_array_escapes_in_stmts(
                 check_array_escapes_in_stmts(body, candidates, escaped);
                 check_array_escapes_in_expr(condition, candidates, escaped);
             }
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 if let Some(init_stmt) = init {
                     check_array_escapes_in_stmts(
                         std::slice::from_ref(init_stmt),
@@ -3666,7 +4620,10 @@ fn check_array_escapes_in_stmts(
                 }
                 check_array_escapes_in_stmts(body, candidates, escaped);
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 check_array_escapes_in_expr(discriminant, candidates, escaped);
                 for case in cases {
                     if let Some(test) = &case.test {
@@ -3675,7 +4632,11 @@ fn check_array_escapes_in_stmts(
                     check_array_escapes_in_stmts(&case.body, candidates, escaped);
                 }
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 check_array_escapes_in_stmts(body, candidates, escaped);
                 if let Some(c) = catch {
                     check_array_escapes_in_stmts(&c.body, candidates, escaped);
@@ -3703,7 +4664,9 @@ fn const_index(expr: &perry_hir::Expr) -> Option<u32> {
     use perry_hir::Expr;
     match expr {
         Expr::Integer(k) if *k >= 0 && *k <= u32::MAX as i64 => Some(*k as u32),
-        Expr::Number(f) if f.is_finite() && *f >= 0.0 && f.fract() == 0.0 && *f <= u32::MAX as f64 => {
+        Expr::Number(f)
+            if f.is_finite() && *f >= 0.0 && f.fract() == 0.0 && *f <= u32::MAX as f64 =>
+        {
             Some(*f as u32)
         }
         _ => None,
@@ -3753,7 +4716,11 @@ fn check_array_escapes_in_expr(
         // IndexSet would mutate the array — treat as escape. (Supporting this
         // would require tracking dirty slots and invalidating earlier reads;
         // not worth the complexity for literals that are mostly read-only.)
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if candidates.contains_key(id) {
                     escaped.insert(*id);
@@ -3804,16 +4771,28 @@ fn check_array_escapes_in_expr(
             check_array_escapes_in_expr(left, candidates, escaped);
             check_array_escapes_in_expr(right, candidates, escaped);
         }
-        Expr::Unary { operand, .. } | Expr::Void(operand) | Expr::TypeOf(operand)
-        | Expr::Await(operand) | Expr::Delete(operand)
-        | Expr::StringCoerce(operand) | Expr::BooleanCoerce(operand)
-        | Expr::NumberCoerce(operand) | Expr::IsFinite(operand)
-        | Expr::IsNaN(operand) | Expr::NumberIsNaN(operand)
-        | Expr::NumberIsFinite(operand) | Expr::NumberIsInteger(operand)
-        | Expr::IsUndefinedOrBareNan(operand) | Expr::ParseFloat(operand) => {
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::Await(operand)
+        | Expr::Delete(operand)
+        | Expr::StringCoerce(operand)
+        | Expr::BooleanCoerce(operand)
+        | Expr::NumberCoerce(operand)
+        | Expr::IsFinite(operand)
+        | Expr::IsNaN(operand)
+        | Expr::NumberIsNaN(operand)
+        | Expr::NumberIsFinite(operand)
+        | Expr::NumberIsInteger(operand)
+        | Expr::IsUndefinedOrBareNan(operand)
+        | Expr::ParseFloat(operand) => {
             check_array_escapes_in_expr(operand, candidates, escaped);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             check_array_escapes_in_expr(condition, candidates, escaped);
             check_array_escapes_in_expr(then_expr, candidates, escaped);
             check_array_escapes_in_expr(else_expr, candidates, escaped);
@@ -3884,9 +4863,17 @@ fn check_array_escapes_in_expr(
             }
         }
         // Leaf expressions: no LocalGet inside.
-        Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_) | Expr::String(_)
-        | Expr::Undefined | Expr::Null | Expr::This | Expr::FuncRef(_)
-        | Expr::ClassRef(_) | Expr::ExternFuncRef { .. } | Expr::GlobalGet(_)
+        Expr::Integer(_)
+        | Expr::Number(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Undefined
+        | Expr::Null
+        | Expr::This
+        | Expr::FuncRef(_)
+        | Expr::ClassRef(_)
+        | Expr::ExternFuncRef { .. }
+        | Expr::GlobalGet(_)
         | Expr::BigInt(_) => {}
         // Catch-all: any unrecognized expression conservatively marks every
         // candidate it references as escaped. Safe — we just miss the
@@ -3947,7 +4934,11 @@ fn find_object_literal_candidates(
     use perry_hir::{Expr, Stmt};
     for s in stmts {
         match s {
-            Stmt::Let { id, init: Some(Expr::Object(props)), .. } => {
+            Stmt::Let {
+                id,
+                init: Some(Expr::Object(props)),
+                ..
+            } => {
                 if boxed_vars.contains(id) || module_globals.contains_key(id) {
                     continue;
                 }
@@ -3957,7 +4948,13 @@ fn find_object_literal_candidates(
                 // Reject method closures that need a `this` back-pointer —
                 // scalar replacement can't provide one.
                 let has_this_closure = props.iter().any(|(_, v)| {
-                    matches!(v, Expr::Closure { captures_this: true, .. })
+                    matches!(
+                        v,
+                        Expr::Closure {
+                            captures_this: true,
+                            ..
+                        }
+                    )
                 });
                 if has_this_closure {
                     continue;
@@ -3971,7 +4968,11 @@ fn find_object_literal_candidates(
                 }
                 candidates.insert(*id, keys);
             }
-            Stmt::If { then_branch, else_branch, .. } => {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 find_object_literal_candidates(then_branch, boxed_vars, module_globals, candidates);
                 if let Some(eb) = else_branch {
                     find_object_literal_candidates(eb, boxed_vars, module_globals, candidates);
@@ -3991,7 +4992,11 @@ fn find_object_literal_candidates(
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 find_object_literal_candidates(body, boxed_vars, module_globals, candidates);
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 find_object_literal_candidates(body, boxed_vars, module_globals, candidates);
                 if let Some(c) = catch {
                     find_object_literal_candidates(&c.body, boxed_vars, module_globals, candidates);
@@ -4039,7 +5044,11 @@ fn check_object_literal_escapes_in_stmts(
                     check_object_literal_escapes_in_expr(e, candidates, escaped);
                 }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 check_object_literal_escapes_in_expr(condition, candidates, escaped);
                 check_object_literal_escapes_in_stmts(then_branch, candidates, escaped);
                 if let Some(eb) = else_branch {
@@ -4054,7 +5063,12 @@ fn check_object_literal_escapes_in_stmts(
                 check_object_literal_escapes_in_stmts(body, candidates, escaped);
                 check_object_literal_escapes_in_expr(condition, candidates, escaped);
             }
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 if let Some(init_stmt) = init {
                     check_object_literal_escapes_in_stmts(
                         std::slice::from_ref(init_stmt),
@@ -4070,7 +5084,10 @@ fn check_object_literal_escapes_in_stmts(
                 }
                 check_object_literal_escapes_in_stmts(body, candidates, escaped);
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 check_object_literal_escapes_in_expr(discriminant, candidates, escaped);
                 for case in cases {
                     if let Some(test) = &case.test {
@@ -4079,7 +5096,11 @@ fn check_object_literal_escapes_in_stmts(
                     check_object_literal_escapes_in_stmts(&case.body, candidates, escaped);
                 }
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 check_object_literal_escapes_in_stmts(body, candidates, escaped);
                 if let Some(c) = catch {
                     check_object_literal_escapes_in_stmts(&c.body, candidates, escaped);

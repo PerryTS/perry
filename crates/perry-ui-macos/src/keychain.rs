@@ -6,7 +6,9 @@ extern "C" {
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const crate::string_header::StringHeader;
         let len = (*header).byte_len as usize;
@@ -75,7 +77,8 @@ pub fn save(key_ptr: *const u8, value_ptr: *const u8) {
         // Try to update existing entry first (preserves ACL)
         let query = make_query(key);
         let dict_cls = objc2::runtime::AnyClass::get(c"NSMutableDictionary").unwrap();
-        let update_dict: objc2::rc::Retained<objc2::runtime::AnyObject> = objc2::msg_send![dict_cls, new];
+        let update_dict: objc2::rc::Retained<objc2::runtime::AnyObject> =
+            objc2::msg_send![dict_cls, new];
         let _: () = objc2::msg_send![&*update_dict, setObject: &*value_data, forKey: value_data_key as *const objc2::runtime::AnyObject];
 
         let status = SecItemUpdate(
@@ -87,7 +90,10 @@ pub fn save(key_ptr: *const u8, value_ptr: *const u8) {
         if status == -25300 {
             let add_dict = make_query(key);
             let _: () = objc2::msg_send![&*add_dict, setObject: &*value_data, forKey: value_data_key as *const objc2::runtime::AnyObject];
-            SecItemAdd(&*add_dict as *const _ as *const c_void, std::ptr::null_mut());
+            SecItemAdd(
+                &*add_dict as *const _ as *const c_void,
+                std::ptr::null_mut(),
+            );
         }
     }
 }

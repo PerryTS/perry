@@ -289,7 +289,9 @@ where
         | Expr::UrlGetSearchParams(v)
         | Expr::UrlSearchParamsToString(v)
         | Expr::JsCreateCallback { closure: v, .. }
-        | Expr::JsGetExport { module_handle: v, .. }
+        | Expr::JsGetExport {
+            module_handle: v, ..
+        }
         | Expr::JsGetProperty { object: v, .. }
         | Expr::ArrayEntries(v)
         | Expr::ArrayKeys(v)
@@ -356,8 +358,7 @@ where
         Expr::StringFromCharCode(v) | Expr::StringFromCodePoint(v) => {
             f(v);
         }
-        Expr::StringAt { string, index }
-        | Expr::StringCodePointAt { string, index } => {
+        Expr::StringAt { string, index } | Expr::StringCodePointAt { string, index } => {
             f(string);
             f(index);
         }
@@ -371,7 +372,11 @@ where
             f(text);
             f(reviver);
         }
-        Expr::JsonStringifyPretty { value, replacer, space } => {
+        Expr::JsonStringifyPretty {
+            value,
+            replacer,
+            space,
+        } => {
             f(value);
             if let Some(r) = replacer {
                 f(r);
@@ -398,12 +403,20 @@ where
         }
 
         // ─── Three-child variants ─────────────────────────────────────────
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             f(object);
             f(index);
             f(value);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             f(condition);
             f(then_expr);
             f(else_expr);
@@ -474,7 +487,11 @@ where
                 f(a);
             }
         }
-        Expr::JsNew { module_handle, args, .. } => {
+        Expr::JsNew {
+            module_handle,
+            args,
+            ..
+        } => {
             f(module_handle);
             for a in args {
                 f(a);
@@ -486,7 +503,11 @@ where
                 f(a);
             }
         }
-        Expr::JsCallFunction { module_handle, args, .. } => {
+        Expr::JsCallFunction {
+            module_handle,
+            args,
+            ..
+        } => {
             f(module_handle);
             for a in args {
                 f(a);
@@ -569,8 +590,16 @@ where
             f(params);
             f(name);
         }
-        Expr::UrlSearchParamsSet { params, name, value }
-        | Expr::UrlSearchParamsAppend { params, name, value } => {
+        Expr::UrlSearchParamsSet {
+            params,
+            name,
+            value,
+        }
+        | Expr::UrlSearchParamsAppend {
+            params,
+            name,
+            value,
+        } => {
             f(params);
             f(name);
             f(value);
@@ -588,12 +617,20 @@ where
             f(regex);
             f(value);
         }
-        Expr::RegExpReplaceFn { string, regex, callback } => {
+        Expr::RegExpReplaceFn {
+            string,
+            regex,
+            callback,
+        } => {
             f(string);
             f(regex);
             f(callback);
         }
-        Expr::StringReplace { string, pattern, replacement } => {
+        Expr::StringReplace {
+            string,
+            pattern,
+            replacement,
+        } => {
             f(string);
             f(pattern);
             f(replacement);
@@ -627,7 +664,13 @@ where
                 f(e);
             }
         }
-        Expr::BufferCopy { source, target, target_start, source_start, source_end } => {
+        Expr::BufferCopy {
+            source,
+            target,
+            target_start,
+            source_start,
+            source_end,
+        } => {
             f(source);
             f(target);
             if let Some(v) = target_start {
@@ -640,7 +683,12 @@ where
                 f(v);
             }
         }
-        Expr::BufferWrite { buffer, string, offset, encoding } => {
+        Expr::BufferWrite {
+            buffer,
+            string,
+            offset,
+            encoding,
+        } => {
             f(buffer);
             f(string);
             if let Some(o) = offset {
@@ -662,7 +710,11 @@ where
             f(buffer);
             f(index);
         }
-        Expr::BufferIndexSet { buffer, index, value } => {
+        Expr::BufferIndexSet {
+            buffer,
+            index,
+            value,
+        } => {
             f(buffer);
             f(index);
             f(value);
@@ -683,7 +735,11 @@ where
             f(array);
             f(index);
         }
-        Expr::Uint8ArraySet { array, index, value } => {
+        Expr::Uint8ArraySet {
+            array,
+            index,
+            value,
+        } => {
             f(array);
             f(index);
             f(value);
@@ -713,8 +769,16 @@ where
                 f(o);
             }
         }
-        Expr::ChildProcessSpawnSync { command, args, options }
-        | Expr::ChildProcessSpawn { command, args, options } => {
+        Expr::ChildProcessSpawnSync {
+            command,
+            args,
+            options,
+        }
+        | Expr::ChildProcessSpawn {
+            command,
+            args,
+            options,
+        } => {
             f(command);
             if let Some(a) = args {
                 f(a);
@@ -723,7 +787,11 @@ where
                 f(o);
             }
         }
-        Expr::ChildProcessExec { command, options, callback } => {
+        Expr::ChildProcessExec {
+            command,
+            options,
+            callback,
+        } => {
             f(command);
             if let Some(o) = options {
                 f(o);
@@ -732,7 +800,12 @@ where
                 f(c);
             }
         }
-        Expr::ChildProcessSpawnBackground { command, args, log_file, env_json } => {
+        Expr::ChildProcessSpawnBackground {
+            command,
+            args,
+            log_file,
+            env_json,
+        } => {
             f(command);
             if let Some(a) = args {
                 f(a);
@@ -744,7 +817,12 @@ where
         }
 
         // ─── Fetch / Net ─────────────────────────────────────────────────
-        Expr::FetchWithOptions { url, method, body, headers } => {
+        Expr::FetchWithOptions {
+            url,
+            method,
+            body,
+            headers,
+        } => {
             f(url);
             f(method);
             f(body);
@@ -756,12 +834,19 @@ where
             f(url);
             f(auth_header);
         }
-        Expr::FetchPostWithAuth { url, auth_header, body } => {
+        Expr::FetchPostWithAuth {
+            url,
+            auth_header,
+            body,
+        } => {
             f(url);
             f(auth_header);
             f(body);
         }
-        Expr::NetCreateServer { options, connection_listener } => {
+        Expr::NetCreateServer {
+            options,
+            connection_listener,
+        } => {
             if let Some(o) = options {
                 f(o);
             }
@@ -769,8 +854,16 @@ where
                 f(c);
             }
         }
-        Expr::NetCreateConnection { port, host, connect_listener }
-        | Expr::NetConnect { port, host, connect_listener } => {
+        Expr::NetCreateConnection {
+            port,
+            host,
+            connect_listener,
+        }
+        | Expr::NetConnect {
+            port,
+            host,
+            connect_listener,
+        } => {
             f(port);
             if let Some(h) = host {
                 f(h);
@@ -798,7 +891,12 @@ where
                 f(e);
             }
         }
-        Expr::ArraySplice { array_id: _, start, delete_count, items } => {
+        Expr::ArraySplice {
+            array_id: _,
+            start,
+            delete_count,
+            items,
+        } => {
             f(start);
             if let Some(dc) = delete_count {
                 f(dc);
@@ -817,7 +915,10 @@ where
         | Expr::ArraySome { array, callback }
         | Expr::ArrayEvery { array, callback }
         | Expr::ArrayFlatMap { array, callback }
-        | Expr::ArraySort { array, comparator: callback } => {
+        | Expr::ArraySort {
+            array,
+            comparator: callback,
+        } => {
             f(array);
             f(callback);
         }
@@ -825,8 +926,16 @@ where
             f(array);
             f(index);
         }
-        Expr::ArrayReduce { array, callback, initial }
-        | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             f(array);
             f(callback);
             if let Some(i) = initial {
@@ -845,7 +954,12 @@ where
                 f(c);
             }
         }
-        Expr::ArrayToSpliced { array, start, delete_count, items } => {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => {
             f(array);
             f(start);
             f(delete_count);
@@ -853,12 +967,21 @@ where
                 f(it);
             }
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             f(array);
             f(index);
             f(value);
         }
-        Expr::ArrayCopyWithin { array_id: _, target, start, end } => {
+        Expr::ArrayCopyWithin {
+            array_id: _,
+            target,
+            start,
+            end,
+        } => {
             f(target);
             f(start);
             if let Some(e) = end {
@@ -882,8 +1005,7 @@ where
         }
 
         // ─── Proxy / Reflect ─────────────────────────────────────────────
-        Expr::ProxyNew { target, handler }
-        | Expr::ProxyRevocable { target, handler } => {
+        Expr::ProxyNew { target, handler } | Expr::ProxyRevocable { target, handler } => {
             f(target);
             f(handler);
         }
@@ -898,8 +1020,7 @@ where
             f(key);
             f(value);
         }
-        Expr::ProxyApply { proxy, args }
-        | Expr::ProxyConstruct { proxy, args } => {
+        Expr::ProxyApply { proxy, args } | Expr::ProxyConstruct { proxy, args } => {
             f(proxy);
             for a in args {
                 f(a);
@@ -916,7 +1037,11 @@ where
             f(key);
             f(value);
         }
-        Expr::ReflectApply { func, this_arg, args } => {
+        Expr::ReflectApply {
+            func,
+            this_arg,
+            args,
+        } => {
             f(func);
             f(this_arg);
             f(args);
@@ -925,14 +1050,23 @@ where
             f(target);
             f(args);
         }
-        Expr::ReflectDefineProperty { target, key, descriptor } => {
+        Expr::ReflectDefineProperty {
+            target,
+            key,
+            descriptor,
+        } => {
             f(target);
             f(key);
             f(descriptor);
         }
 
         // ─── FinalizationRegistry register/unregister ────────────────────
-        Expr::FinalizationRegistryRegister { registry, target, held, token } => {
+        Expr::FinalizationRegistryRegister {
+            registry,
+            target,
+            held,
+            token,
+        } => {
             f(registry);
             f(target);
             f(held);
@@ -1206,7 +1340,9 @@ where
         | Expr::UrlGetSearchParams(v)
         | Expr::UrlSearchParamsToString(v)
         | Expr::JsCreateCallback { closure: v, .. }
-        | Expr::JsGetExport { module_handle: v, .. }
+        | Expr::JsGetExport {
+            module_handle: v, ..
+        }
         | Expr::JsGetProperty { object: v, .. }
         | Expr::ArrayEntries(v)
         | Expr::ArrayKeys(v)
@@ -1273,8 +1409,7 @@ where
         Expr::StringFromCharCode(v) | Expr::StringFromCodePoint(v) => {
             f(v);
         }
-        Expr::StringAt { string, index }
-        | Expr::StringCodePointAt { string, index } => {
+        Expr::StringAt { string, index } | Expr::StringCodePointAt { string, index } => {
             f(string);
             f(index);
         }
@@ -1288,7 +1423,11 @@ where
             f(text);
             f(reviver);
         }
-        Expr::JsonStringifyPretty { value, replacer, space } => {
+        Expr::JsonStringifyPretty {
+            value,
+            replacer,
+            space,
+        } => {
             f(value);
             if let Some(r) = replacer {
                 f(r);
@@ -1313,12 +1452,20 @@ where
             f(iterable);
             f(map_fn);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             f(object);
             f(index);
             f(value);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             f(condition);
             f(then_expr);
             f(else_expr);
@@ -1387,7 +1534,11 @@ where
                 f(a);
             }
         }
-        Expr::JsNew { module_handle, args, .. } => {
+        Expr::JsNew {
+            module_handle,
+            args,
+            ..
+        } => {
             f(module_handle);
             for a in args {
                 f(a);
@@ -1399,7 +1550,11 @@ where
                 f(a);
             }
         }
-        Expr::JsCallFunction { module_handle, args, .. } => {
+        Expr::JsCallFunction {
+            module_handle,
+            args,
+            ..
+        } => {
             f(module_handle);
             for a in args {
                 f(a);
@@ -1474,8 +1629,16 @@ where
             f(params);
             f(name);
         }
-        Expr::UrlSearchParamsSet { params, name, value }
-        | Expr::UrlSearchParamsAppend { params, name, value } => {
+        Expr::UrlSearchParamsSet {
+            params,
+            name,
+            value,
+        }
+        | Expr::UrlSearchParamsAppend {
+            params,
+            name,
+            value,
+        } => {
             f(params);
             f(name);
             f(value);
@@ -1491,12 +1654,20 @@ where
             f(regex);
             f(value);
         }
-        Expr::RegExpReplaceFn { string, regex, callback } => {
+        Expr::RegExpReplaceFn {
+            string,
+            regex,
+            callback,
+        } => {
             f(string);
             f(regex);
             f(callback);
         }
-        Expr::StringReplace { string, pattern, replacement } => {
+        Expr::StringReplace {
+            string,
+            pattern,
+            replacement,
+        } => {
             f(string);
             f(pattern);
             f(replacement);
@@ -1528,7 +1699,13 @@ where
                 f(e);
             }
         }
-        Expr::BufferCopy { source, target, target_start, source_start, source_end } => {
+        Expr::BufferCopy {
+            source,
+            target,
+            target_start,
+            source_start,
+            source_end,
+        } => {
             f(source);
             f(target);
             if let Some(v) = target_start {
@@ -1541,7 +1718,12 @@ where
                 f(v);
             }
         }
-        Expr::BufferWrite { buffer, string, offset, encoding } => {
+        Expr::BufferWrite {
+            buffer,
+            string,
+            offset,
+            encoding,
+        } => {
             f(buffer);
             f(string);
             if let Some(o) = offset {
@@ -1563,7 +1745,11 @@ where
             f(buffer);
             f(index);
         }
-        Expr::BufferIndexSet { buffer, index, value } => {
+        Expr::BufferIndexSet {
+            buffer,
+            index,
+            value,
+        } => {
             f(buffer);
             f(index);
             f(value);
@@ -1582,7 +1768,11 @@ where
             f(array);
             f(index);
         }
-        Expr::Uint8ArraySet { array, index, value } => {
+        Expr::Uint8ArraySet {
+            array,
+            index,
+            value,
+        } => {
             f(array);
             f(index);
             f(value);
@@ -1608,8 +1798,16 @@ where
                 f(o);
             }
         }
-        Expr::ChildProcessSpawnSync { command, args, options }
-        | Expr::ChildProcessSpawn { command, args, options } => {
+        Expr::ChildProcessSpawnSync {
+            command,
+            args,
+            options,
+        }
+        | Expr::ChildProcessSpawn {
+            command,
+            args,
+            options,
+        } => {
             f(command);
             if let Some(a) = args {
                 f(a);
@@ -1618,7 +1816,11 @@ where
                 f(o);
             }
         }
-        Expr::ChildProcessExec { command, options, callback } => {
+        Expr::ChildProcessExec {
+            command,
+            options,
+            callback,
+        } => {
             f(command);
             if let Some(o) = options {
                 f(o);
@@ -1627,7 +1829,12 @@ where
                 f(c);
             }
         }
-        Expr::ChildProcessSpawnBackground { command, args, log_file, env_json } => {
+        Expr::ChildProcessSpawnBackground {
+            command,
+            args,
+            log_file,
+            env_json,
+        } => {
             f(command);
             if let Some(a) = args {
                 f(a);
@@ -1637,7 +1844,12 @@ where
                 f(e);
             }
         }
-        Expr::FetchWithOptions { url, method, body, headers } => {
+        Expr::FetchWithOptions {
+            url,
+            method,
+            body,
+            headers,
+        } => {
             f(url);
             f(method);
             f(body);
@@ -1649,12 +1861,19 @@ where
             f(url);
             f(auth_header);
         }
-        Expr::FetchPostWithAuth { url, auth_header, body } => {
+        Expr::FetchPostWithAuth {
+            url,
+            auth_header,
+            body,
+        } => {
             f(url);
             f(auth_header);
             f(body);
         }
-        Expr::NetCreateServer { options, connection_listener } => {
+        Expr::NetCreateServer {
+            options,
+            connection_listener,
+        } => {
             if let Some(o) = options {
                 f(o);
             }
@@ -1662,8 +1881,16 @@ where
                 f(c);
             }
         }
-        Expr::NetCreateConnection { port, host, connect_listener }
-        | Expr::NetConnect { port, host, connect_listener } => {
+        Expr::NetCreateConnection {
+            port,
+            host,
+            connect_listener,
+        }
+        | Expr::NetConnect {
+            port,
+            host,
+            connect_listener,
+        } => {
             f(port);
             if let Some(h) = host {
                 f(h);
@@ -1689,7 +1916,12 @@ where
                 f(e);
             }
         }
-        Expr::ArraySplice { array_id: _, start, delete_count, items } => {
+        Expr::ArraySplice {
+            array_id: _,
+            start,
+            delete_count,
+            items,
+        } => {
             f(start);
             if let Some(dc) = delete_count {
                 f(dc);
@@ -1708,7 +1940,10 @@ where
         | Expr::ArraySome { array, callback }
         | Expr::ArrayEvery { array, callback }
         | Expr::ArrayFlatMap { array, callback }
-        | Expr::ArraySort { array, comparator: callback } => {
+        | Expr::ArraySort {
+            array,
+            comparator: callback,
+        } => {
             f(array);
             f(callback);
         }
@@ -1716,8 +1951,16 @@ where
             f(array);
             f(index);
         }
-        Expr::ArrayReduce { array, callback, initial }
-        | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             f(array);
             f(callback);
             if let Some(i) = initial {
@@ -1736,7 +1979,12 @@ where
                 f(c);
             }
         }
-        Expr::ArrayToSpliced { array, start, delete_count, items } => {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => {
             f(array);
             f(start);
             f(delete_count);
@@ -1744,12 +1992,21 @@ where
                 f(it);
             }
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             f(array);
             f(index);
             f(value);
         }
-        Expr::ArrayCopyWithin { array_id: _, target, start, end } => {
+        Expr::ArrayCopyWithin {
+            array_id: _,
+            target,
+            start,
+            end,
+        } => {
             f(target);
             f(start);
             if let Some(e) = end {
@@ -1769,8 +2026,7 @@ where
             f(set);
             f(value);
         }
-        Expr::ProxyNew { target, handler }
-        | Expr::ProxyRevocable { target, handler } => {
+        Expr::ProxyNew { target, handler } | Expr::ProxyRevocable { target, handler } => {
             f(target);
             f(handler);
         }
@@ -1785,8 +2041,7 @@ where
             f(key);
             f(value);
         }
-        Expr::ProxyApply { proxy, args }
-        | Expr::ProxyConstruct { proxy, args } => {
+        Expr::ProxyApply { proxy, args } | Expr::ProxyConstruct { proxy, args } => {
             f(proxy);
             for a in args {
                 f(a);
@@ -1803,7 +2058,11 @@ where
             f(key);
             f(value);
         }
-        Expr::ReflectApply { func, this_arg, args } => {
+        Expr::ReflectApply {
+            func,
+            this_arg,
+            args,
+        } => {
             f(func);
             f(this_arg);
             f(args);
@@ -1812,12 +2071,21 @@ where
             f(target);
             f(args);
         }
-        Expr::ReflectDefineProperty { target, key, descriptor } => {
+        Expr::ReflectDefineProperty {
+            target,
+            key,
+            descriptor,
+        } => {
             f(target);
             f(key);
             f(descriptor);
         }
-        Expr::FinalizationRegistryRegister { registry, target, held, token } => {
+        Expr::FinalizationRegistryRegister {
+            registry,
+            target,
+            held,
+            token,
+        } => {
             f(registry);
             f(target);
             f(held);

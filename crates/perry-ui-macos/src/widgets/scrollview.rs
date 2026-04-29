@@ -1,5 +1,5 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2_app_kit::{NSScrollView, NSView};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -37,9 +37,16 @@ fn ensure_flipped_class() {
     ONCE.call_once(|| unsafe {
         let superclass = objc_getClass(c"NSView".as_ptr());
         let cls = objc_allocateClassPair(superclass, c"PerryFlippedView".as_ptr(), 0);
-        if cls.is_null() { return; }
+        if cls.is_null() {
+            return;
+        }
         let sel = sel_registerName(c"isFlipped".as_ptr());
-        class_addMethod(cls, sel, flipped_is_flipped as *const std::ffi::c_void, c"B@:".as_ptr());
+        class_addMethod(
+            cls,
+            sel,
+            flipped_is_flipped as *const std::ffi::c_void,
+            c"B@:".as_ptr(),
+        );
         objc_registerClassPair(cls);
     });
 }
@@ -65,7 +72,10 @@ pub fn create() -> i64 {
 /// Uses a flipped wrapper + Auto Layout for top-origin scrolling.
 /// Changes distribution to GravityAreas and sets minimum row heights on children.
 pub fn set_child(scroll_handle: i64, child_handle: i64) {
-    if let (Some(scroll_view), Some(child)) = (super::get_widget(scroll_handle), super::get_widget(child_handle)) {
+    if let (Some(scroll_view), Some(child)) = (
+        super::get_widget(scroll_handle),
+        super::get_widget(child_handle),
+    ) {
         unsafe {
             let sv: &NSScrollView = &*(Retained::as_ptr(&scroll_view) as *const NSScrollView);
 
@@ -90,10 +100,14 @@ pub fn set_child(scroll_handle: i64, child_handle: i64) {
             let wrap_lead: Retained<AnyObject> = msg_send![&*wrapper, leadingAnchor];
             let wrap_trail: Retained<AnyObject> = msg_send![&*wrapper, trailingAnchor];
             let wrap_bot: Retained<AnyObject> = msg_send![&*wrapper, bottomAnchor];
-            let c1: Retained<AnyObject> = msg_send![&*child_top, constraintEqualToAnchor: &*wrap_top];
-            let c2: Retained<AnyObject> = msg_send![&*child_lead, constraintEqualToAnchor: &*wrap_lead];
-            let c3: Retained<AnyObject> = msg_send![&*child_trail, constraintEqualToAnchor: &*wrap_trail];
-            let c4: Retained<AnyObject> = msg_send![&*child_bot, constraintEqualToAnchor: &*wrap_bot];
+            let c1: Retained<AnyObject> =
+                msg_send![&*child_top, constraintEqualToAnchor: &*wrap_top];
+            let c2: Retained<AnyObject> =
+                msg_send![&*child_lead, constraintEqualToAnchor: &*wrap_lead];
+            let c3: Retained<AnyObject> =
+                msg_send![&*child_trail, constraintEqualToAnchor: &*wrap_trail];
+            let c4: Retained<AnyObject> =
+                msg_send![&*child_bot, constraintEqualToAnchor: &*wrap_bot];
             let _: () = msg_send![&*c1, setActive: true];
             let _: () = msg_send![&*c2, setActive: true];
             let _: () = msg_send![&*c3, setActive: true];
@@ -124,10 +138,13 @@ pub fn set_child(scroll_handle: i64, child_handle: i64) {
                     let n: usize = msg_send![&*arranged, count];
                     for i in 0..n {
                         let subview: *mut AnyObject = msg_send![&*arranged, objectAtIndex: i];
-                        if subview.is_null() { continue; }
+                        if subview.is_null() {
+                            continue;
+                        }
                         // Set minimum height 24px on each arranged subview
                         let sub_h: Retained<AnyObject> = msg_send![subview, heightAnchor];
-                        let hc: Retained<AnyObject> = msg_send![&*sub_h, constraintGreaterThanOrEqualToConstant: 24.0_f64];
+                        let hc: Retained<AnyObject> =
+                            msg_send![&*sub_h, constraintGreaterThanOrEqualToConstant: 24.0_f64];
                         let _: () = msg_send![&*hc, setActive: true];
                     }
                 }
@@ -138,7 +155,10 @@ pub fn set_child(scroll_handle: i64, child_handle: i64) {
 
 /// Scroll so that the given child widget is visible.
 pub fn scroll_to(scroll_handle: i64, child_handle: i64) {
-    if let (Some(scroll_view), Some(child)) = (super::get_widget(scroll_handle), super::get_widget(child_handle)) {
+    if let (Some(scroll_view), Some(child)) = (
+        super::get_widget(scroll_handle),
+        super::get_widget(child_handle),
+    ) {
         unsafe {
             let _sv: &NSScrollView = &*(Retained::as_ptr(&scroll_view) as *const NSScrollView);
             let child_frame: CGRect = msg_send![&*child, frame];

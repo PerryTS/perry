@@ -5,8 +5,8 @@
 //! SwiftUI `TextEditor` and calls `perry_watchos_textarea_changed` when the
 //! user edits the content.
 
-use crate::tree::{self, NodeData, NodeKind};
 use crate::cstring_from_header;
+use crate::tree::{self, NodeData, NodeKind};
 
 extern "C" {
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;

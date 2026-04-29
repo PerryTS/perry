@@ -25,7 +25,9 @@ pub fn set_state(handle: i64, on: i64) {
                 "(Z)V",
                 &[JValue::Bool(if on != 0 { 1 } else { 0 })],
             );
-            unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+            unsafe {
+                env.pop_local_frame(&jni::objects::JObject::null());
+            }
         }
     });
 }
@@ -40,11 +42,13 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
     let activity = super::get_activity(&mut env);
 
     // Create the Switch widget
-    let switch = env.new_object(
-        "android/widget/Switch",
-        "(Landroid/content/Context;)V",
-        &[JValue::Object(&activity)],
-    ).expect("Failed to create Switch");
+    let switch = env
+        .new_object(
+            "android/widget/Switch",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        )
+        .expect("Failed to create Switch");
 
     // Set label text on the Switch itself (Switch extends CompoundButton extends TextView)
     let jstr = env.new_string(label).expect("Failed to create JNI string");
@@ -57,9 +61,8 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
 
     // Register callback and set up OnCheckedChangeListener via PerryBridge
     let cb_key = callback::register(on_change);
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
     let _ = env.call_static_method(
         bridge_cls,
@@ -69,11 +72,13 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
     );
 
     // Create horizontal container (to match iOS pattern where toggle = label + switch)
-    let container = env.new_object(
-        "android/widget/LinearLayout",
-        "(Landroid/content/Context;)V",
-        &[JValue::Object(&activity)],
-    ).expect("Failed to create LinearLayout");
+    let container = env
+        .new_object(
+            "android/widget/LinearLayout",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        )
+        .expect("Failed to create LinearLayout");
 
     // HORIZONTAL = 0
     let _ = env.call_method(&container, "setOrientation", "(I)V", &[JValue::Int(0)]);
@@ -88,14 +93,20 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
         &[JValue::Object(&switch)],
     );
 
-    let switch_global = env.new_global_ref(&switch).expect("Failed to create global ref");
-    let container_global = env.new_global_ref(container).expect("Failed to create global ref");
+    let switch_global = env
+        .new_global_ref(&switch)
+        .expect("Failed to create global ref");
+    let container_global = env
+        .new_global_ref(container)
+        .expect("Failed to create global ref");
     let handle = super::register_widget(container_global);
 
     TOGGLE_SWITCHES.with(|switches| {
         switches.borrow_mut().insert(handle, switch_global);
     });
 
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     handle
 }

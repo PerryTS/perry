@@ -26,19 +26,32 @@ pub fn emit_entry_struct(widget: &WidgetDecl, name: &str) -> String {
 }
 
 /// Emit nested Codable structs for complex field types
-fn emit_nested_structs(out: &mut String, parent_name: &str, field_name: &str, field_type: &WidgetFieldType) {
+fn emit_nested_structs(
+    out: &mut String,
+    parent_name: &str,
+    field_name: &str,
+    field_type: &WidgetFieldType,
+) {
     match field_type {
         WidgetFieldType::Array(inner) => {
             emit_nested_structs(out, parent_name, field_name, inner);
         }
         WidgetFieldType::Object(fields) => {
             let struct_name = format!("{}{}Item", parent_name, capitalize(field_name));
-            writeln!(out, "struct {}: Codable, Identifiable, Hashable {{", struct_name).unwrap();
+            writeln!(
+                out,
+                "struct {}: Codable, Identifiable, Hashable {{",
+                struct_name
+            )
+            .unwrap();
             // Find a suitable id field
             let has_id = fields.iter().any(|(n, _)| n == "id");
             if !has_id {
                 // Use first string field as id
-                if let Some((first_str, _)) = fields.iter().find(|(_, t)| matches!(t, WidgetFieldType::String)) {
+                if let Some((first_str, _)) = fields
+                    .iter()
+                    .find(|(_, t)| matches!(t, WidgetFieldType::String))
+                {
                     writeln!(out, "    var id: String {{ {} }}", first_str).unwrap();
                 } else {
                     writeln!(out, "    var id: String {{ UUID().uuidString }}").unwrap();
@@ -59,19 +72,21 @@ fn emit_nested_structs(out: &mut String, parent_name: &str, field_name: &str, fi
 }
 
 /// Map a WidgetFieldType to a Swift type string
-fn swift_type_for_field(parent_name: &str, field_name: &str, field_type: &WidgetFieldType) -> String {
+fn swift_type_for_field(
+    parent_name: &str,
+    field_name: &str,
+    field_type: &WidgetFieldType,
+) -> String {
     match field_type {
         WidgetFieldType::String => "String".to_string(),
         WidgetFieldType::Number => "Double".to_string(),
         WidgetFieldType::Boolean => "Bool".to_string(),
-        WidgetFieldType::Array(inner) => {
-            match inner.as_ref() {
-                WidgetFieldType::Object(_) => {
-                    format!("[{}{}Item]", parent_name, capitalize(field_name))
-                }
-                _ => format!("[{}]", swift_type_for_field(parent_name, field_name, inner)),
+        WidgetFieldType::Array(inner) => match inner.as_ref() {
+            WidgetFieldType::Object(_) => {
+                format!("[{}{}Item]", parent_name, capitalize(field_name))
             }
-        }
+            _ => format!("[{}]", swift_type_for_field(parent_name, field_name, inner)),
+        },
         WidgetFieldType::Optional(inner) => {
             format!("{}?", swift_type_for_field(parent_name, field_name, inner))
         }
@@ -146,19 +161,33 @@ fn emit_static_timeline_provider(widget: &WidgetDecl, name: &str) -> String {
     let mut out = String::new();
 
     writeln!(out, "struct {}Provider: TimelineProvider {{", name).unwrap();
-    writeln!(out, "    func placeholder(in context: Context) -> {}Entry {{", name).unwrap();
+    writeln!(
+        out,
+        "    func placeholder(in context: Context) -> {}Entry {{",
+        name
+    )
+    .unwrap();
     emit_placeholder_entry(&mut out, widget, name, "        ");
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
 
-    writeln!(out, "    func getSnapshot(in context: Context, completion: @escaping ({}Entry) -> ()) {{", name).unwrap();
+    writeln!(
+        out,
+        "    func getSnapshot(in context: Context, completion: @escaping ({}Entry) -> ()) {{",
+        name
+    )
+    .unwrap();
     writeln!(out, "        completion(placeholder(in: context))").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
 
     writeln!(out, "    func getTimeline(in context: Context, completion: @escaping (Timeline<{}Entry>) -> ()) {{", name).unwrap();
     writeln!(out, "        let entry = placeholder(in: context)").unwrap();
-    writeln!(out, "        let timeline = Timeline(entries: [entry], policy: .atEnd)").unwrap();
+    writeln!(
+        out,
+        "        let timeline = Timeline(entries: [entry], policy: .atEnd)"
+    )
+    .unwrap();
     writeln!(out, "        completion(timeline)").unwrap();
     writeln!(out, "    }}").unwrap();
 
@@ -173,12 +202,22 @@ fn emit_native_timeline_provider(widget: &WidgetDecl, name: &str) -> String {
     let reload_seconds = widget.reload_after_seconds.unwrap_or(1800);
 
     writeln!(out, "struct {}Provider: TimelineProvider {{", name).unwrap();
-    writeln!(out, "    func placeholder(in context: Context) -> {}Entry {{", name).unwrap();
+    writeln!(
+        out,
+        "    func placeholder(in context: Context) -> {}Entry {{",
+        name
+    )
+    .unwrap();
     emit_placeholder_entry(&mut out, widget, name, "        ");
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
 
-    writeln!(out, "    func getSnapshot(in context: Context, completion: @escaping ({}Entry) -> ()) {{", name).unwrap();
+    writeln!(
+        out,
+        "    func getSnapshot(in context: Context, completion: @escaping ({}Entry) -> ()) {{",
+        name
+    )
+    .unwrap();
     writeln!(out, "        completion(placeholder(in: context))").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
@@ -186,28 +225,74 @@ fn emit_native_timeline_provider(widget: &WidgetDecl, name: &str) -> String {
     writeln!(out, "    func getTimeline(in context: Context, completion: @escaping (Timeline<{}Entry>) -> ()) {{", name).unwrap();
     writeln!(out, "        perry_runtime_widget_init()").unwrap();
     writeln!(out, "        let configJson = \"{{}}\"").unwrap();
-    writeln!(out, "        let configPtr = perry_nanbox_string(configJson)").unwrap();
+    writeln!(
+        out,
+        "        let configPtr = perry_nanbox_string(configJson)"
+    )
+    .unwrap();
     writeln!(out, "        let resultPtr = {}(configPtr)", func_name).unwrap();
     writeln!(out, "        let resultJson = perry_get_string(resultPtr)").unwrap();
     writeln!(out, "        if let data = resultJson.data(using: .utf8),").unwrap();
-    writeln!(out, "           let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],").unwrap();
-    writeln!(out, "           let entries = result[\"entries\"] as? [[String: Any]] {{").unwrap();
+    writeln!(
+        out,
+        "           let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "           let entries = result[\"entries\"] as? [[String: Any]] {{"
+    )
+    .unwrap();
     writeln!(out, "            var timelineEntries: [{}Entry] = []", name).unwrap();
     writeln!(out, "            for entryDict in entries {{").unwrap();
-    write!(out, "                let entry = {}Entry(date: Date()", name).unwrap();
+    write!(
+        out,
+        "                let entry = {}Entry(date: Date()",
+        name
+    )
+    .unwrap();
     for (field_name, field_type) in &widget.entry_fields {
         match field_type {
-            WidgetFieldType::String => write!(out, ", {}: entryDict[\"{}\"] as? String ?? \"\"", field_name, field_name).unwrap(),
-            WidgetFieldType::Number => write!(out, ", {}: entryDict[\"{}\"] as? Double ?? 0", field_name, field_name).unwrap(),
-            WidgetFieldType::Boolean => write!(out, ", {}: entryDict[\"{}\"] as? Bool ?? false", field_name, field_name).unwrap(),
-            _ => write!(out, ", {}: entryDict[\"{}\"] as? String ?? \"\"", field_name, field_name).unwrap(),
+            WidgetFieldType::String => write!(
+                out,
+                ", {}: entryDict[\"{}\"] as? String ?? \"\"",
+                field_name, field_name
+            )
+            .unwrap(),
+            WidgetFieldType::Number => write!(
+                out,
+                ", {}: entryDict[\"{}\"] as? Double ?? 0",
+                field_name, field_name
+            )
+            .unwrap(),
+            WidgetFieldType::Boolean => write!(
+                out,
+                ", {}: entryDict[\"{}\"] as? Bool ?? false",
+                field_name, field_name
+            )
+            .unwrap(),
+            _ => write!(
+                out,
+                ", {}: entryDict[\"{}\"] as? String ?? \"\"",
+                field_name, field_name
+            )
+            .unwrap(),
         }
     }
     writeln!(out, ")").unwrap();
     writeln!(out, "                timelineEntries.append(entry)").unwrap();
     writeln!(out, "            }}").unwrap();
-    writeln!(out, "            let reloadDate = Date().addingTimeInterval({})", reload_seconds).unwrap();
-    writeln!(out, "            let timeline = Timeline(entries: timelineEntries, policy: .after(reloadDate))").unwrap();
+    writeln!(
+        out,
+        "            let reloadDate = Date().addingTimeInterval({})",
+        reload_seconds
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "            let timeline = Timeline(entries: timelineEntries, policy: .after(reloadDate))"
+    )
+    .unwrap();
     writeln!(out, "            completion(timeline)").unwrap();
     writeln!(out, "        }} else {{").unwrap();
     writeln!(out, "            let entry = placeholder(in: context)").unwrap();
@@ -221,17 +306,31 @@ fn emit_native_timeline_provider(widget: &WidgetDecl, name: &str) -> String {
 }
 
 /// Emit an AppIntentTimelineProvider (has config params)
-fn emit_app_intent_timeline_provider(widget: &WidgetDecl, name: &str, has_provider: bool) -> String {
+fn emit_app_intent_timeline_provider(
+    widget: &WidgetDecl,
+    name: &str,
+    has_provider: bool,
+) -> String {
     let mut out = String::new();
     let reload_seconds = widget.reload_after_seconds.unwrap_or(1800);
 
     writeln!(out, "struct {}Provider: AppIntentTimelineProvider {{", name).unwrap();
-    writeln!(out, "    func placeholder(in context: Context) -> {}Entry {{", name).unwrap();
+    writeln!(
+        out,
+        "    func placeholder(in context: Context) -> {}Entry {{",
+        name
+    )
+    .unwrap();
     emit_placeholder_entry(&mut out, widget, name, "        ");
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
 
-    writeln!(out, "    func snapshot(for configuration: {}Intent, in context: Context) async -> {}Entry {{", name, name).unwrap();
+    writeln!(
+        out,
+        "    func snapshot(for configuration: {}Intent, in context: Context) async -> {}Entry {{",
+        name, name
+    )
+    .unwrap();
     writeln!(out, "        placeholder(in: context)").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
@@ -245,38 +344,91 @@ fn emit_app_intent_timeline_provider(widget: &WidgetDecl, name: &str, has_provid
         // Serialize config params to JSON
         write!(out, "        let configJson = \"{{").unwrap();
         for (i, param) in widget.config_params.iter().enumerate() {
-            if i > 0 { write!(out, ",").unwrap(); }
-            write!(out, "\\\"{}\\\":\\\"\\(configuration.{}.rawValue)\\\"", param.name, param.name).unwrap();
+            if i > 0 {
+                write!(out, ",").unwrap();
+            }
+            write!(
+                out,
+                "\\\"{}\\\":\\\"\\(configuration.{}.rawValue)\\\"",
+                param.name, param.name
+            )
+            .unwrap();
         }
         writeln!(out, "}}\"").unwrap();
 
-        writeln!(out, "        let configPtr = perry_nanbox_string(configJson)").unwrap();
+        writeln!(
+            out,
+            "        let configPtr = perry_nanbox_string(configJson)"
+        )
+        .unwrap();
         writeln!(out, "        let resultPtr = {}(configPtr)", func_name).unwrap();
         writeln!(out, "        let resultJson = perry_get_string(resultPtr)").unwrap();
         writeln!(out, "        if let data = resultJson.data(using: .utf8),").unwrap();
         writeln!(out, "           let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],").unwrap();
-        writeln!(out, "           let entries = result[\"entries\"] as? [[String: Any]] {{").unwrap();
+        writeln!(
+            out,
+            "           let entries = result[\"entries\"] as? [[String: Any]] {{"
+        )
+        .unwrap();
         writeln!(out, "            var timelineEntries: [{}Entry] = []", name).unwrap();
         writeln!(out, "            for entryDict in entries {{").unwrap();
-        write!(out, "                let entry = {}Entry(date: Date()", name).unwrap();
+        write!(
+            out,
+            "                let entry = {}Entry(date: Date()",
+            name
+        )
+        .unwrap();
         for (field_name, field_type) in &widget.entry_fields {
             match field_type {
-                WidgetFieldType::String => write!(out, ", {}: entryDict[\"{}\"] as? String ?? \"\"", field_name, field_name).unwrap(),
-                WidgetFieldType::Number => write!(out, ", {}: entryDict[\"{}\"] as? Double ?? 0", field_name, field_name).unwrap(),
-                WidgetFieldType::Boolean => write!(out, ", {}: entryDict[\"{}\"] as? Bool ?? false", field_name, field_name).unwrap(),
-                _ => write!(out, ", {}: entryDict[\"{}\"] as? String ?? \"\"", field_name, field_name).unwrap(),
+                WidgetFieldType::String => write!(
+                    out,
+                    ", {}: entryDict[\"{}\"] as? String ?? \"\"",
+                    field_name, field_name
+                )
+                .unwrap(),
+                WidgetFieldType::Number => write!(
+                    out,
+                    ", {}: entryDict[\"{}\"] as? Double ?? 0",
+                    field_name, field_name
+                )
+                .unwrap(),
+                WidgetFieldType::Boolean => write!(
+                    out,
+                    ", {}: entryDict[\"{}\"] as? Bool ?? false",
+                    field_name, field_name
+                )
+                .unwrap(),
+                _ => write!(
+                    out,
+                    ", {}: entryDict[\"{}\"] as? String ?? \"\"",
+                    field_name, field_name
+                )
+                .unwrap(),
             }
         }
         writeln!(out, ")").unwrap();
         writeln!(out, "                timelineEntries.append(entry)").unwrap();
         writeln!(out, "            }}").unwrap();
-        writeln!(out, "            let reloadDate = Date().addingTimeInterval({})", reload_seconds).unwrap();
-        writeln!(out, "            return Timeline(entries: timelineEntries, policy: .after(reloadDate))").unwrap();
+        writeln!(
+            out,
+            "            let reloadDate = Date().addingTimeInterval({})",
+            reload_seconds
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "            return Timeline(entries: timelineEntries, policy: .after(reloadDate))"
+        )
+        .unwrap();
         writeln!(out, "        }}").unwrap();
     }
 
     writeln!(out, "        let entry = placeholder(in: context)").unwrap();
-    writeln!(out, "        return Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(300)))").unwrap();
+    writeln!(
+        out,
+        "        return Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(300)))"
+    )
+    .unwrap();
     writeln!(out, "    }}").unwrap();
 
     writeln!(out, "}}").unwrap();
@@ -302,11 +454,20 @@ fn emit_placeholder_entry(out: &mut String, widget: &WidgetDecl, name: &str, ind
 }
 
 /// Emit a placeholder value as Swift source
-fn emit_placeholder_swift_value(val: &WidgetPlaceholderValue, _field_type: &WidgetFieldType) -> String {
+fn emit_placeholder_swift_value(
+    val: &WidgetPlaceholderValue,
+    _field_type: &WidgetFieldType,
+) -> String {
     match val {
         WidgetPlaceholderValue::String(s) => format!("\"{}\"", escape_swift_string(s)),
         WidgetPlaceholderValue::Number(n) => format_f64(*n),
-        WidgetPlaceholderValue::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        WidgetPlaceholderValue::Bool(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
         WidgetPlaceholderValue::Array(_) => "[]".to_string(),
         WidgetPlaceholderValue::Object(_) => "nil".to_string(),
         WidgetPlaceholderValue::Null => "nil".to_string(),
@@ -334,8 +495,17 @@ pub fn emit_app_intent_config(widget: &WidgetDecl, name: &str) -> String {
         if let WidgetConfigParamType::Enum { values, default } = &param.param_type {
             let enum_name = format!("{}{}Option", name, capitalize(&param.name));
             writeln!(out, "enum {}: String, AppEnum {{", enum_name).unwrap();
-            writeln!(out, "    static var typeDisplayRepresentation: TypeDisplayRepresentation = \"{}\"", param.title).unwrap();
-            writeln!(out, "    static var caseDisplayRepresentations: [Self: DisplayRepresentation] = [").unwrap();
+            writeln!(
+                out,
+                "    static var typeDisplayRepresentation: TypeDisplayRepresentation = \"{}\"",
+                param.title
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "    static var caseDisplayRepresentations: [Self: DisplayRepresentation] = ["
+            )
+            .unwrap();
             for val in values {
                 writeln!(out, "        .{}: \"{}\",", val, val).unwrap();
             }
@@ -352,22 +522,48 @@ pub fn emit_app_intent_config(widget: &WidgetDecl, name: &str) -> String {
 
     // Emit WidgetConfigurationIntent
     writeln!(out, "struct {}Intent: WidgetConfigurationIntent {{", name).unwrap();
-    writeln!(out, "    static var title: LocalizedStringResource = \"{}\"", widget.display_name).unwrap();
-    writeln!(out, "    static var description = IntentDescription(\"{}\")", widget.description).unwrap();
+    writeln!(
+        out,
+        "    static var title: LocalizedStringResource = \"{}\"",
+        widget.display_name
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    static var description = IntentDescription(\"{}\")",
+        widget.description
+    )
+    .unwrap();
     writeln!(out).unwrap();
     for param in &widget.config_params {
         match &param.param_type {
             WidgetConfigParamType::Enum { default, .. } => {
                 let enum_name = format!("{}{}Option", name, capitalize(&param.name));
-                writeln!(out, "    @Parameter(title: \"{}\", default: .{})", param.title, default).unwrap();
+                writeln!(
+                    out,
+                    "    @Parameter(title: \"{}\", default: .{})",
+                    param.title, default
+                )
+                .unwrap();
                 writeln!(out, "    var {}: {}", param.name, enum_name).unwrap();
             }
             WidgetConfigParamType::Bool { default } => {
-                writeln!(out, "    @Parameter(title: \"{}\", default: {})", param.title, default).unwrap();
+                writeln!(
+                    out,
+                    "    @Parameter(title: \"{}\", default: {})",
+                    param.title, default
+                )
+                .unwrap();
                 writeln!(out, "    var {}: Bool", param.name).unwrap();
             }
             WidgetConfigParamType::String { default } => {
-                writeln!(out, "    @Parameter(title: \"{}\", default: \"{}\")", param.title, escape_swift_string(default)).unwrap();
+                writeln!(
+                    out,
+                    "    @Parameter(title: \"{}\", default: \"{}\")",
+                    param.title,
+                    escape_swift_string(default)
+                )
+                .unwrap();
                 writeln!(out, "    var {}: String", param.name).unwrap();
             }
         }
@@ -397,23 +593,45 @@ pub fn emit_widget_bundle(widget: &WidgetDecl, name: &str) -> String {
     if has_config {
         writeln!(out, "        AppIntentConfiguration(kind: kind, intent: {}Intent.self, provider: {}Provider()) {{ entry in", name, name).unwrap();
     } else {
-        writeln!(out, "        StaticConfiguration(kind: kind, provider: {}Provider()) {{ entry in", name).unwrap();
+        writeln!(
+            out,
+            "        StaticConfiguration(kind: kind, provider: {}Provider()) {{ entry in",
+            name
+        )
+        .unwrap();
     }
 
-    writeln!(out, "            {}View({}: entry)", name, widget.entry_param_name).unwrap();
+    writeln!(
+        out,
+        "            {}View({}: entry)",
+        name, widget.entry_param_name
+    )
+    .unwrap();
     writeln!(out, "        }}").unwrap();
 
     // Display name
     if !widget.display_name.is_empty() {
-        writeln!(out, "        .configurationDisplayName(\"{}\")", escape_swift_string(&widget.display_name)).unwrap();
+        writeln!(
+            out,
+            "        .configurationDisplayName(\"{}\")",
+            escape_swift_string(&widget.display_name)
+        )
+        .unwrap();
     }
     // Description
     if !widget.description.is_empty() {
-        writeln!(out, "        .description(\"{}\")", escape_swift_string(&widget.description)).unwrap();
+        writeln!(
+            out,
+            "        .description(\"{}\")",
+            escape_swift_string(&widget.description)
+        )
+        .unwrap();
     }
     // Supported families
     if !widget.supported_families.is_empty() {
-        let families: Vec<String> = widget.supported_families.iter()
+        let families: Vec<String> = widget
+            .supported_families
+            .iter()
             .map(|f| format!(".{}", f))
             .collect();
         writeln!(out, "        .supportedFamilies([{}])", families.join(", ")).unwrap();
@@ -438,13 +656,25 @@ pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
     writeln!(out, "func perry_runtime_widget_init()").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "@_silgen_name(\"js_nanbox_string\")").unwrap();
-    writeln!(out, "func perry_nanbox_string(_ s: UnsafePointer<CChar>) -> Int64").unwrap();
+    writeln!(
+        out,
+        "func perry_nanbox_string(_ s: UnsafePointer<CChar>) -> Int64"
+    )
+    .unwrap();
     writeln!(out).unwrap();
     writeln!(out, "@_silgen_name(\"js_get_string_pointer_unified\")").unwrap();
-    writeln!(out, "func perry_get_string_ptr(_ val: Int64) -> UnsafePointer<CChar>").unwrap();
+    writeln!(
+        out,
+        "func perry_get_string_ptr(_ val: Int64) -> UnsafePointer<CChar>"
+    )
+    .unwrap();
     writeln!(out).unwrap();
     writeln!(out, "func perry_nanbox_string(_ s: String) -> Int64 {{").unwrap();
-    writeln!(out, "    return s.withCString {{ perry_nanbox_string($0) }}").unwrap();
+    writeln!(
+        out,
+        "    return s.withCString {{ perry_nanbox_string($0) }}"
+    )
+    .unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "func perry_get_string(_ val: Int64) -> String {{").unwrap();
@@ -461,11 +691,24 @@ pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
 
     // sharedStorage bridge
     if let Some(ref app_group) = widget.app_group {
-        writeln!(out, "// Shared storage bridge — called from native provider code").unwrap();
+        writeln!(
+            out,
+            "// Shared storage bridge — called from native provider code"
+        )
+        .unwrap();
         writeln!(out, "@_cdecl(\"perry_widget_shared_storage_get\")").unwrap();
-        writeln!(out, "func widgetSharedStorageGet(_ keyPtr: Int64) -> Int64 {{").unwrap();
+        writeln!(
+            out,
+            "func widgetSharedStorageGet(_ keyPtr: Int64) -> Int64 {{"
+        )
+        .unwrap();
         writeln!(out, "    let key = perry_get_string(keyPtr)").unwrap();
-        writeln!(out, "    let value = UserDefaults(suiteName: \"{}\")?.string(forKey: key) ?? \"\"", escape_swift_string(app_group)).unwrap();
+        writeln!(
+            out,
+            "    let value = UserDefaults(suiteName: \"{}\")?.string(forKey: key) ?? \"\"",
+            escape_swift_string(app_group)
+        )
+        .unwrap();
         writeln!(out, "    return perry_nanbox_string(value)").unwrap();
         writeln!(out, "}}").unwrap();
     }
@@ -486,7 +729,12 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             emit_modifiers(&mut out, modifiers, indent);
             writeln!(out).unwrap();
         }
-        WidgetNode::Stack { kind, spacing, children, modifiers } => {
+        WidgetNode::Stack {
+            kind,
+            spacing,
+            children,
+            modifiers,
+        } => {
             let stack_name = match kind {
                 WidgetStackKind::VStack => "VStack",
                 WidgetStackKind::HStack => "HStack",
@@ -505,8 +753,17 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             emit_modifiers(&mut out, modifiers, indent);
             writeln!(out).unwrap();
         }
-        WidgetNode::Image { system_name, modifiers } => {
-            write!(out, "{}Image(systemName: \"{}\")", pad, escape_swift_string(system_name)).unwrap();
+        WidgetNode::Image {
+            system_name,
+            modifiers,
+        } => {
+            write!(
+                out,
+                "{}Image(systemName: \"{}\")",
+                pad,
+                escape_swift_string(system_name)
+            )
+            .unwrap();
             emit_modifiers(&mut out, modifiers, indent);
             writeln!(out).unwrap();
         }
@@ -516,7 +773,13 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
         WidgetNode::Divider => {
             writeln!(out, "{}Divider()", pad).unwrap();
         }
-        WidgetNode::Conditional { field, op, value, then_node, else_node } => {
+        WidgetNode::Conditional {
+            field,
+            op,
+            value,
+            then_node,
+            else_node,
+        } => {
             let cond = emit_condition(field, op, value, entry_param);
             writeln!(out, "{}if {} {{", pad, cond).unwrap();
             out.push_str(&emit_node(then_node, entry_param, indent + 1));
@@ -526,14 +789,34 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             }
             writeln!(out, "{}}}", pad).unwrap();
         }
-        WidgetNode::ForEach { collection_field, item_param, body } => {
-            writeln!(out, "{}ForEach({}.{}, id: \\.self) {{ {} in", pad, entry_param, collection_field, item_param).unwrap();
+        WidgetNode::ForEach {
+            collection_field,
+            item_param,
+            body,
+        } => {
+            writeln!(
+                out,
+                "{}ForEach({}.{}, id: \\.self) {{ {} in",
+                pad, entry_param, collection_field, item_param
+            )
+            .unwrap();
             out.push_str(&emit_node(body, item_param, indent + 1));
             writeln!(out, "{}}}", pad).unwrap();
         }
-        WidgetNode::Label { text, system_image, modifiers } => {
+        WidgetNode::Label {
+            text,
+            system_image,
+            modifiers,
+        } => {
             let text_arg = emit_text_content(text, entry_param);
-            write!(out, "{}Label({}, systemImage: \"{}\")", pad, text_arg, escape_swift_string(system_image)).unwrap();
+            write!(
+                out,
+                "{}Label({}, systemImage: \"{}\")",
+                pad,
+                text_arg,
+                escape_swift_string(system_image)
+            )
+            .unwrap();
             emit_modifiers(&mut out, modifiers, indent);
             writeln!(out).unwrap();
         }
@@ -552,23 +835,38 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             }
             writeln!(out, "{}}}", pad).unwrap();
         }
-        WidgetNode::Gauge { value_expr, label, style, modifiers } => {
+        WidgetNode::Gauge {
+            value_expr,
+            label,
+            style,
+            modifiers,
+        } => {
             // Parse value expression for entry param references
-            let value_str = if value_expr.contains('/') || value_expr.contains('*') || value_expr.contains(' ') {
-                // Complex expression like "totalClicks / clicksGoal" → entry.totalClicks / entry.clicksGoal
-                value_expr.split_whitespace()
-                    .map(|part| {
-                        if part.len() > 1 && part.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) && !matches!(part, "/" | "*" | "+" | "-") {
-                            format!("{}.{}", entry_param, part)
-                        } else {
-                            part.to_string()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            } else {
-                format!("{}.{}", entry_param, value_expr)
-            };
+            let value_str =
+                if value_expr.contains('/') || value_expr.contains('*') || value_expr.contains(' ')
+                {
+                    // Complex expression like "totalClicks / clicksGoal" → entry.totalClicks / entry.clicksGoal
+                    value_expr
+                        .split_whitespace()
+                        .map(|part| {
+                            if part.len() > 1
+                                && part
+                                    .chars()
+                                    .next()
+                                    .map(|c| c.is_alphabetic())
+                                    .unwrap_or(false)
+                                && !matches!(part, "/" | "*" | "+" | "-")
+                            {
+                                format!("{}.{}", entry_param, part)
+                            } else {
+                                part.to_string()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    format!("{}.{}", entry_param, value_expr)
+                };
 
             writeln!(out, "{}Gauge(value: {}) {{", pad, value_str).unwrap();
             writeln!(out, "{}    Text(\"{}\")", pad, escape_swift_string(label)).unwrap();
@@ -616,7 +914,12 @@ fn emit_text_content(content: &WidgetTextContent, entry_param: &str) -> String {
 }
 
 /// Emit a condition expression
-fn emit_condition(field: &str, op: &WidgetConditionOp, value: &WidgetTextContent, entry_param: &str) -> String {
+fn emit_condition(
+    field: &str,
+    op: &WidgetConditionOp,
+    value: &WidgetTextContent,
+    entry_param: &str,
+) -> String {
     let lhs = format!("{}.{}", entry_param, field);
     match op {
         WidgetConditionOp::Truthy => lhs,
@@ -658,7 +961,9 @@ fn emit_modifiers(out: &mut String, modifiers: &[WidgetModifier], _indent: usize
             WidgetModifier::Font(font) => {
                 let font_str = match font {
                     WidgetFont::System(size) => format!(".system(size: {})", format_f64(*size)),
-                    WidgetFont::Named(name) => format!(".custom(\"{}\", size: 17)", escape_swift_string(name)),
+                    WidgetFont::Named(name) => {
+                        format!(".custom(\"{}\", size: 17)", escape_swift_string(name))
+                    }
                     WidgetFont::Headline => ".headline".to_string(),
                     WidgetFont::Title => ".title".to_string(),
                     WidgetFont::Title2 => ".title2".to_string(),
@@ -715,16 +1020,34 @@ fn emit_modifiers(out: &mut String, modifiers: &[WidgetModifier], _indent: usize
             }
             WidgetModifier::ContainerBackground(color) => {
                 let swift_color = swift_color_expr(color);
-                write!(out, "\n{}    .containerBackground({}.gradient, for: .widget)", pad, swift_color).unwrap();
+                write!(
+                    out,
+                    "\n{}    .containerBackground({}.gradient, for: .widget)",
+                    pad, swift_color
+                )
+                .unwrap();
             }
             WidgetModifier::FrameMaxWidth => {
                 write!(out, "\n{}    .frame(maxWidth: .infinity)", pad).unwrap();
             }
             WidgetModifier::WidgetURL(url) => {
-                write!(out, "\n{}    .widgetURL(URL(string: \"{}\")!)", pad, escape_swift_string(url)).unwrap();
+                write!(
+                    out,
+                    "\n{}    .widgetURL(URL(string: \"{}\")!)",
+                    pad,
+                    escape_swift_string(url)
+                )
+                .unwrap();
             }
             WidgetModifier::PaddingEdge { edge, value } => {
-                write!(out, "\n{}    .padding(.{}, {})", pad, edge, format_f64(*value)).unwrap();
+                write!(
+                    out,
+                    "\n{}    .padding(.{}, {})",
+                    pad,
+                    edge,
+                    format_f64(*value)
+                )
+                .unwrap();
             }
         }
     }
@@ -779,10 +1102,10 @@ fn format_f64(v: f64) -> String {
 /// Escape a string for Swift string literals
 fn escape_swift_string(s: &str) -> String {
     s.replace('\\', "\\\\")
-     .replace('"', "\\\"")
-     .replace('\n', "\\n")
-     .replace('\r', "\\r")
-     .replace('\t', "\\t")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 #[cfg(test)]
@@ -818,18 +1141,14 @@ mod tests {
             display_name: "Hello Widget".to_string(),
             description: "A simple hello widget".to_string(),
             supported_families: vec!["systemSmall".to_string()],
-            entry_fields: vec![
-                ("greeting".to_string(), WidgetFieldType::String),
-            ],
-            render_body: vec![
-                WidgetNode::Text {
-                    content: WidgetTextContent::Field("greeting".to_string()),
-                    modifiers: vec![
-                        WidgetModifier::Font(WidgetFont::Title),
-                        WidgetModifier::ForegroundColor("blue".to_string()),
-                    ],
-                },
-            ],
+            entry_fields: vec![("greeting".to_string(), WidgetFieldType::String)],
+            render_body: vec![WidgetNode::Text {
+                content: WidgetTextContent::Field("greeting".to_string()),
+                modifiers: vec![
+                    WidgetModifier::Font(WidgetFont::Title),
+                    WidgetModifier::ForegroundColor("blue".to_string()),
+                ],
+            }],
             entry_param_name: "entry".to_string(),
             config_params: vec![],
             provider_func_name: None,
@@ -855,26 +1174,24 @@ mod tests {
                 ("title".to_string(), WidgetFieldType::String),
                 ("count".to_string(), WidgetFieldType::Number),
             ],
-            vec![
-                WidgetNode::Stack {
-                    kind: WidgetStackKind::VStack,
-                    spacing: Some(8.0),
-                    children: vec![
-                        WidgetNode::Text {
-                            content: WidgetTextContent::Field("title".to_string()),
-                            modifiers: vec![WidgetModifier::Font(WidgetFont::Headline)],
-                        },
-                        WidgetNode::Text {
-                            content: WidgetTextContent::Template(vec![
-                                WidgetTemplatePart::Literal("Count: ".to_string()),
-                                WidgetTemplatePart::Field("count".to_string()),
-                            ]),
-                            modifiers: vec![],
-                        },
-                    ],
-                    modifiers: vec![WidgetModifier::Padding(16.0)],
-                },
-            ],
+            vec![WidgetNode::Stack {
+                kind: WidgetStackKind::VStack,
+                spacing: Some(8.0),
+                children: vec![
+                    WidgetNode::Text {
+                        content: WidgetTextContent::Field("title".to_string()),
+                        modifiers: vec![WidgetModifier::Font(WidgetFont::Headline)],
+                    },
+                    WidgetNode::Text {
+                        content: WidgetTextContent::Template(vec![
+                            WidgetTemplatePart::Literal("Count: ".to_string()),
+                            WidgetTemplatePart::Field("count".to_string()),
+                        ]),
+                        modifiers: vec![],
+                    },
+                ],
+                modifiers: vec![WidgetModifier::Padding(16.0)],
+            }],
         );
 
         let view = emit_view(&widget, "Stack");
@@ -888,14 +1205,18 @@ mod tests {
         let widget = make_widget(
             "com.test.Entry",
             vec![
-                ("sites".to_string(), WidgetFieldType::Array(Box::new(
-                    WidgetFieldType::Object(vec![
+                (
+                    "sites".to_string(),
+                    WidgetFieldType::Array(Box::new(WidgetFieldType::Object(vec![
                         ("url".to_string(), WidgetFieldType::String),
                         ("clicks".to_string(), WidgetFieldType::Number),
-                    ])
-                ))),
+                    ]))),
+                ),
                 ("totalClicks".to_string(), WidgetFieldType::Number),
-                ("error".to_string(), WidgetFieldType::Optional(Box::new(WidgetFieldType::String))),
+                (
+                    "error".to_string(),
+                    WidgetFieldType::Optional(Box::new(WidgetFieldType::String)),
+                ),
             ],
             vec![],
         );
@@ -914,21 +1235,19 @@ mod tests {
         let widget = make_widget(
             "com.test.Cond",
             vec![("count".to_string(), WidgetFieldType::Number)],
-            vec![
-                WidgetNode::Conditional {
-                    field: "count".to_string(),
-                    op: WidgetConditionOp::GreaterThan,
-                    value: WidgetTextContent::Literal("0".to_string()),
-                    then_node: Box::new(WidgetNode::Text {
-                        content: WidgetTextContent::Literal("Has items".to_string()),
-                        modifiers: vec![],
-                    }),
-                    else_node: Some(Box::new(WidgetNode::Text {
-                        content: WidgetTextContent::Literal("Empty".to_string()),
-                        modifiers: vec![],
-                    })),
-                },
-            ],
+            vec![WidgetNode::Conditional {
+                field: "count".to_string(),
+                op: WidgetConditionOp::GreaterThan,
+                value: WidgetTextContent::Literal("0".to_string()),
+                then_node: Box::new(WidgetNode::Text {
+                    content: WidgetTextContent::Literal("Has items".to_string()),
+                    modifiers: vec![],
+                }),
+                else_node: Some(Box::new(WidgetNode::Text {
+                    content: WidgetTextContent::Literal("Empty".to_string()),
+                    modifiers: vec![],
+                })),
+            }],
         );
 
         let view = emit_view(&widget, "Cond");
@@ -942,19 +1261,18 @@ mod tests {
     fn test_foreach() {
         let widget = make_widget(
             "com.test.ForEach",
-            vec![
-                ("items".to_string(), WidgetFieldType::Array(Box::new(WidgetFieldType::String))),
-            ],
-            vec![
-                WidgetNode::ForEach {
-                    collection_field: "items".to_string(),
-                    item_param: "item".to_string(),
-                    body: Box::new(WidgetNode::Text {
-                        content: WidgetTextContent::Field("item".to_string()),
-                        modifiers: vec![],
-                    }),
-                },
-            ],
+            vec![(
+                "items".to_string(),
+                WidgetFieldType::Array(Box::new(WidgetFieldType::String)),
+            )],
+            vec![WidgetNode::ForEach {
+                collection_field: "items".to_string(),
+                item_param: "item".to_string(),
+                body: Box::new(WidgetNode::Text {
+                    content: WidgetTextContent::Field("item".to_string()),
+                    modifiers: vec![],
+                }),
+            }],
         );
 
         let view = emit_view(&widget, "ForEach");
@@ -985,17 +1303,13 @@ mod tests {
     fn test_gauge() {
         let widget = make_widget(
             "com.test.Gauge",
-            vec![
-                ("progress".to_string(), WidgetFieldType::Number),
-            ],
-            vec![
-                WidgetNode::Gauge {
-                    value_expr: "progress".to_string(),
-                    label: "Done".to_string(),
-                    style: GaugeStyle::Circular,
-                    modifiers: vec![],
-                },
-            ],
+            vec![("progress".to_string(), WidgetFieldType::Number)],
+            vec![WidgetNode::Gauge {
+                value_expr: "progress".to_string(),
+                label: "Done".to_string(),
+                style: GaugeStyle::Circular,
+                modifiers: vec![],
+            }],
         );
 
         let view = emit_view(&widget, "Gauge");
@@ -1009,20 +1323,19 @@ mod tests {
         let widget = make_widget(
             "com.test.Family",
             vec![("title".to_string(), WidgetFieldType::String)],
-            vec![
-                WidgetNode::FamilySwitch {
-                    cases: vec![
-                        ("systemSmall".to_string(), WidgetNode::Text {
-                            content: WidgetTextContent::Literal("Small".to_string()),
-                            modifiers: vec![],
-                        }),
-                    ],
-                    default: Some(Box::new(WidgetNode::Text {
-                        content: WidgetTextContent::Literal("Default".to_string()),
+            vec![WidgetNode::FamilySwitch {
+                cases: vec![(
+                    "systemSmall".to_string(),
+                    WidgetNode::Text {
+                        content: WidgetTextContent::Literal("Small".to_string()),
                         modifiers: vec![],
-                    })),
-                },
-            ],
+                    },
+                )],
+                default: Some(Box::new(WidgetNode::Text {
+                    content: WidgetTextContent::Literal("Default".to_string()),
+                    modifiers: vec![],
+                })),
+            }],
         );
 
         let mut w = widget.clone();
@@ -1041,17 +1354,15 @@ mod tests {
         let widget = make_widget(
             "com.test.Modifiers",
             vec![],
-            vec![
-                WidgetNode::Text {
-                    content: WidgetTextContent::Literal("Hello".to_string()),
-                    modifiers: vec![
-                        WidgetModifier::MinimumScaleFactor(0.5),
-                        WidgetModifier::FrameMaxWidth,
-                        WidgetModifier::WidgetURL("myapp://home".to_string()),
-                        WidgetModifier::ContainerBackground("blue".to_string()),
-                    ],
-                },
-            ],
+            vec![WidgetNode::Text {
+                content: WidgetTextContent::Literal("Hello".to_string()),
+                modifiers: vec![
+                    WidgetModifier::MinimumScaleFactor(0.5),
+                    WidgetModifier::FrameMaxWidth,
+                    WidgetModifier::WidgetURL("myapp://home".to_string()),
+                    WidgetModifier::ContainerBackground("blue".to_string()),
+                ],
+            }],
         );
 
         let view = emit_view(&widget, "Modifiers");

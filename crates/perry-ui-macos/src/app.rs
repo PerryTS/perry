@@ -5,8 +5,8 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEventModifierFlags,
     NSImage, NSLayoutConstraint, NSMenu, NSMenuItem, NSWindow, NSWindowStyleMask,
 };
-use objc2_core_foundation::{CGPoint, CGSize, CGRect};
-use objc2_foundation::{NSObject, NSString, MainThreadMarker};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use objc2_foundation::{MainThreadMarker, NSObject, NSString};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -271,41 +271,60 @@ fn setup_menu_bar(app: &NSApplication, mtm: MainThreadMarker) {
             let edit_menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Edit"));
 
             let undo_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm), &NSString::from_str("Undo"),
-                Some(Sel::register(c"undo:")), &NSString::from_str("z"));
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Undo"),
+                Some(Sel::register(c"undo:")),
+                &NSString::from_str("z"),
+            );
             undo_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
             edit_menu.addItem(&undo_item);
 
             let redo_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm), &NSString::from_str("Redo"),
-                Some(Sel::register(c"redo:")), &NSString::from_str("z"));
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Redo"),
+                Some(Sel::register(c"redo:")),
+                &NSString::from_str("z"),
+            );
             redo_item.setKeyEquivalentModifierMask(
-                NSEventModifierFlags::Command | NSEventModifierFlags::Shift);
+                NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+            );
             edit_menu.addItem(&redo_item);
 
             edit_menu.addItem(&NSMenuItem::separatorItem(mtm));
 
             let cut_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm), &NSString::from_str("Cut"),
-                Some(Sel::register(c"cut:")), &NSString::from_str("x"));
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Cut"),
+                Some(Sel::register(c"cut:")),
+                &NSString::from_str("x"),
+            );
             cut_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
             edit_menu.addItem(&cut_item);
 
             let copy_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm), &NSString::from_str("Copy"),
-                Some(Sel::register(c"copy:")), &NSString::from_str("c"));
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Copy"),
+                Some(Sel::register(c"copy:")),
+                &NSString::from_str("c"),
+            );
             copy_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
             edit_menu.addItem(&copy_item);
 
             let paste_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm), &NSString::from_str("Paste"),
-                Some(Sel::register(c"paste:")), &NSString::from_str("v"));
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Paste"),
+                Some(Sel::register(c"paste:")),
+                &NSString::from_str("v"),
+            );
             paste_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
             edit_menu.addItem(&paste_item);
 
             let select_all_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm), &NSString::from_str("Select All"),
-                Some(Sel::register(c"selectAll:")), &NSString::from_str("a"));
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Select All"),
+                Some(Sel::register(c"selectAll:")),
+                &NSString::from_str("a"),
+            );
             select_all_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
             edit_menu.addItem(&select_all_item);
 
@@ -317,24 +336,34 @@ fn setup_menu_bar(app: &NSApplication, mtm: MainThreadMarker) {
         // re-open the main window after closing it (required by App Store guidelines).
         {
             let window_menu_item = NSMenuItem::new(mtm);
-            let window_menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Window"));
+            let window_menu =
+                NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Window"));
 
             let minimize_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm), &NSString::from_str("Minimize"),
-                Some(Sel::register(c"performMiniaturize:")), &NSString::from_str("m"));
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Minimize"),
+                Some(Sel::register(c"performMiniaturize:")),
+                &NSString::from_str("m"),
+            );
             minimize_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
             window_menu.addItem(&minimize_item);
 
             let zoom_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm), &NSString::from_str("Zoom"),
-                Some(Sel::register(c"performZoom:")), &NSString::from_str(""));
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Zoom"),
+                Some(Sel::register(c"performZoom:")),
+                &NSString::from_str(""),
+            );
             window_menu.addItem(&zoom_item);
 
             window_menu.addItem(&NSMenuItem::separatorItem(mtm));
 
             let show_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm), &NSString::from_str("Show Main Window"),
-                Some(Sel::register(c"perryShowMainWindow:")), &NSString::from_str(""));
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Show Main Window"),
+                Some(Sel::register(c"perryShowMainWindow:")),
+                &NSString::from_str(""),
+            );
             // Target is the delegate so our custom action fires
             show_item.setTarget(None);
             window_menu.addItem(&show_item);
@@ -399,9 +428,7 @@ pub fn app_run(_app_handle: i64) {
             // the window could be completely off-screen.
             unsafe {
                 let frame: CGRect = msg_send![&*entry.window, frame];
-                let screens: Retained<AnyObject> = msg_send![
-                    objc2::class!(NSScreen), screens
-                ];
+                let screens: Retained<AnyObject> = msg_send![objc2::class!(NSScreen), screens];
                 let screen_count: usize = msg_send![&*screens, count];
 
                 let mut on_screen = false;
@@ -502,9 +529,13 @@ pub fn app_run(_app_handle: i64) {
         }
         unsafe {
             perry_geisterhand_register_state_set(crate::perry_ui_state_set);
-            perry_geisterhand_register_screenshot_capture(crate::screenshot::perry_ui_screenshot_capture);
+            perry_geisterhand_register_screenshot_capture(
+                crate::screenshot::perry_ui_screenshot_capture,
+            );
             perry_geisterhand_register_textfield_set_string(crate::perry_ui_textfield_set_string);
-            perry_geisterhand_register_scroll_set(crate::widgets::scrollview::perry_ui_scroll_set_offset);
+            perry_geisterhand_register_scroll_set(
+                crate::widgets::scrollview::perry_ui_scroll_set_offset,
+            );
             perry_geisterhand_register_read_value(crate::widgets::perry_ui_read_widget_value);
             perry_geisterhand_register_query_tree(crate::widgets::perry_ui_query_widget_tree);
             perry_geisterhand_register_apply_style(crate::geisterhand_style::apply_style);
@@ -607,10 +638,7 @@ pub fn app_set_size(app_handle: i64, width: f64, height: f64) {
             let window = &apps[idx].window;
             unsafe {
                 let frame: CGRect = msg_send![window, frame];
-                let new_frame = CGRect::new(
-                    frame.origin,
-                    CGSize::new(width, height),
-                );
+                let new_frame = CGRect::new(frame.origin, CGSize::new(width, height));
                 let _: () = msg_send![window, setFrame: new_frame display: true animate: true];
             }
         }
@@ -700,17 +728,35 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
                 // Force the window to accept key status so text fields work.
                 // Use raw ObjC runtime C calls to create a subclass.
                 extern "C" {
-                    fn objc_allocateClassPair(superclass: *const std::ffi::c_void, name: *const i8, extra: usize) -> *mut std::ffi::c_void;
+                    fn objc_allocateClassPair(
+                        superclass: *const std::ffi::c_void,
+                        name: *const i8,
+                        extra: usize,
+                    ) -> *mut std::ffi::c_void;
                     fn objc_registerClassPair(cls: *mut std::ffi::c_void);
-                    fn class_addMethod(cls: *mut std::ffi::c_void, sel: *const std::ffi::c_void, imp: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i8, types: *const i8) -> i8;
-                    fn object_setClass(obj: *mut std::ffi::c_void, cls: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+                    fn class_addMethod(
+                        cls: *mut std::ffi::c_void,
+                        sel: *const std::ffi::c_void,
+                        imp: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i8,
+                        types: *const i8,
+                    ) -> i8;
+                    fn object_setClass(
+                        obj: *mut std::ffi::c_void,
+                        cls: *mut std::ffi::c_void,
+                    ) -> *mut std::ffi::c_void;
                     fn sel_registerName(name: *const i8) -> *mut std::ffi::c_void;
                     fn object_getClass(obj: *const std::ffi::c_void) -> *mut std::ffi::c_void;
                 }
-                extern "C" fn can_become_key(_this: *mut std::ffi::c_void, _sel: *mut std::ffi::c_void) -> i8 { 1 }
+                extern "C" fn can_become_key(
+                    _this: *mut std::ffi::c_void,
+                    _sel: *mut std::ffi::c_void,
+                ) -> i8 {
+                    1
+                }
                 let window_ptr = &**window as *const NSWindow as *mut std::ffi::c_void;
                 let parent_class = object_getClass(window_ptr);
-                let subclass_name = std::ffi::CString::new(format!("PerryKeyableWindow_{}", app_handle)).unwrap();
+                let subclass_name =
+                    std::ffi::CString::new(format!("PerryKeyableWindow_{}", app_handle)).unwrap();
                 let existing = objc2::runtime::AnyClass::get(&subclass_name);
                 let new_class = if existing.is_some() {
                     existing.unwrap() as *const _ as *mut std::ffi::c_void
@@ -725,13 +771,12 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
                 };
                 if !new_class.is_null() {
                     object_setClass(window_ptr, new_class);
-                    let _: () = msg_send![window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+                    let _: () =
+                        msg_send![window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
                 }
                 // Make window transparent so rounded corners show through
                 let _: () = msg_send![window, setOpaque: false];
-                let clear_color: *const AnyObject = msg_send![
-                    objc2::class!(NSColor), clearColor
-                ];
+                let clear_color: *const AnyObject = msg_send![objc2::class!(NSColor), clearColor];
                 let _: () = msg_send![window, setBackgroundColor: clear_color];
                 let _: () = msg_send![window, setHasShadow: true];
                 // Defer rounded corners to app_run, after vibrancy/body are set up
@@ -782,9 +827,8 @@ pub fn app_set_transparent(app_handle: i64, value: f64) {
             unsafe {
                 let _: () = msg_send![window, setOpaque: false];
                 // NSColor.clearColor
-                let clear_color: *const objc2::runtime::AnyObject = msg_send![
-                    objc2::class!(NSColor), clearColor
-                ];
+                let clear_color: *const objc2::runtime::AnyObject =
+                    msg_send![objc2::class!(NSColor), clearColor];
                 let _: () = msg_send![window, setBackgroundColor: clear_color];
             }
         }
@@ -829,9 +873,8 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
 
                 // Make window transparent so vibrancy shows through
                 let _: () = msg_send![window, setOpaque: false];
-                let clear_color: *const objc2::runtime::AnyObject = msg_send![
-                    objc2::class!(NSColor), clearColor
-                ];
+                let clear_color: *const objc2::runtime::AnyObject =
+                    msg_send![objc2::class!(NSColor), clearColor];
                 let _: () = msg_send![window, setBackgroundColor: clear_color];
 
                 // Create NSVisualEffectView sized to the window
@@ -879,7 +922,9 @@ pub fn app_set_activation_policy(_app_handle: i64, value_ptr: *const u8) {
 /// `callback` is a NaN-boxed closure pointer.
 pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64) {
     let key_str = str_from_header(key_ptr);
-    if key_str.is_empty() { return; }
+    if key_str.is_empty() {
+        return;
+    }
 
     let callback_ptr = unsafe { js_nanbox_get_pointer(callback) } as usize;
     let mod_bits = modifiers as u64;
@@ -888,10 +933,18 @@ pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64)
     // Map Perry modifier bits to NSEventModifierFlags raw values
     // Cmd = 1<<20, Shift = 1<<17, Option = 1<<19, Control = 1<<18
     let mut ns_mods: u64 = 0;
-    if mod_bits & 1 != 0 { ns_mods |= 1 << 20; } // Cmd
-    if mod_bits & 2 != 0 { ns_mods |= 1 << 17; } // Shift
-    if mod_bits & 4 != 0 { ns_mods |= 1 << 19; } // Option
-    if mod_bits & 8 != 0 { ns_mods |= 1 << 18; } // Control
+    if mod_bits & 1 != 0 {
+        ns_mods |= 1 << 20;
+    } // Cmd
+    if mod_bits & 2 != 0 {
+        ns_mods |= 1 << 17;
+    } // Shift
+    if mod_bits & 4 != 0 {
+        ns_mods |= 1 << 19;
+    } // Option
+    if mod_bits & 8 != 0 {
+        ns_mods |= 1 << 18;
+    } // Control
 
     unsafe {
         // NSEventMask for keyDown = 1 << 10
@@ -900,13 +953,17 @@ pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64)
         // Global monitor (fires when app is NOT focused)
         let target_key_global = target_key.clone();
         let global_block = block2::RcBlock::new(move |event: *const AnyObject| {
-            if event.is_null() { return; }
+            if event.is_null() {
+                return;
+            }
             let chars: *const AnyObject = msg_send![event, charactersIgnoringModifiers];
             if !chars.is_null() {
                 let utf8: *const std::os::raw::c_char = msg_send![chars, UTF8String];
                 if !utf8.is_null() {
                     let event_key = std::ffi::CStr::from_ptr(utf8)
-                        .to_str().unwrap_or("").to_lowercase();
+                        .to_str()
+                        .unwrap_or("")
+                        .to_lowercase();
                     let event_mods: u64 = msg_send![event, modifierFlags];
                     // Mask to device-independent modifier flags only
                     let relevant_mods = event_mods & 0xFFFF0000;
@@ -927,23 +984,28 @@ pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64)
 
         // Local monitor (fires when app IS focused)
         let target_key_local = target_key;
-        let local_block = block2::RcBlock::new(move |event: *const AnyObject| -> *const AnyObject {
-            if event.is_null() { return event; }
-            let chars: *const AnyObject = msg_send![event, charactersIgnoringModifiers];
-            if !chars.is_null() {
-                let utf8: *const std::os::raw::c_char = msg_send![chars, UTF8String];
-                if !utf8.is_null() {
-                    let event_key = std::ffi::CStr::from_ptr(utf8)
-                        .to_str().unwrap_or("").to_lowercase();
-                    let event_mods: u64 = msg_send![event, modifierFlags];
-                    let relevant_mods = event_mods & 0xFFFF0000;
-                    if event_key == target_key_local && relevant_mods == ns_mods {
-                        js_closure_call0(callback_ptr as *const u8);
+        let local_block =
+            block2::RcBlock::new(move |event: *const AnyObject| -> *const AnyObject {
+                if event.is_null() {
+                    return event;
+                }
+                let chars: *const AnyObject = msg_send![event, charactersIgnoringModifiers];
+                if !chars.is_null() {
+                    let utf8: *const std::os::raw::c_char = msg_send![chars, UTF8String];
+                    if !utf8.is_null() {
+                        let event_key = std::ffi::CStr::from_ptr(utf8)
+                            .to_str()
+                            .unwrap_or("")
+                            .to_lowercase();
+                        let event_mods: u64 = msg_send![event, modifierFlags];
+                        let relevant_mods = event_mods & 0xFFFF0000;
+                        if event_key == target_key_local && relevant_mods == ns_mods {
+                            js_closure_call0(callback_ptr as *const u8);
+                        }
                     }
                 }
-            }
-            event // Return the event (don't consume it)
-        });
+                event // Return the event (don't consume it)
+            });
 
         let _: *const AnyObject = msg_send![
             ns_event_cls,
@@ -971,13 +1033,22 @@ pub fn add_keyboard_shortcut(key_ptr: *const u8, modifiers: f64, callback: f64) 
         install_keyboard_shortcut(key_ptr, modifiers, callback, mtm);
     } else {
         PENDING_SHORTCUTS.with(|ps| {
-            ps.borrow_mut().push(PendingShortcut { key_ptr, modifiers, callback });
+            ps.borrow_mut().push(PendingShortcut {
+                key_ptr,
+                modifiers,
+                callback,
+            });
         });
     }
 }
 
 /// Install a single keyboard shortcut into the existing app menu.
-fn install_keyboard_shortcut(key_ptr: *const u8, modifiers: f64, callback: f64, mtm: MainThreadMarker) {
+fn install_keyboard_shortcut(
+    key_ptr: *const u8,
+    modifiers: f64,
+    callback: f64,
+    mtm: MainThreadMarker,
+) {
     let key_str = str_from_header(key_ptr);
     let app = NSApplication::sharedApplication(mtm);
 
@@ -1002,10 +1073,18 @@ fn install_keyboard_shortcut(key_ptr: *const u8, modifiers: f64, callback: f64, 
         // Build modifier flags
         let mod_bits = modifiers as u64;
         let mut flags = NSEventModifierFlags::empty();
-        if mod_bits & 1 != 0 { flags |= NSEventModifierFlags::Command; }
-        if mod_bits & 2 != 0 { flags |= NSEventModifierFlags::Shift; }
-        if mod_bits & 4 != 0 { flags |= NSEventModifierFlags::Option; }
-        if mod_bits & 8 != 0 { flags |= NSEventModifierFlags::Control; }
+        if mod_bits & 1 != 0 {
+            flags |= NSEventModifierFlags::Command;
+        }
+        if mod_bits & 2 != 0 {
+            flags |= NSEventModifierFlags::Shift;
+        }
+        if mod_bits & 4 != 0 {
+            flags |= NSEventModifierFlags::Option;
+        }
+        if mod_bits & 8 != 0 {
+            flags |= NSEventModifierFlags::Control;
+        }
         item.setKeyEquivalentModifierMask(flags);
 
         item.setTarget(Some(&target));
@@ -1361,7 +1440,11 @@ pub fn register_on_activate(callback: f64) {
 
 /// Create a new window. Returns 1-based handle.
 pub fn window_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
-    let title = if title_ptr.is_null() { "Window" } else { str_from_header(title_ptr) };
+    let title = if title_ptr.is_null() {
+        "Window"
+    } else {
+        str_from_header(title_ptr)
+    };
     let w = if width > 0.0 { width } else { 400.0 };
     let h = if height > 0.0 { height } else { 300.0 };
 
@@ -1457,7 +1540,8 @@ pub fn window_set_size(window_handle: i64, width: f64, height: f64) {
                         CGPoint::new(frame.origin.x, frame.origin.y + dy),
                         CGSize::new(width, height),
                     );
-                    let _: () = objc2::msg_send![window, setFrame: new_frame display: true animate: false];
+                    let _: () =
+                        objc2::msg_send![window, setFrame: new_frame display: true animate: false];
                 }
             }
         });
@@ -1475,7 +1559,8 @@ pub fn window_set_size(window_handle: i64, width: f64, height: f64) {
                     CGPoint::new(frame.origin.x, frame.origin.y + dy),
                     CGSize::new(width, height),
                 );
-                let _: () = objc2::msg_send![window, setFrame: new_frame display: true animate: true];
+                let _: () =
+                    objc2::msg_send![window, setFrame: new_frame display: true animate: true];
             }
         }
     });
@@ -1500,9 +1585,8 @@ pub fn window_on_focus_lost(window_handle: i64, callback: f64) {
                 cbs.borrow_mut().insert(window_handle, callback);
             });
             unsafe {
-                let center: Retained<AnyObject> = objc2::msg_send![
-                    objc2::class!(NSNotificationCenter), defaultCenter
-                ];
+                let center: Retained<AnyObject> =
+                    objc2::msg_send![objc2::class!(NSNotificationCenter), defaultCenter];
                 let name = NSString::from_str("NSWindowDidResignKeyNotification");
                 let callback_copy = callback;
                 let block = block2::RcBlock::new(move |_notif: *const AnyObject| {
@@ -1533,7 +1617,9 @@ pub fn window_on_focus_lost(window_handle: i64, callback: f64) {
 /// intermediate objects to prevent use-after-free during AppKit event dispatch.
 pub fn get_app_icon(path_ptr: *const u8) -> i64 {
     let path = str_from_header(path_ptr);
-    if path.is_empty() { return 0; }
+    if path.is_empty() {
+        return 0;
+    }
 
     // Wrap in autorelease pool — required when called during callbacks where
     // AppKit may not have an active pool (e.g. TextField onChange).
@@ -1542,17 +1628,20 @@ pub fn get_app_icon(path_ptr: *const u8) -> i64 {
             let ns_path = NSString::from_str(path);
 
             // NSWorkspace.sharedWorkspace is a singleton — always valid on the main thread.
-            let workspace: *const AnyObject = msg_send![
-                objc2::class!(NSWorkspace), sharedWorkspace
-            ];
-            if workspace.is_null() { return 0; }
+            let workspace: *const AnyObject =
+                msg_send![objc2::class!(NSWorkspace), sharedWorkspace];
+            if workspace.is_null() {
+                return 0;
+            }
 
             // iconForFile: returns an autoreleased NSImage.
             // Retain it immediately so it survives pool drain.
             let icon_raw: *const AnyObject = msg_send![
                 workspace, iconForFile: &*ns_path
             ];
-            if icon_raw.is_null() { return 0; }
+            if icon_raw.is_null() {
+                return 0;
+            }
             let icon: Retained<AnyObject> = match Retained::retain(icon_raw as *mut AnyObject) {
                 Some(r) => r,
                 None => return 0,

@@ -105,8 +105,12 @@ pub fn create(_label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
 
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-            unsafe { perry_geisterhand_register(handle, 4, 1, on_change, std::ptr::null()); }
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 4, 1, on_change, std::ptr::null());
+            }
         }
 
         handle

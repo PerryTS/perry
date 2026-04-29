@@ -212,7 +212,8 @@ fn jsvalue_to_f64(v: f64) -> f64 {
         if !str_ptr.is_null() && (str_ptr as usize) >= 0x1000 {
             unsafe {
                 let len = (*str_ptr).byte_len as usize;
-                let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                let data =
+                    (str_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
                 if let Ok(s) = std::str::from_utf8(std::slice::from_raw_parts(data, len)) {
                     if let Ok(n) = s.trim().parse::<f64>() {
                         return n;
@@ -256,7 +257,7 @@ unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
                 } else if frac < 0.5 {
                     f
                 } else if f % 2.0 == 0.0 {
-                    f  // round half to even
+                    f // round half to even
                 } else {
                     f + 1.0
                 };
@@ -343,7 +344,11 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
     }
     if top16 < 0x7FFC || top16 > 0x7FFF {
         // Plain IEEE double (including negative, NaN, ±Inf).
-        let len = if val.is_finite() && val >= 0.0 { val as i32 } else { 0 };
+        let len = if val.is_finite() && val >= 0.0 {
+            val as i32
+        } else {
+            0
+        };
         return typed_array_alloc(kind as u8, len.max(0) as u32);
     }
     // Undefined / null / bool / string → empty typed array.
@@ -353,7 +358,10 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
 /// Allocate a typed array from a Perry array (each element coerced to the
 /// per-kind numeric type).
 #[no_mangle]
-pub extern "C" fn js_typed_array_new_from_array(kind: i32, arr: *const ArrayHeader) -> *mut TypedArrayHeader {
+pub extern "C" fn js_typed_array_new_from_array(
+    kind: i32,
+    arr: *const ArrayHeader,
+) -> *mut TypedArrayHeader {
     let kind = kind as u8;
     // Strip NaN-box from the array pointer if needed.
     let arr = {
@@ -460,7 +468,9 @@ pub extern "C" fn js_typed_array_to_reversed(ta: *const TypedArrayHeader) -> *mu
 
 /// `ta.toSorted()` — default ascending numeric sort.
 #[no_mangle]
-pub extern "C" fn js_typed_array_to_sorted_default(ta: *const TypedArrayHeader) -> *mut TypedArrayHeader {
+pub extern "C" fn js_typed_array_to_sorted_default(
+    ta: *const TypedArrayHeader,
+) -> *mut TypedArrayHeader {
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return typed_array_alloc(KIND_FLOAT64, 0);
@@ -625,7 +635,11 @@ fn format_typed_value(kind: u8, v: f64) -> String {
             if v.is_nan() {
                 "NaN".to_string()
             } else if v.is_infinite() {
-                if v > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+                if v > 0.0 {
+                    "Infinity".to_string()
+                } else {
+                    "-Infinity".to_string()
+                }
             } else if v == v.trunc() && v.abs() < 1e16 {
                 format!("{}", v as i64)
             } else {

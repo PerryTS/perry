@@ -17,13 +17,23 @@ pub fn emit_tile_service(widget: &WidgetDecl, name: &str, package: &str) -> Stri
     writeln!(out, "import androidx.wear.tiles.*").unwrap();
     writeln!(out, "import androidx.wear.tiles.material.*").unwrap();
     writeln!(out, "import androidx.wear.tiles.material.layouts.*").unwrap();
-    writeln!(out, "import com.google.android.horologist.annotations.ExperimentalHorologistApi").unwrap();
-    writeln!(out, "import com.google.android.horologist.tiles.SuspendingTileService").unwrap();
+    writeln!(
+        out,
+        "import com.google.android.horologist.annotations.ExperimentalHorologistApi"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "import com.google.android.horologist.tiles.SuspendingTileService"
+    )
+    .unwrap();
     writeln!(out).unwrap();
 
     // Data class for entry
     write!(out, "data class {}Entry(", name).unwrap();
-    let field_strs: Vec<String> = widget.entry_fields.iter()
+    let field_strs: Vec<String> = widget
+        .entry_fields
+        .iter()
         .map(|(fname, ftype)| format!("val {}: {}", fname, kotlin_type_for_field(ftype)))
         .collect();
     write!(out, "{}", field_strs.join(", ")).unwrap();
@@ -31,7 +41,12 @@ pub fn emit_tile_service(widget: &WidgetDecl, name: &str, package: &str) -> Stri
     writeln!(out).unwrap();
 
     writeln!(out, "@OptIn(ExperimentalHorologistApi::class)").unwrap();
-    writeln!(out, "class {}TileService : SuspendingTileService() {{", name).unwrap();
+    writeln!(
+        out,
+        "class {}TileService : SuspendingTileService() {{",
+        name
+    )
+    .unwrap();
     writeln!(out).unwrap();
 
     // resourcesRequest
@@ -46,10 +61,17 @@ pub fn emit_tile_service(widget: &WidgetDecl, name: &str, package: &str) -> Stri
     writeln!(out, "    override suspend fun tileRequest(requestParams: RequestBuilders.TileRequest): TileBuilders.Tile {{").unwrap();
 
     if widget.provider_func_name.is_some() {
-        writeln!(out, "        val {} = {}TileBridge.fetchEntry(this)", entry_param, name).unwrap();
+        writeln!(
+            out,
+            "        val {} = {}TileBridge.fetchEntry(this)",
+            entry_param, name
+        )
+        .unwrap();
     } else {
         write!(out, "        val {} = {}Entry(", entry_param, name).unwrap();
-        let defaults: Vec<String> = widget.entry_fields.iter()
+        let defaults: Vec<String> = widget
+            .entry_fields
+            .iter()
             .map(|(_, ftype)| kotlin_default_value(ftype))
             .collect();
         write!(out, "{}", defaults.join(", ")).unwrap();
@@ -57,9 +79,16 @@ pub fn emit_tile_service(widget: &WidgetDecl, name: &str, package: &str) -> Stri
     }
     writeln!(out).unwrap();
 
-    let reload_ms = widget.reload_after_seconds.map(|s| s as u64 * 1000).unwrap_or(3600000);
+    let reload_ms = widget
+        .reload_after_seconds
+        .map(|s| s as u64 * 1000)
+        .unwrap_or(3600000);
 
-    writeln!(out, "        val layout = LayoutElementBuilders.Column.Builder()").unwrap();
+    writeln!(
+        out,
+        "        val layout = LayoutElementBuilders.Column.Builder()"
+    )
+    .unwrap();
 
     // Emit the tile layout
     if widget.render_body.is_empty() {
@@ -78,13 +107,26 @@ pub fn emit_tile_service(widget: &WidgetDecl, name: &str, package: &str) -> Stri
     writeln!(out).unwrap();
     writeln!(out, "        return TileBuilders.Tile.Builder()").unwrap();
     writeln!(out, "            .setResourcesVersion(\"1\")").unwrap();
-    writeln!(out, "            .setFreshnessIntervalMillis({})", reload_ms).unwrap();
+    writeln!(
+        out,
+        "            .setFreshnessIntervalMillis({})",
+        reload_ms
+    )
+    .unwrap();
     writeln!(out, "            .setTileTimeline(").unwrap();
     writeln!(out, "                TimelineBuilders.Timeline.Builder()").unwrap();
     writeln!(out, "                    .addTimelineEntry(").unwrap();
-    writeln!(out, "                        TimelineBuilders.TimelineEntry.Builder()").unwrap();
+    writeln!(
+        out,
+        "                        TimelineBuilders.TimelineEntry.Builder()"
+    )
+    .unwrap();
     writeln!(out, "                            .setLayout(").unwrap();
-    writeln!(out, "                                LayoutElementBuilders.Layout.Builder()").unwrap();
+    writeln!(
+        out,
+        "                                LayoutElementBuilders.Layout.Builder()"
+    )
+    .unwrap();
     writeln!(out, "                                    .setRoot(layout)").unwrap();
     writeln!(out, "                                    .build()").unwrap();
     writeln!(out, "                            )").unwrap();
@@ -101,17 +143,34 @@ pub fn emit_tile_service(widget: &WidgetDecl, name: &str, package: &str) -> Stri
 /// Emit AndroidManifest service snippet for Wear OS tile
 pub fn emit_manifest_snippet(name: &str, package: &str) -> String {
     let mut out = String::new();
-    writeln!(out, "<!-- Add to AndroidManifest.xml inside <application> -->").unwrap();
+    writeln!(
+        out,
+        "<!-- Add to AndroidManifest.xml inside <application> -->"
+    )
+    .unwrap();
     writeln!(out, "<service").unwrap();
     writeln!(out, "    android:name=\"{}.{}TileService\"", package, name).unwrap();
     writeln!(out, "    android:exported=\"true\"").unwrap();
-    writeln!(out, "    android:permission=\"com.google.android.wearable.permission.BIND_TILE_PROVIDER\">").unwrap();
+    writeln!(
+        out,
+        "    android:permission=\"com.google.android.wearable.permission.BIND_TILE_PROVIDER\">"
+    )
+    .unwrap();
     writeln!(out, "    <intent-filter>").unwrap();
-    writeln!(out, "        <action android:name=\"androidx.wear.tiles.action.BIND_TILE_PROVIDER\" />").unwrap();
+    writeln!(
+        out,
+        "        <action android:name=\"androidx.wear.tiles.action.BIND_TILE_PROVIDER\" />"
+    )
+    .unwrap();
     writeln!(out, "    </intent-filter>").unwrap();
     writeln!(out, "    <meta-data").unwrap();
     writeln!(out, "        android:name=\"androidx.wear.tiles.PREVIEW\"").unwrap();
-    writeln!(out, "        android:resource=\"@drawable/{}_preview\" />", name.to_lowercase()).unwrap();
+    writeln!(
+        out,
+        "        android:resource=\"@drawable/{}_preview\" />",
+        name.to_lowercase()
+    )
+    .unwrap();
     writeln!(out, "</service>").unwrap();
     out
 }
@@ -131,7 +190,12 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             writeln!(out, "{}        .build()", pad).unwrap();
             writeln!(out, "{})", pad).unwrap();
         }
-        WidgetNode::Stack { kind, children, modifiers, spacing: _ } => {
+        WidgetNode::Stack {
+            kind,
+            children,
+            modifiers,
+            spacing: _,
+        } => {
             let builder = match kind {
                 WidgetStackKind::VStack => "Column",
                 WidgetStackKind::HStack => "Row",
@@ -139,7 +203,12 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             };
             let _ = modifiers;
             writeln!(out, "{}.addContent(", pad).unwrap();
-            writeln!(out, "{}    LayoutElementBuilders.{}.Builder()", pad, builder).unwrap();
+            writeln!(
+                out,
+                "{}    LayoutElementBuilders.{}.Builder()",
+                pad, builder
+            )
+            .unwrap();
             for child in children {
                 out.push_str(&emit_node(child, entry_param, indent + 2));
             }
@@ -161,14 +230,24 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             writeln!(out, "{}        .build()", pad).unwrap();
             writeln!(out, "{})", pad).unwrap();
         }
-        WidgetNode::Gauge { value_expr, label, style, modifiers } => {
+        WidgetNode::Gauge {
+            value_expr,
+            label,
+            style,
+            modifiers,
+        } => {
             let _ = modifiers;
             match style {
                 GaugeStyle::Circular => {
                     writeln!(out, "{}.addContent(", pad).unwrap();
                     writeln!(out, "{}    LayoutElementBuilders.Arc.Builder()", pad).unwrap();
                     writeln!(out, "{}        .addContent(", pad).unwrap();
-                    writeln!(out, "{}            LayoutElementBuilders.ArcLine.Builder()", pad).unwrap();
+                    writeln!(
+                        out,
+                        "{}            LayoutElementBuilders.ArcLine.Builder()",
+                        pad
+                    )
+                    .unwrap();
                     writeln!(out, "{}                .setLength(DimensionBuilders.degrees({}.{}.toFloat() * 360f))", pad, entry_param, value_expr).unwrap();
                     writeln!(out, "{}                .build()", pad).unwrap();
                     writeln!(out, "{}        )", pad).unwrap();
@@ -177,20 +256,39 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
                     writeln!(out, "{}// Gauge label: {}", pad, label).unwrap();
                 }
                 GaugeStyle::LinearCapacity => {
-                    writeln!(out, "{}// Linear gauge for: {} ({})", pad, label, value_expr).unwrap();
+                    writeln!(
+                        out,
+                        "{}// Linear gauge for: {} ({})",
+                        pad, label, value_expr
+                    )
+                    .unwrap();
                     writeln!(out, "{}.addContent(", pad).unwrap();
                     writeln!(out, "{}    LayoutElementBuilders.Text.Builder()", pad).unwrap();
-                    writeln!(out, "{}        .setText(\"{}: ${{{}.{}}}\")", pad, label, entry_param, value_expr).unwrap();
+                    writeln!(
+                        out,
+                        "{}        .setText(\"{}: ${{{}.{}}}\")",
+                        pad, label, entry_param, value_expr
+                    )
+                    .unwrap();
                     writeln!(out, "{}        .build()", pad).unwrap();
                     writeln!(out, "{})", pad).unwrap();
                 }
             }
         }
-        WidgetNode::Image { system_name, modifiers } => {
+        WidgetNode::Image {
+            system_name,
+            modifiers,
+        } => {
             let _ = modifiers;
             writeln!(out, "{}// Image: {} (provide resource)", pad, system_name).unwrap();
         }
-        WidgetNode::Conditional { field, op, value, then_node, else_node } => {
+        WidgetNode::Conditional {
+            field,
+            op,
+            value,
+            then_node,
+            else_node,
+        } => {
             let cond = emit_kotlin_condition(field, op, value, entry_param);
             writeln!(out, "{}// Conditional: {}", pad, cond).unwrap();
             out.push_str(&emit_node(then_node, entry_param, indent));
@@ -198,11 +296,24 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
                 out.push_str(&emit_node(else_n, entry_param, indent));
             }
         }
-        WidgetNode::ForEach { collection_field, item_param, body } => {
-            writeln!(out, "{}// ForEach {}.{}", pad, entry_param, collection_field).unwrap();
+        WidgetNode::ForEach {
+            collection_field,
+            item_param,
+            body,
+        } => {
+            writeln!(
+                out,
+                "{}// ForEach {}.{}",
+                pad, entry_param, collection_field
+            )
+            .unwrap();
             let _ = (item_param, body);
         }
-        WidgetNode::Label { text, system_image, modifiers } => {
+        WidgetNode::Label {
+            text,
+            system_image,
+            modifiers,
+        } => {
             let text_val = emit_text_content(text, entry_param);
             let _ = (system_image, modifiers);
             writeln!(out, "{}.addContent(", pad).unwrap();
@@ -212,7 +323,12 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             writeln!(out, "{})", pad).unwrap();
         }
         WidgetNode::FamilySwitch { cases, default } => {
-            writeln!(out, "{}// Family switch — Wear OS tiles are always full-screen", pad).unwrap();
+            writeln!(
+                out,
+                "{}// Family switch — Wear OS tiles are always full-screen",
+                pad
+            )
+            .unwrap();
             // Emit the first case or default
             if let Some((_, node)) = cases.first() {
                 out.push_str(&emit_node(node, entry_param, indent));
@@ -235,7 +351,9 @@ fn emit_text_content(content: &WidgetTextContent, entry_param: &str) -> String {
             for part in parts {
                 match part {
                     WidgetTemplatePart::Literal(lit) => s.push_str(&escape_kotlin_string(lit)),
-                    WidgetTemplatePart::Field(field) => write!(s, "${{{}.{}}}", entry_param, field).unwrap(),
+                    WidgetTemplatePart::Field(field) => {
+                        write!(s, "${{{}.{}}}", entry_param, field).unwrap()
+                    }
                 }
             }
             s.push('"');
@@ -244,7 +362,12 @@ fn emit_text_content(content: &WidgetTextContent, entry_param: &str) -> String {
     }
 }
 
-fn emit_kotlin_condition(field: &str, op: &WidgetConditionOp, value: &WidgetTextContent, entry_param: &str) -> String {
+fn emit_kotlin_condition(
+    field: &str,
+    op: &WidgetConditionOp,
+    value: &WidgetTextContent,
+    entry_param: &str,
+) -> String {
     let lhs = format!("{}.{}", entry_param, field);
     match op {
         WidgetConditionOp::Truthy => lhs,
@@ -259,7 +382,11 @@ fn emit_kotlin_value(value: &WidgetTextContent) -> String {
     match value {
         WidgetTextContent::Literal(s) => {
             if let Ok(n) = s.parse::<f64>() {
-                if n == n.floor() { format!("{:.0}", n) } else { format!("{}", n) }
+                if n == n.floor() {
+                    format!("{:.0}", n)
+                } else {
+                    format!("{}", n)
+                }
             } else {
                 format!("\"{}\"", escape_kotlin_string(s))
             }
@@ -293,11 +420,11 @@ fn kotlin_default_value(field_type: &WidgetFieldType) -> String {
 
 fn escape_kotlin_string(s: &str) -> String {
     s.replace('\\', "\\\\")
-     .replace('"', "\\\"")
-     .replace('\n', "\\n")
-     .replace('\r', "\\r")
-     .replace('\t', "\\t")
-     .replace('$', "\\$")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('$', "\\$")
 }
 
 #[cfg(test)]

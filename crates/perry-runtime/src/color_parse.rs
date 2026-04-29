@@ -45,14 +45,22 @@ fn parse_css_color(s: &str) -> Option<(f64, f64, f64, f64)> {
             }
             4 => {
                 let chs: Vec<char> = hex.chars().collect();
-                return Some((nibble(chs[0])?, nibble(chs[1])?, nibble(chs[2])?, nibble(chs[3])?));
+                return Some((
+                    nibble(chs[0])?,
+                    nibble(chs[1])?,
+                    nibble(chs[2])?,
+                    nibble(chs[3])?,
+                ));
             }
             6 => {
                 return Some((pair(&hex[0..2])?, pair(&hex[2..4])?, pair(&hex[4..6])?, 1.0));
             }
             8 => {
                 return Some((
-                    pair(&hex[0..2])?, pair(&hex[2..4])?, pair(&hex[4..6])?, pair(&hex[6..8])?,
+                    pair(&hex[0..2])?,
+                    pair(&hex[2..4])?,
+                    pair(&hex[4..6])?,
+                    pair(&hex[6..8])?,
                 ));
             }
             _ => {}

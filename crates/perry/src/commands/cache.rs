@@ -156,12 +156,14 @@ fn info(args: InfoArgs, format: OutputFormat) -> Result<()> {
         OutputFormat::Json => {
             let targets_json = per_target
                 .iter()
-                .map(|(t, f, b)| format!(
-                    "{{\"target\":{},\"files\":{},\"bytes\":{}}}",
-                    serde_json::to_string(t).unwrap_or_else(|_| "\"?\"".to_string()),
-                    f,
-                    b
-                ))
+                .map(|(t, f, b)| {
+                    format!(
+                        "{{\"target\":{},\"files\":{},\"bytes\":{}}}",
+                        serde_json::to_string(t).unwrap_or_else(|_| "\"?\"".to_string()),
+                        f,
+                        b
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(",");
             println!(

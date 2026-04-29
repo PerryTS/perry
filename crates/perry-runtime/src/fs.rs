@@ -14,7 +14,11 @@ fn extract_string_ptr(value: f64) -> *const StringHeader {
     let bits = value.to_bits();
     // Mask off the tag bits to get the raw pointer
     let ptr = (bits & POINTER_MASK) as usize;
-    if ptr < 0x1000 { std::ptr::null() } else { ptr as *const StringHeader }
+    if ptr < 0x1000 {
+        std::ptr::null()
+    } else {
+        ptr as *const StringHeader
+    }
 }
 
 /// Read a file synchronously and return its contents as a string
@@ -44,7 +48,12 @@ pub extern "C" fn js_fs_read_file_sync(path_value: f64) -> *mut StringHeader {
                 fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
             }
             let c_path = std::ffi::CString::new(path_str).unwrap_or_default();
-            __android_log_print(3, b"PerryFS\0".as_ptr(), b"readFileSync: path='%s'\0".as_ptr(), c_path.as_ptr());
+            __android_log_print(
+                3,
+                b"PerryFS\0".as_ptr(),
+                b"readFileSync: path='%s'\0".as_ptr(),
+                c_path.as_ptr(),
+            );
         }
 
         match fs::read_to_string(path_str) {
@@ -52,9 +61,19 @@ pub extern "C" fn js_fs_read_file_sync(path_value: f64) -> *mut StringHeader {
                 #[cfg(target_os = "android")]
                 {
                     extern "C" {
-                        fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
+                        fn __android_log_print(
+                            prio: i32,
+                            tag: *const u8,
+                            fmt: *const u8,
+                            ...
+                        ) -> i32;
                     }
-                    __android_log_print(3, b"PerryFS\0".as_ptr(), b"readFileSync: OK, %d bytes\0".as_ptr(), content.len() as i32);
+                    __android_log_print(
+                        3,
+                        b"PerryFS\0".as_ptr(),
+                        b"readFileSync: OK, %d bytes\0".as_ptr(),
+                        content.len() as i32,
+                    );
                 }
                 let bytes = content.as_bytes();
                 js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
@@ -63,10 +82,20 @@ pub extern "C" fn js_fs_read_file_sync(path_value: f64) -> *mut StringHeader {
                 #[cfg(target_os = "android")]
                 {
                     extern "C" {
-                        fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
+                        fn __android_log_print(
+                            prio: i32,
+                            tag: *const u8,
+                            fmt: *const u8,
+                            ...
+                        ) -> i32;
                     }
                     let c_err = std::ffi::CString::new(format!("{}", _e)).unwrap_or_default();
-                    __android_log_print(6, b"PerryFS\0".as_ptr(), b"readFileSync: ERROR: %s\0".as_ptr(), c_err.as_ptr());
+                    __android_log_print(
+                        6,
+                        b"PerryFS\0".as_ptr(),
+                        b"readFileSync: ERROR: %s\0".as_ptr(),
+                        c_err.as_ptr(),
+                    );
                 }
                 // Return empty string instead of null to prevent crashes when
                 // callers access .length on the result without null-checking.
@@ -81,10 +110,7 @@ pub extern "C" fn js_fs_read_file_sync(path_value: f64) -> *mut StringHeader {
 /// Returns 1 on success, 0 on failure
 /// Accepts NaN-boxed string values
 #[no_mangle]
-pub extern "C" fn js_fs_write_file_sync(
-    path_value: f64,
-    content_value: f64,
-) -> i32 {
+pub extern "C" fn js_fs_write_file_sync(path_value: f64, content_value: f64) -> i32 {
     unsafe {
         let path_ptr = extract_string_ptr(path_value);
         let content_ptr = extract_string_ptr(content_value);
@@ -117,12 +143,9 @@ pub extern "C" fn js_fs_write_file_sync(
 /// Returns 1 on success, 0 on failure
 /// Accepts NaN-boxed string values
 #[no_mangle]
-pub extern "C" fn js_fs_append_file_sync(
-    path_value: f64,
-    content_value: f64,
-) -> i32 {
-    use std::io::Write;
+pub extern "C" fn js_fs_append_file_sync(path_value: f64, content_value: f64) -> i32 {
     use std::fs::OpenOptions;
+    use std::io::Write;
 
     unsafe {
         let path_ptr = extract_string_ptr(path_value);
@@ -147,12 +170,10 @@ pub extern "C" fn js_fs_append_file_sync(
 
         // Open file in append mode, creating if it doesn't exist
         match OpenOptions::new().create(true).append(true).open(path_str) {
-            Ok(mut file) => {
-                match file.write_all(content_bytes) {
-                    Ok(_) => 1,
-                    Err(_) => 0,
-                }
-            }
+            Ok(mut file) => match file.write_all(content_bytes) {
+                Ok(_) => 1,
+                Err(_) => 0,
+            },
             Err(_) => 0,
         }
     }
@@ -178,7 +199,11 @@ pub extern "C" fn js_fs_exists_sync(path_value: f64) -> i32 {
             Err(_) => return 0,
         };
 
-        if Path::new(path_str).exists() { 1 } else { 0 }
+        if Path::new(path_str).exists() {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -286,7 +311,11 @@ pub extern "C" fn js_fs_is_directory(path_value: f64) -> i32 {
             Err(_) => return 0,
         };
 
-        if Path::new(path_str).is_dir() { 1 } else { 0 }
+        if Path::new(path_str).is_dir() {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -377,7 +406,8 @@ pub extern "C" fn js_fs_read_file_binary(path_value: f64) -> *mut crate::buffer:
             Ok(bytes) => {
                 let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
                 if !buf.is_null() {
-                    let buf_data = (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+                    let buf_data =
+                        (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf_data, bytes.len());
                     (*buf).length = bytes.len() as u32;
                 }
@@ -455,10 +485,7 @@ unsafe fn make_stats_predicate(value: bool) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     let tag = if value { TAG_TRUE } else { TAG_FALSE };
-    let closure = crate::closure::js_closure_alloc(
-        stats_closure_return_captured as *const u8,
-        1,
-    );
+    let closure = crate::closure::js_closure_alloc(stats_closure_return_captured as *const u8, 1);
     crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(tag));
     // NaN-box the closure pointer with POINTER_TAG so the dynamic
     // dispatch path in `js_native_call_method` can unwrap it.
@@ -560,7 +587,11 @@ pub extern "C" fn js_fs_access_sync(path_value: f64) -> i32 {
             Some(s) => s,
             None => return 0,
         };
-        if Path::new(path_str).exists() { 1 } else { 0 }
+        if Path::new(path_str).exists() {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -919,11 +950,7 @@ fn write_stream_end_internal(closure: *const ClosureHeader, final_chunk: Option<
 /// `ws.on(event, cb)` — register a listener. For 'finish' this
 /// fires synchronously if the stream is already finished; for
 /// 'error' it checks for a recorded error. Unknown events noop.
-extern "C" fn write_stream_on_impl(
-    closure: *const ClosureHeader,
-    event: f64,
-    cb: f64,
-) -> f64 {
+extern "C" fn write_stream_on_impl(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {
     use crate::closure::{js_closure_call0, js_closure_call1};
     let id = stream_id_of(closure);
     let event_bytes = bytes_from_value(event);
@@ -998,11 +1025,7 @@ extern "C" fn write_stream_close_impl(_closure: *const ClosureHeader) -> f64 {
 /// `rs.on(event, cb)` — for 'data' fires cb(contents) once,
 /// for 'end' fires cb() once (after all data), for 'error'
 /// noops unless the file was unreadable.
-extern "C" fn read_stream_on_impl(
-    closure: *const ClosureHeader,
-    event: f64,
-    cb: f64,
-) -> f64 {
+extern "C" fn read_stream_on_impl(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {
     use crate::closure::{js_closure_call0, js_closure_call1};
     let id = stream_id_of(closure);
     let event_bytes = bytes_from_value(event);
@@ -1025,13 +1048,10 @@ extern "C" fn read_stream_on_impl(
             let cb_ptr = extract_closure_ptr(cb);
             if !cb_ptr.is_null() {
                 unsafe {
-                    let chunk = js_string_from_bytes(
-                        buffer_copy.as_ptr(),
-                        buffer_copy.len() as u32,
-                    );
-                    let chunk_val = f64::from_bits(
-                        crate::value::js_nanbox_string(chunk as i64).to_bits(),
-                    );
+                    let chunk =
+                        js_string_from_bytes(buffer_copy.as_ptr(), buffer_copy.len() as u32);
+                    let chunk_val =
+                        f64::from_bits(crate::value::js_nanbox_string(chunk as i64).to_bits());
                     js_closure_call1(cb_ptr, chunk_val);
                 }
             }
@@ -1119,10 +1139,9 @@ pub extern "C" fn js_fs_create_write_stream(path_value: f64) -> f64 {
     // stream's (5) so the shape cache doesn't alias.
     let method_funcs: [(&str, extern "C" fn()); 6] = [
         ("write", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_write_impl)
+            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+                write_stream_write_impl,
+            )
         }),
         ("end", unsafe {
             std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
@@ -1195,10 +1214,9 @@ pub extern "C" fn js_fs_create_read_stream(path_value: f64) -> f64 {
             >(read_stream_on_impl)
         }),
         ("pipe", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64) -> f64,
-                extern "C" fn(),
-            >(read_stream_pipe_impl)
+            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+                read_stream_pipe_impl,
+            )
         }),
         ("close", unsafe {
             std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
@@ -1219,12 +1237,8 @@ pub extern "C" fn js_fs_create_read_stream(path_value: f64) -> f64 {
 /// callback invocation. Stub that just reads the file synchronously
 /// and invokes the callback with `(null, contents)`.
 #[no_mangle]
-pub extern "C" fn js_fs_read_file_callback(
-    path_value: f64,
-    _encoding: f64,
-    callback: f64,
-) -> f64 {
-    use crate::closure::{ClosureHeader, js_closure_call2};
+pub extern "C" fn js_fs_read_file_callback(path_value: f64, _encoding: f64, callback: f64) -> f64 {
+    use crate::closure::{js_closure_call2, ClosureHeader};
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     unsafe {

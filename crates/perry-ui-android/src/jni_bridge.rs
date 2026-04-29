@@ -168,7 +168,8 @@ where
 }
 
 fn find_class(env: &mut JNIEnv, name: &str) -> GlobalRef {
-    let class = env.find_class(name)
+    let class = env
+        .find_class(name)
         .unwrap_or_else(|_| panic!("Failed to find class: {}", name));
     env.new_global_ref(class)
         .unwrap_or_else(|_| panic!("Failed to create global ref for: {}", name))
@@ -183,8 +184,14 @@ fn get_method(env: &mut JNIEnv, class: &GlobalRef, name: &str, sig: &str) -> JMe
 fn get_static_method(env: &mut JNIEnv, class: &GlobalRef, name: &str, sig: &str) -> JMethodID {
     let cls: &JClass = class.as_obj().into();
     // Static method IDs are the same type as instance method IDs in jni-rs
-    let mid = env.get_static_method_id(cls, name, sig)
-        .unwrap_or_else(|_| panic!("Failed to find static method: {}::{} {}", "<class>", name, sig));
+    let mid = env
+        .get_static_method_id(cls, name, sig)
+        .unwrap_or_else(|_| {
+            panic!(
+                "Failed to find static method: {}::{} {}",
+                "<class>", name, sig
+            )
+        });
     // Cast — JStaticMethodID and JMethodID are both wrappers around jmethodID
     unsafe { std::mem::transmute(mid) }
 }
@@ -214,26 +221,72 @@ fn build_cache(env: &mut JNIEnv) -> JniCache {
     let perry_bridge_class = find_class(env, "com/perry/app/PerryBridge");
 
     // Constructor IDs — all View subclass constructors take (Context)
-    let text_view_init = get_method(env, &text_view_class, "<init>", "(Landroid/content/Context;)V");
+    let text_view_init = get_method(
+        env,
+        &text_view_class,
+        "<init>",
+        "(Landroid/content/Context;)V",
+    );
     let button_init = get_method(env, &button_class, "<init>", "(Landroid/content/Context;)V");
-    let linear_layout_init = get_method(env, &linear_layout_class, "<init>", "(Landroid/content/Context;)V");
-    let scroll_view_init = get_method(env, &scroll_view_class, "<init>", "(Landroid/content/Context;)V");
-    let edit_text_init = get_method(env, &edit_text_class, "<init>", "(Landroid/content/Context;)V");
+    let linear_layout_init = get_method(
+        env,
+        &linear_layout_class,
+        "<init>",
+        "(Landroid/content/Context;)V",
+    );
+    let scroll_view_init = get_method(
+        env,
+        &scroll_view_class,
+        "<init>",
+        "(Landroid/content/Context;)V",
+    );
+    let edit_text_init = get_method(
+        env,
+        &edit_text_class,
+        "<init>",
+        "(Landroid/content/Context;)V",
+    );
     let switch_init = get_method(env, &switch_class, "<init>", "(Landroid/content/Context;)V");
-    let seek_bar_init = get_method(env, &seek_bar_class, "<init>", "(Landroid/content/Context;)V");
+    let seek_bar_init = get_method(
+        env,
+        &seek_bar_class,
+        "<init>",
+        "(Landroid/content/Context;)V",
+    );
     let space_init = get_method(env, &space_class, "<init>", "(Landroid/content/Context;)V");
     let view_init = get_method(env, &view_class, "<init>", "(Landroid/content/Context;)V");
-    let popup_menu_init = get_method(env, &popup_menu_class, "<init>", "(Landroid/content/Context;Landroid/view/View;)V");
+    let popup_menu_init = get_method(
+        env,
+        &popup_menu_class,
+        "<init>",
+        "(Landroid/content/Context;Landroid/view/View;)V",
+    );
     let linear_layout_params_init = get_method(env, &linear_layout_params_class, "<init>", "(II)V");
     let frame_layout_params_init = get_method(env, &frame_layout_params_class, "<init>", "(II)V");
 
     // TextView methods
-    let text_view_set_text = get_method(env, &text_view_class, "setText", "(Ljava/lang/CharSequence;)V");
+    let text_view_set_text = get_method(
+        env,
+        &text_view_class,
+        "setText",
+        "(Ljava/lang/CharSequence;)V",
+    );
     let text_view_set_text_color = get_method(env, &text_view_class, "setTextColor", "(I)V");
     let text_view_set_text_size = get_method(env, &text_view_class, "setTextSize", "(IF)V");
-    let text_view_set_typeface = get_method(env, &text_view_class, "setTypeface", "(Landroid/graphics/Typeface;I)V");
-    let text_view_set_text_is_selectable = get_method(env, &text_view_class, "setTextIsSelectable", "(Z)V");
-    let text_view_get_text = get_method(env, &text_view_class, "getText", "()Ljava/lang/CharSequence;");
+    let text_view_set_typeface = get_method(
+        env,
+        &text_view_class,
+        "setTypeface",
+        "(Landroid/graphics/Typeface;I)V",
+    );
+    let text_view_set_text_is_selectable =
+        get_method(env, &text_view_class, "setTextIsSelectable", "(Z)V");
+    let text_view_get_text = get_method(
+        env,
+        &text_view_class,
+        "getText",
+        "()Ljava/lang/CharSequence;",
+    );
 
     // Button methods (inherits from TextView)
     let button_set_text = get_method(env, &button_class, "setText", "(Ljava/lang/CharSequence;)V");
@@ -241,29 +294,54 @@ fn build_cache(env: &mut JNIEnv) -> JniCache {
     // View methods
     let view_set_visibility = get_method(env, &view_class, "setVisibility", "(I)V");
     let view_set_background_color = get_method(env, &view_class, "setBackgroundColor", "(I)V");
-    let view_set_layout_params = get_method(env, &view_class, "setLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)V");
+    let view_set_layout_params = get_method(
+        env,
+        &view_class,
+        "setLayoutParams",
+        "(Landroid/view/ViewGroup$LayoutParams;)V",
+    );
     let view_set_padding = get_method(env, &view_class, "setPadding", "(IIII)V");
-    let view_set_on_long_click_listener = get_method(env, &view_class, "setOnLongClickListener", "(Landroid/view/View$OnLongClickListener;)V");
+    let view_set_on_long_click_listener = get_method(
+        env,
+        &view_class,
+        "setOnLongClickListener",
+        "(Landroid/view/View$OnLongClickListener;)V",
+    );
     let view_request_focus = get_method(env, &view_class, "requestFocus", "()Z");
 
     // ViewGroup methods
-    let view_group_add_view = get_method(env, &view_group_class, "addView", "(Landroid/view/View;)V");
-    let view_group_add_view_at = get_method(env, &view_group_class, "addView", "(Landroid/view/View;I)V");
+    let view_group_add_view =
+        get_method(env, &view_group_class, "addView", "(Landroid/view/View;)V");
+    let view_group_add_view_at =
+        get_method(env, &view_group_class, "addView", "(Landroid/view/View;I)V");
     let view_group_remove_all_views = get_method(env, &view_group_class, "removeAllViews", "()V");
     let view_group_get_child_count = get_method(env, &view_group_class, "getChildCount", "()I");
 
     // LinearLayout methods
-    let linear_layout_set_orientation = get_method(env, &linear_layout_class, "setOrientation", "(I)V");
+    let linear_layout_set_orientation =
+        get_method(env, &linear_layout_class, "setOrientation", "(I)V");
 
     // ScrollView methods
-    let scroll_view_add_view = get_method(env, &scroll_view_class, "addView", "(Landroid/view/View;)V");
+    let scroll_view_add_view =
+        get_method(env, &scroll_view_class, "addView", "(Landroid/view/View;)V");
     let scroll_view_scroll_to = get_method(env, &scroll_view_class, "scrollTo", "(II)V");
     let scroll_view_get_scroll_y = get_method(env, &scroll_view_class, "getScrollY", "()I");
-    let scroll_view_smooth_scroll_to = get_method(env, &scroll_view_class, "smoothScrollTo", "(II)V");
+    let scroll_view_smooth_scroll_to =
+        get_method(env, &scroll_view_class, "smoothScrollTo", "(II)V");
 
     // EditText methods
-    let edit_text_set_hint = get_method(env, &edit_text_class, "setHint", "(Ljava/lang/CharSequence;)V");
-    let edit_text_set_text = get_method(env, &edit_text_class, "setText", "(Ljava/lang/CharSequence;)V");
+    let edit_text_set_hint = get_method(
+        env,
+        &edit_text_class,
+        "setHint",
+        "(Ljava/lang/CharSequence;)V",
+    );
+    let edit_text_set_text = get_method(
+        env,
+        &edit_text_class,
+        "setText",
+        "(Ljava/lang/CharSequence;)V",
+    );
 
     // SeekBar methods
     let seek_bar_set_max = get_method(env, &seek_bar_class, "setMax", "(I)V");
@@ -279,15 +357,27 @@ fn build_cache(env: &mut JNIEnv) -> JniCache {
     let color_argb = get_static_method(env, &color_class, "argb", "(IIII)I");
 
     // Typeface static methods
-    let typeface_create = get_static_method(env, &typeface_class, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;");
+    let typeface_create = get_static_method(
+        env,
+        &typeface_class,
+        "create",
+        "(Ljava/lang/String;I)Landroid/graphics/Typeface;",
+    );
 
     // PopupMenu methods
-    let popup_menu_get_menu = get_method(env, &popup_menu_class, "getMenu", "()Landroid/view/Menu;");
+    let popup_menu_get_menu =
+        get_method(env, &popup_menu_class, "getMenu", "()Landroid/view/Menu;");
     let popup_menu_show = get_method(env, &popup_menu_class, "show", "()V");
 
     // PerryBridge static methods
-    let perry_bridge_get_activity = get_static_method(env, &perry_bridge_class, "getActivity", "()Landroid/app/Activity;");
-    let perry_bridge_run_on_ui_thread = get_static_method(env, &perry_bridge_class, "runOnUiThreadBlocking", "(J)V");
+    let perry_bridge_get_activity = get_static_method(
+        env,
+        &perry_bridge_class,
+        "getActivity",
+        "()Landroid/app/Activity;",
+    );
+    let perry_bridge_run_on_ui_thread =
+        get_static_method(env, &perry_bridge_class, "runOnUiThreadBlocking", "(J)V");
     let perry_bridge_dp_to_px = get_static_method(env, &perry_bridge_class, "dpToPx", "(F)I");
 
     JniCache {

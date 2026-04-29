@@ -25,10 +25,7 @@ pub struct WearTileBundle {
 /// - {Name}TileService.kt: SuspendingGlanceTileService with tile composable
 /// - {Name}TileBridge.kt: JNI bridge for native provider
 /// - AndroidManifest snippet
-pub fn compile_widget_wear_tile(
-    widget: &WidgetDecl,
-    app_package: &str,
-) -> Result<WearTileBundle> {
+pub fn compile_widget_wear_tile(widget: &WidgetDecl, app_package: &str) -> Result<WearTileBundle> {
     let safe_name = sanitize_kind(&widget.kind);
     let mut kotlin_files = Vec::new();
 

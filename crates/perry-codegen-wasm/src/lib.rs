@@ -9,7 +9,7 @@
 pub mod emit;
 
 use anyhow::Result;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use perry_hir::ir::Module;
 
 /// Embedded WASM runtime JavaScript (bridge between WASM and browser APIs)
@@ -97,7 +97,7 @@ pub fn compile_modules_to_wasm(modules: &[(String, Module)]) -> Result<Vec<u8>> 
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }

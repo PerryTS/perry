@@ -55,7 +55,11 @@ unsafe fn make_stack(name: &str, message: &str) -> *mut StringHeader {
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
-unsafe fn alloc_error(kind: u32, name_bytes: &[u8], message: *mut StringHeader) -> *mut ErrorHeader {
+unsafe fn alloc_error(
+    kind: u32,
+    name_bytes: &[u8],
+    message: *mut StringHeader,
+) -> *mut ErrorHeader {
     let raw = crate::gc::gc_malloc(std::mem::size_of::<ErrorHeader>(), crate::gc::GC_TYPE_ERROR);
     let ptr = raw as *mut ErrorHeader;
 
@@ -103,7 +107,10 @@ pub extern "C" fn js_error_new_with_message(message: *mut StringHeader) -> *mut 
 
 /// Create a new Error with a message and a cause (raw f64 NaN-boxed)
 #[no_mangle]
-pub extern "C" fn js_error_new_with_cause(message: *mut StringHeader, cause: f64) -> *mut ErrorHeader {
+pub extern "C" fn js_error_new_with_cause(
+    message: *mut StringHeader,
+    cause: f64,
+) -> *mut ErrorHeader {
     unsafe {
         let ptr = alloc_error(ERROR_KIND_ERROR, b"Error", message);
         (*ptr).cause = cause;

@@ -28,7 +28,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
 
         // Array literals → infer element type from first element
         ast::Expr::Array(arr) => {
-            let elem_ty = arr.elems.iter()
+            let elem_ty = arr
+                .elems
+                .iter()
                 .find_map(|e| e.as_ref().map(|elem| infer_type_from_expr(&elem.expr, ctx)))
                 .unwrap_or(Type::Any);
             Type::Array(Box::new(elem_ty))
@@ -45,8 +47,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
             use ast::BinaryOp::*;
             match bin.op {
                 // Comparison/equality operators always return boolean
-                EqEq | NotEq | EqEqEq | NotEqEq | Lt | LtEq | Gt | GtEq |
-                In | InstanceOf => Type::Boolean,
+                EqEq | NotEq | EqEqEq | NotEqEq | Lt | LtEq | Gt | GtEq | In | InstanceOf => {
+                    Type::Boolean
+                }
 
                 // Addition: string if either side is string, else number if both number
                 Add => {
@@ -65,7 +68,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                 Sub | Mul | Div | Mod | Exp => {
                     let left = infer_type_from_expr(&bin.left, ctx);
                     let right = infer_type_from_expr(&bin.right, ctx);
-                    if matches!(left, Type::Number | Type::Int32) && matches!(right, Type::Number | Type::Int32) {
+                    if matches!(left, Type::Number | Type::Int32)
+                        && matches!(right, Type::Number | Type::Int32)
+                    {
                         Type::Number
                     } else {
                         Type::Any
@@ -78,13 +83,17 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                 // Logical operators → type of operands (simplified)
                 LogicalAnd | LogicalOr => {
                     let right = infer_type_from_expr(&bin.right, ctx);
-                    if !matches!(right, Type::Any) { right } else {
+                    if !matches!(right, Type::Any) {
+                        right
+                    } else {
                         infer_type_from_expr(&bin.left, ctx)
                     }
                 }
                 NullishCoalescing => {
                     let left = infer_type_from_expr(&bin.left, ctx);
-                    if !matches!(left, Type::Any) { left } else {
+                    if !matches!(left, Type::Any) {
+                        left
+                    } else {
                         infer_type_from_expr(&bin.right, ctx)
                     }
                 }
@@ -92,15 +101,13 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
         }
 
         // Unary operators
-        ast::Expr::Unary(unary) => {
-            match unary.op {
-                ast::UnaryOp::TypeOf => Type::String,
-                ast::UnaryOp::Void => Type::Void,
-                ast::UnaryOp::Bang => Type::Boolean,
-                ast::UnaryOp::Minus | ast::UnaryOp::Plus | ast::UnaryOp::Tilde => Type::Number,
-                _ => Type::Any,
-            }
-        }
+        ast::Expr::Unary(unary) => match unary.op {
+            ast::UnaryOp::TypeOf => Type::String,
+            ast::UnaryOp::Void => Type::Void,
+            ast::UnaryOp::Bang => Type::Boolean,
+            ast::UnaryOp::Minus | ast::UnaryOp::Plus | ast::UnaryOp::Tilde => Type::Number,
+            _ => Type::Any,
+        },
 
         // Update expressions (++, --) → Number
         ast::Expr::Update(_) => Type::Number,
@@ -110,7 +117,11 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
         ast::Expr::Cond(cond) => {
             let cons = infer_type_from_expr(&cond.cons, ctx);
             let alt = infer_type_from_expr(&cond.alt, ctx);
-            if cons == alt { cons } else { Type::Any }
+            if cons == alt {
+                cons
+            } else {
+                Type::Any
+            }
         }
 
         // Parenthesized expression
@@ -176,16 +187,22 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                 let name = ident.sym.to_string();
                 if let Some(type_args) = new_expr.type_args.as_ref() {
                     if !type_args.params.is_empty() {
-                        let args: Vec<Type> = type_args.params.iter()
+                        let args: Vec<Type> = type_args
+                            .params
+                            .iter()
                             .map(|t| extract_ts_type(t))
                             .collect();
-                        return Type::Generic { base: name, type_args: args };
+                        return Type::Generic {
+                            base: name,
+                            type_args: args,
+                        };
                     }
                 }
                 match name.as_str() {
-                    "Map" | "Set" | "WeakMap" | "WeakSet" | "Array" | "Promise" => {
-                        Type::Generic { base: name, type_args: Vec::new() }
-                    }
+                    "Map" | "Set" | "WeakMap" | "WeakSet" | "Array" | "Promise" => Type::Generic {
+                        base: name,
+                        type_args: Vec::new(),
+                    },
                     _ => Type::Named(name),
                 }
             } else {
@@ -204,29 +221,48 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
             let mut open_shape = false;
             for prop in &obj.props {
                 match prop {
-                    ast::PropOrSpread::Spread(_) => { open_shape = true; break; }
+                    ast::PropOrSpread::Spread(_) => {
+                        open_shape = true;
+                        break;
+                    }
                     ast::PropOrSpread::Prop(p) => match p.as_ref() {
                         ast::Prop::Shorthand(ident) => {
                             let name = ident.sym.to_string();
                             let ty = ctx.lookup_local_type(&name).cloned().unwrap_or(Type::Any);
-                            properties.insert(name, perry_types::PropertyInfo {
-                                ty, optional: false, readonly: false,
-                            });
+                            properties.insert(
+                                name,
+                                perry_types::PropertyInfo {
+                                    ty,
+                                    optional: false,
+                                    readonly: false,
+                                },
+                            );
                         }
                         ast::Prop::KeyValue(kv) => {
                             let key = match &kv.key {
                                 ast::PropName::Ident(i) => i.sym.to_string(),
                                 ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
                                 ast::PropName::Num(n) => n.value.to_string(),
-                                _ => { open_shape = true; break; }
+                                _ => {
+                                    open_shape = true;
+                                    break;
+                                }
                             };
                             let ty = infer_type_from_expr(&kv.value, ctx);
-                            properties.insert(key, perry_types::PropertyInfo {
-                                ty, optional: false, readonly: false,
-                            });
+                            properties.insert(
+                                key,
+                                perry_types::PropertyInfo {
+                                    ty,
+                                    optional: false,
+                                    readonly: false,
+                                },
+                            );
                         }
-                        _ => { open_shape = true; break; }
-                    }
+                        _ => {
+                            open_shape = true;
+                            break;
+                        }
+                    },
                 }
             }
             if open_shape {
@@ -249,7 +285,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
             // skipped (Generator<T> shape is out of scope). Async wraps in
             // Promise<T>.
             let has_explicit_return_annotation = arrow.return_type.is_some();
-            let annotated = arrow.return_type.as_ref()
+            let annotated = arrow
+                .return_type
+                .as_ref()
                 .map(|rt| extract_ts_type(&rt.type_ann))
                 .unwrap_or(Type::Any);
             let return_type = if !has_explicit_return_annotation
@@ -259,7 +297,11 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                 let inferred = match arrow.body.as_ref() {
                     ast::BlockStmtOrExpr::Expr(expr) => {
                         let t = infer_type_from_expr(expr, ctx);
-                        if matches!(t, Type::Any) { None } else { Some(t) }
+                        if matches!(t, Type::Any) {
+                            None
+                        } else {
+                            Some(t)
+                        }
                     }
                     ast::BlockStmtOrExpr::BlockStmt(block) => {
                         infer_body_return_type(&block.stmts, ctx)
@@ -274,11 +316,15 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                 annotated
             };
             Type::Function(perry_types::FunctionType {
-                params: arrow.params.iter().map(|p| {
-                    let name = get_pat_name(p).unwrap_or_default();
-                    let ty = extract_param_type_with_ctx(p, None);
-                    (name, ty, false)
-                }).collect(),
+                params: arrow
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let name = get_pat_name(p).unwrap_or_default();
+                        let ty = extract_param_type_with_ctx(p, None);
+                        (name, ty, false)
+                    })
+                    .collect(),
                 return_type: Box::new(return_type),
                 is_async: arrow.is_async,
                 is_generator: arrow.is_generator,
@@ -295,10 +341,7 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
 ///
 /// Walks control-flow statements but does NOT descend into nested functions,
 /// arrows, or class bodies — their return statements belong to the inner scope.
-pub(crate) fn infer_body_return_type(
-    stmts: &[ast::Stmt],
-    ctx: &LoweringContext,
-) -> Option<Type> {
+pub(crate) fn infer_body_return_type(stmts: &[ast::Stmt], ctx: &LoweringContext) -> Option<Type> {
     let mut returns: Vec<Type> = Vec::new();
     collect_return_types(stmts, ctx, &mut returns);
     if returns.is_empty() {
@@ -316,11 +359,7 @@ pub(crate) fn infer_body_return_type(
     }
 }
 
-fn collect_return_types(
-    stmts: &[ast::Stmt],
-    ctx: &LoweringContext,
-    out: &mut Vec<Type>,
-) {
+fn collect_return_types(stmts: &[ast::Stmt], ctx: &LoweringContext, out: &mut Vec<Type>) {
     for stmt in stmts {
         match stmt {
             ast::Stmt::Return(ret) => {
@@ -351,12 +390,24 @@ fn collect_return_types(
                     collect_return_types(&case.cons, ctx, out);
                 }
             }
-            ast::Stmt::While(w) => collect_return_types(std::slice::from_ref(w.body.as_ref()), ctx, out),
-            ast::Stmt::DoWhile(d) => collect_return_types(std::slice::from_ref(d.body.as_ref()), ctx, out),
-            ast::Stmt::For(f) => collect_return_types(std::slice::from_ref(f.body.as_ref()), ctx, out),
-            ast::Stmt::ForIn(f) => collect_return_types(std::slice::from_ref(f.body.as_ref()), ctx, out),
-            ast::Stmt::ForOf(f) => collect_return_types(std::slice::from_ref(f.body.as_ref()), ctx, out),
-            ast::Stmt::Labeled(l) => collect_return_types(std::slice::from_ref(l.body.as_ref()), ctx, out),
+            ast::Stmt::While(w) => {
+                collect_return_types(std::slice::from_ref(w.body.as_ref()), ctx, out)
+            }
+            ast::Stmt::DoWhile(d) => {
+                collect_return_types(std::slice::from_ref(d.body.as_ref()), ctx, out)
+            }
+            ast::Stmt::For(f) => {
+                collect_return_types(std::slice::from_ref(f.body.as_ref()), ctx, out)
+            }
+            ast::Stmt::ForIn(f) => {
+                collect_return_types(std::slice::from_ref(f.body.as_ref()), ctx, out)
+            }
+            ast::Stmt::ForOf(f) => {
+                collect_return_types(std::slice::from_ref(f.body.as_ref()), ctx, out)
+            }
+            ast::Stmt::Labeled(l) => {
+                collect_return_types(std::slice::from_ref(l.body.as_ref()), ctx, out)
+            }
             _ => {} // Decl (nested fns), Expr, Break, Continue, Throw, Debugger, Empty, With
         }
     }
@@ -408,10 +459,10 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     return match method_name {
                         "trim" | "trimStart" | "trimEnd" | "toLowerCase" | "toUpperCase"
                         | "slice" | "substring" | "substr" | "replace" | "replaceAll"
-                        | "padStart" | "padEnd" | "repeat" | "charAt" | "concat"
-                        | "normalize" | "toLocaleLowerCase" | "toLocaleUpperCase" => Type::String,
-                        "indexOf" | "lastIndexOf" | "search" | "charCodeAt"
-                        | "codePointAt" | "localeCompare" => Type::Number,
+                        | "padStart" | "padEnd" | "repeat" | "charAt" | "concat" | "normalize"
+                        | "toLocaleLowerCase" | "toLocaleUpperCase" => Type::String,
+                        "indexOf" | "lastIndexOf" | "search" | "charCodeAt" | "codePointAt"
+                        | "localeCompare" => Type::Number,
                         "startsWith" | "endsWith" | "includes" => Type::Boolean,
                         "split" => Type::Array(Box::new(Type::String)),
                         "match" | "matchAll" => Type::Any, // complex return types
@@ -422,12 +473,14 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                 // Array methods
                 if let Type::Array(elem_ty) = &obj_ty {
                     return match method_name {
-                        "push" | "unshift" | "indexOf" | "lastIndexOf" | "findIndex" => Type::Number,
+                        "push" | "unshift" | "indexOf" | "lastIndexOf" | "findIndex" => {
+                            Type::Number
+                        }
                         "join" => Type::String,
                         "includes" | "every" | "some" => Type::Boolean,
                         "pop" | "shift" | "find" | "at" => *elem_ty.clone(),
-                        "map" | "filter" | "slice" | "concat" | "flat" | "flatMap"
-                        | "reverse" | "sort" | "splice" => obj_ty.clone(),
+                        "map" | "filter" | "slice" | "concat" | "flat" | "flatMap" | "reverse"
+                        | "sort" | "splice" => obj_ty.clone(),
                         "reduce" => Type::Any, // depends on accumulator
                         "fill" => obj_ty.clone(),
                         "forEach" => Type::Void,
@@ -474,7 +527,7 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                             // Use a String|Undefined union so callers route through
                             // dynamic dispatch instead.
                             "stringify" => Type::Union(vec![Type::String, Type::Void]),
-                            _ => Type::Any,  // parse returns any
+                            _ => Type::Any, // parse returns any
                         };
                     }
                     if obj_name == "Object" {
@@ -498,8 +551,9 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     // array path which reads f64 elements as JS values.
                     if obj_name == "Buffer" {
                         return match method_name {
-                            "from" | "alloc" | "allocUnsafe" | "concat"
-                                => Type::Named("Uint8Array".to_string()),
+                            "from" | "alloc" | "allocUnsafe" | "concat" => {
+                                Type::Named("Uint8Array".to_string())
+                            }
                             "isBuffer" => Type::Boolean,
                             "byteLength" => Type::Number,
                             "compare" => Type::Number,
@@ -513,8 +567,9 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     // it requires walking nested calls.
                     if obj_name == "crypto" {
                         return match method_name {
-                            "randomBytes" | "scryptSync" | "pbkdf2Sync"
-                                => Type::Named("Uint8Array".to_string()),
+                            "randomBytes" | "scryptSync" | "pbkdf2Sync" => {
+                                Type::Named("Uint8Array".to_string())
+                            }
                             "randomUUID" => Type::String,
                             _ => Type::Any,
                         };
@@ -560,9 +615,12 @@ pub(crate) fn extract_ts_type(ts_type: &ast::TsType) -> Type {
 }
 
 /// Extract a Type from an SWC TypeScript type annotation with type parameter context
-pub(crate) fn extract_ts_type_with_ctx(ts_type: &ast::TsType, ctx: Option<&LoweringContext>) -> Type {
-    use ast::TsType::*;
+pub(crate) fn extract_ts_type_with_ctx(
+    ts_type: &ast::TsType,
+    ctx: Option<&LoweringContext>,
+) -> Type {
     use ast::TsKeywordTypeKind::*;
+    use ast::TsType::*;
 
     match ts_type {
         // Keyword types (primitives)
@@ -771,33 +829,45 @@ pub(crate) fn extract_ts_type_with_ctx(ts_type: &ast::TsType, ctx: Option<&Lower
                             } else {
                                 Type::Any
                             };
-                            properties.insert(field_name, perry_types::PropertyInfo {
-                                ty: field_type,
-                                optional: prop.optional,
-                                readonly: prop.readonly,
-                            });
+                            properties.insert(
+                                field_name,
+                                perry_types::PropertyInfo {
+                                    ty: field_type,
+                                    optional: prop.optional,
+                                    readonly: prop.readonly,
+                                },
+                            );
                         }
                     }
                     ast::TsTypeElement::TsMethodSignature(method) => {
                         if let ast::Expr::Ident(ident) = method.key.as_ref() {
                             let method_name = ident.sym.to_string();
-                            let return_type = method.type_ann.as_ref()
+                            let return_type = method
+                                .type_ann
+                                .as_ref()
                                 .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
                                 .unwrap_or(Type::Any);
-                            let params: Vec<(String, Type, bool)> = method.params.iter().map(|p| {
-                                let (name, ty) = get_fn_param_name_and_type_with_ctx(p, ctx);
-                                (name, ty, false)
-                            }).collect();
-                            properties.insert(method_name, perry_types::PropertyInfo {
-                                ty: Type::Function(perry_types::FunctionType {
-                                    params,
-                                    return_type: Box::new(return_type),
-                                    is_async: false,
-                                    is_generator: false,
-                                }),
-                                optional: method.optional,
-                                readonly: false,
-                            });
+                            let params: Vec<(String, Type, bool)> = method
+                                .params
+                                .iter()
+                                .map(|p| {
+                                    let (name, ty) = get_fn_param_name_and_type_with_ctx(p, ctx);
+                                    (name, ty, false)
+                                })
+                                .collect();
+                            properties.insert(
+                                method_name,
+                                perry_types::PropertyInfo {
+                                    ty: Type::Function(perry_types::FunctionType {
+                                        params,
+                                        return_type: Box::new(return_type),
+                                        is_async: false,
+                                        is_generator: false,
+                                    }),
+                                    optional: method.optional,
+                                    readonly: false,
+                                },
+                            );
                         }
                     }
                     ast::TsTypeElement::TsIndexSignature(idx_sig) => {
@@ -843,29 +913,40 @@ pub(crate) fn get_fn_param_name_and_type(param: &ast::TsFnParam) -> (String, Typ
 }
 
 /// Helper to get parameter name and type from TsFnParam with context
-pub(crate) fn get_fn_param_name_and_type_with_ctx(param: &ast::TsFnParam, ctx: Option<&LoweringContext>) -> (String, Type) {
+pub(crate) fn get_fn_param_name_and_type_with_ctx(
+    param: &ast::TsFnParam,
+    ctx: Option<&LoweringContext>,
+) -> (String, Type) {
     match param {
         ast::TsFnParam::Ident(ident) => {
             let name = ident.id.sym.to_string();
-            let ty = ident.type_ann.as_ref()
+            let ty = ident
+                .type_ann
+                .as_ref()
                 .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
                 .unwrap_or(Type::Any);
             (name, ty)
         }
         ast::TsFnParam::Array(arr) => {
-            let ty = arr.type_ann.as_ref()
+            let ty = arr
+                .type_ann
+                .as_ref()
                 .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
                 .unwrap_or(Type::Any);
             ("_array".to_string(), ty)
         }
         ast::TsFnParam::Rest(rest) => {
-            let ty = rest.type_ann.as_ref()
+            let ty = rest
+                .type_ann
+                .as_ref()
                 .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
                 .unwrap_or(Type::Any);
             ("_rest".to_string(), ty)
         }
         ast::TsFnParam::Object(obj) => {
-            let ty = obj.type_ann.as_ref()
+            let ty = obj
+                .type_ann
+                .as_ref()
                 .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
                 .unwrap_or(Type::Any);
             ("_obj".to_string(), ty)
@@ -906,26 +987,26 @@ pub(crate) fn extract_pattern_type(pat: &ast::Pat) -> Type {
 /// Extract type from a pattern with type parameter context
 pub(crate) fn extract_pattern_type_with_ctx(pat: &ast::Pat, ctx: Option<&LoweringContext>) -> Type {
     match pat {
-        ast::Pat::Ident(ident) => {
-            ident.type_ann.as_ref()
-                .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
-                .unwrap_or(Type::Any)
-        }
-        ast::Pat::Array(arr) => {
-            arr.type_ann.as_ref()
-                .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
-                .unwrap_or(Type::Any)
-        }
-        ast::Pat::Rest(rest) => {
-            rest.type_ann.as_ref()
-                .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
-                .unwrap_or(Type::Any)
-        }
-        ast::Pat::Object(obj) => {
-            obj.type_ann.as_ref()
-                .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
-                .unwrap_or(Type::Any)
-        }
+        ast::Pat::Ident(ident) => ident
+            .type_ann
+            .as_ref()
+            .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
+            .unwrap_or(Type::Any),
+        ast::Pat::Array(arr) => arr
+            .type_ann
+            .as_ref()
+            .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
+            .unwrap_or(Type::Any),
+        ast::Pat::Rest(rest) => rest
+            .type_ann
+            .as_ref()
+            .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
+            .unwrap_or(Type::Any),
+        ast::Pat::Object(obj) => obj
+            .type_ann
+            .as_ref()
+            .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, ctx))
+            .unwrap_or(Type::Any),
         ast::Pat::Assign(assign) => {
             // For default parameters, get type from the left side
             extract_pattern_type_with_ctx(&assign.left, ctx)
@@ -950,46 +1031,51 @@ pub(crate) fn extract_binding_type(binding: &ast::Pat) -> Type {
 }
 
 /// Lower decorators from SWC AST to HIR Decorators
-pub(crate) fn lower_decorators(_ctx: &mut LoweringContext, decorators: &[ast::Decorator]) -> Vec<Decorator> {
-    decorators.iter().filter_map(|dec| {
-        // The decorator expression can be:
-        // - Identifier: @log
-        // - Call expression: @log("prefix")
-        match dec.expr.as_ref() {
-            ast::Expr::Ident(ident) => {
-                Some(Decorator {
+pub(crate) fn lower_decorators(
+    _ctx: &mut LoweringContext,
+    decorators: &[ast::Decorator],
+) -> Vec<Decorator> {
+    decorators
+        .iter()
+        .filter_map(|dec| {
+            // The decorator expression can be:
+            // - Identifier: @log
+            // - Call expression: @log("prefix")
+            match dec.expr.as_ref() {
+                ast::Expr::Ident(ident) => Some(Decorator {
                     name: ident.sym.to_string(),
                     args: Vec::new(),
-                })
-            }
-            ast::Expr::Call(call) => {
-                // Get the callee name
-                if let ast::Callee::Expr(callee_expr) = &call.callee {
-                    if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
-                        // Lower the arguments - for now just handle simple literals
-                        let args: Vec<Expr> = call.args.iter()
-                            .filter_map(|arg| {
-                                if arg.spread.is_some() {
-                                    None // Skip spread arguments for now
-                                } else {
-                                    // For decorator args, only handle simple literals for now
-                                    match arg.expr.as_ref() {
-                                        ast::Expr::Lit(lit) => lower_lit(lit).ok(),
-                                        _ => None,
+                }),
+                ast::Expr::Call(call) => {
+                    // Get the callee name
+                    if let ast::Callee::Expr(callee_expr) = &call.callee {
+                        if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
+                            // Lower the arguments - for now just handle simple literals
+                            let args: Vec<Expr> = call
+                                .args
+                                .iter()
+                                .filter_map(|arg| {
+                                    if arg.spread.is_some() {
+                                        None // Skip spread arguments for now
+                                    } else {
+                                        // For decorator args, only handle simple literals for now
+                                        match arg.expr.as_ref() {
+                                            ast::Expr::Lit(lit) => lower_lit(lit).ok(),
+                                            _ => None,
+                                        }
                                     }
-                                }
-                            })
-                            .collect();
-                        return Some(Decorator {
-                            name: ident.sym.to_string(),
-                            args,
-                        });
+                                })
+                                .collect();
+                            return Some(Decorator {
+                                name: ident.sym.to_string(),
+                                args,
+                            });
+                        }
                     }
+                    None
                 }
-                None
+                _ => None,
             }
-            _ => None,
-        }
-    }).collect()
+        })
+        .collect()
 }
-

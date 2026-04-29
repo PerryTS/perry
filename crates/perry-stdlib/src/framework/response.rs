@@ -5,8 +5,8 @@
 use perry_runtime::{js_string_from_bytes, StringHeader};
 use std::collections::HashMap;
 
+use super::server::{HttpResponse, RequestHandle, PENDING_RESPONSES};
 use crate::common::{get_handle, Handle};
-use super::server::{RequestHandle, HttpResponse, PENDING_RESPONSES};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -33,7 +33,10 @@ pub unsafe extern "C" fn js_http_respond_text(
 
     if let Some(req) = get_handle::<RequestHandle>(req_handle) {
         let mut headers = HashMap::new();
-        headers.insert("content-type".to_string(), "text/plain; charset=utf-8".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        );
 
         let response = HttpResponse {
             status: status as u16,
@@ -63,7 +66,10 @@ pub unsafe extern "C" fn js_http_respond_json(
 
     if let Some(req) = get_handle::<RequestHandle>(req_handle) {
         let mut headers = HashMap::new();
-        headers.insert("content-type".to_string(), "application/json; charset=utf-8".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            "application/json; charset=utf-8".to_string(),
+        );
 
         let response = HttpResponse {
             status: status as u16,
@@ -93,7 +99,10 @@ pub unsafe extern "C" fn js_http_respond_html(
 
     if let Some(req) = get_handle::<RequestHandle>(req_handle) {
         let mut headers = HashMap::new();
-        headers.insert("content-type".to_string(), "text/html; charset=utf-8".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            "text/html; charset=utf-8".to_string(),
+        );
 
         let response = HttpResponse {
             status: status as u16,
@@ -125,8 +134,8 @@ pub unsafe extern "C" fn js_http_respond_with_headers(
 
     if let Some(req) = get_handle::<RequestHandle>(req_handle) {
         // Parse headers JSON
-        let headers: HashMap<String, String> = serde_json::from_str(&headers_json)
-            .unwrap_or_default();
+        let headers: HashMap<String, String> =
+            serde_json::from_str(&headers_json).unwrap_or_default();
 
         let response = HttpResponse {
             status: status as u16,
@@ -187,7 +196,10 @@ pub unsafe extern "C" fn js_http_respond_not_found(req_handle: Handle) -> f64 {
 
     if let Some(req) = get_handle::<RequestHandle>(req_handle) {
         let mut headers = HashMap::new();
-        headers.insert("content-type".to_string(), "text/plain; charset=utf-8".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        );
 
         let response = HttpResponse {
             status: 404,
@@ -213,11 +225,15 @@ pub unsafe extern "C" fn js_http_respond_error(
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 
-    let message = string_from_header(message_ptr).unwrap_or_else(|| "Internal Server Error".to_string());
+    let message =
+        string_from_header(message_ptr).unwrap_or_else(|| "Internal Server Error".to_string());
 
     if let Some(req) = get_handle::<RequestHandle>(req_handle) {
         let mut headers = HashMap::new();
-        headers.insert("content-type".to_string(), "text/plain; charset=utf-8".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        );
 
         let response = HttpResponse {
             status: status as u16,

@@ -53,7 +53,11 @@ pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
         if ptr.is_null() {
             let count = BOX_SET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
             if count < 3 {
-                eprintln!("[PERRY WARN] js_box_set: null box pointer #{} (value bits: 0x{:016x})", count, value.to_bits());
+                eprintln!(
+                    "[PERRY WARN] js_box_set: null box pointer #{} (value bits: 0x{:016x})",
+                    count,
+                    value.to_bits()
+                );
             }
             return;
         }

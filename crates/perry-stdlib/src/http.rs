@@ -7,15 +7,15 @@
 //! Both http and https share this implementation — reqwest handles TLS based on URL scheme.
 
 use perry_runtime::{
-    js_object_get_field_by_name, js_object_keys, js_array_length, js_array_get_jsvalue,
-    js_string_from_bytes, JSValue, StringHeader, ClosureHeader,
-    js_closure_call1, js_closure_call0,
+    js_array_get_jsvalue, js_array_length, js_closure_call0, js_closure_call1,
+    js_object_get_field_by_name, js_object_keys, js_string_from_bytes, ClosureHeader, JSValue,
+    StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::common::async_bridge::spawn;
-use crate::common::{register_handle, get_handle_mut, for_each_handle_of, Handle};
+use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle};
 
 /// Pending HTTP events to be processed on the main thread
 static HTTP_PENDING_EVENTS: once_cell::sync::Lazy<Mutex<Vec<PendingHttpEvent>>> =
@@ -50,9 +50,7 @@ fn ensure_gc_scanner_registered() {
 fn scan_http_roots(mark: &mut dyn FnMut(f64)) {
     let mark_cb = |cb: i64, mark: &mut dyn FnMut(f64)| {
         if cb != 0 {
-            let boxed = f64::from_bits(
-                0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF),
-            );
+            let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF));
             mark(boxed);
         }
     };
@@ -273,8 +271,7 @@ unsafe fn build_url_from_options(options_f64: f64, default_protocol: &str) -> St
     let port = get_object_string_field(options_f64, "port")
         .or_else(|| get_object_number_field(options_f64, "port").map(|n| format!("{}", n as u16)));
 
-    let path = get_object_string_field(options_f64, "path")
-        .unwrap_or_else(|| "/".to_string());
+    let path = get_object_string_field(options_f64, "path").unwrap_or_else(|| "/".to_string());
 
     match port {
         Some(p) => format!("{}://{}:{}{}", protocol, hostname, p, path),
@@ -351,8 +348,7 @@ pub unsafe extern "C" fn js_http_request(options_f64: f64, callback_i64: i64) ->
         }
     }
 
-    let timeout_ms = get_object_number_field(options_f64, "timeout")
-        .map(|n| n as u64);
+    let timeout_ms = get_object_number_field(options_f64, "timeout").map(|n| n as u64);
 
     let handle = register_handle(ClientRequestHandle {
         method,
@@ -400,8 +396,7 @@ pub unsafe extern "C" fn js_https_request(options_f64: f64, callback_i64: i64) -
         }
     }
 
-    let timeout_ms = get_object_number_field(options_f64, "timeout")
-        .map(|n| n as u64);
+    let timeout_ms = get_object_number_field(options_f64, "timeout").map(|n| n as u64);
 
     let handle = register_handle(ClientRequestHandle {
         method,
@@ -451,8 +446,7 @@ pub unsafe extern "C" fn js_http_get(url_or_options_f64: f64, callback_i64: i64)
             }
         }
 
-        let timeout_ms = get_object_number_field(url_or_options_f64, "timeout")
-            .map(|n| n as u64);
+        let timeout_ms = get_object_number_field(url_or_options_f64, "timeout").map(|n| n as u64);
 
         (url, headers, timeout_ms)
     };
@@ -511,8 +505,7 @@ pub unsafe extern "C" fn js_https_get(url_or_options_f64: f64, callback_i64: i64
             }
         }
 
-        let timeout_ms = get_object_number_field(url_or_options_f64, "timeout")
-            .map(|n| n as u64);
+        let timeout_ms = get_object_number_field(url_or_options_f64, "timeout").map(|n| n as u64);
 
         (url, headers, timeout_ms)
     };
@@ -619,8 +612,11 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
         match request.send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_message = response.status().canonical_reason()
-                    .unwrap_or("").to_string();
+                let status_message = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
 
                 let mut resp_headers = Vec::new();
                 for (key, value) in response.headers() {
@@ -735,10 +731,7 @@ pub extern "C" fn js_http_status_code(handle: Handle) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_http_status_message(handle: Handle) -> *mut StringHeader {
     if let Some(res) = get_handle_mut::<IncomingMessageHandle>(handle) {
-        return js_string_from_bytes(
-            res.status_message.as_ptr(),
-            res.status_message.len() as u32,
-        );
+        return js_string_from_bytes(res.status_message.as_ptr(), res.status_message.len() as u32);
     }
     js_string_from_bytes("".as_ptr(), 0)
 }
@@ -820,7 +813,7 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 if response_callback != 0 {
                     let closure_ptr = response_callback as *const ClosureHeader;
                     let handle_f64 = f64::from_bits(
-                        0x7FFD_0000_0000_0000u64 | (incoming_handle as u64 & 0x0000_FFFF_FFFF_FFFF)
+                        0x7FFD_0000_0000_0000u64 | (incoming_handle as u64 & 0x0000_FFFF_FFFF_FFFF),
                     );
                     js_closure_call1(closure_ptr, handle_f64);
                 }
@@ -838,12 +831,10 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
 
                 if !data_listeners.is_empty() && !body_clone.is_empty() {
                     // Create a NaN-boxed string from the body
-                    let body_str = js_string_from_bytes(
-                        body_clone.as_ptr(),
-                        body_clone.len() as u32,
-                    );
+                    let body_str =
+                        js_string_from_bytes(body_clone.as_ptr(), body_clone.len() as u32);
                     let body_f64 = f64::from_bits(
-                        0x7FFF_0000_0000_0000u64 | (body_str as u64 & 0x0000_FFFF_FFFF_FFFF)
+                        0x7FFF_0000_0000_0000u64 | (body_str as u64 & 0x0000_FFFF_FFFF_FFFF),
                     );
 
                     for cb in data_listeners {
@@ -884,12 +875,10 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
 
                 if !error_listeners.is_empty() {
                     // Create error string as NaN-boxed value
-                    let err_str = js_string_from_bytes(
-                        error_message.as_ptr(),
-                        error_message.len() as u32,
-                    );
+                    let err_str =
+                        js_string_from_bytes(error_message.as_ptr(), error_message.len() as u32);
                     let err_f64 = f64::from_bits(
-                        0x7FFF_0000_0000_0000u64 | (err_str as u64 & 0x0000_FFFF_FFFF_FFFF)
+                        0x7FFF_0000_0000_0000u64 | (err_str as u64 & 0x0000_FFFF_FFFF_FFFF),
                     );
 
                     for cb in error_listeners {

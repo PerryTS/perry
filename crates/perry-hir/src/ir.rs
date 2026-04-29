@@ -59,7 +59,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "crypto",
     // Tier 3
     "dotenv",
-    "dotenv/config",  // Side-effect import that auto-calls dotenv.config()
+    "dotenv/config", // Side-effect import that auto-calls dotenv.config()
     "jsonwebtoken",
     "nanoid",
     "slugify",
@@ -146,7 +146,14 @@ const RUNTIME_ONLY_MODULES: &[&str] = &[
     // `net` moved to perry-stdlib (event-driven async TCP) in A1/A1.5 —
     // deliberately NOT in this list so `requires_stdlib("net")` returns true
     // and the auto-optimizer enables the `net` feature on perry-stdlib.
-    "fs", "path", "os", "buffer", "child_process", "stream", "url", "util",
+    "fs",
+    "path",
+    "os",
+    "buffer",
+    "child_process",
+    "stream",
+    "url",
+    "util",
     "perry/ui",
     "perry/system",
     "perry/widget",
@@ -304,9 +311,16 @@ pub struct WidgetConfigParam {
 /// Configuration parameter type
 #[derive(Debug, Clone)]
 pub enum WidgetConfigParamType {
-    Enum { values: Vec<String>, default: String },
-    Bool { default: bool },
-    String { default: String },
+    Enum {
+        values: Vec<String>,
+        default: String,
+    },
+    Bool {
+        default: bool,
+    },
+    String {
+        default: String,
+    },
 }
 
 /// Placeholder value for widget preview
@@ -441,7 +455,10 @@ pub enum WidgetModifier {
     FontWeight(String),
     ForegroundColor(String),
     Padding(f64),
-    Frame { width: Option<f64>, height: Option<f64> },
+    Frame {
+        width: Option<f64>,
+        height: Option<f64>,
+    },
     CornerRadius(f64),
     Background(String),
     Opacity(f64),
@@ -456,7 +473,10 @@ pub enum WidgetModifier {
     /// Deep link URL on a view: .widgetURL(URL(string: "...")!)
     WidgetURL(String),
     /// Edge-specific padding: .padding(.leading, 8)
-    PaddingEdge { edge: String, value: f64 },
+    PaddingEdge {
+        edge: String,
+        value: f64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -566,28 +586,18 @@ pub struct Import {
 #[derive(Debug, Clone)]
 pub enum ImportSpecifier {
     /// Named import: import { foo, bar as baz } from "..."
-    Named {
-        imported: String,
-        local: String,
-    },
+    Named { imported: String, local: String },
     /// Default import: import foo from "..."
-    Default {
-        local: String,
-    },
+    Default { local: String },
     /// Namespace import: import * as foo from "..."
-    Namespace {
-        local: String,
-    },
+    Namespace { local: String },
 }
 
 /// An export declaration
 #[derive(Debug, Clone)]
 pub enum Export {
     /// Named export: export { foo, bar as baz }
-    Named {
-        local: String,
-        exported: String,
-    },
+    Named { local: String, exported: String },
     /// Re-export: export { foo } from "..."
     ReExport {
         source: String,
@@ -595,9 +605,7 @@ pub enum Export {
         exported: String,
     },
     /// Export all: export * from "..."
-    ExportAll {
-        source: String,
-    },
+    ExportAll { source: String },
 }
 
 /// A class definition
@@ -718,15 +726,9 @@ pub enum Stmt {
         else_branch: Option<Vec<Stmt>>,
     },
     /// While loop
-    While {
-        condition: Expr,
-        body: Vec<Stmt>,
-    },
+    While { condition: Expr, body: Vec<Stmt> },
     /// Do-while loop (body runs at least once, condition checked at the end)
-    DoWhile {
-        body: Vec<Stmt>,
-        condition: Expr,
-    },
+    DoWhile { body: Vec<Stmt>, condition: Expr },
     /// For loop (lowered from various JS for loops)
     For {
         init: Option<Box<Stmt>>,
@@ -735,10 +737,7 @@ pub enum Stmt {
         body: Vec<Stmt>,
     },
     /// Labeled statement: `label: for/while/do/block`
-    Labeled {
-        label: String,
-        body: Box<Stmt>,
-    },
+    Labeled { label: String, body: Box<Stmt> },
     /// Break statement
     Break,
     /// Continue statement
@@ -786,7 +785,7 @@ pub enum Expr {
     Null,
     Bool(bool),
     Number(f64),
-    Integer(i64), // Integer literal that fits in i64 (for optimization)
+    Integer(i64),   // Integer literal that fits in i64 (for optimization)
     BigInt(String), // Store as string to preserve precision
     String(String),
     /// String literal containing WTF-8 bytes (lone surrogates U+D800..U+DFFF).
@@ -908,8 +907,8 @@ pub enum Expr {
     PropertyUpdate {
         object: Box<Expr>,
         property: String,
-        op: BinaryOp,      // Add for ++, Sub for --
-        prefix: bool,      // true for ++x, false for x++
+        op: BinaryOp, // Add for ++, Sub for --
+        prefix: bool, // true for ++x, false for x++
     },
 
     // Array/index access
@@ -926,8 +925,8 @@ pub enum Expr {
     IndexUpdate {
         object: Box<Expr>,
         index: Box<Expr>,
-        op: BinaryOp,      // Add for ++, Sub for --
-        prefix: bool,      // true for ++x, false for x++
+        op: BinaryOp, // Add for ++, Sub for --
+        prefix: bool, // true for ++x, false for x++
     },
 
     // Object literal
@@ -973,7 +972,10 @@ pub enum Expr {
     Await(Box<Expr>),
 
     // Yield expression (for generator functions)
-    Yield { value: Option<Box<Expr>>, delegate: bool },
+    Yield {
+        value: Option<Box<Expr>>,
+        delegate: bool,
+    },
 
     // New expression (class instantiation)
     New {
@@ -1065,11 +1067,17 @@ pub enum Expr {
     // process.nextTick(callback) -> void
     ProcessNextTick(Box<Expr>),
     // process.on(event, handler) -> void (registers an event listener)
-    ProcessOn { event: Box<Expr>, handler: Box<Expr> },
+    ProcessOn {
+        event: Box<Expr>,
+        handler: Box<Expr>,
+    },
     // process.chdir(directory) -> void
     ProcessChdir(Box<Expr>),
     // process.kill(pid, signal?) -> void
-    ProcessKill { pid: Box<Expr>, signal: Option<Box<Expr>> },
+    ProcessKill {
+        pid: Box<Expr>,
+        signal: Option<Box<Expr>>,
+    },
     // process.exit(code?) -> never. Bare `process.exit()` lowers as
     // `ProcessExit(None)` which the runtime treats as code 0.
     ProcessExit(Option<Box<Expr>>),
@@ -1081,78 +1089,92 @@ pub enum Expr {
     ProcessStderr,
 
     // File system operations
-    FsReadFileSync(Box<Expr>),           // fs.readFileSync(path) -> string
+    FsReadFileSync(Box<Expr>), // fs.readFileSync(path) -> string
     FsWriteFileSync(Box<Expr>, Box<Expr>), // fs.writeFileSync(path, content) -> void
-    FsExistsSync(Box<Expr>),             // fs.existsSync(path) -> boolean
-    FsMkdirSync(Box<Expr>),              // fs.mkdirSync(path) -> void
-    FsUnlinkSync(Box<Expr>),             // fs.unlinkSync(path) -> void
+    FsExistsSync(Box<Expr>),   // fs.existsSync(path) -> boolean
+    FsMkdirSync(Box<Expr>),    // fs.mkdirSync(path) -> void
+    FsUnlinkSync(Box<Expr>),   // fs.unlinkSync(path) -> void
     FsAppendFileSync(Box<Expr>, Box<Expr>), // fs.appendFileSync(path, content) -> void
-    FsReadFileBinary(Box<Expr>),         // fs.readFileBuffer(path) -> Buffer (binary-safe)
-    FsRmRecursive(Box<Expr>),            // fs.rmRecursive(path) -> boolean
+    FsReadFileBinary(Box<Expr>), // fs.readFileBuffer(path) -> Buffer (binary-safe)
+    FsRmRecursive(Box<Expr>),  // fs.rmRecursive(path) -> boolean
 
     // Path operations
-    PathJoin(Box<Expr>, Box<Expr>),      // path.join(a, b) -> string
-    PathDirname(Box<Expr>),              // path.dirname(path) -> string
-    PathBasename(Box<Expr>),             // path.basename(path) -> string
+    PathJoin(Box<Expr>, Box<Expr>),        // path.join(a, b) -> string
+    PathDirname(Box<Expr>),                // path.dirname(path) -> string
+    PathBasename(Box<Expr>),               // path.basename(path) -> string
     PathBasenameExt(Box<Expr>, Box<Expr>), // path.basename(path, ext) -> string (strips ext suffix)
-    PathExtname(Box<Expr>),              // path.extname(path) -> string
-    PathResolve(Box<Expr>),              // path.resolve(path) -> string
-    PathIsAbsolute(Box<Expr>),           // path.isAbsolute(path) -> boolean
-    PathRelative(Box<Expr>, Box<Expr>),  // path.relative(from, to) -> string
-    PathNormalize(Box<Expr>),            // path.normalize(path) -> string
-    PathParse(Box<Expr>),                // path.parse(path) -> { root, dir, base, ext, name }
-    PathFormat(Box<Expr>),               // path.format({ dir, base }) -> string
-    PathSep,                             // path.sep constant
-    PathDelimiter,                       // path.delimiter constant
+    PathExtname(Box<Expr>),                // path.extname(path) -> string
+    PathResolve(Box<Expr>),                // path.resolve(path) -> string
+    PathIsAbsolute(Box<Expr>),             // path.isAbsolute(path) -> boolean
+    PathRelative(Box<Expr>, Box<Expr>),    // path.relative(from, to) -> string
+    PathNormalize(Box<Expr>),              // path.normalize(path) -> string
+    PathParse(Box<Expr>),                  // path.parse(path) -> { root, dir, base, ext, name }
+    PathFormat(Box<Expr>),                 // path.format({ dir, base }) -> string
+    PathSep,                               // path.sep constant
+    PathDelimiter,                         // path.delimiter constant
 
     // WeakRef and FinalizationRegistry
-    WeakRefNew(Box<Expr>),                                                                     // new WeakRef(obj) -> WeakRef
-    WeakRefDeref(Box<Expr>),                                                                   // ref.deref() -> object | undefined
-    FinalizationRegistryNew(Box<Expr>),                                                        // new FinalizationRegistry(callback) -> registry
-    FinalizationRegistryRegister {                                                             // registry.register(target, held, token?)
+    WeakRefNew(Box<Expr>),              // new WeakRef(obj) -> WeakRef
+    WeakRefDeref(Box<Expr>),            // ref.deref() -> object | undefined
+    FinalizationRegistryNew(Box<Expr>), // new FinalizationRegistry(callback) -> registry
+    FinalizationRegistryRegister {
+        // registry.register(target, held, token?)
         registry: Box<Expr>,
         target: Box<Expr>,
         held: Box<Expr>,
         token: Option<Box<Expr>>,
     },
-    FinalizationRegistryUnregister { registry: Box<Expr>, token: Box<Expr> },                  // registry.unregister(token) -> bool
+    FinalizationRegistryUnregister {
+        registry: Box<Expr>,
+        token: Box<Expr>,
+    }, // registry.unregister(token) -> bool
 
     // Object property descriptor methods
     ObjectDefineProperty(Box<Expr>, Box<Expr>, Box<Expr>), // Object.defineProperty(obj, key, desc)
-    ObjectGetOwnPropertyDescriptor(Box<Expr>, Box<Expr>),  // Object.getOwnPropertyDescriptor(obj, key)
-    ObjectGetOwnPropertyNames(Box<Expr>),                  // Object.getOwnPropertyNames(obj) -> string[]
-    ObjectCreate(Box<Expr>),                               // Object.create(proto)
-    ObjectFreeze(Box<Expr>),                               // Object.freeze(obj)
-    ObjectSeal(Box<Expr>),                                 // Object.seal(obj)
-    ObjectPreventExtensions(Box<Expr>),                    // Object.preventExtensions(obj)
-    ObjectIsFrozen(Box<Expr>),                             // Object.isFrozen(obj)
-    ObjectIsSealed(Box<Expr>),                             // Object.isSealed(obj)
-    ObjectIsExtensible(Box<Expr>),                         // Object.isExtensible(obj)
-    ObjectGetPrototypeOf(Box<Expr>),                       // Object.getPrototypeOf(obj)
-    ObjectGetOwnPropertySymbols(Box<Expr>),                // Object.getOwnPropertySymbols(obj) -> symbol[]
+    ObjectGetOwnPropertyDescriptor(Box<Expr>, Box<Expr>), // Object.getOwnPropertyDescriptor(obj, key)
+    ObjectGetOwnPropertyNames(Box<Expr>), // Object.getOwnPropertyNames(obj) -> string[]
+    ObjectCreate(Box<Expr>),              // Object.create(proto)
+    ObjectFreeze(Box<Expr>),              // Object.freeze(obj)
+    ObjectSeal(Box<Expr>),                // Object.seal(obj)
+    ObjectPreventExtensions(Box<Expr>),   // Object.preventExtensions(obj)
+    ObjectIsFrozen(Box<Expr>),            // Object.isFrozen(obj)
+    ObjectIsSealed(Box<Expr>),            // Object.isSealed(obj)
+    ObjectIsExtensible(Box<Expr>),        // Object.isExtensible(obj)
+    ObjectGetPrototypeOf(Box<Expr>),      // Object.getPrototypeOf(obj)
+    ObjectGetOwnPropertySymbols(Box<Expr>), // Object.getOwnPropertySymbols(obj) -> symbol[]
 
     // Symbol operations
-    SymbolNew(Option<Box<Expr>>),                          // Symbol() / Symbol(description)
-    SymbolFor(Box<Expr>),                                  // Symbol.for(key) -> registered symbol
-    SymbolKeyFor(Box<Expr>),                               // Symbol.keyFor(sym) -> key | undefined
-    SymbolDescription(Box<Expr>),                          // sym.description
-    SymbolToString(Box<Expr>),                             // sym.toString()
+    SymbolNew(Option<Box<Expr>>), // Symbol() / Symbol(description)
+    SymbolFor(Box<Expr>),         // Symbol.for(key) -> registered symbol
+    SymbolKeyFor(Box<Expr>),      // Symbol.keyFor(sym) -> key | undefined
+    SymbolDescription(Box<Expr>), // sym.description
+    SymbolToString(Box<Expr>),    // sym.toString()
 
     // URL operations
-    FileURLToPath(Box<Expr>),            // url.fileURLToPath(url) -> string
+    FileURLToPath(Box<Expr>), // url.fileURLToPath(url) -> string
 
     // RegExp operations
-    RegExpExec { regex: Box<Expr>, string: Box<Expr> },
+    RegExpExec {
+        regex: Box<Expr>,
+        string: Box<Expr>,
+    },
     RegExpSource(Box<Expr>),
     RegExpFlags(Box<Expr>),
     RegExpLastIndex(Box<Expr>),
-    RegExpSetLastIndex { regex: Box<Expr>, value: Box<Expr> },
-    RegExpReplaceFn { string: Box<Expr>, regex: Box<Expr>, callback: Box<Expr> },
+    RegExpSetLastIndex {
+        regex: Box<Expr>,
+        value: Box<Expr>,
+    },
+    RegExpReplaceFn {
+        string: Box<Expr>,
+        regex: Box<Expr>,
+        callback: Box<Expr>,
+    },
     RegExpExecIndex,
     RegExpExecGroups,
 
     // JSON operations
-    JsonParse(Box<Expr>),                // JSON.parse(string) -> value
+    JsonParse(Box<Expr>), // JSON.parse(string) -> value
     /// `JSON.parse<T>(string)` with a compile-time type argument
     /// (issue #179 tier 1 via typed-parse plan). The `ty` carries the
     /// expected shape so codegen can emit a specialized parse call.
@@ -1168,49 +1190,60 @@ pub enum Expr {
     /// faster specialized path per shape. Falls back to the generic
     /// parser transparently if the input doesn't match the declared
     /// shape.
-    JsonParseTyped { text: Box<Expr>, ty: Type, ordered_keys: Option<Vec<String>> },
-    JsonParseReviver { text: Box<Expr>, reviver: Box<Expr> },
+    JsonParseTyped {
+        text: Box<Expr>,
+        ty: Type,
+        ordered_keys: Option<Vec<String>>,
+    },
+    JsonParseReviver {
+        text: Box<Expr>,
+        reviver: Box<Expr>,
+    },
     JsonParseWithReviver(Box<Expr>, Box<Expr>),
-    JsonStringify(Box<Expr>),            // JSON.stringify(value) -> string
-    JsonStringifyPretty { value: Box<Expr>, replacer: Option<Box<Expr>>, space: Box<Expr> },
+    JsonStringify(Box<Expr>), // JSON.stringify(value) -> string
+    JsonStringifyPretty {
+        value: Box<Expr>,
+        replacer: Option<Box<Expr>>,
+        space: Box<Expr>,
+    },
     JsonStringifyFull(Box<Expr>, Box<Expr>, Box<Expr>),
 
     // Math operations
-    MathFloor(Box<Expr>),                // Math.floor(x) -> number
-    MathCeil(Box<Expr>),                 // Math.ceil(x) -> number
-    MathRound(Box<Expr>),                // Math.round(x) -> number
-    MathAbs(Box<Expr>),                  // Math.abs(x) -> number
-    MathSqrt(Box<Expr>),                 // Math.sqrt(x) -> number
-    MathLog(Box<Expr>),                  // Math.log(x) -> number
-    MathLog2(Box<Expr>),                 // Math.log2(x) -> number
-    MathLog10(Box<Expr>),                // Math.log10(x) -> number
-    MathPow(Box<Expr>, Box<Expr>),       // Math.pow(base, exp) -> number
-    MathMin(Vec<Expr>),                  // Math.min(...values) -> number
-    MathMax(Vec<Expr>),                  // Math.max(...values) -> number
-    MathMinSpread(Box<Expr>),            // Math.min(...array) -> number (spread from single array)
-    MathMaxSpread(Box<Expr>),            // Math.max(...array) -> number (spread from single array)
-    MathImul(Box<Expr>, Box<Expr>),      // Math.imul(a, b) -> number (32-bit integer multiply)
-    MathRandom,                          // Math.random() -> number
-    MathSin(Box<Expr>),                  // Math.sin(x) -> number
-    MathCos(Box<Expr>),                  // Math.cos(x) -> number
-    MathTan(Box<Expr>),                  // Math.tan(x) -> number
-    MathAsin(Box<Expr>),                 // Math.asin(x) -> number
-    MathAcos(Box<Expr>),                 // Math.acos(x) -> number
-    MathAtan(Box<Expr>),                 // Math.atan(x) -> number
-    MathAtan2(Box<Expr>, Box<Expr>),     // Math.atan2(y, x) -> number
-    MathCbrt(Box<Expr>),                 // Math.cbrt(x) -> number
-    MathHypot(Vec<Expr>),                // Math.hypot(...values) -> number
-    MathFround(Box<Expr>),               // Math.fround(x) -> number
-    MathClz32(Box<Expr>),                // Math.clz32(x) -> number
-    MathExpm1(Box<Expr>),                // Math.expm1(x) -> number
-    MathLog1p(Box<Expr>),                // Math.log1p(x) -> number
-    MathSinh(Box<Expr>),                 // Math.sinh(x) -> number
-    MathCosh(Box<Expr>),                 // Math.cosh(x) -> number
-    MathTanh(Box<Expr>),                 // Math.tanh(x) -> number
-    MathAsinh(Box<Expr>),                // Math.asinh(x) -> number
-    MathAcosh(Box<Expr>),                // Math.acosh(x) -> number
-    MathAtanh(Box<Expr>),                // Math.atanh(x) -> number
-    MathExp(Box<Expr>),                  // Math.exp(x) -> number (e^x)
+    MathFloor(Box<Expr>),            // Math.floor(x) -> number
+    MathCeil(Box<Expr>),             // Math.ceil(x) -> number
+    MathRound(Box<Expr>),            // Math.round(x) -> number
+    MathAbs(Box<Expr>),              // Math.abs(x) -> number
+    MathSqrt(Box<Expr>),             // Math.sqrt(x) -> number
+    MathLog(Box<Expr>),              // Math.log(x) -> number
+    MathLog2(Box<Expr>),             // Math.log2(x) -> number
+    MathLog10(Box<Expr>),            // Math.log10(x) -> number
+    MathPow(Box<Expr>, Box<Expr>),   // Math.pow(base, exp) -> number
+    MathMin(Vec<Expr>),              // Math.min(...values) -> number
+    MathMax(Vec<Expr>),              // Math.max(...values) -> number
+    MathMinSpread(Box<Expr>),        // Math.min(...array) -> number (spread from single array)
+    MathMaxSpread(Box<Expr>),        // Math.max(...array) -> number (spread from single array)
+    MathImul(Box<Expr>, Box<Expr>),  // Math.imul(a, b) -> number (32-bit integer multiply)
+    MathRandom,                      // Math.random() -> number
+    MathSin(Box<Expr>),              // Math.sin(x) -> number
+    MathCos(Box<Expr>),              // Math.cos(x) -> number
+    MathTan(Box<Expr>),              // Math.tan(x) -> number
+    MathAsin(Box<Expr>),             // Math.asin(x) -> number
+    MathAcos(Box<Expr>),             // Math.acos(x) -> number
+    MathAtan(Box<Expr>),             // Math.atan(x) -> number
+    MathAtan2(Box<Expr>, Box<Expr>), // Math.atan2(y, x) -> number
+    MathCbrt(Box<Expr>),             // Math.cbrt(x) -> number
+    MathHypot(Vec<Expr>),            // Math.hypot(...values) -> number
+    MathFround(Box<Expr>),           // Math.fround(x) -> number
+    MathClz32(Box<Expr>),            // Math.clz32(x) -> number
+    MathExpm1(Box<Expr>),            // Math.expm1(x) -> number
+    MathLog1p(Box<Expr>),            // Math.log1p(x) -> number
+    MathSinh(Box<Expr>),             // Math.sinh(x) -> number
+    MathCosh(Box<Expr>),             // Math.cosh(x) -> number
+    MathTanh(Box<Expr>),             // Math.tanh(x) -> number
+    MathAsinh(Box<Expr>),            // Math.asinh(x) -> number
+    MathAcosh(Box<Expr>),            // Math.acosh(x) -> number
+    MathAtanh(Box<Expr>),            // Math.atanh(x) -> number
+    MathExp(Box<Expr>),              // Math.exp(x) -> number (e^x)
 
     /// performance.now() -> number (high-resolution time in ms)
     PerformanceNow,
@@ -1245,90 +1278,102 @@ pub enum Expr {
     QueueMicrotask(Box<Expr>),
 
     // Crypto operations
-    CryptoRandomBytes(Box<Expr>),        // crypto.randomBytes(size) -> string (hex)
-    CryptoRandomUUID,                    // crypto.randomUUID() -> string
-    CryptoSha256(Box<Expr>),             // crypto.sha256(data) -> string (hex)
-    CryptoMd5(Box<Expr>),                // crypto.md5(data) -> string (hex)
+    CryptoRandomBytes(Box<Expr>), // crypto.randomBytes(size) -> string (hex)
+    CryptoRandomUUID,             // crypto.randomUUID() -> string
+    CryptoSha256(Box<Expr>),      // crypto.sha256(data) -> string (hex)
+    CryptoMd5(Box<Expr>),         // crypto.md5(data) -> string (hex)
 
     // OS operations
-    OsPlatform,                          // os.platform() -> string ("darwin", "linux", "win32")
-    OsArch,                              // os.arch() -> string ("x64", "arm64", etc.)
-    OsHostname,                          // os.hostname() -> string
-    OsHomedir,                           // os.homedir() -> string
-    OsTmpdir,                            // os.tmpdir() -> string
-    OsTotalmem,                          // os.totalmem() -> number (bytes)
-    OsFreemem,                           // os.freemem() -> number (bytes)
-    OsUptime,                            // os.uptime() -> number (seconds)
-    OsType,                              // os.type() -> string ("Darwin", "Linux", "Windows_NT")
-    OsRelease,                           // os.release() -> string
-    OsCpus,                              // os.cpus() -> array of CPU info objects
-    OsNetworkInterfaces,                 // os.networkInterfaces() -> object
-    OsUserInfo,                          // os.userInfo() -> object
-    OsEOL,                               // os.EOL -> string ("\n" or "\r\n")
+    OsPlatform,          // os.platform() -> string ("darwin", "linux", "win32")
+    OsArch,              // os.arch() -> string ("x64", "arm64", etc.)
+    OsHostname,          // os.hostname() -> string
+    OsHomedir,           // os.homedir() -> string
+    OsTmpdir,            // os.tmpdir() -> string
+    OsTotalmem,          // os.totalmem() -> number (bytes)
+    OsFreemem,           // os.freemem() -> number (bytes)
+    OsUptime,            // os.uptime() -> number (seconds)
+    OsType,              // os.type() -> string ("Darwin", "Linux", "Windows_NT")
+    OsRelease,           // os.release() -> string
+    OsCpus,              // os.cpus() -> array of CPU info objects
+    OsNetworkInterfaces, // os.networkInterfaces() -> object
+    OsUserInfo,          // os.userInfo() -> object
+    OsEOL,               // os.EOL -> string ("\n" or "\r\n")
 
     // Buffer operations
-    BufferFrom {                         // Buffer.from(data, encoding?) -> Buffer
+    BufferFrom {
+        // Buffer.from(data, encoding?) -> Buffer
         data: Box<Expr>,
         encoding: Option<Box<Expr>>,
     },
-    BufferAlloc {                        // Buffer.alloc(size, fill?) -> Buffer
+    BufferAlloc {
+        // Buffer.alloc(size, fill?) -> Buffer
         size: Box<Expr>,
         fill: Option<Box<Expr>>,
     },
-    BufferAllocUnsafe(Box<Expr>),        // Buffer.allocUnsafe(size) -> Buffer
-    BufferConcat(Box<Expr>),             // Buffer.concat(list) -> Buffer
-    BufferIsBuffer(Box<Expr>),           // Buffer.isBuffer(obj) -> boolean
-    BufferByteLength(Box<Expr>),         // Buffer.byteLength(string) -> number
-    BufferToString {                     // buffer.toString(encoding?) -> string
+    BufferAllocUnsafe(Box<Expr>), // Buffer.allocUnsafe(size) -> Buffer
+    BufferConcat(Box<Expr>),      // Buffer.concat(list) -> Buffer
+    BufferIsBuffer(Box<Expr>),    // Buffer.isBuffer(obj) -> boolean
+    BufferByteLength(Box<Expr>),  // Buffer.byteLength(string) -> number
+    BufferToString {
+        // buffer.toString(encoding?) -> string
         buffer: Box<Expr>,
         encoding: Option<Box<Expr>>,
     },
-    BufferLength(Box<Expr>),             // buffer.length -> number
-    BufferSlice {                        // buffer.slice(start?, end?) -> Buffer
+    BufferLength(Box<Expr>), // buffer.length -> number
+    BufferSlice {
+        // buffer.slice(start?, end?) -> Buffer
         buffer: Box<Expr>,
         start: Option<Box<Expr>>,
         end: Option<Box<Expr>>,
     },
-    BufferCopy {                         // buffer.copy(target, tStart?, sStart?, sEnd?) -> number
+    BufferCopy {
+        // buffer.copy(target, tStart?, sStart?, sEnd?) -> number
         source: Box<Expr>,
         target: Box<Expr>,
         target_start: Option<Box<Expr>>,
         source_start: Option<Box<Expr>>,
         source_end: Option<Box<Expr>>,
     },
-    BufferWrite {                        // buffer.write(string, offset?, encoding?) -> number
+    BufferWrite {
+        // buffer.write(string, offset?, encoding?) -> number
         buffer: Box<Expr>,
         string: Box<Expr>,
         offset: Option<Box<Expr>>,
         encoding: Option<Box<Expr>>,
     },
-    BufferFill {                         // buffer.fill(value) -> Buffer (same buffer)
+    BufferFill {
+        // buffer.fill(value) -> Buffer (same buffer)
         buffer: Box<Expr>,
         value: Box<Expr>,
     },
-    BufferEquals {                       // buffer.equals(other) -> boolean
+    BufferEquals {
+        // buffer.equals(other) -> boolean
         buffer: Box<Expr>,
         other: Box<Expr>,
     },
-    BufferIndexGet {                     // buffer[i] -> number
+    BufferIndexGet {
+        // buffer[i] -> number
         buffer: Box<Expr>,
         index: Box<Expr>,
     },
-    BufferIndexSet {                     // buffer[i] = value
+    BufferIndexSet {
+        // buffer[i] = value
         buffer: Box<Expr>,
         index: Box<Expr>,
         value: Box<Expr>,
     },
 
     // Typed array operations
-    Uint8ArrayNew(Option<Box<Expr>>),    // new Uint8Array() or new Uint8Array(length) or new Uint8Array(array)
-    Uint8ArrayFrom(Box<Expr>),           // Uint8Array.from(arrayLike) -> Uint8Array
-    Uint8ArrayLength(Box<Expr>),         // uint8array.length -> number
-    Uint8ArrayGet {                      // uint8array[i] -> number
+    Uint8ArrayNew(Option<Box<Expr>>), // new Uint8Array() or new Uint8Array(length) or new Uint8Array(array)
+    Uint8ArrayFrom(Box<Expr>),        // Uint8Array.from(arrayLike) -> Uint8Array
+    Uint8ArrayLength(Box<Expr>),      // uint8array.length -> number
+    Uint8ArrayGet {
+        // uint8array[i] -> number
         array: Box<Expr>,
         index: Box<Expr>,
     },
-    Uint8ArraySet {                      // uint8array[i] = value
+    Uint8ArraySet {
+        // uint8array[i] = value
         array: Box<Expr>,
         index: Box<Expr>,
         value: Box<Expr>,
@@ -1337,191 +1382,349 @@ pub enum Expr {
     /// Generic typed array constructor: `new Int32Array([1, 2, 3])` etc.
     /// `kind` is one of the `TYPED_ARRAY_KIND_*` constants.
     /// `arg` is `None` for `new Int32Array()`, `Some(expr)` for `(length)` or `(arrayLike)`.
-    TypedArrayNew { kind: u8, arg: Option<Box<Expr>> },
+    TypedArrayNew {
+        kind: u8,
+        arg: Option<Box<Expr>>,
+    },
 
     // Child Process operations
-    ChildProcessExecSync {               // execSync(cmd, opts?) -> Buffer | string
+    ChildProcessExecSync {
+        // execSync(cmd, opts?) -> Buffer | string
         command: Box<Expr>,
         options: Option<Box<Expr>>,
     },
-    ChildProcessSpawnSync {              // spawnSync(cmd, args?, opts?) -> SpawnSyncResult
-        command: Box<Expr>,
-        args: Option<Box<Expr>>,
-        options: Option<Box<Expr>>,
-    },
-    ChildProcessSpawn {                  // spawn(cmd, args?, opts?) -> ChildProcess
+    ChildProcessSpawnSync {
+        // spawnSync(cmd, args?, opts?) -> SpawnSyncResult
         command: Box<Expr>,
         args: Option<Box<Expr>>,
         options: Option<Box<Expr>>,
     },
-    ChildProcessExec {                   // exec(cmd, opts?, callback?) -> ChildProcess
+    ChildProcessSpawn {
+        // spawn(cmd, args?, opts?) -> ChildProcess
+        command: Box<Expr>,
+        args: Option<Box<Expr>>,
+        options: Option<Box<Expr>>,
+    },
+    ChildProcessExec {
+        // exec(cmd, opts?, callback?) -> ChildProcess
         command: Box<Expr>,
         options: Option<Box<Expr>>,
         callback: Option<Box<Expr>>,
     },
-    ChildProcessSpawnBackground {        // child_process.spawnBackground(cmd, args, logFile, envJson?) -> {pid, handleId}
+    ChildProcessSpawnBackground {
+        // child_process.spawnBackground(cmd, args, logFile, envJson?) -> {pid, handleId}
         command: Box<Expr>,
         args: Option<Box<Expr>>,
         log_file: Box<Expr>,
         env_json: Option<Box<Expr>>,
     },
     ChildProcessGetProcessStatus(Box<Expr>), // child_process.getProcessStatus(handleId) -> {alive, exitCode}
-    ChildProcessKillProcess(Box<Expr>),  // child_process.killProcess(handleId) -> void
+    ChildProcessKillProcess(Box<Expr>),      // child_process.killProcess(handleId) -> void
 
     // Fetch operations
-    FetchWithOptions {                   // fetch(url, {method, body, headers}) -> Promise<Response>
+    FetchWithOptions {
+        // fetch(url, {method, body, headers}) -> Promise<Response>
         url: Box<Expr>,
         method: Box<Expr>,
         body: Box<Expr>,
         headers: Vec<(String, Expr)>,
     },
-    FetchGetWithAuth {                   // fetchWithAuth(url, authHeader) -> Promise<Response>
+    FetchGetWithAuth {
+        // fetchWithAuth(url, authHeader) -> Promise<Response>
         url: Box<Expr>,
         auth_header: Box<Expr>,
     },
-    FetchPostWithAuth {                  // fetchPostWithAuth(url, authHeader, body) -> Promise<Response>
+    FetchPostWithAuth {
+        // fetchPostWithAuth(url, authHeader, body) -> Promise<Response>
         url: Box<Expr>,
         auth_header: Box<Expr>,
         body: Box<Expr>,
     },
 
     // Net operations
-    NetCreateServer {                    // net.createServer(options?, connectionListener?) -> Server
+    NetCreateServer {
+        // net.createServer(options?, connectionListener?) -> Server
         options: Option<Box<Expr>>,
         connection_listener: Option<Box<Expr>>,
     },
-    NetCreateConnection {                // net.createConnection(port, host?, connectListener?) -> Socket
+    NetCreateConnection {
+        // net.createConnection(port, host?, connectListener?) -> Socket
         port: Box<Expr>,
         host: Option<Box<Expr>>,
         connect_listener: Option<Box<Expr>>,
     },
-    NetConnect {                         // net.connect(port, host?, connectListener?) -> Socket
+    NetConnect {
+        // net.connect(port, host?, connectListener?) -> Socket
         port: Box<Expr>,
         host: Option<Box<Expr>>,
         connect_listener: Option<Box<Expr>>,
     },
 
     // Array methods
-    ArrayPush { array_id: LocalId, value: Box<Expr> },    // arr.push(value) -> new length
-    ArrayPushSpread { array_id: LocalId, source: Box<Expr> }, // arr.push(...src) -> new length
-    ArrayPop(LocalId),                                     // arr.pop() -> removed element
-    ArrayShift(LocalId),                                   // arr.shift() -> removed element
-    ArrayUnshift { array_id: LocalId, value: Box<Expr> }, // arr.unshift(value) -> new length
-    ArrayIndexOf { array: Box<Expr>, value: Box<Expr> },  // arr.indexOf(value) -> index
-    ArrayIncludes { array: Box<Expr>, value: Box<Expr> }, // arr.includes(value) -> boolean
-    ArraySlice { array: Box<Expr>, start: Box<Expr>, end: Option<Box<Expr>> }, // arr.slice(start, end?) -> new array
-    ArraySplice { array_id: LocalId, start: Box<Expr>, delete_count: Option<Box<Expr>>, items: Vec<Expr> }, // arr.splice(start, deleteCount?, ...items) -> deleted elements array
+    ArrayPush {
+        array_id: LocalId,
+        value: Box<Expr>,
+    }, // arr.push(value) -> new length
+    ArrayPushSpread {
+        array_id: LocalId,
+        source: Box<Expr>,
+    }, // arr.push(...src) -> new length
+    ArrayPop(LocalId),   // arr.pop() -> removed element
+    ArrayShift(LocalId), // arr.shift() -> removed element
+    ArrayUnshift {
+        array_id: LocalId,
+        value: Box<Expr>,
+    }, // arr.unshift(value) -> new length
+    ArrayIndexOf {
+        array: Box<Expr>,
+        value: Box<Expr>,
+    }, // arr.indexOf(value) -> index
+    ArrayIncludes {
+        array: Box<Expr>,
+        value: Box<Expr>,
+    }, // arr.includes(value) -> boolean
+    ArraySlice {
+        array: Box<Expr>,
+        start: Box<Expr>,
+        end: Option<Box<Expr>>,
+    }, // arr.slice(start, end?) -> new array
+    ArraySplice {
+        array_id: LocalId,
+        start: Box<Expr>,
+        delete_count: Option<Box<Expr>>,
+        items: Vec<Expr>,
+    }, // arr.splice(start, deleteCount?, ...items) -> deleted elements array
 
     // Array higher-order function methods
-    ArrayForEach { array: Box<Expr>, callback: Box<Expr> },  // arr.forEach(fn) -> void
-    ArrayMap { array: Box<Expr>, callback: Box<Expr> },      // arr.map(fn) -> new array
-    ArrayFilter { array: Box<Expr>, callback: Box<Expr> },   // arr.filter(fn) -> new array
-    ArrayFind { array: Box<Expr>, callback: Box<Expr> },     // arr.find(fn) -> element | undefined
-    ArrayFindIndex { array: Box<Expr>, callback: Box<Expr> }, // arr.findIndex(fn) -> index | -1
-    ArrayFindLast { array: Box<Expr>, callback: Box<Expr> }, // arr.findLast(fn) -> element | undefined
-    ArrayFindLastIndex { array: Box<Expr>, callback: Box<Expr> }, // arr.findLastIndex(fn) -> index | -1
-    ArrayAt { array: Box<Expr>, index: Box<Expr> },          // arr.at(i) -> element (negative index OK)
-    ArraySome { array: Box<Expr>, callback: Box<Expr> },     // arr.some(fn) -> boolean
-    ArrayEvery { array: Box<Expr>, callback: Box<Expr> },    // arr.every(fn) -> boolean
-    ArrayFlatMap { array: Box<Expr>, callback: Box<Expr> },  // arr.flatMap(fn) -> new array
-    ArraySort { array: Box<Expr>, comparator: Box<Expr> },   // arr.sort(fn) -> same array (in-place)
-    ArrayReduce { array: Box<Expr>, callback: Box<Expr>, initial: Option<Box<Expr>> }, // arr.reduce(fn, init?) -> value
-    ArrayReduceRight { array: Box<Expr>, callback: Box<Expr>, initial: Option<Box<Expr>> }, // arr.reduceRight(fn, init?) -> value
-    ArrayJoin { array: Box<Expr>, separator: Option<Box<Expr>> }, // arr.join(separator?) -> string
-    ArrayFlat { array: Box<Expr> },                          // arr.flat() -> flattened array
-    ArrayToReversed { array: Box<Expr> },                    // arr.toReversed() -> new reversed array
-    ArrayToSorted { array: Box<Expr>, comparator: Option<Box<Expr>> }, // arr.toSorted(fn?) -> new sorted array
-    ArrayToSpliced { array: Box<Expr>, start: Box<Expr>, delete_count: Box<Expr>, items: Vec<Expr> }, // arr.toSpliced(start, deleteCount, ...items) -> new array
-    ArrayWith { array: Box<Expr>, index: Box<Expr>, value: Box<Expr> }, // arr.with(index, value) -> new array
-    ArrayCopyWithin { array_id: LocalId, target: Box<Expr>, start: Box<Expr>, end: Option<Box<Expr>> }, // arr.copyWithin(target, start, end?) -> same array
-    ArrayEntries(Box<Expr>),                                 // arr.entries() -> Array<[index, value]> (eager materialization)
-    ArrayKeys(Box<Expr>),                                    // arr.keys() -> Array<index>
-    ArrayValues(Box<Expr>),                                  // arr.values() -> Array<value> (essentially clone)
+    ArrayForEach {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+    }, // arr.forEach(fn) -> void
+    ArrayMap {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+    }, // arr.map(fn) -> new array
+    ArrayFilter {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+    }, // arr.filter(fn) -> new array
+    ArrayFind {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+    }, // arr.find(fn) -> element | undefined
+    ArrayFindIndex {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+    }, // arr.findIndex(fn) -> index | -1
+    ArrayFindLast {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+    }, // arr.findLast(fn) -> element | undefined
+    ArrayFindLastIndex {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+    }, // arr.findLastIndex(fn) -> index | -1
+    ArrayAt {
+        array: Box<Expr>,
+        index: Box<Expr>,
+    }, // arr.at(i) -> element (negative index OK)
+    ArraySome {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+    }, // arr.some(fn) -> boolean
+    ArrayEvery {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+    }, // arr.every(fn) -> boolean
+    ArrayFlatMap {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+    }, // arr.flatMap(fn) -> new array
+    ArraySort {
+        array: Box<Expr>,
+        comparator: Box<Expr>,
+    }, // arr.sort(fn) -> same array (in-place)
+    ArrayReduce {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+        initial: Option<Box<Expr>>,
+    }, // arr.reduce(fn, init?) -> value
+    ArrayReduceRight {
+        array: Box<Expr>,
+        callback: Box<Expr>,
+        initial: Option<Box<Expr>>,
+    }, // arr.reduceRight(fn, init?) -> value
+    ArrayJoin {
+        array: Box<Expr>,
+        separator: Option<Box<Expr>>,
+    }, // arr.join(separator?) -> string
+    ArrayFlat {
+        array: Box<Expr>,
+    }, // arr.flat() -> flattened array
+    ArrayToReversed {
+        array: Box<Expr>,
+    }, // arr.toReversed() -> new reversed array
+    ArrayToSorted {
+        array: Box<Expr>,
+        comparator: Option<Box<Expr>>,
+    }, // arr.toSorted(fn?) -> new sorted array
+    ArrayToSpliced {
+        array: Box<Expr>,
+        start: Box<Expr>,
+        delete_count: Box<Expr>,
+        items: Vec<Expr>,
+    }, // arr.toSpliced(start, deleteCount, ...items) -> new array
+    ArrayWith {
+        array: Box<Expr>,
+        index: Box<Expr>,
+        value: Box<Expr>,
+    }, // arr.with(index, value) -> new array
+    ArrayCopyWithin {
+        array_id: LocalId,
+        target: Box<Expr>,
+        start: Box<Expr>,
+        end: Option<Box<Expr>>,
+    }, // arr.copyWithin(target, start, end?) -> same array
+    ArrayEntries(Box<Expr>), // arr.entries() -> Array<[index, value]> (eager materialization)
+    ArrayKeys(Box<Expr>),    // arr.keys() -> Array<index>
+    ArrayValues(Box<Expr>),  // arr.values() -> Array<value> (essentially clone)
 
     // String methods
-    StringSplit(Box<Expr>, Box<Expr>),  // string.split(delimiter) -> string[]
-    StringFromCharCode(Box<Expr>),      // String.fromCharCode(code) -> single-char string
-    StringFromCodePoint(Box<Expr>),     // String.fromCodePoint(code) -> string
-    StringAt { string: Box<Expr>, index: Box<Expr> },         // str.at(i) -> string | undefined (negative supported)
-    StringCodePointAt { string: Box<Expr>, index: Box<Expr> }, // str.codePointAt(i) -> number | undefined
+    StringSplit(Box<Expr>, Box<Expr>), // string.split(delimiter) -> string[]
+    StringFromCharCode(Box<Expr>),     // String.fromCharCode(code) -> single-char string
+    StringFromCodePoint(Box<Expr>),    // String.fromCodePoint(code) -> string
+    StringAt {
+        string: Box<Expr>,
+        index: Box<Expr>,
+    }, // str.at(i) -> string | undefined (negative supported)
+    StringCodePointAt {
+        string: Box<Expr>,
+        index: Box<Expr>,
+    }, // str.codePointAt(i) -> number | undefined
 
     // Map operations
-    MapNew,                                                    // new Map() -> empty map
-    MapNewFromArray(Box<Expr>),                                // new Map([[k,v], ...]) -> map from entries
-    MapSet { map: Box<Expr>, key: Box<Expr>, value: Box<Expr> }, // map.set(key, value) -> map
-    MapGet { map: Box<Expr>, key: Box<Expr> },                 // map.get(key) -> value | undefined
-    MapHas { map: Box<Expr>, key: Box<Expr> },                 // map.has(key) -> boolean
-    MapDelete { map: Box<Expr>, key: Box<Expr> },              // map.delete(key) -> boolean
-    MapSize(Box<Expr>),                                        // map.size -> number
-    MapClear(Box<Expr>),                                       // map.clear() -> void
-    MapEntries(Box<Expr>),                                     // map.entries() -> Array<[key, value]>
-    MapKeys(Box<Expr>),                                        // map.keys() -> Array<key>
-    MapValues(Box<Expr>),                                      // map.values() -> Array<value>
+    MapNew,                     // new Map() -> empty map
+    MapNewFromArray(Box<Expr>), // new Map([[k,v], ...]) -> map from entries
+    MapSet {
+        map: Box<Expr>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+    }, // map.set(key, value) -> map
+    MapGet {
+        map: Box<Expr>,
+        key: Box<Expr>,
+    }, // map.get(key) -> value | undefined
+    MapHas {
+        map: Box<Expr>,
+        key: Box<Expr>,
+    }, // map.has(key) -> boolean
+    MapDelete {
+        map: Box<Expr>,
+        key: Box<Expr>,
+    }, // map.delete(key) -> boolean
+    MapSize(Box<Expr>),         // map.size -> number
+    MapClear(Box<Expr>),        // map.clear() -> void
+    MapEntries(Box<Expr>),      // map.entries() -> Array<[key, value]>
+    MapKeys(Box<Expr>),         // map.keys() -> Array<key>
+    MapValues(Box<Expr>),       // map.values() -> Array<value>
 
     // Set operations
-    SetNew,                                                    // new Set() -> empty set
-    SetNewFromArray(Box<Expr>),                                // new Set(array) -> set from iterable
-    SetAdd { set_id: LocalId, value: Box<Expr> },              // set.add(value) -> set (updates local)
-    SetHas { set: Box<Expr>, value: Box<Expr> },               // set.has(value) -> boolean
-    SetDelete { set: Box<Expr>, value: Box<Expr> },            // set.delete(value) -> boolean
-    SetSize(Box<Expr>),                                        // set.size -> number
-    SetClear(Box<Expr>),                                       // set.clear() -> void
-    SetValues(Box<Expr>),                                      // set.values() -> Array (via js_set_to_array)
+    SetNew,                     // new Set() -> empty set
+    SetNewFromArray(Box<Expr>), // new Set(array) -> set from iterable
+    SetAdd {
+        set_id: LocalId,
+        value: Box<Expr>,
+    }, // set.add(value) -> set (updates local)
+    SetHas {
+        set: Box<Expr>,
+        value: Box<Expr>,
+    }, // set.has(value) -> boolean
+    SetDelete {
+        set: Box<Expr>,
+        value: Box<Expr>,
+    }, // set.delete(value) -> boolean
+    SetSize(Box<Expr>),         // set.size -> number
+    SetClear(Box<Expr>),        // set.clear() -> void
+    SetValues(Box<Expr>),       // set.values() -> Array (via js_set_to_array)
 
     // Sequence expression (comma operator)
     Sequence(Vec<Expr>),
 
     // Date operations
-    DateNow,                              // Date.now() -> number (timestamp in ms)
-    DateNew(Option<Box<Expr>>),           // new Date() or new Date(timestamp) -> Date object
-    DateGetTime(Box<Expr>),               // date.getTime() -> number
-    DateToISOString(Box<Expr>),           // date.toISOString() -> string
-    DateGetFullYear(Box<Expr>),           // date.getFullYear() -> number
-    DateGetMonth(Box<Expr>),              // date.getMonth() -> number (0-11)
-    DateGetDate(Box<Expr>),               // date.getDate() -> number (1-31)
-    DateGetHours(Box<Expr>),              // date.getHours() -> number (0-23)
-    DateGetMinutes(Box<Expr>),            // date.getMinutes() -> number (0-59)
-    DateGetSeconds(Box<Expr>),            // date.getSeconds() -> number (0-59)
-    DateGetMilliseconds(Box<Expr>),       // date.getMilliseconds() -> number (0-999)
+    DateNow,                        // Date.now() -> number (timestamp in ms)
+    DateNew(Option<Box<Expr>>),     // new Date() or new Date(timestamp) -> Date object
+    DateGetTime(Box<Expr>),         // date.getTime() -> number
+    DateToISOString(Box<Expr>),     // date.toISOString() -> string
+    DateGetFullYear(Box<Expr>),     // date.getFullYear() -> number
+    DateGetMonth(Box<Expr>),        // date.getMonth() -> number (0-11)
+    DateGetDate(Box<Expr>),         // date.getDate() -> number (1-31)
+    DateGetHours(Box<Expr>),        // date.getHours() -> number (0-23)
+    DateGetMinutes(Box<Expr>),      // date.getMinutes() -> number (0-59)
+    DateGetSeconds(Box<Expr>),      // date.getSeconds() -> number (0-59)
+    DateGetMilliseconds(Box<Expr>), // date.getMilliseconds() -> number (0-999)
 
     // Date static methods
-    DateParse(Box<Expr>),                 // Date.parse(isoString) -> number
-    DateUtc(Vec<Expr>),                   // Date.UTC(year, month, day, h?, m?, s?) -> number
+    DateParse(Box<Expr>), // Date.parse(isoString) -> number
+    DateUtc(Vec<Expr>),   // Date.UTC(year, month, day, h?, m?, s?) -> number
 
     // Date getters (UTC variants - for Perry these are the same since we store UTC timestamps)
-    DateGetUtcDay(Box<Expr>),             // date.getUTCDay() -> number (0-6)
-    DateGetUtcFullYear(Box<Expr>),        // date.getUTCFullYear() -> number
-    DateGetUtcMonth(Box<Expr>),           // date.getUTCMonth() -> number (0-11)
-    DateGetUtcDate(Box<Expr>),            // date.getUTCDate() -> number (1-31)
-    DateGetUtcHours(Box<Expr>),           // date.getUTCHours() -> number (0-23)
-    DateGetUtcMinutes(Box<Expr>),         // date.getUTCMinutes() -> number (0-59)
-    DateGetUtcSeconds(Box<Expr>),         // date.getUTCSeconds() -> number (0-59)
-    DateGetUtcMilliseconds(Box<Expr>),    // date.getUTCMilliseconds() -> number (0-999)
+    DateGetUtcDay(Box<Expr>),          // date.getUTCDay() -> number (0-6)
+    DateGetUtcFullYear(Box<Expr>),     // date.getUTCFullYear() -> number
+    DateGetUtcMonth(Box<Expr>),        // date.getUTCMonth() -> number (0-11)
+    DateGetUtcDate(Box<Expr>),         // date.getUTCDate() -> number (1-31)
+    DateGetUtcHours(Box<Expr>),        // date.getUTCHours() -> number (0-23)
+    DateGetUtcMinutes(Box<Expr>),      // date.getUTCMinutes() -> number (0-59)
+    DateGetUtcSeconds(Box<Expr>),      // date.getUTCSeconds() -> number (0-59)
+    DateGetUtcMilliseconds(Box<Expr>), // date.getUTCMilliseconds() -> number (0-999)
 
     // Date setters (UTC variants) — return the new timestamp
-    DateSetUtcFullYear { date: Box<Expr>, value: Box<Expr> },
-    DateSetUtcMonth { date: Box<Expr>, value: Box<Expr> },
-    DateSetUtcDate { date: Box<Expr>, value: Box<Expr> },
-    DateSetUtcHours { date: Box<Expr>, value: Box<Expr> },
-    DateSetUtcMinutes { date: Box<Expr>, value: Box<Expr> },
-    DateSetUtcSeconds { date: Box<Expr>, value: Box<Expr> },
-    DateSetUtcMilliseconds { date: Box<Expr>, value: Box<Expr> },
+    DateSetUtcFullYear {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetUtcMonth {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetUtcDate {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetUtcHours {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetUtcMinutes {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetUtcSeconds {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
+    DateSetUtcMilliseconds {
+        date: Box<Expr>,
+        value: Box<Expr>,
+    },
 
     // Date misc
-    DateValueOf(Box<Expr>),               // date.valueOf() -> number (same as getTime)
-    DateToDateString(Box<Expr>),          // date.toDateString() -> string
-    DateToTimeString(Box<Expr>),          // date.toTimeString() -> string
-    DateToLocaleDateString(Box<Expr>),    // date.toLocaleDateString() -> string
-    DateToLocaleTimeString(Box<Expr>),    // date.toLocaleTimeString() -> string
-    DateToLocaleString(Box<Expr>),        // date.toLocaleString() -> string
-    DateGetTimezoneOffset(Box<Expr>),     // date.getTimezoneOffset() -> number
-    DateToJSON(Box<Expr>),                // date.toJSON() -> string
+    DateValueOf(Box<Expr>),      // date.valueOf() -> number (same as getTime)
+    DateToDateString(Box<Expr>), // date.toDateString() -> string
+    DateToTimeString(Box<Expr>), // date.toTimeString() -> string
+    DateToLocaleDateString(Box<Expr>), // date.toLocaleDateString() -> string
+    DateToLocaleTimeString(Box<Expr>), // date.toLocaleTimeString() -> string
+    DateToLocaleString(Box<Expr>), // date.toLocaleString() -> string
+    DateGetTimezoneOffset(Box<Expr>), // date.getTimezoneOffset() -> number
+    DateToJSON(Box<Expr>),       // date.toJSON() -> string
 
     // Error operations
-    ErrorNew(Option<Box<Expr>>),          // new Error() or new Error(message) -> Error object
-    ErrorMessage(Box<Expr>),              // error.message -> string
+    ErrorNew(Option<Box<Expr>>), // new Error() or new Error(message) -> Error object
+    ErrorMessage(Box<Expr>),     // error.message -> string
     /// new Error(message, { cause })
-    ErrorNewWithCause { message: Box<Expr>, cause: Box<Expr> },
+    ErrorNewWithCause {
+        message: Box<Expr>,
+        cause: Box<Expr>,
+    },
     /// new TypeError(message)
     TypeErrorNew(Box<Expr>),
     /// new RangeError(message)
@@ -1531,7 +1734,10 @@ pub enum Expr {
     /// new SyntaxError(message)
     SyntaxErrorNew(Box<Expr>),
     /// new AggregateError(errors, message)
-    AggregateErrorNew { errors: Box<Expr>, message: Box<Expr> },
+    AggregateErrorNew {
+        errors: Box<Expr>,
+        message: Box<Expr>,
+    },
 
     // URL operations
     /// new URL(url) or new URL(url, base) -> URL object (stored as pointer)
@@ -1599,7 +1805,7 @@ pub enum Expr {
     },
 
     // Delete operator
-    Delete(Box<Expr>),                    // delete obj.prop or delete obj["prop"] -> bool
+    Delete(Box<Expr>), // delete obj.prop or delete obj["prop"] -> bool
 
     // Closure (inline function/arrow function)
     Closure {
@@ -1671,10 +1877,16 @@ pub enum Expr {
     /// Object.groupBy(items, keyFn) -> { [key]: items[] }
     /// Walks `items` and groups each element by the string key returned
     /// from `keyFn(item, index)`. Lowered through `js_object_group_by`.
-    ObjectGroupBy { items: Box<Expr>, key_fn: Box<Expr> },
+    ObjectGroupBy {
+        items: Box<Expr>,
+        key_fn: Box<Expr>,
+    },
     /// Object rest destructuring: copies all properties except the excluded keys
     /// Used for `const { a, b, ...rest } = obj` → rest = ObjectRest(obj, ["a", "b"])
-    ObjectRest { object: Box<Expr>, exclude_keys: Vec<String> },
+    ObjectRest {
+        object: Box<Expr>,
+        exclude_keys: Vec<String>,
+    },
 
     // Array static methods
     /// Array.isArray(value) -> boolean
@@ -1683,10 +1895,13 @@ pub enum Expr {
     /// Array.from(iterable) -> Array
     /// Creates a new array from an iterable (e.g., Map.entries(), Map.keys(), another array)
     ArrayFrom(Box<Expr>),
-    IteratorToArray(Box<Expr>),          // collect iterator (.next() loop) into array
+    IteratorToArray(Box<Expr>), // collect iterator (.next() loop) into array
     /// Array.from(iterable, mapFn) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.
-    ArrayFromMapped { iterable: Box<Expr>, map_fn: Box<Expr> },
+    ArrayFromMapped {
+        iterable: Box<Expr>,
+        map_fn: Box<Expr>,
+    },
 
     // Global built-in functions
     /// parseInt(string, radix?) -> number
@@ -1736,7 +1951,6 @@ pub enum Expr {
 
     // V8 JavaScript Runtime interop
     // These expressions are used for modules loaded via the V8 interpreter
-
     /// Load a JavaScript module via V8 runtime
     /// Returns a module handle (u64) for subsequent calls
     JsLoadModule {
@@ -1821,23 +2035,72 @@ pub enum Expr {
     ImportMetaUrl(String),
 
     // --- Proxy / Reflect (metaprogramming) -----------------------------
-    ProxyNew { target: Box<Expr>, handler: Box<Expr> },
-    ProxyGet { proxy: Box<Expr>, key: Box<Expr> },
-    ProxySet { proxy: Box<Expr>, key: Box<Expr>, value: Box<Expr> },
-    ProxyHas { proxy: Box<Expr>, key: Box<Expr> },
-    ProxyDelete { proxy: Box<Expr>, key: Box<Expr> },
-    ProxyApply { proxy: Box<Expr>, args: Vec<Expr> },
-    ProxyConstruct { proxy: Box<Expr>, args: Vec<Expr> },
-    ProxyRevocable { target: Box<Expr>, handler: Box<Expr> },
+    ProxyNew {
+        target: Box<Expr>,
+        handler: Box<Expr>,
+    },
+    ProxyGet {
+        proxy: Box<Expr>,
+        key: Box<Expr>,
+    },
+    ProxySet {
+        proxy: Box<Expr>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+    },
+    ProxyHas {
+        proxy: Box<Expr>,
+        key: Box<Expr>,
+    },
+    ProxyDelete {
+        proxy: Box<Expr>,
+        key: Box<Expr>,
+    },
+    ProxyApply {
+        proxy: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    ProxyConstruct {
+        proxy: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    ProxyRevocable {
+        target: Box<Expr>,
+        handler: Box<Expr>,
+    },
     ProxyRevoke(Box<Expr>),
-    ReflectGet { target: Box<Expr>, key: Box<Expr> },
-    ReflectSet { target: Box<Expr>, key: Box<Expr>, value: Box<Expr> },
-    ReflectHas { target: Box<Expr>, key: Box<Expr> },
-    ReflectDelete { target: Box<Expr>, key: Box<Expr> },
+    ReflectGet {
+        target: Box<Expr>,
+        key: Box<Expr>,
+    },
+    ReflectSet {
+        target: Box<Expr>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+    },
+    ReflectHas {
+        target: Box<Expr>,
+        key: Box<Expr>,
+    },
+    ReflectDelete {
+        target: Box<Expr>,
+        key: Box<Expr>,
+    },
     ReflectOwnKeys(Box<Expr>),
-    ReflectApply { func: Box<Expr>, this_arg: Box<Expr>, args: Box<Expr> },
-    ReflectConstruct { target: Box<Expr>, args: Box<Expr> },
-    ReflectDefineProperty { target: Box<Expr>, key: Box<Expr>, descriptor: Box<Expr> },
+    ReflectApply {
+        func: Box<Expr>,
+        this_arg: Box<Expr>,
+        args: Box<Expr>,
+    },
+    ReflectConstruct {
+        target: Box<Expr>,
+        args: Box<Expr>,
+    },
+    ReflectDefineProperty {
+        target: Box<Expr>,
+        key: Box<Expr>,
+        descriptor: Box<Expr>,
+    },
     ReflectGetPrototypeOf(Box<Expr>),
 }
 
@@ -1870,21 +2133,21 @@ pub enum UnaryOp {
 /// Comparison operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareOp {
-    Eq,       // ===
-    Ne,       // !==
-    LooseEq,  // ==
-    LooseNe,  // !=
-    Lt,       // <
-    Le,       // <=
-    Gt,       // >
-    Ge,       // >=
+    Eq,      // ===
+    Ne,      // !==
+    LooseEq, // ==
+    LooseNe, // !=
+    Lt,      // <
+    Le,      // <=
+    Gt,      // >
+    Ge,      // >=
 }
 
 /// Logical operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogicalOp {
-    And, // &&
-    Or,  // ||
+    And,      // &&
+    Or,       // ||
     Coalesce, // ??
 }
 

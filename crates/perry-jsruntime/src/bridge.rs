@@ -9,8 +9,8 @@
 //! in a thread-local handle table. The native code receives a handle ID that
 //! can be used to retrieve the V8 object for subsequent operations.
 
-use perry_runtime::JSValue;
 use deno_core::v8;
+use perry_runtime::JSValue;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
@@ -54,17 +54,21 @@ pub fn store_js_handle(scope: &mut v8::HandleScope, value: v8::Local<v8::Value>)
 }
 
 /// Retrieve a V8 value from the handle table
-pub fn get_js_handle<'s>(scope: &mut v8::HandleScope<'s>, handle: u64) -> Option<v8::Local<'s, v8::Value>> {
+pub fn get_js_handle<'s>(
+    scope: &mut v8::HandleScope<'s>,
+    handle: u64,
+) -> Option<v8::Local<'s, v8::Value>> {
     JS_OBJECT_HANDLES.with(|handles| {
-        handles.borrow().get(&handle).map(|g| v8::Local::new(scope, g))
+        handles
+            .borrow()
+            .get(&handle)
+            .map(|g| v8::Local::new(scope, g))
     })
 }
 
 /// Release a V8 handle from the table
 pub fn release_js_handle(handle: u64) -> bool {
-    JS_OBJECT_HANDLES.with(|handles| {
-        handles.borrow_mut().remove(&handle).is_some()
-    })
+    JS_OBJECT_HANDLES.with(|handles| handles.borrow_mut().remove(&handle).is_some())
 }
 
 /// Check if a NaN-boxed value is a JS handle
@@ -105,10 +109,7 @@ pub fn fixup_native_for_v8(value: f64) -> f64 {
 }
 
 /// Convert a native NaN-boxed value to a V8 value
-pub fn native_to_v8<'s>(
-    scope: &mut v8::HandleScope<'s>,
-    value: f64,
-) -> v8::Local<'s, v8::Value> {
+pub fn native_to_v8<'s>(scope: &mut v8::HandleScope<'s>, value: f64) -> v8::Local<'s, v8::Value> {
     let bits = value.to_bits();
 
     // Check special values
@@ -299,7 +300,10 @@ fn rust_string_to_native(s: &str) -> *const u8 {
 }
 
 /// Convert a native object pointer to a V8 object
-fn native_object_to_v8<'s>(scope: &mut v8::HandleScope<'s>, ptr: *const u8) -> v8::Local<'s, v8::Value> {
+fn native_object_to_v8<'s>(
+    scope: &mut v8::HandleScope<'s>,
+    ptr: *const u8,
+) -> v8::Local<'s, v8::Value> {
     if ptr.is_null() {
         return v8::null(scope).into();
     }
@@ -389,7 +393,8 @@ fn native_object_to_v8<'s>(scope: &mut v8::HandleScope<'s>, ptr: *const u8) -> v
         if str_len > 0 && str_len <= 100_000 && str_cap >= str_len && str_cap <= str_len + 64 {
             // Capacity is close to length — looks like a string, not an array
             // (Arrays typically have capacity much larger than needed due to growth)
-            let data = unsafe { ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>()) };
+            let data =
+                unsafe { ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>()) };
             let bytes = unsafe { std::slice::from_raw_parts(data, str_len) };
             if let Ok(s) = std::str::from_utf8(bytes) {
                 if let Some(v8_str) = v8::String::new(scope, s) {
@@ -426,7 +431,10 @@ fn native_object_to_v8<'s>(scope: &mut v8::HandleScope<'s>, ptr: *const u8) -> v
 }
 
 /// Convert a native BigInt pointer to a V8 BigInt
-fn native_bigint_to_v8<'s>(scope: &mut v8::HandleScope<'s>, ptr: *const u8) -> v8::Local<'s, v8::Value> {
+fn native_bigint_to_v8<'s>(
+    scope: &mut v8::HandleScope<'s>,
+    ptr: *const u8,
+) -> v8::Local<'s, v8::Value> {
     use perry_runtime::bigint::BigIntHeader;
 
     if ptr.is_null() {
@@ -461,14 +469,22 @@ fn native_bigint_to_v8<'s>(scope: &mut v8::HandleScope<'s>, ptr: *const u8) -> v
             borrow = if underflow { 1 } else { 0 };
         }
         // Find the actual word count (trim trailing zeros)
-        let word_count = magnitude.iter().rposition(|&x| x != 0).map(|i| i + 1).unwrap_or(1);
+        let word_count = magnitude
+            .iter()
+            .rposition(|&x| x != 0)
+            .map(|i| i + 1)
+            .unwrap_or(1);
         v8::BigInt::new_from_words(scope, true, &magnitude[..word_count])
             .map(|bi| bi.into())
             .unwrap_or_else(|| v8::BigInt::new_from_i64(scope, 0).into())
     } else {
         // Positive number with multiple limbs
         // Find the actual word count (trim trailing zeros)
-        let word_count = limbs.iter().rposition(|&x| x != 0).map(|i| i + 1).unwrap_or(1);
+        let word_count = limbs
+            .iter()
+            .rposition(|&x| x != 0)
+            .map(|i| i + 1)
+            .unwrap_or(1);
         v8::BigInt::new_from_words(scope, false, &limbs[..word_count])
             .map(|bi| bi.into())
             .unwrap_or_else(|| v8::BigInt::new_from_i64(scope, 0).into())

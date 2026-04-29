@@ -1,33 +1,33 @@
-pub mod text;
-pub mod button;
-pub mod vstack;
-pub mod hstack;
-pub mod spacer;
-pub mod divider;
-pub mod textfield;
-pub mod securefield;
-pub mod toggle;
-pub mod slider;
-pub mod scrollview;
-pub mod canvas;
-pub mod progressview;
-pub mod image;
-pub mod picker;
-pub mod form;
-pub mod navstack;
-pub mod zstack;
 pub mod alert;
-pub mod sheet;
-pub mod toolbar;
+pub mod button;
+pub mod canvas;
+pub mod divider;
+pub mod form;
+pub mod hstack;
+pub mod image;
 pub mod lazyvstack;
-pub mod table;
+pub mod navstack;
+pub mod picker;
+pub mod progressview;
 pub mod qrcode;
+pub mod scrollview;
+pub mod securefield;
+pub mod sheet;
+pub mod slider;
+pub mod spacer;
+pub mod table;
+pub mod text;
 pub mod textarea;
+pub mod textfield;
+pub mod toggle;
+pub mod toolbar;
+pub mod vstack;
+pub mod zstack;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_app_kit::{NSView, NSStackView};
+use objc2_app_kit::{NSStackView, NSView};
 use objc2_foundation::{NSObject, NSObjectProtocol};
 use std::cell::RefCell;
 
@@ -70,7 +70,9 @@ fn alloc_string_result(s: &str, out_len: *mut usize) -> *mut u8 {
     let bytes = s.as_bytes();
     let len = bytes.len();
     let buf = unsafe { libc::malloc(len) as *mut u8 };
-    if buf.is_null() { return std::ptr::null_mut(); }
+    if buf.is_null() {
+        return std::ptr::null_mut();
+    }
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
         *out_len = len;
@@ -82,7 +84,9 @@ fn alloc_string_result(s: &str, out_len: *mut usize) -> *mut u8 {
 #[cfg(feature = "geisterhand")]
 #[no_mangle]
 pub extern "C" fn perry_ui_read_widget_value(handle: i64, out_len: *mut usize) -> *mut u8 {
-    unsafe { *out_len = 0; }
+    unsafe {
+        *out_len = 0;
+    }
     if let Some(view) = get_widget(handle) {
         unsafe {
             if let Some(tf_cls) = objc2::runtime::AnyClass::get(c"NSTextField") {
@@ -90,7 +94,8 @@ pub extern "C" fn perry_ui_read_widget_value(handle: i64, out_len: *mut usize) -
                 if is_tf {
                     let val: *const objc2::runtime::AnyObject = msg_send![&*view, stringValue];
                     if !val.is_null() {
-                        let ns: &objc2_foundation::NSString = &*(val as *const objc2_foundation::NSString);
+                        let ns: &objc2_foundation::NSString =
+                            &*(val as *const objc2_foundation::NSString);
                         return alloc_string_result(&ns.to_string(), out_len);
                     }
                 }
@@ -142,7 +147,9 @@ pub extern "C" fn perry_ui_query_widget_tree(out_len: *mut usize) -> *mut u8 {
     let len = bytes.len();
     let buf = unsafe { libc::malloc(len) as *mut u8 };
     if buf.is_null() {
-        unsafe { *out_len = 0; }
+        unsafe {
+            *out_len = 0;
+        }
         return std::ptr::null_mut();
     }
     unsafe {
@@ -164,12 +171,16 @@ pub fn register_external_nsview(nsview_ptr: i64) -> i64 {
             // Disable autoresizing mask constraints so the view can be sized
             // by NSStackView layout instead of being fixed at its initial frame size.
             unsafe {
-                let _: () = objc2::msg_send![&*nsview, setTranslatesAutoresizingMaskIntoConstraints: false];
+                let _: () =
+                    objc2::msg_send![&*nsview, setTranslatesAutoresizingMaskIntoConstraints: false];
             }
             // Set low content hugging so it stretches in both axes.
             unsafe {
-                let _: () = msg_send![&*nsview, setContentHuggingPriority: 1.0f32 forOrientation: 0i64]; // horizontal
-                let _: () = msg_send![&*nsview, setContentHuggingPriority: 1.0f32 forOrientation: 1i64]; // vertical
+                let _: () =
+                    msg_send![&*nsview, setContentHuggingPriority: 1.0f32 forOrientation: 0i64]; // horizontal
+                let _: () =
+                    msg_send![&*nsview, setContentHuggingPriority: 1.0f32 forOrientation: 1i64];
+                // vertical
             }
             // Clip to bounds — prevent the view from drawing outside its frame
             // (e.g. editor content bleeding behind tab bar/breadcrumb in VStack)
@@ -192,9 +203,12 @@ pub fn register_external_nsview(nsview_ptr: i64) -> i64 {
                 }
             }
             register_widget(nsview)
-        },
+        }
         None => {
-            eprintln!("register_external_nsview: failed to retain NSView at {:#x}", nsview_ptr);
+            eprintln!(
+                "register_external_nsview: failed to retain NSView at {:#x}",
+                nsview_ptr
+            );
             0
         }
     }
@@ -227,18 +241,15 @@ pub fn set_hidden(handle: i64, hidden: bool) {
             };
 
             if needs_reattach {
-                let parent_info = PARENT_MAP.with(|m| {
-                    m.borrow().get(&handle).copied()
-                });
+                let parent_info = PARENT_MAP.with(|m| m.borrow().get(&handle).copied());
                 if let Some((parent_handle, index)) = parent_info {
                     if let Some(parent) = get_widget(parent_handle) {
                         let is_stack = AnyClass::get(c"NSStackView")
                             .map(|cls| parent.isKindOfClass(cls))
                             .unwrap_or(false);
                         if is_stack {
-                            let stack: &NSStackView = unsafe {
-                                &*(Retained::as_ptr(&parent) as *const NSStackView)
-                            };
+                            let stack: &NSStackView =
+                                unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
                             let count = stack.arrangedSubviews().len();
                             let insert_idx = index.min(count);
                             unsafe {
@@ -252,9 +263,7 @@ pub fn set_hidden(handle: i64, hidden: bool) {
             }
 
             // Re-apply cached background color (NSStackView detach strips CALayer bg)
-            let cached_bg = BG_COLOR_MAP.with(|m| {
-                m.borrow().get(&handle).copied()
-            });
+            let cached_bg = BG_COLOR_MAP.with(|m| m.borrow().get(&handle).copied());
             if let Some((r, g, b, a)) = cached_bg {
                 apply_background_color(handle, r, g, b, a);
             }
@@ -358,16 +367,24 @@ fn collect_subtree_handles(view: &NSView) -> Vec<i64> {
 /// Clean up metadata maps for a list of widget handles.
 fn cleanup_widget_maps(handles: &[i64]) {
     for handle in handles {
-        PARENT_MAP.with(|m| { m.borrow_mut().remove(handle); });
-        BG_COLOR_MAP.with(|m| { m.borrow_mut().remove(handle); });
+        PARENT_MAP.with(|m| {
+            m.borrow_mut().remove(handle);
+        });
+        BG_COLOR_MAP.with(|m| {
+            m.borrow_mut().remove(handle);
+        });
         WIDTH_CONSTRAINTS.with(|wc| {
             if let Some(old) = wc.borrow_mut().remove(handle) {
-                unsafe { let _: () = objc2::msg_send![&*old, setActive: false]; }
+                unsafe {
+                    let _: () = objc2::msg_send![&*old, setActive: false];
+                }
             }
         });
         HEIGHT_CONSTRAINTS.with(|hc| {
             if let Some(old) = hc.borrow_mut().remove(handle) {
-                unsafe { let _: () = objc2::msg_send![&*old, setActive: false]; }
+                unsafe {
+                    let _: () = objc2::msg_send![&*old, setActive: false];
+                }
             }
         });
     }
@@ -384,7 +401,8 @@ pub fn clear_children(handle: i64) {
             false
         };
         if is_stack {
-            let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
+            let stack: &NSStackView =
+                unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
 
             // Phase 1: Snapshot subviews into a Vec (avoid iterator invalidation)
             let subviews = stack.arrangedSubviews();
@@ -444,14 +462,16 @@ pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
         };
 
         if is_stack {
-            let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
+            let stack: &NSStackView =
+                unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
             // Use addView:inGravity: with top/leading gravity for consistent packing
             unsafe {
                 let _: () = objc2::msg_send![stack, addView: &*child, inGravity: 1i64];
             }
             // Track parent-child for re-attachment after hide/show
             PARENT_MAP.with(|m| {
-                m.borrow_mut().insert(child_handle, (parent_handle, index as usize));
+                m.borrow_mut()
+                    .insert(child_handle, (parent_handle, index as usize));
             });
         } else if zstack::is_zstack(parent_handle) {
             zstack::add_child(parent_handle, child_handle);
@@ -474,7 +494,8 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
 
         if is_stack {
             // Safety: we verified the type with isKindOfClass
-            let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
+            let stack: &NSStackView =
+                unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
             let index = stack.arrangedSubviews().len();
             // Use addView:inGravity: with Top/Leading gravity (1) so children
             // pack tightly from the top (VStack) or leading edge (HStack)
@@ -510,7 +531,8 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
         handles_to_clean.extend(collect_subtree_handles(&child));
 
         if is_stack {
-            let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
+            let stack: &NSStackView =
+                unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
             stack.removeArrangedSubview(&child);
         }
         child.removeFromSuperview();
@@ -555,17 +577,20 @@ pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
         };
 
         if is_stack {
-            let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
+            let stack: &NSStackView =
+                unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
             let subviews = stack.arrangedSubviews();
             let count = subviews.len();
             let fi = from_index as usize;
             let ti = to_index as usize;
             if fi < count && ti < count {
-                let child: *const NSView = unsafe { objc2::msg_send![&subviews, objectAtIndex: fi] };
+                let child: *const NSView =
+                    unsafe { objc2::msg_send![&subviews, objectAtIndex: fi] };
                 let child_ref: &NSView = unsafe { &*child };
                 stack.removeArrangedSubview(child_ref);
                 unsafe {
-                    let _: () = objc2::msg_send![stack, insertArrangedSubview: child_ref, atIndex: ti];
+                    let _: () =
+                        objc2::msg_send![stack, insertArrangedSubview: child_ref, atIndex: ti];
                 }
             }
         }
@@ -611,14 +636,24 @@ fn apply_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
 
 /// Set a linear gradient background on any widget via CAGradientLayer.
 pub fn set_background_gradient(
-    handle: i64, r1: f64, g1: f64, b1: f64, a1: f64,
-    r2: f64, g2: f64, b2: f64, a2: f64, direction: f64,
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
+    direction: f64,
 ) {
     if let Some(view) = get_widget(handle) {
         unsafe {
             let _: () = objc2::msg_send![&*view, setWantsLayer: true];
             let layer: *mut AnyObject = objc2::msg_send![&*view, layer];
-            if layer.is_null() { return; }
+            if layer.is_null() {
+                return;
+            }
 
             // Remove any existing gradient sublayer (tagged by name "PerryGradient")
             let sublayers: *mut AnyObject = objc2::msg_send![layer, sublayers];
@@ -641,8 +676,8 @@ pub fn set_background_gradient(
             }
 
             // Create CAGradientLayer
-            let gradient_cls = AnyClass::get(c"CAGradientLayer")
-                .expect("CAGradientLayer class not found");
+            let gradient_cls =
+                AnyClass::get(c"CAGradientLayer").expect("CAGradientLayer class not found");
             let gradient: *mut AnyObject = objc2::msg_send![gradient_cls, layer];
 
             // Set name for later removal
@@ -736,8 +771,13 @@ pub fn set_border_width(handle: i64, width: f64) {
 /// blur + offset_x + offset_y to 0 effectively clears the shadow.
 pub fn set_shadow(
     handle: i64,
-    r: f64, g: f64, b: f64, a: f64,
-    blur: f64, offset_x: f64, offset_y: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+    blur: f64,
+    offset_x: f64,
+    offset_y: f64,
 ) {
     if let Some(view) = get_widget(handle) {
         unsafe {
@@ -778,7 +818,12 @@ pub fn set_edge_insets(handle: i64, top: f64, left: f64, bottom: f64, right: f64
         if is_stack {
             let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&view) as *const NSStackView) };
             unsafe {
-                stack.setEdgeInsets(objc2_foundation::NSEdgeInsets { top, left, bottom, right });
+                stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
+                    top,
+                    left,
+                    bottom,
+                    right,
+                });
             }
         }
     }
@@ -868,9 +913,13 @@ pub fn set_hugging_priority(handle: i64, priority: f64) {
     if let Some(view) = get_widget(handle) {
         use objc2_app_kit::NSLayoutConstraintOrientation;
         view.setContentHuggingPriority_forOrientation(
-            priority as f32, NSLayoutConstraintOrientation::Horizontal);
+            priority as f32,
+            NSLayoutConstraintOrientation::Horizontal,
+        );
         view.setContentHuggingPriority_forOrientation(
-            priority as f32, NSLayoutConstraintOrientation::Vertical);
+            priority as f32,
+            NSLayoutConstraintOrientation::Vertical,
+        );
     }
 }
 
@@ -907,7 +956,8 @@ pub fn match_stack_width(child_handle: i64) {
             }
             let child_width: Retained<AnyObject> = msg_send![&*child, widthAnchor];
             let stack_width: Retained<AnyObject> = msg_send![found_stack, widthAnchor];
-            let c: Retained<AnyObject> = msg_send![&*child_width, constraintEqualToAnchor: &*stack_width];
+            let c: Retained<AnyObject> =
+                msg_send![&*child_width, constraintEqualToAnchor: &*stack_width];
             let _: () = msg_send![&*c, setActive: true];
         }
     }
@@ -928,8 +978,10 @@ pub fn match_parent_height(child_handle: i64) {
             let child_bottom: Retained<AnyObject> = msg_send![&*child, bottomAnchor];
             let parent_top: Retained<AnyObject> = msg_send![superview_ptr, topAnchor];
             let parent_bottom: Retained<AnyObject> = msg_send![superview_ptr, bottomAnchor];
-            let top_c: Retained<AnyObject> = msg_send![&*child_top, constraintEqualToAnchor: &*parent_top];
-            let bot_c: Retained<AnyObject> = msg_send![&*child_bottom, constraintEqualToAnchor: &*parent_bottom];
+            let top_c: Retained<AnyObject> =
+                msg_send![&*child_top, constraintEqualToAnchor: &*parent_top];
+            let bot_c: Retained<AnyObject> =
+                msg_send![&*child_bottom, constraintEqualToAnchor: &*parent_bottom];
             let _: () = msg_send![&*top_c, setActive: true];
             let _: () = msg_send![&*bot_c, setActive: true];
         }
@@ -950,8 +1002,10 @@ pub fn match_parent_width(child_handle: i64) {
             let child_trailing: Retained<AnyObject> = msg_send![&*child, trailingAnchor];
             let parent_leading: Retained<AnyObject> = msg_send![superview_ptr, leadingAnchor];
             let parent_trailing: Retained<AnyObject> = msg_send![superview_ptr, trailingAnchor];
-            let lead_c: Retained<AnyObject> = msg_send![&*child_leading, constraintEqualToAnchor: &*parent_leading];
-            let trail_c: Retained<AnyObject> = msg_send![&*child_trailing, constraintEqualToAnchor: &*parent_trailing];
+            let lead_c: Retained<AnyObject> =
+                msg_send![&*child_leading, constraintEqualToAnchor: &*parent_leading];
+            let trail_c: Retained<AnyObject> =
+                msg_send![&*child_trailing, constraintEqualToAnchor: &*parent_trailing];
             let _: () = msg_send![&*lead_c, setActive: true];
             let _: () = msg_send![&*trail_c, setActive: true];
         }
@@ -1019,10 +1073,8 @@ pub fn animate_position(handle: i64, dx: f64, dy: f64, duration_secs: f64) {
     if let Some(view) = get_widget(handle) {
         unsafe {
             let frame: objc2_core_foundation::CGRect = objc2::msg_send![&*view, frame];
-            let new_origin = objc2_core_foundation::CGPoint::new(
-                frame.origin.x + dx,
-                frame.origin.y + dy,
-            );
+            let new_origin =
+                objc2_core_foundation::CGPoint::new(frame.origin.x + dx, frame.origin.y + dy);
             let ctx_cls = AnyClass::get(c"NSAnimationContext").unwrap();
             let _: () = objc2::msg_send![ctx_cls, beginGrouping];
             let ctx: *mut AnyObject = objc2::msg_send![ctx_cls, currentContext];
@@ -1050,8 +1102,12 @@ pub fn set_on_hover(handle: i64, callback: f64) {
 
     #[cfg(feature = "geisterhand")]
     {
-        extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-        unsafe { perry_geisterhand_register(handle, 0, 3, callback, std::ptr::null()); }
+        extern "C" {
+            fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+        }
+        unsafe {
+            perry_geisterhand_register(handle, 0, 3, callback, std::ptr::null());
+        }
     }
 
     if let Some(view) = get_widget(handle) {
@@ -1060,9 +1116,7 @@ pub fn set_on_hover(handle: i64, callback: f64) {
             let ta_cls = AnyClass::get(c"NSTrackingArea").unwrap();
             let bounds: objc2_core_foundation::CGRect = objc2::msg_send![&*view, bounds];
             let options: u64 = 0x01 | 0x02 | 0x20; // MouseEnteredAndExited | MouseMoved | ActiveAlways
-            let tracking_area: *mut AnyObject = objc2::msg_send![
-                ta_cls, alloc
-            ];
+            let tracking_area: *mut AnyObject = objc2::msg_send![ta_cls, alloc];
             let tracking_area: *mut AnyObject = objc2::msg_send![
                 tracking_area, initWithRect: bounds, options: options, owner: &*view, userInfo: std::ptr::null::<AnyObject>()
             ];
@@ -1079,8 +1133,12 @@ pub fn set_on_double_click(handle: i64, callback: f64) {
 
     #[cfg(feature = "geisterhand")]
     {
-        extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-        unsafe { perry_geisterhand_register(handle, 0, 4, callback, std::ptr::null()); }
+        extern "C" {
+            fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+        }
+        unsafe {
+            perry_geisterhand_register(handle, 0, 4, callback, std::ptr::null());
+        }
     }
 
     if let Some(view) = get_widget(handle) {
@@ -1166,7 +1224,9 @@ pub fn set_on_click(handle: i64, callback: f64) {
 
             #[cfg(feature = "geisterhand")]
             {
-                extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
+                extern "C" {
+                    fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+                }
                 perry_geisterhand_register(handle, 0, 0, callback, std::ptr::null());
             }
         }

@@ -219,8 +219,7 @@ pub fn set_column_header(handle: i64, col: i64, title_ptr: *const u8) {
             let columns: Retained<AnyObject> = msg_send![tv, tableColumns];
             let count: usize = msg_send![&*columns, count];
             if (col as usize) < count {
-                let tc: *mut AnyObject =
-                    msg_send![&*columns, objectAtIndex: col as usize];
+                let tc: *mut AnyObject = msg_send![&*columns, objectAtIndex: col as usize];
                 let header_cell: *mut AnyObject = msg_send![tc, headerCell];
                 let ns_title = NSString::from_str(title);
                 let _: () = msg_send![header_cell, setStringValue: &*ns_title];
@@ -251,8 +250,7 @@ pub fn set_column_width(handle: i64, col: i64, width: f64) {
             let columns: Retained<AnyObject> = msg_send![tv, tableColumns];
             let count: usize = msg_send![&*columns, count];
             if (col as usize) < count {
-                let tc: *mut AnyObject =
-                    msg_send![&*columns, objectAtIndex: col as usize];
+                let tc: *mut AnyObject = msg_send![&*columns, objectAtIndex: col as usize];
                 let _: () = msg_send![tc, setWidth: width];
             }
         }

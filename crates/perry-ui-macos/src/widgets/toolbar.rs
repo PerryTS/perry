@@ -13,7 +13,9 @@ extern "C" {
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const crate::string_header::StringHeader;
         let len = (*header).byte_len as usize;
@@ -90,7 +92,10 @@ pub fn create() -> i64 {
 
         TOOLBARS.with(|t| {
             let mut toolbars = t.borrow_mut();
-            toolbars.push(ToolbarEntry { toolbar, items: Vec::new() });
+            toolbars.push(ToolbarEntry {
+                toolbar,
+                items: Vec::new(),
+            });
             toolbars.len() as i64
         })
     }

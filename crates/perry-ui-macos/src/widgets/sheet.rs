@@ -2,8 +2,8 @@ use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::MainThreadOnly;
-use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSApplication};
-use objc2_core_foundation::{CGPoint, CGSize, CGRect};
+use objc2_app_kit::{NSApplication, NSBackingStoreType, NSWindow, NSWindowStyleMask};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{MainThreadMarker, NSString};
 use std::cell::RefCell;
 
@@ -12,7 +12,9 @@ thread_local! {
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const crate::string_header::StringHeader;
         let len = (*header).byte_len as usize;
@@ -27,9 +29,8 @@ pub fn create(width: f64, height: f64, title_ptr: *const u8) -> i64 {
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     unsafe {
-        let style = NSWindowStyleMask::Titled
-            | NSWindowStyleMask::Closable
-            | NSWindowStyleMask::Resizable;
+        let style =
+            NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Resizable;
         let frame = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(width, height));
         let panel = NSWindow::initWithContentRect_styleMask_backing_defer(
             NSWindow::alloc(mtm),

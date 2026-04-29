@@ -9,7 +9,7 @@ pub mod handle;
 pub mod async_bridge;
 pub mod dispatch;
 
-pub use handle::*;
 #[cfg(feature = "async-runtime")]
 pub use async_bridge::*;
 pub use dispatch::*;
+pub use handle::*;

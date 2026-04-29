@@ -9,7 +9,9 @@ extern "C" {
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const crate::string_header::StringHeader;
         let len = (*header).byte_len as usize;
@@ -43,7 +45,11 @@ pub fn show(title_ptr: *const u8, message_ptr: *const u8, arr_ptr: i64, callback
             fn js_get_string_pointer_unified(val: f64) -> i64;
         }
 
-        let len = if arr_ptr != 0 { js_array_get_length(arr_ptr) } else { 0 };
+        let len = if arr_ptr != 0 {
+            js_array_get_length(arr_ptr)
+        } else {
+            0
+        };
         if len == 0 {
             let ns_ok = NSString::from_str("OK");
             let _: Retained<AnyObject> = msg_send![&*alert, addButtonWithTitle: &*ns_ok];

@@ -19,7 +19,13 @@ pub const STRING_FLAG_HAS_LONE_SURROGATES: u32 = 1;
 /// A static empty string that can be used as a safe fallback for null pointers.
 /// Has utf16_len=0, byte_len=0, capacity=0, refcount=0, flags=0 (shared).
 #[no_mangle]
-pub static PERRY_EMPTY_STRING: StringHeader = StringHeader { utf16_len: 0, byte_len: 0, capacity: 0, refcount: 0, flags: 0 };
+pub static PERRY_EMPTY_STRING: StringHeader = StringHeader {
+    utf16_len: 0,
+    byte_len: 0,
+    capacity: 0,
+    refcount: 0,
+    flags: 0,
+};
 
 /// Get a pointer to the static empty string (for codegen null guards).
 #[no_mangle]
@@ -231,10 +237,7 @@ pub extern "C" fn js_string_new_sso(data: *const u8, len: u32) -> f64 {
 /// Same layout and wire format as `js_string_from_bytes` — only the
 /// backing arena differs.
 #[no_mangle]
-pub extern "C" fn js_string_from_bytes_longlived(
-    data: *const u8,
-    len: u32,
-) -> *mut StringHeader {
+pub extern "C" fn js_string_from_bytes_longlived(data: *const u8, len: u32) -> *mut StringHeader {
     let total_size = std::mem::size_of::<StringHeader>() + len as usize;
     let raw = crate::arena::arena_alloc_gc_longlived(total_size, 8, crate::gc::GC_TYPE_STRING);
     let ptr = raw as *mut StringHeader;
@@ -275,7 +278,11 @@ fn js_string_from_ascii_bytes(data: *const u8, len: u32) -> *mut StringHeader {
 
 /// Create a string from raw bytes with extra capacity for future appending
 #[no_mangle]
-pub extern "C" fn js_string_from_bytes_with_capacity(data: *const u8, len: u32, capacity: u32) -> *mut StringHeader {
+pub extern "C" fn js_string_from_bytes_with_capacity(
+    data: *const u8,
+    len: u32,
+    capacity: u32,
+) -> *mut StringHeader {
     let capacity = capacity.max(len); // Ensure capacity >= len
     let total_size = std::mem::size_of::<StringHeader>() + capacity as usize;
 
@@ -367,7 +374,10 @@ pub extern "C" fn js_string_from_wtf8_bytes(data: *const u8, len: u32) -> *mut S
 /// pointers in caller-saved registers. The old string becomes garbage and
 /// is collected in the next GC cycle.
 #[no_mangle]
-pub extern "C" fn js_string_append(dest: *mut StringHeader, src: *const StringHeader) -> *mut StringHeader {
+pub extern "C" fn js_string_append(
+    dest: *mut StringHeader,
+    src: *const StringHeader,
+) -> *mut StringHeader {
     if !is_valid_string_ptr(dest as *const StringHeader) {
         // If dest is invalid, just duplicate src
         if !is_valid_string_ptr(src) {
@@ -404,7 +414,11 @@ pub extern "C" fn js_string_append(dest: *mut StringHeader, src: *const StringHe
         if (*dest).refcount == 1 && new_blen <= (*dest).capacity {
             let dest_data = (dest as *mut u8).add(std::mem::size_of::<StringHeader>());
             let src_data_ptr = string_data(src);
-            ptr::copy_nonoverlapping(src_data_ptr, dest_data.add(dest_blen as usize), src_blen as usize);
+            ptr::copy_nonoverlapping(
+                src_data_ptr,
+                dest_data.add(dest_blen as usize),
+                src_blen as usize,
+            );
             (*dest).byte_len = new_blen;
             (*dest).utf16_len += (*src).utf16_len;
             return dest; // Same pointer, no allocation!
@@ -427,7 +441,11 @@ pub extern "C" fn js_string_append(dest: *mut StringHeader, src: *const StringHe
 
         // Copy src content after dest content
         let src_data_ptr = string_data(src);
-        ptr::copy_nonoverlapping(src_data_ptr, new_data.add(dest_blen as usize), src_blen as usize);
+        ptr::copy_nonoverlapping(
+            src_data_ptr,
+            new_data.add(dest_blen as usize),
+            src_blen as usize,
+        );
         (*new_ptr).byte_len = new_blen;
         (*new_ptr).utf16_len = (*dest).utf16_len + (*src).utf16_len;
 
@@ -475,9 +493,7 @@ pub extern "C" fn js_string_length(s: *const StringHeader) -> u32 {
 
 /// Get the data pointer for a string
 fn string_data(s: *const StringHeader) -> *const u8 {
-    unsafe {
-        (s as *const u8).add(std::mem::size_of::<StringHeader>())
-    }
+    unsafe { (s as *const u8).add(std::mem::size_of::<StringHeader>()) }
 }
 
 /// Get string as a Rust &str (for internal use)
@@ -485,7 +501,12 @@ fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
     unsafe {
         let blen = (*s).byte_len as usize;
         let cap = (*s).capacity as usize;
-        debug_assert!(blen <= cap, "StringHeader byte_len {} > capacity {}", blen, cap);
+        debug_assert!(
+            blen <= cap,
+            "StringHeader byte_len {} > capacity {}",
+            blen,
+            cap
+        );
         let data = string_data(s);
         let bytes = slice::from_raw_parts(data, blen);
         str::from_utf8_unchecked(bytes)
@@ -500,9 +521,20 @@ fn is_ascii_string(s: *const StringHeader) -> bool {
 
 /// Concatenate two strings
 #[no_mangle]
-pub extern "C" fn js_string_concat(a: *const StringHeader, b: *const StringHeader) -> *mut StringHeader {
-    let blen_a = if is_valid_string_ptr(a) { unsafe { (*a).byte_len } } else { 0 };
-    let blen_b = if is_valid_string_ptr(b) { unsafe { (*b).byte_len } } else { 0 };
+pub extern "C" fn js_string_concat(
+    a: *const StringHeader,
+    b: *const StringHeader,
+) -> *mut StringHeader {
+    let blen_a = if is_valid_string_ptr(a) {
+        unsafe { (*a).byte_len }
+    } else {
+        0
+    };
+    let blen_b = if is_valid_string_ptr(b) {
+        unsafe { (*b).byte_len }
+    } else {
+        0
+    };
     let total_blen = blen_a + blen_b;
 
     // Intern fast path: if result is short enough, check the intern table
@@ -525,8 +557,16 @@ pub extern "C" fn js_string_concat(a: *const StringHeader, b: *const StringHeade
         }
     }
 
-    let u16len_a = if is_valid_string_ptr(a) { unsafe { (*a).utf16_len } } else { 0 };
-    let u16len_b = if is_valid_string_ptr(b) { unsafe { (*b).utf16_len } } else { 0 };
+    let u16len_a = if is_valid_string_ptr(a) {
+        unsafe { (*a).utf16_len }
+    } else {
+        0
+    };
+    let u16len_b = if is_valid_string_ptr(b) {
+        unsafe { (*b).utf16_len }
+    } else {
+        0
+    };
 
     let total_size = std::mem::size_of::<StringHeader>() + total_blen as usize;
 
@@ -534,8 +574,16 @@ pub extern "C" fn js_string_concat(a: *const StringHeader, b: *const StringHeade
     let ptr = raw as *mut StringHeader;
 
     unsafe {
-        let flags_a = if is_valid_string_ptr(a) { (*a).flags } else { 0 };
-        let flags_b = if is_valid_string_ptr(b) { (*b).flags } else { 0 };
+        let flags_a = if is_valid_string_ptr(a) {
+            (*a).flags
+        } else {
+            0
+        };
+        let flags_b = if is_valid_string_ptr(b) {
+            (*b).flags
+        } else {
+            0
+        };
         (*ptr).utf16_len = u16len_a + u16len_b;
         (*ptr).byte_len = total_blen;
         (*ptr).capacity = total_blen;
@@ -548,7 +596,11 @@ pub extern "C" fn js_string_concat(a: *const StringHeader, b: *const StringHeade
             ptr::copy_nonoverlapping(string_data(a), data_ptr, blen_a as usize);
         }
         if is_valid_string_ptr(b) && blen_b > 0 {
-            ptr::copy_nonoverlapping(string_data(b), data_ptr.add(blen_a as usize), blen_b as usize);
+            ptr::copy_nonoverlapping(
+                string_data(b),
+                data_ptr.add(blen_a as usize),
+                blen_b as usize,
+            );
         }
 
         ptr
@@ -572,8 +624,16 @@ pub extern "C" fn js_string_concat_value(
     prefix: *const StringHeader,
     value: f64,
 ) -> *mut StringHeader {
-    let prefix_blen = if is_valid_string_ptr(prefix) { unsafe { (*prefix).byte_len } } else { 0 };
-    let prefix_u16 = if is_valid_string_ptr(prefix) { unsafe { (*prefix).utf16_len } } else { 0 };
+    let prefix_blen = if is_valid_string_ptr(prefix) {
+        unsafe { (*prefix).byte_len }
+    } else {
+        0
+    };
+    let prefix_u16 = if is_valid_string_ptr(prefix) {
+        unsafe { (*prefix).utf16_len }
+    } else {
+        0
+    };
 
     // Fast path: value is a number (no NaN-boxing tag in upper 16 bits → plain f64).
     // This covers the hot `"item_" + i` pattern.
@@ -631,13 +691,21 @@ pub extern "C" fn js_string_concat_value(
             (*ptr).byte_len = total_blen as u32;
             (*ptr).capacity = total_blen as u32;
             (*ptr).refcount = 0;
-            (*ptr).flags = if is_valid_string_ptr(prefix) { (*prefix).flags } else { 0 };
+            (*ptr).flags = if is_valid_string_ptr(prefix) {
+                (*prefix).flags
+            } else {
+                0
+            };
 
             let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
             if is_valid_string_ptr(prefix) && prefix_blen > 0 {
                 ptr::copy_nonoverlapping(string_data(prefix), data_ptr, prefix_blen as usize);
             }
-            ptr::copy_nonoverlapping(num_buf.as_ptr(), data_ptr.add(prefix_blen as usize), num_len);
+            ptr::copy_nonoverlapping(
+                num_buf.as_ptr(),
+                data_ptr.add(prefix_blen as usize),
+                num_len,
+            );
         }
 
         return ptr;
@@ -655,8 +723,16 @@ pub extern "C" fn js_value_concat_string(
     value: f64,
     suffix: *const StringHeader,
 ) -> *mut StringHeader {
-    let suffix_blen = if is_valid_string_ptr(suffix) { unsafe { (*suffix).byte_len } } else { 0 };
-    let suffix_u16 = if is_valid_string_ptr(suffix) { unsafe { (*suffix).utf16_len } } else { 0 };
+    let suffix_blen = if is_valid_string_ptr(suffix) {
+        unsafe { (*suffix).byte_len }
+    } else {
+        0
+    };
+    let suffix_u16 = if is_valid_string_ptr(suffix) {
+        unsafe { (*suffix).utf16_len }
+    } else {
+        0
+    };
 
     let bits = value.to_bits();
     let tag = bits >> 48;
@@ -707,12 +783,20 @@ pub extern "C" fn js_value_concat_string(
             (*ptr).byte_len = total_blen as u32;
             (*ptr).capacity = total_blen as u32;
             (*ptr).refcount = 0;
-            (*ptr).flags = if is_valid_string_ptr(suffix) { (*suffix).flags } else { 0 };
+            (*ptr).flags = if is_valid_string_ptr(suffix) {
+                (*suffix).flags
+            } else {
+                0
+            };
 
             let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
             ptr::copy_nonoverlapping(num_buf.as_ptr(), data_ptr, num_len);
             if is_valid_string_ptr(suffix) && suffix_blen > 0 {
-                ptr::copy_nonoverlapping(string_data(suffix), data_ptr.add(num_len), suffix_blen as usize);
+                ptr::copy_nonoverlapping(
+                    string_data(suffix),
+                    data_ptr.add(num_len),
+                    suffix_blen as usize,
+                );
             }
         }
 
@@ -773,8 +857,8 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
             (*ptr).refcount = 0;
             SMALL_INT_CACHE[idx] = ptr;
             // Mark as interned so GC roots it via the intern scanner
-            let gc_header = (ptr as *const u8)
-                .sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            let gc_header =
+                (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
             (*gc_header).gc_flags |= crate::gc::GC_FLAG_PINNED;
         }
         return ptr;
@@ -784,7 +868,11 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
     let s = if value.is_nan() {
         "NaN".to_string()
     } else if value.is_infinite() {
-        if value > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+        if value > 0.0 {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        }
     } else if value == 0.0 {
         // Cover both +0 and -0 as "0" (matches JS)
         "0".to_string()
@@ -825,7 +913,11 @@ pub extern "C" fn js_number_to_precision(value: f64, precision: f64) -> *mut Str
     let s = if value.is_nan() {
         "NaN".to_string()
     } else if value.is_infinite() {
-        if value > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+        if value > 0.0 {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        }
     } else {
         let p = precision as usize;
         if p == 0 {
@@ -833,7 +925,11 @@ pub extern "C" fn js_number_to_precision(value: f64, precision: f64) -> *mut Str
             format_number_for_js(value)
         } else if value == 0.0 {
             // 0.toPrecision(3) = "0.00"
-            if p == 1 { "0".to_string() } else { format!("0.{}", "0".repeat(p - 1)) }
+            if p == 1 {
+                "0".to_string()
+            } else {
+                format!("0.{}", "0".repeat(p - 1))
+            }
         } else {
             // Find the decimal exponent: floor(log10(|x|))
             let abs = value.abs();
@@ -862,7 +958,11 @@ pub extern "C" fn js_number_to_exponential(value: f64, decimals: f64) -> *mut St
     let s = if value.is_nan() {
         "NaN".to_string()
     } else if value.is_infinite() {
-        if value > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+        if value > 0.0 {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        }
     } else {
         let dp = decimals as usize;
         // Rust's `{:e}` produces e.g. "1.23e4"; JS expects "1.23e+4"
@@ -892,11 +992,19 @@ pub(crate) fn fix_exponent_format(s: &str) -> String {
 
 /// Format a number per JS toString rules (helper for toPrecision when precision=0)
 fn format_number_for_js(value: f64) -> String {
-    if value.is_nan() { return "NaN".to_string(); }
-    if value.is_infinite() {
-        return if value > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() };
+    if value.is_nan() {
+        return "NaN".to_string();
     }
-    if value == 0.0 { return "0".to_string(); }
+    if value.is_infinite() {
+        return if value > 0.0 {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        };
+    }
+    if value == 0.0 {
+        return "0".to_string();
+    }
     if value.fract() == 0.0 && value.abs() < 1e15 {
         format!("{}", value as i64)
     } else {
@@ -914,7 +1022,11 @@ fn format_number_for_js(value: f64) -> String {
 /// Returns a new string from start to end (exclusive).
 /// start/end are in UTF-16 code unit indices (JS semantics).
 #[no_mangle]
-pub extern "C" fn js_string_slice(s: *const StringHeader, start: i32, end: i32) -> *mut StringHeader {
+pub extern "C" fn js_string_slice(
+    s: *const StringHeader,
+    start: i32,
+    end: i32,
+) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(ptr::null(), 0);
     }
@@ -922,8 +1034,16 @@ pub extern "C" fn js_string_slice(s: *const StringHeader, start: i32, end: i32) 
     let len = unsafe { (*s).utf16_len } as i32;
 
     // Handle negative indices (from end)
-    let start = if start < 0 { (len + start).max(0) } else { start.min(len) };
-    let end = if end < 0 { (len + end).max(0) } else { end.min(len) };
+    let start = if start < 0 {
+        (len + start).max(0)
+    } else {
+        start.min(len)
+    };
+    let end = if end < 0 {
+        (len + end).max(0)
+    } else {
+        end.min(len)
+    };
 
     if start >= end {
         return js_string_from_bytes(ptr::null(), 0);
@@ -951,7 +1071,11 @@ pub extern "C" fn js_string_slice(s: *const StringHeader, start: i32, end: i32) 
 /// - If start > end, arguments are swapped
 /// start/end are in UTF-16 code unit indices (JS semantics).
 #[no_mangle]
-pub extern "C" fn js_string_substring(s: *const StringHeader, start: i32, end: i32) -> *mut StringHeader {
+pub extern "C" fn js_string_substring(
+    s: *const StringHeader,
+    start: i32,
+    end: i32,
+) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(ptr::null(), 0);
     }
@@ -1045,14 +1169,21 @@ pub extern "C" fn js_string_to_upper_case(s: *const StringHeader) -> *mut String
 
 /// Find index of substring (-1 if not found)
 #[no_mangle]
-pub extern "C" fn js_string_index_of(haystack: *const StringHeader, needle: *const StringHeader) -> i32 {
+pub extern "C" fn js_string_index_of(
+    haystack: *const StringHeader,
+    needle: *const StringHeader,
+) -> i32 {
     js_string_index_of_from(haystack, needle, 0)
 }
 
 /// Find index of substring starting from a given position (-1 if not found).
 /// from_index and return value are in UTF-16 code unit indices (JS semantics).
 #[no_mangle]
-pub extern "C" fn js_string_index_of_from(haystack: *const StringHeader, needle: *const StringHeader, from_index: i32) -> i32 {
+pub extern "C" fn js_string_index_of_from(
+    haystack: *const StringHeader,
+    needle: *const StringHeader,
+    from_index: i32,
+) -> i32 {
     if !is_valid_string_ptr(haystack) || !is_valid_string_ptr(needle) {
         return -1;
     }
@@ -1064,19 +1195,21 @@ pub extern "C" fn js_string_index_of_from(haystack: *const StringHeader, needle:
         // ASCII fast path: byte offset == UTF-16 offset, use Rust's
         // optimized Two-Way str::find (avoids O(n*m) naive scan).
         if is_ascii_string(haystack) {
-            let start = if from_index < 0 { 0usize } else { from_index as usize };
+            let start = if from_index < 0 {
+                0usize
+            } else {
+                from_index as usize
+            };
             if n_blen == 0 {
                 return start.min(h_blen) as i32;
             }
             if start + n_blen > h_blen {
                 return -1;
             }
-            let h = std::str::from_utf8_unchecked(
-                slice::from_raw_parts(string_data(haystack), h_blen),
-            );
-            let n = std::str::from_utf8_unchecked(
-                slice::from_raw_parts(string_data(needle), n_blen),
-            );
+            let h =
+                std::str::from_utf8_unchecked(slice::from_raw_parts(string_data(haystack), h_blen));
+            let n =
+                std::str::from_utf8_unchecked(slice::from_raw_parts(string_data(needle), n_blen));
             return match h[start..].find(n) {
                 Some(pos) => (start + pos) as i32,
                 None => -1,
@@ -1086,10 +1219,16 @@ pub extern "C" fn js_string_index_of_from(haystack: *const StringHeader, needle:
         // Non-ASCII: construct &str, convert UTF-16 from_index to byte offset
         let h = string_as_str(haystack);
         let n = string_as_str(needle);
-        let u16_start = if from_index < 0 { 0usize } else { from_index as usize };
+        let u16_start = if from_index < 0 {
+            0usize
+        } else {
+            from_index as usize
+        };
         let byte_start = utf16_offset_to_byte_offset(h, u16_start);
         if byte_start > h.len() {
-            if n.is_empty() { return (*haystack).utf16_len as i32; }
+            if n.is_empty() {
+                return (*haystack).utf16_len as i32;
+            }
             return -1;
         }
         match h[byte_start..].find(n) {
@@ -1103,7 +1242,10 @@ pub extern "C" fn js_string_index_of_from(haystack: *const StringHeader, needle:
 /// Returns the UTF-16 code unit offset of the LAST occurrence, or -1 if not found.
 /// An empty needle returns the string's UTF-16 length.
 #[no_mangle]
-pub extern "C" fn js_string_last_index_of(haystack: *const StringHeader, needle: *const StringHeader) -> i32 {
+pub extern "C" fn js_string_last_index_of(
+    haystack: *const StringHeader,
+    needle: *const StringHeader,
+) -> i32 {
     if !is_valid_string_ptr(haystack) {
         return -1;
     }
@@ -1120,13 +1262,13 @@ pub extern "C" fn js_string_last_index_of(haystack: *const StringHeader, needle:
         // ASCII fast path: byte offset == UTF-16 offset, use rfind
         if is_ascii_string(haystack) {
             let h_blen = (*haystack).byte_len as usize;
-            if n_blen > h_blen { return -1; }
-            let h = std::str::from_utf8_unchecked(
-                slice::from_raw_parts(string_data(haystack), h_blen),
-            );
-            let n = std::str::from_utf8_unchecked(
-                slice::from_raw_parts(string_data(needle), n_blen),
-            );
+            if n_blen > h_blen {
+                return -1;
+            }
+            let h =
+                std::str::from_utf8_unchecked(slice::from_raw_parts(string_data(haystack), h_blen));
+            let n =
+                std::str::from_utf8_unchecked(slice::from_raw_parts(string_data(needle), n_blen));
             return match h.rfind(n) {
                 Some(pos) => pos as i32,
                 None => -1,
@@ -1203,13 +1345,20 @@ pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeade
         let data_b = string_data(b);
         let slice_a = std::slice::from_raw_parts(data_a, blen_a as usize);
         let slice_b = std::slice::from_raw_parts(data_b, blen_b as usize);
-        if slice_a == slice_b { 1 } else { 0 }
+        if slice_a == slice_b {
+            1
+        } else {
+            0
+        }
     }
 }
 
 /// Check if a string starts with a prefix
 #[no_mangle]
-pub extern "C" fn js_string_starts_with(s: *const StringHeader, prefix: *const StringHeader) -> i32 {
+pub extern "C" fn js_string_starts_with(
+    s: *const StringHeader,
+    prefix: *const StringHeader,
+) -> i32 {
     if !is_valid_string_ptr(s) || !is_valid_string_ptr(prefix) {
         return 0;
     }
@@ -1284,7 +1433,9 @@ pub extern "C" fn js_string_char_code_at(s: *const StringHeader, index: i32) -> 
     // ASCII fast path: byte_len == utf16_len means every byte is one
     // UTF-16 code unit. Direct byte index, no scan, no allocation.
     if is_ascii_string(s) {
-        unsafe { return *string_data(s).add(idx) as f64; }
+        unsafe {
+            return *string_data(s).add(idx) as f64;
+        }
     }
 
     // Non-ASCII: walk codepoints counting UTF-16 units. Allocation-free.
@@ -1358,10 +1509,11 @@ pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
         let mut buf = [0u8; 4];
         let encoded = ch.encode_utf8(&mut buf);
         let ch_ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
-        let nanboxed = f64::from_bits(
-            crate::value::STRING_TAG | (ch_ptr as u64 & crate::value::POINTER_MASK),
-        );
-        unsafe { *elements.add(i) = nanboxed; }
+        let nanboxed =
+            f64::from_bits(crate::value::STRING_TAG | (ch_ptr as u64 & crate::value::POINTER_MASK));
+        unsafe {
+            *elements.add(i) = nanboxed;
+        }
     }
     arr as i64
 }
@@ -1454,7 +1606,9 @@ pub extern "C" fn js_string_code_point_at(s: *const StringHeader, index: i32) ->
 
     // ASCII fast path — identical to charCodeAt's.
     if is_ascii_string(s) {
-        unsafe { return *string_data(s).add(idx) as f64; }
+        unsafe {
+            return *string_data(s).add(idx) as f64;
+        }
     }
 
     // Non-ASCII: walk codepoints without allocating a Vec<u16>.
@@ -1512,10 +1666,7 @@ pub extern "C" fn js_string_normalize(
 /// character class wins) and then case-sensitive with lowercase < uppercase
 /// (matching V8's default ICU behavior where 'a' < 'A').
 #[no_mangle]
-pub extern "C" fn js_string_locale_compare(
-    a: *const StringHeader,
-    b: *const StringHeader,
-) -> f64 {
+pub extern "C" fn js_string_locale_compare(a: *const StringHeader, b: *const StringHeader) -> f64 {
     let a_valid = is_valid_string_ptr(a);
     let b_valid = is_valid_string_ptr(b);
     if !a_valid && !b_valid {
@@ -1619,18 +1770,30 @@ pub extern "C" fn js_string_to_well_formed(s: *const StringHeader) -> *mut Strin
             i += 1;
         } else if b < 0xE0 {
             result.push(b);
-            if i + 1 < blen { result.push(bytes[i + 1]); }
+            if i + 1 < blen {
+                result.push(bytes[i + 1]);
+            }
             i += 2;
         } else if b < 0xF0 {
             result.push(b);
-            if i + 1 < blen { result.push(bytes[i + 1]); }
-            if i + 2 < blen { result.push(bytes[i + 2]); }
+            if i + 1 < blen {
+                result.push(bytes[i + 1]);
+            }
+            if i + 2 < blen {
+                result.push(bytes[i + 2]);
+            }
             i += 3;
         } else {
             result.push(b);
-            if i + 1 < blen { result.push(bytes[i + 1]); }
-            if i + 2 < blen { result.push(bytes[i + 2]); }
-            if i + 3 < blen { result.push(bytes[i + 3]); }
+            if i + 1 < blen {
+                result.push(bytes[i + 1]);
+            }
+            if i + 2 < blen {
+                result.push(bytes[i + 2]);
+            }
+            if i + 3 < blen {
+                result.push(bytes[i + 3]);
+            }
             i += 4;
         }
     }
@@ -1678,7 +1841,10 @@ use crate::array::ArrayHeader;
 /// Split a string by a delimiter
 /// Returns an array of string pointers (stored as f64 bit patterns)
 #[no_mangle]
-pub extern "C" fn js_string_split(s: *const StringHeader, delimiter: *const StringHeader) -> *mut ArrayHeader {
+pub extern "C" fn js_string_split(
+    s: *const StringHeader,
+    delimiter: *const StringHeader,
+) -> *mut ArrayHeader {
     if !is_valid_string_ptr(s) {
         // Return empty array
         return crate::array::js_array_alloc(0);
@@ -1710,11 +1876,14 @@ pub extern "C" fn js_string_split(s: *const StringHeader, delimiter: *const Stri
 
     if delim.is_empty() {
         // Empty delimiter: split into individual characters (single pass)
-        let parts: Vec<*mut StringHeader> = str_data.chars().map(|c| {
-            let mut buf = [0u8; 4];
-            let char_str = c.encode_utf8(&mut buf);
-            js_string_from_bytes(char_str.as_ptr(), char_str.len() as u32)
-        }).collect();
+        let parts: Vec<*mut StringHeader> = str_data
+            .chars()
+            .map(|c| {
+                let mut buf = [0u8; 4];
+                let char_str = c.encode_utf8(&mut buf);
+                js_string_from_bytes(char_str.as_ptr(), char_str.len() as u32)
+            })
+            .collect();
 
         let arr = crate::array::js_array_alloc(parts.len() as u32);
         unsafe {
@@ -1773,12 +1942,20 @@ pub extern "C" fn js_string_alloc_space() -> *mut StringHeader {
 /// Pad the start of a string to reach target length (in UTF-16 code units).
 /// str.padStart(targetLength, padString)
 #[no_mangle]
-pub extern "C" fn js_string_pad_start(s: *const StringHeader, target_length: u32, pad_string: *const StringHeader) -> *mut StringHeader {
+pub extern "C" fn js_string_pad_start(
+    s: *const StringHeader,
+    target_length: u32,
+    pad_string: *const StringHeader,
+) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(ptr::null(), 0);
     }
     let str_data = string_as_str(s);
-    let pad_data = if is_valid_string_ptr(pad_string) { string_as_str(pad_string) } else { " " };
+    let pad_data = if is_valid_string_ptr(pad_string) {
+        string_as_str(pad_string)
+    } else {
+        " "
+    };
 
     let current_len = unsafe { (*s).utf16_len } as usize;
     let target_len = target_length as usize;
@@ -1798,7 +1975,9 @@ pub extern "C" fn js_string_pad_start(s: *const StringHeader, target_length: u32
     while u16_added < pad_needed {
         let ch = pad_chars[pad_idx % pad_chars.len()];
         let ch_u16_len = ch.len_utf16();
-        if u16_added + ch_u16_len > pad_needed { break; }
+        if u16_added + ch_u16_len > pad_needed {
+            break;
+        }
         result.push(ch);
         u16_added += ch_u16_len;
         pad_idx += 1;
@@ -1814,12 +1993,20 @@ pub extern "C" fn js_string_pad_start(s: *const StringHeader, target_length: u32
 /// Pad the end of a string to reach target length (in UTF-16 code units).
 /// str.padEnd(targetLength, padString)
 #[no_mangle]
-pub extern "C" fn js_string_pad_end(s: *const StringHeader, target_length: u32, pad_string: *const StringHeader) -> *mut StringHeader {
+pub extern "C" fn js_string_pad_end(
+    s: *const StringHeader,
+    target_length: u32,
+    pad_string: *const StringHeader,
+) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(ptr::null(), 0);
     }
     let str_data = string_as_str(s);
-    let pad_data = if is_valid_string_ptr(pad_string) { string_as_str(pad_string) } else { " " };
+    let pad_data = if is_valid_string_ptr(pad_string) {
+        string_as_str(pad_string)
+    } else {
+        " "
+    };
 
     let current_len = unsafe { (*s).utf16_len } as usize;
     let target_len = target_length as usize;
@@ -1840,7 +2027,9 @@ pub extern "C" fn js_string_pad_end(s: *const StringHeader, target_length: u32, 
     while u16_added < pad_needed {
         let ch = pad_chars[pad_idx % pad_chars.len()];
         let ch_u16_len = ch.len_utf16();
-        if u16_added + ch_u16_len > pad_needed { break; }
+        if u16_added + ch_u16_len > pad_needed {
+            break;
+        }
         result.push(ch);
         u16_added += ch_u16_len;
         pad_idx += 1;
@@ -1921,7 +2110,7 @@ pub extern "C" fn js_btoa(value: f64) -> *const StringHeader {
 #[derive(Clone, Copy)]
 #[repr(C)]
 struct InternEntry {
-    hash: u64,        // FNV-1a content hash
+    hash: u64,         // FNV-1a content hash
     string_ptr: usize, // pointer to StringHeader (0 = empty slot)
 }
 
@@ -1932,16 +2121,15 @@ const INTERN_TABLE_MASK: usize = INTERN_TABLE_SIZE - 1;
 const INTERN_MAX_BYTE_LEN: u32 = 64;
 
 #[no_mangle]
-static mut INTERN_TABLE: [InternEntry; INTERN_TABLE_SIZE] =
-    [InternEntry { hash: 0, string_ptr: 0 }; INTERN_TABLE_SIZE];
+static mut INTERN_TABLE: [InternEntry; INTERN_TABLE_SIZE] = [InternEntry {
+    hash: 0,
+    string_ptr: 0,
+}; INTERN_TABLE_SIZE];
 
 /// Intern a property-name string. Returns the canonical pointer for
 /// the given content. `hash` is the pre-computed FNV-1a hash.
 #[no_mangle]
-pub extern "C" fn js_string_intern(
-    key: *const StringHeader,
-    hash: u64,
-) -> *const StringHeader {
+pub extern "C" fn js_string_intern(key: *const StringHeader, hash: u64) -> *const StringHeader {
     if key.is_null() || !is_valid_string_ptr(key) {
         return key;
     }
@@ -1969,8 +2157,8 @@ pub extern "C" fn js_string_intern(
         entry.string_ptr = key as usize;
 
         // Mark as interned in GcHeader
-        let gc_header = (key as *const u8)
-            .sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let gc_header =
+            (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*gc_header).gc_flags |= crate::gc::GC_FLAG_INTERNED;
 
         // Force shared — never mutate interned strings in-place
@@ -1982,7 +2170,11 @@ pub extern "C" fn js_string_intern(
 
 /// Byte-level content comparison for intern table lookups.
 #[inline(always)]
-unsafe fn intern_content_equals(a: *const StringHeader, b: *const StringHeader, byte_len: u32) -> bool {
+unsafe fn intern_content_equals(
+    a: *const StringHeader,
+    b: *const StringHeader,
+    byte_len: u32,
+) -> bool {
     let data_a = (a as *const u8).add(std::mem::size_of::<StringHeader>());
     let data_b = (b as *const u8).add(std::mem::size_of::<StringHeader>());
     std::slice::from_raw_parts(data_a, byte_len as usize)
@@ -1993,7 +2185,12 @@ unsafe fn intern_content_equals(a: *const StringHeader, b: *const StringHeader, 
 /// without allocating the result. Caller guarantees both pointers are
 /// valid when their respective lengths are >0.
 #[inline(always)]
-unsafe fn fnv1a_concat(a: *const StringHeader, a_len: u32, b: *const StringHeader, b_len: u32) -> u64 {
+unsafe fn fnv1a_concat(
+    a: *const StringHeader,
+    a_len: u32,
+    b: *const StringHeader,
+    b_len: u32,
+) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     if a_len > 0 {
         let data = (a as *const u8).add(std::mem::size_of::<StringHeader>());
@@ -2016,8 +2213,10 @@ unsafe fn fnv1a_concat(a: *const StringHeader, a_len: u32, b: *const StringHeade
 /// Caller guarantees pointers are valid when their respective lengths are >0.
 #[inline(always)]
 unsafe fn concat_content_matches(
-    a: *const StringHeader, a_len: u32,
-    b: *const StringHeader, b_len: u32,
+    a: *const StringHeader,
+    a_len: u32,
+    b: *const StringHeader,
+    b_len: u32,
     existing: *const StringHeader,
 ) -> bool {
     let ex_data = (existing as *const u8).add(std::mem::size_of::<StringHeader>());
@@ -2045,8 +2244,8 @@ pub fn scan_intern_table_roots(mark: &mut dyn FnMut(f64)) {
     unsafe {
         for entry in INTERN_TABLE.iter() {
             if entry.string_ptr != 0 {
-                let nanboxed = 0x7FFF_0000_0000_0000u64
-                    | (entry.string_ptr as u64 & 0x0000_FFFF_FFFF_FFFFu64);
+                let nanboxed =
+                    0x7FFF_0000_0000_0000u64 | (entry.string_ptr as u64 & 0x0000_FFFF_FFFF_FFFFu64);
                 mark(f64::from_bits(nanboxed));
             }
         }
@@ -2095,7 +2294,7 @@ mod tests {
 
     #[test]
     fn test_string_split() {
-        use crate::array::{js_array_length, js_array_get_f64};
+        use crate::array::{js_array_get_f64, js_array_length};
 
         let s = js_string_from_bytes(b"a,b,c".as_ptr(), 5);
         let delim = js_string_from_bytes(b",".as_ptr(), 1);
@@ -2181,6 +2380,10 @@ mod tests {
         }
         assert_eq!(js_string_length(result), 1000);
         // Most appends should be in-place (only ~10 re-allocations for 1000 appends)
-        assert!(inplace_count > 980, "Expected >980 in-place appends, got {}", inplace_count);
+        assert!(
+            inplace_count > 980,
+            "Expected >980 in-place appends, got {}",
+            inplace_count
+        );
     }
 }

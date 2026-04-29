@@ -3,13 +3,13 @@
 //! Native implementation of the 'better-sqlite3' npm package using rusqlite.
 //! Provides synchronous SQLite database operations.
 
-use perry_runtime::{
-    js_array_alloc, js_array_push, js_object_alloc, js_object_alloc_with_shape, js_object_set_field,
-    js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
-};
-use rusqlite::{Connection, params_from_iter, types::Value as SqliteValue};
-use std::sync::Mutex;
 use crate::common::{get_handle, register_handle, Handle};
+use perry_runtime::{
+    js_array_alloc, js_array_push, js_object_alloc, js_object_alloc_with_shape,
+    js_object_set_field, js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
+};
+use rusqlite::{params_from_iter, types::Value as SqliteValue, Connection};
+use std::sync::Mutex;
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -118,7 +118,9 @@ pub unsafe extern "C" fn js_sqlite_open(filename_ptr: *const StringHeader) -> Ha
                 }
             }
             #[cfg(not(target_os = "ios"))]
-            { filename.clone() }
+            {
+                filename.clone()
+            }
         } else {
             filename.clone()
         };
@@ -126,7 +128,9 @@ pub unsafe extern "C" fn js_sqlite_open(filename_ptr: *const StringHeader) -> Ha
     };
 
     match conn {
-        Ok(c) => register_handle(SqliteDbHandle { conn: Mutex::new(c) }),
+        Ok(c) => register_handle(SqliteDbHandle {
+            conn: Mutex::new(c),
+        }),
         Err(_) => -1,
     }
 }
@@ -143,7 +147,11 @@ pub unsafe extern "C" fn js_sqlite_exec(db_handle: Handle, sql_ptr: *const Strin
 
     if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
         if let Ok(conn) = db.conn.lock() {
-            return if conn.execute_batch(&sql).is_ok() { 1 } else { 0 };
+            return if conn.execute_batch(&sql).is_ok() {
+                1
+            } else {
+                0
+            };
         }
     }
     0
@@ -249,7 +257,8 @@ pub unsafe extern "C" fn js_sqlite_stmt_run(
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
             if let Ok(conn) = db.conn.lock() {
-                let param_refs: Vec<&dyn rusqlite::ToSql> = sqlite_params.iter().map(|p| p.as_ref()).collect();
+                let param_refs: Vec<&dyn rusqlite::ToSql> =
+                    sqlite_params.iter().map(|p| p.as_ref()).collect();
 
                 if let Ok(changes) = conn.execute(&stmt.sql, param_refs.as_slice()) {
                     let last_id = conn.last_insert_rowid();
@@ -288,7 +297,8 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
             if let Ok(conn) = db.conn.lock() {
-                let param_refs: Vec<&dyn rusqlite::ToSql> = sqlite_params.iter().map(|p| p.as_ref()).collect();
+                let param_refs: Vec<&dyn rusqlite::ToSql> =
+                    sqlite_params.iter().map(|p| p.as_ref()).collect();
 
                 if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
                     let column_names: Vec<String> = prepared
@@ -311,7 +321,11 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
 
                             for (idx, _name) in column_names.iter().enumerate() {
                                 let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
-                                js_object_set_field(obj, idx as u32, sqlite_value_to_jsvalue(&value));
+                                js_object_set_field(
+                                    obj,
+                                    idx as u32,
+                                    sqlite_value_to_jsvalue(&value),
+                                );
                             }
 
                             return f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits());
@@ -339,7 +353,8 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
             if let Ok(conn) = db.conn.lock() {
-                let param_refs: Vec<&dyn rusqlite::ToSql> = sqlite_params.iter().map(|p| p.as_ref()).collect();
+                let param_refs: Vec<&dyn rusqlite::ToSql> =
+                    sqlite_params.iter().map(|p| p.as_ref()).collect();
 
                 if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
                     let column_names: Vec<String> = prepared
@@ -362,7 +377,11 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
 
                             for (idx, _name) in column_names.iter().enumerate() {
                                 let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
-                                js_object_set_field(obj, idx as u32, sqlite_value_to_jsvalue(&value));
+                                js_object_set_field(
+                                    obj,
+                                    idx as u32,
+                                    sqlite_value_to_jsvalue(&value),
+                                );
                             }
 
                             js_array_push(result_array, JSValue::object_ptr(obj as *mut u8));
@@ -421,11 +440,14 @@ unsafe extern "C" fn sqlite_tx_wrapper(
     wrapper_closure: *const perry_runtime::ClosureHeader,
     arg0: f64,
 ) -> f64 {
-    use perry_runtime::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr, js_closure_call1};
+    use perry_runtime::closure::{
+        js_closure_call1, js_closure_get_capture_f64, js_closure_get_capture_ptr,
+    };
 
     let db_handle_f64 = js_closure_get_capture_f64(wrapper_closure, 0);
     let db_handle = db_handle_f64 as i64;
-    let original_closure = js_closure_get_capture_ptr(wrapper_closure, 1) as *const perry_runtime::ClosureHeader;
+    let original_closure =
+        js_closure_get_capture_ptr(wrapper_closure, 1) as *const perry_runtime::ClosureHeader;
 
     // BEGIN
     js_sqlite_begin_transaction(db_handle);
@@ -447,7 +469,9 @@ pub unsafe extern "C" fn js_sqlite_transaction(
     db_handle: Handle,
     closure_ptr: i64,
 ) -> *mut perry_runtime::ClosureHeader {
-    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr};
+    use perry_runtime::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
 
     let wrapper = js_closure_alloc(sqlite_tx_wrapper as *const u8, 2);
     js_closure_set_capture_f64(wrapper, 0, db_handle as f64);
@@ -461,7 +485,11 @@ pub unsafe extern "C" fn js_sqlite_transaction(
 pub unsafe extern "C" fn js_sqlite_begin_transaction(db_handle: Handle) -> i32 {
     if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
         if let Ok(conn) = db.conn.lock() {
-            return if conn.execute("BEGIN TRANSACTION", []).is_ok() { 1 } else { 0 };
+            return if conn.execute("BEGIN TRANSACTION", []).is_ok() {
+                1
+            } else {
+                0
+            };
         }
     }
     0
@@ -472,7 +500,11 @@ pub unsafe extern "C" fn js_sqlite_begin_transaction(db_handle: Handle) -> i32 {
 pub unsafe extern "C" fn js_sqlite_commit(db_handle: Handle) -> i32 {
     if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
         if let Ok(conn) = db.conn.lock() {
-            return if conn.execute("COMMIT", []).is_ok() { 1 } else { 0 };
+            return if conn.execute("COMMIT", []).is_ok() {
+                1
+            } else {
+                0
+            };
         }
     }
     0
@@ -483,7 +515,11 @@ pub unsafe extern "C" fn js_sqlite_commit(db_handle: Handle) -> i32 {
 pub unsafe extern "C" fn js_sqlite_rollback(db_handle: Handle) -> i32 {
     if let Some(db) = get_handle::<SqliteDbHandle>(db_handle) {
         if let Ok(conn) = db.conn.lock() {
-            return if conn.execute("ROLLBACK", []).is_ok() { 1 } else { 0 };
+            return if conn.execute("ROLLBACK", []).is_ok() {
+                1
+            } else {
+                0
+            };
         }
     }
     0
@@ -496,7 +532,11 @@ pub unsafe extern "C" fn js_sqlite_rollback(db_handle: Handle) -> i32 {
 pub unsafe extern "C" fn js_sqlite_close(db_handle: Handle) -> i32 {
     // The connection will be closed when the handle is dropped
     // For now, we just verify the handle is valid
-    if get_handle::<SqliteDbHandle>(db_handle).is_some() { 1 } else { 0 }
+    if get_handle::<SqliteDbHandle>(db_handle).is_some() {
+        1
+    } else {
+        0
+    }
 }
 
 /// db.inTransaction -> boolean

@@ -278,8 +278,7 @@ fn run(cli: &Cli) -> Result<i32> {
             host_platform: host,
             results: results.clone(),
         };
-        let contents =
-            serde_json::to_string_pretty(&full).context("serializing JSON report")?;
+        let contents = serde_json::to_string_pretty(&full).context("serializing JSON report")?;
         std::fs::write(path, contents).context("writing JSON report")?;
     }
 
@@ -325,7 +324,13 @@ fn count(results: &[ExampleReport]) -> (usize, usize, usize) {
     (passed, failed, skipped)
 }
 
-fn print_summary(total: usize, passed: usize, failed: usize, skipped: usize, results: &[ExampleReport]) {
+fn print_summary(
+    total: usize,
+    passed: usize,
+    failed: usize,
+    skipped: usize,
+    results: &[ExampleReport],
+) {
     for r in results {
         let tag = match r.status {
             Status::Pass => "PASS",
@@ -343,9 +348,7 @@ fn print_summary(total: usize, passed: usize, failed: usize, skipped: usize, res
         println!("{tag:<13} {} ({} ms)  {}", r.file, r.duration_ms, r.detail);
     }
     println!();
-    println!(
-        "doc-tests: {passed}/{total} passed, {failed} failed, {skipped} skipped",
-    );
+    println!("doc-tests: {passed}/{total} passed, {failed} failed, {skipped} skipped",);
 }
 
 #[derive(Debug)]
@@ -360,7 +363,10 @@ struct Example {
 
 fn discover_examples(root: &Path) -> Result<Vec<Example>> {
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -412,8 +418,8 @@ struct Banner {
 }
 
 fn read_banner(path: &Path) -> Result<Banner> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut b = Banner::default();
     let mut platforms_seen = false;
     for line in text.lines().take(15) {
@@ -508,9 +514,9 @@ fn run_one(
 
     let expected_stdout = load_expected_stdout(examples_dir, rel);
     let baseline_name = baseline_name_for(rel);
-    let screenshot_path = baseline_name.as_ref().map(|name| {
-        out_dir.join(format!("{name}_{host}.png"))
-    });
+    let screenshot_path = baseline_name
+        .as_ref()
+        .map(|name| out_dir.join(format!("{name}_{host}.png")));
 
     let mut cmd = Command::new(&bin_path);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -612,22 +618,36 @@ fn target_buildable_reason(target: &str, host: &str) -> Option<String> {
         "watchos" | "watchos-simulator" | "visionos" | "visionos-simulator" => {
             // Rust Tier-3 — requires nightly + `-Zbuild-std`. Skip in the
             // generic cross-compile until we wire up a dedicated job.
-            Some(format!("target=`{target}` is Rust Tier-3 (nightly + -Zbuild-std); not yet wired"))
+            Some(format!(
+                "target=`{target}` is Rust Tier-3 (nightly + -Zbuild-std); not yet wired"
+            ))
         }
-        "ios" | "ios-simulator" | "tvos" | "tvos-simulator" | "macos"
-        | "ios-widget" | "ios-widget-simulator"
-        | "watchos-widget" | "watchos-widget-simulator" => {
+        "ios"
+        | "ios-simulator"
+        | "tvos"
+        | "tvos-simulator"
+        | "macos"
+        | "ios-widget"
+        | "ios-widget-simulator"
+        | "watchos-widget"
+        | "watchos-widget-simulator" => {
             if host != "macos" {
-                Some(format!("needs Xcode — host `{host}` can't build `{target}`"))
+                Some(format!(
+                    "needs Xcode — host `{host}` can't build `{target}`"
+                ))
             } else if !has_xcode() {
-                Some(format!("Xcode command-line tools not installed (target=`{target}`)"))
+                Some(format!(
+                    "Xcode command-line tools not installed (target=`{target}`)"
+                ))
             } else {
                 None
             }
         }
         "android" | "android-widget" | "wearos-tile" => {
             if host != "linux" && host != "macos" {
-                Some(format!("android cross-compile unsupported on host `{host}`"))
+                Some(format!(
+                    "android cross-compile unsupported on host `{host}`"
+                ))
             } else if std::env::var("ANDROID_NDK_HOME").is_err()
                 && std::env::var("ANDROID_NDK_ROOT").is_err()
             {
@@ -639,9 +659,9 @@ fn target_buildable_reason(target: &str, host: &str) -> Option<String> {
         "linux" if host != "linux" => {
             Some(format!("linux cross-compile unsupported on host `{host}`"))
         }
-        "windows" if host != "windows" => {
-            Some(format!("windows cross-compile unsupported on host `{host}`"))
-        }
+        "windows" if host != "windows" => Some(format!(
+            "windows cross-compile unsupported on host `{host}`"
+        )),
         "linux" | "windows" | "web" | "wasm" => None,
         other => Some(format!("unknown target `{other}`")),
     }
@@ -697,10 +717,8 @@ fn cross_compile_one(
     // source bundles directly into the `-o` directory, so `out` IS the artifact
     // directory — no `.app` suffix appended.
     let artifact_check = match target {
-        "ios" | "ios-simulator" | "visionos" | "visionos-simulator"
-        | "tvos" | "tvos-simulator" | "watchos" | "watchos-simulator" => {
-            out.with_extension("app")
-        }
+        "ios" | "ios-simulator" | "visionos" | "visionos-simulator" | "tvos" | "tvos-simulator"
+        | "watchos" | "watchos-simulator" => out.with_extension("app"),
         // Widget targets: perry writes the source bundle into `-o` itself.
         _ => out.clone(),
     };
@@ -710,8 +728,9 @@ fn cross_compile_one(
     // AndroidManifest_snippet.xml. If present, we check for the sentinel
     // instead of a raw non-empty-dir test.
     let sentinel: Option<&str> = match target {
-        "ios-widget" | "ios-widget-simulator"
-        | "watchos-widget" | "watchos-widget-simulator" => Some("Info.plist"),
+        "ios-widget" | "ios-widget-simulator" | "watchos-widget" | "watchos-widget-simulator" => {
+            Some("Info.plist")
+        }
         "android-widget" | "wearos-tile" => Some("AndroidManifest_snippet.xml"),
         _ => None,
     };
@@ -760,16 +779,24 @@ fn cross_compile_one(
     let ok = if let Some(s) = sentinel {
         artifact_check.is_dir() && artifact_check.join(s).is_file()
     } else if artifact_check.is_dir() {
-        std::fs::read_dir(&artifact_check).map(|it| it.count() > 0).unwrap_or(false)
+        std::fs::read_dir(&artifact_check)
+            .map(|it| it.count() > 0)
+            .unwrap_or(false)
     } else {
-        artifact_check.metadata().map(|m| m.len() > 0).unwrap_or(false)
+        artifact_check
+            .metadata()
+            .map(|m| m.len() > 0)
+            .unwrap_or(false)
     };
     if !ok {
         return ExampleReport {
             file: rel.to_string(),
             kind: ex.kind,
             status: Status::CrossCompileFail,
-            detail: format!("target=`{target}`: artifact missing or empty at {}", artifact_check.display()),
+            detail: format!(
+                "target=`{target}`: artifact missing or empty at {}",
+                artifact_check.display()
+            ),
             duration_ms: 0,
         };
     }
@@ -826,7 +853,10 @@ struct RunOutput {
     stderr: Vec<u8>,
 }
 
-fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> std::result::Result<RunOutput, RunError> {
+fn run_with_timeout(
+    cmd: &mut Command,
+    timeout: Duration,
+) -> std::result::Result<RunOutput, RunError> {
     let mut child = cmd.spawn().map_err(RunError::Io)?;
     let deadline = Instant::now() + timeout;
     loop {
@@ -840,7 +870,11 @@ fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> std::result::Result
                 if let Some(mut s) = child.stderr.take() {
                     let _ = std::io::Read::read_to_end(&mut s, &mut stderr);
                 }
-                return Ok(RunOutput { status, stdout, stderr });
+                return Ok(RunOutput {
+                    status,
+                    stdout,
+                    stderr,
+                });
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
@@ -979,7 +1013,11 @@ fn normalize(s: &str) -> String {
 fn stdout_diff_summary(expected: &str, actual: &str) -> String {
     let e_lines: Vec<&str> = expected.lines().collect();
     let a_lines: Vec<&str> = actual.lines().collect();
-    let common = e_lines.iter().zip(a_lines.iter()).take_while(|(a, b)| a == b).count();
+    let common = e_lines
+        .iter()
+        .zip(a_lines.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
     let first_diff_line = common + 1;
     let e_snippet = e_lines.get(common).unwrap_or(&"");
     let a_snippet = a_lines.get(common).unwrap_or(&"");

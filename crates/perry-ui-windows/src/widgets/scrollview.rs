@@ -6,15 +6,15 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::Graphics::Gdi::{FillRect, HBRUSH};
+#[cfg(target_os = "windows")]
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Controls::SetScrollInfo;
 #[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::{HBRUSH, FillRect};
-#[cfg(target_os = "windows")]
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, register_widget_with_layout};
+use super::{register_widget_with_layout, WidgetKind};
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -37,26 +37,29 @@ thread_local! {
 
 #[cfg(target_os = "windows")]
 fn ensure_class_registered() {
-    SCROLL_CLASS_REGISTERED.call_once(|| {
-        unsafe {
-            let hinstance = GetModuleHandleW(None).unwrap();
-            let class_name = to_wide("PerryScrollView");
-            let wc = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(scroll_wnd_proc),
-                hInstance: HINSTANCE::from(hinstance),
-                hbrBackground: HBRUSH(std::ptr::null_mut()),
-                lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
-                ..Default::default()
-            };
-            RegisterClassExW(&wc);
-        }
+    SCROLL_CLASS_REGISTERED.call_once(|| unsafe {
+        let hinstance = GetModuleHandleW(None).unwrap();
+        let class_name = to_wide("PerryScrollView");
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(scroll_wnd_proc),
+            hInstance: HINSTANCE::from(hinstance),
+            hbrBackground: HBRUSH(std::ptr::null_mut()),
+            lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
+            ..Default::default()
+        };
+        RegisterClassExW(&wc);
     });
 }
 
 #[cfg(target_os = "windows")]
-unsafe extern "system" fn scroll_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn scroll_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_VSCROLL => {
             let handle = super::find_handle_by_hwnd(hwnd);
@@ -81,11 +84,12 @@ unsafe extern "system" fn scroll_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_ERASEBKGND | WM_PAINT => {
-            let color = super::get_hwnd_bg_color(hwnd)
-                .or_else(|| super::find_ancestor_hwnd_bg_color(hwnd));
+            let color =
+                super::get_hwnd_bg_color(hwnd).or_else(|| super::find_ancestor_hwnd_bg_color(hwnd));
             if let Some(color) = color {
                 let brush = windows::Win32::Graphics::Gdi::CreateSolidBrush(
-                    windows::Win32::Foundation::COLORREF(color));
+                    windows::Win32::Foundation::COLORREF(color),
+                );
                 if msg == WM_ERASEBKGND {
                     let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut _);
                     let mut rect = RECT::default();
@@ -115,7 +119,9 @@ unsafe extern "system" fn scroll_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, 
 fn find_ancestor_brush(mut hwnd: HWND) -> Option<HBRUSH> {
     for _ in 0..10 {
         if let Ok(parent) = unsafe { GetParent(hwnd) } {
-            if parent.0.is_null() { break; }
+            if parent.0.is_null() {
+                break;
+            }
             let parent_handle = super::find_handle_by_hwnd(parent);
             if parent_handle > 0 {
                 if let Some(brush) = super::get_bg_brush(parent_handle) {
@@ -144,21 +150,33 @@ pub fn create() -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
                 WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN,
-                0, 0, 100, 100,
+                0,
+                0,
+                100,
+                100,
                 super::get_parking_hwnd(),
                 None,
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
-            let handle = register_widget_with_layout(hwnd, WidgetKind::ScrollView, 0.0, (0.0, 0.0, 0.0, 0.0));
+            let handle = register_widget_with_layout(
+                hwnd,
+                WidgetKind::ScrollView,
+                0.0,
+                (0.0, 0.0, 0.0, 0.0),
+            );
             SCROLL_STATES.with(|states| {
-                states.borrow_mut().insert(handle, ScrollState {
-                    scroll_offset: 0,
-                    content_height: 0,
-                    viewport_height: 0,
-                    content_child: None,
-                });
+                states.borrow_mut().insert(
+                    handle,
+                    ScrollState {
+                        scroll_offset: 0,
+                        content_height: 0,
+                        viewport_height: 0,
+                        content_child: None,
+                    },
+                );
             });
             handle
         }
@@ -166,14 +184,18 @@ pub fn create() -> i64 {
 
     #[cfg(not(target_os = "windows"))]
     {
-        let handle = register_widget_with_layout(0, WidgetKind::ScrollView, 0.0, (0.0, 0.0, 0.0, 0.0));
+        let handle =
+            register_widget_with_layout(0, WidgetKind::ScrollView, 0.0, (0.0, 0.0, 0.0, 0.0));
         SCROLL_STATES.with(|states| {
-            states.borrow_mut().insert(handle, ScrollState {
-                scroll_offset: 0,
-                content_height: 0,
-                viewport_height: 0,
-                content_child: None,
-            });
+            states.borrow_mut().insert(
+                handle,
+                ScrollState {
+                    scroll_offset: 0,
+                    content_height: 0,
+                    viewport_height: 0,
+                    content_child: None,
+                },
+            );
         });
         handle
     }
@@ -224,7 +246,10 @@ pub fn update_scroll_info(handle: i64, viewport_height: i32, content_height: i32
 pub fn scroll_to(scroll_handle: i64, child_handle: i64) {
     #[cfg(target_os = "windows")]
     {
-        if let (Some(scroll_hwnd), Some(child_hwnd)) = (super::get_hwnd(scroll_handle), super::get_hwnd(child_handle)) {
+        if let (Some(scroll_hwnd), Some(child_hwnd)) = (
+            super::get_hwnd(scroll_handle),
+            super::get_hwnd(child_handle),
+        ) {
             unsafe {
                 let mut child_rect = RECT::default();
                 let mut scroll_rect = RECT::default();
@@ -236,7 +261,11 @@ pub fn scroll_to(scroll_handle: i64, child_handle: i64) {
                 let child_bottom = child_rect.bottom - scroll_rect.top;
 
                 let viewport_height = SCROLL_STATES.with(|states| {
-                    states.borrow().get(&scroll_handle).map(|s| s.viewport_height).unwrap_or(0)
+                    states
+                        .borrow()
+                        .get(&scroll_handle)
+                        .map(|s| s.viewport_height)
+                        .unwrap_or(0)
                 });
 
                 let current_offset = get_offset(scroll_handle) as i32;
@@ -246,7 +275,10 @@ pub fn scroll_to(scroll_handle: i64, child_handle: i64) {
                     set_offset(scroll_handle, (current_offset + child_top) as f64);
                 } else if child_bottom > viewport_height {
                     // Child is below viewport — scroll down
-                    set_offset(scroll_handle, (current_offset + child_bottom - viewport_height) as f64);
+                    set_offset(
+                        scroll_handle,
+                        (current_offset + child_bottom - viewport_height) as f64,
+                    );
                 }
             }
         }
@@ -261,7 +293,11 @@ pub fn scroll_to(scroll_handle: i64, child_handle: i64) {
 /// Get the vertical scroll offset.
 pub fn get_offset(scroll_handle: i64) -> f64 {
     SCROLL_STATES.with(|states| {
-        states.borrow().get(&scroll_handle).map(|s| s.scroll_offset as f64).unwrap_or(0.0)
+        states
+            .borrow()
+            .get(&scroll_handle)
+            .map(|s| s.scroll_offset as f64)
+            .unwrap_or(0.0)
     })
 }
 
@@ -298,8 +334,10 @@ fn apply_scroll_offset(handle: i64) {
                     let _ = SetWindowPos(
                         child_hwnd,
                         None,
-                        0, -offset,
-                        0, 0,
+                        0,
+                        -offset,
+                        0,
+                        0,
                         SWP_NOSIZE | SWP_NOZORDER,
                     );
                 }
@@ -327,7 +365,10 @@ fn apply_scroll_offset(handle: i64) {
 fn handle_vscroll(handle: i64, hwnd: HWND, wparam: WPARAM) {
     let action = (wparam.0 & 0xFFFF) as u16;
     let current = SCROLL_STATES.with(|states| {
-        states.borrow().get(&handle).map(|s| (s.scroll_offset, s.content_height, s.viewport_height))
+        states
+            .borrow()
+            .get(&handle)
+            .map(|s| (s.scroll_offset, s.content_height, s.viewport_height))
     });
 
     if let Some((current_offset, content_height, viewport_height)) = current {
@@ -341,17 +382,15 @@ fn handle_vscroll(handle: i64, hwnd: HWND, wparam: WPARAM) {
             SB_LINEDOWN => (current_offset + line_size).min(max_offset),
             SB_PAGEUP => (current_offset - page_size).max(0),
             SB_PAGEDOWN => (current_offset + page_size).min(max_offset),
-            SB_THUMBTRACK | SB_THUMBPOSITION => {
-                unsafe {
-                    let mut si = SCROLLINFO {
-                        cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
-                        fMask: SIF_TRACKPOS,
-                        ..Default::default()
-                    };
-                    let _ = GetScrollInfo(hwnd, SB_VERT, &mut si);
-                    si.nTrackPos.clamp(0, max_offset)
-                }
-            }
+            SB_THUMBTRACK | SB_THUMBPOSITION => unsafe {
+                let mut si = SCROLLINFO {
+                    cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+                    fMask: SIF_TRACKPOS,
+                    ..Default::default()
+                };
+                let _ = GetScrollInfo(hwnd, SB_VERT, &mut si);
+                si.nTrackPos.clamp(0, max_offset)
+            },
             SB_TOP => 0,
             SB_BOTTOM => max_offset,
             _ => current_offset,

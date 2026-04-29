@@ -246,12 +246,8 @@ pub fn state_set(handle: i64, value: f64) {
         render_for_each(container, closure, value);
     }
 
-    let callbacks_snapshot: Vec<f64> = ON_CHANGE_CALLBACKS.with(|cbs| {
-        cbs.borrow()
-            .get(&handle)
-            .cloned()
-            .unwrap_or_default()
-    });
+    let callbacks_snapshot: Vec<f64> =
+        ON_CHANGE_CALLBACKS.with(|cbs| cbs.borrow().get(&handle).cloned().unwrap_or_default());
     for closure_f64 in callbacks_snapshot {
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
@@ -260,7 +256,12 @@ pub fn state_set(handle: i64, value: f64) {
     }
 }
 
-pub fn bind_text_numeric(state_handle: i64, text_handle: i64, prefix_ptr: *const u8, suffix_ptr: *const u8) {
+pub fn bind_text_numeric(
+    state_handle: i64,
+    text_handle: i64,
+    prefix_ptr: *const u8,
+    suffix_ptr: *const u8,
+) {
     let prefix = str_from_header(prefix_ptr).to_string();
     let suffix = str_from_header(suffix_ptr).to_string();
     TEXT_BINDINGS.with(|b| {
@@ -318,10 +319,7 @@ pub fn bind_text_template(
     MULTI_TEXT_BINDINGS.with(|bindings| {
         let mut bindings = bindings.borrow_mut();
         let idx = bindings.len();
-        bindings.push(MultiTextBinding {
-            text_handle,
-            parts,
-        });
+        bindings.push(MultiTextBinding { text_handle, parts });
 
         MULTI_TEXT_INDEX.with(|index| {
             let mut index = index.borrow_mut();

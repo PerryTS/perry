@@ -4,12 +4,12 @@
 //! The elements array is separately allocated and can be reallocated
 //! without changing the SetHeader address.
 
+use crate::string::StringHeader;
 use std::alloc::{alloc, realloc, Layout};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::ptr;
-use crate::string::StringHeader;
 
 thread_local! {
     static SET_REGISTRY: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
@@ -102,7 +102,11 @@ unsafe fn elements_ptr_mut(set: *mut SetHeader) -> *mut f64 {
 /// so `v == 0.0` stays false for them.
 #[inline(always)]
 fn normalize_zero(value: f64) -> f64 {
-    if value == 0.0 { 0.0 } else { value }
+    if value == 0.0 {
+        0.0
+    } else {
+        value
+    }
 }
 
 /// Check if a value looks like a heap pointer (raw pointer stored in f64)
@@ -148,7 +152,11 @@ fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
         0x7FFD => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // POINTER_TAG
         0x0000 => {
             let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-            if lower > 0x10000 { lower as *const StringHeader } else { std::ptr::null() }
+            if lower > 0x10000 {
+                lower as *const StringHeader
+            } else {
+                std::ptr::null()
+            }
         }
         _ => std::ptr::null(),
     }
@@ -207,7 +215,8 @@ unsafe fn ensure_capacity(set: *mut SetHeader) {
     let old_layout = elements_layout(capacity as usize);
     let new_layout = elements_layout(new_capacity as usize);
 
-    let new_elements = realloc((*set).elements as *mut u8, old_layout, new_layout.size()) as *mut f64;
+    let new_elements =
+        realloc((*set).elements as *mut u8, old_layout, new_layout.size()) as *mut f64;
     if new_elements.is_null() {
         panic!("Failed to grow set elements");
     }
@@ -268,7 +277,9 @@ fn clean_set_ptr(set: *const SetHeader) -> *const SetHeader {
 #[no_mangle]
 pub extern "C" fn js_set_size(set: *const SetHeader) -> u32 {
     let set = clean_set_ptr(set);
-    if set.is_null() { return 0; }
+    if set.is_null() {
+        return 0;
+    }
     unsafe { (*set).size }
 }
 
@@ -313,7 +324,11 @@ pub extern "C" fn js_set_add(set: *mut SetHeader, value: f64) -> *mut SetHeader 
 pub extern "C" fn js_set_has(set: *const SetHeader, value: f64) -> i32 {
     let value = normalize_zero(value);
     unsafe {
-        if find_value_index(set, value) >= 0 { 1 } else { 0 }
+        if find_value_index(set, value) >= 0 {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -429,7 +444,8 @@ pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64) {
 
         // Extract the closure pointer from the NaN-boxed callback.
         // Mask off the upper 16 bits (NaN-box tag) to get the real pointer.
-        let closure_ptr = (callback.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader;
+        let closure_ptr =
+            (callback.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader;
 
         for i in 0..size {
             let value = ptr::read(elements.add(i));
@@ -555,7 +571,11 @@ mod tests {
 
         // Adding string with same content (different pointer) should be duplicate
         js_set_add(set, val2);
-        assert_eq!(js_set_size(set), 1, "strings with same content should be deduplicated");
+        assert_eq!(
+            js_set_size(set),
+            1,
+            "strings with same content should be deduplicated"
+        );
 
         // has() should find by content
         assert_eq!(js_set_has(set, val2), 1);
@@ -630,9 +650,15 @@ mod tests {
         let mut found = [false; 3];
         for i in 0..3 {
             let val = crate::array::js_array_get_f64(arr, i);
-            if val == 10.0 { found[0] = true; }
-            if val == 20.0 { found[1] = true; }
-            if val == 30.0 { found[2] = true; }
+            if val == 10.0 {
+                found[0] = true;
+            }
+            if val == 20.0 {
+                found[1] = true;
+            }
+            if val == 30.0 {
+                found[2] = true;
+            }
         }
         assert!(found.iter().all(|&f| f), "all values should be in array");
     }
@@ -692,6 +718,9 @@ mod tests {
         // POINTER_TAG (different tag, same content)
         let val2 = f64::from_bits(0x7FFD_0000_0000_0000 | (s2 as u64 & 0x0000_FFFF_FFFF_FFFF));
 
-        assert!(jsvalue_eq(val1, val2), "cross-tag strings with same content should be equal");
+        assert!(
+            jsvalue_eq(val1, val2),
+            "cross-tag strings with same content should be equal"
+        );
     }
 }

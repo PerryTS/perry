@@ -1,5 +1,5 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::MainThreadOnly;
 use objc2_app_kit::NSView;
 use objc2_foundation::MainThreadMarker;
@@ -30,13 +30,18 @@ pub fn create() -> i64 {
 
         super::register_widget(view)
     };
-    ZSTACK_HANDLES.with(|h| { h.borrow_mut().insert(handle); });
+    ZSTACK_HANDLES.with(|h| {
+        h.borrow_mut().insert(handle);
+    });
     handle
 }
 
 /// Add a child to the ZStack pinned to fill the parent bounds using Auto Layout constraints.
 pub fn add_child(parent_handle: i64, child_handle: i64) {
-    if let (Some(parent), Some(child)) = (super::get_widget(parent_handle), super::get_widget(child_handle)) {
+    if let (Some(parent), Some(child)) = (
+        super::get_widget(parent_handle),
+        super::get_widget(child_handle),
+    ) {
         unsafe {
             parent.addSubview(&child);
             let _: () = msg_send![&*child, setTranslatesAutoresizingMaskIntoConstraints: false];
@@ -48,25 +53,29 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
             // leading
             let child_anchor: *mut objc2::runtime::AnyObject = msg_send![&*child, leadingAnchor];
             let parent_anchor: *mut objc2::runtime::AnyObject = msg_send![&*parent, leadingAnchor];
-            let constraint: *mut objc2::runtime::AnyObject = msg_send![child_anchor, constraintEqualToAnchor: parent_anchor];
+            let constraint: *mut objc2::runtime::AnyObject =
+                msg_send![child_anchor, constraintEqualToAnchor: parent_anchor];
             let _: () = msg_send![arr, addObject: constraint];
 
             // trailing
             let child_anchor: *mut objc2::runtime::AnyObject = msg_send![&*child, trailingAnchor];
             let parent_anchor: *mut objc2::runtime::AnyObject = msg_send![&*parent, trailingAnchor];
-            let constraint: *mut objc2::runtime::AnyObject = msg_send![child_anchor, constraintEqualToAnchor: parent_anchor];
+            let constraint: *mut objc2::runtime::AnyObject =
+                msg_send![child_anchor, constraintEqualToAnchor: parent_anchor];
             let _: () = msg_send![arr, addObject: constraint];
 
             // top
             let child_anchor: *mut objc2::runtime::AnyObject = msg_send![&*child, topAnchor];
             let parent_anchor: *mut objc2::runtime::AnyObject = msg_send![&*parent, topAnchor];
-            let constraint: *mut objc2::runtime::AnyObject = msg_send![child_anchor, constraintEqualToAnchor: parent_anchor];
+            let constraint: *mut objc2::runtime::AnyObject =
+                msg_send![child_anchor, constraintEqualToAnchor: parent_anchor];
             let _: () = msg_send![arr, addObject: constraint];
 
             // bottom
             let child_anchor: *mut objc2::runtime::AnyObject = msg_send![&*child, bottomAnchor];
             let parent_anchor: *mut objc2::runtime::AnyObject = msg_send![&*parent, bottomAnchor];
-            let constraint: *mut objc2::runtime::AnyObject = msg_send![child_anchor, constraintEqualToAnchor: parent_anchor];
+            let constraint: *mut objc2::runtime::AnyObject =
+                msg_send![child_anchor, constraintEqualToAnchor: parent_anchor];
             let _: () = msg_send![arr, addObject: constraint];
 
             // Activate all constraints

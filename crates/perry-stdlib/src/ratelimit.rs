@@ -3,17 +3,17 @@
 //! Native implementation of rate limiting functionality using governor.
 //! Provides token bucket rate limiting for API protection.
 
-use perry_runtime::{js_promise_new, js_string_from_bytes, JSValue, Promise, StringHeader};
+use crate::common::{get_handle, register_handle, spawn_for_promise, Handle};
 use governor::{
     clock::DefaultClock,
     state::{InMemoryState, NotKeyed},
     Quota, RateLimiter,
 };
+use perry_runtime::{js_promise_new, js_string_from_bytes, JSValue, Promise, StringHeader};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use crate::common::{get_handle, register_handle, spawn_for_promise, Handle};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -304,10 +304,7 @@ pub unsafe extern "C" fn js_ratelimit_reward(
 
 /// Check if a key would be rate limited (without consuming)
 #[no_mangle]
-pub unsafe extern "C" fn js_ratelimit_check(
-    handle: Handle,
-    key_ptr: *const StringHeader,
-) -> bool {
+pub unsafe extern "C" fn js_ratelimit_check(handle: Handle, key_ptr: *const StringHeader) -> bool {
     let key = string_from_header(key_ptr).unwrap_or_else(|| "default".to_string());
 
     if let Some(keyed) = get_handle::<KeyedRateLimiterHandle>(handle) {

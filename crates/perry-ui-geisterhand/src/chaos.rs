@@ -67,15 +67,16 @@ pub fn start(interval_ms: u64, _seed: Option<u64>) {
             let idx = (rand::random::<usize>()) % widgets.len();
             let widget = &widgets[idx];
 
-            let closure = unsafe {
-                perry_geisterhand_get_closure(widget.handle, widget.callback_kind)
-            };
+            let closure =
+                unsafe { perry_geisterhand_get_closure(widget.handle, widget.callback_kind) };
 
             if closure != 0.0 {
                 match widget.widget_type {
                     0 => {
                         // Button — fire onClick (no args)
-                        unsafe { perry_geisterhand_queue_action(closure); }
+                        unsafe {
+                            perry_geisterhand_queue_action(closure);
+                        }
                     }
                     1 => {
                         // TextField — generate random string
@@ -83,9 +84,13 @@ pub fn start(interval_ms: u64, _seed: Option<u64>) {
                         let text: String = (0..len)
                             .map(|_| {
                                 let c = rand::random::<u8>() % 62;
-                                if c < 10 { (b'0' + c) as char }
-                                else if c < 36 { (b'a' + c - 10) as char }
-                                else { (b'A' + c - 36) as char }
+                                if c < 10 {
+                                    (b'0' + c) as char
+                                } else if c < 36 {
+                                    (b'a' + c - 10) as char
+                                } else {
+                                    (b'A' + c - 36) as char
+                                }
                             })
                             .collect();
                         extern "C" {
@@ -95,12 +100,16 @@ pub fn start(interval_ms: u64, _seed: Option<u64>) {
                         let bytes = text.as_bytes();
                         let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len()) };
                         let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
-                        unsafe { perry_geisterhand_queue_action1(closure, nanboxed); }
+                        unsafe {
+                            perry_geisterhand_queue_action1(closure, nanboxed);
+                        }
                     }
                     2 => {
                         // Slider — random f64 in 0.0..1.0
                         let value: f64 = rand::random::<f64>();
-                        unsafe { perry_geisterhand_queue_action1(closure, value); }
+                        unsafe {
+                            perry_geisterhand_queue_action1(closure, value);
+                        }
                     }
                     3 => {
                         // Toggle — random bool
@@ -109,16 +118,22 @@ pub fn start(interval_ms: u64, _seed: Option<u64>) {
                         } else {
                             0x7FFC_0000_0000_0003u64 // TAG_FALSE
                         };
-                        unsafe { perry_geisterhand_queue_action1(closure, f64::from_bits(tag)); }
+                        unsafe {
+                            perry_geisterhand_queue_action1(closure, f64::from_bits(tag));
+                        }
                     }
                     4 => {
                         // Picker — random index 0..9
                         let idx = (rand::random::<usize>() % 10) as f64;
-                        unsafe { perry_geisterhand_queue_action1(closure, idx); }
+                        unsafe {
+                            perry_geisterhand_queue_action1(closure, idx);
+                        }
                     }
                     _ => {
                         // Menu, shortcut, table — just fire with no args
-                        unsafe { perry_geisterhand_queue_action(closure); }
+                        unsafe {
+                            perry_geisterhand_queue_action(closure);
+                        }
                     }
                 }
                 EVENTS_FIRED.fetch_add(1, Ordering::SeqCst);
@@ -136,7 +151,8 @@ pub fn stop() {
 pub fn status() -> String {
     let running = CHAOS_RUNNING.load(Ordering::SeqCst);
     let events = EVENTS_FIRED.load(Ordering::SeqCst);
-    let uptime = START_TIME.lock()
+    let uptime = START_TIME
+        .lock()
         .ok()
         .and_then(|t| t.map(|t| t.elapsed().as_secs()))
         .unwrap_or(0);

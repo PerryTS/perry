@@ -3,7 +3,7 @@
 //! Provides a global registry where UI widgets register their callbacks,
 //! and a pending-action queue for cross-thread dispatch (HTTP server thread → main thread).
 
-use std::sync::{Mutex, Condvar};
+use std::sync::{Condvar, Mutex};
 
 /// Widget type identifiers
 pub const WIDGET_BUTTON: u8 = 0;
@@ -36,12 +36,27 @@ pub struct RegisteredWidget {
 
 /// An action queued for main-thread execution
 pub enum PendingAction {
-    InvokeCallback { closure_f64: f64, args: Vec<f64> },
-    SetState { handle: i64, value: f64 },
+    InvokeCallback {
+        closure_f64: f64,
+        args: Vec<f64>,
+    },
+    SetState {
+        handle: i64,
+        value: f64,
+    },
     CaptureScreenshot,
-    SetText { handle: i64, text: String },
-    ScrollTo { handle: i64, x: f64, y: f64 },
-    ReadValue { handle: i64 },
+    SetText {
+        handle: i64,
+        text: String,
+    },
+    ScrollTo {
+        handle: i64,
+        x: f64,
+        y: f64,
+    },
+    ReadValue {
+        handle: i64,
+    },
     QueryWidgetTree,
     /// Issue #185 Phase D step 2: live-edit a single style prop on a
     /// widget. `prop_id` selects the setter (one of `STYLE_*` constants
@@ -49,7 +64,11 @@ pub enum PendingAction {
     /// (RGBA 0-1), scalar props use `args[0]`, bools use `args[0] != 0`.
     /// The pump dispatches to the platform UI lib's registered
     /// `perry_ui_geisterhand_apply_style` function on the main thread.
-    ApplyStyle { handle: i64, prop_id: u32, args: [f64; 4] },
+    ApplyStyle {
+        handle: i64,
+        prop_id: u32,
+        args: [f64; 4],
+    },
 }
 
 /// Stable prop-id namespace for `ApplyStyle`. Adds at the end only —
@@ -134,7 +153,9 @@ pub extern "C" fn perry_geisterhand_register_scroll_set(f: extern "C" fn(i64, f6
 
 /// Register the platform UI crate's read_value function.
 #[no_mangle]
-pub extern "C" fn perry_geisterhand_register_read_value(f: extern "C" fn(i64, *mut usize) -> *mut u8) {
+pub extern "C" fn perry_geisterhand_register_read_value(
+    f: extern "C" fn(i64, *mut usize) -> *mut u8,
+) {
     UI_READ_VALUE_FN.store(f as *mut (), Ordering::Release);
 }
 
@@ -228,7 +249,8 @@ pub extern "C" fn perry_geisterhand_register_with_shortcut(
         String::new()
     } else {
         unsafe {
-            String::from_utf8_lossy(std::slice::from_raw_parts(shortcut_ptr, shortcut_len)).into_owned()
+            String::from_utf8_lossy(std::slice::from_raw_parts(shortcut_ptr, shortcut_len))
+                .into_owned()
         }
     };
     if let Ok(mut reg) = REGISTRY.lock() {
@@ -253,9 +275,9 @@ pub extern "C" fn perry_geisterhand_find_by_shortcut(
     if shortcut_ptr.is_null() || shortcut_len == 0 {
         return 0.0;
     }
-    let query = unsafe {
-        String::from_utf8_lossy(std::slice::from_raw_parts(shortcut_ptr, shortcut_len))
-    }.to_lowercase();
+    let query =
+        unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(shortcut_ptr, shortcut_len)) }
+            .to_lowercase();
     match REGISTRY.lock() {
         Ok(reg) => {
             for w in reg.iter() {
@@ -330,15 +352,25 @@ pub extern "C" fn perry_geisterhand_queue_apply_style(
     a3: f64,
 ) {
     if let Ok(mut q) = PENDING_ACTIONS.lock() {
-        q.push(PendingAction::ApplyStyle { handle, prop_id, args: [a0, a1, a2, a3] });
+        q.push(PendingAction::ApplyStyle {
+            handle,
+            prop_id,
+            args: [a0, a1, a2, a3],
+        });
     }
 }
 
 /// Queue a text-set action for main-thread dispatch (sets Win32 Edit control text + fires onChange).
 #[no_mangle]
-pub extern "C" fn perry_geisterhand_queue_set_text(handle: i64, text_ptr: *const u8, text_len: usize) {
+pub extern "C" fn perry_geisterhand_queue_set_text(
+    handle: i64,
+    text_ptr: *const u8,
+    text_len: usize,
+) {
     let text = if !text_ptr.is_null() && text_len > 0 {
-        unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(text_ptr, text_len)).into_owned() }
+        unsafe {
+            String::from_utf8_lossy(std::slice::from_raw_parts(text_ptr, text_len)).into_owned()
+        }
     } else {
         String::new()
     };
@@ -361,8 +393,12 @@ pub extern "C" fn perry_geisterhand_pump() {
                 let ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
                 unsafe {
                     match args.len() {
-                        0 => { js_closure_call0(ptr); }
-                        _ => { js_closure_call1(ptr, args[0]); }
+                        0 => {
+                            js_closure_call0(ptr);
+                        }
+                        _ => {
+                            js_closure_call1(ptr, args[0]);
+                        }
                     }
                 }
             }
@@ -394,15 +430,22 @@ pub extern "C" fn perry_geisterhand_pump() {
                         for w in reg.iter() {
                             if w.handle == handle && w.callback_kind == CB_ON_CHANGE {
                                 let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
-                                let ptr = unsafe { js_nanbox_get_pointer(w.closure_f64) } as *const u8;
-                                unsafe { js_closure_call1(ptr, nanboxed); }
+                                let ptr =
+                                    unsafe { js_nanbox_get_pointer(w.closure_f64) } as *const u8;
+                                unsafe {
+                                    js_closure_call1(ptr, nanboxed);
+                                }
                                 break;
                             }
                         }
                     }
                 }
             }
-            PendingAction::ApplyStyle { handle, prop_id, args } => {
+            PendingAction::ApplyStyle {
+                handle,
+                prop_id,
+                args,
+            } => {
                 let f = UI_APPLY_STYLE_FN.load(Ordering::Acquire);
                 if !f.is_null() {
                     unsafe {
@@ -425,11 +468,13 @@ pub extern "C" fn perry_geisterhand_pump() {
                 let f = UI_READ_VALUE_FN.load(Ordering::Acquire);
                 let result = if !f.is_null() {
                     unsafe {
-                        let func: extern "C" fn(i64, *mut usize) -> *mut u8 = std::mem::transmute(f);
+                        let func: extern "C" fn(i64, *mut usize) -> *mut u8 =
+                            std::mem::transmute(f);
                         let mut len: usize = 0;
                         let ptr = func(handle, &mut len);
                         if !ptr.is_null() && len > 0 {
-                            let s = String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned();
+                            let s = String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len))
+                                .into_owned();
                             libc::free(ptr as *mut libc::c_void);
                             s
                         } else {
@@ -452,7 +497,8 @@ pub extern "C" fn perry_geisterhand_pump() {
                         let func: extern "C" fn(*mut usize) -> *mut u8 = std::mem::transmute(f);
                         let ptr = func(&mut len);
                         if !ptr.is_null() && len > 0 {
-                            let s = String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned();
+                            let s = String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len))
+                                .into_owned();
                             libc::free(ptr as *mut libc::c_void);
                             s
                         } else {
@@ -471,7 +517,8 @@ pub extern "C" fn perry_geisterhand_pump() {
                 let f = UI_SCREENSHOT_CAPTURE_FN.load(Ordering::Acquire);
                 let (ptr, len) = if !f.is_null() {
                     let mut len: usize = 0;
-                    let func: extern "C" fn(*mut usize) -> *mut u8 = unsafe { std::mem::transmute(f) };
+                    let func: extern "C" fn(*mut usize) -> *mut u8 =
+                        unsafe { std::mem::transmute(f) };
                     let ptr = func(&mut len);
                     (ptr, len)
                 } else {
@@ -479,7 +526,9 @@ pub extern "C" fn perry_geisterhand_pump() {
                 };
                 let png_data = if !ptr.is_null() && len > 0 {
                     let data = unsafe { std::slice::from_raw_parts(ptr, len).to_vec() };
-                    unsafe { libc::free(ptr as *mut libc::c_void); }
+                    unsafe {
+                        libc::free(ptr as *mut libc::c_void);
+                    }
                     data
                 } else {
                     Vec::new()
@@ -502,7 +551,9 @@ pub extern "C" fn perry_geisterhand_get_registry_json(out_len: *mut usize) -> *m
         Ok(reg) => {
             let mut s = String::from("[");
             for (i, w) in reg.iter().enumerate() {
-                if i > 0 { s.push(','); }
+                if i > 0 {
+                    s.push(',');
+                }
                 let escaped_label = w.label.replace('\\', "\\\\").replace('"', "\\\"");
                 let escaped_shortcut = w.shortcut.replace('\\', "\\\\").replace('"', "\\\"");
                 s.push_str(&format!(
@@ -521,7 +572,9 @@ pub extern "C" fn perry_geisterhand_get_registry_json(out_len: *mut usize) -> *m
     let ptr = bytes.as_ptr();
     let boxed = bytes.into_boxed_slice();
     let raw = Box::into_raw(boxed);
-    unsafe { *out_len = len; }
+    unsafe {
+        *out_len = len;
+    }
     raw as *mut u8
 }
 
@@ -549,7 +602,9 @@ pub extern "C" fn perry_geisterhand_request_screenshot(out_len: *mut usize) -> *
     // Prevent duplicate requests
     if let Ok(mut requested) = SCREENSHOT_REQUESTED.lock() {
         if *requested {
-            unsafe { *out_len = 0; }
+            unsafe {
+                *out_len = 0;
+            }
             return std::ptr::null_mut();
         }
         *requested = true;
@@ -588,11 +643,15 @@ pub extern "C" fn perry_geisterhand_request_screenshot(out_len: *mut usize) -> *
             let len = data.len();
             let boxed = data.into_boxed_slice();
             let raw = Box::into_raw(boxed);
-            unsafe { *out_len = len; }
+            unsafe {
+                *out_len = len;
+            }
             raw as *mut u8
         }
         _ => {
-            unsafe { *out_len = 0; }
+            unsafe {
+                *out_len = 0;
+            }
             std::ptr::null_mut()
         }
     }
@@ -610,7 +669,9 @@ fn request_string_from_main(
 ) -> *mut u8 {
     if let Ok(mut r) = requested.lock() {
         if *r {
-            unsafe { *out_len = 0; }
+            unsafe {
+                *out_len = 0;
+            }
             return std::ptr::null_mut();
         }
         *r = true;
@@ -626,7 +687,11 @@ fn request_string_from_main(
         let (guard, timeout) = condvar
             .wait_timeout_while(guard, std::time::Duration::from_secs(5), |r| r.is_none())
             .unwrap();
-        if timeout.timed_out() { None } else { guard.clone() }
+        if timeout.timed_out() {
+            None
+        } else {
+            guard.clone()
+        }
     };
     if let Ok(mut r) = requested.lock() {
         *r = false;
@@ -636,11 +701,15 @@ fn request_string_from_main(
             let bytes = s.into_bytes();
             let len = bytes.len();
             let raw = Box::into_raw(bytes.into_boxed_slice());
-            unsafe { *out_len = len; }
+            unsafe {
+                *out_len = len;
+            }
             raw as *mut u8
         }
         _ => {
-            unsafe { *out_len = 0; }
+            unsafe {
+                *out_len = 0;
+            }
             std::ptr::null_mut()
         }
     }

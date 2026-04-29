@@ -44,13 +44,19 @@ fn parse_nm_archive_output(
         if trimmed.ends_with(':') {
             let raw = &trimmed[..trimmed.len() - 1];
             let member = if let (Some(open), Some(close)) = (raw.rfind('('), raw.rfind(')')) {
-                if open < close { raw[open + 1..close].to_string() } else { raw.to_string() }
+                if open < close {
+                    raw[open + 1..close].to_string()
+                } else {
+                    raw.to_string()
+                }
             } else {
                 raw.to_string()
             };
             current = Some(member);
         } else if let Some(ref m) = current {
-            map.entry(m.clone()).or_default().insert(trimmed.to_string());
+            map.entry(m.clone())
+                .or_default()
+                .insert(trimmed.to_string());
         }
     }
     map
@@ -73,7 +79,9 @@ fn collect_archive_symbols_by_member(
     if !out.status.success() {
         return None;
     }
-    Some(parse_nm_archive_output(&String::from_utf8_lossy(&out.stdout)))
+    Some(parse_nm_archive_output(&String::from_utf8_lossy(
+        &out.stdout,
+    )))
 }
 
 /// Flat union of every symbol defined anywhere in the archive.
@@ -126,12 +134,18 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     let abs_staticlib = std::fs::canonicalize(lib_path)?;
 
     // List staticlib members
-    let staticlib_out = Command::new(&llvm_ar).arg("t").arg(&abs_staticlib).output()?;
+    let staticlib_out = Command::new(&llvm_ar)
+        .arg("t")
+        .arg(&abs_staticlib)
+        .output()?;
     let staticlib_members: Vec<String> = String::from_utf8_lossy(&staticlib_out.stdout)
         .lines()
         .map(|l| l.to_string())
         .collect();
-    eprintln!("[strip-dedup] {lib_name}: {} total members", staticlib_members.len());
+    eprintln!(
+        "[strip-dedup] {lib_name}: {} total members",
+        staticlib_members.len()
+    );
 
     // Determine library naming convention from the input lib
     let is_win_lib = lib_name.ends_with(".lib");
@@ -156,7 +170,8 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     };
 
     // Find perry-stdlib members so we can compute the set difference.
-    let stdlib_path = lib_path.parent()
+    let stdlib_path = lib_path
+        .parent()
         .map(|p| p.join(stdlib_name))
         .filter(|p| p.exists())
         .or_else(|| find_stdlib_library(search_target));
@@ -170,17 +185,24 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 exclude_members.insert(line.to_string());
             }
-            eprintln!("[strip-dedup] {stdlib_name} found: {} — {} members loaded",
-                abs_sp.display(), exclude_members.len() - count_before);
+            eprintln!(
+                "[strip-dedup] {stdlib_name} found: {} — {} members loaded",
+                abs_sp.display(),
+                exclude_members.len() - count_before
+            );
         } else {
-            eprintln!("[strip-dedup] WARNING: failed to list {stdlib_name} at {}", abs_sp.display());
+            eprintln!(
+                "[strip-dedup] WARNING: failed to list {stdlib_name} at {}",
+                abs_sp.display()
+            );
         }
     } else {
         eprintln!("[strip-dedup] WARNING: {stdlib_name} not found (searched next to lib and via find_stdlib_library)");
     }
 
     // Also find perry_runtime members
-    let runtime_path = lib_path.parent()
+    let runtime_path = lib_path
+        .parent()
         .map(|p| p.join(runtime_name))
         .filter(|p| p.exists())
         .or_else(|| find_library(runtime_name, search_target));
@@ -192,20 +214,30 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 exclude_members.insert(line.to_string());
             }
-            eprintln!("[strip-dedup] {runtime_name} found: {} — {} members loaded",
-                abs_rp.display(), exclude_members.len() - count_before);
+            eprintln!(
+                "[strip-dedup] {runtime_name} found: {} — {} members loaded",
+                abs_rp.display(),
+                exclude_members.len() - count_before
+            );
         } else {
-            eprintln!("[strip-dedup] WARNING: failed to list {runtime_name} at {}", abs_rp.display());
+            eprintln!(
+                "[strip-dedup] WARNING: failed to list {runtime_name} at {}",
+                abs_rp.display()
+            );
         }
     } else {
         eprintln!("[strip-dedup] WARNING: {runtime_name} not found (searched next to lib and via find_library)");
     }
 
-    eprintln!("[strip-dedup] Total exclude set: {} members from stdlib+runtime .lib files", exclude_members.len());
+    eprintln!(
+        "[strip-dedup] Total exclude set: {} members from stdlib+runtime .lib files",
+        exclude_members.len()
+    );
 
     // Try to find the rlib alongside the staticlib
     // .lib → lib<name>.rlib, .a (already has lib prefix) → lib<name>.rlib
-    let rlib_name = lib_path.file_name()
+    let rlib_name = lib_path
+        .file_name()
         .and_then(|f| f.to_str())
         .map(|f| {
             if f.ends_with(".lib") {
@@ -218,7 +250,11 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         .unwrap_or_default();
     let rlib_path = lib_path.with_file_name(&rlib_name);
     let has_rlib = rlib_path.exists();
-    eprintln!("[strip-dedup] rlib {}: {}", if has_rlib { "found" } else { "NOT found" }, rlib_path.display());
+    eprintln!(
+        "[strip-dedup] rlib {}: {}",
+        if has_rlib { "found" } else { "NOT found" },
+        rlib_path.display()
+    );
 
     let rlib_objects: Vec<String> = if has_rlib {
         let abs_rlib = std::fs::canonicalize(&rlib_path)?;
@@ -235,9 +271,7 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     };
 
     // Determine the UI crate name from the staticlib filename
-    let _ui_crate_name = lib_path.file_stem()
-        .and_then(|f| f.to_str())
-        .unwrap_or("");
+    let _ui_crate_name = lib_path.file_stem().and_then(|f| f.to_str()).unwrap_or("");
 
     // Filter: keep only objects unique to this lib.
     //
@@ -265,7 +299,10 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     let nm_works = llvm_nm.as_ref().is_some_and(|nm| {
         // Probe with a trivial call; if it can't even run, skip the
         // symbol-set path entirely.
-        Command::new(nm).arg("--version").output().is_ok_and(|o| o.status.success())
+        Command::new(nm)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
     });
 
     // Build provided-symbols union when nm is available.
@@ -282,13 +319,19 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
             let abs = std::fs::canonicalize(sp).unwrap_or_else(|_| sp.clone());
             let n = syms.len();
             syms.extend(collect_archive_symbols_flat(nm, &abs));
-            eprintln!("[strip-dedup] {stdlib_name} symbols loaded: {}", syms.len() - n);
+            eprintln!(
+                "[strip-dedup] {stdlib_name} symbols loaded: {}",
+                syms.len() - n
+            );
         }
         if let Some(ref rp) = runtime_path {
             let abs = std::fs::canonicalize(rp).unwrap_or_else(|_| rp.clone());
             let n = syms.len();
             syms.extend(collect_archive_symbols_flat(nm, &abs));
-            eprintln!("[strip-dedup] {runtime_name} symbols loaded: {}", syms.len() - n);
+            eprintln!(
+                "[strip-dedup] {runtime_name} symbols loaded: {}",
+                syms.len() - n
+            );
         }
         syms
     } else {
@@ -307,51 +350,59 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
 
     let mut excluded_by_subset = 0usize;
     let mut excluded_by_pattern = 0usize;
-    let ui_only_deps: Vec<&String> = staticlib_members.iter().filter(|m| {
-        if m.ends_with(".dll") { return false; }
-        if m.contains("compiler_builtins") { excluded_by_pattern += 1; return false; }
+    let ui_only_deps: Vec<&String> = staticlib_members
+        .iter()
+        .filter(|m| {
+            if m.ends_with(".dll") {
+                return false;
+            }
+            if m.contains("compiler_builtins") {
+                excluded_by_pattern += 1;
+                return false;
+            }
 
-        // Symbol-set path: drop only if every defined symbol is also
-        // provided elsewhere. Members with no defined symbols (e.g.
-        // marker TUs, inline-only headers) are kept defensively.
-        if nm_works {
-            if let Some(member_syms) = staticlib_member_symbols.get(m.as_str()) {
-                if !member_syms.is_empty()
-                    && member_syms.iter().all(|s| provided_symbols.contains(s))
+            // Symbol-set path: drop only if every defined symbol is also
+            // provided elsewhere. Members with no defined symbols (e.g.
+            // marker TUs, inline-only headers) are kept defensively.
+            if nm_works {
+                if let Some(member_syms) = staticlib_member_symbols.get(m.as_str()) {
+                    if !member_syms.is_empty()
+                        && member_syms.iter().all(|s| provided_symbols.contains(s))
+                    {
+                        excluded_by_subset += 1;
+                        return false;
+                    }
+                }
+                // Member not found in nm output → keep (defensive — could be
+                // a Mach-O archive nm version skew).
+                return true;
+            }
+
+            // Fallback: legacy name-pattern when nm is unavailable. The
+            // `exclude_members` set is from `ar t` member names (recorded
+            // for diagnostics). We don't actually drop on this in the new
+            // logic because name collisions between archives don't imply
+            // symbol overlap (#181 Arch Linux), but on the no-nm fallback
+            // we restore the rlib-prefix shortcut so the UI crate's own
+            // CGUs aren't double-included.
+            if exclude_members.contains(m.as_str()) {
+                // Counted only — not excluded. Same reasoning as #181.
+            }
+            if has_rlib {
+                if let Some(prefix) = rlib_objects
+                    .first()
+                    .and_then(|o| o.split('.').next())
+                    .and_then(|s| s.split('-').next())
                 {
-                    excluded_by_subset += 1;
-                    return false;
+                    if m.starts_with(&format!("{}-", prefix)) {
+                        excluded_by_pattern += 1;
+                        return false;
+                    }
                 }
             }
-            // Member not found in nm output → keep (defensive — could be
-            // a Mach-O archive nm version skew).
-            return true;
-        }
-
-        // Fallback: legacy name-pattern when nm is unavailable. The
-        // `exclude_members` set is from `ar t` member names (recorded
-        // for diagnostics). We don't actually drop on this in the new
-        // logic because name collisions between archives don't imply
-        // symbol overlap (#181 Arch Linux), but on the no-nm fallback
-        // we restore the rlib-prefix shortcut so the UI crate's own
-        // CGUs aren't double-included.
-        if exclude_members.contains(m.as_str()) {
-            // Counted only — not excluded. Same reasoning as #181.
-        }
-        if has_rlib {
-            if let Some(prefix) = rlib_objects
-                .first()
-                .and_then(|o| o.split('.').next())
-                .and_then(|s| s.split('-').next())
-            {
-                if m.starts_with(&format!("{}-", prefix)) {
-                    excluded_by_pattern += 1;
-                    return false;
-                }
-            }
-        }
-        true
-    }).collect();
+            true
+        })
+        .collect();
 
     eprintln!("[strip-dedup] {lib_name}: keeping {} of {} members (excluded: {} by symbol-subset, {} by name pattern)",
         ui_only_deps.len(), staticlib_members.len(), excluded_by_subset, excluded_by_pattern);
@@ -378,15 +429,22 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
                 continue;
             }
             let out = Command::new(&llvm_ar)
-                .arg("x").arg(&abs_rlib).arg(member)
+                .arg("x")
+                .arg(&abs_rlib)
+                .arg(member)
                 .current_dir(&extract_dir)
                 .output()?;
             if out.status.success() {
                 let p = extract_dir.join(member);
-                if p.exists() { all_objects.push(p); rlib_extracted += 1; }
+                if p.exists() {
+                    all_objects.push(p);
+                    rlib_extracted += 1;
+                }
             }
         }
-        eprintln!("[strip-dedup] rlib: extracted {rlib_extracted}, skipped {rlib_skipped} alloc shims");
+        eprintln!(
+            "[strip-dedup] rlib: extracted {rlib_extracted}, skipped {rlib_skipped} alloc shims"
+        );
     }
 
     // Extract UI-only deps from staticlib
@@ -394,12 +452,17 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     let mut extract_fail = 0usize;
     for member in &ui_only_deps {
         let out = Command::new(&llvm_ar)
-            .arg("x").arg(&abs_staticlib).arg(member.as_str())
+            .arg("x")
+            .arg(&abs_staticlib)
+            .arg(member.as_str())
             .current_dir(&extract_dir)
             .output()?;
         if out.status.success() {
             let p = extract_dir.join(member.as_str());
-            if p.exists() { all_objects.push(p); extract_ok += 1; }
+            if p.exists() {
+                all_objects.push(p);
+                extract_ok += 1;
+            }
         } else {
             extract_fail += 1;
         }
@@ -408,7 +471,10 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         eprintln!("[strip-dedup] WARNING: {extract_fail} members failed to extract from staticlib");
     }
 
-    eprintln!("[strip-dedup] Building trimmed {lib_name}: {} objects total", all_objects.len());
+    eprintln!(
+        "[strip-dedup] Building trimmed {lib_name}: {} objects total",
+        all_objects.len()
+    );
 
     // Create new archive from just the UI-specific objects
     let mut ar_cmd = Command::new(&llvm_ar);
@@ -421,10 +487,16 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
         let stderr = String::from_utf8_lossy(&ar_out.stderr);
         eprintln!("[strip-dedup] ERROR: archive creation failed: {}", stderr);
         let _ = std::fs::remove_dir_all(&extract_dir);
-        return Err(anyhow::anyhow!("Failed to create trimmed archive for {lib_name}: {stderr}"));
+        return Err(anyhow::anyhow!(
+            "Failed to create trimmed archive for {lib_name}: {stderr}"
+        ));
     }
 
-    eprintln!("[strip-dedup] OK: {} -> {}", lib_path.display(), trimmed_lib.display());
+    eprintln!(
+        "[strip-dedup] OK: {} -> {}",
+        lib_path.display(),
+        trimmed_lib.display()
+    );
     let _ = std::fs::remove_dir_all(&extract_dir);
     let _ = std::fs::remove_dir_all("_perry_ui_objects");
     Ok(trimmed_lib)
@@ -502,7 +574,9 @@ empty_marker.o:
 ";
         let by_member = parse_nm_archive_output(nm_out);
         let provided: std::collections::HashSet<String> =
-            ["_a".to_string(), "_b".to_string(), "_z".to_string()].into_iter().collect();
+            ["_a".to_string(), "_b".to_string(), "_z".to_string()]
+                .into_iter()
+                .collect();
 
         // fully_dup.o → all symbols provided → drop
         let m1 = &by_member["fully_dup.o"];

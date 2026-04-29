@@ -5,8 +5,8 @@
 
 use perry_runtime::{
     js_array_alloc, js_array_get, js_array_length, js_array_push, js_object_alloc,
-    js_object_get_field, js_object_set_field, js_string_from_bytes, JSValue, ObjectHeader,
-    StringHeader, ArrayHeader,
+    js_object_get_field, js_object_set_field, js_string_from_bytes, ArrayHeader, JSValue,
+    ObjectHeader, StringHeader,
 };
 use std::collections::HashSet;
 
@@ -29,10 +29,7 @@ unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
 ///
 /// Split array into groups of size.
 #[no_mangle]
-pub unsafe extern "C" fn js_lodash_chunk(
-    arr_ptr: *mut ArrayHeader,
-    size: f64,
-) -> *mut ArrayHeader {
+pub unsafe extern "C" fn js_lodash_chunk(arr_ptr: *mut ArrayHeader, size: f64) -> *mut ArrayHeader {
     let result = js_array_alloc(0);
     let size = size.max(1.0) as usize;
 
@@ -212,8 +209,16 @@ pub unsafe extern "C" fn js_lodash_fill(
     let start = start as i32;
     let end = if end.is_nan() { len } else { end as i32 };
 
-    let start = if start < 0 { (len + start).max(0) } else { start.min(len) } as u32;
-    let end = if end < 0 { (len + end).max(0) } else { end.min(len) } as u32;
+    let start = if start < 0 {
+        (len + start).max(0)
+    } else {
+        start.min(len)
+    } as u32;
+    let end = if end < 0 {
+        (len + end).max(0)
+    } else {
+        end.min(len)
+    } as u32;
 
     // Note: This modifies in place, but for safety we return the array
     // In a real implementation, we'd need mutable array access
@@ -764,7 +769,11 @@ pub extern "C" fn js_lodash_in_range(number: f64, start: f64, end: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 
-    let (start, end) = if start > end { (end, start) } else { (start, end) };
+    let (start, end) = if start > end {
+        (end, start)
+    } else {
+        (start, end)
+    };
     if number >= start && number < end {
         f64::from_bits(TAG_TRUE)
     } else {
@@ -851,7 +860,11 @@ pub unsafe extern "C" fn js_lodash_is_empty(value_f: f64) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_lodash_is_nil(value_f: f64) -> i32 {
     let value = JSValue::from_bits(value_f.to_bits());
-    if value.is_null() || value.is_undefined() { 1 } else { 0 }
+    if value.is_null() || value.is_undefined() {
+        1
+    } else {
+        0
+    }
 }
 
 /// _.size(collection) -> number

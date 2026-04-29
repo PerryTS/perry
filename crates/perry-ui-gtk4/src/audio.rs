@@ -28,25 +28,54 @@ struct AWeightState {
 
 impl AWeightState {
     fn new() -> Self {
-        AWeightState { sections: [[0.0; 4]; 3] }
+        AWeightState {
+            sections: [[0.0; 4]; 3],
+        }
     }
 }
 
 const A_WEIGHT_SOS: [[f64; 6]; 3] = [
-    [1.0, -2.0, 1.0, 1.0, -1.9746716508129498, 0.97504628855498883],
-    [1.0, -2.0, 1.0, 1.0, -1.1440825051498020, 0.20482985688498268],
-    [0.24649652853975498, -0.49299305707950996, 0.24649652853975498, 1.0, -0.48689808685150487, 0.0],
+    [
+        1.0,
+        -2.0,
+        1.0,
+        1.0,
+        -1.9746716508129498,
+        0.97504628855498883,
+    ],
+    [
+        1.0,
+        -2.0,
+        1.0,
+        1.0,
+        -1.1440825051498020,
+        0.20482985688498268,
+    ],
+    [
+        0.24649652853975498,
+        -0.49299305707950996,
+        0.24649652853975498,
+        1.0,
+        -0.48689808685150487,
+        0.0,
+    ],
 ];
 const A_WEIGHT_GAIN: f64 = 0.11310782960598924;
 
 fn a_weight_filter(sample: f64, state: &mut AWeightState) -> f64 {
     let mut x = sample * A_WEIGHT_GAIN;
     for (i, sos) in A_WEIGHT_SOS.iter().enumerate() {
-        let b0 = sos[0]; let b1 = sos[1]; let b2 = sos[2];
-        let a1 = sos[4]; let a2 = sos[5];
+        let b0 = sos[0];
+        let b1 = sos[1];
+        let b2 = sos[2];
+        let a1 = sos[4];
+        let a2 = sos[5];
         let s = &mut state.sections[i];
         let y = b0 * x + b1 * s[0] + b2 * s[1] - a1 * s[2] - a2 * s[3];
-        s[1] = s[0]; s[0] = x; s[3] = s[2]; s[2] = y;
+        s[1] = s[0];
+        s[0] = x;
+        s[3] = s[2];
+        s[2] = y;
         x = y;
     }
     x
@@ -61,7 +90,7 @@ fn a_weight_filter(sample: f64, state: &mut AWeightState) -> f64 {
 
 #[repr(C)]
 struct PaSampleSpec {
-    format: i32,    // pa_sample_format_t
+    format: i32, // pa_sample_format_t
     rate: u32,
     channels: u8,
 }
@@ -76,10 +105,10 @@ type PaSimple = *mut std::ffi::c_void;
 
 extern "C" {
     fn pa_simple_new(
-        server: *const std::ffi::c_char,         // NULL for default
-        name: *const std::ffi::c_char,           // application name
-        dir: i32,                                // PA_STREAM_RECORD
-        dev: *const std::ffi::c_char,            // NULL for default device
+        server: *const std::ffi::c_char, // NULL for default
+        name: *const std::ffi::c_char,   // application name
+        dir: i32,                        // PA_STREAM_RECORD
+        dev: *const std::ffi::c_char,    // NULL for default device
         stream_name: *const std::ffi::c_char,
         ss: *const PaSampleSpec,
         map: *const std::ffi::c_void,  // NULL for default channel map
@@ -148,7 +177,10 @@ pub fn start() -> i64 {
             return;
         }
 
-        eprintln!("[audio] PulseAudio capture started ({}Hz mono)", sample_rate);
+        eprintln!(
+            "[audio] PulseAudio capture started ({}Hz mono)",
+            sample_rate
+        );
 
         let mut filter_state = AWeightState::new();
         let mut ema_db: f64 = 0.0;
@@ -178,7 +210,9 @@ pub fn start() -> i64 {
             for i in 0..n {
                 let s = buf[i];
                 let abs_s = s.abs();
-                if abs_s > peak { peak = abs_s; }
+                if abs_s > peak {
+                    peak = abs_s;
+                }
                 let weighted = a_weight_filter(s as f64, &mut filter_state);
                 sum_sq += weighted * weighted;
             }
@@ -200,11 +234,15 @@ pub fn start() -> i64 {
             CURRENT_PEAK.store((peak as f64).to_bits(), Ordering::Relaxed);
 
             let idx = WAVEFORM_WRITE_INDEX.load(Ordering::Relaxed) as usize % WAVEFORM_SIZE;
-            unsafe { WAVEFORM_BUFFER[idx] = ema_db; }
+            unsafe {
+                WAVEFORM_BUFFER[idx] = ema_db;
+            }
             WAVEFORM_WRITE_INDEX.store((idx + 1) as u64, Ordering::Relaxed);
         }
 
-        unsafe { pa_simple_free(pa); }
+        unsafe {
+            pa_simple_free(pa);
+        }
         eprintln!("[audio] PulseAudio capture stopped");
     });
 
@@ -240,8 +278,15 @@ pub fn get_device_model() -> i64 {
     // On Linux, use hostname as device identifier
     let mut hostname = [0u8; 256];
     let model = unsafe {
-        if libc::gethostname(hostname.as_mut_ptr() as *mut std::ffi::c_char, hostname.len()) == 0 {
-            let len = hostname.iter().position(|&b| b == 0).unwrap_or(hostname.len());
+        if libc::gethostname(
+            hostname.as_mut_ptr() as *mut std::ffi::c_char,
+            hostname.len(),
+        ) == 0
+        {
+            let len = hostname
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(hostname.len());
             std::str::from_utf8_unchecked(&hostname[..len]).to_string()
         } else {
             "Linux".to_string()

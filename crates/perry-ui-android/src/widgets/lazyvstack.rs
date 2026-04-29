@@ -1,9 +1,9 @@
 //! LazyVStack — ScrollView + LinearLayout, render-all approach
 
+use crate::jni_bridge;
+use jni::objects::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use jni::objects::JValue;
-use crate::jni_bridge;
 
 extern "C" {
     fn js_closure_call1(closure: f64, arg: f64) -> f64;
@@ -30,11 +30,14 @@ pub fn create(count: f64, render_closure: f64) -> i64 {
     super::scrollview::set_child(scroll_handle, container_handle);
 
     LAZY_STATES.with(|s| {
-        s.borrow_mut().insert(scroll_handle, LazyState {
+        s.borrow_mut().insert(
             scroll_handle,
-            container_handle,
-            render_closure,
-        });
+            LazyState {
+                scroll_handle,
+                container_handle,
+                render_closure,
+            },
+        );
     });
 
     // Render initial items

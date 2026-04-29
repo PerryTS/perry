@@ -6,23 +6,23 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::Graphics::Gdi::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::*;
-#[cfg(target_os = "windows")]
 use windows::Win32::UI::Controls::InitCommonControlsEx;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::Controls::INITCOMMONCONTROLSEX;
+use windows::Win32::UI::Controls::ICC_BAR_CLASSES;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Controls::ICC_STANDARD_CLASSES;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::Controls::ICC_BAR_CLASSES;
+use windows::Win32::UI::Controls::INITCOMMONCONTROLSEX;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
@@ -46,9 +46,15 @@ static DPI_SCALE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 fn get_system_dpi() -> u32 {
     unsafe {
         // GetDpiForSystem requires Windows 10 1607+
-        extern "system" { fn GetDpiForSystem() -> u32; }
+        extern "system" {
+            fn GetDpiForSystem() -> u32;
+        }
         let dpi = GetDpiForSystem();
-        if dpi > 0 { dpi } else { 96 }
+        if dpi > 0 {
+            dpi
+        } else {
+            96
+        }
     }
 }
 
@@ -60,7 +66,11 @@ fn set_dpi_scale(scale: f64) {
 /// Get the DPI scale factor. Returns 1.0 if not set.
 pub fn get_dpi_scale() -> f64 {
     let bits = DPI_SCALE.load(std::sync::atomic::Ordering::Relaxed);
-    if bits == 0 { 1.0 } else { f64::from_bits(bits) }
+    if bits == 0 {
+        1.0
+    } else {
+        f64::from_bits(bits)
+    }
 }
 
 thread_local! {
@@ -187,13 +197,16 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(title_wide.as_ptr()),
                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                CW_USEDEFAULT, CW_USEDEFAULT,
-                w, h,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                w,
+                h,
                 None,
                 None,
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
             // Attach any pending menu bar now that the window exists
             crate::menu::attach_pending_menubar(hwnd);
@@ -284,7 +297,9 @@ pub fn app_run(app_handle: i64) {
             let apps = apps.borrow();
             let idx = (app_handle - 1) as usize;
             if idx < apps.len() {
-                unsafe { let _ = SetTimer(apps[idx].hwnd, TICK_TIMER_ID, 50, None); }
+                unsafe {
+                    let _ = SetTimer(apps[idx].hwnd, TICK_TIMER_ID, 50, None);
+                }
             }
         });
 
@@ -322,8 +337,12 @@ pub fn app_run(app_handle: i64) {
             }
             unsafe {
                 perry_geisterhand_register_state_set(crate::perry_ui_state_set);
-                perry_geisterhand_register_screenshot_capture(crate::screenshot::perry_ui_screenshot_capture);
-                perry_geisterhand_register_textfield_set_string(crate::perry_ui_textfield_set_string);
+                perry_geisterhand_register_screenshot_capture(
+                    crate::screenshot::perry_ui_screenshot_capture,
+                );
+                perry_geisterhand_register_textfield_set_string(
+                    crate::perry_ui_textfield_set_string,
+                );
                 perry_geisterhand_register_apply_style(crate::geisterhand_style::apply_style);
             }
         }
@@ -333,11 +352,14 @@ pub fn app_run(app_handle: i64) {
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
                 // WM_HOTKEY is posted to the thread message queue, not to a window
-                if msg.message == 0x0312 { // WM_HOTKEY
+                if msg.message == 0x0312 {
+                    // WM_HOTKEY
                     let hotkey_id = msg.wParam.0 as i32;
                     GLOBAL_HOTKEY_CALLBACKS.with(|cbs| {
                         if let Some(cb_ptr) = cbs.borrow().get(&hotkey_id) {
-                            unsafe { js_closure_call0(*cb_ptr); }
+                            unsafe {
+                                js_closure_call0(*cb_ptr);
+                            }
                         }
                     });
                     continue;
@@ -357,11 +379,15 @@ pub fn app_run(app_handle: i64) {
                         js_interval_timer_tick();
                     }
                 }
-                    #[cfg(feature = "geisterhand")]
-                    {
-                        extern "C" { fn perry_geisterhand_pump(); }
-                        unsafe { perry_geisterhand_pump(); }
+                #[cfg(feature = "geisterhand")]
+                {
+                    extern "C" {
+                        fn perry_geisterhand_pump();
                     }
+                    unsafe {
+                        perry_geisterhand_pump();
+                    }
+                }
             }
         }
     }
@@ -395,25 +421,67 @@ fn install_shortcut(key: &str, modifiers: f64, callback: f64) {
 
 fn key_to_vk(key: &str) -> u16 {
     match key.to_lowercase().as_str() {
-        "a" => 0x41, "b" => 0x42, "c" => 0x43, "d" => 0x44, "e" => 0x45,
-        "f" => 0x46, "g" => 0x47, "h" => 0x48, "i" => 0x49, "j" => 0x4A,
-        "k" => 0x4B, "l" => 0x4C, "m" => 0x4D, "n" => 0x4E, "o" => 0x4F,
-        "p" => 0x50, "q" => 0x51, "r" => 0x52, "s" => 0x53, "t" => 0x54,
-        "u" => 0x55, "v" => 0x56, "w" => 0x57, "x" => 0x58, "y" => 0x59,
+        "a" => 0x41,
+        "b" => 0x42,
+        "c" => 0x43,
+        "d" => 0x44,
+        "e" => 0x45,
+        "f" => 0x46,
+        "g" => 0x47,
+        "h" => 0x48,
+        "i" => 0x49,
+        "j" => 0x4A,
+        "k" => 0x4B,
+        "l" => 0x4C,
+        "m" => 0x4D,
+        "n" => 0x4E,
+        "o" => 0x4F,
+        "p" => 0x50,
+        "q" => 0x51,
+        "r" => 0x52,
+        "s" => 0x53,
+        "t" => 0x54,
+        "u" => 0x55,
+        "v" => 0x56,
+        "w" => 0x57,
+        "x" => 0x58,
+        "y" => 0x59,
         "z" => 0x5A,
-        "0" => 0x30, "1" => 0x31, "2" => 0x32, "3" => 0x33, "4" => 0x34,
-        "5" => 0x35, "6" => 0x36, "7" => 0x37, "8" => 0x38, "9" => 0x39,
+        "0" => 0x30,
+        "1" => 0x31,
+        "2" => 0x32,
+        "3" => 0x33,
+        "4" => 0x34,
+        "5" => 0x35,
+        "6" => 0x36,
+        "7" => 0x37,
+        "8" => 0x38,
+        "9" => 0x39,
         "return" | "enter" => 0x0D,
         "escape" | "esc" => 0x1B,
         "tab" => 0x09,
         "space" => 0x20,
         "delete" | "backspace" => 0x08,
-        "up" => 0x26, "down" => 0x28, "left" => 0x25, "right" => 0x27,
-        "f1" => 0x70, "f2" => 0x71, "f3" => 0x72, "f4" => 0x73,
-        "f5" => 0x74, "f6" => 0x75, "f7" => 0x76, "f8" => 0x77,
-        "f9" => 0x78, "f10" => 0x79, "f11" => 0x7A, "f12" => 0x7B,
-        "home" => 0x24, "end" => 0x23,
-        "pageup" => 0x21, "pagedown" => 0x22,
+        "up" => 0x26,
+        "down" => 0x28,
+        "left" => 0x25,
+        "right" => 0x27,
+        "f1" => 0x70,
+        "f2" => 0x71,
+        "f3" => 0x72,
+        "f4" => 0x73,
+        "f5" => 0x74,
+        "f6" => 0x75,
+        "f7" => 0x76,
+        "f8" => 0x77,
+        "f9" => 0x78,
+        "f10" => 0x79,
+        "f11" => 0x7A,
+        "f12" => 0x7B,
+        "home" => 0x24,
+        "end" => 0x23,
+        "pageup" => 0x21,
+        "pagedown" => 0x22,
         _ => 0,
     }
 }
@@ -422,11 +490,14 @@ fn try_handle_shortcut(vk: u16) -> bool {
     #[cfg(target_os = "windows")]
     {
         let ctrl_down = unsafe {
-            windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x11 /* VK_CONTROL */) } < 0;
+            windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x11 /* VK_CONTROL */)
+        } < 0;
         let shift_down = unsafe {
-            windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x10 /* VK_SHIFT */) } < 0;
+            windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x10 /* VK_SHIFT */)
+        } < 0;
         let alt_down = unsafe {
-            windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x12 /* VK_MENU */) } < 0;
+            windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x12 /* VK_MENU */)
+        } < 0;
 
         SHORTCUTS.with(|shortcuts| {
             let shortcuts = shortcuts.borrow();
@@ -492,9 +563,12 @@ pub fn app_set_size(app_handle: i64, width: f64, height: f64) {
                 let hwnd = apps[idx].hwnd;
                 unsafe {
                     let _ = SetWindowPos(
-                        hwnd, None,
-                        0, 0,
-                        width as i32, height as i32,
+                        hwnd,
+                        None,
+                        0,
+                        0,
+                        width as i32,
+                        height as i32,
                         SWP_NOMOVE | SWP_NOZORDER,
                     );
                 }
@@ -532,7 +606,10 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
                     let _ = SetWindowPos(
                         hwnd,
                         None,
-                        0, 0, 0, 0,
+                        0,
+                        0,
+                        0,
+                        0,
                         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
                     );
 
@@ -582,12 +659,7 @@ pub fn app_set_level(app_handle: i64, value_ptr: *const u8) {
                         "modal" => HWND_TOPMOST,
                         _ => HWND_NOTOPMOST,
                     };
-                    let _ = SetWindowPos(
-                        hwnd,
-                        insert_after,
-                        0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE,
-                    );
+                    let _ = SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
                 }
             }
         });
@@ -615,11 +687,7 @@ pub fn app_set_transparent(app_handle: i64, value: f64) {
                 unsafe {
                     // Add WS_EX_LAYERED for per-pixel alpha
                     let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                    SetWindowLongW(
-                        hwnd,
-                        GWL_EXSTYLE,
-                        (ex_style | WS_EX_LAYERED.0) as i32,
-                    );
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, (ex_style | WS_EX_LAYERED.0) as i32);
                     // SetLayeredWindowAttributes for basic transparency
                     // 230 = ~90% opacity as a reasonable default
                     SetLayeredWindowAttributes(hwnd, COLORREF(0), 230, LWA_ALPHA);
@@ -654,7 +722,7 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
                         "sidebar" | "underWindowBackground" | "behindWindow" => 2, // Mica
                         "menu" | "popover" | "tooltip" | "hudWindow" => 3,         // Acrylic
                         "titlebar" | "headerView" => 4,                            // Mica Alt
-                        _ => 3,                                                     // Acrylic default
+                        _ => 3, // Acrylic default
                     };
 
                     // DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof)
@@ -780,7 +848,9 @@ pub fn on_terminate(callback: f64) {
 /// Handle WM_TIMER — dispatch to registered timer callbacks.
 #[cfg(target_os = "windows")]
 pub fn handle_timer(hwnd: HWND, timer_id: usize) {
-    if timer_id == 0 { return; }
+    if timer_id == 0 {
+        return;
+    }
 
     // Periodic tick — just flag it, actual processing happens in message loop
     if timer_id == TICK_TIMER_ID {
@@ -790,13 +860,17 @@ pub fn handle_timer(hwnd: HWND, timer_id: usize) {
 
     // PERRY_UI_TEST_MODE exit: capture screenshot (if configured), then exit.
     if timer_id == TEST_EXIT_TIMER_ID {
-        unsafe { let _ = KillTimer(hwnd, TEST_EXIT_TIMER_ID); }
+        unsafe {
+            let _ = KillTimer(hwnd, TEST_EXIT_TIMER_ID);
+        }
         if let Some(path) = perry_ui_testkit::screenshot_path() {
             let mut len: usize = 0;
             let ptr = crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
             if !ptr.is_null() && len > 0 {
                 perry_ui_testkit::write_screenshot_bytes(&path, ptr, len);
-                unsafe { libc::free(ptr as *mut libc::c_void); }
+                unsafe {
+                    libc::free(ptr as *mut libc::c_void);
+                }
             }
         }
         use std::io::Write;
@@ -916,7 +990,12 @@ fn do_layout() {
 // =============================================================================
 
 #[cfg(target_os = "windows")]
-unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_SIZE => {
             let width = (lparam.0 & 0xFFFF) as i32;
@@ -1081,14 +1160,22 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 /// `callback` is a NaN-boxed closure pointer.
 pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64) {
     let key_str = str_from_header(key_ptr);
-    if key_str.is_empty() { return; }
+    if key_str.is_empty() {
+        return;
+    }
 
     let mod_bits = modifiers as u32;
     // Perry: 1=Cmd(->Ctrl on Win), 2=Shift, 4=Option(->Alt), 8=Control(->Ctrl)
     let mut win_mods: u32 = 0;
-    if mod_bits & 1 != 0 || mod_bits & 8 != 0 { win_mods |= 0x0002; } // MOD_CONTROL
-    if mod_bits & 2 != 0 { win_mods |= 0x0004; } // MOD_SHIFT
-    if mod_bits & 4 != 0 { win_mods |= 0x0001; } // MOD_ALT
+    if mod_bits & 1 != 0 || mod_bits & 8 != 0 {
+        win_mods |= 0x0002;
+    } // MOD_CONTROL
+    if mod_bits & 2 != 0 {
+        win_mods |= 0x0004;
+    } // MOD_SHIFT
+    if mod_bits & 4 != 0 {
+        win_mods |= 0x0001;
+    } // MOD_ALT
     win_mods |= 0x4000; // MOD_NOREPEAT
 
     let vk = key_to_vk(key_str);

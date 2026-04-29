@@ -43,9 +43,7 @@ pub unsafe extern "C" fn js_bcrypt_hash(
 
     // Spawn async task for hashing (bcrypt is CPU-intensive)
     spawn(async move {
-        let result = tokio::task::spawn_blocking(move || {
-            bcrypt::hash(password, cost)
-        }).await;
+        let result = tokio::task::spawn_blocking(move || bcrypt::hash(password, cost)).await;
 
         match result {
             Ok(Ok(hash)) => {
@@ -105,14 +103,16 @@ pub unsafe extern "C" fn js_bcrypt_compare(
 
     // Spawn async task for verification (bcrypt is CPU-intensive)
     spawn(async move {
-        let result = tokio::task::spawn_blocking(move || {
-            bcrypt::verify(password, &hash)
-        }).await;
+        let result = tokio::task::spawn_blocking(move || bcrypt::verify(password, &hash)).await;
 
         match result {
             Ok(Ok(matches)) => {
                 // Return boolean as f64 (1.0 for true, 0.0 for false)
-                let result_bits = if matches { 1.0f64.to_bits() } else { 0.0f64.to_bits() };
+                let result_bits = if matches {
+                    1.0f64.to_bits()
+                } else {
+                    0.0f64.to_bits()
+                };
                 queue_promise_resolution(promise_ptr, true, result_bits);
             }
             Ok(Err(e)) => {
@@ -136,9 +136,7 @@ pub unsafe extern "C" fn js_bcrypt_compare(
 /// Generate a salt with the given cost factor
 /// bcrypt.genSalt(rounds) -> Promise<string>
 #[no_mangle]
-pub unsafe extern "C" fn js_bcrypt_gen_salt(
-    rounds: f64,
-) -> *mut perry_runtime::Promise {
+pub unsafe extern "C" fn js_bcrypt_gen_salt(rounds: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
     let promise_ptr = promise as usize;
     let cost = rounds as u32;
@@ -160,9 +158,10 @@ pub unsafe extern "C" fn js_bcrypt_gen_salt(
                         Err("Invalid hash format".to_string())
                     }
                 }
-                Err(e) => Err(format!("{}", e))
+                Err(e) => Err(format!("{}", e)),
             }
-        }).await;
+        })
+        .await;
 
         match result {
             Ok(Ok(salt)) => {
@@ -194,7 +193,10 @@ pub unsafe extern "C" fn js_bcrypt_hash_sync(
     password_ptr: *const StringHeader,
     salt_rounds: f64,
 ) -> i64 {
-    eprintln!("[bcrypt-sync] hash_sync called, password_ptr={:?} salt_rounds={}", password_ptr, salt_rounds);
+    eprintln!(
+        "[bcrypt-sync] hash_sync called, password_ptr={:?} salt_rounds={}",
+        password_ptr, salt_rounds
+    );
     let password = match string_from_header(password_ptr) {
         Some(s) => s,
         None => {
@@ -202,7 +204,11 @@ pub unsafe extern "C" fn js_bcrypt_hash_sync(
             return 0;
         }
     };
-    eprintln!("[bcrypt-sync] password len={} cost={}", password.len(), salt_rounds as u32);
+    eprintln!(
+        "[bcrypt-sync] password len={} cost={}",
+        password.len(),
+        salt_rounds as u32
+    );
 
     let cost = salt_rounds as u32;
 
@@ -232,7 +238,10 @@ pub unsafe extern "C" fn js_bcrypt_compare_sync(
     password_ptr: *const StringHeader,
     hash_ptr: *const StringHeader,
 ) -> f64 {
-    eprintln!("[bcrypt-cmp] compare_sync called, password_ptr={:?} hash_ptr={:?}", password_ptr, hash_ptr);
+    eprintln!(
+        "[bcrypt-cmp] compare_sync called, password_ptr={:?} hash_ptr={:?}",
+        password_ptr, hash_ptr
+    );
     let password = match string_from_header(password_ptr) {
         Some(s) => s,
         None => {
@@ -249,7 +258,11 @@ pub unsafe extern "C" fn js_bcrypt_compare_sync(
         }
     };
 
-    eprintln!("[bcrypt-cmp] password len={} hash_prefix={}", password.len(), &hash[..hash.len().min(15)]);
+    eprintln!(
+        "[bcrypt-cmp] password len={} hash_prefix={}",
+        password.len(),
+        &hash[..hash.len().min(15)]
+    );
     match bcrypt::verify(&password, &hash) {
         Ok(true) => {
             eprintln!("[bcrypt-cmp] match=true");

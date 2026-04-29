@@ -1,8 +1,8 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2_ui_kit::UIView;
 use objc2_foundation::MainThreadMarker;
+use objc2_ui_kit::UIView;
 
 pub fn create() -> i64 {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");

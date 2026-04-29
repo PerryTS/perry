@@ -46,11 +46,14 @@ pub fn create(count: f64, render_closure: f64) -> i64 {
 
     // Store state for update
     LAZYVSTACK_STATES.with(|states| {
-        states.borrow_mut().insert(scroll_handle, LazyVStackState {
+        states.borrow_mut().insert(
             scroll_handle,
-            vstack_handle,
-            render_closure: closure_ptr,
-        });
+            LazyVStackState {
+                scroll_handle,
+                vstack_handle,
+                render_closure: closure_ptr,
+            },
+        );
     });
 
     scroll_handle

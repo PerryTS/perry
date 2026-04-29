@@ -1,8 +1,8 @@
 //! Dialog — save file dialog and alert
 
-use jni::objects::JValue;
-use crate::jni_bridge;
 use crate::callback;
+use crate::jni_bridge;
+use jni::objects::JValue;
 
 fn str_from_header(ptr: *const u8) -> &'static str {
     crate::app::str_from_header(ptr)
@@ -15,14 +15,20 @@ extern "C" {
 }
 
 /// Show a save file dialog. On Android, uses PerryBridge helper or Intent.
-pub fn save_file_dialog(callback: f64, _default_name_ptr: *const u8, _allowed_types_ptr: *const u8) {
+pub fn save_file_dialog(
+    callback: f64,
+    _default_name_ptr: *const u8,
+    _allowed_types_ptr: *const u8,
+) {
     // Android save file dialog requires Activity.startActivityForResult with Intent(ACTION_CREATE_DOCUMENT)
     // For now, call callback with empty string (no file selected)
     if callback != 0.0 {
         let empty = b"\0";
         let s = unsafe { js_string_from_bytes(empty.as_ptr(), 0) };
         let val = unsafe { js_nanbox_string(s) };
-        unsafe { js_closure_call1(callback, val); }
+        unsafe {
+            js_closure_call1(callback, val);
+        }
     }
 }
 
@@ -37,13 +43,18 @@ pub fn alert(title_ptr: *const u8, message_ptr: *const u8, _buttons_ptr: *const 
     let activity = crate::widgets::get_activity(&mut env);
 
     // Use PerryBridge.showAlert(Activity, String title, String message, long callback)
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
 
     let jtitle = env.new_string(title).expect("Failed to create JNI string");
-    let jmessage = env.new_string(message).expect("Failed to create JNI string");
-    let cb_key = if callback != 0.0 { callback::register(callback) } else { 0 };
+    let jmessage = env
+        .new_string(message)
+        .expect("Failed to create JNI string");
+    let cb_key = if callback != 0.0 {
+        callback::register(callback)
+    } else {
+        0
+    };
 
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
     let _ = env.call_static_method(
@@ -58,5 +69,7 @@ pub fn alert(title_ptr: *const u8, message_ptr: *const u8, _buttons_ptr: *const 
         ],
     );
 
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
 }

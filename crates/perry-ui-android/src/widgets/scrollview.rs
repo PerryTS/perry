@@ -1,6 +1,6 @@
-use jni::objects::JValue;
-use crate::jni_bridge;
 use crate::callback;
+use crate::jni_bridge;
+use jni::objects::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -16,16 +16,28 @@ extern "C" {
 /// Create a ScrollView. Returns widget handle.
 pub fn create() -> i64 {
     unsafe {
-        __android_log_print(3, b"PerryScrollView\0".as_ptr(), b"create: getting env\0".as_ptr());
+        __android_log_print(
+            3,
+            b"PerryScrollView\0".as_ptr(),
+            b"create: getting env\0".as_ptr(),
+        );
     }
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(32);
     unsafe {
-        __android_log_print(3, b"PerryScrollView\0".as_ptr(), b"create: got env, getting activity\0".as_ptr());
+        __android_log_print(
+            3,
+            b"PerryScrollView\0".as_ptr(),
+            b"create: got env, getting activity\0".as_ptr(),
+        );
     }
     let activity = super::get_activity(&mut env);
     unsafe {
-        __android_log_print(3, b"PerryScrollView\0".as_ptr(), b"create: got activity, creating ScrollView\0".as_ptr());
+        __android_log_print(
+            3,
+            b"PerryScrollView\0".as_ptr(),
+            b"create: got activity, creating ScrollView\0".as_ptr(),
+        );
     }
 
     let scroll_result = env.new_object(
@@ -36,19 +48,32 @@ pub fn create() -> i64 {
     let scroll = match scroll_result {
         Ok(s) => {
             unsafe {
-                __android_log_print(3, b"PerryScrollView\0".as_ptr(), b"create: ScrollView created OK\0".as_ptr());
+                __android_log_print(
+                    3,
+                    b"PerryScrollView\0".as_ptr(),
+                    b"create: ScrollView created OK\0".as_ptr(),
+                );
             }
             s
         }
         Err(e) => {
             let msg = format!("Failed to create ScrollView: {:?}\0", e);
             unsafe {
-                __android_log_print(6, b"PerryScrollView\0".as_ptr(), b"create: ERROR: %s\0".as_ptr(), msg.as_ptr());
+                __android_log_print(
+                    6,
+                    b"PerryScrollView\0".as_ptr(),
+                    b"create: ERROR: %s\0".as_ptr(),
+                    msg.as_ptr(),
+                );
             }
             // Check if there's a pending JNI exception
             if env.exception_check().unwrap_or(false) {
                 unsafe {
-                    __android_log_print(6, b"PerryScrollView\0".as_ptr(), b"create: JNI exception pending, describing:\0".as_ptr());
+                    __android_log_print(
+                        6,
+                        b"PerryScrollView\0".as_ptr(),
+                        b"create: JNI exception pending, describing:\0".as_ptr(),
+                    );
                 }
                 let _ = env.exception_describe();
                 let _ = env.exception_clear();
@@ -58,19 +83,16 @@ pub fn create() -> i64 {
     };
 
     // Fill viewport so content can expand
-    let _ = env.call_method(
-        &scroll,
-        "setFillViewport",
-        "(Z)V",
-        &[JValue::Bool(1)],
-    );
+    let _ = env.call_method(&scroll, "setFillViewport", "(Z)V", &[JValue::Bool(1)]);
 
     // MATCH_PARENT for both dimensions
-    let params = env.new_object(
-        "android/widget/FrameLayout$LayoutParams",
-        "(II)V",
-        &[JValue::Int(-1), JValue::Int(-1)],
-    ).expect("Failed to create LayoutParams");
+    let params = env
+        .new_object(
+            "android/widget/FrameLayout$LayoutParams",
+            "(II)V",
+            &[JValue::Int(-1), JValue::Int(-1)],
+        )
+        .expect("Failed to create LayoutParams");
     let _ = env.call_method(
         &scroll,
         "setLayoutParams",
@@ -78,16 +100,23 @@ pub fn create() -> i64 {
         &[JValue::Object(&params)],
     );
 
-    let global = env.new_global_ref(scroll).expect("Failed to create global ref");
+    let global = env
+        .new_global_ref(scroll)
+        .expect("Failed to create global ref");
     let handle = super::register_widget(global);
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     handle
 }
 
 /// Set the content child of a ScrollView.
 /// ScrollView can only have one direct child. Remove existing children first.
 pub fn set_child(scroll_handle: i64, child_handle: i64) {
-    if let (Some(scroll_ref), Some(child_ref)) = (super::get_widget(scroll_handle), super::get_widget(child_handle)) {
+    if let (Some(scroll_ref), Some(child_ref)) = (
+        super::get_widget(scroll_handle),
+        super::get_widget(child_handle),
+    ) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);
         // Remove existing children
@@ -99,7 +128,9 @@ pub fn set_child(scroll_handle: i64, child_handle: i64) {
             "(Landroid/view/View;)V",
             &[JValue::Object(child_ref.as_obj())],
         );
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 
@@ -109,12 +140,18 @@ pub fn scroll_to(_scroll_handle: i64, child_handle: i64) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);
         // Get the child's top position and scroll its parent to it
-        let top = env.call_method(child_ref.as_obj(), "getTop", "()I", &[])
+        let top = env
+            .call_method(child_ref.as_obj(), "getTop", "()I", &[])
             .map(|v| v.i().unwrap_or(0))
             .unwrap_or(0);
 
         // Get the parent ScrollView
-        let parent = env.call_method(child_ref.as_obj(), "getParent", "()Landroid/view/ViewParent;", &[]);
+        let parent = env.call_method(
+            child_ref.as_obj(),
+            "getParent",
+            "()Landroid/view/ViewParent;",
+            &[],
+        );
         if let Ok(parent_val) = parent {
             if let Ok(parent_obj) = parent_val.l() {
                 if !parent_obj.is_null() {
@@ -127,7 +164,9 @@ pub fn scroll_to(_scroll_handle: i64, child_handle: i64) {
                 }
             }
         }
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 
@@ -142,7 +181,9 @@ pub fn get_offset(scroll_handle: i64) -> f64 {
         } else {
             0.0
         };
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
         return offset;
     }
     0.0
@@ -174,6 +215,8 @@ pub fn set_offset(scroll_handle: i64, offset: f64) {
             "(II)V",
             &[JValue::Int(0), JValue::Int(offset as i32)],
         );
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }

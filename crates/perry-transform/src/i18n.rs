@@ -3,8 +3,8 @@
 //! Walks all HIR modules and replaces string literals in UI component calls
 //! with I18nString nodes that reference the global i18n string table.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
 use perry_hir::{Expr, Module, Stmt};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// UI widget constructors whose first argument is a localizable string.
 const LOCALIZABLE_WIDGETS: &[&str] = &[
@@ -76,7 +76,9 @@ pub fn apply_i18n(
     let mut key_to_idx: HashMap<String, u32> = HashMap::new();
     let mut keys: Vec<String> = Vec::new();
 
-    let default_locale_idx = config.locales.iter()
+    let default_locale_idx = config
+        .locales
+        .iter()
         .position(|l| l == &config.default_locale)
         .unwrap_or(0);
 
@@ -100,7 +102,12 @@ pub fn apply_i18n(
     // Scan locale files for keys with plural suffixes (.zero, .one, .two, .few, .many, .other)
     // and register them as additional string table entries.
     let plural_suffixes: &[(&str, u8)] = &[
-        (".zero", 0), (".one", 1), (".two", 2), (".few", 3), (".many", 4), (".other", 5),
+        (".zero", 0),
+        (".one", 1),
+        (".two", 2),
+        (".few", 3),
+        (".many", 4),
+        (".other", 5),
     ];
     // plural_info: base_key → Vec<(category, string_idx)>
     let mut plural_info: HashMap<String, Vec<(u8, u32)>> = HashMap::new();
@@ -151,7 +158,8 @@ pub fn apply_i18n(
                 .cloned()
                 .unwrap_or_else(|| {
                     if locale != &config.default_locale {
-                        let fallback = translations.get(&config.default_locale)
+                        let fallback = translations
+                            .get(&config.default_locale)
                             .and_then(|t| t.get(key))
                             .cloned()
                             .unwrap_or_else(|| key.clone());
@@ -183,10 +191,7 @@ pub fn apply_i18n(
             if !used_keys.contains(key.as_str()) {
                 diagnostics.push(I18nDiagnostic {
                     severity: I18nSeverity::Warning,
-                    message: format!(
-                        "Unused i18n key \"{}\" in locale \"{}\"",
-                        key, locale
-                    ),
+                    message: format!("Unused i18n key \"{}\" in locale \"{}\"", key, locale),
                     key: key.clone(),
                 });
             }
@@ -195,13 +200,23 @@ pub fn apply_i18n(
 
     // Second pass: replace Expr::String with Expr::I18nString in all modules
     for (_, module) in modules.iter_mut() {
-        replace_in_stmts(&mut module.init, &key_to_idx, &plural_info, &plural_param_map);
+        replace_in_stmts(
+            &mut module.init,
+            &key_to_idx,
+            &plural_info,
+            &plural_param_map,
+        );
         for func in &mut module.functions {
             replace_in_stmts(&mut func.body, &key_to_idx, &plural_info, &plural_param_map);
         }
         for class in &mut module.classes {
             for method in &mut class.methods {
-                replace_in_stmts(&mut method.body, &key_to_idx, &plural_info, &plural_param_map);
+                replace_in_stmts(
+                    &mut method.body,
+                    &key_to_idx,
+                    &plural_info,
+                    &plural_param_map,
+                );
             }
             if let Some(ctor) = &mut class.constructor {
                 replace_in_stmts(&mut ctor.body, &key_to_idx, &plural_info, &plural_param_map);
@@ -237,10 +252,19 @@ fn collect_keys_from_stmt(
     keys: &mut Vec<String>,
 ) {
     match stmt {
-        Stmt::Let { init: Some(expr), .. } | Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Let {
+            init: Some(expr), ..
+        }
+        | Stmt::Expr(expr)
+        | Stmt::Return(Some(expr))
+        | Stmt::Throw(expr) => {
             collect_keys_from_expr(expr, key_to_idx, keys);
         }
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             collect_keys_from_expr(condition, key_to_idx, keys);
             collect_keys_from_stmts(then_branch, key_to_idx, keys);
             if let Some(else_b) = else_branch {
@@ -251,7 +275,12 @@ fn collect_keys_from_stmt(
             collect_keys_from_expr(condition, key_to_idx, keys);
             collect_keys_from_stmts(body, key_to_idx, keys);
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
                 collect_keys_from_stmt(init_stmt, key_to_idx, keys);
             }
@@ -263,7 +292,11 @@ fn collect_keys_from_stmt(
             }
             collect_keys_from_stmts(body, key_to_idx, keys);
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             collect_keys_from_stmts(body, key_to_idx, keys);
             if let Some(catch_clause) = catch {
                 collect_keys_from_stmts(&catch_clause.body, key_to_idx, keys);
@@ -272,7 +305,10 @@ fn collect_keys_from_stmt(
                 collect_keys_from_stmts(finally_body, key_to_idx, keys);
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             collect_keys_from_expr(discriminant, key_to_idx, keys);
             for case in cases {
                 if let Some(test) = &case.test {
@@ -292,7 +328,13 @@ fn collect_keys_from_expr(
 ) {
     match expr {
         // The target: UI widget calls with string literal as first arg
-        Expr::NativeMethodCall { module, method, object, args, .. } => {
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object,
+            args,
+            ..
+        } => {
             if module == "perry/ui" && object.is_none() && is_localizable_widget(method) {
                 if let Some(Expr::String(key)) = args.first() {
                     register_key(key, key_to_idx, keys);
@@ -311,14 +353,20 @@ fn collect_keys_from_expr(
             }
         }
         // Structural expressions — recurse
-        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } | Expr::Logical { left, right, .. } => {
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
             collect_keys_from_expr(left, key_to_idx, keys);
             collect_keys_from_expr(right, key_to_idx, keys);
         }
         Expr::Unary { operand, .. } => {
             collect_keys_from_expr(operand, key_to_idx, keys);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             collect_keys_from_expr(condition, key_to_idx, keys);
             collect_keys_from_expr(then_expr, key_to_idx, keys);
             collect_keys_from_expr(else_expr, key_to_idx, keys);
@@ -367,9 +415,13 @@ fn collect_keys_from_expr(
         Expr::Closure { body, .. } => {
             collect_keys_from_stmts(body, key_to_idx, keys);
         }
-        Expr::New { args, .. } | Expr::NewDynamic { args, .. } | Expr::SuperCall(args) |
-        Expr::StaticMethodCall { args, .. } | Expr::Sequence(args) |
-        Expr::MathMin(args) | Expr::MathMax(args) => {
+        Expr::New { args, .. }
+        | Expr::NewDynamic { args, .. }
+        | Expr::SuperCall(args)
+        | Expr::StaticMethodCall { args, .. }
+        | Expr::Sequence(args)
+        | Expr::MathMin(args)
+        | Expr::MathMax(args) => {
             for arg in args {
                 collect_keys_from_expr(arg, key_to_idx, keys);
             }
@@ -377,7 +429,9 @@ fn collect_keys_from_expr(
         Expr::Await(expr) | Expr::TypeOf(expr) | Expr::Void(expr) | Expr::Delete(expr) => {
             collect_keys_from_expr(expr, key_to_idx, keys);
         }
-        Expr::Yield { value: Some(expr), .. } => {
+        Expr::Yield {
+            value: Some(expr), ..
+        } => {
             collect_keys_from_expr(expr, key_to_idx, keys);
         }
         Expr::In { property, object } => {
@@ -415,11 +469,10 @@ fn is_localizable_widget(method: &str) -> bool {
 /// `Text("Hello, {name}!", { name: user.name })` → [("name", Expr::PropertyGet(user, "name"))]
 fn extract_params(expr: &Expr) -> Vec<(String, Box<Expr>)> {
     match expr {
-        Expr::Object(fields) => {
-            fields.iter()
-                .map(|(name, value)| (name.clone(), Box::new(value.clone())))
-                .collect()
-        }
+        Expr::Object(fields) => fields
+            .iter()
+            .map(|(name, value)| (name.clone(), Box::new(value.clone())))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -444,10 +497,19 @@ fn replace_in_stmt(
     plural_param_map: &HashMap<String, String>,
 ) {
     match stmt {
-        Stmt::Let { init: Some(expr), .. } | Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Let {
+            init: Some(expr), ..
+        }
+        | Stmt::Expr(expr)
+        | Stmt::Return(Some(expr))
+        | Stmt::Throw(expr) => {
             replace_in_expr(expr, key_to_idx, plural_info, plural_param_map);
         }
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             replace_in_expr(condition, key_to_idx, plural_info, plural_param_map);
             replace_in_stmts(then_branch, key_to_idx, plural_info, plural_param_map);
             if let Some(else_b) = else_branch {
@@ -458,7 +520,12 @@ fn replace_in_stmt(
             replace_in_expr(condition, key_to_idx, plural_info, plural_param_map);
             replace_in_stmts(body, key_to_idx, plural_info, plural_param_map);
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
                 replace_in_stmt(init_stmt, key_to_idx, plural_info, plural_param_map);
             }
@@ -470,16 +537,28 @@ fn replace_in_stmt(
             }
             replace_in_stmts(body, key_to_idx, plural_info, plural_param_map);
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             replace_in_stmts(body, key_to_idx, plural_info, plural_param_map);
             if let Some(catch_clause) = catch {
-                replace_in_stmts(&mut catch_clause.body, key_to_idx, plural_info, plural_param_map);
+                replace_in_stmts(
+                    &mut catch_clause.body,
+                    key_to_idx,
+                    plural_info,
+                    plural_param_map,
+                );
             }
             if let Some(finally_body) = finally {
                 replace_in_stmts(finally_body, key_to_idx, plural_info, plural_param_map);
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             replace_in_expr(discriminant, key_to_idx, plural_info, plural_param_map);
             for case in cases {
                 if let Some(test) = &mut case.test {
@@ -499,10 +578,15 @@ fn replace_in_expr(
     plural_param_map: &HashMap<String, String>,
 ) {
     match expr {
-        Expr::NativeMethodCall { module, method, object, args, .. } => {
-            let is_localizable_ui = module == "perry/ui"
-                && object.is_none()
-                && is_localizable_widget(method);
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object,
+            args,
+            ..
+        } => {
+            let is_localizable_ui =
+                module == "perry/ui" && object.is_none() && is_localizable_widget(method);
             let is_i18n_t = module == "perry/i18n" && method == "t";
 
             if (is_localizable_ui || is_i18n_t) && !args.is_empty() {
@@ -534,14 +618,20 @@ fn replace_in_expr(
                 replace_in_expr(arg, key_to_idx, plural_info, plural_param_map);
             }
         }
-        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } | Expr::Logical { left, right, .. } => {
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
             replace_in_expr(left, key_to_idx, plural_info, plural_param_map);
             replace_in_expr(right, key_to_idx, plural_info, plural_param_map);
         }
         Expr::Unary { operand, .. } => {
             replace_in_expr(operand, key_to_idx, plural_info, plural_param_map);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             replace_in_expr(condition, key_to_idx, plural_info, plural_param_map);
             replace_in_expr(then_expr, key_to_idx, plural_info, plural_param_map);
             replace_in_expr(else_expr, key_to_idx, plural_info, plural_param_map);
@@ -590,9 +680,13 @@ fn replace_in_expr(
         Expr::Closure { body, .. } => {
             replace_in_stmts(body, key_to_idx, plural_info, plural_param_map);
         }
-        Expr::New { args, .. } | Expr::NewDynamic { args, .. } | Expr::SuperCall(args) |
-        Expr::StaticMethodCall { args, .. } | Expr::Sequence(args) |
-        Expr::MathMin(args) | Expr::MathMax(args) => {
+        Expr::New { args, .. }
+        | Expr::NewDynamic { args, .. }
+        | Expr::SuperCall(args)
+        | Expr::StaticMethodCall { args, .. }
+        | Expr::Sequence(args)
+        | Expr::MathMin(args)
+        | Expr::MathMax(args) => {
             for arg in args.iter_mut() {
                 replace_in_expr(arg, key_to_idx, plural_info, plural_param_map);
             }
@@ -600,7 +694,9 @@ fn replace_in_expr(
         Expr::Await(expr) | Expr::TypeOf(expr) | Expr::Void(expr) | Expr::Delete(expr) => {
             replace_in_expr(expr, key_to_idx, plural_info, plural_param_map);
         }
-        Expr::Yield { value: Some(expr), .. } => {
+        Expr::Yield {
+            value: Some(expr), ..
+        } => {
             replace_in_expr(expr, key_to_idx, plural_info, plural_param_map);
         }
         Expr::In { property, object } => {

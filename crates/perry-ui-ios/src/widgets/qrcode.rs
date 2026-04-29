@@ -1,8 +1,8 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2_ui_kit::UIView;
 use objc2_foundation::NSString;
+use objc2_ui_kit::UIView;
 
 /// Extract a &str from a *const StringHeader pointer.
 fn str_from_header(ptr: *const u8) -> &'static str {
@@ -32,7 +32,9 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
         let iv_cls = AnyClass::get(c"UIImageView").unwrap();
         let iv_raw: *mut AnyObject = msg_send![iv_cls, alloc];
         let iv_raw: *mut AnyObject = msg_send![iv_raw, initWithFrame: frame];
-        if iv_raw.is_null() { return 0; }
+        if iv_raw.is_null() {
+            return 0;
+        }
         let image_view: Retained<UIView> = Retained::retain(iv_raw as *mut UIView).unwrap();
 
         // UIViewContentModeScaleAspectFit = 1
@@ -41,11 +43,13 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
 
         // Set width/height constraints
         let width_anchor: Retained<AnyObject> = msg_send![&*image_view, widthAnchor];
-        let wc: Retained<AnyObject> = msg_send![&*width_anchor, constraintEqualToConstant: display_size];
+        let wc: Retained<AnyObject> =
+            msg_send![&*width_anchor, constraintEqualToConstant: display_size];
         let _: () = msg_send![&*wc, setActive: true];
 
         let height_anchor: Retained<AnyObject> = msg_send![&*image_view, heightAnchor];
-        let hc: Retained<AnyObject> = msg_send![&*height_anchor, constraintEqualToConstant: display_size];
+        let hc: Retained<AnyObject> =
+            msg_send![&*height_anchor, constraintEqualToConstant: display_size];
         let _: () = msg_send![&*hc, setActive: true];
 
         if !data_str.is_empty() {

@@ -26,7 +26,7 @@ Perry automatically:
 
 ## Step 3: Load from Host
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/plugins/host_snippets.ts:imports}}
 
 {{#include ../../examples/plugins/host_snippets.ts:load}}
@@ -44,13 +44,13 @@ The `api: PluginApi` passed to `activate()` provides:
 
 ### Metadata
 
-```typescript
+```typescript,no-test
 api.setMetadata(name: string, version: string, description: string): void
 ```
 
 ### Hooks
 
-```typescript
+```typescript,no-test
 api.registerHook(name: string, handler: (ctx: unknown) => unknown): void
 api.registerHookEx(name: string, handler: (ctx: unknown) => unknown, priority: number, mode: number): void
 ```
@@ -61,7 +61,7 @@ priority numbers run first.
 
 ### Tools
 
-```typescript
+```typescript,no-test
 api.registerTool(name: string, description: string, handler: (args: unknown) => unknown): void
 ```
 
@@ -69,13 +69,13 @@ Tools are invoked by name from the host.
 
 ### Configuration
 
-```typescript
+```typescript,no-test
 const value = api.getConfig(key: string)  // Read host-provided config
 ```
 
 ### Events
 
-```typescript
+```typescript,no-test
 api.on(event: string, handler: (data: unknown) => void): void  // Listen for events
 api.emit(event: string, data: unknown): void                    // Emit to other plugins
 ```

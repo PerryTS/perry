@@ -324,7 +324,11 @@ pub fn run(args: VerifyArgs, format: OutputFormat, _use_color: bool) -> Result<(
     });
 
     if let Err(ref e) = result {
-        crate::commands::publish::report_beta_error("verify", &format!("{e:#}"), Some(&target_hint));
+        crate::commands::publish::report_beta_error(
+            "verify",
+            &format!("{e:#}"),
+            Some(&target_hint),
+        );
     }
 
     result

@@ -4,12 +4,12 @@
 //! and allows programmatic input firing (click, type, slide, toggle) and
 //! chaos-mode random fuzzing.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::collections::HashMap;
 
-mod server;
 mod chaos;
+mod server;
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -32,7 +32,10 @@ pub extern "C" fn perry_geisterhand_store_hwnd(handle: i64, hwnd: usize) {
 #[no_mangle]
 pub extern "C" fn perry_geisterhand_lookup_hwnd(handle: i64) -> usize {
     match HWND_MAP.lock() {
-        Ok(map) => map.as_ref().and_then(|m| m.get(&handle).copied()).unwrap_or(0),
+        Ok(map) => map
+            .as_ref()
+            .and_then(|m| m.get(&handle).copied())
+            .unwrap_or(0),
         Err(_) => 0,
     }
 }

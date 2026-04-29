@@ -19,6 +19,32 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Lint: cargo fmt --check (formatting gate for every PR)
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # ---------------------------------------------------------------------------
   # Build compiler + runtime once, cache for downstream jobs
   # ---------------------------------------------------------------------------
   build:
@@ -214,7 +240,11 @@ jobs:
           REPORT="test-parity/reports/latest.json"
           KNOWN="test-parity/known_failures.json"
 
-          jq -r '(.failures.parity // []) + (.failures.compile // []) | .[]' "$REPORT" | sort -u > /tmp/all_fails.txt
+          # Filter empty strings — `run_parity_tests.sh` emits `compile: [""]`
+          # when there are zero compile failures (a printf+sed quirk in the
+          # JSON generator), and that empty entry would propagate to a
+          # spurious "NEW FAILURES:  - " line and fail this gate.
+          jq -r '(.failures.parity // []) + (.failures.compile // []) | .[] | select(. != "")' "$REPORT" | sort -u > /tmp/all_fails.txt
           if [[ -f "$KNOWN" ]]; then
             jq -r 'keys[]' "$KNOWN" | sort -u > /tmp/known.txt
           else
@@ -353,7 +383,17 @@ jobs:
               return 0
             fi
             local err_log="$LOGS_DIR/${name}.compile_error.log"
-            if "$PERRY" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log"; then
+            # Try once. If perry compile fails, sleep 2s then retry.
+            # The xargs -P parallel pass can race when two workers both
+            # need an auto-optimize rebuild of the same feature combo —
+            # the loser's clang sees a momentarily-missing
+            # `target/perry-auto-<hash>/release/libperry_runtime.a` and
+            # bails with `errno=2`. Race window is sub-second so a
+            # single retry after a brief delay is the cheapest fix
+            # without serializing the workers entirely. `||` short-
+            # circuits on first success — the success path is unchanged.
+            if "$PERRY" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log" \
+               || (sleep 2 && "$PERRY" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log"); then
               : > "$LOGS_DIR/${name}.pass"
               rm -f "/tmp/perry_smoke_${name}" "$err_log"
             else
@@ -364,17 +404,36 @@ jobs:
 
           # macos-14 GitHub runner has 3 vCPUs; perry compile is
           # CPU-bound for HIR/codegen but waits on the linker (clang)
-          # for a meaningful chunk of each test, so ~2× core count is
-          # the sweet spot. Pre-fix the sequential loop took ~26 min
-          # for ~130 files (≈12 s / file). Override with PERRY_SMOKE_JOBS
-          # if a future runner spec changes the math.
-          NJOBS="${PERRY_SMOKE_JOBS:-6}"
+          # for a meaningful chunk of each test. Default lowered to 3
+          # (= vCPU count) after v0.5.383's compile-smoke run hit a
+          # cargo auto-optimize file-lock race at NJOBS=6: two workers
+          # rebuilding the same `target/perry-auto-<hash>/lib*.a` led
+          # to one worker's clang seeing `errno=2` mid-link. Local
+          # 12-core machines didn't surface this because the race
+          # window is sub-second and rare under low contention. With
+          # NJOBS=3 + the retry-once in compile_one, the race is both
+          # less likely and self-healing. Sequential baseline was
+          # ~26 min; expect ~10-12 min at NJOBS=3.
+          NJOBS="${PERRY_SMOKE_JOBS:-3}"
           printf '%s\n' test-files/*.ts \
             | xargs -P "$NJOBS" -n 1 -I{} bash -c 'compile_one "$@"' _ {}
 
-          PASS=$(ls -1 "$LOGS_DIR"/*.pass 2>/dev/null | wc -l | tr -d ' ')
-          FAIL=$(ls -1 "$LOGS_DIR"/*.fail 2>/dev/null | wc -l | tr -d ' ')
-          SKIP=$(ls -1 "$LOGS_DIR"/*.skip 2>/dev/null | wc -l | tr -d ' ')
+          # Count markers via shopt nullglob + bash array length. Pre-fix
+          # we used `ls -1 "$LOGS_DIR"/*.fail | wc -l` which fails when
+          # no matches exist (`ls` exits 1 on missing files), and with
+          # GH Actions' default `bash -eo pipefail` the failed pipe
+          # propagates errexit and kills the script BEFORE printing the
+          # summary line — so a clean run with zero failures still made
+          # compile-smoke exit 1 (PR #285 / v0.5.379 introduced this).
+          # nullglob makes an empty glob expand to nothing instead of
+          # the literal pattern, so the array length is correctly 0.
+          shopt -s nullglob
+          pass_files=("$LOGS_DIR"/*.pass)
+          fail_files=("$LOGS_DIR"/*.fail)
+          skip_files=("$LOGS_DIR"/*.skip)
+          PASS=${#pass_files[@]}
+          FAIL=${#fail_files[@]}
+          SKIP=${#skip_files[@]}
           echo "Compile smoke: $PASS passed, $FAIL failed, $SKIP skipped"
 
           if [[ $FAIL -gt 0 ]]; then

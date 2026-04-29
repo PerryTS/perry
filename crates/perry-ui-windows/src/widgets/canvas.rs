@@ -7,13 +7,13 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, register_widget_with_layout};
+use super::{register_widget_with_layout, WidgetKind};
 
 /// Drawing commands accumulated and replayed in WM_PAINT.
 #[derive(Clone, Debug)]
@@ -41,26 +41,29 @@ fn to_wide(s: &str) -> Vec<u16> {
 
 #[cfg(target_os = "windows")]
 fn ensure_class_registered() {
-    CANVAS_CLASS_REGISTERED.call_once(|| {
-        unsafe {
-            let hinstance = GetModuleHandleW(None).unwrap();
-            let class_name = to_wide("PerryCanvas");
-            let wc = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(canvas_wnd_proc),
-                hInstance: hinstance.into(),
-                hbrBackground: HBRUSH(unsafe { GetStockObject(WHITE_BRUSH) }.0),
-                lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
-                ..Default::default()
-            };
-            RegisterClassExW(&wc);
-        }
+    CANVAS_CLASS_REGISTERED.call_once(|| unsafe {
+        let hinstance = GetModuleHandleW(None).unwrap();
+        let class_name = to_wide("PerryCanvas");
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(canvas_wnd_proc),
+            hInstance: hinstance.into(),
+            hbrBackground: HBRUSH(unsafe { GetStockObject(WHITE_BRUSH) }.0),
+            lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
+            ..Default::default()
+        };
+        RegisterClassExW(&wc);
     });
 }
 
 #[cfg(target_os = "windows")]
-unsafe extern "system" fn canvas_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn canvas_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_PAINT => {
             let handle = super::find_handle_by_hwnd(hwnd);
@@ -106,9 +109,8 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                             path_points.push((*x as i32, *y as i32));
                         }
                         DrawCmd::Stroke(r, g, b, _a, width) => {
-                            let color = COLORREF(
-                                (*r as u32) | ((*g as u32) << 8) | ((*b as u32) << 16),
-                            );
+                            let color =
+                                COLORREF((*r as u32) | ((*g as u32) << 8) | ((*b as u32) << 16));
                             let pen = CreatePen(PS_SOLID, *width as i32, color);
                             let old_pen = SelectObject(hdc, pen);
 
@@ -135,7 +137,11 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                             let _ = GetClientRect(hwnd, &mut rect);
                             let vertical = *direction < 0.5;
 
-                            let steps = if vertical { (rect.bottom - rect.top).max(1) } else { (rect.right - rect.left).max(1) };
+                            let steps = if vertical {
+                                (rect.bottom - rect.top).max(1)
+                            } else {
+                                (rect.right - rect.left).max(1)
+                            };
 
                             for i in 0..steps {
                                 let t = i as f64 / steps as f64;
@@ -145,9 +151,19 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                                 let color = COLORREF(cr | (cg << 8) | (cb << 16));
                                 let brush = CreateSolidBrush(color);
                                 let band = if vertical {
-                                    RECT { left: rect.left, top: rect.top + i, right: rect.right, bottom: rect.top + i + 1 }
+                                    RECT {
+                                        left: rect.left,
+                                        top: rect.top + i,
+                                        right: rect.right,
+                                        bottom: rect.top + i + 1,
+                                    }
                                 } else {
-                                    RECT { left: rect.left + i, top: rect.top, right: rect.left + i + 1, bottom: rect.bottom }
+                                    RECT {
+                                        left: rect.left + i,
+                                        top: rect.top,
+                                        right: rect.left + i + 1,
+                                        bottom: rect.bottom,
+                                    }
                                 };
                                 let _ = FillRect(hdc, &band, brush);
                                 let _ = DeleteObject(brush);
@@ -180,7 +196,10 @@ pub fn create(width: f64, height: f64) -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
-                0, 0, width as i32, height as i32,
+                0,
+                0,
+                width as i32,
+                height as i32,
                 super::get_parking_hwnd(),
                 None,
                 HINSTANCE::from(hinstance),
@@ -188,7 +207,8 @@ pub fn create(width: f64, height: f64) -> i64 {
             )
             .unwrap();
 
-            let handle = register_widget_with_layout(hwnd, WidgetKind::Canvas, 0.0, (0.0, 0.0, 0.0, 0.0));
+            let handle =
+                register_widget_with_layout(hwnd, WidgetKind::Canvas, 0.0, (0.0, 0.0, 0.0, 0.0));
             CANVAS_CMDS.with(|cmds| {
                 cmds.borrow_mut().insert(handle, Vec::new());
             });
@@ -277,8 +297,14 @@ pub fn stroke(handle: i64, r: f64, g: f64, b: f64, a: f64, line_width: f64) {
 /// Fill the canvas with a gradient. direction: 0=vertical, 1=horizontal.
 pub fn fill_gradient(
     handle: i64,
-    r1: f64, g1: f64, b1: f64, a1: f64,
-    r2: f64, g2: f64, b2: f64, a2: f64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
     direction: f64,
 ) {
     push_cmd(

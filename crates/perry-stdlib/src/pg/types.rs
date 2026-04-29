@@ -1,8 +1,8 @@
 //! Type conversions between PostgreSQL types and JSValue
 
 use perry_runtime::{
-    js_object_alloc, js_object_get_field, js_object_set_field,
-    js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
+    js_object_alloc, js_object_get_field, js_object_set_field, js_string_from_bytes, JSValue,
+    ObjectHeader, StringHeader,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{Column, Row, TypeInfo};

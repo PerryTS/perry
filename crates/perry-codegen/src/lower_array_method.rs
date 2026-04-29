@@ -9,7 +9,9 @@
 use anyhow::{bail, Result};
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle, unbox_to_i64, FnCtx};
+use crate::expr::{
+    lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle, unbox_to_i64, FnCtx,
+};
 use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64};
 
@@ -36,7 +38,10 @@ pub(crate) fn lower_array_method(
         }
         "join" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.join expects 1 arg (separator), got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.join expects 1 arg (separator), got {}",
+                    args.len()
+                );
             }
             let sep_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
@@ -57,14 +62,26 @@ pub(crate) fn lower_array_method(
         }
         "some" | "every" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.{} expects 1 arg, got {}", property, args.len());
+                bail!(
+                    "perry-codegen: Array.{} expects 1 arg, got {}",
+                    property,
+                    args.len()
+                );
             }
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            let runtime_fn = if property == "some" { "js_array_some" } else { "js_array_every" };
-            Ok(blk.call(DOUBLE, runtime_fn, &[(I64, &recv_handle), (I64, &cb_handle)]))
+            let runtime_fn = if property == "some" {
+                "js_array_some"
+            } else {
+                "js_array_every"
+            };
+            Ok(blk.call(
+                DOUBLE,
+                runtime_fn,
+                &[(I64, &recv_handle), (I64, &cb_handle)],
+            ))
         }
         "toString" => {
             // arr.toString() == arr.join(",")
@@ -95,8 +112,11 @@ pub(crate) fn lower_array_method(
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let other_handle = unbox_to_i64(blk, &other_box);
-            let result =
-                blk.call(I64, "js_array_concat", &[(I64, &recv_handle), (I64, &other_handle)]);
+            let result = blk.call(
+                I64,
+                "js_array_concat",
+                &[(I64, &recv_handle), (I64, &other_handle)],
+            );
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "sort" => {
@@ -137,7 +157,10 @@ pub(crate) fn lower_array_method(
         }
         "flatMap" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.flatMap expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.flatMap expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
@@ -155,49 +178,80 @@ pub(crate) fn lower_array_method(
         // the HIR lowering doesn't recognize the pattern.
         "find" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.find expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.find expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            Ok(blk.call(DOUBLE, "js_array_find", &[(I64, &recv_handle), (I64, &cb_handle)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_array_find",
+                &[(I64, &recv_handle), (I64, &cb_handle)],
+            ))
         }
         "findIndex" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.findIndex expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.findIndex expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            let i32_v = blk.call(I32, "js_array_findIndex", &[(I64, &recv_handle), (I64, &cb_handle)]);
+            let i32_v = blk.call(
+                I32,
+                "js_array_findIndex",
+                &[(I64, &recv_handle), (I64, &cb_handle)],
+            );
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "findLast" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.findLast expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.findLast expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            Ok(blk.call(DOUBLE, "js_array_find_last", &[(I64, &recv_handle), (I64, &cb_handle)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_array_find_last",
+                &[(I64, &recv_handle), (I64, &cb_handle)],
+            ))
         }
         "findLastIndex" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.findLastIndex expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.findLastIndex expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            let i32_v = blk.call(I32, "js_array_find_last_index", &[(I64, &recv_handle), (I64, &cb_handle)]);
+            let i32_v = blk.call(
+                I32,
+                "js_array_find_last_index",
+                &[(I64, &recv_handle), (I64, &cb_handle)],
+            );
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "reduce" => {
             if args.is_empty() || args.len() > 2 {
-                bail!("perry-codegen: Array.reduce expects 1-2 args, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.reduce expects 1-2 args, got {}",
+                    args.len()
+                );
             }
             let cb_box = lower_expr(ctx, &args[0])?;
             let (has_initial, initial_box) = if args.len() == 2 {
@@ -213,12 +267,20 @@ pub(crate) fn lower_array_method(
             Ok(blk.call(
                 DOUBLE,
                 "js_array_reduce",
-                &[(I64, &recv_handle), (I64, &cb_handle), (I32, &has_init_str), (DOUBLE, &initial_box)],
+                &[
+                    (I64, &recv_handle),
+                    (I64, &cb_handle),
+                    (I32, &has_init_str),
+                    (DOUBLE, &initial_box),
+                ],
             ))
         }
         "reduceRight" => {
             if args.is_empty() || args.len() > 2 {
-                bail!("perry-codegen: Array.reduceRight expects 1-2 args, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.reduceRight expects 1-2 args, got {}",
+                    args.len()
+                );
             }
             let cb_box = lower_expr(ctx, &args[0])?;
             let (has_initial, initial_box) = if args.len() == 2 {
@@ -234,7 +296,12 @@ pub(crate) fn lower_array_method(
             Ok(blk.call(
                 DOUBLE,
                 "js_array_reduce_right",
-                &[(I64, &recv_handle), (I64, &cb_handle), (I32, &has_init_str), (DOUBLE, &initial_box)],
+                &[
+                    (I64, &recv_handle),
+                    (I64, &cb_handle),
+                    (I32, &has_init_str),
+                    (DOUBLE, &initial_box),
+                ],
             ))
         }
         "map" => {
@@ -245,35 +312,55 @@ pub(crate) fn lower_array_method(
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            let result = blk.call(I64, "js_array_map", &[(I64, &recv_handle), (I64, &cb_handle)]);
+            let result = blk.call(
+                I64,
+                "js_array_map",
+                &[(I64, &recv_handle), (I64, &cb_handle)],
+            );
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "filter" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.filter expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.filter expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            let result = blk.call(I64, "js_array_filter", &[(I64, &recv_handle), (I64, &cb_handle)]);
+            let result = blk.call(
+                I64,
+                "js_array_filter",
+                &[(I64, &recv_handle), (I64, &cb_handle)],
+            );
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "forEach" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.forEach expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.forEach expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let cb_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            blk.call_void("js_array_forEach", &[(I64, &recv_handle), (I64, &cb_handle)]);
+            blk.call_void(
+                "js_array_forEach",
+                &[(I64, &recv_handle), (I64, &cb_handle)],
+            );
             // forEach returns undefined
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
         "includes" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.includes expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.includes expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let val_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
@@ -283,11 +370,17 @@ pub(crate) fn lower_array_method(
             // or `Object.getOwnPropertyNames()`) match by content, not
             // pointer identity. The `*_f64` variant compares raw bits
             // which fails for strings allocated at different sites.
-            let i32_v = blk.call(I32, "js_array_includes_jsvalue", &[(I64, &recv_handle), (DOUBLE, &val_box)]);
+            let i32_v = blk.call(
+                I32,
+                "js_array_includes_jsvalue",
+                &[(I64, &recv_handle), (DOUBLE, &val_box)],
+            );
             // Convert i32 boolean to NaN-boxed true/false
             let bit = blk.icmp_ne(I32, &i32_v, "0");
             let tagged = blk.select(
-                "i1", &bit, I64,
+                "i1",
+                &bit,
+                I64,
                 crate::nanbox::TAG_TRUE_I64,
                 crate::nanbox::TAG_FALSE_I64,
             );
@@ -295,7 +388,10 @@ pub(crate) fn lower_array_method(
         }
         "indexOf" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.indexOf expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.indexOf expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let val_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
@@ -306,7 +402,11 @@ pub(crate) fn lower_array_method(
             // string array returned -1 because the SSO element bits
             // never bit-equal the heap-string needle bits). Mirrors
             // the existing `includes` arm.
-            let i32_v = blk.call(I32, "js_array_indexOf_jsvalue", &[(I64, &recv_handle), (DOUBLE, &val_box)]);
+            let i32_v = blk.call(
+                I32,
+                "js_array_indexOf_jsvalue",
+                &[(I64, &recv_handle), (DOUBLE, &val_box)],
+            );
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "at" => {
@@ -316,11 +416,18 @@ pub(crate) fn lower_array_method(
             let idx_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            Ok(blk.call(DOUBLE, "js_array_at", &[(I64, &recv_handle), (DOUBLE, &idx_box)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_array_at",
+                &[(I64, &recv_handle), (DOUBLE, &idx_box)],
+            ))
         }
         "slice" => {
             if args.len() > 2 {
-                bail!("perry-codegen: Array.slice expects 0-2 args, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.slice expects 0-2 args, got {}",
+                    args.len()
+                );
             }
             // Zero-arg `.slice()` is the JS shallow-copy idiom: same as
             // `.slice(0)`. Lower it to start=0, end=i32::MAX.
@@ -349,7 +456,10 @@ pub(crate) fn lower_array_method(
         }
         "shift" => {
             if !args.is_empty() {
-                bail!("perry-codegen: Array.shift takes no args, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.shift takes no args, got {}",
+                    args.len()
+                );
             }
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
@@ -357,40 +467,60 @@ pub(crate) fn lower_array_method(
         }
         "fill" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.fill expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.fill expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let val_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let result = blk.call(I64, "js_array_fill", &[(I64, &recv_handle), (DOUBLE, &val_box)]);
+            let result = blk.call(
+                I64,
+                "js_array_fill",
+                &[(I64, &recv_handle), (DOUBLE, &val_box)],
+            );
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "unshift" => {
             if args.len() != 1 {
-                bail!("perry-codegen: Array.unshift expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: Array.unshift expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let val_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let result = blk.call(I64, "js_array_unshift_f64", &[(I64, &recv_handle), (DOUBLE, &val_box)]);
+            let result = blk.call(
+                I64,
+                "js_array_unshift_f64",
+                &[(I64, &recv_handle), (DOUBLE, &val_box)],
+            );
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "entries" => {
-            for a in args { let _ = lower_expr(ctx, a)?; }
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let result = blk.call(I64, "js_array_entries", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "keys" => {
-            for a in args { let _ = lower_expr(ctx, a)?; }
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let result = blk.call(I64, "js_array_keys", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "values" => {
-            for a in args { let _ = lower_expr(ctx, a)?; }
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let result = blk.call(I64, "js_array_values", &[(I64, &recv_handle)]);

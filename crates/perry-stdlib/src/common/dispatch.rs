@@ -56,8 +56,18 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     #[cfg(feature = "http-server")]
     if matches!(
         method_name,
-        "get" | "post" | "put" | "delete" | "patch" | "head" | "options"
-        | "all" | "addHook" | "setErrorHandler" | "register" | "listen"
+        "get"
+            | "post"
+            | "put"
+            | "delete"
+            | "patch"
+            | "head"
+            | "options"
+            | "all"
+            | "addHook"
+            | "setErrorHandler"
+            | "register"
+            | "listen"
     ) && with_handle::<crate::fastify::FastifyApp, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return dispatch_fastify_app(handle, method_name, args);
@@ -67,9 +77,18 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     #[cfg(feature = "http-server")]
     if matches!(
         method_name,
-        "send" | "status" | "code" | "header" | "method" | "url"
-        | "body" | "json" | "params" | "headers"
-    ) && with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true).unwrap_or(false)
+        "send"
+            | "status"
+            | "code"
+            | "header"
+            | "method"
+            | "url"
+            | "body"
+            | "json"
+            | "params"
+            | "headers"
+    ) && with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true)
+        .unwrap_or(false)
     {
         return dispatch_fastify_context(handle, method_name, args);
     }
@@ -78,8 +97,18 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     #[cfg(feature = "database-redis")]
     if matches!(
         method_name,
-        "connect" | "get" | "set" | "setex" | "del" | "exists"
-        | "incr" | "decr" | "expire" | "ping" | "quit" | "disconnect"
+        "connect"
+            | "get"
+            | "set"
+            | "setex"
+            | "del"
+            | "exists"
+            | "incr"
+            | "decr"
+            | "expire"
+            | "ping"
+            | "quit"
+            | "disconnect"
     ) && with_handle::<crate::ioredis::RedisClient, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return dispatch_ioredis(handle, method_name, args);
@@ -115,71 +144,155 @@ unsafe fn dispatch_fastify_app(handle: i64, method: &str, args: &[f64]) -> f64 {
         "get" if args.len() >= 2 => {
             let path = args[0].to_bits() as i64;
             // Support 3-arg form: fastify.get(path, options, handler) — skip options object
-            let handler = if args.len() >= 3 { args[2].to_bits() as i64 } else { args[1].to_bits() as i64 };
+            let handler = if args.len() >= 3 {
+                args[2].to_bits() as i64
+            } else {
+                args[1].to_bits() as i64
+            };
             let result = crate::fastify::js_fastify_get(handle, path, handler);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "post" if args.len() >= 2 => {
             let path = args[0].to_bits() as i64;
-            let handler = if args.len() >= 3 { args[2].to_bits() as i64 } else { args[1].to_bits() as i64 };
+            let handler = if args.len() >= 3 {
+                args[2].to_bits() as i64
+            } else {
+                args[1].to_bits() as i64
+            };
             let result = crate::fastify::js_fastify_post(handle, path, handler);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "put" if args.len() >= 2 => {
             let path = args[0].to_bits() as i64;
-            let handler = if args.len() >= 3 { args[2].to_bits() as i64 } else { args[1].to_bits() as i64 };
+            let handler = if args.len() >= 3 {
+                args[2].to_bits() as i64
+            } else {
+                args[1].to_bits() as i64
+            };
             let result = crate::fastify::js_fastify_put(handle, path, handler);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "delete" if args.len() >= 2 => {
             let path = args[0].to_bits() as i64;
-            let handler = if args.len() >= 3 { args[2].to_bits() as i64 } else { args[1].to_bits() as i64 };
+            let handler = if args.len() >= 3 {
+                args[2].to_bits() as i64
+            } else {
+                args[1].to_bits() as i64
+            };
             let result = crate::fastify::js_fastify_delete(handle, path, handler);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "patch" if args.len() >= 2 => {
             let path = args[0].to_bits() as i64;
-            let handler = if args.len() >= 3 { args[2].to_bits() as i64 } else { args[1].to_bits() as i64 };
+            let handler = if args.len() >= 3 {
+                args[2].to_bits() as i64
+            } else {
+                args[1].to_bits() as i64
+            };
             let result = crate::fastify::js_fastify_patch(handle, path, handler);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "head" if args.len() >= 2 => {
             let path = args[0].to_bits() as i64;
-            let handler = if args.len() >= 3 { args[2].to_bits() as i64 } else { args[1].to_bits() as i64 };
+            let handler = if args.len() >= 3 {
+                args[2].to_bits() as i64
+            } else {
+                args[1].to_bits() as i64
+            };
             let result = crate::fastify::js_fastify_head(handle, path, handler);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "options" if args.len() >= 2 => {
             let path = args[0].to_bits() as i64;
-            let handler = if args.len() >= 3 { args[2].to_bits() as i64 } else { args[1].to_bits() as i64 };
+            let handler = if args.len() >= 3 {
+                args[2].to_bits() as i64
+            } else {
+                args[1].to_bits() as i64
+            };
             let result = crate::fastify::js_fastify_options(handle, path, handler);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "all" if args.len() >= 2 => {
             let path = args[0].to_bits() as i64;
-            let handler = if args.len() >= 3 { args[2].to_bits() as i64 } else { args[1].to_bits() as i64 };
+            let handler = if args.len() >= 3 {
+                args[2].to_bits() as i64
+            } else {
+                args[1].to_bits() as i64
+            };
             let result = crate::fastify::js_fastify_all(handle, path, handler);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "addHook" if args.len() >= 2 => {
             let hook_name = args[0].to_bits() as i64;
             let handler = args[1].to_bits() as i64;
             let result = crate::fastify::js_fastify_add_hook(handle, hook_name, handler);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "setErrorHandler" if args.len() >= 1 => {
             let handler = args[0].to_bits() as i64;
             let result = crate::fastify::js_fastify_set_error_handler(handle, handler);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "register" if args.len() >= 1 => {
             let plugin = args[0].to_bits() as i64;
-            let opts = if args.len() >= 2 { args[1] } else { f64::from_bits(0x7FF8_0000_0000_0001) };
+            let opts = if args.len() >= 2 {
+                args[1]
+            } else {
+                f64::from_bits(0x7FF8_0000_0000_0001)
+            };
             let result = crate::fastify::js_fastify_register(handle, plugin, opts);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "listen" if args.len() >= 1 => {
-            let callback = if args.len() >= 2 { args[1].to_bits() as i64 } else { 0 };
+            let callback = if args.len() >= 2 {
+                args[1].to_bits() as i64
+            } else {
+                0
+            };
             crate::fastify::js_fastify_listen(handle, args[0], callback);
             f64::from_bits(0x7FF8_0000_0000_0001) // undefined (void)
         }
@@ -199,7 +312,11 @@ unsafe fn dispatch_fastify_context(handle: i64, method: &str, args: &[f64]) -> f
         // Reply methods
         "send" if args.len() >= 1 => {
             let result = crate::fastify::js_fastify_reply_send(handle, args[0]);
-            if result { 1.0 } else { 0.0 }
+            if result {
+                1.0
+            } else {
+                0.0
+            }
         }
         "status" | "code" if args.len() >= 1 => {
             let result = crate::fastify::js_fastify_reply_status(handle, args[0]);
@@ -222,15 +339,9 @@ unsafe fn dispatch_fastify_context(handle: i64, method: &str, args: &[f64]) -> f
             let ptr = crate::fastify::js_fastify_req_url(handle);
             f64::from_bits(JSValue::string_ptr(ptr).bits())
         }
-        "body" => {
-            crate::fastify::js_fastify_req_json(handle)
-        }
-        "json" => {
-            crate::fastify::js_fastify_req_json(handle)
-        }
-        "params" => {
-            crate::fastify::js_fastify_req_params_object(handle)
-        }
+        "body" => crate::fastify::js_fastify_req_json(handle),
+        "json" => crate::fastify::js_fastify_req_json(handle),
+        "params" => crate::fastify::js_fastify_req_params_object(handle),
         "headers" => {
             // Returns NaN-boxed JS object (parsed from JSON), use bits directly
             let bits = crate::fastify::js_fastify_req_headers(handle);
@@ -285,9 +396,7 @@ unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
             let promise = crate::net::js_net_socket_upgrade_tls(handle, servername_ptr, verify);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
-        _ => {
-            f64::from_bits(0x7FFC_0000_0000_0001)
-        }
+        _ => f64::from_bits(0x7FFC_0000_0000_0001),
     }
 }
 
@@ -305,8 +414,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     let property_name = if property_name_ptr.is_null() || property_name_len == 0 {
         ""
     } else {
-        std::str::from_utf8(std::slice::from_raw_parts(property_name_ptr, property_name_len))
-            .unwrap_or("")
+        std::str::from_utf8(std::slice::from_raw_parts(
+            property_name_ptr,
+            property_name_len,
+        ))
+        .unwrap_or("")
     };
     let _ = property_name;
     let _ = handle;
@@ -319,12 +431,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 // Return a real JavaScript object, not a JSON string
                 crate::fastify::js_fastify_req_query_object(handle)
             }
-            "params" => {
-                crate::fastify::js_fastify_req_params_object(handle)
-            }
-            "body" => {
-                crate::fastify::js_fastify_req_json(handle)
-            }
+            "params" => crate::fastify::js_fastify_req_params_object(handle),
+            "body" => crate::fastify::js_fastify_req_json(handle),
             "rawBody" | "text" => {
                 let ptr = crate::fastify::js_fastify_req_body(handle);
                 if ptr.is_null() {
@@ -461,8 +569,11 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     let property_name = if property_name_ptr.is_null() || property_name_len == 0 {
         ""
     } else {
-        std::str::from_utf8(std::slice::from_raw_parts(property_name_ptr, property_name_len))
-            .unwrap_or("")
+        std::str::from_utf8(std::slice::from_raw_parts(
+            property_name_ptr,
+            property_name_len,
+        ))
+        .unwrap_or("")
     };
     let _ = property_name;
     let _ = handle;

@@ -97,10 +97,8 @@ pub(super) fn build_optimized_libs(
     // to `abort` saves ~12-18 % off the final binary by dropping
     // __TEXT,__eh_frame, __TEXT,__gcc_except_tab, __TEXT,__unwind_info
     // and the matching landing pads / Drop glue.
-    let panic_abort_safe = !ctx.needs_ui
-        && !ctx.needs_thread
-        && !ctx.needs_plugins
-        && !ctx.needs_geisterhand;
+    let panic_abort_safe =
+        !ctx.needs_ui && !ctx.needs_thread && !ctx.needs_plugins && !ctx.needs_geisterhand;
 
     // Locate the workspace. Without source we can't rebuild — fall back
     // to whatever's prebuilt next to perry on disk. The fallback names are
@@ -113,7 +111,9 @@ pub(super) fn build_optimized_libs(
             if matches!(format, OutputFormat::Text) && verbose > 0 {
                 let (rt_name, std_name) = match target {
                     Some("windows") => ("perry_runtime.lib", "perry_stdlib.lib"),
-                    None if cfg!(target_os = "windows") => ("perry_runtime.lib", "perry_stdlib.lib"),
+                    None if cfg!(target_os = "windows") => {
+                        ("perry_runtime.lib", "perry_stdlib.lib")
+                    }
                     _ => ("libperry_runtime.a", "libperry_stdlib.a"),
                 };
                 eprintln!(
@@ -167,8 +167,10 @@ pub(super) fn build_optimized_libs(
         .env("CARGO_TARGET_DIR", &target_dir)
         .arg("build")
         .arg("--release")
-        .arg("-p").arg("perry-runtime")
-        .arg("-p").arg("perry-stdlib")
+        .arg("-p")
+        .arg("perry-runtime")
+        .arg("-p")
+        .arg("perry-stdlib")
         .arg("--no-default-features");
     if is_tier3 {
         cargo_cmd.arg("-Zbuild-std=std,panic_abort");
@@ -316,7 +318,8 @@ pub(super) fn build_optimized_libs(
                 .env("RUSTFLAGS", &bc_rustflags)
                 .arg("rustc")
                 .arg("--release")
-                .arg("-p").arg(crate_name)
+                .arg("-p")
+                .arg(crate_name)
                 .arg("--no-default-features");
             if !cross_features.is_empty() {
                 cmd.arg("--features").arg(cross_features.join(","));
@@ -399,7 +402,10 @@ pub(super) fn build_optimized_libs(
         let mut extra = Vec::new();
         if ctx.needs_ui {
             let ui_crate = match target {
-                Some("ios-simulator") | Some("ios") | Some("ios-widget") | Some("ios-widget-simulator") => "perry-ui-ios",
+                Some("ios-simulator")
+                | Some("ios")
+                | Some("ios-widget")
+                | Some("ios-widget-simulator") => "perry-ui-ios",
                 Some("visionos-simulator") | Some("visionos") => "perry-ui-visionos",
                 Some("android") => "perry-ui-android",
                 Some("watchos-simulator") | Some("watchos") => "perry-ui-watchos",
@@ -409,8 +415,11 @@ pub(super) fn build_optimized_libs(
                 Some("windows") => "perry-ui-windows",
                 Some("macos") => "perry-ui-macos",
                 _ => {
-                    if cfg!(target_os = "linux") { "perry-ui-gtk4" }
-                    else { "perry-ui-macos" }
+                    if cfg!(target_os = "linux") {
+                        "perry-ui-gtk4"
+                    } else {
+                        "perry-ui-macos"
+                    }
                 }
             };
             if let Some(bc) = emit_bc(ui_crate) {
@@ -434,8 +443,16 @@ pub(super) fn build_optimized_libs(
     };
 
     OptimizedLibs {
-        runtime: if runtime_path.exists() { Some(runtime_path) } else { None },
-        stdlib: if stdlib_path.exists() { Some(stdlib_path) } else { None },
+        runtime: if runtime_path.exists() {
+            Some(runtime_path)
+        } else {
+            None
+        },
+        stdlib: if stdlib_path.exists() {
+            Some(stdlib_path)
+        } else {
+            None
+        },
         runtime_bc,
         stdlib_bc,
         extra_bc,

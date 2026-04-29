@@ -196,15 +196,9 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
             let result_bits = (resolution.converter)();
 
             if resolution.is_success {
-                perry_runtime::js_promise_resolve(
-                    promise_ptr,
-                    f64::from_bits(result_bits),
-                );
+                perry_runtime::js_promise_resolve(promise_ptr, f64::from_bits(result_bits));
             } else {
-                perry_runtime::js_promise_reject(
-                    promise_ptr,
-                    f64::from_bits(result_bits),
-                );
+                perry_runtime::js_promise_reject(promise_ptr, f64::from_bits(result_bits));
             }
         }
     }
@@ -340,11 +334,7 @@ where
 ///
 /// # Safety
 /// The promise_ptr must be a valid pointer to a Promise object
-pub unsafe fn spawn_for_promise_deferred<T, F, C>(
-    promise_ptr: *mut u8,
-    future: F,
-    converter: C,
-)
+pub unsafe fn spawn_for_promise_deferred<T, F, C>(promise_ptr: *mut u8, future: F, converter: C)
 where
     T: Send + 'static,
     F: Future<Output = Result<T, String>> + Send + 'static,

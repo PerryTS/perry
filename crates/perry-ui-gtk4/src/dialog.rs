@@ -48,15 +48,20 @@ pub fn save_file_dialog(callback: f64, default_name_ptr: *const u8, _allowed_typ
                 if let Some(path) = file.path() {
                     let path_str = path.to_string_lossy().to_string();
                     let bytes = path_str.as_bytes();
-                    let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
+                    let str_ptr =
+                        unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
                     let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
-                    unsafe { js_closure_call1(closure_ptr, nanboxed); }
+                    unsafe {
+                        js_closure_call1(closure_ptr, nanboxed);
+                    }
                     dialog.close();
                     return;
                 }
             }
         }
-        unsafe { js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001)); }
+        unsafe {
+            js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001));
+        }
         dialog.close();
     });
 
@@ -113,7 +118,9 @@ pub fn alert(title_ptr: *const u8, message_ptr: *const u8, buttons_ptr: *const u
             _ => 0.0,
         };
         let closure_ptr = unsafe { js_nanbox_get_pointer(callback_f64) } as *const u8;
-        unsafe { js_closure_call1(closure_ptr, index); }
+        unsafe {
+            js_closure_call1(closure_ptr, index);
+        }
         dialog.close();
     });
 

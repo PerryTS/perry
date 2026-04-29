@@ -128,7 +128,11 @@ mod tests {
         // Consumer slept ~10 ms before notify, then woke up. Total elapsed
         // since consumer start should be ~10 ms + tiny wake latency.
         // Anything under 50 ms confirms the notify path works.
-        assert!(elapsed_us < 50_000, "wake took {} us — notify path broken", elapsed_us);
+        assert!(
+            elapsed_us < 50_000,
+            "wake took {} us — notify path broken",
+            elapsed_us
+        );
     }
 
     /// Spec: a notify sent BEFORE the consumer waits is not lost.
@@ -141,8 +145,11 @@ mod tests {
         let start = Instant::now();
         js_wait_for_event(); // should return immediately
         let elapsed = start.elapsed();
-        assert!(elapsed < Duration::from_millis(5),
-                "wait blocked despite prior notify: {:?}", elapsed);
+        assert!(
+            elapsed < Duration::from_millis(5),
+            "wait blocked despite prior notify: {:?}",
+            elapsed
+        );
     }
 
     /// Spec: wait does eventually return even with no notify (idle cap).
@@ -154,9 +161,15 @@ mod tests {
         let start = Instant::now();
         js_wait_for_event();
         let elapsed = start.elapsed();
-        assert!(elapsed >= Duration::from_millis(40),
-                "wait returned too early: {:?}", elapsed);
-        assert!(elapsed < Duration::from_millis(500),
-                "wait blocked past timer deadline: {:?}", elapsed);
+        assert!(
+            elapsed >= Duration::from_millis(40),
+            "wait returned too early: {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "wait blocked past timer deadline: {:?}",
+            elapsed
+        );
     }
 }

@@ -6,11 +6,11 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, alloc_control_id, register_widget};
+use super::{alloc_control_id, register_widget, WidgetKind};
 
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
@@ -72,7 +72,10 @@ pub fn create(label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
                         | WS_TABSTOP.0
                         | WS_VSCROLL.0,
                 ),
-                0, 0, 200, 200, // height includes dropdown area
+                0,
+                0,
+                200,
+                200, // height includes dropdown area
                 // WS_CHILD requires a parent HWND — the main app window
                 // doesn't exist yet when widgets are constructed during
                 // the body-builder closure, so use the parking window
@@ -93,7 +96,15 @@ pub fn create(label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
 
             #[cfg(feature = "geisterhand")]
             {
-                extern "C" { fn perry_geisterhand_register(handle: i64, widget_type: u8, callback_kind: u8, closure_f64: f64, label_ptr: *const u8); }
+                extern "C" {
+                    fn perry_geisterhand_register(
+                        handle: i64,
+                        widget_type: u8,
+                        callback_kind: u8,
+                        closure_f64: f64,
+                        label_ptr: *const u8,
+                    );
+                }
                 perry_geisterhand_register(handle, 4, 1, on_change, std::ptr::null());
             }
 
@@ -110,8 +121,18 @@ pub fn create(label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
 
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(handle: i64, widget_type: u8, callback_kind: u8, closure_f64: f64, label_ptr: *const u8); }
-            unsafe { perry_geisterhand_register(handle, 4, 1, on_change, std::ptr::null()); }
+            extern "C" {
+                fn perry_geisterhand_register(
+                    handle: i64,
+                    widget_type: u8,
+                    callback_kind: u8,
+                    closure_f64: f64,
+                    label_ptr: *const u8,
+                );
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 4, 1, on_change, std::ptr::null());
+            }
         }
 
         handle
@@ -127,7 +148,12 @@ pub fn add_item(handle: i64, title_ptr: *const u8) {
         if let Some(hwnd) = super::get_hwnd(handle) {
             let wide = to_wide(title);
             unsafe {
-                SendMessageW(hwnd, CB_ADDSTRING, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+                SendMessageW(
+                    hwnd,
+                    CB_ADDSTRING,
+                    WPARAM(0),
+                    LPARAM(wide.as_ptr() as isize),
+                );
             }
         }
     }
@@ -160,9 +186,7 @@ pub fn get_selected(handle: i64) -> i64 {
     #[cfg(target_os = "windows")]
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
-            let result = unsafe {
-                SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0))
-            };
+            let result = unsafe { SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)) };
             return result.0 as i64;
         }
         -1

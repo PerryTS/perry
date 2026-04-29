@@ -3,13 +3,13 @@
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::SystemServices::SS_ETCHEDHORZ;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, alloc_control_id, register_widget};
+use super::{alloc_control_id, register_widget, WidgetKind};
 
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
@@ -31,12 +31,16 @@ pub fn create() -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
                 WINDOW_STYLE(SS_ETCHEDHORZ.0 | WS_CHILD.0 | WS_VISIBLE.0),
-                0, 0, 100, 2,
+                0,
+                0,
+                100,
+                2,
                 super::get_parking_hwnd(),
                 HMENU(control_id as *mut _),
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
             register_widget(hwnd, WidgetKind::Divider, control_id)
         }

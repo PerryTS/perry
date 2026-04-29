@@ -74,15 +74,9 @@ pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
 
         // Create a Bitmap: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         let bitmap_cls = env.find_class("android/graphics/Bitmap").ok()?;
-        let config_cls = env
-            .find_class("android/graphics/Bitmap$Config")
-            .ok()?;
+        let config_cls = env.find_class("android/graphics/Bitmap$Config").ok()?;
         let argb_config = env
-            .get_static_field(
-                &config_cls,
-                "ARGB_8888",
-                "Landroid/graphics/Bitmap$Config;",
-            )
+            .get_static_field(&config_cls, "ARGB_8888", "Landroid/graphics/Bitmap$Config;")
             .ok()?
             .l()
             .ok()?;
@@ -128,9 +122,7 @@ pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
         }
 
         // Compress bitmap to PNG: bitmap.compress(CompressFormat.PNG, 100, outputStream)
-        let baos_cls = env
-            .find_class("java/io/ByteArrayOutputStream")
-            .ok()?;
+        let baos_cls = env.find_class("java/io/ByteArrayOutputStream").ok()?;
         let baos = env.new_object(&baos_cls, "()V", &[]).ok()?;
 
         let compress_format_cls = env

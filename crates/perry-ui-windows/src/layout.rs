@@ -9,9 +9,9 @@ use crate::widgets::{self, WidgetKind};
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Recursively layout a widget and its children within the given bounds.
 pub fn layout_widget(handle: i64, width: i32, height: i32) {
@@ -26,7 +26,9 @@ pub fn layout_widget(handle: i64, width: i32, height: i32) {
     }
 
     match info.kind {
-        WidgetKind::VStack | WidgetKind::Form | WidgetKind::Section | WidgetKind::LazyVStack => layout_stack(handle, width, height, true),
+        WidgetKind::VStack | WidgetKind::Form | WidgetKind::Section | WidgetKind::LazyVStack => {
+            layout_stack(handle, width, height, true)
+        }
         WidgetKind::HStack => layout_stack(handle, width, height, false),
         WidgetKind::ScrollView => layout_scrollview(handle, width, height),
         WidgetKind::ZStack => layout_zstack(handle, width, height),
@@ -78,7 +80,9 @@ fn layout_stack(handle: i64, width: i32, height: i32, vertical: bool) {
                 #[cfg(target_os = "windows")]
                 {
                     if let Some(child_hwnd) = widgets::get_hwnd_safe(child) {
-                        unsafe { let _ = MoveWindow(child_hwnd, -10000, -10000, 0, 0, false); }
+                        unsafe {
+                            let _ = MoveWindow(child_hwnd, -10000, -10000, 0, 0, false);
+                        }
                     }
                 }
                 continue;
@@ -127,9 +131,13 @@ fn layout_stack(handle: i64, width: i32, height: i32, vertical: bool) {
     for (idx, &child) in visible_children.iter().enumerate() {
         let ci = match widgets::get_widget_info(child) {
             Some(ci) => ci,
-            None => { child_sizes.push(0); continue; }
+            None => {
+                child_sizes.push(0);
+                continue;
+            }
         };
-        if matches!(ci.kind, WidgetKind::Spacer) || ci.fills_remaining || auto_fill_idx == Some(idx) {
+        if matches!(ci.kind, WidgetKind::Spacer) || ci.fills_remaining || auto_fill_idx == Some(idx)
+        {
             child_sizes.push(0); // placeholder, will be computed below
         } else if !vertical && ci.fixed_width.is_some() {
             // In HStack, use fixed_width as the main-axis size
@@ -212,7 +220,6 @@ fn layout_stack(handle: i64, width: i32, height: i32, vertical: bool) {
 
         pos += size + spacing_px;
     }
-
 }
 
 fn layout_scrollview(handle: i64, width: i32, height: i32) {
@@ -325,7 +332,11 @@ fn measure_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross_size:
                     return measure_text_height(hwnd, cross_size, vertical);
                 }
             }
-            if vertical { 20 } else { 100 }
+            if vertical {
+                20
+            } else {
+                100
+            }
         }
         WidgetKind::Button => {
             #[cfg(target_os = "windows")]
@@ -336,19 +347,39 @@ fn measure_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross_size:
                     return if vertical { size + 16 } else { size + 32 };
                 }
             }
-            if vertical { 34 } else { 100 }
+            if vertical {
+                34
+            } else {
+                100
+            }
         }
         WidgetKind::TextField => {
-            if vertical { 30 } else { 200 }
+            if vertical {
+                30
+            } else {
+                200
+            }
         }
         WidgetKind::Toggle => {
-            if vertical { 24 } else { 100 }
+            if vertical {
+                24
+            } else {
+                100
+            }
         }
         WidgetKind::Slider => {
-            if vertical { 24 } else { 200 }
+            if vertical {
+                24
+            } else {
+                200
+            }
         }
         WidgetKind::Divider => {
-            if vertical { 2 } else { 2 }
+            if vertical {
+                2
+            } else {
+                2
+            }
         }
         WidgetKind::Spacer => 0, // handled separately
         WidgetKind::VStack | WidgetKind::HStack => {
@@ -356,29 +387,57 @@ fn measure_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross_size:
         }
         WidgetKind::ScrollView | WidgetKind::LazyVStack => {
             // ScrollView/LazyVStack takes all available space
-            if vertical { 200 } else { 200 }
+            if vertical {
+                200
+            } else {
+                200
+            }
         }
         WidgetKind::SecureField => {
-            if vertical { 24 } else { 200 }
+            if vertical {
+                24
+            } else {
+                200
+            }
         }
         WidgetKind::ProgressView => {
-            if vertical { 20 } else { 200 }
+            if vertical {
+                20
+            } else {
+                200
+            }
         }
         WidgetKind::Form | WidgetKind::Section => {
             measure_stack_intrinsic(handle, &WidgetKind::VStack, vertical, cross_size)
         }
         WidgetKind::ZStack | WidgetKind::NavStack => {
             // ZStack/NavStack takes all available space
-            if vertical { 200 } else { 200 }
+            if vertical {
+                200
+            } else {
+                200
+            }
         }
         WidgetKind::Picker => {
-            if vertical { 28 } else { 200 }
+            if vertical {
+                28
+            } else {
+                200
+            }
         }
         WidgetKind::Canvas => {
-            if vertical { 200 } else { 200 }
+            if vertical {
+                200
+            } else {
+                200
+            }
         }
         WidgetKind::Image => {
-            if vertical { 24 } else { 24 }
+            if vertical {
+                24
+            } else {
+                24
+            }
         }
     }
 }
@@ -394,8 +453,16 @@ fn measure_stack_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross
 
     let spacing = info.spacing as i32;
     let (top, left, bottom, right) = info.insets;
-    let inset_main = if vertical { top as i32 + bottom as i32 } else { left as i32 + right as i32 };
-    let inset_cross = if vertical { left as i32 + right as i32 } else { top as i32 + bottom as i32 };
+    let inset_main = if vertical {
+        top as i32 + bottom as i32
+    } else {
+        left as i32 + right as i32
+    };
+    let inset_cross = if vertical {
+        left as i32 + right as i32
+    } else {
+        top as i32 + bottom as i32
+    };
     let inner_cross = (cross_size - inset_cross).max(0);
 
     let children = &info.children;
@@ -461,7 +528,12 @@ fn measure_text_height(hwnd: HWND, width: i32, vertical: bool) -> i32 {
                 right: width,
                 bottom: 0,
             };
-            DrawTextW(hdc, &mut buf[..text_len as usize], &mut rect, DT_CALCRECT | DT_WORDBREAK | DT_LEFT);
+            DrawTextW(
+                hdc,
+                &mut buf[..text_len as usize],
+                &mut rect,
+                DT_CALCRECT | DT_WORDBREAK | DT_LEFT,
+            );
 
             if !old_font.is_invalid() {
                 SelectObject(hdc, old_font);
@@ -504,5 +576,7 @@ pub fn force_paint_backgrounds(handle: i64) {
         }
     }
     #[cfg(not(target_os = "windows"))]
-    { let _ = handle; }
+    {
+        let _ = handle;
+    }
 }

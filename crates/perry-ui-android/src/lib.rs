@@ -34,7 +34,12 @@ extern "C" {
 pub fn log_debug(msg: &str) {
     let c_msg = std::ffi::CString::new(msg).unwrap_or_default();
     unsafe {
-        __android_log_print(3, b"PerryDebug\0".as_ptr(), b"%s\0".as_ptr(), c_msg.as_ptr());
+        __android_log_print(
+            3,
+            b"PerryDebug\0".as_ptr(),
+            b"%s\0".as_ptr(),
+            c_msg.as_ptr(),
+        );
     }
 }
 
@@ -81,7 +86,8 @@ fn catch_panic_void(name: &str, f: impl FnOnce() + std::panic::UnwindSafe) {
 pub extern "C" fn JNI_OnLoad(vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) -> jni::sys::jint {
     unsafe {
         __android_log_print(
-            3, b"PerryJNI\0".as_ptr(),
+            3,
+            b"PerryJNI\0".as_ptr(),
             b"JNI_OnLoad: starting\0".as_ptr(),
         );
     }
@@ -102,7 +108,8 @@ pub extern "C" fn JNI_OnLoad(vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) 
         // M_BIONIC_SET_HEAP_TAGGING_LEVEL = -204, level 0 = no tagging
         let ret = mallopt(-204, 0);
         __android_log_print(
-            3, b"PerryJNI\0".as_ptr(),
+            3,
+            b"PerryJNI\0".as_ptr(),
             b"JNI_OnLoad: mallopt(-204, 0) returned %d\0".as_ptr(),
             ret,
         );
@@ -110,10 +117,7 @@ pub extern "C" fn JNI_OnLoad(vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) 
 
     jni_bridge::init_vm(vm);
     unsafe {
-        __android_log_print(
-            3, b"PerryJNI\0".as_ptr(),
-            b"JNI_OnLoad: done\0".as_ptr(),
-        );
+        __android_log_print(3, b"PerryJNI\0".as_ptr(), b"JNI_OnLoad: done\0".as_ptr());
     }
     jni::sys::JNI_VERSION_1_6
 }
@@ -159,15 +163,19 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeMain(
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(16);
         if let Ok(activity) = env.call_static_method(
-            "com/perry/app/PerryBridge", "getActivity",
-            "()Landroid/app/Activity;", &[],
+            "com/perry/app/PerryBridge",
+            "getActivity",
+            "()Landroid/app/Activity;",
+            &[],
         ) {
             if let Ok(act_obj) = activity.l() {
-                if let Ok(files_dir) = env.call_method(&act_obj, "getFilesDir",
-                    "()Ljava/io/File;", &[]) {
+                if let Ok(files_dir) =
+                    env.call_method(&act_obj, "getFilesDir", "()Ljava/io/File;", &[])
+                {
                     if let Ok(fd_obj) = files_dir.l() {
-                        if let Ok(abs_val) = env.call_method(&fd_obj, "getAbsolutePath",
-                            "()Ljava/lang/String;", &[]) {
+                        if let Ok(abs_val) =
+                            env.call_method(&fd_obj, "getAbsolutePath", "()Ljava/lang/String;", &[])
+                        {
                             if let Ok(abs_obj) = abs_val.l() {
                                 if let Ok(path_str) = env.get_string((&abs_obj).into()) {
                                     let path: String = path_str.into();
@@ -180,17 +188,21 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeMain(
                 }
             }
         }
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 
     unsafe {
         __android_log_print(
-            3, b"PerryJNI\0".as_ptr(),
+            3,
+            b"PerryJNI\0".as_ptr(),
             b"nativeMain: calling main()\0".as_ptr(),
         );
         main();
         __android_log_print(
-            3, b"PerryJNI\0".as_ptr(),
+            3,
+            b"PerryJNI\0".as_ptr(),
             b"nativeMain: main() returned, parking thread\0".as_ptr(),
         );
     }
@@ -227,27 +239,37 @@ pub extern "C" fn perry_ui_app_run(app_handle: i64) {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
-    catch_panic("perry_ui_text_create", || widgets::text::create(text_ptr as *const u8))
+    catch_panic("perry_ui_text_create", || {
+        widgets::text::create(text_ptr as *const u8)
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
-    catch_panic("perry_ui_button_create", || widgets::button::create(label_ptr as *const u8, on_press))
+    catch_panic("perry_ui_button_create", || {
+        widgets::button::create(label_ptr as *const u8, on_press)
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_vstack_create(spacing: f64) -> i64 {
-    catch_panic("perry_ui_vstack_create", || widgets::vstack::create(spacing))
+    catch_panic("perry_ui_vstack_create", || {
+        widgets::vstack::create(spacing)
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_hstack_create(spacing: f64) -> i64 {
-    catch_panic("perry_ui_hstack_create", || widgets::hstack::create(spacing))
+    catch_panic("perry_ui_hstack_create", || {
+        widgets::hstack::create(spacing)
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_add_child(parent_handle: i64, child_handle: i64) {
-    catch_panic_void("perry_ui_widget_add_child", || widgets::add_child(parent_handle, child_handle));
+    catch_panic_void("perry_ui_widget_add_child", || {
+        widgets::add_child(parent_handle, child_handle)
+    });
 }
 
 #[no_mangle]
@@ -266,8 +288,18 @@ pub extern "C" fn perry_ui_state_set(state_handle: i64, value: f64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_state_bind_text_numeric(state_handle: i64, text_handle: i64, prefix_ptr: i64, suffix_ptr: i64) {
-    state::bind_text_numeric(state_handle, text_handle, prefix_ptr as *const u8, suffix_ptr as *const u8);
+pub extern "C" fn perry_ui_state_bind_text_numeric(
+    state_handle: i64,
+    text_handle: i64,
+    prefix_ptr: i64,
+    suffix_ptr: i64,
+) {
+    state::bind_text_numeric(
+        state_handle,
+        text_handle,
+        prefix_ptr as *const u8,
+        suffix_ptr as *const u8,
+    );
 }
 
 #[no_mangle]
@@ -317,11 +349,20 @@ pub extern "C" fn perry_ui_state_bind_text_template(
     types_ptr: i64,
     values_ptr: i64,
 ) {
-    state::bind_text_template(text_handle, num_parts, types_ptr as *const i32, values_ptr as *const i64);
+    state::bind_text_template(
+        text_handle,
+        num_parts,
+        types_ptr as *const i32,
+        values_ptr as *const i64,
+    );
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_state_bind_visibility(state_handle: i64, show_handle: i64, hide_handle: i64) {
+pub extern "C" fn perry_ui_state_bind_visibility(
+    state_handle: i64,
+    show_handle: i64,
+    hide_handle: i64,
+) {
     state::bind_visibility(state_handle, show_handle, hide_handle);
 }
 
@@ -331,7 +372,11 @@ pub extern "C" fn perry_ui_set_widget_hidden(handle: i64, hidden: i64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_for_each_init(container_handle: i64, state_handle: i64, render_closure: f64) {
+pub extern "C" fn perry_ui_for_each_init(
+    container_handle: i64,
+    state_handle: i64,
+    render_closure: f64,
+) {
     state::for_each_init(container_handle, state_handle, render_closure);
 }
 
@@ -350,12 +395,24 @@ pub extern "C" fn perry_ui_text_set_string(handle: i64, text_ptr: i64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_vstack_create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right: f64) -> i64 {
+pub extern "C" fn perry_ui_vstack_create_with_insets(
+    spacing: f64,
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+) -> i64 {
     widgets::vstack::create_with_insets(spacing, top, left, bottom, right)
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_hstack_create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right: f64) -> i64 {
+pub extern "C" fn perry_ui_hstack_create_with_insets(
+    spacing: f64,
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+) -> i64 {
     widgets::hstack::create_with_insets(spacing, top, left, bottom, right)
 }
 
@@ -367,14 +424,16 @@ pub extern "C" fn perry_ui_hstack_create_with_insets(spacing: f64, top: f64, lef
 pub extern "C" fn perry_ui_scrollview_create() -> i64 {
     unsafe {
         __android_log_print(
-            3, b"PerryJNI\0".as_ptr(),
+            3,
+            b"PerryJNI\0".as_ptr(),
             b"perry_ui_scrollview_create: called\0".as_ptr(),
         );
     }
     let h = widgets::scrollview::create();
     unsafe {
         __android_log_print(
-            3, b"PerryJNI\0".as_ptr(),
+            3,
+            b"PerryJNI\0".as_ptr(),
             b"perry_ui_scrollview_create: returned handle=%lld\0".as_ptr(),
             h,
         );
@@ -406,7 +465,9 @@ pub extern "C" fn perry_ui_add_keyboard_shortcut(key_ptr: i64, modifiers: f64, c
 pub extern "C" fn perry_ui_register_global_hotkey(_key: i64, _mods: f64, _cb: f64) {}
 
 #[no_mangle]
-pub extern "C" fn perry_system_get_app_icon(_path: i64) -> i64 { 0 }
+pub extern "C" fn perry_system_get_app_icon(_path: i64) -> i64 {
+    0
+}
 
 // =============================================================================
 // Phase A.3: Text Styling & Button Styling
@@ -492,7 +553,12 @@ pub extern "C" fn perry_ui_widget_set_context_menu(widget_handle: i64, menu_hand
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_menu_add_item_with_shortcut(_menu_handle: i64, _title_ptr: i64, _shortcut_ptr: i64, _callback: f64) {
+pub extern "C" fn perry_ui_menu_add_item_with_shortcut(
+    _menu_handle: i64,
+    _title_ptr: i64,
+    _shortcut_ptr: i64,
+    _callback: f64,
+) {
     // No-op on Android — no menu bar on mobile
 }
 
@@ -502,7 +568,11 @@ pub extern "C" fn perry_ui_menu_add_separator(_menu_handle: i64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_menu_add_submenu(_menu_handle: i64, _title_ptr: i64, _submenu_handle: i64) {
+pub extern "C" fn perry_ui_menu_add_submenu(
+    _menu_handle: i64,
+    _title_ptr: i64,
+    _submenu_handle: i64,
+) {
     // No-op on Android
 }
 
@@ -529,7 +599,12 @@ pub extern "C" fn perry_ui_menu_clear(_menu_handle: i64) {
 
 /// Add a menu item with a standard action (no-op on Android — macOS responder chain concept).
 #[no_mangle]
-pub extern "C" fn perry_ui_menu_add_standard_action(_menu_handle: i64, _title_ptr: i64, _selector_ptr: i64, _shortcut_ptr: i64) {
+pub extern "C" fn perry_ui_menu_add_standard_action(
+    _menu_handle: i64,
+    _title_ptr: i64,
+    _selector_ptr: i64,
+    _shortcut_ptr: i64,
+) {
     // No-op on Android
 }
 
@@ -651,7 +726,9 @@ pub extern "C" fn perry_ui_lazyvstack_update(handle: i64, count: i64) {
 
 // Table (stub — not yet implemented on Android)
 #[no_mangle]
-pub extern "C" fn perry_ui_table_create(_row_count: f64, _col_count: f64, _render: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_table_create(_row_count: f64, _col_count: f64, _render: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_column_header(_handle: i64, _col: i64, _title_ptr: i64) {}
 #[no_mangle]
@@ -661,7 +738,9 @@ pub extern "C" fn perry_ui_table_update_row_count(_handle: i64, _count: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_on_row_select(_handle: i64, _callback: f64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_selected_row(_handle: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_table_get_selected_row(_handle: i64) -> i64 {
+    -1
+}
 
 // =============================================================================
 // Canvas
@@ -688,27 +767,59 @@ pub extern "C" fn perry_ui_canvas_line_to(handle: i64, x: f64, y: f64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_stroke(handle: i64, r: f64, g: f64, b: f64, a: f64, line_width: f64) {
+pub extern "C" fn perry_ui_canvas_stroke(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+    line_width: f64,
+) {
     widgets::canvas::stroke(handle, r, g, b, a, line_width);
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_fill_gradient(handle: i64, r1: f64, g1: f64, b1: f64, a1: f64, r2: f64, g2: f64, b2: f64, a2: f64, direction: f64) {
+pub extern "C" fn perry_ui_canvas_fill_gradient(
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
+    direction: f64,
+) {
     widgets::canvas::fill_gradient(handle, r1, g1, b1, a1, r2, g2, b2, a2, direction);
 }
 
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_fill_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_stroke_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_line_width(_h: i64, _w: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_fill_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_stroke_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) { widgets::canvas::clear(h); }
-#[no_mangle] pub extern "C" fn perry_ui_canvas_arc(_h: i64, _x: f64, _y: f64, _r: f64, _sa: f64, _ea: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_close_path(_h: i64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_fill(_h: i64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_stroke_path(_h: i64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_fill_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_stroke_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_line_width(_h: i64, _w: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_stroke_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {
+    widgets::canvas::clear(h);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_arc(_h: i64, _x: f64, _y: f64, _r: f64, _sa: f64, _ea: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_close_path(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_stroke_path(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
 
 // =============================================================================
 // Picker
@@ -808,40 +919,76 @@ pub extern "C" fn perry_ui_widget_set_corner_radius(handle: i64, radius: f64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_shadow(
     handle: i64,
-    r: f64, g: f64, b: f64, a: f64,
-    blur: f64, offset_x: f64, offset_y: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+    blur: f64,
+    offset_x: f64,
+    offset_y: f64,
 ) {
     widgets::set_shadow(handle, r, g, b, a, blur, offset_x, offset_y);
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+pub extern "C" fn perry_ui_widget_set_background_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
     widgets::set_background_color(handle, r, g, b, a);
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_background_gradient(handle: i64, r1: f64, g1: f64, b1: f64, a1: f64, r2: f64, g2: f64, b2: f64, a2: f64, direction: f64) {
+pub extern "C" fn perry_ui_widget_set_background_gradient(
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
+    direction: f64,
+) {
     widgets::set_background_gradient(handle, r1, g1, b1, a1, r2, g2, b2, a2, direction);
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
-    catch_panic_void("perry_ui_widget_set_border_color", || widgets::set_border_color(handle, r, g, b, a));
+    catch_panic_void("perry_ui_widget_set_border_color", || {
+        widgets::set_border_color(handle, r, g, b, a)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_border_width(handle: i64, width: f64) {
-    catch_panic_void("perry_ui_widget_set_border_width", || widgets::set_border_width(handle, width));
+    catch_panic_void("perry_ui_widget_set_border_width", || {
+        widgets::set_border_width(handle, width)
+    });
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_edge_insets(handle: i64, top: f64, left: f64, bottom: f64, right: f64) {
-    catch_panic_void("perry_ui_widget_set_edge_insets", || widgets::set_edge_insets(handle, top, left, bottom, right));
+pub extern "C" fn perry_ui_widget_set_edge_insets(
+    handle: i64,
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+) {
+    catch_panic_void("perry_ui_widget_set_edge_insets", || {
+        widgets::set_edge_insets(handle, top, left, bottom, right)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_opacity(handle: i64, alpha: f64) {
-    catch_panic_void("perry_ui_widget_set_opacity", || widgets::set_opacity(handle, alpha));
+    catch_panic_void("perry_ui_widget_set_opacity", || {
+        widgets::set_opacity(handle, alpha)
+    });
 }
 
 // =============================================================================
@@ -868,7 +1015,12 @@ pub extern "C" fn perry_ui_widget_animate_opacity(handle: i64, target: f64, dura
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_animate_position(handle: i64, dx: f64, dy: f64, duration_secs: f64) {
+pub extern "C" fn perry_ui_widget_animate_position(
+    handle: i64,
+    dx: f64,
+    dy: f64,
+    duration_secs: f64,
+) {
     widgets::animate_position(handle, dx, dy, duration_secs);
 }
 
@@ -877,13 +1029,31 @@ pub extern "C" fn perry_ui_widget_animate_position(handle: i64, dx: f64, dy: f64
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_save_file_dialog(callback: f64, default_name_ptr: i64, allowed_types_ptr: i64) {
-    dialog::save_file_dialog(callback, default_name_ptr as *const u8, allowed_types_ptr as *const u8);
+pub extern "C" fn perry_ui_save_file_dialog(
+    callback: f64,
+    default_name_ptr: i64,
+    allowed_types_ptr: i64,
+) {
+    dialog::save_file_dialog(
+        callback,
+        default_name_ptr as *const u8,
+        allowed_types_ptr as *const u8,
+    );
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_alert(title_ptr: i64, message_ptr: i64, buttons_ptr: i64, callback: f64) {
-    dialog::alert(title_ptr as *const u8, message_ptr as *const u8, buttons_ptr as *const u8, callback);
+pub extern "C" fn perry_ui_alert(
+    title_ptr: i64,
+    message_ptr: i64,
+    buttons_ptr: i64,
+    callback: f64,
+) {
+    dialog::alert(
+        title_ptr as *const u8,
+        message_ptr as *const u8,
+        buttons_ptr as *const u8,
+        callback,
+    );
 }
 
 // =============================================================================
@@ -948,8 +1118,18 @@ pub extern "C" fn perry_ui_toolbar_create() -> i64 {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_toolbar_add_item(toolbar_handle: i64, label_ptr: i64, icon_ptr: i64, callback: f64) {
-    toolbar::add_item(toolbar_handle, label_ptr as *const u8, icon_ptr as *const u8, callback);
+pub extern "C" fn perry_ui_toolbar_add_item(
+    toolbar_handle: i64,
+    label_ptr: i64,
+    icon_ptr: i64,
+    callback: f64,
+) {
+    toolbar::add_item(
+        toolbar_handle,
+        label_ptr as *const u8,
+        icon_ptr as *const u8,
+        callback,
+    );
 }
 
 #[no_mangle]
@@ -1032,21 +1212,33 @@ pub extern "C" fn perry_system_notification_on_background_receive(callback: f64)
 /// Schedule a fire-after-N-seconds notification via AlarmManager (#96).
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_interval(
-    id_ptr: i64, title_ptr: i64, body_ptr: i64, seconds: f64, repeats: f64,
+    id_ptr: i64,
+    title_ptr: i64,
+    body_ptr: i64,
+    seconds: f64,
+    repeats: f64,
 ) {
     system::notification_schedule_interval(
-        id_ptr as *const u8, title_ptr as *const u8, body_ptr as *const u8,
-        seconds, repeats,
+        id_ptr as *const u8,
+        title_ptr as *const u8,
+        body_ptr as *const u8,
+        seconds,
+        repeats,
     );
 }
 
 /// Schedule a fire-at-wallclock-ms notification via AlarmManager (#96).
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_calendar(
-    id_ptr: i64, title_ptr: i64, body_ptr: i64, timestamp_ms: f64,
+    id_ptr: i64,
+    title_ptr: i64,
+    body_ptr: i64,
+    timestamp_ms: f64,
 ) {
     system::notification_schedule_calendar(
-        id_ptr as *const u8, title_ptr as *const u8, body_ptr as *const u8,
+        id_ptr as *const u8,
+        title_ptr as *const u8,
+        body_ptr as *const u8,
         timestamp_ms,
     );
 }
@@ -1055,11 +1247,20 @@ pub extern "C" fn perry_system_notification_schedule_calendar(
 /// runtime `ACCESS_FINE_LOCATION` grant. Deferred to #96 follow-up.
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_location(
-    id_ptr: i64, title_ptr: i64, body_ptr: i64, lat: f64, lon: f64, radius: f64,
+    id_ptr: i64,
+    title_ptr: i64,
+    body_ptr: i64,
+    lat: f64,
+    lon: f64,
+    radius: f64,
 ) {
     system::notification_schedule_location(
-        id_ptr as *const u8, title_ptr as *const u8, body_ptr as *const u8,
-        lat, lon, radius,
+        id_ptr as *const u8,
+        title_ptr as *const u8,
+        body_ptr as *const u8,
+        lat,
+        lon,
+        radius,
     );
 }
 
@@ -1086,17 +1287,25 @@ pub extern "C" fn perry_system_get_locale() -> i64 {
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(8);
     let locale_class = env.find_class("java/util/Locale").expect("Locale class");
-    let default_locale = env.call_static_method(
-        locale_class, "getDefault", "()Ljava/util/Locale;", &[]
-    ).expect("getDefault").l().expect("locale obj");
-    let lang = env.call_method(
-        &default_locale, "getLanguage", "()Ljava/lang/String;", &[]
-    ).expect("getLanguage").l().expect("lang string");
+    let default_locale = env
+        .call_static_method(locale_class, "getDefault", "()Ljava/util/Locale;", &[])
+        .expect("getDefault")
+        .l()
+        .expect("locale obj");
+    let lang = env
+        .call_method(&default_locale, "getLanguage", "()Ljava/lang/String;", &[])
+        .expect("getLanguage")
+        .l()
+        .expect("lang string");
     let jstr: jni::objects::JString = lang.into();
     let s: String = env.get_string(&jstr).expect("get string").into();
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     let bytes = s.as_bytes();
-    extern "C" { fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8; }
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
+    }
     unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) as i64 }
 }
 
@@ -1106,17 +1315,23 @@ pub extern "C" fn perry_system_get_locale() -> i64 {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_tabbar_create(on_select: f64) -> i64 {
-    catch_panic("perry_ui_tabbar_create", || widgets::tabbar::create(on_select))
+    catch_panic("perry_ui_tabbar_create", || {
+        widgets::tabbar::create(on_select)
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_tabbar_add_tab(tabbar_handle: i64, label_ptr: i64) {
-    catch_panic_void("perry_ui_tabbar_add_tab", || widgets::tabbar::add_tab(tabbar_handle, label_ptr as *const u8));
+    catch_panic_void("perry_ui_tabbar_add_tab", || {
+        widgets::tabbar::add_tab(tabbar_handle, label_ptr as *const u8)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_tabbar_set_selected(tabbar_handle: i64, index: i64) {
-    catch_panic_void("perry_ui_tabbar_set_selected", || widgets::tabbar::set_selected(tabbar_handle, index));
+    catch_panic_void("perry_ui_tabbar_set_selected", || {
+        widgets::tabbar::set_selected(tabbar_handle, index)
+    });
 }
 
 // =============================================================================
@@ -1125,12 +1340,16 @@ pub extern "C" fn perry_ui_tabbar_set_selected(tabbar_handle: i64, index: i64) {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
-    catch_panic_void("perry_ui_button_set_text_color", || widgets::button::set_text_color(handle, r, g, b, a));
+    catch_panic_void("perry_ui_button_set_text_color", || {
+        widgets::button::set_text_color(handle, r, g, b, a)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_image(handle: i64, name_ptr: i64) {
-    catch_panic_void("perry_ui_button_set_image", || widgets::button::set_image(handle, name_ptr as *const u8));
+    catch_panic_void("perry_ui_button_set_image", || {
+        widgets::button::set_image(handle, name_ptr as *const u8)
+    });
 }
 
 #[no_mangle]
@@ -1139,28 +1358,44 @@ pub extern "C" fn perry_ui_button_set_image_position(handle: i64, position: i64)
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_button_set_content_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
-    catch_panic_void("perry_ui_button_set_content_tint_color", || widgets::button::set_content_tint_color(handle, r, g, b, a));
+pub extern "C" fn perry_ui_button_set_content_tint_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
+    catch_panic_void("perry_ui_button_set_content_tint_color", || {
+        widgets::button::set_content_tint_color(handle, r, g, b, a)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_scrollview_set_refresh_control(scroll_handle: i64, callback: f64) {
-    catch_panic_void("perry_ui_scrollview_set_refresh_control", || widgets::scrollview::set_refresh_control(scroll_handle, callback));
+    catch_panic_void("perry_ui_scrollview_set_refresh_control", || {
+        widgets::scrollview::set_refresh_control(scroll_handle, callback)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_scrollview_end_refreshing(scroll_handle: i64) {
-    catch_panic_void("perry_ui_scrollview_end_refreshing", || widgets::scrollview::end_refreshing(scroll_handle));
+    catch_panic_void("perry_ui_scrollview_end_refreshing", || {
+        widgets::scrollview::end_refreshing(scroll_handle)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_on_click(handle: i64, callback: f64) {
-    catch_panic_void("perry_ui_widget_set_on_click", || widgets::set_on_click(handle, callback));
+    catch_panic_void("perry_ui_widget_set_on_click", || {
+        widgets::set_on_click(handle, callback)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_hugging(handle: i64, priority: f64) {
-    catch_panic_void("perry_ui_widget_set_hugging", || widgets::set_hugging(handle, priority));
+    catch_panic_void("perry_ui_widget_set_hugging", || {
+        widgets::set_hugging(handle, priority)
+    });
 }
 
 // =============================================================================
@@ -1169,32 +1404,48 @@ pub extern "C" fn perry_ui_widget_set_hugging(handle: i64, priority: f64) {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_width(handle: i64, width: f64) {
-    catch_panic_void("perry_ui_widget_set_width", || widgets::set_width(handle, width));
+    catch_panic_void("perry_ui_widget_set_width", || {
+        widgets::set_width(handle, width)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_height(handle: i64, height: f64) {
-    catch_panic_void("perry_ui_widget_set_height", || widgets::set_height(handle, height));
+    catch_panic_void("perry_ui_widget_set_height", || {
+        widgets::set_height(handle, height)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_remove_child(parent_handle: i64, child_handle: i64) {
-    catch_panic_void("perry_ui_widget_remove_child", || widgets::remove_child(parent_handle, child_handle));
+    catch_panic_void("perry_ui_widget_remove_child", || {
+        widgets::remove_child(parent_handle, child_handle)
+    });
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_reorder_child(parent_handle: i64, from_index: f64, to_index: f64) {
-    catch_panic_void("perry_ui_widget_reorder_child", || widgets::reorder_child(parent_handle, from_index as i64, to_index as i64));
+pub extern "C" fn perry_ui_widget_reorder_child(
+    parent_handle: i64,
+    from_index: f64,
+    to_index: f64,
+) {
+    catch_panic_void("perry_ui_widget_reorder_child", || {
+        widgets::reorder_child(parent_handle, from_index as i64, to_index as i64)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_match_parent_width(handle: i64) {
-    catch_panic_void("perry_ui_widget_match_parent_width", || widgets::match_parent_width(handle));
+    catch_panic_void("perry_ui_widget_match_parent_width", || {
+        widgets::match_parent_width(handle)
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_match_parent_height(handle: i64) {
-    catch_panic_void("perry_ui_widget_match_parent_height", || widgets::match_parent_height(handle));
+    catch_panic_void("perry_ui_widget_match_parent_height", || {
+        widgets::match_parent_height(handle)
+    });
 }
 
 #[no_mangle]
@@ -1212,20 +1463,41 @@ pub extern "C" fn perry_ui_stack_set_distribution(handle: i64, distribution: f64
         if let Some(view_ref) = widgets::get_widget(handle) {
             let mut env = jni_bridge::get_env();
             let _ = env.push_local_frame(32);
-            let child_count = env.call_method(view_ref.as_obj(), "getChildCount", "()I", &[])
-                .map(|v| v.i().unwrap_or(0)).unwrap_or(0);
+            let child_count = env
+                .call_method(view_ref.as_obj(), "getChildCount", "()I", &[])
+                .map(|v| v.i().unwrap_or(0))
+                .unwrap_or(0);
             for i in 0..child_count {
-                let child = env.call_method(view_ref.as_obj(), "getChildAt",
-                    "(I)Landroid/view/View;", &[jni::objects::JValue::Int(i)]);
+                let child = env.call_method(
+                    view_ref.as_obj(),
+                    "getChildAt",
+                    "(I)Landroid/view/View;",
+                    &[jni::objects::JValue::Int(i)],
+                );
                 if let Ok(child_val) = child {
                     if let Ok(child_obj) = child_val.l() {
                         if !child_obj.is_null() {
-                            if let Ok(lp) = env.call_method(&child_obj, "getLayoutParams",
-                                "()Landroid/view/ViewGroup$LayoutParams;", &[]) {
+                            if let Ok(lp) = env.call_method(
+                                &child_obj,
+                                "getLayoutParams",
+                                "()Landroid/view/ViewGroup$LayoutParams;",
+                                &[],
+                            ) {
                                 if let Ok(lp_obj) = lp.l() {
                                     if !lp_obj.is_null() {
-                                        if env.is_instance_of(&lp_obj, "android/widget/LinearLayout$LayoutParams").unwrap_or(false) {
-                                            let _ = env.set_field(&lp_obj, "weight", "F", jni::objects::JValue::Float(1.0));
+                                        if env
+                                            .is_instance_of(
+                                                &lp_obj,
+                                                "android/widget/LinearLayout$LayoutParams",
+                                            )
+                                            .unwrap_or(false)
+                                        {
+                                            let _ = env.set_field(
+                                                &lp_obj,
+                                                "weight",
+                                                "F",
+                                                jni::objects::JValue::Float(1.0),
+                                            );
                                         }
                                     }
                                 }
@@ -1234,7 +1506,9 @@ pub extern "C" fn perry_ui_stack_set_distribution(handle: i64, distribution: f64
                     }
                 }
             }
-            unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+            unsafe {
+                env.pop_local_frame(&jni::objects::JObject::null());
+            }
         }
     }
 }
@@ -1252,26 +1526,28 @@ pub extern "C" fn perry_ui_stack_set_alignment(handle: i64, alignment: f64) {
         let _ = env.push_local_frame(8);
 
         // Determine orientation: 0=HORIZONTAL (HStack), 1=VERTICAL (VStack)
-        let orientation = env.call_method(view_ref.as_obj(), "getOrientation", "()I", &[])
-            .map(|v| v.i().unwrap_or(0)).unwrap_or(0);
+        let orientation = env
+            .call_method(view_ref.as_obj(), "getOrientation", "()I", &[])
+            .map(|v| v.i().unwrap_or(0))
+            .unwrap_or(0);
 
         let align = alignment as i64;
         let gravity = if orientation == 0 {
             // HStack: cross-axis is vertical
             match align {
-                0 => -1,         // Fill — no gravity override (let children use MATCH_PARENT height)
-                1 => 48,         // Leading → TOP
-                3 => 16,         // Center → CENTER_VERTICAL
-                4 => 80,         // Trailing → BOTTOM
+                0 => -1, // Fill — no gravity override (let children use MATCH_PARENT height)
+                1 => 48, // Leading → TOP
+                3 => 16, // Center → CENTER_VERTICAL
+                4 => 80, // Trailing → BOTTOM
                 _ => -1,
             }
         } else {
             // VStack: cross-axis is horizontal
             match align {
-                0 => -1,         // Fill — no gravity override
-                1 => 3,          // Leading → LEFT
-                3 => 1,          // Center → CENTER_HORIZONTAL
-                4 => 5,          // Trailing → RIGHT
+                0 => -1, // Fill — no gravity override
+                1 => 3,  // Leading → LEFT
+                3 => 1,  // Center → CENTER_HORIZONTAL
+                4 => 5,  // Trailing → RIGHT
                 _ => -1,
             }
         };
@@ -1284,7 +1560,9 @@ pub extern "C" fn perry_ui_stack_set_alignment(handle: i64, alignment: f64) {
                 &[jni::objects::JValue::Int(gravity)],
             );
         }
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 
@@ -1294,7 +1572,9 @@ pub extern "C" fn perry_ui_stack_set_alignment(handle: i64, alignment: f64) {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_wraps(handle: i64, max_width: f64) {
-    catch_panic_void("perry_ui_text_set_wraps", || widgets::text::set_wraps(handle, max_width));
+    catch_panic_void("perry_ui_text_set_wraps", || {
+        widgets::text::set_wraps(handle, max_width)
+    });
 }
 
 // =============================================================================
@@ -1308,7 +1588,9 @@ pub extern "C" fn perry_ui_textfield_get_string(handle: i64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_textfield_set_on_submit(handle: i64, on_submit: f64) {
-    catch_panic_void("perry_ui_textfield_set_on_submit", || widgets::textfield::set_on_submit(handle, on_submit));
+    catch_panic_void("perry_ui_textfield_set_on_submit", || {
+        widgets::textfield::set_on_submit(handle, on_submit)
+    });
 }
 
 // =============================================================================
@@ -1317,12 +1599,16 @@ pub extern "C" fn perry_ui_textfield_set_on_submit(handle: i64, on_submit: f64) 
 
 #[no_mangle]
 pub extern "C" fn perry_ui_textarea_create(placeholder_ptr: i64, on_change: f64) -> i64 {
-    catch_panic("perry_ui_textarea_create", || widgets::textarea::create(placeholder_ptr as *const u8, on_change))
+    catch_panic("perry_ui_textarea_create", || {
+        widgets::textarea::create(placeholder_ptr as *const u8, on_change)
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_textarea_set_string(handle: i64, text_ptr: i64) {
-    catch_panic_void("perry_ui_textarea_set_string", || widgets::textfield::set_string_value(handle, text_ptr as *const u8));
+    catch_panic_void("perry_ui_textarea_set_string", || {
+        widgets::textfield::set_string_value(handle, text_ptr as *const u8)
+    });
 }
 
 #[no_mangle]
@@ -1336,12 +1622,16 @@ pub extern "C" fn perry_ui_textarea_get_string(handle: i64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_qrcode_create(data_ptr: i64, size: f64) -> i64 {
-    catch_panic("perry_ui_qrcode_create", || widgets::qrcode::create(data_ptr as *const u8, size))
+    catch_panic("perry_ui_qrcode_create", || {
+        widgets::qrcode::create(data_ptr as *const u8, size)
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_qrcode_set_data(handle: i64, data_ptr: i64) {
-    catch_panic_void("perry_ui_qrcode_set_data", || widgets::qrcode::set_data(handle, data_ptr as *const u8));
+    catch_panic_void("perry_ui_qrcode_set_data", || {
+        widgets::qrcode::set_data(handle, data_ptr as *const u8)
+    });
 }
 
 // =============================================================================
@@ -1398,12 +1688,16 @@ pub extern "C" fn perry_ui_embed_nsview(view_ptr: i64) -> i64 {
     let global = match env.new_global_ref(obj) {
         Ok(g) => g,
         Err(_) => {
-            unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+            unsafe {
+                env.pop_local_frame(&jni::objects::JObject::null());
+            }
             return 0;
         }
     };
     let handle = widgets::register_widget(global);
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     handle
 }
 
@@ -1412,7 +1706,9 @@ pub extern "C" fn perry_ui_embed_nsview(view_ptr: i64) -> i64 {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_frame_split_create(_left_width: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_frame_split_create(_left_width: f64) -> i64 {
+    0
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_frame_split_add_child(_parent: i64, _child: i64) {}
@@ -1425,18 +1721,42 @@ fn query_display_metrics() -> (f64, f64, f64) {
 
     // Get Application context: ActivityThread.currentApplication()
     let result = (|| -> Option<(f64, f64, f64)> {
-        let app = env.call_static_method(
-            "android/app/ActivityThread",
-            "currentApplication",
-            "()Landroid/app/Application;",
-            &[],
-        ).ok()?.l().ok()?;
-        if app.is_null() { return None; }
+        let app = env
+            .call_static_method(
+                "android/app/ActivityThread",
+                "currentApplication",
+                "()Landroid/app/Application;",
+                &[],
+            )
+            .ok()?
+            .l()
+            .ok()?;
+        if app.is_null() {
+            return None;
+        }
 
         // Get Resources
-        let res = env.call_method(&app, "getResources", "()Landroid/content/res/Resources;", &[]).ok()?.l().ok()?;
+        let res = env
+            .call_method(
+                &app,
+                "getResources",
+                "()Landroid/content/res/Resources;",
+                &[],
+            )
+            .ok()?
+            .l()
+            .ok()?;
         // Get DisplayMetrics
-        let dm = env.call_method(&res, "getDisplayMetrics", "()Landroid/util/DisplayMetrics;", &[]).ok()?.l().ok()?;
+        let dm = env
+            .call_method(
+                &res,
+                "getDisplayMetrics",
+                "()Landroid/util/DisplayMetrics;",
+                &[],
+            )
+            .ok()?
+            .l()
+            .ok()?;
 
         let width_px = env.get_field(&dm, "widthPixels", "I").ok()?.i().ok()? as f64;
         let height_px = env.get_field(&dm, "heightPixels", "I").ok()?.i().ok()? as f64;
@@ -1449,7 +1769,9 @@ fn query_display_metrics() -> (f64, f64, f64) {
         }
     })();
 
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     result.unwrap_or((412.0, 915.0, 2.625))
 }
 
@@ -1469,37 +1791,65 @@ pub extern "C" fn perry_get_scale_factor() -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_get_device_idiom() -> i64 { 0 } // 0 = phone
+pub extern "C" fn perry_get_device_idiom() -> i64 {
+    0
+} // 0 = phone
 
 // Audio capture (AudioRecord via JNI)
 #[no_mangle]
-pub extern "C" fn perry_system_audio_start() -> i64 { audio::start() }
+pub extern "C" fn perry_system_audio_start() -> i64 {
+    audio::start()
+}
 #[no_mangle]
-pub extern "C" fn perry_system_audio_stop() { audio::stop() }
+pub extern "C" fn perry_system_audio_stop() {
+    audio::stop()
+}
 #[no_mangle]
-pub extern "C" fn perry_system_audio_get_level() -> f64 { audio::get_level() }
+pub extern "C" fn perry_system_audio_get_level() -> f64 {
+    audio::get_level()
+}
 #[no_mangle]
-pub extern "C" fn perry_system_audio_get_peak() -> f64 { audio::get_peak() }
+pub extern "C" fn perry_system_audio_get_peak() -> f64 {
+    audio::get_peak()
+}
 #[no_mangle]
-pub extern "C" fn perry_system_audio_get_waveform(count: f64) -> f64 { audio::get_waveform(count) }
+pub extern "C" fn perry_system_audio_get_waveform(count: f64) -> f64 {
+    audio::get_waveform(count)
+}
 #[no_mangle]
-pub extern "C" fn perry_system_get_device_model() -> i64 { audio::get_device_model() }
+pub extern "C" fn perry_system_get_device_model() -> i64 {
+    audio::get_device_model()
+}
 
 // Camera (Camera2 API via JNI)
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_create() -> i64 { camera::create() }
+pub extern "C" fn perry_ui_camera_create() -> i64 {
+    camera::create()
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_start(handle: i64) { camera::start(handle) }
+pub extern "C" fn perry_ui_camera_start(handle: i64) {
+    camera::start(handle)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_stop(handle: i64) { camera::stop(handle) }
+pub extern "C" fn perry_ui_camera_stop(handle: i64) {
+    camera::stop(handle)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_freeze(handle: i64) { camera::freeze(handle) }
+pub extern "C" fn perry_ui_camera_freeze(handle: i64) {
+    camera::freeze(handle)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_unfreeze(handle: i64) { camera::unfreeze(handle) }
+pub extern "C" fn perry_ui_camera_unfreeze(handle: i64) {
+    camera::unfreeze(handle)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_sample_color(x: f64, y: f64) -> f64 { camera::sample_color(x, y) }
+pub extern "C" fn perry_ui_camera_sample_color(x: f64, y: f64) -> f64 {
+    camera::sample_color(x, y)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_set_on_tap(handle: i64, callback: f64) { camera::set_on_tap(handle, callback) }
+pub extern "C" fn perry_ui_camera_set_on_tap(handle: i64, callback: f64) {
+    camera::set_on_tap(handle, callback)
+}
 
 // Geisterhand screenshot stub (not implemented on Android)
 #[no_mangle]
@@ -1525,19 +1875,37 @@ fn get_app_files_dir_string() -> f64 {
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
     let result = (|| -> Option<f64> {
-        let activity = env.call_static_method(
-            "com/perry/app/PerryBridge", "getActivity",
-            "()Landroid/app/Activity;", &[],
-        ).ok()?.l().ok()?;
-        if activity.is_null() { return None; }
-        let files_dir = env.call_method(&activity, "getFilesDir",
-            "()Ljava/io/File;", &[]).ok()?.l().ok()?;
-        if files_dir.is_null() { return None; }
-        let abs_path = env.call_method(&files_dir, "getAbsolutePath",
-            "()Ljava/lang/String;", &[]).ok()?.l().ok()?;
+        let activity = env
+            .call_static_method(
+                "com/perry/app/PerryBridge",
+                "getActivity",
+                "()Landroid/app/Activity;",
+                &[],
+            )
+            .ok()?
+            .l()
+            .ok()?;
+        if activity.is_null() {
+            return None;
+        }
+        let files_dir = env
+            .call_method(&activity, "getFilesDir", "()Ljava/io/File;", &[])
+            .ok()?
+            .l()
+            .ok()?;
+        if files_dir.is_null() {
+            return None;
+        }
+        let abs_path = env
+            .call_method(&files_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
+            .ok()?
+            .l()
+            .ok()?;
         let rust_str = env.get_string((&abs_path).into()).ok()?;
         let bytes = rust_str.to_str().unwrap_or("").as_bytes();
-        if bytes.is_empty() { return None; }
+        if bytes.is_empty() {
+            return None;
+        }
         // Append /workspace to the files dir
         let mut path = String::from_utf8_lossy(bytes).to_string();
         path.push_str("/workspace");
@@ -1548,22 +1916,32 @@ fn get_app_files_dir_string() -> f64 {
         let nanboxed = unsafe { js_nanbox_string(str_ptr) };
         Some(nanboxed)
     })();
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     // Return empty string NaN-boxed (not 0, which is integer 0)
     result.unwrap_or_else(|| unsafe { js_nanbox_string(std::ptr::null()) })
 }
 
 #[no_mangle]
-pub extern "C" fn hone_get_app_files_dir() -> f64 { get_app_files_dir_string() }
+pub extern "C" fn hone_get_app_files_dir() -> f64 {
+    get_app_files_dir_string()
+}
 
 #[no_mangle]
-pub extern "C" fn __wrapper_hone_get_app_files_dir() -> f64 { get_app_files_dir_string() }
+pub extern "C" fn __wrapper_hone_get_app_files_dir() -> f64 {
+    get_app_files_dir_string()
+}
 
 #[no_mangle]
-pub extern "C" fn hone_get_documents_dir() -> f64 { get_app_files_dir_string() }
+pub extern "C" fn hone_get_documents_dir() -> f64 {
+    get_app_files_dir_string()
+}
 
 #[no_mangle]
-pub extern "C" fn __wrapper_hone_get_documents_dir() -> f64 { get_app_files_dir_string() }
+pub extern "C" fn __wrapper_hone_get_documents_dir() -> f64 {
+    get_app_files_dir_string()
+}
 
 // =============================================================================
 // Stubs for UI functions not yet implemented on Android
@@ -1598,7 +1976,13 @@ pub extern "C" fn perry_ui_textfield_set_borderless(handle: i64, borderless: f64
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_textfield_set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+pub extern "C" fn perry_ui_textfield_set_background_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
     widgets::textfield::set_background_color(handle, r, g, b, a);
 }
 
@@ -1620,6 +2004,12 @@ pub extern "C" fn perry_ui_widget_add_overlay(_parent: f64, _child: f64) {
 
 /// perry_ui_widget_set_overlay_frame(child, x, y, w, h) — position overlay
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_overlay_frame(_child: f64, _x: f64, _y: f64, _w: f64, _h: f64) {
+pub extern "C" fn perry_ui_widget_set_overlay_frame(
+    _child: f64,
+    _x: f64,
+    _y: f64,
+    _w: f64,
+    _h: f64,
+) {
     // TODO: set FrameLayout.LayoutParams with margins
 }

@@ -24,11 +24,11 @@ use crate::types::{DOUBLE, I64};
 
 use super::{
     apply_inline_style, collect_closure_introduced_ids, extract_options_fields,
-    find_outer_writes_stmt, get_raw_string_ptr, lower_fetch_native_method, lower_native_module_dispatch,
-    lower_notification_schedule, lower_perry_ui_table_call, native_module_lookup,
-    perry_i18n_table_lookup, perry_plugin_instance_method_lookup, perry_plugin_table_lookup,
-    perry_system_table_lookup, perry_ui_instance_method_lookup, perry_ui_table_lookup,
-    perry_updater_table_lookup,
+    find_outer_writes_stmt, get_raw_string_ptr, lower_fetch_native_method,
+    lower_native_module_dispatch, lower_notification_schedule, lower_perry_ui_table_call,
+    native_module_lookup, perry_i18n_table_lookup, perry_plugin_instance_method_lookup,
+    perry_plugin_table_lookup, perry_system_table_lookup, perry_ui_instance_method_lookup,
+    perry_ui_table_lookup, perry_updater_table_lookup,
 };
 
 pub(crate) fn lower_native_method_call(
@@ -79,10 +79,7 @@ pub(crate) fn lower_native_method_call(
     // added one by one via `perry_ui_widget_add_child`. We can't express
     // this with the per-method table because it's variadic in arg shape
     // *and* needs sequential calls per child.
-    if module == "perry/ui"
-        && (method == "VStack" || method == "HStack")
-        && object.is_none()
-    {
+    if module == "perry/ui" && (method == "VStack" || method == "HStack") && object.is_none() {
         let runtime_create = if method == "VStack" {
             "perry_ui_vstack_create"
         } else {
@@ -101,11 +98,8 @@ pub(crate) fn lower_native_method_call(
             }
             None => ("8.0".to_string(), 0),
         };
-        ctx.pending_declares.push((
-            runtime_create.to_string(),
-            I64,
-            vec![DOUBLE],
-        ));
+        ctx.pending_declares
+            .push((runtime_create.to_string(), I64, vec![DOUBLE]));
         let blk = ctx.block();
         let parent_handle = blk.call(I64, runtime_create, &[(DOUBLE, &spacing_d)]);
         // Stash so add_child has it; we'll need to reload later because
@@ -172,11 +166,8 @@ pub(crate) fn lower_native_method_call(
     // then tries to add_child with an invalid handle, AppKit silently fails
     // to attach the window body, and the process runs but no window shows.
     if module == "perry/ui" && method == "ForEach" && object.is_none() && args.len() == 2 {
-        ctx.pending_declares.push((
-            "perry_ui_vstack_create".to_string(),
-            I64,
-            vec![DOUBLE],
-        ));
+        ctx.pending_declares
+            .push(("perry_ui_vstack_create".to_string(), I64, vec![DOUBLE]));
         ctx.pending_declares.push((
             "perry_ui_for_each_init".to_string(),
             crate::types::VOID,
@@ -201,7 +192,11 @@ pub(crate) fn lower_native_method_call(
         let container_reload = blk.load(I64, &container_slot);
         blk.call_void(
             "perry_ui_for_each_init",
-            &[(I64, &container_reload), (I64, &state_handle), (DOUBLE, &closure_d)],
+            &[
+                (I64, &container_reload),
+                (I64, &state_handle),
+                (DOUBLE, &closure_d),
+            ],
         );
 
         let blk = ctx.block();
@@ -224,11 +219,8 @@ pub(crate) fn lower_native_method_call(
         } else {
             "0.0".to_string()
         };
-        ctx.pending_declares.push((
-            "perry_ui_button_create".to_string(),
-            I64,
-            vec![I64, DOUBLE],
-        ));
+        ctx.pending_declares
+            .push(("perry_ui_button_create".to_string(), I64, vec![I64, DOUBLE]));
         // Scope `blk` so the mutable borrow on `ctx` is released before
         // we call `apply_inline_style(ctx, ...)`, which re-borrows.
         let handle = {
@@ -448,7 +440,8 @@ pub(crate) fn lower_native_method_call(
             "renameSync" if args.len() >= 2 => {
                 let from = lower_expr(ctx, &args[0])?;
                 let to = lower_expr(ctx, &args[1])?;
-                ctx.block().call_void("js_fs_rename_sync", &[(DOUBLE, &from), (DOUBLE, &to)]);
+                ctx.block()
+                    .call_void("js_fs_rename_sync", &[(DOUBLE, &from), (DOUBLE, &to)]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             "unlinkSync" if args.len() >= 1 => {
@@ -469,20 +462,26 @@ pub(crate) fn lower_native_method_call(
             "copyFileSync" if args.len() >= 2 => {
                 let src = lower_expr(ctx, &args[0])?;
                 let dst = lower_expr(ctx, &args[1])?;
-                ctx.block().call_void("js_fs_copy_file_sync", &[(DOUBLE, &src), (DOUBLE, &dst)]);
+                ctx.block()
+                    .call_void("js_fs_copy_file_sync", &[(DOUBLE, &src), (DOUBLE, &dst)]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             "chmodSync" if args.len() >= 2 => {
                 let p = lower_expr(ctx, &args[0])?;
                 let m = lower_expr(ctx, &args[1])?;
-                ctx.block().call_void("js_fs_chmod_sync", &[(DOUBLE, &p), (DOUBLE, &m)]);
+                ctx.block()
+                    .call_void("js_fs_chmod_sync", &[(DOUBLE, &p), (DOUBLE, &m)]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             _ => {
                 // Fall through — readFileSync/writeFileSync/existsSync/etc.
                 // are handled as dedicated HIR Expr variants, not
                 // NativeMethodCall. Warn on truly unhandled ones.
-                eprintln!("perry-codegen: unhandled fs.{}() NativeMethodCall ({})", method, args.len());
+                eprintln!(
+                    "perry-codegen: unhandled fs.{}() NativeMethodCall ({})",
+                    method,
+                    args.len()
+                );
             }
         }
     }
@@ -550,9 +549,7 @@ pub(crate) fn lower_native_method_call(
                         // function workers work fine when wrapped (`(x) => worker(x)`);
                         // this just closes the compile-time safety bypass that silently
                         // let outer-writing named functions through.
-                        Expr::FuncRef(_)
-                        | Expr::LocalGet(_)
-                        | Expr::ExternFuncRef { .. } => {
+                        Expr::FuncRef(_) | Expr::LocalGet(_) | Expr::ExternFuncRef { .. } => {
                             anyhow::bail!(
                                 "perry/thread: `{}` callback must be an inline arrow/closure, not a \
                                  named function reference. Compile-time thread-safety analysis can only \
@@ -594,8 +591,10 @@ pub(crate) fn lower_native_method_call(
         let handle = unbox_to_i64(blk, &recv_val);
         if let Some(sig) = perry_ui_instance_method_lookup(method) {
             // Build args: handle is the first arg, then the call args.
-            let mut llvm_args: Vec<(crate::types::LlvmType, String)> = Vec::with_capacity(1 + args.len());
-            let mut runtime_param_types: Vec<crate::types::LlvmType> = Vec::with_capacity(1 + args.len());
+            let mut llvm_args: Vec<(crate::types::LlvmType, String)> =
+                Vec::with_capacity(1 + args.len());
+            let mut runtime_param_types: Vec<crate::types::LlvmType> =
+                Vec::with_capacity(1 + args.len());
             llvm_args.push((I64, handle));
             runtime_param_types.push(I64);
             for (kind, arg) in sig.args.iter().zip(args.iter()) {
@@ -637,7 +636,8 @@ pub(crate) fn lower_native_method_call(
                 UiReturnKind::Void => crate::types::VOID,
                 UiReturnKind::Str => I64,
             };
-            ctx.pending_declares.push((sig.runtime.to_string(), return_type, runtime_param_types));
+            ctx.pending_declares
+                .push((sig.runtime.to_string(), return_type, runtime_param_types));
             let ref_args: Vec<(crate::types::LlvmType, &str)> =
                 llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
             let blk = ctx.block();
@@ -650,9 +650,7 @@ pub(crate) fn lower_native_method_call(
                     let raw = blk.call(I64, sig.runtime, &ref_args);
                     Ok(crate::expr::nanbox_pointer_inline(blk, &raw))
                 }
-                UiReturnKind::F64 => {
-                    Ok(blk.call(DOUBLE, sig.runtime, &ref_args))
-                }
+                UiReturnKind::F64 => Ok(blk.call(DOUBLE, sig.runtime, &ref_args)),
                 UiReturnKind::Str => {
                     let raw = blk.call(I64, sig.runtime, &ref_args);
                     Ok(crate::expr::nanbox_string_inline(blk, &raw))
@@ -687,8 +685,10 @@ pub(crate) fn lower_native_method_call(
         let blk = ctx.block();
         let handle = unbox_to_i64(blk, &recv_val);
         if let Some(sig) = perry_plugin_instance_method_lookup(method) {
-            let mut llvm_args: Vec<(crate::types::LlvmType, String)> = Vec::with_capacity(1 + args.len());
-            let mut runtime_param_types: Vec<crate::types::LlvmType> = Vec::with_capacity(1 + args.len());
+            let mut llvm_args: Vec<(crate::types::LlvmType, String)> =
+                Vec::with_capacity(1 + args.len());
+            let mut runtime_param_types: Vec<crate::types::LlvmType> =
+                Vec::with_capacity(1 + args.len());
             llvm_args.push((I64, handle));
             runtime_param_types.push(I64);
             for (kind, arg) in sig.args.iter().zip(args.iter()) {
@@ -724,7 +724,8 @@ pub(crate) fn lower_native_method_call(
                 UiReturnKind::F64 => DOUBLE,
                 UiReturnKind::Void => crate::types::VOID,
             };
-            ctx.pending_declares.push((sig.runtime.to_string(), return_type, runtime_param_types));
+            ctx.pending_declares
+                .push((sig.runtime.to_string(), return_type, runtime_param_types));
             let ref_args: Vec<(crate::types::LlvmType, &str)> =
                 llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
             let blk = ctx.block();
@@ -773,11 +774,7 @@ pub(crate) fn lower_native_method_call(
         let mut arr_handle = unbox_to_i64(blk, &arr_box);
         for v in &lowered {
             let blk = ctx.block();
-            arr_handle = blk.call(
-                I64,
-                "js_array_push_f64",
-                &[(I64, &arr_handle), (DOUBLE, v)],
-            );
+            arr_handle = blk.call(I64, "js_array_push_f64", &[(I64, &arr_handle), (DOUBLE, v)]);
         }
         let blk = ctx.block();
         let new_handle = arr_handle;
@@ -797,11 +794,13 @@ pub(crate) fn lower_native_method_call(
                     ctx.block().store(DOUBLE, &new_box, &g_ref);
                 }
             }
-            Expr::PropertyGet { object: obj_expr, property } => {
+            Expr::PropertyGet {
+                object: obj_expr,
+                property,
+            } => {
                 let obj_box = lower_expr(ctx, obj_expr)?;
                 let key_idx = ctx.strings.intern(property);
-                let key_handle_global =
-                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
                 let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);

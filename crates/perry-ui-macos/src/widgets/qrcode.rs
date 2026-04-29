@@ -1,7 +1,7 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
-use objc2::{AnyThread, MainThreadOnly};
+use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
+use objc2::{AnyThread, MainThreadOnly};
 use objc2_app_kit::{NSImage, NSImageView, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
 
@@ -135,7 +135,8 @@ unsafe fn generate_qr_image(text: &str, display_size: f64) -> Option<Retained<NS
     // Use raw alloc/init to avoid objc2 type constraints on initWithCGImage:
     let ns_image_cls = AnyClass::get(c"NSImage").unwrap();
     let ns_image_raw: *mut AnyObject = msg_send![ns_image_cls, alloc];
-    let ns_image_raw: *mut AnyObject = msg_send![ns_image_raw, initWithCGImage: cg_image size: target_size];
+    let ns_image_raw: *mut AnyObject =
+        msg_send![ns_image_raw, initWithCGImage: cg_image size: target_size];
 
     // Release the CGImage (we own it from createCGImage:fromRect:)
     extern "C" {

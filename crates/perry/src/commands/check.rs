@@ -168,44 +168,43 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         let filename = canonical.to_string_lossy().to_string();
 
         // Parse with diagnostics
-        let parse_result =
-            match perry_parser::parse_typescript_with_cache(&source, &filename, &mut source_cache)
-            {
-                Ok(result) => result,
-                Err(e) => {
-                    if verbose > 0 {
-                        eprintln!("Parse error in {}: {}", canonical.display(), e);
-                    }
-                    continue;
+        let parse_result = match perry_parser::parse_typescript_with_cache(
+            &source,
+            &filename,
+            &mut source_cache,
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                if verbose > 0 {
+                    eprintln!("Parse error in {}: {}", canonical.display(), e);
                 }
-            };
+                continue;
+            }
+        };
 
         all_diagnostics.extend(parse_result.diagnostics.into_iter());
 
         // Run fixer analysis if --fix or --fix-dry-run is enabled
         if args.fix || args.fix_dry_run {
-            let fixable_issues = Fixer::analyze(&parse_result.module, parse_result.file_id, &source);
+            let fixable_issues =
+                Fixer::analyze(&parse_result.module, parse_result.file_id, &source);
             for issue in &fixable_issues {
                 fix_applier.add_issue(issue, &canonical, &source, min_confidence);
 
                 // Add a diagnostic for each fixable issue so it shows in output
                 let diag = match &issue.kind {
-                    super::fixer::FixableKind::AnyType { .. } => {
-                        Diagnostic::warning(
-                            DiagnosticCode::AnyTypeUsage,
-                            format!("{} (--fix to apply)", issue.message),
-                        )
-                        .with_span(issue.span.clone())
-                        .build()
-                    }
-                    super::fixer::FixableKind::TemplateLiteral => {
-                        Diagnostic::warning(
-                            DiagnosticCode::UnsupportedFeature,
-                            format!("{} (--fix to apply)", issue.message),
-                        )
-                        .with_span(issue.span.clone())
-                        .build()
-                    }
+                    super::fixer::FixableKind::AnyType { .. } => Diagnostic::warning(
+                        DiagnosticCode::AnyTypeUsage,
+                        format!("{} (--fix to apply)", issue.message),
+                    )
+                    .with_span(issue.span.clone())
+                    .build(),
+                    super::fixer::FixableKind::TemplateLiteral => Diagnostic::warning(
+                        DiagnosticCode::UnsupportedFeature,
+                        format!("{} (--fix to apply)", issue.message),
+                    )
+                    .with_span(issue.span.clone())
+                    .build(),
                 };
                 all_diagnostics.push(diag);
             }
@@ -237,24 +236,20 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
                 // offending source snippet. Otherwise fall back to a
                 // location-less message (but still tag it with the file_id
                 // so the emitter can at least show the filename).
-                let (message, span) = if let Some(lower_err) =
-                    e.downcast_ref::<perry_hir::error::LowerError>()
-                {
-                    let span = match lower_err.span {
-                        Some(swc_span) => {
-                            Span::new(file_id, swc_span.lo.0, swc_span.hi.0)
-                        }
-                        None => Span::DUMMY,
+                let (message, span) =
+                    if let Some(lower_err) = e.downcast_ref::<perry_hir::error::LowerError>() {
+                        let span = match lower_err.span {
+                            Some(swc_span) => Span::new(file_id, swc_span.lo.0, swc_span.hi.0),
+                            None => Span::DUMMY,
+                        };
+                        (lower_err.message.clone(), span)
+                    } else {
+                        // No span info — prefix the filename so the user at
+                        // least knows which file produced the error.
+                        (format!("{}: {}", filename, e), Span::DUMMY)
                     };
-                    (lower_err.message.clone(), span)
-                } else {
-                    // No span info — prefix the filename so the user at
-                    // least knows which file produced the error.
-                    (format!("{}: {}", filename, e), Span::DUMMY)
-                };
 
-                let mut builder =
-                    Diagnostic::error(DiagnosticCode::UnsupportedFeature, message);
+                let mut builder = Diagnostic::error(DiagnosticCode::UnsupportedFeature, message);
                 if !span.is_dummy() {
                     builder = builder.with_span(span);
                 }
@@ -384,7 +379,8 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
                 if use_color {
                     println!(
                         "{}",
-                        console::style("✓ Parsing, HIR lowering, and dependency checks passed").green()
+                        console::style("✓ Parsing, HIR lowering, and dependency checks passed")
+                            .green()
                     );
                     println!(
                         "{}",
@@ -495,8 +491,8 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         }
     }
 
-    let has_blocking_issues = all_diagnostics.has_errors()
-        || (args.strict && all_diagnostics.warning_count() > 0);
+    let has_blocking_issues =
+        all_diagnostics.has_errors() || (args.strict && all_diagnostics.warning_count() > 0);
 
     if has_blocking_issues {
         Err(anyhow!("Check failed with errors"))

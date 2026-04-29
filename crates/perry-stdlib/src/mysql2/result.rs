@@ -1,6 +1,9 @@
 //! Query result handling for mysql2
 
-use perry_runtime::{js_array_alloc, js_array_push, js_object_alloc, js_object_set_field, js_object_set_keys, js_string_from_bytes, JSValue};
+use perry_runtime::{
+    js_array_alloc, js_array_push, js_object_alloc, js_object_set_field, js_object_set_keys,
+    js_string_from_bytes, JSValue,
+};
 use sqlx::mysql::{MySqlColumn, MySqlRow};
 use sqlx::{Column, Row, TypeInfo};
 
@@ -54,7 +57,10 @@ pub struct RawQueryResult {
 #[derive(Clone, Debug)]
 pub enum QueryOutcome {
     Rows(RawQueryResult),
-    Executed { affected_rows: u64, last_insert_id: u64 },
+    Executed {
+        affected_rows: u64,
+        last_insert_id: u64,
+    },
 }
 
 impl RawQueryResult {
@@ -296,9 +302,10 @@ impl QueryOutcome {
     pub fn to_jsvalue(&self) -> JSValue {
         match self {
             QueryOutcome::Rows(raw) => raw.to_jsvalue(),
-            QueryOutcome::Executed { affected_rows, last_insert_id } => {
-                affected_rows_result(*affected_rows, *last_insert_id)
-            }
+            QueryOutcome::Executed {
+                affected_rows,
+                last_insert_id,
+            } => affected_rows_result(*affected_rows, *last_insert_id),
         }
     }
 }

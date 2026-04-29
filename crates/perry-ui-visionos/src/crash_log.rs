@@ -91,9 +91,9 @@ pub fn install_crash_hooks() {
 extern "C" fn signal_handler(sig: libc::c_int) {
     let msg: &[u8] = match sig {
         libc::SIGSEGV => b"signal:SIGSEGV\n",
-        libc::SIGBUS  => b"signal:SIGBUS\n",
+        libc::SIGBUS => b"signal:SIGBUS\n",
         libc::SIGABRT => b"signal:SIGABRT\n",
-        _             => b"signal:unknown\n",
+        _ => b"signal:unknown\n",
     };
 
     unsafe {

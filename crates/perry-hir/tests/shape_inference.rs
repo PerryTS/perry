@@ -46,16 +46,24 @@ fn find_local_type<'m>(module: &'m Module, name: &str) -> &'m Type {
             }
             // Descend through control-flow wrappers in case the binding is nested.
             match s {
-                Stmt::If { then_branch, else_branch, .. } => {
-                    if let Some(t) = walk(then_branch, target) { return Some(t); }
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    if let Some(t) = walk(then_branch, target) {
+                        return Some(t);
+                    }
                     if let Some(eb) = else_branch {
-                        if let Some(t) = walk(eb, target) { return Some(t); }
+                        if let Some(t) = walk(eb, target) {
+                            return Some(t);
+                        }
                     }
                 }
-                Stmt::While { body, .. }
-                | Stmt::DoWhile { body, .. }
-                | Stmt::For { body, .. } => {
-                    if let Some(t) = walk(body, target) { return Some(t); }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                    if let Some(t) = walk(body, target) {
+                        return Some(t);
+                    }
                 }
                 _ => {}
             }
@@ -774,4 +782,3 @@ fn standalone_inheritance_preserves_chain() {
     assert!(derived.extends.is_some());
     assert!(derived.fields.iter().any(|f| f.name == "d"));
 }
-

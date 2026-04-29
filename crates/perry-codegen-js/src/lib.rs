@@ -61,7 +61,7 @@ pub fn compile_module_to_js(module: &Module, minify_names: bool) -> (String, BTr
 /// The entry module is the last one in the list.
 /// When `minify` is true, applies name mangling and whitespace stripping.
 pub fn compile_modules_to_html(
-    modules: &[(String, Module)],  // (module_name, hir_module)
+    modules: &[(String, Module)], // (module_name, hir_module)
     title: &str,
     minify: bool,
 ) -> Result<String> {
@@ -85,29 +85,38 @@ pub fn compile_modules_to_html(
         } else if !exported_names.is_empty() {
             // Non-entry module with exports: wrap in IIFE
             let safe_name = sanitize_module_name(mod_name);
-            let _ = std::fmt::Write::write_fmt(&mut all_js,
-                format_args!("const __mod_{} = (() => {{\n", safe_name));
+            let _ = std::fmt::Write::write_fmt(
+                &mut all_js,
+                format_args!("const __mod_{} = (() => {{\n", safe_name),
+            );
             all_js.push_str(&js);
             all_js.push_str("  return {");
             for (j, name) in exported_names.iter().enumerate() {
-                if j > 0 { all_js.push_str(", "); }
+                if j > 0 {
+                    all_js.push_str(", ");
+                }
                 all_js.push_str(name);
             }
             all_js.push_str("};\n})();\n");
 
             // Destructure exports into local scope (skip already-declared names)
-            let new_names: Vec<&String> = exported_names.iter()
+            let new_names: Vec<&String> = exported_names
+                .iter()
                 .filter(|n| !declared_names.contains(n.as_str()))
                 .collect();
             if !new_names.is_empty() {
                 all_js.push_str("const {");
                 for (j, name) in new_names.iter().enumerate() {
-                    if j > 0 { all_js.push_str(", "); }
+                    if j > 0 {
+                        all_js.push_str(", ");
+                    }
                     all_js.push_str(name);
                     declared_names.insert(name.to_string());
                 }
-                let _ = std::fmt::Write::write_fmt(&mut all_js,
-                    format_args!("}} = __mod_{};\n", safe_name));
+                let _ = std::fmt::Write::write_fmt(
+                    &mut all_js,
+                    format_args!("}} = __mod_{};\n", safe_name),
+                );
             }
         } else {
             // Non-entry module without exports: still wrap in IIFE for scope isolation
@@ -165,15 +174,21 @@ pub fn compile_modules_to_html(
 
 /// Sanitize a module name for use as a JavaScript identifier
 fn sanitize_module_name(name: &str) -> String {
-    name.chars().map(|c| {
-        if c.is_alphanumeric() || c == '_' { c } else { '_' }
-    }).collect()
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Basic HTML escaping for title
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }

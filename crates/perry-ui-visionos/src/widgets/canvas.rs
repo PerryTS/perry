@@ -6,9 +6,9 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use objc2_foundation::{MainThreadMarker, NSObject};
 use objc2_ui_kit::UIView;
-use objc2_core_foundation::{CGPoint, CGSize, CGRect};
-use objc2_foundation::{NSObject, MainThreadMarker};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -37,14 +37,19 @@ extern "C" {
     fn CGContextSetLineJoin(c: CGContextRef, join: i32);
     fn CGContextSetRGBStrokeColor(c: CGContextRef, r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat);
     fn CGContextDrawLinearGradient(
-        c: CGContextRef, gradient: CGGradientRef,
-        start_point: CGPoint, end_point: CGPoint, options: u32,
+        c: CGContextRef,
+        gradient: CGGradientRef,
+        start_point: CGPoint,
+        end_point: CGPoint,
+        options: u32,
     );
     fn CGColorSpaceCreateDeviceRGB() -> CGColorSpaceRef;
     fn CGColorSpaceRelease(space: CGColorSpaceRef);
     fn CGGradientCreateWithColorComponents(
-        space: CGColorSpaceRef, components: *const CGFloat,
-        locations: *const CGFloat, count: usize,
+        space: CGColorSpaceRef,
+        components: *const CGFloat,
+        locations: *const CGFloat,
+        count: usize,
     ) -> CGGradientRef;
     fn CGGradientRelease(gradient: CGGradientRef);
 }
@@ -55,10 +60,22 @@ enum DrawCommand {
     BeginPath,
     MoveTo(f64, f64),
     LineTo(f64, f64),
-    Stroke { r: f64, g: f64, b: f64, a: f64, line_width: f64 },
+    Stroke {
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+        line_width: f64,
+    },
     FillGradient {
-        r1: f64, g1: f64, b1: f64, a1: f64,
-        r2: f64, g2: f64, b2: f64, a2: f64,
+        r1: f64,
+        g1: f64,
+        b1: f64,
+        a1: f64,
+        r2: f64,
+        g2: f64,
+        b2: f64,
+        a2: f64,
         direction: f64,
     },
 }
@@ -212,17 +229,13 @@ impl PerryCanvasView {
         // Set a fixed size via Auto Layout constraints
         unsafe {
             let _: () = msg_send![&*view, setTranslatesAutoresizingMaskIntoConstraints: false];
-            let width_anchor: Retained<AnyObject> = msg_send![
-                &*view, widthAnchor
-            ];
+            let width_anchor: Retained<AnyObject> = msg_send![&*view, widthAnchor];
             let constraint: Retained<AnyObject> = msg_send![
                 &*width_anchor, constraintEqualToConstant: width
             ];
             let _: () = msg_send![&*constraint, setActive: true];
 
-            let height_anchor: Retained<AnyObject> = msg_send![
-                &*view, heightAnchor
-            ];
+            let height_anchor: Retained<AnyObject> = msg_send![&*view, heightAnchor];
             let h_constraint: Retained<AnyObject> = msg_send![
                 &*height_anchor, constraintEqualToConstant: height
             ];
@@ -248,9 +261,7 @@ pub fn create(width: f64, height: f64) -> i64 {
     });
 
     // Cast to UIView for registration
-    let ui_view: Retained<UIView> = unsafe {
-        Retained::cast_unchecked(view)
-    };
+    let ui_view: Retained<UIView> = unsafe { Retained::cast_unchecked(view) };
     register_widget(ui_view)
 }
 
@@ -313,7 +324,13 @@ pub fn stroke(handle: i64, r: f64, g: f64, b: f64, a: f64, line_width: f64) {
     if let Some(key) = get_canvas_key(handle) {
         CANVAS_COMMANDS.with(|cmds| {
             if let Some(commands) = cmds.borrow_mut().get_mut(&key) {
-                commands.push(DrawCommand::Stroke { r, g, b, a, line_width });
+                commands.push(DrawCommand::Stroke {
+                    r,
+                    g,
+                    b,
+                    a,
+                    line_width,
+                });
             }
         });
         // Trigger redraw
@@ -327,14 +344,30 @@ pub fn stroke(handle: i64, r: f64, g: f64, b: f64, a: f64, line_width: f64) {
 
 /// Fill the current path area with a gradient.
 pub fn fill_gradient(
-    handle: i64, r1: f64, g1: f64, b1: f64, a1: f64,
-    r2: f64, g2: f64, b2: f64, a2: f64, direction: f64,
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
+    direction: f64,
 ) {
     if let Some(key) = get_canvas_key(handle) {
         CANVAS_COMMANDS.with(|cmds| {
             if let Some(commands) = cmds.borrow_mut().get_mut(&key) {
                 commands.push(DrawCommand::FillGradient {
-                    r1, g1, b1, a1, r2, g2, b2, a2, direction,
+                    r1,
+                    g1,
+                    b1,
+                    a1,
+                    r2,
+                    g2,
+                    b2,
+                    a2,
+                    direction,
                 });
             }
         });

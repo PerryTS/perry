@@ -1,5 +1,5 @@
+use perry_ui_test::{Support, FEATURES};
 use std::collections::HashSet;
-use perry_ui_test::{FEATURES, Support};
 
 /// Extract `perry_ui_*` / `perry_system_*` FFI symbols from Rust source.
 /// Matches: `pub extern "C" fn perry_...(` across one or more lines.
@@ -107,30 +107,35 @@ macro_rules! native_platform_test {
         fn $test_name() {
             let source = include_str!($source_path);
             let symbols = extract_ffi_symbols(source);
-            check_platform(
-                $platform_name,
-                &symbols,
-                |f| f.$field,
-                |f| f.name,
-            );
+            check_platform($platform_name, &symbols, |f| f.$field, |f| f.name);
         }
     };
 }
 
-native_platform_test!(test_macos,   "macOS",   "../../perry-ui-macos/src/lib.rs",   macos);
-native_platform_test!(test_ios,     "iOS",     "../../perry-ui-ios/src/lib.rs",      ios);
-native_platform_test!(test_android, "Android", "../../perry-ui-android/src/lib.rs",  android);
-native_platform_test!(test_gtk4,    "GTK4",    "../../perry-ui-gtk4/src/lib.rs",     gtk4);
-native_platform_test!(test_windows, "Windows", "../../perry-ui-windows/src/lib.rs",  windows);
+native_platform_test!(
+    test_macos,
+    "macOS",
+    "../../perry-ui-macos/src/lib.rs",
+    macos
+);
+native_platform_test!(test_ios, "iOS", "../../perry-ui-ios/src/lib.rs", ios);
+native_platform_test!(
+    test_android,
+    "Android",
+    "../../perry-ui-android/src/lib.rs",
+    android
+);
+native_platform_test!(test_gtk4, "GTK4", "../../perry-ui-gtk4/src/lib.rs", gtk4);
+native_platform_test!(
+    test_windows,
+    "Windows",
+    "../../perry-ui-windows/src/lib.rs",
+    windows
+);
 
 #[test]
 fn test_web() {
     let source = include_str!("../../perry-codegen-js/src/web_runtime.js");
     let symbols = extract_web_symbols(source);
-    check_platform(
-        "Web",
-        &symbols,
-        |f| f.web,
-        |f| f.web_name.unwrap_or(f.name),
-    );
+    check_platform("Web", &symbols, |f| f.web, |f| f.web_name.unwrap_or(f.name));
 }

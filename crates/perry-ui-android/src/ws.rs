@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use perry_runtime::string::{js_string_from_bytes, StringHeader};
 use perry_runtime::promise::Promise;
+use perry_runtime::string::{js_string_from_bytes, StringHeader};
 
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{connect, Message, WebSocket};
@@ -23,12 +23,7 @@ extern "C" {
 fn ws_log(msg: &str) {
     let c_msg = std::ffi::CString::new(msg).unwrap_or_default();
     unsafe {
-        __android_log_print(
-            3,
-            b"PerryWS\0".as_ptr(),
-            b"%s\0".as_ptr(),
-            c_msg.as_ptr(),
-        );
+        __android_log_print(3, b"PerryWS\0".as_ptr(), b"%s\0".as_ptr(), c_msg.as_ptr());
     }
 }
 
@@ -66,8 +61,11 @@ fn str_from_header(ptr: *const StringHeader) -> Option<&'static str> {
     unsafe {
         let header = ptr as *const perry_runtime::string::StringHeader;
         let len = (*header).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)))
+        let data =
+            (ptr as *const u8).add(std::mem::size_of::<perry_runtime::string::StringHeader>());
+        Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+            data, len,
+        )))
     }
 }
 
@@ -242,8 +240,7 @@ pub extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut Promise {
 pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     ws_log("js_ws_connect_start called");
 
-    let url_ptr =
-        perry_runtime::js_get_string_pointer_unified(url_nanboxed) as *const StringHeader;
+    let url_ptr = perry_runtime::js_get_string_pointer_unified(url_nanboxed) as *const StringHeader;
     let url = match str_from_header(url_ptr) {
         Some(u) => u.to_string(),
         None => {
@@ -344,10 +341,7 @@ pub extern "C" fn js_ws_receive(handle: i64) -> *mut StringHeader {
 
 /// Wait for a message (not used by sync-transport.ts polling model).
 #[no_mangle]
-pub extern "C" fn js_ws_wait_for_message(
-    _handle: i64,
-    _timeout_ms: f64,
-) -> *mut Promise {
+pub extern "C" fn js_ws_wait_for_message(_handle: i64, _timeout_ms: f64) -> *mut Promise {
     std::ptr::null_mut()
 }
 

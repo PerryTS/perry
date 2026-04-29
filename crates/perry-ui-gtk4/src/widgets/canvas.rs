@@ -17,10 +17,22 @@ enum DrawCommand {
     BeginPath,
     MoveTo(f64, f64),
     LineTo(f64, f64),
-    Stroke { r: f64, g: f64, b: f64, a: f64, line_width: f64 },
+    Stroke {
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+        line_width: f64,
+    },
     FillGradient {
-        r1: f64, g1: f64, b1: f64, a1: f64,
-        r2: f64, g2: f64, b2: f64, a2: f64,
+        r1: f64,
+        g1: f64,
+        b1: f64,
+        a1: f64,
+        r2: f64,
+        g2: f64,
+        b2: f64,
+        a2: f64,
         direction: f64,
     },
 }
@@ -51,9 +63,8 @@ pub fn create(width: f64, height: f64) -> i64 {
 
     // Set the draw function — replays the command buffer using Cairo
     area.set_draw_func(move |_area, cr, _w, _h| {
-        let (canvas_w, canvas_h) = CANVAS_SIZES.with(|s| {
-            s.borrow().get(&handle).copied().unwrap_or((0.0, 0.0))
-        });
+        let (canvas_w, canvas_h) =
+            CANVAS_SIZES.with(|s| s.borrow().get(&handle).copied().unwrap_or((0.0, 0.0)));
 
         CANVAS_COMMANDS.with(|cmds| {
             let cmds = cmds.borrow();
@@ -74,7 +85,13 @@ pub fn create(width: f64, height: f64) -> i64 {
                         DrawCommand::LineTo(x, y) => {
                             path_points.push((*x, *y));
                         }
-                        DrawCommand::Stroke { r, g, b, a, line_width } => {
+                        DrawCommand::Stroke {
+                            r,
+                            g,
+                            b,
+                            a,
+                            line_width,
+                        } => {
                             if path_points.len() >= 2 {
                                 cr.save().ok();
                                 cr.set_source_rgba(*r, *g, *b, *a);
@@ -90,7 +107,17 @@ pub fn create(width: f64, height: f64) -> i64 {
                                 cr.restore().ok();
                             }
                         }
-                        DrawCommand::FillGradient { r1, g1, b1, a1, r2, g2, b2, a2, direction } => {
+                        DrawCommand::FillGradient {
+                            r1,
+                            g1,
+                            b1,
+                            a1,
+                            r2,
+                            g2,
+                            b2,
+                            a2,
+                            direction,
+                        } => {
                             if path_points.len() >= 2 {
                                 cr.save().ok();
 
@@ -179,7 +206,13 @@ pub fn line_to(handle: i64, x: f64, y: f64) {
 pub fn stroke(handle: i64, r: f64, g: f64, b: f64, a: f64, line_width: f64) {
     CANVAS_COMMANDS.with(|cmds| {
         if let Some(commands) = cmds.borrow_mut().get_mut(&handle) {
-            commands.push(DrawCommand::Stroke { r, g, b, a, line_width });
+            commands.push(DrawCommand::Stroke {
+                r,
+                g,
+                b,
+                a,
+                line_width,
+            });
         }
     });
     // Trigger redraw
@@ -192,13 +225,29 @@ pub fn stroke(handle: i64, r: f64, g: f64, b: f64, a: f64, line_width: f64) {
 
 /// Fill the current path area with a gradient.
 pub fn fill_gradient(
-    handle: i64, r1: f64, g1: f64, b1: f64, a1: f64,
-    r2: f64, g2: f64, b2: f64, a2: f64, direction: f64,
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
+    direction: f64,
 ) {
     CANVAS_COMMANDS.with(|cmds| {
         if let Some(commands) = cmds.borrow_mut().get_mut(&handle) {
             commands.push(DrawCommand::FillGradient {
-                r1, g1, b1, a1, r2, g2, b2, a2, direction,
+                r1,
+                g1,
+                b1,
+                a1,
+                r2,
+                g2,
+                b2,
+                a2,
+                direction,
             });
         }
     });

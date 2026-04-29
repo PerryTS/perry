@@ -168,9 +168,8 @@ pub extern "C" fn perry_ui_embed_nsview(ptr: i64) -> i64 {
         eprintln!("[perry-ui] perry_ui_embed_nsview: null ptr, returning 0");
         return 0;
     }
-    let widget: gtk4::Widget = unsafe {
-        gtk4::glib::translate::from_glib_none(ptr as *mut gtk4::ffi::GtkWidget)
-    };
+    let widget: gtk4::Widget =
+        unsafe { gtk4::glib::translate::from_glib_none(ptr as *mut gtk4::ffi::GtkWidget) };
     let handle = widgets::register_widget(widget);
     eprintln!("[perry-ui] perry_ui_embed_nsview -> handle {}", handle);
     handle
@@ -321,7 +320,9 @@ pub extern "C" fn perry_ui_lazyvstack_set_row_height(_handle: i64, _height: f64)
 
 // Table (stub — not yet implemented on GTK4)
 #[no_mangle]
-pub extern "C" fn perry_ui_table_create(_row_count: f64, _col_count: f64, _render: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_table_create(_row_count: f64, _col_count: f64, _render: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_column_header(_handle: i64, _col: i64, _title_ptr: i64) {}
 #[no_mangle]
@@ -331,7 +332,9 @@ pub extern "C" fn perry_ui_table_update_row_count(_handle: i64, _count: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_on_row_select(_handle: i64, _callback: f64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_selected_row(_handle: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_table_get_selected_row(_handle: i64) -> i64 {
+    -1
+}
 
 /// Create a ProgressView.
 #[no_mangle]
@@ -378,7 +381,11 @@ pub extern "C" fn perry_ui_widget_remove_child(parent_handle: i64, child_handle:
 /// `perry_ui_widget_reorder_child` — args are f64 to match the macOS
 /// signature, internally cast to i64.
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_reorder_child(parent_handle: i64, from_index: f64, to_index: f64) {
+pub extern "C" fn perry_ui_widget_reorder_child(
+    parent_handle: i64,
+    from_index: f64,
+    to_index: f64,
+) {
     widgets::reorder_child(parent_handle, from_index as i64, to_index as i64);
 }
 
@@ -431,8 +438,18 @@ pub extern "C" fn perry_ui_state_on_change(state_handle: i64, callback: f64) {
 
 /// Bind a text widget to a state cell with prefix/suffix.
 #[no_mangle]
-pub extern "C" fn perry_ui_state_bind_text_numeric(state_handle: i64, text_handle: i64, prefix_ptr: i64, suffix_ptr: i64) {
-    state::bind_text_numeric(state_handle, text_handle, prefix_ptr as *const u8, suffix_ptr as *const u8);
+pub extern "C" fn perry_ui_state_bind_text_numeric(
+    state_handle: i64,
+    text_handle: i64,
+    prefix_ptr: i64,
+    suffix_ptr: i64,
+) {
+    state::bind_text_numeric(
+        state_handle,
+        text_handle,
+        prefix_ptr as *const u8,
+        suffix_ptr as *const u8,
+    );
 }
 
 /// Bind a slider to a state cell (two-way).
@@ -449,13 +466,27 @@ pub extern "C" fn perry_ui_state_bind_toggle(state_handle: i64, toggle_handle: i
 
 /// Bind a text widget to multiple states with a template.
 #[no_mangle]
-pub extern "C" fn perry_ui_state_bind_text_template(text_handle: i64, num_parts: i32, types_ptr: i64, values_ptr: i64) {
-    state::bind_text_template(text_handle, num_parts, types_ptr as *const i32, values_ptr as *const i64);
+pub extern "C" fn perry_ui_state_bind_text_template(
+    text_handle: i64,
+    num_parts: i32,
+    types_ptr: i64,
+    values_ptr: i64,
+) {
+    state::bind_text_template(
+        text_handle,
+        num_parts,
+        types_ptr as *const i32,
+        values_ptr as *const i64,
+    );
 }
 
 /// Bind visibility of widgets to a state cell.
 #[no_mangle]
-pub extern "C" fn perry_ui_state_bind_visibility(state_handle: i64, show_handle: i64, hide_handle: i64) {
+pub extern "C" fn perry_ui_state_bind_visibility(
+    state_handle: i64,
+    show_handle: i64,
+    hide_handle: i64,
+) {
     state::bind_visibility(state_handle, show_handle, hide_handle);
 }
 
@@ -467,7 +498,11 @@ pub extern "C" fn perry_ui_state_bind_textfield(state_handle: i64, textfield_han
 
 /// Initialize a ForEach dynamic list binding.
 #[no_mangle]
-pub extern "C" fn perry_ui_for_each_init(container_handle: i64, state_handle: i64, render_closure: f64) {
+pub extern "C" fn perry_ui_for_each_init(
+    container_handle: i64,
+    state_handle: i64,
+    render_closure: f64,
+) {
     state::for_each_init(container_handle, state_handle, render_closure);
 }
 
@@ -548,7 +583,13 @@ pub extern "C" fn perry_ui_button_set_text_color(handle: i64, r: f64, g: f64, b:
 
 /// Set the tint color of a button's image/icon.
 #[no_mangle]
-pub extern "C" fn perry_ui_button_set_content_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+pub extern "C" fn perry_ui_button_set_content_tint_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
     widgets::button::set_content_tint_color(handle, r, g, b, a);
 }
 
@@ -608,13 +649,30 @@ pub extern "C" fn perry_ui_scrollview_set_offset(scroll_handle: i64, offset: f64
 
 /// Set background color.
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+pub extern "C" fn perry_ui_widget_set_background_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
     widgets::set_background_color(handle, r, g, b, a);
 }
 
 /// Set background gradient.
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_background_gradient(handle: i64, r1: f64, g1: f64, b1: f64, a1: f64, r2: f64, g2: f64, b2: f64, a2: f64, direction: f64) {
+pub extern "C" fn perry_ui_widget_set_background_gradient(
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
+    direction: f64,
+) {
     widgets::set_background_gradient(handle, r1, g1, b1, a1, r2, g2, b2, a2, direction);
 }
 
@@ -628,8 +686,13 @@ pub extern "C" fn perry_ui_widget_set_corner_radius(handle: i64, radius: f64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_shadow(
     handle: i64,
-    r: f64, g: f64, b: f64, a: f64,
-    blur: f64, offset_x: f64, offset_y: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+    blur: f64,
+    offset_x: f64,
+    offset_y: f64,
 ) {
     widgets::set_shadow(handle, r, g, b, a, blur, offset_x, offset_y);
 }
@@ -713,29 +776,61 @@ pub extern "C" fn perry_ui_canvas_line_to(handle: i64, x: f64, y: f64) {
 
 /// Stroke the current path.
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_stroke(handle: i64, r: f64, g: f64, b: f64, a: f64, line_width: f64) {
+pub extern "C" fn perry_ui_canvas_stroke(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+    line_width: f64,
+) {
     widgets::canvas::stroke(handle, r, g, b, a, line_width);
 }
 
 /// Fill the current path with a gradient.
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_fill_gradient(handle: i64, r1: f64, g1: f64, b1: f64, a1: f64, r2: f64, g2: f64, b2: f64, a2: f64, direction: f64) {
+pub extern "C" fn perry_ui_canvas_fill_gradient(
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
+    direction: f64,
+) {
     widgets::canvas::fill_gradient(handle, r1, g1, b1, a1, r2, g2, b2, a2, direction);
 }
 
 // Stateful 2D-context API stubs (full implementation tracked in perry-ui-test as `U`).
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_fill_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_stroke_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_line_width(_h: i64, _w: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_fill_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_stroke_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) { widgets::canvas::clear(h); }
-#[no_mangle] pub extern "C" fn perry_ui_canvas_arc(_h: i64, _x: f64, _y: f64, _r: f64, _sa: f64, _ea: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_close_path(_h: i64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_fill(_h: i64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_stroke_path(_h: i64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_fill_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_stroke_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_line_width(_h: i64, _w: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_stroke_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {
+    widgets::canvas::clear(h);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_arc(_h: i64, _x: f64, _y: f64, _r: f64, _sa: f64, _ea: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_close_path(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_stroke_path(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
 
 // =============================================================================
 // Menu
@@ -755,9 +850,19 @@ pub extern "C" fn perry_ui_menu_add_item(menu_handle: i64, title_ptr: i64, callb
 
 /// Add a menu item with a keyboard shortcut.
 #[no_mangle]
-pub extern "C" fn perry_ui_menu_add_item_with_shortcut(menu_handle: i64, title_ptr: i64, shortcut_ptr: i64, callback: f64) {
+pub extern "C" fn perry_ui_menu_add_item_with_shortcut(
+    menu_handle: i64,
+    title_ptr: i64,
+    shortcut_ptr: i64,
+    callback: f64,
+) {
     // Arg order matches the TS-side API: `menuAddItemWithShortcut(menu, title, shortcut, callback)`.
-    menu::add_item_with_shortcut(menu_handle, title_ptr as *const u8, callback, shortcut_ptr as *const u8);
+    menu::add_item_with_shortcut(
+        menu_handle,
+        title_ptr as *const u8,
+        callback,
+        shortcut_ptr as *const u8,
+    );
 }
 
 /// Add a separator to a menu.
@@ -798,7 +903,12 @@ pub extern "C" fn perry_ui_menu_clear(menu_handle: i64) {
 
 /// Add a menu item with a standard action (no-op on GTK4 — macOS responder chain concept).
 #[no_mangle]
-pub extern "C" fn perry_ui_menu_add_standard_action(_menu_handle: i64, _title_ptr: i64, _selector_ptr: i64, _shortcut_ptr: i64) {
+pub extern "C" fn perry_ui_menu_add_standard_action(
+    _menu_handle: i64,
+    _title_ptr: i64,
+    _selector_ptr: i64,
+    _shortcut_ptr: i64,
+) {
     // No-op on GTK4 — standard actions are handled by GtkTextView built-in bindings
 }
 
@@ -836,8 +946,16 @@ pub extern "C" fn perry_ui_open_folder_dialog(callback: f64) {
 
 /// Open a save file dialog.
 #[no_mangle]
-pub extern "C" fn perry_ui_save_file_dialog(callback: f64, default_name_ptr: i64, allowed_types_ptr: i64) {
-    dialog::save_file_dialog(callback, default_name_ptr as *const u8, allowed_types_ptr as *const u8);
+pub extern "C" fn perry_ui_save_file_dialog(
+    callback: f64,
+    default_name_ptr: i64,
+    allowed_types_ptr: i64,
+) {
+    dialog::save_file_dialog(
+        callback,
+        default_name_ptr as *const u8,
+        allowed_types_ptr as *const u8,
+    );
 }
 
 /// Show an alert dialog with custom buttons.
@@ -845,9 +963,16 @@ pub extern "C" fn perry_ui_save_file_dialog(callback: f64, default_name_ptr: i64
 /// invoked with the 0-based index of the clicked button.
 #[no_mangle]
 pub extern "C" fn perry_ui_alert(title_ptr: i64, message_ptr: i64, buttons: f64, callback: f64) {
-    extern "C" { fn js_nanbox_get_pointer(value: f64) -> i64; }
+    extern "C" {
+        fn js_nanbox_get_pointer(value: f64) -> i64;
+    }
     let buttons_ptr = unsafe { js_nanbox_get_pointer(buttons) } as *const u8;
-    dialog::alert(title_ptr as *const u8, message_ptr as *const u8, buttons_ptr, callback);
+    dialog::alert(
+        title_ptr as *const u8,
+        message_ptr as *const u8,
+        buttons_ptr,
+        callback,
+    );
 }
 
 /// Show a simple alert (title, message, OK button). Called from `alert(title, message)`.
@@ -912,7 +1037,12 @@ pub extern "C" fn perry_ui_widget_animate_opacity(handle: i64, target: f64, dura
 
 /// Animate position. `duration_secs` is in seconds.
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_animate_position(handle: i64, dx: f64, dy: f64, duration_secs: f64) {
+pub extern "C" fn perry_ui_widget_animate_position(
+    handle: i64,
+    dx: f64,
+    dy: f64,
+    duration_secs: f64,
+) {
     widgets::animate_position(handle, dx, dy, duration_secs);
 }
 
@@ -935,7 +1065,11 @@ pub extern "C" fn perry_ui_widget_set_hugging(handle: i64, priority: f64) {
 /// Set edge insets (padding) on a widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_edge_insets(
-    handle: i64, top: f64, left: f64, bottom: f64, right: f64,
+    handle: i64,
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
 ) {
     widgets::set_edge_insets(handle, top, left, bottom, right);
 }
@@ -957,7 +1091,13 @@ pub extern "C" fn perry_ui_textfield_set_borderless(handle: i64, borderless: f64
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_textfield_set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+pub extern "C" fn perry_ui_textfield_set_background_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
     widgets::textfield::set_background_color(handle, r, g, b, a);
 }
 
@@ -1012,11 +1152,15 @@ pub extern "C" fn perry_ui_stack_set_detaches_hidden(handle: i64, flag: i64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_icon(path_ptr: i64) {
     let path = crate::widgets::image::str_from_header(path_ptr as *const u8);
-    if path.is_empty() { return; }
+    if path.is_empty() {
+        return;
+    }
 
     // Resolve path: try relative to executable, then relative to cwd
     let resolved = resolve_asset_path(path);
-    if !resolved.exists() { return; }
+    if !resolved.exists() {
+        return;
+    }
 
     // In GTK4, window icons are set via the icon theme.
     // Add the icon's parent directory to the theme search path.
@@ -1041,7 +1185,9 @@ fn resolve_asset_path(path: &str) -> std::path::PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = dir.join(path);
-            if candidate.exists() { return candidate; }
+            if candidate.exists() {
+                return candidate;
+            }
         }
     }
     // Fallback to the path as-is (relative to cwd)
@@ -1050,13 +1196,25 @@ fn resolve_asset_path(path: &str) -> std::path::PathBuf {
 
 /// Create a VStack with custom insets.
 #[no_mangle]
-pub extern "C" fn perry_ui_vstack_create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right: f64) -> i64 {
+pub extern "C" fn perry_ui_vstack_create_with_insets(
+    spacing: f64,
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+) -> i64 {
     widgets::vstack::create_with_insets(spacing, top, left, bottom, right)
 }
 
 /// Create an HStack with custom insets.
 #[no_mangle]
-pub extern "C" fn perry_ui_hstack_create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right: f64) -> i64 {
+pub extern "C" fn perry_ui_hstack_create_with_insets(
+    spacing: f64,
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+) -> i64 {
     widgets::hstack::create_with_insets(spacing, top, left, bottom, right)
 }
 
@@ -1173,8 +1331,18 @@ pub extern "C" fn perry_ui_toolbar_create() -> i64 {
 
 /// Add an item to a toolbar.
 #[no_mangle]
-pub extern "C" fn perry_ui_toolbar_add_item(toolbar_handle: i64, label_ptr: i64, icon_ptr: i64, callback: f64) {
-    toolbar::add_item(toolbar_handle, label_ptr as *const u8, icon_ptr as *const u8, callback);
+pub extern "C" fn perry_ui_toolbar_add_item(
+    toolbar_handle: i64,
+    label_ptr: i64,
+    icon_ptr: i64,
+    callback: f64,
+) {
+    toolbar::add_item(
+        toolbar_handle,
+        label_ptr as *const u8,
+        icon_ptr as *const u8,
+        callback,
+    );
 }
 
 /// Attach a toolbar to the current window.
@@ -1255,18 +1423,33 @@ pub extern "C" fn perry_system_notification_on_background_receive(_callback: f64
 /// notification re-emit would be best-effort and is out of scope for #96.
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_interval(
-    _id_ptr: i64, _title_ptr: i64, _body_ptr: i64, _seconds: f64, _repeats: f64,
-) {}
+    _id_ptr: i64,
+    _title_ptr: i64,
+    _body_ptr: i64,
+    _seconds: f64,
+    _repeats: f64,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_calendar(
-    _id_ptr: i64, _title_ptr: i64, _body_ptr: i64, _timestamp_ms: f64,
-) {}
+    _id_ptr: i64,
+    _title_ptr: i64,
+    _body_ptr: i64,
+    _timestamp_ms: f64,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_location(
-    _id_ptr: i64, _title_ptr: i64, _body_ptr: i64, _lat: f64, _lon: f64, _radius: f64,
-) {}
+    _id_ptr: i64,
+    _title_ptr: i64,
+    _body_ptr: i64,
+    _lat: f64,
+    _lon: f64,
+    _radius: f64,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn perry_system_notification_cancel(_id_ptr: i64) {}
@@ -1276,7 +1459,9 @@ pub extern "C" fn perry_system_notification_on_tap(_callback: f64) {}
 
 #[no_mangle]
 pub extern "C" fn perry_system_get_locale() -> i64 {
-    extern "C" { fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8; }
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
+    }
     let lang = std::env::var("LANG")
         .or_else(|_| std::env::var("LC_ALL"))
         .or_else(|_| std::env::var("LANGUAGE"))
@@ -1362,7 +1547,9 @@ thread_local! {
 /// perry_on_resize(callback) — store callback; called with (width, height) on resize.
 #[no_mangle]
 pub extern "C" fn __wrapper_perry_on_resize(_closure_ptr: i64, callback: f64) -> f64 {
-    RESIZE_CALLBACK.with(|rc| { *rc.borrow_mut() = Some(callback); });
+    RESIZE_CALLBACK.with(|rc| {
+        *rc.borrow_mut() = Some(callback);
+    });
     TAG_UNDEFINED
 }
 
@@ -1384,22 +1571,34 @@ pub extern "C" fn perry_ui_poll_open_file() -> i64 {
 /// the symbol must exist for the linker even though it is never called at runtime.
 #[no_mangle]
 pub extern "C" fn perry_get_device_idiom(_closure_ptr: i64) -> f64 {
-    0.0  // 0 = phone-like; value is irrelevant on Linux (dead code branch)
+    0.0 // 0 = phone-like; value is irrelevant on Linux (dead code branch)
 }
 
 // Audio capture (PulseAudio simple API)
 #[no_mangle]
-pub extern "C" fn perry_system_audio_start() -> i64 { audio::start() }
+pub extern "C" fn perry_system_audio_start() -> i64 {
+    audio::start()
+}
 #[no_mangle]
-pub extern "C" fn perry_system_audio_stop() { audio::stop() }
+pub extern "C" fn perry_system_audio_stop() {
+    audio::stop()
+}
 #[no_mangle]
-pub extern "C" fn perry_system_audio_get_level() -> f64 { audio::get_level() }
+pub extern "C" fn perry_system_audio_get_level() -> f64 {
+    audio::get_level()
+}
 #[no_mangle]
-pub extern "C" fn perry_system_audio_get_peak() -> f64 { audio::get_peak() }
+pub extern "C" fn perry_system_audio_get_peak() -> f64 {
+    audio::get_peak()
+}
 #[no_mangle]
-pub extern "C" fn perry_system_audio_get_waveform(count: f64) -> f64 { audio::get_waveform(count) }
+pub extern "C" fn perry_system_audio_get_waveform(count: f64) -> f64 {
+    audio::get_waveform(count)
+}
 #[no_mangle]
-pub extern "C" fn perry_system_get_device_model() -> i64 { audio::get_device_model() }
+pub extern "C" fn perry_system_get_device_model() -> i64 {
+    audio::get_device_model()
+}
 
 /// hone_get_documents_dir() — iOS sandbox documents dir stub.
 /// Returns empty string; only reachable on iOS (__platform__ === 1), which is dead code on Linux.
@@ -1421,7 +1620,9 @@ pub extern "C" fn __wrapper_hone_get_app_files_dir(_closure_ptr: i64) -> f64 {
 // these no-ops let user code that targets multiple platforms link cleanly.
 
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_create() -> i64 { 0 }
+pub extern "C" fn perry_ui_camera_create() -> i64 {
+    0
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_camera_start(_handle: i64) {}
@@ -1436,7 +1637,9 @@ pub extern "C" fn perry_ui_camera_freeze(_handle: i64) {}
 pub extern "C" fn perry_ui_camera_unfreeze(_handle: i64) {}
 
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_sample_color(_x: f64, _y: f64) -> f64 { -1.0 }
+pub extern "C" fn perry_ui_camera_sample_color(_x: f64, _y: f64) -> f64 {
+    -1.0
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_camera_set_on_tap(_handle: i64, _callback: f64) {}

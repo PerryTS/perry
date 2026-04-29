@@ -1,5 +1,5 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2_app_kit::NSPasteboard;
 use objc2_foundation::NSString;
 

@@ -1,8 +1,8 @@
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_ui_kit::UIView;
 use objc2_foundation::{NSObject, NSString};
+use objc2_ui_kit::UIView;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -77,10 +77,7 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
     let _placeholder = str_from_header(placeholder_ptr);
 
     unsafe {
-        let text_view: Retained<AnyObject> = msg_send![
-            AnyClass::get(c"UITextView").unwrap(),
-            new
-        ];
+        let text_view: Retained<AnyObject> = msg_send![AnyClass::get(c"UITextView").unwrap(), new];
         let _: () = msg_send![&*text_view, setEditable: true];
         let _: () = msg_send![&*text_view, setSelectable: true];
         let _: () = msg_send![&*text_view, setTranslatesAutoresizingMaskIntoConstraints: false];

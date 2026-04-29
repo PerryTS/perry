@@ -1,14 +1,10 @@
 {
-  "test_edge_control_flow": {
-    "status": "flake",
-    "reason": "Intermittent: failed in parity run 2026-04-25 but passed on isolated re-run with the same binary. Appeared alongside test_cli_simulation between the 2026-04-24 and 2026-04-25 runs. Possibly state-dependent on sibling tests or non-deterministic codegen path; investigate separately. Tracked at https://github.com/PerryTS/perry/issues/272."
-  },
-  "test_edge_error_handling": {
-    "status": "flake",
-    "reason": "Same flake family as test_edge_control_flow: failed in parity run 2026-04-25 but passed on isolated re-run with the same binary. Pre-existing, appeared between 2026-04-24 and 2026-04-25 parity runs. Tracked at https://github.com/PerryTS/perry/issues/273."
-  },
   "test_gap_typed_arrays": {
-    "status": "known_limitation",
-    "reason": "Uint8ClampedArray doesn't clamp values 0-255 (Node: `Uint8Clamped: 255 0 128` from inputs [300, -10, 128]; Perry: `Uint8Clamped: 300 -10 128` — input passed through as-is). Categorical typed-array gap; the wider TypedArray completeness work (Int8Array / Uint8Array / Int16Array / Uint16Array / Int32Array / Uint32Array / Float32Array / Float64Array prototype surface) is also incomplete. The .at() sub-issue was fixed in #289 (v0.5.381)."
+    "status": "bug",
+    "reason": "Uint8ClampedArray index-set does NOT clamp values. Repro: `const c = new Uint8ClampedArray(3); c[0] = 300; c[1] = -10; c[2] = 128; console.log(c[0], c[1], c[2])` prints `300 -10 128` (Perry) vs `255 0 128` (Node). v0.5.380 / b2b0a3e6 added Uint8ClampedArray-specific intercepts at the start of `Expr::IndexGet` (line ~1687) and `Expr::IndexSet` (line ~2353) in `crates/perry-codegen/src/expr.rs` that route to `js_typed_array_get`/`js_typed_array_set` (which DO apply ToUint8Clamp via `KIND_UINT8_CLAMPED` in `crates/perry-runtime/src/typedarray.rs::store_at` line ~244). But the test still fails on clean main HEAD — the IndexSet path the test takes bypasses the new intercept. Likely culprits: (a) `receiver_class_name(ctx, object)` returns None for the test's `LocalGet`-typed receiver, (b) `lower_index_set_fast` or another inline-store fast path fires before the new intercept arm, (c) the receiver's `Type::Named(\"Uint8ClampedArray\")` info is lost between binding and use. Investigation: dump LLVM IR via `PERRY_NO_CACHE=1 PERRY_SAVE_LL=/tmp/dump.ll target/release/perry test-files/test_gap_typed_arrays.ts -o /tmp/x` and check whether the call site is `@js_typed_array_set` (correct) or `@js_array_set_f64`/inline `store double` (bug). Tracked separately as a follow-up to b2b0a3e6."
+  },
+  "test_issue_154_using_dispose": {
+    "status": "bug",
+    "reason": "SIGBUS (exit code 138) silently before producing any output. Repro: `target/release/perry test-files/test_issue_154_using_dispose.ts -o /tmp/t154 && /tmp/t154; echo $?` prints nothing then `138`. Pre-existing crash, acknowledged in CLAUDE.md v0.5.377 entry: \"The pre-existing test_issue_154_using_dispose SIGBUS is unrelated to this change (reproduces on clean main HEAD pre-fix).\" The `using` / `await using` desugar landed in v0.5.317 via `crates/perry-hir/src/lower_decl.rs::lower_stmts_using_aware` (rewires block-stmt lowering to wrap each binding in nested `Stmt::Try { catch: None, finally: ... }`). Likely failure mode: a runtime dispose call dereferences a bad pointer (NaN-boxed undefined misread as `*StringHeader` or `*ClosureHeader`), or the synthesized `try/finally` lowering produces a malformed exception-frame that crashes during stack unwinding. Investigation: lldb the binary at `/tmp/t154`, look for the crashing instruction; likely lives in `crates/perry-runtime/src/exception.rs` or the dispose-method dispatch in `crates/perry-codegen/src/lower_call.rs`. Tracked separately."
   }
 }

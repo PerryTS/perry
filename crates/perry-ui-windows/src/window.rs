@@ -5,7 +5,11 @@ use std::collections::HashMap;
 
 fn debug_log(msg: &str) {
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("perry_window_debug.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("perry_window_debug.log")
+    {
         let _ = writeln!(f, "{}", msg);
     }
 }
@@ -24,7 +28,9 @@ thread_local! {
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const perry_runtime::string::StringHeader;
         let len = (*header).byte_len as usize;
@@ -104,11 +110,11 @@ pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
 
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::*;
-        use windows::Win32::UI::WindowsAndMessaging::*;
-        use windows::Win32::Graphics::Gdi::{HBRUSH, COLOR_WINDOW, UpdateWindow};
-        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows::core::PCWSTR;
+        use windows::Win32::Foundation::*;
+        use windows::Win32::Graphics::Gdi::{UpdateWindow, COLOR_WINDOW, HBRUSH};
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::WindowsAndMessaging::*;
 
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();
@@ -131,12 +137,16 @@ pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 PCWSTR(class_name.as_ptr()),
                 PCWSTR(title_wide.as_ptr()),
                 WS_OVERLAPPEDWINDOW,
-                CW_USEDEFAULT, CW_USEDEFAULT,
-                width as i32, height as i32,
-                None, None,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                width as i32,
+                height as i32,
+                None,
+                None,
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
             HWND_TO_WINDOW.with(|m| m.borrow_mut().insert(hwnd.0 as isize, id));
             WINDOWS.with(|w| w.borrow_mut().insert(id, hwnd));
@@ -154,7 +164,10 @@ pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
 
 /// Set the body (root widget) of a window.
 pub fn set_body(window_handle: i64, widget_handle: i64) {
-    debug_log(&format!("[perry-window] set_body: window={} widget={}", window_handle, widget_handle));
+    debug_log(&format!(
+        "[perry-window] set_body: window={} widget={}",
+        window_handle, widget_handle
+    ));
     WINDOW_ROOTS.with(|m| m.borrow_mut().insert(window_handle, widget_handle));
 
     #[cfg(target_os = "windows")]
@@ -171,20 +184,31 @@ pub fn set_body(window_handle: i64, widget_handle: i64) {
                         // Trigger initial layout (mirrors app_set_body)
                         let mut rect = RECT::default();
                         let _ = GetClientRect(*parent_hwnd, &mut rect);
-                        debug_log(&format!("[perry-window] set_body layout: rect={}x{} hwnd={:?}", rect.right, rect.bottom, parent_hwnd));
+                        debug_log(&format!(
+                            "[perry-window] set_body layout: rect={}x{} hwnd={:?}",
+                            rect.right, rect.bottom, parent_hwnd
+                        ));
                         let _ = MoveWindow(child_hwnd, 0, 0, rect.right, rect.bottom, true);
                         crate::layout::layout_widget(widget_handle, rect.right, rect.bottom);
                     }
                 } else {
-                    debug_log(&format!("[perry-window] set_body: no child hwnd for widget {}", widget_handle));
+                    debug_log(&format!(
+                        "[perry-window] set_body: no child hwnd for widget {}",
+                        widget_handle
+                    ));
                 }
             } else {
-                debug_log(&format!("[perry-window] set_body: no parent hwnd for window {}", window_handle));
+                debug_log(&format!(
+                    "[perry-window] set_body: no parent hwnd for window {}",
+                    window_handle
+                ));
             }
         });
     }
     #[cfg(not(target_os = "windows"))]
-    { let _ = (window_handle, widget_handle); }
+    {
+        let _ = (window_handle, widget_handle);
+    }
 }
 
 /// Show a window.
@@ -192,20 +216,26 @@ pub fn show(window_handle: i64) {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::*;
-        use windows::Win32::UI::WindowsAndMessaging::*;
         use windows::Win32::Graphics::Gdi::UpdateWindow;
+        use windows::Win32::UI::WindowsAndMessaging::*;
         WINDOWS.with(|w| {
             if let Some(hwnd) = w.borrow().get(&window_handle) {
                 unsafe {
                     let _ = ShowWindow(*hwnd, SW_SHOW);
                     // Re-layout in case set_body was called before the window was visible
                     let root = WINDOW_ROOTS.with(|m| m.borrow().get(&window_handle).copied());
-                    debug_log(&format!("[perry-window] show: window={} root={:?}", window_handle, root));
+                    debug_log(&format!(
+                        "[perry-window] show: window={} root={:?}",
+                        window_handle, root
+                    ));
                     if let Some(root_handle) = root {
                         if let Some(child_hwnd) = crate::widgets::get_hwnd(root_handle) {
                             let mut rect = RECT::default();
                             let _ = GetClientRect(*hwnd, &mut rect);
-                            debug_log(&format!("[perry-window] show layout: rect={}x{}", rect.right, rect.bottom));
+                            debug_log(&format!(
+                                "[perry-window] show layout: rect={}x{}",
+                                rect.right, rect.bottom
+                            ));
                             let _ = MoveWindow(child_hwnd, 0, 0, rect.right, rect.bottom, true);
                             crate::layout::layout_widget(root_handle, rect.right, rect.bottom);
                         }
@@ -216,7 +246,9 @@ pub fn show(window_handle: i64) {
         });
     }
     #[cfg(not(target_os = "windows"))]
-    { let _ = window_handle; }
+    {
+        let _ = window_handle;
+    }
 }
 
 /// Close a window.
@@ -226,12 +258,16 @@ pub fn close(window_handle: i64) {
         use windows::Win32::UI::WindowsAndMessaging::*;
         WINDOWS.with(|w| {
             if let Some(hwnd) = w.borrow().get(&window_handle) {
-                unsafe { let _ = DestroyWindow(*hwnd); }
+                unsafe {
+                    let _ = DestroyWindow(*hwnd);
+                }
             }
         });
     }
     #[cfg(not(target_os = "windows"))]
-    { let _ = window_handle; }
+    {
+        let _ = window_handle;
+    }
 }
 
 thread_local! {
@@ -245,12 +281,16 @@ pub fn hide(window_handle: i64) {
         use windows::Win32::UI::WindowsAndMessaging::*;
         WINDOWS.with(|w| {
             if let Some(hwnd) = w.borrow().get(&window_handle) {
-                unsafe { let _ = ShowWindow(*hwnd, SW_HIDE); }
+                unsafe {
+                    let _ = ShowWindow(*hwnd, SW_HIDE);
+                }
             }
         });
     }
     #[cfg(not(target_os = "windows"))]
-    { let _ = window_handle; }
+    {
+        let _ = window_handle;
+    }
 }
 
 /// Set window size.
@@ -262,9 +302,12 @@ pub fn set_size(window_handle: i64, width: f64, height: f64) {
             if let Some(hwnd) = w.borrow().get(&window_handle) {
                 unsafe {
                     let _ = SetWindowPos(
-                        *hwnd, None,
-                        0, 0,
-                        width as i32, height as i32,
+                        *hwnd,
+                        None,
+                        0,
+                        0,
+                        width as i32,
+                        height as i32,
                         SWP_NOMOVE | SWP_NOZORDER,
                     );
                 }
@@ -272,7 +315,9 @@ pub fn set_size(window_handle: i64, width: f64, height: f64) {
         });
     }
     #[cfg(not(target_os = "windows"))]
-    { let _ = (window_handle, width, height); }
+    {
+        let _ = (window_handle, width, height);
+    }
 }
 
 /// Register a callback for focus loss. Store it and handle in wndproc WM_ACTIVATE.

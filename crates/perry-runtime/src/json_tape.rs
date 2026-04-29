@@ -112,7 +112,9 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
             }
             if c == b'\\' {
                 *pos += 1;
-                if *pos >= bytes.len() { return false; }
+                if *pos >= bytes.len() {
+                    return false;
+                }
                 *pos += 1;
             } else {
                 *pos += 1;
@@ -124,42 +126,63 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
     // Helper: skip a JSON number (past its last digit/exponent).
     #[inline(always)]
     fn skip_number(bytes: &[u8], pos: &mut usize) {
-        if *pos < bytes.len() && bytes[*pos] == b'-' { *pos += 1; }
-        while *pos < bytes.len() && bytes[*pos].is_ascii_digit() { *pos += 1; }
+        if *pos < bytes.len() && bytes[*pos] == b'-' {
+            *pos += 1;
+        }
+        while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
+            *pos += 1;
+        }
         if *pos < bytes.len() && bytes[*pos] == b'.' {
             *pos += 1;
-            while *pos < bytes.len() && bytes[*pos].is_ascii_digit() { *pos += 1; }
+            while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
+                *pos += 1;
+            }
         }
         if *pos < bytes.len() && (bytes[*pos] == b'e' || bytes[*pos] == b'E') {
             *pos += 1;
             if *pos < bytes.len() && (bytes[*pos] == b'+' || bytes[*pos] == b'-') {
                 *pos += 1;
             }
-            while *pos < bytes.len() && bytes[*pos].is_ascii_digit() { *pos += 1; }
+            while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
+                *pos += 1;
+            }
         }
     }
 
     // Driver: expecting-value state. After emitting a value, the
     // caller handles the trailing `,` or container end.
-    enum State { Value, AfterValue }
+    enum State {
+        Value,
+        AfterValue,
+    }
     let mut state = State::Value;
 
     loop {
         skip_ws(bytes, &mut pos);
-        if pos >= bytes.len() { break; }
+        if pos >= bytes.len() {
+            break;
+        }
         match state {
             State::Value => {
                 let tok_off = pos as u32;
                 match bytes[pos] {
                     b'{' => {
                         let idx = entries.len() as u32;
-                        entries.push(TapeEntry { offset: tok_off, kind: KIND_OBJ_START, link: 0 });
+                        entries.push(TapeEntry {
+                            offset: tok_off,
+                            kind: KIND_OBJ_START,
+                            link: 0,
+                        });
                         stack.push(idx);
                         pos += 1;
                         skip_ws(bytes, &mut pos);
                         if pos < bytes.len() && bytes[pos] == b'}' {
                             let end_idx = entries.len() as u32;
-                            entries.push(TapeEntry { offset: pos as u32, kind: KIND_OBJ_END, link: idx });
+                            entries.push(TapeEntry {
+                                offset: pos as u32,
+                                kind: KIND_OBJ_END,
+                                link: idx,
+                            });
                             entries[idx as usize].link = end_idx;
                             stack.pop();
                             pos += 1;
@@ -169,24 +192,42 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                             // Handled by the AfterStart branch below.
                             state = State::Value;
                             // Immediately parse the key.
-                            if pos >= bytes.len() || bytes[pos] != b'"' { return None; }
+                            if pos >= bytes.len() || bytes[pos] != b'"' {
+                                return None;
+                            }
                             let key_off = pos as u32;
-                            if !skip_string(bytes, &mut pos) { return None; }
-                            entries.push(TapeEntry { offset: key_off, kind: KIND_KEY, link: 0 });
+                            if !skip_string(bytes, &mut pos) {
+                                return None;
+                            }
+                            entries.push(TapeEntry {
+                                offset: key_off,
+                                kind: KIND_KEY,
+                                link: 0,
+                            });
                             skip_ws(bytes, &mut pos);
-                            if pos >= bytes.len() || bytes[pos] != b':' { return None; }
+                            if pos >= bytes.len() || bytes[pos] != b':' {
+                                return None;
+                            }
                             pos += 1;
                         }
                     }
                     b'[' => {
                         let idx = entries.len() as u32;
-                        entries.push(TapeEntry { offset: tok_off, kind: KIND_ARR_START, link: 0 });
+                        entries.push(TapeEntry {
+                            offset: tok_off,
+                            kind: KIND_ARR_START,
+                            link: 0,
+                        });
                         stack.push(idx);
                         pos += 1;
                         skip_ws(bytes, &mut pos);
                         if pos < bytes.len() && bytes[pos] == b']' {
                             let end_idx = entries.len() as u32;
-                            entries.push(TapeEntry { offset: pos as u32, kind: KIND_ARR_END, link: idx });
+                            entries.push(TapeEntry {
+                                offset: pos as u32,
+                                kind: KIND_ARR_END,
+                                link: idx,
+                            });
                             entries[idx as usize].link = end_idx;
                             stack.pop();
                             pos += 1;
@@ -196,31 +237,59 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                         }
                     }
                     b'"' => {
-                        if !skip_string(bytes, &mut pos) { return None; }
-                        entries.push(TapeEntry { offset: tok_off, kind: KIND_STRING, link: 0 });
+                        if !skip_string(bytes, &mut pos) {
+                            return None;
+                        }
+                        entries.push(TapeEntry {
+                            offset: tok_off,
+                            kind: KIND_STRING,
+                            link: 0,
+                        });
                         state = State::AfterValue;
                     }
                     b't' => {
-                        if pos + 4 > bytes.len() || &bytes[pos..pos + 4] != b"true" { return None; }
-                        entries.push(TapeEntry { offset: tok_off, kind: KIND_TRUE, link: 0 });
+                        if pos + 4 > bytes.len() || &bytes[pos..pos + 4] != b"true" {
+                            return None;
+                        }
+                        entries.push(TapeEntry {
+                            offset: tok_off,
+                            kind: KIND_TRUE,
+                            link: 0,
+                        });
                         pos += 4;
                         state = State::AfterValue;
                     }
                     b'f' => {
-                        if pos + 5 > bytes.len() || &bytes[pos..pos + 5] != b"false" { return None; }
-                        entries.push(TapeEntry { offset: tok_off, kind: KIND_FALSE, link: 0 });
+                        if pos + 5 > bytes.len() || &bytes[pos..pos + 5] != b"false" {
+                            return None;
+                        }
+                        entries.push(TapeEntry {
+                            offset: tok_off,
+                            kind: KIND_FALSE,
+                            link: 0,
+                        });
                         pos += 5;
                         state = State::AfterValue;
                     }
                     b'n' => {
-                        if pos + 4 > bytes.len() || &bytes[pos..pos + 4] != b"null" { return None; }
-                        entries.push(TapeEntry { offset: tok_off, kind: KIND_NULL, link: 0 });
+                        if pos + 4 > bytes.len() || &bytes[pos..pos + 4] != b"null" {
+                            return None;
+                        }
+                        entries.push(TapeEntry {
+                            offset: tok_off,
+                            kind: KIND_NULL,
+                            link: 0,
+                        });
                         pos += 4;
                         state = State::AfterValue;
                     }
                     c if c == b'-' || c.is_ascii_digit() => {
                         skip_number(bytes, &mut pos);
-                        entries.push(TapeEntry { offset: tok_off, kind: KIND_NUMBER, link: 0 });
+                        entries.push(TapeEntry {
+                            offset: tok_off,
+                            kind: KIND_NUMBER,
+                            link: 0,
+                        });
                         state = State::AfterValue;
                     }
                     _ => return None,
@@ -240,19 +309,33 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                         if top_kind == KIND_OBJ_START {
                             // Expect next key.
                             skip_ws(bytes, &mut pos);
-                            if pos >= bytes.len() || bytes[pos] != b'"' { return None; }
+                            if pos >= bytes.len() || bytes[pos] != b'"' {
+                                return None;
+                            }
                             let key_off = pos as u32;
-                            if !skip_string(bytes, &mut pos) { return None; }
-                            entries.push(TapeEntry { offset: key_off, kind: KIND_KEY, link: 0 });
+                            if !skip_string(bytes, &mut pos) {
+                                return None;
+                            }
+                            entries.push(TapeEntry {
+                                offset: key_off,
+                                kind: KIND_KEY,
+                                link: 0,
+                            });
                             skip_ws(bytes, &mut pos);
-                            if pos >= bytes.len() || bytes[pos] != b':' { return None; }
+                            if pos >= bytes.len() || bytes[pos] != b':' {
+                                return None;
+                            }
                             pos += 1;
                         }
                         state = State::Value;
                     }
                     b'}' if top_kind == KIND_OBJ_START => {
                         let end_idx = entries.len() as u32;
-                        entries.push(TapeEntry { offset: pos as u32, kind: KIND_OBJ_END, link: top_idx });
+                        entries.push(TapeEntry {
+                            offset: pos as u32,
+                            kind: KIND_OBJ_END,
+                            link: top_idx,
+                        });
                         entries[top_idx as usize].link = end_idx;
                         stack.pop();
                         pos += 1;
@@ -260,7 +343,11 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
                     }
                     b']' if top_kind == KIND_ARR_START => {
                         let end_idx = entries.len() as u32;
-                        entries.push(TapeEntry { offset: pos as u32, kind: KIND_ARR_END, link: top_idx });
+                        entries.push(TapeEntry {
+                            offset: pos as u32,
+                            kind: KIND_ARR_END,
+                            link: top_idx,
+                        });
                         entries[top_idx as usize].link = end_idx;
                         stack.pop();
                         pos += 1;
@@ -272,8 +359,12 @@ pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
         }
     }
 
-    if !stack.is_empty() { return None; } // unclosed container
-    if entries.is_empty() { return None; }
+    if !stack.is_empty() {
+        return None;
+    } // unclosed container
+    if entries.is_empty() {
+        return None;
+    }
     Some(Tape { entries })
 }
 
@@ -330,15 +421,27 @@ unsafe fn materialize_value_slice(tape: &[TapeEntry], bytes: &[u8], idx: &mut us
             *idx += 1;
             materialize_number(bytes, entry.offset as usize)
         }
-        KIND_TRUE => { *idx += 1; JSValue::bool(true) }
-        KIND_FALSE => { *idx += 1; JSValue::bool(false) }
-        KIND_NULL => { *idx += 1; JSValue::null() }
+        KIND_TRUE => {
+            *idx += 1;
+            JSValue::bool(true)
+        }
+        KIND_FALSE => {
+            *idx += 1;
+            JSValue::bool(false)
+        }
+        KIND_NULL => {
+            *idx += 1;
+            JSValue::null()
+        }
         _ => JSValue::null(),
     }
 }
 
 unsafe fn materialize_object(
-    tape: &[TapeEntry], bytes: &[u8], idx: &mut usize, end_idx: usize,
+    tape: &[TapeEntry],
+    bytes: &[u8],
+    idx: &mut usize,
+    end_idx: usize,
 ) -> JSValue {
     let obj = crate::object::js_object_alloc(0, 0);
     while *idx < end_idx {
@@ -349,9 +452,7 @@ unsafe fn materialize_object(
         let key_ptr = decode_key_to_interned_string(bytes, key_entry.offset as usize);
         let value = materialize_value_slice(tape, bytes, idx);
         if !key_ptr.is_null() {
-            crate::object::js_object_set_field_by_name(
-                obj, key_ptr, f64::from_bits(value.bits()),
-            );
+            crate::object::js_object_set_field_by_name(obj, key_ptr, f64::from_bits(value.bits()));
         }
     }
     // Skip past the OBJ_END marker.
@@ -360,7 +461,10 @@ unsafe fn materialize_object(
 }
 
 unsafe fn materialize_array(
-    tape: &[TapeEntry], bytes: &[u8], idx: &mut usize, end_idx: usize,
+    tape: &[TapeEntry],
+    bytes: &[u8],
+    idx: &mut usize,
+    end_idx: usize,
 ) -> JSValue {
     let mut arr = crate::array::js_array_alloc(16);
     while *idx < end_idx {
@@ -379,9 +483,7 @@ unsafe fn materialize_array(
 /// longlived strings and the tape path ends up ~3× slower than the
 /// direct parser which always went through the cache (`json.rs:448`
 /// keyed path in `DirectParser::parse_object`).
-unsafe fn decode_key_to_interned_string(
-    bytes: &[u8], offset: usize,
-) -> *mut crate::StringHeader {
+unsafe fn decode_key_to_interned_string(bytes: &[u8], offset: usize) -> *mut crate::StringHeader {
     let bytes_at_key = &bytes[offset..];
     let key_bytes: Vec<u8> = match parse_string_bytes_static(bytes_at_key) {
         Some(ParsedStr::Borrowed(slice)) => slice.to_vec(),
@@ -395,10 +497,8 @@ unsafe fn decode_key_to_interned_string(
     if let Some(p) = cached {
         return p as *mut crate::StringHeader;
     }
-    let p = crate::string::js_string_from_bytes_longlived(
-        key_bytes.as_ptr(),
-        key_bytes.len() as u32,
-    );
+    let p =
+        crate::string::js_string_from_bytes_longlived(key_bytes.as_ptr(), key_bytes.len() as u32);
     crate::json::PARSE_KEY_CACHE.with(|c| {
         c.borrow_mut().insert(key_bytes, p);
     });
@@ -436,16 +536,26 @@ unsafe fn materialize_number(bytes: &[u8], offset: usize) -> JSValue {
     // Find the number's end using the same rules as skip_number in
     // the tape builder. Slice then parse.
     let mut end = offset;
-    if end < bytes.len() && bytes[end] == b'-' { end += 1; }
-    while end < bytes.len() && bytes[end].is_ascii_digit() { end += 1; }
+    if end < bytes.len() && bytes[end] == b'-' {
+        end += 1;
+    }
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
     if end < bytes.len() && bytes[end] == b'.' {
         end += 1;
-        while end < bytes.len() && bytes[end].is_ascii_digit() { end += 1; }
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
     }
     if end < bytes.len() && (bytes[end] == b'e' || bytes[end] == b'E') {
         end += 1;
-        if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') { end += 1; }
-        while end < bytes.len() && bytes[end].is_ascii_digit() { end += 1; }
+        if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
+            end += 1;
+        }
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
     }
     let num_str = std::str::from_utf8_unchecked(&bytes[offset..end]);
     let value: f64 = num_str.parse().unwrap_or(0.0);
@@ -464,7 +574,9 @@ enum ParsedStr<'a> {
 /// `DirectParser` instance. Same semantics as
 /// `DirectParser::parse_string_bytes`.
 fn parse_string_bytes_static(bytes: &[u8]) -> Option<ParsedStr<'_>> {
-    if bytes.is_empty() || bytes[0] != b'"' { return None; }
+    if bytes.is_empty() || bytes[0] != b'"' {
+        return None;
+    }
     let mut pos = 1usize;
     let start = pos;
     while pos < bytes.len() {
@@ -485,13 +597,17 @@ fn parse_string_bytes_slow(bytes: &[u8], start_pos: usize, start: usize) -> Opti
     let mut result: Vec<u8> = Vec::from(&bytes[start..start_pos]);
     let mut pos = start_pos;
     loop {
-        if pos >= bytes.len() { return None; }
+        if pos >= bytes.len() {
+            return None;
+        }
         let c = bytes[pos];
         pos += 1;
         match c {
             b'"' => return Some(ParsedStr::Owned(result)),
             b'\\' => {
-                if pos >= bytes.len() { return None; }
+                if pos >= bytes.len() {
+                    return None;
+                }
                 let esc = bytes[pos];
                 pos += 1;
                 match esc {
@@ -504,7 +620,9 @@ fn parse_string_bytes_slow(bytes: &[u8], start_pos: usize, start: usize) -> Opti
                     b'b' => result.push(0x08),
                     b'f' => result.push(0x0C),
                     b'u' => {
-                        if pos + 4 > bytes.len() { return None; }
+                        if pos + 4 > bytes.len() {
+                            return None;
+                        }
                         let hex = std::str::from_utf8(&bytes[pos..pos + 4]).ok()?;
                         let code = u16::from_str_radix(hex, 16).ok()?;
                         pos += 4;
@@ -553,16 +671,26 @@ mod tests {
         let kinds: Vec<u8> = tape.entries.iter().map(|e| e.kind).collect();
         assert_eq!(
             kinds,
-            vec![KIND_OBJ_START, KIND_KEY, KIND_NUMBER, KIND_KEY, KIND_STRING, KIND_OBJ_END]
+            vec![
+                KIND_OBJ_START,
+                KIND_KEY,
+                KIND_NUMBER,
+                KIND_KEY,
+                KIND_STRING,
+                KIND_OBJ_END
+            ]
         );
         // OBJ_START.link points at the matching OBJ_END (last entry).
         assert_eq!(tape.entries[0].link as usize, tape.entries.len() - 1);
         // OBJ_END.link points back at OBJ_START.
-        assert_eq!(*tape.entries.last().unwrap(), TapeEntry {
-            offset: tape.entries.last().unwrap().offset,
-            kind: KIND_OBJ_END,
-            link: 0
-        });
+        assert_eq!(
+            *tape.entries.last().unwrap(),
+            TapeEntry {
+                offset: tape.entries.last().unwrap().offset,
+                kind: KIND_OBJ_END,
+                link: 0
+            }
+        );
     }
 
     /// Nested structure — an array of objects. Each inner OBJ_START
@@ -577,16 +705,26 @@ mod tests {
         assert_eq!(tape.entries[0].kind, KIND_ARR_START);
         assert_eq!(tape.entries.last().unwrap().kind, KIND_ARR_END);
         // Three object children — count OBJ_START entries.
-        let n_objs = tape.entries.iter().filter(|e| e.kind == KIND_OBJ_START).count();
+        let n_objs = tape
+            .entries
+            .iter()
+            .filter(|e| e.kind == KIND_OBJ_START)
+            .count();
         assert_eq!(n_objs, 3);
         // Each OBJ_START's link points at an OBJ_END strictly before ARR_END.
         for (i, e) in tape.entries.iter().enumerate() {
             if e.kind == KIND_OBJ_START {
                 let end = e.link as usize;
                 assert!(end > i, "OBJ_START.link must point forward");
-                assert!(end < tape.entries.len() - 1, "OBJ_END must precede outer ARR_END");
+                assert!(
+                    end < tape.entries.len() - 1,
+                    "OBJ_END must precede outer ARR_END"
+                );
                 assert_eq!(tape.entries[end].kind, KIND_OBJ_END);
-                assert_eq!(tape.entries[end].link as usize, i, "OBJ_END.link must point back");
+                assert_eq!(
+                    tape.entries[end].link as usize, i,
+                    "OBJ_END.link must point back"
+                );
             }
         }
     }
@@ -630,8 +768,10 @@ mod tests {
     /// not a megabyte.
     #[test]
     fn tape_entry_layout() {
-        assert!(std::mem::size_of::<TapeEntry>() <= 12,
-            "TapeEntry grew beyond 12 bytes — check padding");
+        assert!(
+            std::mem::size_of::<TapeEntry>() <= 12,
+            "TapeEntry grew beyond 12 bytes — check padding"
+        );
     }
 }
 
@@ -743,8 +883,8 @@ impl LazyArrayHeader {
     /// header alive for the slice's lifetime.
     #[inline]
     pub unsafe fn tape_slice<'a>(this: *const LazyArrayHeader) -> &'a [TapeEntry] {
-        let base = (this as *const u8).add(std::mem::size_of::<LazyArrayHeader>())
-            as *const TapeEntry;
+        let base =
+            (this as *const u8).add(std::mem::size_of::<LazyArrayHeader>()) as *const TapeEntry;
         std::slice::from_raw_parts(base, (*this).tape_len as usize)
     }
 
@@ -814,8 +954,7 @@ pub unsafe fn alloc_lazy_array(
         (*hdr).materialized_elements = std::ptr::null_mut();
         (*hdr).materialized_bitmap = std::ptr::null_mut();
     }
-    let tape_dst = (raw as *mut u8)
-        .add(std::mem::size_of::<LazyArrayHeader>()) as *mut TapeEntry;
+    let tape_dst = (raw as *mut u8).add(std::mem::size_of::<LazyArrayHeader>()) as *mut TapeEntry;
     std::ptr::copy_nonoverlapping(tape_entries.as_ptr(), tape_dst, tape_entries.len());
     hdr
 }
@@ -874,8 +1013,8 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
         if i >= length {
             return JSValue::from_bits(crate::value::TAG_UNDEFINED);
         }
-        let elements_ptr = (mat as *const u8)
-            .add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+        let elements_ptr =
+            (mat as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
         return JSValue::from_bits(*elements_ptr.add(i as usize));
     }
 
@@ -986,7 +1125,10 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
         let words = (cached_length as usize + 63) / 64;
         let mut any = false;
         for w in 0..words {
-            if *bitmap.add(w) != 0 { any = true; break; }
+            if *bitmap.add(w) != 0 {
+                any = true;
+                break;
+            }
         }
         any
     } else {
@@ -1010,8 +1152,8 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
     // set (preserves mutations + identity); otherwise materialize
     // from the tape. Build the array element-by-element.
     let arr_ptr = crate::array::js_array_alloc(cached_length);
-    let elements_ptr = (arr_ptr as *mut u8)
-        .add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+    let elements_ptr =
+        (arr_ptr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
     let tape = LazyArrayHeader::tape_slice(hdr);
     let bytes = LazyArrayHeader::blob_bytes(hdr);
     let root = (*hdr).root_idx as usize;
@@ -1019,7 +1161,9 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
         let end = tape[root].link as usize;
         let mut idx = root + 1;
         for i in 0..cached_length as usize {
-            if idx >= end { break; }
+            if idx >= end {
+                break;
+            }
             let word_idx = i / 64;
             let bit_idx = i % 64;
             let use_cache = (*bitmap.add(word_idx)) & (1u64 << bit_idx) != 0;
@@ -1051,11 +1195,7 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
 /// blob was ~600 KB of throwaway heap per indexed-read iteration
 /// and showed up as a 2-3× slowdown on `bench_json_readonly_indexed`
 /// vs the direct parser).
-pub unsafe fn materialize_from_idx(
-    tape: &[TapeEntry],
-    bytes: &[u8],
-    start_idx: usize,
-) -> JSValue {
+pub unsafe fn materialize_from_idx(tape: &[TapeEntry], bytes: &[u8], start_idx: usize) -> JSValue {
     let mut idx = start_idx;
     materialize_value_slice(tape, bytes, &mut idx)
 }

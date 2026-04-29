@@ -5,8 +5,8 @@
 //! in stdlib_stubs.rs.
 
 use perry_runtime::{
-    js_array_alloc, js_array_push, js_object_alloc, js_object_set_field,
-    js_object_set_keys, js_string_from_bytes, JSValue, StringHeader,
+    js_array_alloc, js_array_push, js_object_alloc, js_object_set_field, js_object_set_keys,
+    js_string_from_bytes, JSValue, StringHeader,
 };
 use std::fmt::Write as FmtWrite;
 
@@ -127,7 +127,8 @@ impl<'a> DirectParser<'a> {
                             if self.pos + 4 > self.input.len() {
                                 return None;
                             }
-                            let hex = std::str::from_utf8(&self.input[self.pos..self.pos + 4]).ok()?;
+                            let hex =
+                                std::str::from_utf8(&self.input[self.pos..self.pos + 4]).ok()?;
                             let code = u16::from_str_radix(hex, 16).ok()?;
                             self.pos += 4;
                             if (0xD800..=0xDBFF).contains(&code) {
@@ -135,10 +136,15 @@ impl<'a> DirectParser<'a> {
                                     && self.input[self.pos] == b'\\'
                                     && self.input[self.pos + 1] == b'u'
                                 {
-                                    let hex2 = std::str::from_utf8(&self.input[self.pos + 2..self.pos + 6]).ok()?;
+                                    let hex2 = std::str::from_utf8(
+                                        &self.input[self.pos + 2..self.pos + 6],
+                                    )
+                                    .ok()?;
                                     let low = u16::from_str_radix(hex2, 16).ok()?;
                                     self.pos += 6;
-                                    let codepoint = 0x10000 + ((code as u32 - 0xD800) << 10) + (low as u32 - 0xDC00);
+                                    let codepoint = 0x10000
+                                        + ((code as u32 - 0xD800) << 10)
+                                        + (low as u32 - 0xDC00);
                                     if let Some(c) = char::from_u32(codepoint) {
                                         let mut buf = [0u8; 4];
                                         let s = c.encode_utf8(&mut buf);
@@ -251,9 +257,13 @@ impl<'a> DirectParser<'a> {
                 self.pos += 1;
             }
         }
-        if self.pos < self.input.len() && (self.input[self.pos] == b'e' || self.input[self.pos] == b'E') {
+        if self.pos < self.input.len()
+            && (self.input[self.pos] == b'e' || self.input[self.pos] == b'E')
+        {
             self.pos += 1;
-            if self.pos < self.input.len() && (self.input[self.pos] == b'+' || self.input[self.pos] == b'-') {
+            if self.pos < self.input.len()
+                && (self.input[self.pos] == b'+' || self.input[self.pos] == b'-')
+            {
                 self.pos += 1;
             }
             while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
@@ -331,16 +341,19 @@ unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     let potential_keys_ptr = (*obj).keys_array as u64;
     let top_16_bits = potential_keys_ptr >> 48;
     let is_likely_heap_pointer = top_16_bits == 0 || top_16_bits == 1;
-    let looks_like_valid_pointer = is_likely_heap_pointer
-        && potential_keys_ptr > 0x10000
-        && (potential_keys_ptr & 0x7) == 0;
+    let looks_like_valid_pointer =
+        is_likely_heap_pointer && potential_keys_ptr > 0x10000 && (potential_keys_ptr & 0x7) == 0;
 
     if looks_like_valid_pointer {
         let keys_arr = (*obj).keys_array;
         let keys_len = (*keys_arr).length;
         let keys_cap = (*keys_arr).capacity;
         let field_count = (*obj).field_count;
-        keys_len <= keys_cap && keys_len > 0 && keys_cap < 1000 && field_count == keys_len && field_count < 1000
+        keys_len <= keys_cap
+            && keys_len > 0
+            && keys_cap < 1000
+            && field_count == keys_len
+            && field_count < 1000
     } else {
         false
     }
@@ -398,9 +411,18 @@ unsafe fn write_escaped_string(buf: &mut String, s: &str) {
 unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut String) {
     let bits: u64 = value.to_bits();
 
-    if bits == TAG_NULL { buf.push_str("null"); return; }
-    if bits == TAG_TRUE { buf.push_str("true"); return; }
-    if bits == TAG_FALSE { buf.push_str("false"); return; }
+    if bits == TAG_NULL {
+        buf.push_str("null");
+        return;
+    }
+    if bits == TAG_TRUE {
+        buf.push_str("true");
+        return;
+    }
+    if bits == TAG_FALSE {
+        buf.push_str("false");
+        return;
+    }
 
     let tag = bits & 0xFFFF_0000_0000_0000;
     if tag == STRING_TAG {
@@ -414,8 +436,14 @@ unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut String) {
     }
 
     if let Some(ptr) = extract_pointer(bits) {
-        if type_hint == TYPE_OBJECT { stringify_object(ptr, buf); return; }
-        if type_hint == TYPE_ARRAY { stringify_array(ptr, buf); return; }
+        if type_hint == TYPE_OBJECT {
+            stringify_object(ptr, buf);
+            return;
+        }
+        if type_hint == TYPE_ARRAY {
+            stringify_array(ptr, buf);
+            return;
+        }
         if is_object_pointer(ptr) {
             stringify_object(ptr, buf);
         } else {
@@ -449,12 +477,15 @@ unsafe fn stringify_object(ptr: *const u8, buf: &mut String) {
     let keys_arr = (*obj).keys_array;
     let keys_len = (*keys_arr).length;
     let keys_elements = (keys_arr as *const u8)
-        .add(std::mem::size_of::<perry_runtime::ArrayHeader>()) as *const f64;
-    let fields_ptr = (ptr as *const u8)
-        .add(std::mem::size_of::<perry_runtime::ObjectHeader>()) as *const f64;
+        .add(std::mem::size_of::<perry_runtime::ArrayHeader>())
+        as *const f64;
+    let fields_ptr =
+        (ptr as *const u8).add(std::mem::size_of::<perry_runtime::ObjectHeader>()) as *const f64;
 
     for f in 0..num_fields {
-        if f > 0 { buf.push(','); }
+        if f > 0 {
+            buf.push(',');
+        }
         if (f as u32) < keys_len {
             let key_f64 = *keys_elements.add(f as usize);
             let key_bits = key_f64.to_bits();
@@ -483,11 +514,14 @@ unsafe fn stringify_object(ptr: *const u8, buf: &mut String) {
 unsafe fn stringify_array(ptr: *const u8, buf: &mut String) {
     let arr = ptr as *const perry_runtime::ArrayHeader;
     let len = (*arr).length;
-    let elements = (ptr as *const u8).add(std::mem::size_of::<perry_runtime::ArrayHeader>()) as *const f64;
+    let elements =
+        (ptr as *const u8).add(std::mem::size_of::<perry_runtime::ArrayHeader>()) as *const f64;
 
     buf.push('[');
     for i in 0..len {
-        if i > 0 { buf.push(','); }
+        if i > 0 {
+            buf.push(',');
+        }
         let elem = *elements.add(i as usize);
         let elem_bits = elem.to_bits();
         let elem_tag = elem_bits & 0xFFFF_0000_0000_0000;

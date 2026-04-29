@@ -165,7 +165,10 @@ impl Fixer {
                 // Track function calls
                 if let Callee::Expr(callee) = &call.callee {
                     if let Expr::Ident(ident) = callee.as_ref() {
-                        let usage = self.variable_usages.entry(ident.sym.to_string()).or_default();
+                        let usage = self
+                            .variable_usages
+                            .entry(ident.sym.to_string())
+                            .or_default();
                         usage.is_called = true;
                         usage.call_arg_count = Some(call.args.len());
                     }
@@ -258,8 +261,12 @@ impl Fixer {
             Decl::Var(var_decl) => {
                 for decl in &var_decl.decls {
                     // Check type annotation for `any`
-                    if let Some(type_ann) = &decl.name.as_ident().and_then(|i| i.type_ann.as_ref()) {
-                        self.find_any_in_type_ann(type_ann, decl.name.as_ident().map(|i| i.sym.to_string()));
+                    if let Some(type_ann) = &decl.name.as_ident().and_then(|i| i.type_ann.as_ref())
+                    {
+                        self.find_any_in_type_ann(
+                            type_ann,
+                            decl.name.as_ident().map(|i| i.sym.to_string()),
+                        );
                     }
                     // Check initializer for template literals
                     if let Some(init) = &decl.init {
@@ -326,14 +333,20 @@ impl Fixer {
                             ParamOrTsParamProp::Param(p) => {
                                 if let Pat::Ident(ident) = &p.pat {
                                     if let Some(type_ann) = &ident.type_ann {
-                                        self.find_any_in_type_ann(type_ann, Some(ident.sym.to_string()));
+                                        self.find_any_in_type_ann(
+                                            type_ann,
+                                            Some(ident.sym.to_string()),
+                                        );
                                     }
                                 }
                             }
                             ParamOrTsParamProp::TsParamProp(prop) => {
                                 if let TsParamPropParam::Ident(ident) = &prop.param {
                                     if let Some(type_ann) = &ident.type_ann {
-                                        self.find_any_in_type_ann(type_ann, Some(ident.sym.to_string()));
+                                        self.find_any_in_type_ann(
+                                            type_ann,
+                                            Some(ident.sym.to_string()),
+                                        );
                                     }
                                 }
                             }
@@ -397,51 +410,52 @@ impl Fixer {
                     kind: FixableKind::AnyType { inferred },
                     original,
                     replacement: replacement.clone(),
-                    confidence: if has_inferred { Confidence::Medium } else { Confidence::High },
+                    confidence: if has_inferred {
+                        Confidence::Medium
+                    } else {
+                        Confidence::High
+                    },
                     message: format!("Replace 'any' with '{}'", replacement),
                 });
             }
             TsType::TsArrayType(arr) => {
                 self.find_any_in_ts_type(&arr.elem_type, var_name);
             }
-            TsType::TsUnionOrIntersectionType(union_or_intersection) => {
-                match union_or_intersection {
-                    TsUnionOrIntersectionType::TsUnionType(union) => {
-                        for t in &union.types {
-                            self.find_any_in_ts_type(t, var_name.clone());
-                        }
-                    }
-                    TsUnionOrIntersectionType::TsIntersectionType(intersection) => {
-                        for t in &intersection.types {
-                            self.find_any_in_ts_type(t, var_name.clone());
-                        }
+            TsType::TsUnionOrIntersectionType(union_or_intersection) => match union_or_intersection
+            {
+                TsUnionOrIntersectionType::TsUnionType(union) => {
+                    for t in &union.types {
+                        self.find_any_in_ts_type(t, var_name.clone());
                     }
                 }
-            }
-            TsType::TsFnOrConstructorType(fn_type) => {
-                match fn_type {
-                    TsFnOrConstructorType::TsFnType(fn_t) => {
-                        for param in &fn_t.params {
-                            if let TsFnParam::Ident(ident) = param {
-                                if let Some(type_ann) = &ident.type_ann {
-                                    self.find_any_in_type_ann(type_ann, None);
-                                }
-                            }
-                        }
-                        self.find_any_in_type_ann(&fn_t.type_ann, None);
-                    }
-                    TsFnOrConstructorType::TsConstructorType(ctor) => {
-                        for param in &ctor.params {
-                            if let TsFnParam::Ident(ident) = param {
-                                if let Some(type_ann) = &ident.type_ann {
-                                    self.find_any_in_type_ann(type_ann, None);
-                                }
-                            }
-                        }
-                        self.find_any_in_type_ann(&ctor.type_ann, None);
+                TsUnionOrIntersectionType::TsIntersectionType(intersection) => {
+                    for t in &intersection.types {
+                        self.find_any_in_ts_type(t, var_name.clone());
                     }
                 }
-            }
+            },
+            TsType::TsFnOrConstructorType(fn_type) => match fn_type {
+                TsFnOrConstructorType::TsFnType(fn_t) => {
+                    for param in &fn_t.params {
+                        if let TsFnParam::Ident(ident) = param {
+                            if let Some(type_ann) = &ident.type_ann {
+                                self.find_any_in_type_ann(type_ann, None);
+                            }
+                        }
+                    }
+                    self.find_any_in_type_ann(&fn_t.type_ann, None);
+                }
+                TsFnOrConstructorType::TsConstructorType(ctor) => {
+                    for param in &ctor.params {
+                        if let TsFnParam::Ident(ident) = param {
+                            if let Some(type_ann) = &ident.type_ann {
+                                self.find_any_in_type_ann(type_ann, None);
+                            }
+                        }
+                    }
+                    self.find_any_in_type_ann(&ctor.type_ann, None);
+                }
+            },
             TsType::TsTypeLit(lit) => {
                 for member in &lit.members {
                     self.find_any_in_ts_type_element(member);

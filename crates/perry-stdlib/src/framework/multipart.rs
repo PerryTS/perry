@@ -84,7 +84,9 @@ pub fn parse_multipart(body: &[u8], content_type: &str) -> Result<Vec<MultipartP
                 break;
             }
             // Skip past \r\n after delimiter
-            search_start = if after_delim + 2 <= body.len() && &body[after_delim..after_delim + 2] == b"\r\n" {
+            search_start = if after_delim + 2 <= body.len()
+                && &body[after_delim..after_delim + 2] == b"\r\n"
+            {
                 after_delim + 2
             } else if after_delim + 1 <= body.len() && body[after_delim] == b'\n' {
                 after_delim + 1
@@ -214,18 +216,13 @@ pub unsafe extern "C" fn js_multipart_parse(
                         obj.insert("filename".into(), serde_json::Value::String(f.clone()));
                     }
                     if let Some(ref ct) = p.content_type {
-                        obj.insert(
-                            "content_type".into(),
-                            serde_json::Value::String(ct.clone()),
-                        );
+                        obj.insert("content_type".into(), serde_json::Value::String(ct.clone()));
                     }
                     // Return data as string (works for text; binary gets lossy conversion
                     // but hub code uses it for text fields and accesses raw bytes separately)
                     obj.insert(
                         "data".into(),
-                        serde_json::Value::String(
-                            String::from_utf8_lossy(&p.data).to_string(),
-                        ),
+                        serde_json::Value::String(String::from_utf8_lossy(&p.data).to_string()),
                     );
                     serde_json::Value::Object(obj)
                 })
@@ -271,16 +268,11 @@ pub unsafe extern "C" fn js_multipart_parse_with_sizes(
                         obj.insert("filename".into(), serde_json::Value::String(f.clone()));
                     }
                     if let Some(ref ct) = p.content_type {
-                        obj.insert(
-                            "content_type".into(),
-                            serde_json::Value::String(ct.clone()),
-                        );
+                        obj.insert("content_type".into(), serde_json::Value::String(ct.clone()));
                     }
                     obj.insert(
                         "data".into(),
-                        serde_json::Value::String(
-                            String::from_utf8_lossy(&p.data).to_string(),
-                        ),
+                        serde_json::Value::String(String::from_utf8_lossy(&p.data).to_string()),
                     );
                     obj.insert(
                         "size".into(),

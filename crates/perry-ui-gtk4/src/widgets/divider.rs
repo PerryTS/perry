@@ -1,6 +1,6 @@
 use gtk4::prelude::*;
-use gtk4::Separator;
 use gtk4::Orientation;
+use gtk4::Separator;
 
 /// Create a horizontal separator line.
 pub fn create() -> i64 {

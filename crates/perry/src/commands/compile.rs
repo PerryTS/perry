@@ -14,44 +14,41 @@ use crate::OutputFormat;
 // `compile/` directory. The `compile.rs` orchestrator stays as the
 // public API surface; helpers move to focused modules so unrelated
 // changes don't churn this file.
-mod parse_cache;
-mod strip_dedup;
-mod library_search;
-mod targets;
-mod object_cache;
-mod resolve;
-mod optimized_libs;
 mod collect_modules;
+mod library_search;
 mod link;
-pub use parse_cache::ParseCache;
-use parse_cache::parse_cached;
-use strip_dedup::strip_duplicate_objects_from_lib;
-use library_search::{
-    build_geisterhand_libs,
-    find_geisterhand_library, find_geisterhand_runtime, find_geisterhand_ui,
-    find_harmonyos_sdk, find_jsruntime_library, find_lld_link, find_library,
-    find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
-    find_runtime_library, find_stdlib_library, find_ui_library,
-    windows_pe_subsystem_flag,
-};
-use targets::{
-    apple_sdk_version, compile_for_android_widget, compile_for_ios_widget,
-    compile_for_wasm, compile_for_watchos_widget, compile_for_wearos_tile,
-    compile_metallib_for_bundle, find_visionos_swift_runtime, find_watchos_swift_runtime,
-    generate_js_bundle, lookup_bundle_id_from_toml,
-};
-pub use object_cache::{djb2_hash, ObjectCache};
-use object_cache::compute_object_cache_key;
-use optimized_libs::{build_optimized_libs, OptimizedLibs};
+mod object_cache;
+mod optimized_libs;
+mod parse_cache;
+mod resolve;
+mod strip_dedup;
+mod targets;
 use collect_modules::collect_modules;
+use library_search::{
+    build_geisterhand_libs, find_geisterhand_library, find_geisterhand_runtime,
+    find_geisterhand_ui, find_harmonyos_sdk, find_jsruntime_library, find_library, find_lld_link,
+    find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
+    find_runtime_library, find_stdlib_library, find_ui_library, windows_pe_subsystem_flag,
+};
 use link::build_and_run_link;
+use object_cache::compute_object_cache_key;
+pub use object_cache::{djb2_hash, ObjectCache};
+use optimized_libs::{build_optimized_libs, OptimizedLibs};
+use parse_cache::parse_cached;
+pub use parse_cache::ParseCache;
 pub use resolve::find_perry_workspace_root;
 use resolve::{
-    is_declaration_file, is_js_file,
     cached_resolve_import, compute_module_prefix, discover_extension_entries,
-    extract_compile_package_dir,
-    has_perry_native_library, is_in_compile_package,
-    is_in_perry_native_package, parse_native_library_manifest, parse_package_specifier, resolve_import,
+    extract_compile_package_dir, has_perry_native_library, is_declaration_file,
+    is_in_compile_package, is_in_perry_native_package, is_js_file, parse_native_library_manifest,
+    parse_package_specifier, resolve_import,
+};
+use strip_dedup::strip_duplicate_objects_from_lib;
+use targets::{
+    apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,
+    compile_for_watchos_widget, compile_for_wearos_tile, compile_metallib_for_bundle,
+    find_visionos_swift_runtime, find_watchos_swift_runtime, generate_js_bundle,
+    lookup_bundle_id_from_toml,
 };
 
 /// Result of a successful compilation
@@ -289,8 +286,6 @@ impl CompilationContext {
     }
 }
 
-
-
 /// External native library manifest parsed from package.json `perry.nativeLibrary` field
 #[derive(Debug, Clone)]
 pub struct NativeLibraryManifest {
@@ -411,7 +406,12 @@ fn emit_harmonyos_arkts_stubs(output_dir: &Path, so_filename: &str) -> Result<()
     Ok(())
 }
 
-pub fn run(args: CompileArgs, format: OutputFormat, use_color: bool, verbose: u8) -> Result<CompileResult> {
+pub fn run(
+    args: CompileArgs,
+    format: OutputFormat,
+    use_color: bool,
+    verbose: u8,
+) -> Result<CompileResult> {
     run_with_parse_cache(args, None, format, use_color, verbose)
 }
 
@@ -436,7 +436,8 @@ pub fn run_with_parse_cache(
     // immediately terminated because `PathBuf::from(".").pop()` returns false. That meant
     // perry.compilePackages / perry.packageAliases declared in a parent package.json were
     // silently ignored unless the user invoked perry from the directory containing it (#260).
-    let project_root = args.input
+    let project_root = args
+        .input
         .canonicalize()
         .ok()
         .and_then(|p| p.parent().map(PathBuf::from))
@@ -467,18 +468,28 @@ pub fn run_with_parse_cache(
     if let Some(pkg_json_path) = pkg_json_path {
         if let Ok(content) = fs::read_to_string(&pkg_json_path) {
             if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(aliases) = pkg.get("perry").and_then(|p| p.get("packageAliases")).and_then(|a| a.as_object()) {
+                if let Some(aliases) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("packageAliases"))
+                    .and_then(|a| a.as_object())
+                {
                     for (from, to) in aliases {
                         if let Some(to_str) = to.as_str() {
                             match format {
-                                OutputFormat::Text => println!("  Package alias: {} → {}", from, to_str),
+                                OutputFormat::Text => {
+                                    println!("  Package alias: {} → {}", from, to_str)
+                                }
                                 OutputFormat::Json => {}
                             }
                             ctx.package_aliases.insert(from.clone(), to_str.to_string());
                         }
                     }
                 }
-                if let Some(compile_pkgs) = pkg.get("perry").and_then(|p| p.get("compilePackages")).and_then(|a| a.as_array()) {
+                if let Some(compile_pkgs) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("compilePackages"))
+                    .and_then(|a| a.as_array())
+                {
                     for pkg_name in compile_pkgs {
                         if let Some(name) = pkg_name.as_str() {
                             match format {
@@ -515,21 +526,29 @@ pub fn run_with_parse_cache(
             if let Ok(content) = fs::read_to_string(&toml_path) {
                 if let Ok(doc) = content.parse::<toml::Table>() {
                     if let Some(i18n) = doc.get("i18n").and_then(|v| v.as_table()) {
-                        let locales: Vec<String> = i18n.get("locales")
+                        let locales: Vec<String> = i18n
+                            .get("locales")
                             .and_then(|v| v.as_array())
-                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
                             .unwrap_or_default();
-                        let default_locale = i18n.get("default_locale")
+                        let default_locale = i18n
+                            .get("default_locale")
                             .and_then(|v| v.as_str())
                             .unwrap_or("en")
                             .to_string();
-                        let dynamic = i18n.get("dynamic")
+                        let dynamic = i18n
+                            .get("dynamic")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
 
                         // Parse [i18n.currencies] — locale → currency code
                         let mut currencies = HashMap::new();
-                        if let Some(curr_table) = i18n.get("currencies").and_then(|v| v.as_table()) {
+                        if let Some(curr_table) = i18n.get("currencies").and_then(|v| v.as_table())
+                        {
                             for (locale, code) in curr_table {
                                 if let Some(code_str) = code.as_str() {
                                     currencies.insert(locale.clone(), code_str.to_string());
@@ -539,8 +558,12 @@ pub fn run_with_parse_cache(
 
                         if !locales.is_empty() {
                             match format {
-                                OutputFormat::Text => println!("  i18n: {} locale(s) [{}], default: {}",
-                                    locales.len(), locales.join(", "), default_locale),
+                                OutputFormat::Text => println!(
+                                    "  i18n: {} locale(s) [{}], default: {}",
+                                    locales.len(),
+                                    locales.join(", "),
+                                    default_locale
+                                ),
                                 OutputFormat::Json => {}
                             }
 
@@ -550,13 +573,20 @@ pub fn run_with_parse_cache(
                                 let locale_file = locales_dir.join(format!("{}.json", locale));
                                 if locale_file.exists() {
                                     if let Ok(json_content) = fs::read_to_string(&locale_file) {
-                                        match serde_json::from_str::<BTreeMap<String, String>>(&json_content) {
+                                        match serde_json::from_str::<BTreeMap<String, String>>(
+                                            &json_content,
+                                        ) {
                                             Ok(translations) => {
                                                 match format {
-                                                    OutputFormat::Text => println!("    Loaded locales/{}.json ({} keys)", locale, translations.len()),
+                                                    OutputFormat::Text => println!(
+                                                        "    Loaded locales/{}.json ({} keys)",
+                                                        locale,
+                                                        translations.len()
+                                                    ),
                                                     OutputFormat::Json => {}
                                                 }
-                                                i18n_translations.insert(locale.clone(), translations);
+                                                i18n_translations
+                                                    .insert(locale.clone(), translations);
                                             }
                                             Err(e) => {
                                                 eprintln!("  Warning: Failed to parse locales/{}.json: {}", locale, e);
@@ -564,7 +594,10 @@ pub fn run_with_parse_cache(
                                         }
                                     }
                                 } else {
-                                    eprintln!("  Warning: Locale file locales/{}.json not found", locale);
+                                    eprintln!(
+                                        "  Warning: Locale file locales/{}.json not found",
+                                        locale
+                                    );
                                 }
                             }
 
@@ -601,17 +634,17 @@ pub fn run_with_parse_cache(
                     }
                 } else {
                     match format {
-                        OutputFormat::Text => eprintln!("  Warning: No tsconfig.json found. Type checking disabled."),
+                        OutputFormat::Text => {
+                            eprintln!("  Warning: No tsconfig.json found. Type checking disabled.")
+                        }
                         OutputFormat::Json => {}
                     }
                 }
             }
-            Err(e) => {
-                match format {
-                    OutputFormat::Text => eprintln!("  Warning: {}", e),
-                    OutputFormat::Json => {}
-                }
-            }
+            Err(e) => match format {
+                OutputFormat::Text => eprintln!("  Warning: {}", e),
+                OutputFormat::Json => {}
+            },
         }
     }
 
@@ -619,7 +652,17 @@ pub fn run_with_parse_cache(
     let mut next_class_id: perry_hir::ClassId = 1; // Start at 1, 0 is reserved for "no parent"
     let skip_transforms = matches!(args.target.as_deref(), Some("web") | Some("wasm"));
 
-    collect_modules(&args.input, &mut ctx, &mut visited, args.enable_js_runtime, format, args.target.as_deref(), &mut next_class_id, skip_transforms, parse_cache.as_deref_mut())?;
+    collect_modules(
+        &args.input,
+        &mut ctx,
+        &mut visited,
+        args.enable_js_runtime,
+        format,
+        args.target.as_deref(),
+        &mut next_class_id,
+        skip_transforms,
+        parse_cache.as_deref_mut(),
+    )?;
 
     // Bundle extensions if --bundle-extensions specified
     let mut bundled_extensions: Vec<(PathBuf, String)> = Vec::new();
@@ -631,11 +674,22 @@ pub fn run_with_parse_cache(
         }
         for (entry_path, plugin_id) in &ext_entries {
             match format {
-                OutputFormat::Text => println!("  Extension: {} ({})", plugin_id, entry_path.display()),
+                OutputFormat::Text => {
+                    println!("  Extension: {} ({})", plugin_id, entry_path.display())
+                }
                 OutputFormat::Json => {}
             }
-            collect_modules(entry_path, &mut ctx, &mut visited,
-                           args.enable_js_runtime, format, args.target.as_deref(), &mut next_class_id, skip_transforms, parse_cache.as_deref_mut())?;
+            collect_modules(
+                entry_path,
+                &mut ctx,
+                &mut visited,
+                args.enable_js_runtime,
+                format,
+                args.target.as_deref(),
+                &mut next_class_id,
+                skip_transforms,
+                parse_cache.as_deref_mut(),
+            )?;
             bundled_extensions.push((entry_path.canonicalize()?, plugin_id.clone()));
         }
     }
@@ -671,7 +725,8 @@ pub fn run_with_parse_cache(
                 let paths: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
                 for path in paths {
                     if let Some(module) = ctx.native_modules.get_mut(&path) {
-                        let filename = path.file_name()
+                        let filename = path
+                            .file_name()
                             .and_then(|n| n.to_str())
                             .unwrap_or("module.ts");
                         module.name = path
@@ -689,7 +744,8 @@ pub fn run_with_parse_cache(
     let total_modules = ctx.native_modules.len() + ctx.js_modules.len();
     match format {
         OutputFormat::Text => {
-            println!("Found {} module(s): {} native, {} JavaScript",
+            println!(
+                "Found {} module(s): {} native, {} JavaScript",
                 total_modules,
                 ctx.native_modules.len(),
                 ctx.js_modules.len()
@@ -711,10 +767,16 @@ pub fn run_with_parse_cache(
     }
 
     // --- Widget targets: emit platform-specific source + optional native provider ---
-    if matches!(args.target.as_deref(), Some("ios-widget") | Some("ios-widget-simulator")) {
+    if matches!(
+        args.target.as_deref(),
+        Some("ios-widget") | Some("ios-widget-simulator")
+    ) {
         return compile_for_ios_widget(&ctx, &args, format);
     }
-    if matches!(args.target.as_deref(), Some("watchos-widget") | Some("watchos-widget-simulator")) {
+    if matches!(
+        args.target.as_deref(),
+        Some("watchos-widget") | Some("watchos-widget-simulator")
+    ) {
         return compile_for_watchos_widget(&ctx, &args, format);
     }
     if args.target.as_deref() == Some("android-widget") {
@@ -734,17 +796,20 @@ pub fn run_with_parse_cache(
     // cheap branch.
     use rayon::prelude::*;
     let needs_js_runtime = ctx.needs_js_runtime;
-    ctx.native_modules.par_iter_mut().for_each(|(_, hir_module)| {
-        if needs_js_runtime {
-            perry_hir::transform_js_imports(hir_module);
-        }
-        perry_hir::fix_local_native_instances(hir_module);
-    });
+    ctx.native_modules
+        .par_iter_mut()
+        .for_each(|(_, hir_module)| {
+            if needs_js_runtime {
+                perry_hir::transform_js_imports(hir_module);
+            }
+            perry_hir::fix_local_native_instances(hir_module);
+        });
 
     // Build map of exported native instances from all modules. Must
     // run AFTER fix_local_native_instances above so the exports list
     // reflects post-rewrite state.
-    let mut exported_instances: BTreeMap<(String, String), perry_hir::ExportedNativeInstance> = BTreeMap::new();
+    let mut exported_instances: BTreeMap<(String, String), perry_hir::ExportedNativeInstance> =
+        BTreeMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
         for (export_name, native_module, native_class) in &hir_module.exported_native_instances {
@@ -759,10 +824,15 @@ pub fn run_with_parse_cache(
     }
 
     // Build map of exported functions that return native instances.
-    let mut exported_func_return_instances: BTreeMap<(String, String), perry_hir::ExportedNativeInstance> = BTreeMap::new();
+    let mut exported_func_return_instances: BTreeMap<
+        (String, String),
+        perry_hir::ExportedNativeInstance,
+    > = BTreeMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
-        for (func_name, native_module, native_class) in &hir_module.exported_func_return_native_instances {
+        for (func_name, native_module, native_class) in
+            &hir_module.exported_func_return_native_instances
+        {
             exported_func_return_instances.insert(
                 (path_str.clone(), func_name.clone()),
                 perry_hir::ExportedNativeInstance {
@@ -785,49 +855,51 @@ pub fn run_with_parse_cache(
     // export existing (skip the call entirely otherwise).
     let has_native_exports =
         !exported_instances.is_empty() || !exported_func_return_instances.is_empty();
-    ctx.native_modules.par_iter_mut().for_each(|(_, hir_module)| {
-        if has_native_exports {
-            perry_hir::fix_cross_module_native_instances(
-                hir_module,
-                &exported_instances,
-                &exported_func_return_instances,
-            );
-        }
-        // Always re-run local fix (matches pre-Tier-4.2 behaviour —
-        // the prior code unconditionally ran a second local-fix pass
-        // after the cross-module branch). When `has_native_exports`
-        // is false this is effectively a no-op since nothing changed
-        // since the first local-fix in Pass A above.
-        perry_hir::fix_local_native_instances(hir_module);
-        perry_hir::monomorphize_module(hir_module);
-    });
+    ctx.native_modules
+        .par_iter_mut()
+        .for_each(|(_, hir_module)| {
+            if has_native_exports {
+                perry_hir::fix_cross_module_native_instances(
+                    hir_module,
+                    &exported_instances,
+                    &exported_func_return_instances,
+                );
+            }
+            // Always re-run local fix (matches pre-Tier-4.2 behaviour —
+            // the prior code unconditionally ran a second local-fix pass
+            // after the cross-module branch). When `has_native_exports`
+            // is false this is effectively a no-op since nothing changed
+            // since the first local-fix in Pass A above.
+            perry_hir::fix_local_native_instances(hir_module);
+            perry_hir::monomorphize_module(hir_module);
+        });
 
     // --- i18n: apply i18n transform pass ---
     let i18n_table = if let Some(ref config) = i18n_config {
-        let table = perry_transform::i18n::apply_i18n(
-            &mut ctx.native_modules, config, &i18n_translations
-        );
+        let table =
+            perry_transform::i18n::apply_i18n(&mut ctx.native_modules, config, &i18n_translations);
         // Report diagnostics
         for diag in &table.diagnostics {
             match diag.severity {
-                perry_transform::i18n::I18nSeverity::Warning => {
-                    match format {
-                        OutputFormat::Text => eprintln!("  i18n warning: {}", diag.message),
-                        OutputFormat::Json => {}
-                    }
-                }
-                perry_transform::i18n::I18nSeverity::Error => {
-                    match format {
-                        OutputFormat::Text => eprintln!("  i18n error: {}", diag.message),
-                        OutputFormat::Json => {}
-                    }
-                }
+                perry_transform::i18n::I18nSeverity::Warning => match format {
+                    OutputFormat::Text => eprintln!("  i18n warning: {}", diag.message),
+                    OutputFormat::Json => {}
+                },
+                perry_transform::i18n::I18nSeverity::Error => match format {
+                    OutputFormat::Text => eprintln!("  i18n error: {}", diag.message),
+                    OutputFormat::Json => {}
+                },
             }
         }
         match format {
-            OutputFormat::Text => if !table.keys.is_empty() {
-                println!("  i18n: {} localizable string(s) detected", table.keys.len());
-            },
+            OutputFormat::Text => {
+                if !table.keys.is_empty() {
+                    println!(
+                        "  i18n: {} localizable string(s) detected",
+                        table.keys.len()
+                    );
+                }
+            }
             OutputFormat::Json => {}
         }
         // The LLVM backend threads i18n through `CompileOptions::i18n_table`
@@ -889,15 +961,22 @@ pub fn run_with_parse_cache(
         if !table.keys.is_empty() {
             let perry_dir = ctx.project_root.join(".perry");
             let _ = fs::create_dir_all(&perry_dir);
-            let registry: Vec<serde_json::Value> = table.keys.iter().enumerate().map(|(i, key)| {
-                serde_json::json!({
-                    "key": key,
-                    "string_idx": i,
+            let registry: Vec<serde_json::Value> = table
+                .keys
+                .iter()
+                .enumerate()
+                .map(|(i, key)| {
+                    serde_json::json!({
+                        "key": key,
+                        "string_idx": i,
+                    })
                 })
-            }).collect();
+                .collect();
             let registry_json = serde_json::json!({ "keys": registry });
-            let _ = fs::write(perry_dir.join("i18n-keys.json"),
-                serde_json::to_string_pretty(&registry_json).unwrap_or_default());
+            let _ = fs::write(
+                perry_dir.join("i18n-keys.json"),
+                serde_json::to_string_pretty(&registry_json).unwrap_or_default(),
+            );
         }
     }
 
@@ -909,7 +988,10 @@ pub fn run_with_parse_cache(
     let mut obj_paths = Vec::new();
 
     // Get canonical path of entry module
-    let entry_path = args.input.canonicalize().unwrap_or_else(|_| args.input.clone());
+    let entry_path = args
+        .input
+        .canonicalize()
+        .unwrap_or_else(|_| args.input.clone());
 
     // Collect non-entry module names for init function calls
     // Topologically sort by import dependencies so that if module A imports from module B,
@@ -932,7 +1014,9 @@ pub fn run_with_parse_cache(
             for import in &hir_module.imports {
                 if let Some(ref resolved) = import.resolved_path {
                     let resolved_path = PathBuf::from(resolved);
-                    if resolved_path != entry_path && ctx.native_modules.contains_key(&resolved_path) {
+                    if resolved_path != entry_path
+                        && ctx.native_modules.contains_key(&resolved_path)
+                    {
                         module_deps.push(resolved_path);
                     }
                 }
@@ -947,8 +1031,16 @@ pub fn run_with_parse_cache(
                     perry_hir::Export::Named { .. } => None,
                 };
                 if let Some(src) = source {
-                    if let Some((resolved_path, _)) = resolve_import(src, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
-                        if resolved_path != entry_path && ctx.native_modules.contains_key(&resolved_path) {
+                    if let Some((resolved_path, _)) = resolve_import(
+                        src,
+                        path,
+                        &ctx.project_root,
+                        &ctx.compile_packages,
+                        &ctx.compile_package_dirs,
+                    ) {
+                        if resolved_path != entry_path
+                            && ctx.native_modules.contains_key(&resolved_path)
+                        {
                             module_deps.push(resolved_path);
                         }
                     }
@@ -1000,14 +1092,24 @@ pub fn run_with_parse_cache(
         all_paths.sort();
 
         for path in &all_paths {
-            dfs_visit(path, &deps, &path_to_name, &mut visited, &mut visiting, &mut sorted);
+            dfs_visit(
+                path,
+                &deps,
+                &path_to_name,
+                &mut visited,
+                &mut visiting,
+                &mut sorted,
+            );
         }
 
         sorted
     };
 
     if matches!(format, OutputFormat::Text) && verbose > 0 {
-        eprintln!("\nModule init order ({} modules):", non_entry_module_names.len());
+        eprintln!(
+            "\nModule init order ({} modules):",
+            non_entry_module_names.len()
+        );
         for (i, name) in non_entry_module_names.iter().enumerate() {
             eprintln!("  [{}] {}", i, name);
         }
@@ -1016,12 +1118,15 @@ pub fn run_with_parse_cache(
 
     // Build a map of all exported enums from all modules (owned data, no borrows)
     // Key: (resolved_path, enum_name) -> Vec<(member_name, EnumValue)>
-    let mut exported_enums: BTreeMap<(String, String), Vec<(String, perry_hir::EnumValue)>> = BTreeMap::new();
+    let mut exported_enums: BTreeMap<(String, String), Vec<(String, perry_hir::EnumValue)>> =
+        BTreeMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
         for en in &hir_module.enums {
             if en.is_exported {
-                let members: Vec<(String, perry_hir::EnumValue)> = en.members.iter()
+                let members: Vec<(String, perry_hir::EnumValue)> = en
+                    .members
+                    .iter()
                     .map(|m| (m.name.clone(), m.value.clone()))
                     .collect();
                 exported_enums.insert((path_str.clone(), en.name.clone()), members);
@@ -1032,22 +1137,38 @@ pub fn run_with_parse_cache(
     // Propagate enum re-exports: when module A has `export * from "./B"`,
     // all enums exported from B should also be accessible via A's path.
     loop {
-        let mut new_enum_entries: Vec<((String, String), Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
+        let mut new_enum_entries: Vec<((String, String), Vec<(String, perry_hir::EnumValue)>)> =
+            Vec::new();
         for (path, hir_module) in &ctx.native_modules {
             let path_str = path.to_string_lossy().to_string();
             for export in &hir_module.exports {
                 let source_str = match export {
                     perry_hir::Export::ExportAll { source } => Some((source.as_str(), None)),
-                    perry_hir::Export::ReExport { source, imported, exported } => Some((source.as_str(), Some((imported.as_str(), exported.as_str())))),
+                    perry_hir::Export::ReExport {
+                        source,
+                        imported,
+                        exported,
+                    } => Some((
+                        source.as_str(),
+                        Some((imported.as_str(), exported.as_str())),
+                    )),
                     _ => None,
                 };
                 if let Some((source, re_export_names)) = source_str {
-                    if let Some((resolved_source, _)) = resolve_import(source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
+                    if let Some((resolved_source, _)) = resolve_import(
+                        source,
+                        path,
+                        &ctx.project_root,
+                        &ctx.compile_packages,
+                        &ctx.compile_package_dirs,
+                    ) {
                         let source_path_str = resolved_source.to_string_lossy().to_string();
                         for ((src_path, enum_name), members) in &exported_enums {
                             if src_path == &source_path_str {
                                 let (propagate, exported_name) = match re_export_names {
-                                    Some((imported, exported)) => (enum_name == imported, exported.to_string()),
+                                    Some((imported, exported)) => {
+                                        (enum_name == imported, exported.to_string())
+                                    }
                                     None => (true, enum_name.clone()),
                                 };
                                 if propagate {
@@ -1062,7 +1183,9 @@ pub fn run_with_parse_cache(
                 }
             }
         }
-        if new_enum_entries.is_empty() { break; }
+        if new_enum_entries.is_empty() {
+            break;
+        }
         for (key, members) in new_enum_entries {
             exported_enums.insert(key, members);
         }
@@ -1072,19 +1195,31 @@ pub fn run_with_parse_cache(
     // (exported_classes holds references into ctx.native_modules, so we need to do
     // the mutable fixup pass first)
     {
-        let mut module_enums: BTreeMap<PathBuf, BTreeMap<String, Vec<(String, perry_hir::EnumValue)>>> = BTreeMap::new();
+        let mut module_enums: BTreeMap<
+            PathBuf,
+            BTreeMap<String, Vec<(String, perry_hir::EnumValue)>>,
+        > = BTreeMap::new();
         for (path, hir_module) in &ctx.native_modules {
-            let mut imported_enums_for_module: BTreeMap<String, Vec<(String, perry_hir::EnumValue)>> = BTreeMap::new();
+            let mut imported_enums_for_module: BTreeMap<
+                String,
+                Vec<(String, perry_hir::EnumValue)>,
+            > = BTreeMap::new();
             for import in &hir_module.imports {
-                if import.module_kind != perry_hir::ModuleKind::NativeCompiled { continue; }
+                if import.module_kind != perry_hir::ModuleKind::NativeCompiled {
+                    continue;
+                }
                 let resolved_path = match &import.resolved_path {
                     Some(p) => p.clone(),
                     None => continue,
                 };
                 for spec in &import.specifiers {
                     let (local_name, exported_name) = match spec {
-                        perry_hir::ImportSpecifier::Named { imported, local } => (local.clone(), imported.clone()),
-                        perry_hir::ImportSpecifier::Default { local } => (local.clone(), local.clone()),
+                        perry_hir::ImportSpecifier::Named { imported, local } => {
+                            (local.clone(), imported.clone())
+                        }
+                        perry_hir::ImportSpecifier::Default { local } => {
+                            (local.clone(), local.clone())
+                        }
                         perry_hir::ImportSpecifier::Namespace { .. } => continue,
                     };
                     let key = (resolved_path.clone(), exported_name.clone());
@@ -1107,7 +1242,8 @@ pub fn run_with_parse_cache(
     // Collect all non-generic type aliases from all modules.
     // These are passed to each module's compiler so type_to_abi can resolve
     // Named("BlockTag") -> Union([...]) for correct ABI types in function signatures.
-    let mut all_type_aliases: std::collections::BTreeMap<String, perry_types::Type> = std::collections::BTreeMap::new();
+    let mut all_type_aliases: std::collections::BTreeMap<String, perry_types::Type> =
+        std::collections::BTreeMap::new();
     for (_path, hir_module) in &ctx.native_modules {
         for ta in &hir_module.type_aliases {
             if ta.type_params.is_empty() {
@@ -1138,7 +1274,8 @@ pub fn run_with_parse_cache(
     // the interface. Type-only imports are stripped at HIR lowering
     // (`crates/perry-hir/src/lower.rs:2777`), so the consumer's
     // `hir_module.imports` doesn't even mention the source module.
-    let mut all_program_type_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut all_program_type_names: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for (_path, hir_module) in &ctx.native_modules {
         for class in &hir_module.classes {
             all_program_type_names.insert(class.name.clone());
@@ -1173,7 +1310,8 @@ pub fn run_with_parse_cache(
     // Build a map of all exported functions with their param counts from all modules
     let mut exported_func_param_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
     // Build a map of all exported functions with their return types from all modules
-    let mut exported_func_return_types: BTreeMap<(String, String), perry_types::Type> = BTreeMap::new();
+    let mut exported_func_return_types: BTreeMap<(String, String), perry_types::Type> =
+        BTreeMap::new();
     // Set of exported functions that were declared `async` in their source module.
     // We track this separately because users routinely write `async function f() { ... }`
     // without an explicit `Promise<T>` annotation, in which case `func.return_type` is the
@@ -1183,8 +1321,12 @@ pub fn run_with_parse_cache(
         let path_str = path.to_string_lossy().to_string();
         for func in &hir_module.functions {
             if func.is_exported {
-                exported_func_param_counts.insert((path_str.clone(), func.name.clone()), func.params.len());
-                exported_func_return_types.insert((path_str.clone(), func.name.clone()), func.return_type.clone());
+                exported_func_param_counts
+                    .insert((path_str.clone(), func.name.clone()), func.params.len());
+                exported_func_return_types.insert(
+                    (path_str.clone(), func.name.clone()),
+                    func.return_type.clone(),
+                );
                 if func.is_async {
                     exported_async_funcs.insert((path_str.clone(), func.name.clone()));
                 }
@@ -1195,8 +1337,12 @@ pub fn run_with_parse_cache(
         for (export_name, func_id) in &hir_module.exported_functions {
             if let Some(func) = hir_module.functions.iter().find(|f| f.id == *func_id) {
                 let key = (path_str.clone(), export_name.clone());
-                exported_func_param_counts.entry(key.clone()).or_insert(func.params.len());
-                exported_func_return_types.entry(key.clone()).or_insert_with(|| func.return_type.clone());
+                exported_func_param_counts
+                    .entry(key.clone())
+                    .or_insert(func.params.len());
+                exported_func_return_types
+                    .entry(key.clone())
+                    .or_insert_with(|| func.return_type.clone());
                 if func.is_async {
                     exported_async_funcs.insert(key);
                 }
@@ -1204,10 +1350,16 @@ pub fn run_with_parse_cache(
         }
         // Debug: print superstruct exports
         if path_str.contains("superstruct") {
-            eprintln!("[DEBUG] superstruct: {} functions ({} exported), {} exported_functions entries",
+            eprintln!(
+                "[DEBUG] superstruct: {} functions ({} exported), {} exported_functions entries",
                 hir_module.functions.len(),
-                hir_module.functions.iter().filter(|f| f.is_exported).count(),
-                hir_module.exported_functions.len());
+                hir_module
+                    .functions
+                    .iter()
+                    .filter(|f| f.is_exported)
+                    .count(),
+                hir_module.exported_functions.len()
+            );
             for (name, _fid) in &hir_module.exported_functions {
                 eprintln!("[DEBUG]   exported_function: {}", name);
             }
@@ -1215,13 +1367,27 @@ pub fn run_with_parse_cache(
 
         // Also scan init statements for exported closures (arrow functions assigned to const)
         // These are in exported_objects but not in functions, so they need param counts too
-        let exported_set: std::collections::HashSet<&String> = hir_module.exported_objects.iter().collect();
+        let exported_set: std::collections::HashSet<&String> =
+            hir_module.exported_objects.iter().collect();
         for stmt in &hir_module.init {
-            if let perry_hir::ir::Stmt::Let { name, init: Some(expr), .. } = stmt {
+            if let perry_hir::ir::Stmt::Let {
+                name,
+                init: Some(expr),
+                ..
+            } = stmt
+            {
                 if exported_set.contains(name) {
-                    if let perry_hir::ir::Expr::Closure { params, return_type, is_async, .. } = expr {
-                        exported_func_param_counts.insert((path_str.clone(), name.clone()), params.len());
-                        exported_func_return_types.insert((path_str.clone(), name.clone()), return_type.clone());
+                    if let perry_hir::ir::Expr::Closure {
+                        params,
+                        return_type,
+                        is_async,
+                        ..
+                    } = expr
+                    {
+                        exported_func_param_counts
+                            .insert((path_str.clone(), name.clone()), params.len());
+                        exported_func_return_types
+                            .insert((path_str.clone(), name.clone()), return_type.clone());
                         if *is_async {
                             exported_async_funcs.insert((path_str.clone(), name.clone()));
                         }
@@ -1248,7 +1414,9 @@ pub fn run_with_parse_cache(
     let mut all_module_exports: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
-        let exports = all_module_exports.entry(path_str.clone()).or_insert_with(BTreeMap::new);
+        let exports = all_module_exports
+            .entry(path_str.clone())
+            .or_insert_with(BTreeMap::new);
         // Exported functions
         for func in &hir_module.functions {
             if func.is_exported {
@@ -1288,7 +1456,13 @@ pub fn run_with_parse_cache(
             for export in &hir_module.exports {
                 match export {
                     perry_hir::Export::ExportAll { source } => {
-                        if let Some((resolved_source, _)) = resolve_import(source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
+                        if let Some((resolved_source, _)) = resolve_import(
+                            source,
+                            path,
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             if let Some(source_exports) = all_module_exports.get(&source_path_str) {
                                 let current_exports = all_module_exports.get(&path_str);
@@ -1297,14 +1471,28 @@ pub fn run_with_parse_cache(
                                         .map(|e| e.contains_key(name))
                                         .unwrap_or(false);
                                     if !already_exists {
-                                        new_export_entries.push((path_str.clone(), name.clone(), origin.clone()));
+                                        new_export_entries.push((
+                                            path_str.clone(),
+                                            name.clone(),
+                                            origin.clone(),
+                                        ));
                                     }
                                 }
                             }
                         }
                     }
-                    perry_hir::Export::ReExport { source, imported, exported } => {
-                        if let Some((resolved_source, _)) = resolve_import(source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
+                    perry_hir::Export::ReExport {
+                        source,
+                        imported,
+                        exported,
+                    } => {
+                        if let Some((resolved_source, _)) = resolve_import(
+                            source,
+                            path,
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             if let Some(source_exports) = all_module_exports.get(&source_path_str) {
                                 if let Some(origin) = source_exports.get(imported) {
@@ -1314,7 +1502,11 @@ pub fn run_with_parse_cache(
                                         .map(|v| v == origin)
                                         .unwrap_or(false);
                                     if !already_correct {
-                                        new_export_entries.push((path_str.clone(), exported.clone(), origin.clone()));
+                                        new_export_entries.push((
+                                            path_str.clone(),
+                                            exported.clone(),
+                                            origin.clone(),
+                                        ));
                                     }
                                 }
                             }
@@ -1325,24 +1517,41 @@ pub fn run_with_parse_cache(
                         for import in &hir_module.imports {
                             for spec in &import.specifiers {
                                 let (matches, imported_name) = match spec {
-                                    perry_hir::ImportSpecifier::Named { local: l, imported } =>
-                                        (l == local, imported.clone()),
-                                    perry_hir::ImportSpecifier::Default { local: l } =>
-                                        (l == local, "default".to_string()),
+                                    perry_hir::ImportSpecifier::Named { local: l, imported } => {
+                                        (l == local, imported.clone())
+                                    }
+                                    perry_hir::ImportSpecifier::Default { local: l } => {
+                                        (l == local, "default".to_string())
+                                    }
                                     _ => (false, String::new()),
                                 };
                                 if matches {
-                                    if let Some((resolved_source, _)) = resolve_import(&import.source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
-                                        let source_path_str = resolved_source.to_string_lossy().to_string();
-                                        if let Some(source_exports) = all_module_exports.get(&source_path_str) {
-                                            if let Some(origin) = source_exports.get(&imported_name) {
-                                                let current_exports = all_module_exports.get(&path_str);
+                                    if let Some((resolved_source, _)) = resolve_import(
+                                        &import.source,
+                                        path,
+                                        &ctx.project_root,
+                                        &ctx.compile_packages,
+                                        &ctx.compile_package_dirs,
+                                    ) {
+                                        let source_path_str =
+                                            resolved_source.to_string_lossy().to_string();
+                                        if let Some(source_exports) =
+                                            all_module_exports.get(&source_path_str)
+                                        {
+                                            if let Some(origin) = source_exports.get(&imported_name)
+                                            {
+                                                let current_exports =
+                                                    all_module_exports.get(&path_str);
                                                 let already_correct = current_exports
                                                     .and_then(|e| e.get(exported.as_str()))
                                                     .map(|v| v == origin)
                                                     .unwrap_or(false);
                                                 if !already_correct {
-                                                    new_export_entries.push((path_str.clone(), exported.clone(), origin.clone()));
+                                                    new_export_entries.push((
+                                                        path_str.clone(),
+                                                        exported.clone(),
+                                                        origin.clone(),
+                                                    ));
                                                 }
                                             }
                                         }
@@ -1355,9 +1564,14 @@ pub fn run_with_parse_cache(
                 }
             }
         }
-        if new_export_entries.is_empty() { break; }
+        if new_export_entries.is_empty() {
+            break;
+        }
         for (module_path, name, origin) in new_export_entries {
-            all_module_exports.entry(module_path).or_insert_with(BTreeMap::new).insert(name, origin);
+            all_module_exports
+                .entry(module_path)
+                .or_insert_with(BTreeMap::new)
+                .insert(name, origin);
         }
     }
 
@@ -1369,9 +1583,16 @@ pub fn run_with_parse_cache(
             for export in &hir_module.exports {
                 match export {
                     perry_hir::Export::ExportAll { source } => {
-                        if let Some((resolved_source, _)) = resolve_import(source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
+                        if let Some((resolved_source, _)) = resolve_import(
+                            source,
+                            path,
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
-                            for ((src_path, func_name), &param_count) in &exported_func_param_counts {
+                            for ((src_path, func_name), &param_count) in &exported_func_param_counts
+                            {
                                 if src_path == &source_path_str {
                                     let key = (path_str.clone(), func_name.clone());
                                     if !exported_func_param_counts.contains_key(&key) {
@@ -1381,10 +1602,21 @@ pub fn run_with_parse_cache(
                             }
                         }
                     }
-                    perry_hir::Export::ReExport { source, imported, exported } => {
-                        if let Some((resolved_source, _)) = resolve_import(source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
+                    perry_hir::Export::ReExport {
+                        source,
+                        imported,
+                        exported,
+                    } => {
+                        if let Some((resolved_source, _)) = resolve_import(
+                            source,
+                            path,
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
-                            for ((src_path, func_name), &param_count) in &exported_func_param_counts {
+                            for ((src_path, func_name), &param_count) in &exported_func_param_counts
+                            {
                                 if src_path == &source_path_str && func_name == imported {
                                     let key = (path_str.clone(), exported.clone());
                                     if !exported_func_param_counts.contains_key(&key) {
@@ -1398,17 +1630,28 @@ pub fn run_with_parse_cache(
                         for import in &hir_module.imports {
                             for spec in &import.specifiers {
                                 let (matches, imported_name) = match spec {
-                                    perry_hir::ImportSpecifier::Named { local: l, imported } =>
-                                        (l == local, imported.clone()),
-                                    perry_hir::ImportSpecifier::Default { local: l } =>
-                                        (l == local, "default".to_string()),
+                                    perry_hir::ImportSpecifier::Named { local: l, imported } => {
+                                        (l == local, imported.clone())
+                                    }
+                                    perry_hir::ImportSpecifier::Default { local: l } => {
+                                        (l == local, "default".to_string())
+                                    }
                                     _ => (false, String::new()),
                                 };
                                 if matches {
-                                    if let Some((resolved_source, _)) = resolve_import(&import.source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
-                                        let source_path_str = resolved_source.to_string_lossy().to_string();
+                                    if let Some((resolved_source, _)) = resolve_import(
+                                        &import.source,
+                                        path,
+                                        &ctx.project_root,
+                                        &ctx.compile_packages,
+                                        &ctx.compile_package_dirs,
+                                    ) {
+                                        let source_path_str =
+                                            resolved_source.to_string_lossy().to_string();
                                         let key_src = (source_path_str, imported_name);
-                                        if let Some(&param_count) = exported_func_param_counts.get(&key_src) {
+                                        if let Some(&param_count) =
+                                            exported_func_param_counts.get(&key_src)
+                                        {
                                             let key = (path_str.clone(), exported.clone());
                                             if !exported_func_param_counts.contains_key(&key) {
                                                 new_func_entries.push((key, param_count));
@@ -1423,7 +1666,9 @@ pub fn run_with_parse_cache(
                 }
             }
         }
-        if new_func_entries.is_empty() { break; }
+        if new_func_entries.is_empty() {
+            break;
+        }
         for (key, param_count) in new_func_entries {
             exported_func_param_counts.insert(key, param_count);
         }
@@ -1440,16 +1685,24 @@ pub fn run_with_parse_cache(
             for export in &hir_module.exports {
                 match export {
                     perry_hir::Export::ExportAll { source } => {
-                        if let Some((resolved_source, _)) = resolve_import(source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
+                        if let Some((resolved_source, _)) = resolve_import(
+                            source,
+                            path,
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
-                            for ((src_path, func_name), return_type) in &exported_func_return_types {
+                            for ((src_path, func_name), return_type) in &exported_func_return_types
+                            {
                                 if src_path == &source_path_str {
                                     let key = (path_str.clone(), func_name.clone());
                                     if !exported_func_return_types.contains_key(&key) {
                                         new_func_entries.push((key.clone(), return_type.clone()));
                                     }
                                     let async_key = (source_path_str.clone(), func_name.clone());
-                                    let propagated_async_key = (path_str.clone(), func_name.clone());
+                                    let propagated_async_key =
+                                        (path_str.clone(), func_name.clone());
                                     if exported_async_funcs.contains(&async_key)
                                         && !exported_async_funcs.contains(&propagated_async_key)
                                     {
@@ -1459,10 +1712,21 @@ pub fn run_with_parse_cache(
                             }
                         }
                     }
-                    perry_hir::Export::ReExport { source, imported, exported } => {
-                        if let Some((resolved_source, _)) = resolve_import(source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
+                    perry_hir::Export::ReExport {
+                        source,
+                        imported,
+                        exported,
+                    } => {
+                        if let Some((resolved_source, _)) = resolve_import(
+                            source,
+                            path,
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
-                            for ((src_path, func_name), return_type) in &exported_func_return_types {
+                            for ((src_path, func_name), return_type) in &exported_func_return_types
+                            {
                                 if src_path == &source_path_str && func_name == imported {
                                     let key = (path_str.clone(), exported.clone());
                                     if !exported_func_return_types.contains_key(&key) {
@@ -1483,24 +1747,38 @@ pub fn run_with_parse_cache(
                         for import in &hir_module.imports {
                             for spec in &import.specifiers {
                                 let (matches, imported_name) = match spec {
-                                    perry_hir::ImportSpecifier::Named { local: l, imported } =>
-                                        (l == local, imported.clone()),
-                                    perry_hir::ImportSpecifier::Default { local: l } =>
-                                        (l == local, "default".to_string()),
+                                    perry_hir::ImportSpecifier::Named { local: l, imported } => {
+                                        (l == local, imported.clone())
+                                    }
+                                    perry_hir::ImportSpecifier::Default { local: l } => {
+                                        (l == local, "default".to_string())
+                                    }
                                     _ => (false, String::new()),
                                 };
                                 if matches {
-                                    if let Some((resolved_source, _)) = resolve_import(&import.source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
-                                        let source_path_str = resolved_source.to_string_lossy().to_string();
+                                    if let Some((resolved_source, _)) = resolve_import(
+                                        &import.source,
+                                        path,
+                                        &ctx.project_root,
+                                        &ctx.compile_packages,
+                                        &ctx.compile_package_dirs,
+                                    ) {
+                                        let source_path_str =
+                                            resolved_source.to_string_lossy().to_string();
                                         let key_src = (source_path_str, imported_name);
-                                        if let Some(return_type) = exported_func_return_types.get(&key_src) {
+                                        if let Some(return_type) =
+                                            exported_func_return_types.get(&key_src)
+                                        {
                                             let key = (path_str.clone(), exported.clone());
                                             if !exported_func_return_types.contains_key(&key) {
-                                                new_func_entries.push((key.clone(), return_type.clone()));
+                                                new_func_entries
+                                                    .push((key.clone(), return_type.clone()));
                                             }
-                                            let propagated_async_key = (path_str.clone(), exported.clone());
+                                            let propagated_async_key =
+                                                (path_str.clone(), exported.clone());
                                             if exported_async_funcs.contains(&key_src)
-                                                && !exported_async_funcs.contains(&propagated_async_key)
+                                                && !exported_async_funcs
+                                                    .contains(&propagated_async_key)
                                             {
                                                 new_async_entries.push(propagated_async_key);
                                             }
@@ -1514,7 +1792,9 @@ pub fn run_with_parse_cache(
                 }
             }
         }
-        if new_func_entries.is_empty() && new_async_entries.is_empty() { break; }
+        if new_func_entries.is_empty() && new_async_entries.is_empty() {
+            break;
+        }
         for (key, return_type) in new_func_entries {
             exported_func_return_types.insert(key, return_type);
         }
@@ -1531,7 +1811,13 @@ pub fn run_with_parse_cache(
             for export in &hir_module.exports {
                 match export {
                     perry_hir::Export::ExportAll { source } => {
-                        if let Some((resolved_source, _)) = resolve_import(source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
+                        if let Some((resolved_source, _)) = resolve_import(
+                            source,
+                            path,
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             for ((src_path, class_name), class) in &exported_classes {
                                 if src_path == &source_path_str {
@@ -1543,8 +1829,18 @@ pub fn run_with_parse_cache(
                             }
                         }
                     }
-                    perry_hir::Export::ReExport { source, imported, exported } => {
-                        if let Some((resolved_source, _)) = resolve_import(source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
+                    perry_hir::Export::ReExport {
+                        source,
+                        imported,
+                        exported,
+                    } => {
+                        if let Some((resolved_source, _)) = resolve_import(
+                            source,
+                            path,
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             for ((src_path, class_name), class) in &exported_classes {
                                 if src_path == &source_path_str && class_name == imported {
@@ -1560,15 +1856,24 @@ pub fn run_with_parse_cache(
                         for import in &hir_module.imports {
                             for spec in &import.specifiers {
                                 let (matches, imported_name) = match spec {
-                                    perry_hir::ImportSpecifier::Named { local: l, imported } =>
-                                        (l == local, imported.clone()),
-                                    perry_hir::ImportSpecifier::Default { local: l } =>
-                                        (l == local, "default".to_string()),
+                                    perry_hir::ImportSpecifier::Named { local: l, imported } => {
+                                        (l == local, imported.clone())
+                                    }
+                                    perry_hir::ImportSpecifier::Default { local: l } => {
+                                        (l == local, "default".to_string())
+                                    }
                                     _ => (false, String::new()),
                                 };
                                 if matches {
-                                    if let Some((resolved_source, _)) = resolve_import(&import.source, path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs) {
-                                        let source_path_str = resolved_source.to_string_lossy().to_string();
+                                    if let Some((resolved_source, _)) = resolve_import(
+                                        &import.source,
+                                        path,
+                                        &ctx.project_root,
+                                        &ctx.compile_packages,
+                                        &ctx.compile_package_dirs,
+                                    ) {
+                                        let source_path_str =
+                                            resolved_source.to_string_lossy().to_string();
                                         let key_src = (source_path_str, imported_name);
                                         if let Some(class) = exported_classes.get(&key_src) {
                                             let key = (path_str.clone(), exported.clone());
@@ -1585,7 +1890,9 @@ pub fn run_with_parse_cache(
                 }
             }
         }
-        if new_entries.is_empty() { break; }
+        if new_entries.is_empty() {
+            break;
+        }
         for (key, class) in new_entries {
             exported_classes.insert(key, class);
         }
@@ -1599,8 +1906,10 @@ pub fn run_with_parse_cache(
     // harmonyos runtime is already on disk (the npm-distribution case, once
     // that ships). `find_runtime_library` is a borrowed-result, so we inspect
     // without propagating errors.
-    if matches!(target.as_deref(), Some("harmonyos") | Some("harmonyos-simulator"))
-        && find_harmonyos_sdk().is_none()
+    if matches!(
+        target.as_deref(),
+        Some("harmonyos") | Some("harmonyos-simulator")
+    ) && find_harmonyos_sdk().is_none()
         && find_runtime_library(target.as_deref()).is_err()
     {
         anyhow::bail!(
@@ -1620,17 +1929,24 @@ pub fn run_with_parse_cache(
 
     // Pre-compute feature flags (moved out of parallel loop to avoid ctx mutation)
     let compiled_features: Vec<String> = if let Some(ref features_str) = args.features {
-        let mut features: Vec<String> = features_str.split(',')
+        let mut features: Vec<String> = features_str
+            .split(',')
             .map(|f| f.trim().to_string())
             .filter(|f| !f.is_empty())
             .collect();
-        let is_mobile = matches!(target.as_deref(),
-            Some("ios") | Some("ios-simulator") |
-            Some("visionos") | Some("visionos-simulator") |
-            Some("android") |
-            Some("watchos") | Some("watchos-simulator") |
-            Some("tvos") | Some("tvos-simulator") |
-            Some("harmonyos") | Some("harmonyos-simulator")
+        let is_mobile = matches!(
+            target.as_deref(),
+            Some("ios")
+                | Some("ios-simulator")
+                | Some("visionos")
+                | Some("visionos-simulator")
+                | Some("android")
+                | Some("watchos")
+                | Some("watchos-simulator")
+                | Some("tvos")
+                | Some("tvos-simulator")
+                | Some("harmonyos")
+                | Some("harmonyos-simulator")
         );
         if is_mobile {
             features.retain(|f| f != "plugins");
@@ -1641,13 +1957,18 @@ pub fn run_with_parse_cache(
         // Auto-enable the HarmonyOS NAPI entry wrapper. Without this the
         // linked .so has no `napi_module_register` call and the ArkTS shim
         // fails at import time with "module entry not found".
-        if matches!(target.as_deref(), Some("harmonyos") | Some("harmonyos-simulator"))
-            && !features.iter().any(|f| f == "ohos-napi")
+        if matches!(
+            target.as_deref(),
+            Some("harmonyos") | Some("harmonyos-simulator")
+        ) && !features.iter().any(|f| f == "ohos-napi")
         {
             features.push("ohos-napi".to_string());
         }
         features
-    } else if matches!(target.as_deref(), Some("harmonyos") | Some("harmonyos-simulator")) {
+    } else if matches!(
+        target.as_deref(),
+        Some("harmonyos") | Some("harmonyos-simulator")
+    ) {
         // User didn't pass --features at all; still auto-enable ohos-napi.
         vec!["ohos-napi".to_string()]
     } else {
@@ -1655,10 +1976,14 @@ pub fn run_with_parse_cache(
     };
 
     // Pre-compute native library FFI functions
-    let ffi_functions: Vec<(String, Vec<String>, String)> = ctx.native_libraries.iter()
-        .flat_map(|lib| lib.functions.iter().map(|f| {
-            (f.name.clone(), f.params.clone(), f.returns.clone())
-        }))
+    let ffi_functions: Vec<(String, Vec<String>, String)> = ctx
+        .native_libraries
+        .iter()
+        .flat_map(|lib| {
+            lib.functions
+                .iter()
+                .map(|f| (f.name.clone(), f.params.clone(), f.returns.clone()))
+        })
         .collect();
 
     // Pre-compute JS module specifiers
@@ -1666,7 +1991,6 @@ pub fn run_with_parse_cache(
     let needs_js_runtime = ctx.needs_js_runtime || args.enable_js_runtime;
 
     // Compile native modules in parallel using rayon
-    
 
     // Snapshot i18n data from main thread so rayon workers can access it.
     // The `default_locale_idx` is required by the LLVM backend to resolve
@@ -1693,15 +2017,13 @@ pub fn run_with_parse_cache(
     // Phase J: detect bitcode-link mode. The actual .bc paths aren't known
     // yet (build_optimized_libs runs after compilation), but we decide the
     // mode here so the per-module codegen can emit .ll instead of .o.
-    let bitcode_link =
-        std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1");
+    let bitcode_link = std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1");
 
     // V2.2: Per-module object cache at `.perry-cache/objects/<target>/<key>.o`.
     // Disabled when the user passed `--no-cache`, when `PERRY_NO_CACHE=1`, or
     // when we're in bitcode-link mode (the artifacts aren't object files).
     // Key derivation: `compute_object_cache_key(opts, source_hash, perry_version)`.
-    let cache_env_disabled =
-        std::env::var("PERRY_NO_CACHE").ok().as_deref() == Some("1");
+    let cache_env_disabled = std::env::var("PERRY_NO_CACHE").ok().as_deref() == Some("1");
     let cache_enabled = !args.no_cache && !cache_env_disabled && !bitcode_link;
     // Target dir name for the cache layout. Using the resolved LLVM triple
     // keeps cross-compile caches from colliding with native-host caches.
@@ -1709,7 +2031,9 @@ pub fn run_with_parse_cache(
     let object_cache = ObjectCache::new(&ctx.project_root, cache_target_dir, cache_enabled);
     let perry_version = env!("CARGO_PKG_VERSION");
 
-    let compile_results: Vec<Result<(PathBuf, Vec<u8>), String>> = ctx.native_modules.par_iter()
+    let compile_results: Vec<Result<(PathBuf, Vec<u8>), String>> = ctx
+        .native_modules
+        .par_iter()
         .map(|(path, hir_module)| {
             // Compile this module to LLVM IR (or .ll text in bitcode-link mode)
             // and return the object bytes for the linker to consume.
@@ -1725,9 +2049,20 @@ pub fn run_with_parse_cache(
             let sanitize_name = |s: &str| -> String {
                 let mut out: String = s
                     .chars()
-                    .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || c == '_' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
                     .collect();
-                if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                if out
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+                {
                     out.insert(0, '_');
                 }
                 out
@@ -1760,14 +2095,19 @@ pub fn run_with_parse_cache(
             // module, look up the source module's HIR by resolved
             // path and capture its name. The LLVM codegen uses this
             // to generate `perry_fn_<source_prefix>__<name>`.
-            let mut import_function_prefixes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            let mut import_function_prefixes: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
             let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
             let mut imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
-            let mut imported_async_set: std::collections::HashSet<String> = std::collections::HashSet::new();
-            let mut imported_param_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            let mut imported_return_types: std::collections::HashMap<String, perry_types::Type> = std::collections::HashMap::new();
-            let mut imported_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut imported_async_set: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            let mut imported_param_counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            let mut imported_return_types: std::collections::HashMap<String, perry_types::Type> =
+                std::collections::HashMap::new();
+            let mut imported_vars: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
 
             for import in &hir_module.imports {
                 if import.module_kind != perry_hir::ModuleKind::NativeCompiled {
@@ -1795,8 +2135,10 @@ pub fn run_with_parse_cache(
                         // Register all exports from the source module
                         if let Some(exports) = all_module_exports.get(&resolved_path_str) {
                             for (export_name, origin_path) in exports {
-                                let origin_prefix = compute_module_prefix(origin_path, &ctx.project_root);
-                                import_function_prefixes.insert(export_name.clone(), origin_prefix.clone());
+                                let origin_prefix =
+                                    compute_module_prefix(origin_path, &ctx.project_root);
+                                import_function_prefixes
+                                    .insert(export_name.clone(), origin_prefix.clone());
 
                                 let key = (origin_path.clone(), export_name.clone());
                                 if let Some(&param_count) = exported_func_param_counts.get(&key) {
@@ -1807,15 +2149,47 @@ pub fn run_with_parse_cache(
                                         name: class.name.clone(),
                                         local_alias: None,
                                         source_prefix: origin_prefix.clone(),
-                                        constructor_param_count: class.constructor.as_ref().map(|c| c.params.len()).unwrap_or(0),
-                                        method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                                        method_param_counts: class.methods.iter().map(|m| m.params.len()).collect(),
-                                        static_method_names: class.static_methods.iter().map(|m| m.name.clone()).collect(),
-                                        getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
-                                        setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
+                                        constructor_param_count: class
+                                            .constructor
+                                            .as_ref()
+                                            .map(|c| c.params.len())
+                                            .unwrap_or(0),
+                                        method_names: class
+                                            .methods
+                                            .iter()
+                                            .map(|m| m.name.clone())
+                                            .collect(),
+                                        method_param_counts: class
+                                            .methods
+                                            .iter()
+                                            .map(|m| m.params.len())
+                                            .collect(),
+                                        static_method_names: class
+                                            .static_methods
+                                            .iter()
+                                            .map(|m| m.name.clone())
+                                            .collect(),
+                                        getter_names: class
+                                            .getters
+                                            .iter()
+                                            .map(|(n, _)| n.clone())
+                                            .collect(),
+                                        setter_names: class
+                                            .setters
+                                            .iter()
+                                            .map(|(n, _)| n.clone())
+                                            .collect(),
                                         parent_name: class.extends_name.clone(),
-                                        field_names: class.fields.iter().map(|f| f.name.clone()).collect(),
-                                        field_types: class.fields.iter().map(|f| f.ty.clone()).collect(),
+                                        field_names: class
+                                            .fields
+                                            .iter()
+                                            .map(|f| f.name.clone())
+                                            .collect(),
+                                        field_types: class
+                                            .fields
+                                            .iter()
+                                            .map(|f| f.ty.clone())
+                                            .collect(),
                                         source_class_id: Some(class.id),
                                     });
                                 }
@@ -1828,31 +2202,38 @@ pub fn run_with_parse_cache(
                     }
 
                     let (local_name, exported_name) = match spec {
-                        perry_hir::ImportSpecifier::Named { imported, local } => (local.clone(), imported.clone()),
-                        perry_hir::ImportSpecifier::Default { local } => (local.clone(), "default".to_string()),
+                        perry_hir::ImportSpecifier::Named { imported, local } => {
+                            (local.clone(), imported.clone())
+                        }
+                        perry_hir::ImportSpecifier::Default { local } => {
+                            (local.clone(), "default".to_string())
+                        }
                         perry_hir::ImportSpecifier::Namespace { .. } => unreachable!(),
                     };
 
                     let key = (resolved_path_str.clone(), exported_name.clone());
 
                     // Resolve effective prefix (follow re-exports)
-                    let effective_prefix = if let Some(exports) = all_module_exports.get(&resolved_path_str) {
-                        if let Some(origin_path) = exports.get(&exported_name) {
-                            if origin_path != &resolved_path_str {
-                                compute_module_prefix(origin_path, &ctx.project_root)
+                    let effective_prefix =
+                        if let Some(exports) = all_module_exports.get(&resolved_path_str) {
+                            if let Some(origin_path) = exports.get(&exported_name) {
+                                if origin_path != &resolved_path_str {
+                                    compute_module_prefix(origin_path, &ctx.project_root)
+                                } else {
+                                    source_prefix.clone()
+                                }
                             } else {
                                 source_prefix.clone()
                             }
                         } else {
                             source_prefix.clone()
-                        }
-                    } else {
-                        source_prefix.clone()
-                    };
+                        };
 
-                    import_function_prefixes.insert(exported_name.clone(), effective_prefix.clone());
+                    import_function_prefixes
+                        .insert(exported_name.clone(), effective_prefix.clone());
                     if local_name != exported_name {
-                        import_function_prefixes.insert(local_name.clone(), effective_prefix.clone());
+                        import_function_prefixes
+                            .insert(local_name.clone(), effective_prefix.clone());
                     }
 
                     // Imported variables (not functions) — ExternFuncRef-as-value
@@ -1868,12 +2249,28 @@ pub fn run_with_parse_cache(
                     if let Some(class) = exported_classes.get(&key) {
                         imported_classes.push(perry_codegen::ImportedClass {
                             name: class.name.clone(),
-                            local_alias: if local_name != class.name { Some(local_name.clone()) } else { None },
+                            local_alias: if local_name != class.name {
+                                Some(local_name.clone())
+                            } else {
+                                None
+                            },
                             source_prefix: effective_prefix.clone(),
-                            constructor_param_count: class.constructor.as_ref().map(|c| c.params.len()).unwrap_or(0),
+                            constructor_param_count: class
+                                .constructor
+                                .as_ref()
+                                .map(|c| c.params.len())
+                                .unwrap_or(0),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class.methods.iter().map(|m| m.params.len()).collect(),
-                            static_method_names: class.static_methods.iter().map(|m| m.name.clone()).collect(),
+                            method_param_counts: class
+                                .methods
+                                .iter()
+                                .map(|m| m.params.len())
+                                .collect(),
+                            static_method_names: class
+                                .static_methods
+                                .iter()
+                                .map(|m| m.name.clone())
+                                .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
                             setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
                             parent_name: class.extends_name.clone(),
@@ -1973,10 +2370,22 @@ pub fn run_with_parse_cache(
                             name: class.name.clone(),
                             local_alias: None,
                             source_prefix: class_prefix,
-                            constructor_param_count: class.constructor.as_ref().map(|c| c.params.len()).unwrap_or(0),
+                            constructor_param_count: class
+                                .constructor
+                                .as_ref()
+                                .map(|c| c.params.len())
+                                .unwrap_or(0),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class.methods.iter().map(|m| m.params.len()).collect(),
-                            static_method_names: class.static_methods.iter().map(|m| m.name.clone()).collect(),
+                            method_param_counts: class
+                                .methods
+                                .iter()
+                                .map(|m| m.params.len())
+                                .collect(),
+                            static_method_names: class
+                                .static_methods
+                                .iter()
+                                .map(|m| m.name.clone())
+                                .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
                             setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
                             parent_name: class.extends_name.clone(),
@@ -2060,7 +2469,8 @@ pub fn run_with_parse_cache(
                     | "Widget" | "Color" | "Font" | "Image"
                 )
             }
-            let mut local_known: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut local_known: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             for class in &hir_module.classes {
                 local_known.insert(class.name.clone());
             }
@@ -2087,23 +2497,21 @@ pub fn run_with_parse_cache(
                     && !all_program_type_names.contains(name)
                     && !is_builtin_type_name(name)
             };
-            fn type_has_unresolved<F: Fn(&str) -> bool>(
-                ty: &perry_types::Type,
-                check: &F,
-            ) -> bool {
+            fn type_has_unresolved<F: Fn(&str) -> bool>(ty: &perry_types::Type, check: &F) -> bool {
                 use perry_types::Type;
                 match ty {
                     Type::Named(name) => check(name),
                     Type::Generic { base, type_args } => {
-                        check(base)
-                            || type_args.iter().any(|t| type_has_unresolved(t, check))
+                        check(base) || type_args.iter().any(|t| type_has_unresolved(t, check))
                     }
                     Type::Array(elem) => type_has_unresolved(elem, check),
                     Type::Promise(inner) => type_has_unresolved(inner, check),
                     Type::Union(variants) => variants.iter().any(|v| type_has_unresolved(v, check)),
                     Type::Tuple(items) => items.iter().any(|v| type_has_unresolved(v, check)),
                     Type::Function(ft) => {
-                        ft.params.iter().any(|(_, t, _)| type_has_unresolved(t, check))
+                        ft.params
+                            .iter()
+                            .any(|(_, t, _)| type_has_unresolved(t, check))
                             || type_has_unresolved(&ft.return_type, check)
                     }
                     _ => false,
@@ -2115,21 +2523,21 @@ pub fn run_with_parse_cache(
             ) -> bool {
                 stmts.iter().any(|s| stmt_has_unresolved(s, check))
             }
-            fn stmt_has_unresolved<F: Fn(&str) -> bool>(
-                stmt: &perry_hir::Stmt,
-                check: &F,
-            ) -> bool {
+            fn stmt_has_unresolved<F: Fn(&str) -> bool>(stmt: &perry_hir::Stmt, check: &F) -> bool {
                 match stmt {
                     perry_hir::Stmt::Let { ty, .. } => type_has_unresolved(ty, check),
-                    perry_hir::Stmt::If { then_branch, else_branch, .. } => {
+                    perry_hir::Stmt::If {
+                        then_branch,
+                        else_branch,
+                        ..
+                    } => {
                         stmts_have_unresolved(then_branch, check)
                             || else_branch
                                 .as_ref()
                                 .map(|a| stmts_have_unresolved(a, check))
                                 .unwrap_or(false)
                     }
-                    perry_hir::Stmt::While { body, .. }
-                    | perry_hir::Stmt::DoWhile { body, .. } => {
+                    perry_hir::Stmt::While { body, .. } | perry_hir::Stmt::DoWhile { body, .. } => {
                         stmts_have_unresolved(body, check)
                     }
                     perry_hir::Stmt::For { init, body, .. } => {
@@ -2142,7 +2550,11 @@ pub fn run_with_parse_cache(
                     perry_hir::Stmt::Labeled { body, .. } => {
                         stmt_has_unresolved(body.as_ref(), check)
                     }
-                    perry_hir::Stmt::Try { body, catch, finally } => {
+                    perry_hir::Stmt::Try {
+                        body,
+                        catch,
+                        finally,
+                    } => {
                         if stmts_have_unresolved(body, check) {
                             return true;
                         }
@@ -2164,10 +2576,7 @@ pub fn run_with_parse_cache(
                     _ => false,
                 }
             }
-            fn fn_has_unresolved<F: Fn(&str) -> bool>(
-                f: &perry_hir::Function,
-                check: &F,
-            ) -> bool {
+            fn fn_has_unresolved<F: Fn(&str) -> bool>(f: &perry_hir::Function, check: &F) -> bool {
                 f.params.iter().any(|p| type_has_unresolved(&p.ty, check))
                     || type_has_unresolved(&f.return_type, check)
                     || stmts_have_unresolved(&f.body, check)
@@ -2207,8 +2616,7 @@ pub fn run_with_parse_cache(
                     }
                 }
             }
-            if !references_interface
-                && stmts_have_unresolved(&hir_module.init, &is_unresolved_name)
+            if !references_interface && stmts_have_unresolved(&hir_module.init, &is_unresolved_name)
             {
                 references_interface = true;
             }
@@ -2227,10 +2635,22 @@ pub fn run_with_parse_cache(
                             name: class.name.clone(),
                             local_alias: None,
                             source_prefix: class_prefix,
-                            constructor_param_count: class.constructor.as_ref().map(|c| c.params.len()).unwrap_or(0),
+                            constructor_param_count: class
+                                .constructor
+                                .as_ref()
+                                .map(|c| c.params.len())
+                                .unwrap_or(0),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class.methods.iter().map(|m| m.params.len()).collect(),
-                            static_method_names: class.static_methods.iter().map(|m| m.name.clone()).collect(),
+                            method_param_counts: class
+                                .methods
+                                .iter()
+                                .map(|m| m.params.len())
+                                .collect(),
+                            static_method_names: class
+                                .static_methods
+                                .iter()
+                                .map(|m| m.name.clone())
+                                .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
                             setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
                             parent_name: class.extends_name.clone(),
@@ -2253,16 +2673,11 @@ pub fn run_with_parse_cache(
             // `class_table` and its field types are unknown. Closing
             // over field types lets `PropertyGet` recursion resolve
             // the receiver class at every step of the chain.
-            let mut visited_imports: std::collections::HashSet<String> = imported_classes
-                .iter()
-                .map(|ic| ic.name.clone())
-                .collect();
-            let mut closure_worklist: Vec<String> =
-                visited_imports.iter().cloned().collect();
+            let mut visited_imports: std::collections::HashSet<String> =
+                imported_classes.iter().map(|ic| ic.name.clone()).collect();
+            let mut closure_worklist: Vec<String> = visited_imports.iter().cloned().collect();
             while let Some(name) = closure_worklist.pop() {
-                let ic_idx = imported_classes
-                    .iter()
-                    .position(|ic| ic.name == name);
+                let ic_idx = imported_classes.iter().position(|ic| ic.name == name);
                 let Some(idx) = ic_idx else { continue };
                 let field_types_clone = imported_classes[idx].field_types.clone();
                 for ty in &field_types_clone {
@@ -2284,10 +2699,22 @@ pub fn run_with_parse_cache(
                             name: class.name.clone(),
                             local_alias: None,
                             source_prefix: class_prefix,
-                            constructor_param_count: class.constructor.as_ref().map(|c| c.params.len()).unwrap_or(0),
+                            constructor_param_count: class
+                                .constructor
+                                .as_ref()
+                                .map(|c| c.params.len())
+                                .unwrap_or(0),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class.methods.iter().map(|m| m.params.len()).collect(),
-                            static_method_names: class.static_methods.iter().map(|m| m.name.clone()).collect(),
+                            method_param_counts: class
+                                .methods
+                                .iter()
+                                .map(|m| m.params.len())
+                                .collect(),
+                            static_method_names: class
+                                .static_methods
+                                .iter()
+                                .map(|m| m.name.clone())
+                                .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
                             setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
                             parent_name: class.extends_name.clone(),
@@ -2303,7 +2730,10 @@ pub fn run_with_parse_cache(
 
             // Type aliases from all modules
             let type_alias_map: std::collections::HashMap<String, perry_types::Type> =
-                all_type_aliases.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                all_type_aliases
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
 
             // Resolve the CLI's short target name (ios/android/etc.) to
             // an LLVM triple. `None` falls through to the host default
@@ -2321,10 +2751,8 @@ pub fn run_with_parse_cache(
                 bundled_extensions
                     .iter()
                     .map(|(ext_path, _plugin_id)| {
-                        let ext_prefix = compute_module_prefix(
-                            &ext_path.to_string_lossy(),
-                            &ctx.project_root,
-                        );
+                        let ext_prefix =
+                            compute_module_prefix(&ext_path.to_string_lossy(), &ctx.project_root);
                         (ext_path.to_string_lossy().to_string(), ext_prefix)
                     })
                     .collect()
@@ -2378,11 +2806,7 @@ pub fn run_with_parse_cache(
             // identity, not just semantic equivalence. A miss (no entry,
             // disabled cache, or IO error) falls through to `compile_module`.
             let cache_key = if object_cache.is_enabled() {
-                let source_hash = ctx
-                    .module_source_hashes
-                    .get(path)
-                    .copied()
-                    .unwrap_or(0);
+                let source_hash = ctx.module_source_hashes.get(path).copied().unwrap_or(0);
                 Some(compute_object_cache_key(&opts, source_hash, perry_version))
             } else {
                 None
@@ -2390,18 +2814,22 @@ pub fn run_with_parse_cache(
             let object_code = match cache_key.and_then(|k| object_cache.lookup(k)) {
                 Some(bytes) => bytes,
                 None => {
-                    let bytes = perry_codegen::compile_module(hir_module, opts)
-                        .map_err(|e| format!(
+                    let bytes = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
+                        format!(
                             "Error compiling module '{}' ({}) with --backend llvm: {:#}",
-                            hir_module.name, path.display(), e
-                        ))?;
+                            hir_module.name,
+                            path.display(),
+                            e
+                        )
+                    })?;
                     if let Some(k) = cache_key {
                         object_cache.store(k, &bytes);
                     }
                     bytes
                 }
             };
-            let obj_name = hir_module.name
+            let obj_name = hir_module
+                .name
                 .replace(|c: char| !c.is_alphanumeric() && c != '_', "_")
                 .trim_matches('_')
                 .to_string();
@@ -2439,7 +2867,7 @@ pub fn run_with_parse_cache(
 
     // Parallel write phase. Returns one Result per write so we can
     // bail on the first I/O error after the par_iter finishes.
-    
+
     let write_results: Vec<Result<(), std::io::Error>> = to_write
         .par_iter()
         .map(|(obj_path, object_code)| fs::write(obj_path, object_code))
@@ -2510,10 +2938,8 @@ pub fn run_with_parse_cache(
     // for architecture arm64: "_main"` — which is a downstream symptom
     // that took a lot of digging to trace back to the real codegen
     // errors hidden in the build noise. Hard-fail here instead.
-    let entry_module_name: Option<String> = ctx
-        .native_modules
-        .get(&entry_path)
-        .map(|h| h.name.clone());
+    let entry_module_name: Option<String> =
+        ctx.native_modules.get(&entry_path).map(|h| h.name.clone());
     if !failed_modules.is_empty() {
         let entry_failed = entry_module_name
             .as_deref()
@@ -2552,9 +2978,7 @@ pub fn run_with_parse_cache(
         }
         eprintln!();
         if entry_failed {
-            eprintln!(
-                "Aborting: the entry module's `main` symbol is required by the linker."
-            );
+            eprintln!("Aborting: the entry module's `main` symbol is required by the linker.");
             eprintln!("Fix the codegen errors above (search for `Error compiling module`)");
             eprintln!("and re-run. The driver previously emitted an empty `_perry_init_*`");
             eprintln!("stub here and continued to link, which produced the misleading");
@@ -2585,7 +3009,9 @@ pub fn run_with_parse_cache(
     } else {
         build_optimized_libs(&ctx, target.as_deref(), &compiled_features, format, verbose)
     };
-    let stdlib_lib_resolved: Option<PathBuf> = optimized_libs.stdlib.clone()
+    let stdlib_lib_resolved: Option<PathBuf> = optimized_libs
+        .stdlib
+        .clone()
         .or_else(|| find_stdlib_library(target.as_deref()));
 
     // Generate stubs for missing symbols from unresolved imports (npm packages etc.)
@@ -2595,13 +3021,16 @@ pub fn run_with_parse_cache(
         let mut defined_syms: HashSet<String> = HashSet::new();
         // Prefer the auto-built runtime so the symbol-stub scan and the
         // final link see the same artifact (panic mode + feature set).
-        let runtime_lib_path = optimized_libs.runtime.clone()
+        let runtime_lib_path = optimized_libs
+            .runtime
+            .clone()
             .or_else(|| find_runtime_library(target.as_deref()).ok());
         let stdlib_lib_path = stdlib_lib_resolved.clone();
         // Check if jsruntime will be used - if so, don't generate stubs for its symbols
         let use_jsruntime = ctx.needs_js_runtime || args.enable_js_runtime;
         // Check if stdlib will be linked - if so, it provides perry_runtime symbols (no stubs needed)
-        let target_is_windows = matches!(target.as_deref(), Some("windows")) || (cfg!(target_os = "windows") && target.is_none());
+        let target_is_windows = matches!(target.as_deref(), Some("windows"))
+            || (cfg!(target_os = "windows") && target.is_none());
         let will_link_stdlib = (ctx.needs_stdlib || target_is_windows) && stdlib_lib_path.is_some();
         let jsruntime_lib_path = if use_jsruntime {
             find_jsruntime_library(target.as_deref())
@@ -2609,11 +3038,17 @@ pub fn run_with_parse_cache(
             None
         };
         let mut all_scan_paths: Vec<PathBuf> = obj_paths.clone();
-        if let Some(ref p) = runtime_lib_path { all_scan_paths.push(p.clone()); }
-        if ctx.needs_stdlib {
-            if let Some(ref p) = stdlib_lib_path { all_scan_paths.push(p.clone()); }
+        if let Some(ref p) = runtime_lib_path {
+            all_scan_paths.push(p.clone());
         }
-        if let Some(ref p) = jsruntime_lib_path { all_scan_paths.push(p.clone()); }
+        if ctx.needs_stdlib {
+            if let Some(ref p) = stdlib_lib_path {
+                all_scan_paths.push(p.clone());
+            }
+        }
+        if let Some(ref p) = jsruntime_lib_path {
+            all_scan_paths.push(p.clone());
+        }
         // Scan UI library for defined symbols so we don't generate stubs for
         // functions that exist in the platform UI library (e.g. screen detection FFI)
         if ctx.needs_ui {
@@ -2631,20 +3066,37 @@ pub fn run_with_parse_cache(
         // Platform detection for nm tool and symbol prefix
         let _is_ios = matches!(target.as_deref(), Some("ios-simulator") | Some("ios"));
         let is_android = matches!(target.as_deref(), Some("android"));
-        let is_harmonyos = matches!(target.as_deref(), Some("harmonyos") | Some("harmonyos-simulator"));
-        let is_linux = matches!(target.as_deref(), Some("linux")) || (!cfg!(target_os = "macos") && !cfg!(target_os = "windows") && target.is_none());
-        let is_windows = matches!(target.as_deref(), Some("windows")) || (cfg!(target_os = "windows") && target.is_none());
+        let is_harmonyos = matches!(
+            target.as_deref(),
+            Some("harmonyos") | Some("harmonyos-simulator")
+        );
+        let is_linux = matches!(target.as_deref(), Some("linux"))
+            || (!cfg!(target_os = "macos") && !cfg!(target_os = "windows") && target.is_none());
+        let is_windows = matches!(target.as_deref(), Some("windows"))
+            || (cfg!(target_os = "windows") && target.is_none());
         // Symbol prefix depends on object format:
         // Mach-O targets (macOS, iOS, watchOS, tvOS): nm shows `_` prefix
         // COFF (Windows targets): no prefix
         // ELF (Linux/Android/HarmonyOS targets): no prefix
         // Use TARGET (what we're compiling to), not HOST (what we're running on)
-        let is_macho = matches!(target.as_deref(),
-            Some("ios") | Some("ios-simulator") | Some("ios-widget") | Some("ios-widget-simulator") |
-            Some("visionos") | Some("visionos-simulator") |
-            Some("macos") | Some("watchos") | Some("watchos-simulator") |
-            Some("tvos") | Some("tvos-simulator")
-        ) || (!is_windows && !is_linux && !is_android && !is_harmonyos && cfg!(target_os = "macos"));
+        let is_macho = matches!(
+            target.as_deref(),
+            Some("ios")
+                | Some("ios-simulator")
+                | Some("ios-widget")
+                | Some("ios-widget-simulator")
+                | Some("visionos")
+                | Some("visionos-simulator")
+                | Some("macos")
+                | Some("watchos")
+                | Some("watchos-simulator")
+                | Some("tvos")
+                | Some("tvos-simulator")
+        ) || (!is_windows
+            && !is_linux
+            && !is_android
+            && !is_harmonyos
+            && cfg!(target_os = "macos"));
         // Find the nm tool: use llvm-nm when cross-compiling (host nm can't read foreign object formats)
         let needs_llvm_nm = is_windows || (is_macho && !cfg!(target_os = "macos"));
         let nm_cmd = if needs_llvm_nm {
@@ -2655,15 +3107,24 @@ pub fn run_with_parse_cache(
             "nm".to_string()
         };
         // Scan object files in parallel for symbol resolution
-        let scan_results: Vec<(HashSet<String>, HashSet<String>)> = all_scan_paths.par_iter()
+        let scan_results: Vec<(HashSet<String>, HashSet<String>)> = all_scan_paths
+            .par_iter()
             .map(|scan_path| {
                 let mut local_undef = HashSet::new();
                 let mut local_def = HashSet::new();
-                if let Ok(output) = std::process::Command::new(&nm_cmd).arg("-g").arg(scan_path).output() {
+                if let Ok(output) = std::process::Command::new(&nm_cmd)
+                    .arg("-g")
+                    .arg(scan_path)
+                    .output()
+                {
                     for line in String::from_utf8_lossy(&output.stdout).lines() {
                         let parts: Vec<&str> = line.split_whitespace().collect();
                         if parts.len() >= 2 {
-                            let (st, sn) = if parts.len() == 3 { (parts[1], parts[2]) } else { (parts[0], parts[1]) };
+                            let (st, sn) = if parts.len() == 3 {
+                                (parts[1], parts[2])
+                            } else {
+                                (parts[0], parts[1])
+                            };
                             let cn = if is_macho {
                                 sn.strip_prefix('_').unwrap_or(sn)
                             } else {
@@ -2672,14 +3133,25 @@ pub fn run_with_parse_cache(
                             if st == "U" {
                                 if cn.starts_with("__export_") || cn.starts_with("__wrapper_") {
                                     local_undef.insert(cn.to_string());
-                                } else if !use_jsruntime && !will_link_stdlib && (cn == "js_call_function" || cn == "js_load_module" || cn == "js_new_from_handle"
-                                    || cn == "js_new_instance" || cn == "js_create_callback" || cn == "js_runtime_init"
-                                    || cn == "js_set_property" || cn == "js_get_export" || cn == "js_await_js_promise") {
+                                } else if !use_jsruntime
+                                    && !will_link_stdlib
+                                    && (cn == "js_call_function"
+                                        || cn == "js_load_module"
+                                        || cn == "js_new_from_handle"
+                                        || cn == "js_new_instance"
+                                        || cn == "js_create_callback"
+                                        || cn == "js_runtime_init"
+                                        || cn == "js_set_property"
+                                        || cn == "js_get_export"
+                                        || cn == "js_await_js_promise")
+                                {
                                     local_undef.insert(cn.to_string());
-                                } else if is_windows && (
-                                    cn.starts_with("perry_ui_") || cn.starts_with("perry_system_") ||
-                                    cn.starts_with("perry_plugin_") || cn.starts_with("perry_get_")
-                                ) {
+                                } else if is_windows
+                                    && (cn.starts_with("perry_ui_")
+                                        || cn.starts_with("perry_system_")
+                                        || cn.starts_with("perry_plugin_")
+                                        || cn.starts_with("perry_get_"))
+                                {
                                     local_undef.insert(cn.to_string());
                                 }
                             } else if matches!(st, "T" | "t" | "D" | "d" | "S" | "s" | "B" | "b") {
@@ -2710,8 +3182,14 @@ pub fn run_with_parse_cache(
                     mf.push(s.clone());
                 }
             }
-            if let OutputFormat::Text = format { eprintln!("  Generating stubs for {} missing symbols ({} data, {} functions, {} identity)", missing.len(), md.len(), mf.len(), mi.len()); for s in &missing { eprintln!("    - {}", s); } }
-            let stub_bytes = perry_codegen::stubs::generate_stub_object(&md, &mf, &mi, target.as_deref())?;
+            if let OutputFormat::Text = format {
+                eprintln!("  Generating stubs for {} missing symbols ({} data, {} functions, {} identity)", missing.len(), md.len(), mf.len(), mi.len());
+                for s in &missing {
+                    eprintln!("    - {}", s);
+                }
+            }
+            let stub_bytes =
+                perry_codegen::stubs::generate_stub_object(&md, &mf, &mi, target.as_deref())?;
             let stub_path = PathBuf::from("_perry_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
             obj_paths.push(stub_path);
@@ -2726,11 +3204,13 @@ pub fn run_with_parse_cache(
             println!("Using LLVM bitcode link (whole-program LTO)");
         }
         // Separate .ll files (user modules) from .o files (stubs)
-        let ll_files: Vec<PathBuf> = obj_paths.iter()
+        let ll_files: Vec<PathBuf> = obj_paths
+            .iter()
             .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("ll"))
             .cloned()
             .collect();
-        let stub_objs: Vec<PathBuf> = obj_paths.iter()
+        let stub_objs: Vec<PathBuf> = obj_paths
+            .iter()
             .filter(|p| p.extension().and_then(|e| e.to_str()) != Some("ll"))
             .cloned()
             .collect();
@@ -2773,7 +3253,10 @@ pub fn run_with_parse_cache(
                     true
                 }
                 Err(e) => {
-                    eprintln!("  bitcode-link: pipeline failed ({}), falling back to normal link", e);
+                    eprintln!(
+                        "  bitcode-link: pipeline failed ({}), falling back to normal link",
+                        e
+                    );
                     false
                 }
             }
@@ -2786,10 +3269,8 @@ pub fn run_with_parse_cache(
         for p in &obj_paths {
             if p.extension().and_then(|e| e.to_str()) == Some("ll") {
                 let ll_text = fs::read_to_string(p)?;
-                let obj_bytes = perry_codegen::linker::compile_ll_to_object(
-                    &ll_text,
-                    target.as_deref(),
-                )?;
+                let obj_bytes =
+                    perry_codegen::linker::compile_ll_to_object(&ll_text, target.as_deref())?;
                 let obj_path = p.with_extension("o");
                 fs::write(&obj_path, &obj_bytes)?;
                 let _ = fs::remove_file(p);
@@ -2825,10 +3306,17 @@ pub fn run_with_parse_cache(
     let exe_path = args.output.unwrap_or_else(|| {
         if is_dylib {
             #[cfg(target_os = "macos")]
-            { PathBuf::from(format!("{}.dylib", stem)) }
+            {
+                PathBuf::from(format!("{}.dylib", stem))
+            }
             #[cfg(not(target_os = "macos"))]
-            { PathBuf::from(format!("{}.so", stem)) }
-        } else if matches!(target.as_deref(), Some("harmonyos") | Some("harmonyos-simulator")) {
+            {
+                PathBuf::from(format!("{}.so", stem))
+            }
+        } else if matches!(
+            target.as_deref(),
+            Some("harmonyos") | Some("harmonyos-simulator")
+        ) {
             // HarmonyOS apps ship as .so loaded by the ArkTS runtime via
             // napi_module_register — there is no standalone executable
             // shipping shape. `lib` prefix matches the dlopen name used by
@@ -2874,8 +3362,15 @@ pub fn run_with_parse_cache(
 
     if args.no_link {
         let codegen_cache_stats = if object_cache.is_enabled() {
-            Some((object_cache.hits(), object_cache.misses(), object_cache.stores(), object_cache.store_errors()))
-        } else { None };
+            Some((
+                object_cache.hits(),
+                object_cache.misses(),
+                object_cache.stores(),
+                object_cache.store_errors(),
+            ))
+        } else {
+            None
+        };
         return Ok(CompileResult {
             output_path: exe_path,
             target: target.clone().unwrap_or_else(|| "native".to_string()),
@@ -2897,9 +3392,15 @@ pub fn run_with_parse_cache(
     }
 
     let is_ios = matches!(target.as_deref(), Some("ios-simulator") | Some("ios"));
-    let is_visionos = matches!(target.as_deref(), Some("visionos-simulator") | Some("visionos"));
+    let is_visionos = matches!(
+        target.as_deref(),
+        Some("visionos-simulator") | Some("visionos")
+    );
     let is_android = matches!(target.as_deref(), Some("android"));
-    let is_harmonyos = matches!(target.as_deref(), Some("harmonyos") | Some("harmonyos-simulator"));
+    let is_harmonyos = matches!(
+        target.as_deref(),
+        Some("harmonyos") | Some("harmonyos-simulator")
+    );
     let is_linux = matches!(target.as_deref(), Some("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
     let _is_windows = matches!(target.as_deref(), Some("windows"))
@@ -2918,8 +3419,9 @@ pub fn run_with_parse_cache(
             // macOS — use flat_namespace so plugins can resolve symbols from the host
             let mut c = Command::new("cc");
             c.arg("-dynamiclib")
-             .arg("-flat_namespace")
-             .arg("-undefined").arg("dynamic_lookup");
+                .arg("-flat_namespace")
+                .arg("-undefined")
+                .arg("dynamic_lookup");
             c
         };
 
@@ -2949,8 +3451,15 @@ pub fn run_with_parse_cache(
         }
 
         let codegen_cache_stats = if object_cache.is_enabled() {
-            Some((object_cache.hits(), object_cache.misses(), object_cache.stores(), object_cache.store_errors()))
-        } else { None };
+            Some((
+                object_cache.hits(),
+                object_cache.misses(),
+                object_cache.stores(),
+                object_cache.store_errors(),
+            ))
+        } else {
+            None
+        };
         return Ok(CompileResult {
             output_path: exe_path,
             target: target.clone().unwrap_or_else(|| "native".to_string()),
@@ -2977,13 +3486,25 @@ pub fn run_with_parse_cache(
         find_runtime_library(target.as_deref())?
     };
     let stdlib_lib = stdlib_lib_resolved.clone();
-    let is_watchos = matches!(target.as_deref(), Some("watchos") | Some("watchos-simulator"));
+    let is_watchos = matches!(
+        target.as_deref(),
+        Some("watchos") | Some("watchos-simulator")
+    );
     let is_tvos = matches!(target.as_deref(), Some("tvos") | Some("tvos-simulator"));
-    let jsruntime_lib = if !is_ios && !is_visionos && !is_android && !is_harmonyos && !is_watchos && !is_tvos && (ctx.needs_js_runtime || args.enable_js_runtime) {
+    let jsruntime_lib = if !is_ios
+        && !is_visionos
+        && !is_android
+        && !is_harmonyos
+        && !is_watchos
+        && !is_tvos
+        && (ctx.needs_js_runtime || args.enable_js_runtime)
+    {
         match find_jsruntime_library(target.as_deref()) {
             Some(lib) => {
                 match format {
-                    OutputFormat::Text => println!("Using V8 JavaScript runtime for JS module support"),
+                    OutputFormat::Text => {
+                        println!("Using V8 JavaScript runtime for JS module support")
+                    }
                     OutputFormat::Json => {}
                 }
                 Some(lib)
@@ -3021,10 +3542,12 @@ pub fn run_with_parse_cache(
     // templated off the actual .so filename so it matches at dlopen time.
     if is_harmonyos {
         if let Some(output_dir) = exe_path.parent() {
-            let so_filename = exe_path.file_name()
+            let so_filename = exe_path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("libperry_app.so");
-            let stem = exe_path.file_stem()
+            let stem = exe_path
+                .file_stem()
                 .and_then(|n| n.to_str())
                 .unwrap_or("app")
                 .trim_start_matches("lib");
@@ -3049,7 +3572,11 @@ pub fn run_with_parse_cache(
                                     "Wrote HAP: {} ({}, ets: {})",
                                     res.hap_path.display(),
                                     if res.signed { "signed" } else { "unsigned" },
-                                    if res.abc_compiled { "bytecode" } else { "source" },
+                                    if res.abc_compiled {
+                                        "bytecode"
+                                    } else {
+                                        "source"
+                                    },
                                 );
                             }
                         }
@@ -3070,7 +3597,8 @@ pub fn run_with_parse_cache(
                     let lib_name = &target_config.lib_name;
                     if lib_name.ends_with(".so") {
                         let crate_target_dir = target_config.crate_path.join("target");
-                        let candidate = if let Some(triple) = rust_target_triple(target.as_deref()) {
+                        let candidate = if let Some(triple) = rust_target_triple(target.as_deref())
+                        {
                             crate_target_dir.join(triple).join("release").join(lib_name)
                         } else {
                             crate_target_dir.join("release").join(lib_name)
@@ -3078,10 +3606,15 @@ pub fn run_with_parse_cache(
                         if candidate.exists() {
                             let dest = output_dir.join(lib_name);
                             if let Err(e) = fs::copy(&candidate, &dest) {
-                                eprintln!("Warning: failed to copy companion library {}: {}", lib_name, e);
+                                eprintln!(
+                                    "Warning: failed to copy companion library {}: {}",
+                                    lib_name, e
+                                );
                             } else {
                                 match format {
-                                    OutputFormat::Text => println!("Copied companion library: {}", lib_name),
+                                    OutputFormat::Text => {
+                                        println!("Copied companion library: {}", lib_name)
+                                    }
                                     OutputFormat::Json => {}
                                 }
                             }
@@ -3104,73 +3637,93 @@ pub fn run_with_parse_cache(
         fs::copy(&exe_path, &bundle_exe)?;
         let _ = fs::remove_file(&exe_path);
 
-        let exe_stem = exe_path.file_stem().and_then(|s| s.to_str()).unwrap_or(stem);
+        let exe_stem = exe_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(stem);
         // Precedence: --app-bundle-id CLI flag > perry.toml [ios].bundle_id / [app]
         // / [project] / top-level > package.json "bundleId" > com.perry.{name}.
         // CLI wins so callers (doc-tests harness, CI, scripts) can override the
         // embedded ID without editing manifests; without this the app installs
         // under its fallback CFBundleIdentifier and a later `simctl launch
         // <custom-id>` fails with FBSOpenApplicationServiceErrorDomain code=4.
-        let bundle_id = args.app_bundle_id.clone().or_else(|| {
-            (|| -> Option<String> {
-                let mut dir = args.input.canonicalize().ok()?;
-                for _ in 0..5 {
-                    dir = dir.parent()?.to_path_buf();
-                    // Check perry.toml first: [ios].bundle_id, then top-level bundle_id
-                    let toml_path = dir.join("perry.toml");
-                    if toml_path.exists() {
-                        if let Ok(data) = fs::read_to_string(&toml_path) {
-                            if let Ok(doc) = data.parse::<toml::Table>() {
-                                let toml_bid = doc.get("ios")
-                                    .and_then(|i| i.get("bundle_id"))
-                                    .or_else(|| doc.get("app").and_then(|a| a.get("bundle_id")))
-                                    .or_else(|| doc.get("project").and_then(|p| p.get("bundle_id")))
-                                    .or_else(|| doc.get("bundle_id"))
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
-                                if toml_bid.is_some() {
-                                    return toml_bid;
+        let bundle_id = args
+            .app_bundle_id
+            .clone()
+            .or_else(|| {
+                (|| -> Option<String> {
+                    let mut dir = args.input.canonicalize().ok()?;
+                    for _ in 0..5 {
+                        dir = dir.parent()?.to_path_buf();
+                        // Check perry.toml first: [ios].bundle_id, then top-level bundle_id
+                        let toml_path = dir.join("perry.toml");
+                        if toml_path.exists() {
+                            if let Ok(data) = fs::read_to_string(&toml_path) {
+                                if let Ok(doc) = data.parse::<toml::Table>() {
+                                    let toml_bid = doc
+                                        .get("ios")
+                                        .and_then(|i| i.get("bundle_id"))
+                                        .or_else(|| doc.get("app").and_then(|a| a.get("bundle_id")))
+                                        .or_else(|| {
+                                            doc.get("project").and_then(|p| p.get("bundle_id"))
+                                        })
+                                        .or_else(|| doc.get("bundle_id"))
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+                                    if toml_bid.is_some() {
+                                        return toml_bid;
+                                    }
                                 }
                             }
                         }
+                        // Then check package.json
+                        let pkg = dir.join("package.json");
+                        if pkg.exists() {
+                            let data = fs::read_to_string(pkg).ok()?;
+                            let idx = data.find("\"bundleId\"")?;
+                            let colon = data[idx..].find(':')?;
+                            let q1 = data[idx + colon..].find('"')? + idx + colon + 1;
+                            let q2 = data[q1..].find('"')? + q1;
+                            return Some(data[q1..q2].to_string());
+                        }
                     }
-                    // Then check package.json
-                    let pkg = dir.join("package.json");
-                    if pkg.exists() {
-                        let data = fs::read_to_string(pkg).ok()?;
-                        let idx = data.find("\"bundleId\"")?;
-                        let colon = data[idx..].find(':')?;
-                        let q1 = data[idx + colon..].find('"')? + idx + colon + 1;
-                        let q2 = data[q1..].find('"')? + q1;
-                        return Some(data[q1..q2].to_string());
-                    }
-                }
-                None
-            })()
-        }).unwrap_or_else(|| format!("com.perry.{}", exe_stem));
+                    None
+                })()
+            })
+            .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
         result_bundle_id = Some(bundle_id.clone());
         result_app_dir = Some(app_dir.clone());
 
         // Read perry.toml for version, build_number, name
-        let (toml_version, toml_build_number, _toml_name) = (|| -> Option<(Option<String>, Option<String>, Option<String>)> {
-            let mut dir = args.input.canonicalize().ok()?;
-            for _ in 0..5 {
-                dir = dir.parent()?.to_path_buf();
-                let toml_path = dir.join("perry.toml");
-                if toml_path.exists() {
-                    let data = fs::read_to_string(&toml_path).ok()?;
-                    let doc: toml::Table = data.parse().ok()?;
-                    let project = doc.get("project")?.as_table()?;
-                    let version = project.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let build_number = project.get("build_number").and_then(|v| {
-                        v.as_integer().map(|n| n.to_string()).or_else(|| v.as_str().map(|s| s.to_string()))
-                    });
-                    let name = project.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    return Some((version, build_number, name));
+        let (toml_version, toml_build_number, _toml_name) =
+            (|| -> Option<(Option<String>, Option<String>, Option<String>)> {
+                let mut dir = args.input.canonicalize().ok()?;
+                for _ in 0..5 {
+                    dir = dir.parent()?.to_path_buf();
+                    let toml_path = dir.join("perry.toml");
+                    if toml_path.exists() {
+                        let data = fs::read_to_string(&toml_path).ok()?;
+                        let doc: toml::Table = data.parse().ok()?;
+                        let project = doc.get("project")?.as_table()?;
+                        let version = project
+                            .get("version")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let build_number = project.get("build_number").and_then(|v| {
+                            v.as_integer()
+                                .map(|n| n.to_string())
+                                .or_else(|| v.as_str().map(|s| s.to_string()))
+                        });
+                        let name = project
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        return Some((version, build_number, name));
+                    }
                 }
-            }
-            None
-        })().unwrap_or((None, None, None));
+                None
+            })()
+            .unwrap_or((None, None, None));
         let app_version = toml_version.as_deref().unwrap_or("1.0.0");
         let app_build_number = toml_build_number.as_deref().unwrap_or("1");
 
@@ -3186,17 +3739,18 @@ pub fn run_with_parse_cache(
                     let exempt = ios.get("encryption_exempt")?.as_bool()?;
                     if exempt {
                         return Some(
-                            "    <key>ITSAppUsesNonExemptEncryption</key>\n    <false/>".into()
+                            "    <key>ITSAppUsesNonExemptEncryption</key>\n    <false/>".into(),
                         );
                     } else {
                         return Some(
-                            "    <key>ITSAppUsesNonExemptEncryption</key>\n    <true/>".into()
+                            "    <key>ITSAppUsesNonExemptEncryption</key>\n    <true/>".into(),
                         );
                     }
                 }
             }
             None
-        })().unwrap_or_default();
+        })()
+        .unwrap_or_default();
 
         // Game-loop apps use traditional UIApplicationMain lifecycle, not SceneDelegate.
         // Including UIApplicationSceneManifest causes a black screen with game-loop.
@@ -3220,7 +3774,8 @@ pub fn run_with_parse_cache(
             </array>
         </dict>
     </dict>
-"#.to_string()
+"#
+            .to_string()
         };
 
         // Simulator bundles must declare iPhoneSimulator / iphonesimulator in
@@ -3229,9 +3784,21 @@ pub fn run_with_parse_cache(
         // aarch64-apple-ios-sim) causes simctl to refuse launch with
         // `FBSOpenApplicationServiceErrorDomain code=4`.
         let is_sim = matches!(target.as_deref(), Some("ios-simulator"));
-        let plist_supported_platform = if is_sim { "iPhoneSimulator" } else { "iPhoneOS" };
-        let plist_platform_name = if is_sim { "iphonesimulator" } else { "iphoneos" };
-        let plist_sdk_name = if is_sim { "iphonesimulator" } else { "iphoneos" };
+        let plist_supported_platform = if is_sim {
+            "iPhoneSimulator"
+        } else {
+            "iPhoneOS"
+        };
+        let plist_platform_name = if is_sim {
+            "iphonesimulator"
+        } else {
+            "iphoneos"
+        };
+        let plist_sdk_name = if is_sim {
+            "iphonesimulator"
+        } else {
+            "iphoneos"
+        };
         let info_plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -3428,7 +3995,8 @@ pub fn run_with_parse_cache(
                         } else if let Some(b) = value.as_bool() {
                             entries.push_str(&format!(
                                 "    <key>{}</key>\n    <{}/>",
-                                key, if b { "true" } else { "false" }
+                                key,
+                                if b { "true" } else { "false" }
                             ));
                         }
                     }
@@ -3438,7 +4006,8 @@ pub fn run_with_parse_cache(
                 }
             }
             None
-        })().unwrap_or_default();
+        })()
+        .unwrap_or_default();
         let info_plist = if !custom_plist_entries.is_empty() {
             info_plist.replace(
                 "</dict>\n</plist>",
@@ -3492,7 +4061,8 @@ pub fn run_with_parse_cache(
 
         // Write a compiled LaunchScreen storyboard — with splash image if configured,
         // otherwise a minimal blank storyboard so iPadOS treats the app as native iPad.
-        let launch_sb_xml = if let Some((ref image_path, ref bg_hex, ref custom_sb)) = splash_config {
+        let launch_sb_xml = if let Some((ref image_path, ref bg_hex, ref custom_sb)) = splash_config
+        {
             if let Some(custom) = custom_sb {
                 // Custom storyboard: copy as-is
                 fs::read_to_string(custom).unwrap_or_default()
@@ -3514,7 +4084,8 @@ pub fn run_with_parse_cache(
                 };
 
                 let image_views = if image_path.is_some() {
-                    format!(r#"
+                    format!(
+                        r#"
                         <subviews>
                             <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="splash_image" translatesAutoresizingMaskIntoConstraints="NO" id="img-splash-1">
                                 <rect key="frame" x="132.5" y="362" width="128" height="128"/>
@@ -3527,7 +4098,8 @@ pub fn run_with_parse_cache(
                         <constraints>
                             <constraint firstItem="img-splash-1" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="cx-1"/>
                             <constraint firstItem="img-splash-1" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" id="cy-1"/>
-                        </constraints>"#)
+                        </constraints>"#
+                    )
                 } else {
                     String::new()
                 };
@@ -3536,12 +4108,14 @@ pub fn run_with_parse_cache(
                     r#"
     <resources>
         <image name="splash_image" width="128" height="128"/>
-    </resources>"#.to_string()
+    </resources>"#
+                        .to_string()
                 } else {
                     String::new()
                 };
 
-                format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
 <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="21701" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
     <scenes>
         <scene sceneID="EHf-IW-A2E">
@@ -3558,7 +4132,8 @@ pub fn run_with_parse_cache(
             <point key="canvasLocation" x="0" y="0"/>
         </scene>
     </scenes>{resources}
-</document>"#)
+</document>"#
+                )
             }
         } else {
             // No splash config — minimal blank storyboard for iPadOS compatibility
@@ -3599,24 +4174,38 @@ pub fn run_with_parse_cache(
 
         // Bundle resource files: scan source for ImageFile('...') calls and copy referenced files
         // Also copy any directories named 'logo', 'assets', 'resources', 'images' from the project root
-        let source_dir = args.input.canonicalize().ok()
+        let source_dir = args
+            .input
+            .canonicalize()
+            .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
         if let Some(src_dir) = &source_dir {
             // Walk up to find project root (where package.json is)
             let mut project_root = src_dir.clone();
             for _ in 0..5 {
-                if project_root.join("package.json").exists() { break; }
+                if project_root.join("package.json").exists() {
+                    break;
+                }
                 if let Some(parent) = project_root.parent() {
                     project_root = parent.to_path_buf();
-                } else { break; }
+                } else {
+                    break;
+                }
             }
             // Copy common resource directories into the bundle
             for dir_name in &["logo", "assets", "resources", "images"] {
                 let resource_dir = project_root.join(dir_name);
                 if resource_dir.is_dir() {
                     let dest = app_dir.join(dir_name);
-                    eprintln!("[perry] iOS asset copy: src={} -> dst={}", resource_dir.display(), dest.display());
-                    fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+                    eprintln!(
+                        "[perry] iOS asset copy: src={} -> dst={}",
+                        resource_dir.display(),
+                        dest.display()
+                    );
+                    fn copy_dir_recursive(
+                        src: &std::path::Path,
+                        dst: &std::path::Path,
+                    ) -> std::io::Result<()> {
                         fs::create_dir_all(dst)?;
                         for entry in fs::read_dir(src)? {
                             let entry = entry?;
@@ -3644,17 +4233,25 @@ pub fn run_with_parse_cache(
                     let mut strings_content = String::new();
                     for (key_idx, key) in table.keys.iter().enumerate() {
                         let flat_idx = locale_idx * table.keys.len() + key_idx;
-                        let value = table.translations.get(flat_idx).cloned().unwrap_or_else(|| key.clone());
+                        let value = table
+                            .translations
+                            .get(flat_idx)
+                            .cloned()
+                            .unwrap_or_else(|| key.clone());
                         // Escape for .strings format
                         let escaped_key = key.replace('\\', "\\\\").replace('"', "\\\"");
                         let escaped_val = value.replace('\\', "\\\\").replace('"', "\\\"");
-                        strings_content.push_str(&format!("\"{}\" = \"{}\";\n", escaped_key, escaped_val));
+                        strings_content
+                            .push_str(&format!("\"{}\" = \"{}\";\n", escaped_key, escaped_val));
                     }
                     let _ = fs::write(lproj_dir.join("Localizable.strings"), &strings_content);
                 }
                 match format {
-                    OutputFormat::Text => println!("  Generated {}.lproj bundles for {} locale(s)",
-                        config.locales.join(", "), config.locales.len()),
+                    OutputFormat::Text => println!(
+                        "  Generated {}.lproj bundles for {} locale(s)",
+                        config.locales.join(", "),
+                        config.locales.len()
+                    ),
                     OutputFormat::Json => {}
                 }
             }
@@ -3688,7 +4285,10 @@ pub fn run_with_parse_cache(
         fs::copy(&exe_path, &bundle_exe)?;
         let _ = fs::remove_file(&exe_path);
 
-        let exe_stem = exe_path.file_stem().and_then(|s| s.to_str()).unwrap_or(stem);
+        let exe_stem = exe_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(stem);
         let bundle_id = lookup_bundle_id_from_toml(&args.input, "visionos")
             .or_else(|| lookup_bundle_id_from_toml(&args.input, "app"))
             .or_else(|| lookup_bundle_id_from_toml(&args.input, "ios"))
@@ -3696,7 +4296,13 @@ pub fn run_with_parse_cache(
         result_bundle_id = Some(bundle_id.clone());
         result_app_dir = Some(app_dir.clone());
 
-        let (app_version, app_build_number, deployment_target, encryption_exempt, custom_plist_entries) = (|| -> Option<(String, String, String, Option<bool>, String)> {
+        let (
+            app_version,
+            app_build_number,
+            deployment_target,
+            encryption_exempt,
+            custom_plist_entries,
+        ) = (|| -> Option<(String, String, String, Option<bool>, String)> {
             let mut dir = args.input.canonicalize().ok()?;
             for _ in 0..5 {
                 dir = dir.parent()?.to_path_buf();
@@ -3715,10 +4321,17 @@ pub fn run_with_parse_cache(
                     .to_string();
                 let build_number = project
                     .and_then(|p| p.get("build_number"))
-                    .and_then(|v| v.as_integer().map(|n| n.to_string()).or_else(|| v.as_str().map(|s| s.to_string())))
+                    .and_then(|v| {
+                        v.as_integer()
+                            .map(|n| n.to_string())
+                            .or_else(|| v.as_str().map(|s| s.to_string()))
+                    })
                     .unwrap_or_else(|| "1".to_string());
                 let deployment_target = visionos
-                    .and_then(|v| v.get("deployment_target").or_else(|| v.get("minimum_version")))
+                    .and_then(|v| {
+                        v.get("deployment_target")
+                            .or_else(|| v.get("minimum_version"))
+                    })
                     .and_then(|v| v.as_str())
                     .unwrap_or("1.0")
                     .to_string();
@@ -3732,18 +4345,41 @@ pub fn run_with_parse_cache(
                 {
                     for (key, value) in info_plist {
                         if let Some(s) = value.as_str() {
-                            entries.push_str(&format!("    <key>{}</key>\n    <string>{}</string>\n", key, s));
+                            entries.push_str(&format!(
+                                "    <key>{}</key>\n    <string>{}</string>\n",
+                                key, s
+                            ));
                         } else if let Some(b) = value.as_bool() {
-                            entries.push_str(&format!("    <key>{}</key>\n    <{}/>\n", key, if b { "true" } else { "false" }));
+                            entries.push_str(&format!(
+                                "    <key>{}</key>\n    <{}/>\n",
+                                key,
+                                if b { "true" } else { "false" }
+                            ));
                         } else if let Some(i) = value.as_integer() {
-                            entries.push_str(&format!("    <key>{}</key>\n    <integer>{}</integer>\n", key, i));
+                            entries.push_str(&format!(
+                                "    <key>{}</key>\n    <integer>{}</integer>\n",
+                                key, i
+                            ));
                         }
                     }
                 }
-                return Some((version, build_number, deployment_target, encryption_exempt, entries));
+                return Some((
+                    version,
+                    build_number,
+                    deployment_target,
+                    encryption_exempt,
+                    entries,
+                ));
             }
-            Some(("1.0.0".to_string(), "1".to_string(), "1.0".to_string(), None, String::new()))
-        })().unwrap();
+            Some((
+                "1.0.0".to_string(),
+                "1".to_string(),
+                "1.0".to_string(),
+                None,
+                String::new(),
+            ))
+        })()
+        .unwrap();
 
         let platform_name = if target.as_deref() == Some("visionos-simulator") {
             "XRSimulator"
@@ -3805,33 +4441,54 @@ pub fn run_with_parse_cache(
             "    <key>NSMicrophoneUsageDescription</key>\n",
             "    <string>This app uses the microphone to measure sound levels.</string>\n",
         );
-        info_plist = info_plist.replace("</dict>\n</plist>", &format!("{}</dict>\n</plist>", usage_descriptions));
+        info_plist = info_plist.replace(
+            "</dict>\n</plist>",
+            &format!("{}</dict>\n</plist>", usage_descriptions),
+        );
 
         if let Some(exempt) = encryption_exempt {
             let encryption_entry = format!(
                 "    <key>ITSAppUsesNonExemptEncryption</key>\n    <{}/>\n",
                 if exempt { "false" } else { "true" }
             );
-            info_plist = info_plist.replace("</dict>\n</plist>", &format!("{}</dict>\n</plist>", encryption_entry));
+            info_plist = info_plist.replace(
+                "</dict>\n</plist>",
+                &format!("{}</dict>\n</plist>", encryption_entry),
+            );
         }
 
         if !custom_plist_entries.is_empty() {
-            info_plist = info_plist.replace("</dict>\n</plist>", &format!("{}</dict>\n</plist>", custom_plist_entries));
+            info_plist = info_plist.replace(
+                "</dict>\n</plist>",
+                &format!("{}</dict>\n</plist>", custom_plist_entries),
+            );
         }
 
         fs::write(app_dir.join("Info.plist"), info_plist)?;
 
-        let source_dir = args.input.canonicalize().ok()
+        let source_dir = args
+            .input
+            .canonicalize()
+            .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
         if let Some(src_dir) = &source_dir {
             let mut project_root = src_dir.clone();
             for _ in 0..5 {
-                if project_root.join("package.json").exists() || project_root.join("perry.toml").exists() { break; }
+                if project_root.join("package.json").exists()
+                    || project_root.join("perry.toml").exists()
+                {
+                    break;
+                }
                 if let Some(parent) = project_root.parent() {
                     project_root = parent.to_path_buf();
-                } else { break; }
+                } else {
+                    break;
+                }
             }
-            fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+            fn copy_dir_recursive(
+                src: &std::path::Path,
+                dst: &std::path::Path,
+            ) -> std::io::Result<()> {
                 fs::create_dir_all(dst)?;
                 for entry in fs::read_dir(src)? {
                     let entry = entry?;
@@ -3862,10 +4519,15 @@ pub fn run_with_parse_cache(
                     let mut strings_content = String::new();
                     for (key_idx, key) in table.keys.iter().enumerate() {
                         let flat_idx = locale_idx * table.keys.len() + key_idx;
-                        let value = table.translations.get(flat_idx).cloned().unwrap_or_else(|| key.clone());
+                        let value = table
+                            .translations
+                            .get(flat_idx)
+                            .cloned()
+                            .unwrap_or_else(|| key.clone());
                         let escaped_key = key.replace('\\', "\\\\").replace('"', "\\\"");
                         let escaped_val = value.replace('\\', "\\\\").replace('"', "\\\"");
-                        strings_content.push_str(&format!("\"{}\" = \"{}\";\n", escaped_key, escaped_val));
+                        strings_content
+                            .push_str(&format!("\"{}\" = \"{}\";\n", escaped_key, escaped_val));
                     }
                     let _ = fs::write(lproj_dir.join("Localizable.strings"), &strings_content);
                 }
@@ -3899,7 +4561,10 @@ pub fn run_with_parse_cache(
         fs::copy(&exe_path, &bundle_exe)?;
         let _ = fs::remove_file(&exe_path);
 
-        let exe_stem = exe_path.file_stem().and_then(|s| s.to_str()).unwrap_or(stem);
+        let exe_stem = exe_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(stem);
         let bundle_id = lookup_bundle_id_from_toml(&args.input, "watchos")
             .or_else(|| lookup_bundle_id_from_toml(&args.input, "app"))
             .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
@@ -3939,17 +4604,29 @@ pub fn run_with_parse_cache(
         // Copy project resource directories into the bundle so
         // bloom_load_texture / load_sound / read_file can resolve relative
         // asset paths via [[NSBundle mainBundle] resourcePath].
-        let source_dir = args.input.canonicalize().ok()
+        let source_dir = args
+            .input
+            .canonicalize()
+            .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
         if let Some(src_dir) = &source_dir {
             let mut project_root = src_dir.clone();
             for _ in 0..5 {
-                if project_root.join("package.json").exists() || project_root.join("perry.toml").exists() { break; }
+                if project_root.join("package.json").exists()
+                    || project_root.join("perry.toml").exists()
+                {
+                    break;
+                }
                 if let Some(parent) = project_root.parent() {
                     project_root = parent.to_path_buf();
-                } else { break; }
+                } else {
+                    break;
+                }
             }
-            fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+            fn copy_dir_recursive(
+                src: &std::path::Path,
+                dst: &std::path::Path,
+            ) -> std::io::Result<()> {
                 fs::create_dir_all(dst)?;
                 for entry in fs::read_dir(src)? {
                     let entry = entry?;
@@ -4001,7 +4678,10 @@ pub fn run_with_parse_cache(
         fs::copy(&exe_path, &bundle_exe)?;
         let _ = fs::remove_file(&exe_path);
 
-        let exe_stem = exe_path.file_stem().and_then(|s| s.to_str()).unwrap_or(stem);
+        let exe_stem = exe_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(stem);
         let bundle_id = lookup_bundle_id_from_toml(&args.input, "tvos")
             .or_else(|| lookup_bundle_id_from_toml(&args.input, "app"))
             .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
@@ -4065,17 +4745,27 @@ pub fn run_with_parse_cache(
         // For Windows/Linux (non-bundle targets), copy asset directories next to the exe
         // so that resolve_asset_path can find them relative to the executable.
         if let Some(output_dir) = exe_path.parent() {
-            let source_dir = args.input.canonicalize().ok()
+            let source_dir = args
+                .input
+                .canonicalize()
+                .ok()
                 .and_then(|p| p.parent().map(|d| d.to_path_buf()));
             if let Some(src_dir) = source_dir {
                 let mut project_root = src_dir.clone();
                 for _ in 0..5 {
-                    if project_root.join("package.json").exists() { break; }
+                    if project_root.join("package.json").exists() {
+                        break;
+                    }
                     if let Some(parent) = project_root.parent() {
                         project_root = parent.to_path_buf();
-                    } else { break; }
+                    } else {
+                        break;
+                    }
                 }
-                fn copy_dir_recursive_standalone(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+                fn copy_dir_recursive_standalone(
+                    src: &std::path::Path,
+                    dst: &std::path::Path,
+                ) -> std::io::Result<()> {
                     fs::create_dir_all(dst)?;
                     for entry in fs::read_dir(src)? {
                         let entry = entry?;
@@ -4095,8 +4785,12 @@ pub fn run_with_parse_cache(
                 } else {
                     output_dir.to_path_buf()
                 };
-                let output_canon = output_resolved.canonicalize().unwrap_or_else(|_| output_resolved.clone());
-                let project_canon = project_root.canonicalize().unwrap_or_else(|_| project_root.to_path_buf());
+                let output_canon = output_resolved
+                    .canonicalize()
+                    .unwrap_or_else(|_| output_resolved.clone());
+                let project_canon = project_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| project_root.to_path_buf());
                 // Skip asset copying if output dir IS the project root
                 // (fs::copy to self truncates files to 0 bytes)
                 if output_canon != project_canon {
@@ -4138,24 +4832,46 @@ pub fn run_with_parse_cache(
                         res_dir.join(format!("values-{}", locale))
                     };
                     let _ = fs::create_dir_all(&values_dir);
-                    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n");
+                    let mut xml =
+                        String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n");
                     for (key_idx, key) in table.keys.iter().enumerate() {
                         let flat_idx = locale_idx * table.keys.len() + key_idx;
-                        let value = table.translations.get(flat_idx).cloned().unwrap_or_else(|| key.clone());
+                        let value = table
+                            .translations
+                            .get(flat_idx)
+                            .cloned()
+                            .unwrap_or_else(|| key.clone());
                         // Sanitize key for Android resource name (alphanumeric + underscore)
-                        let res_name: String = key.chars().map(|c| {
-                            if c.is_alphanumeric() || c == '_' { c } else { '_' }
-                        }).collect();
+                        let res_name: String = key
+                            .chars()
+                            .map(|c| {
+                                if c.is_alphanumeric() || c == '_' {
+                                    c
+                                } else {
+                                    '_'
+                                }
+                            })
+                            .collect();
                         // Escape XML special chars
-                        let escaped = value.replace('&', "&amp;").replace('<', "&lt;")
-                            .replace('>', "&gt;").replace('"', "&quot;").replace('\'', "\\'");
-                        xml.push_str(&format!("    <string name=\"{}\">{}</string>\n", res_name, escaped));
+                        let escaped = value
+                            .replace('&', "&amp;")
+                            .replace('<', "&lt;")
+                            .replace('>', "&gt;")
+                            .replace('"', "&quot;")
+                            .replace('\'', "\\'");
+                        xml.push_str(&format!(
+                            "    <string name=\"{}\">{}</string>\n",
+                            res_name, escaped
+                        ));
                     }
                     xml.push_str("</resources>\n");
                     let _ = fs::write(values_dir.join("strings.xml"), &xml);
                 }
                 match format {
-                    OutputFormat::Text => println!("  Generated res/values-*/strings.xml for {} locale(s)", config.locales.len()),
+                    OutputFormat::Text => println!(
+                        "  Generated res/values-*/strings.xml for {} locale(s)",
+                        config.locales.len()
+                    ),
                     OutputFormat::Json => {}
                 }
             }
@@ -4168,13 +4884,22 @@ pub fn run_with_parse_cache(
     // "non-object and non-archive file" warning).
     // Skip for watchOS — bundling above already moved exe_path into the .app
     // Skip when PERRY_DEBUG_SYMBOLS=1 is set — keep symbols for crash debugging
-    if !is_dylib && !is_ios && !is_visionos && !is_tvos && !is_watchos && !is_harmonyos
+    if !is_dylib
+        && !is_ios
+        && !is_visionos
+        && !is_tvos
+        && !is_watchos
+        && !is_harmonyos
         && target.as_deref() != Some("android")
-        && std::env::var("PERRY_DEBUG_SYMBOLS").is_err() {
+        && std::env::var("PERRY_DEBUG_SYMBOLS").is_err()
+    {
         if ctx.needs_plugins {
             // When plugins are enabled, use strip -x to keep exported symbols
             // (dlopen'd plugins need to resolve hone_host_api_* from the main executable)
-            let _ = std::process::Command::new("strip").arg("-x").arg(&exe_path).status();
+            let _ = std::process::Command::new("strip")
+                .arg("-x")
+                .arg(&exe_path)
+                .status();
         } else {
             let _ = std::process::Command::new("strip").arg(&exe_path).status();
         }
@@ -4197,8 +4922,15 @@ pub fn run_with_parse_cache(
     let final_output_path = result_app_dir.unwrap_or(exe_path);
 
     let codegen_cache_stats = if object_cache.is_enabled() {
-        Some((object_cache.hits(), object_cache.misses(), object_cache.stores(), object_cache.store_errors()))
-    } else { None };
+        Some((
+            object_cache.hits(),
+            object_cache.misses(),
+            object_cache.stores(),
+            object_cache.store_errors(),
+        ))
+    } else {
+        None
+    };
 
     Ok(CompileResult {
         output_path: final_output_path,
@@ -4208,10 +4940,6 @@ pub fn run_with_parse_cache(
         codegen_cache_stats,
     })
 }
-
-
-
-
 
 #[cfg(test)]
 mod windows_link_tests {

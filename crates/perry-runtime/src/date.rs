@@ -21,7 +21,9 @@ thread_local! {
 
 /// Mark `bits` as a Date so future `instanceof Date` checks can recognize it.
 pub fn register_date_bits(bits: u64) {
-    DATE_REGISTRY.with(|r| { r.borrow_mut().insert(bits); });
+    DATE_REGISTRY.with(|r| {
+        r.borrow_mut().insert(bits);
+    });
 }
 
 /// True when `bits` were previously registered as a Date.
@@ -180,9 +182,18 @@ fn parse_date_string(s: &str) -> f64 {
     // Try ISO 8601 / MySQL datetime formats
     // "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS" or "YYYY-MM-DD HH:MM:SS"
     if s.len() >= 10 && s.as_bytes()[4] == b'-' && s.as_bytes()[7] == b'-' {
-        let year: i32 = match s[0..4].parse() { Ok(v) => v, Err(_) => return f64::NAN };
-        let month: u32 = match s[5..7].parse() { Ok(v) => v, Err(_) => return f64::NAN };
-        let day: u32 = match s[8..10].parse() { Ok(v) => v, Err(_) => return f64::NAN };
+        let year: i32 = match s[0..4].parse() {
+            Ok(v) => v,
+            Err(_) => return f64::NAN,
+        };
+        let month: u32 = match s[5..7].parse() {
+            Ok(v) => v,
+            Err(_) => return f64::NAN,
+        };
+        let day: u32 = match s[8..10].parse() {
+            Ok(v) => v,
+            Err(_) => return f64::NAN,
+        };
 
         if month < 1 || month > 12 || day < 1 || day > 31 {
             return f64::NAN;
@@ -198,13 +209,24 @@ fn parse_date_string(s: &str) -> f64 {
         if rest.len() >= 6 && (rest.starts_with('T') || rest.starts_with(' ')) {
             let time_str = &rest[1..];
             if time_str.len() >= 5 && time_str.as_bytes()[2] == b':' {
-                hour = match time_str[0..2].parse() { Ok(v) => v, Err(_) => return f64::NAN };
-                minute = match time_str[3..5].parse() { Ok(v) => v, Err(_) => return f64::NAN };
+                hour = match time_str[0..2].parse() {
+                    Ok(v) => v,
+                    Err(_) => return f64::NAN,
+                };
+                minute = match time_str[3..5].parse() {
+                    Ok(v) => v,
+                    Err(_) => return f64::NAN,
+                };
                 if time_str.len() >= 8 && time_str.as_bytes()[5] == b':' {
-                    second = match time_str[6..8].parse() { Ok(v) => v, Err(_) => return f64::NAN };
+                    second = match time_str[6..8].parse() {
+                        Ok(v) => v,
+                        Err(_) => return f64::NAN,
+                    };
                     // Milliseconds after '.'
                     if time_str.len() >= 10 && time_str.as_bytes()[8] == b'.' {
-                        let ms_end = time_str[9..].find(|c: char| !c.is_ascii_digit()).unwrap_or(time_str.len() - 9);
+                        let ms_end = time_str[9..]
+                            .find(|c: char| !c.is_ascii_digit())
+                            .unwrap_or(time_str.len() - 9);
                         let ms_str = &time_str[9..9 + ms_end];
                         millis = match ms_str.parse::<u32>() {
                             Ok(v) => {
@@ -233,10 +255,25 @@ fn parse_date_string(s: &str) -> f64 {
 
 /// Convert date components (UTC) to Unix timestamp in seconds.
 /// Inverse of timestamp_to_components.
-fn components_to_timestamp(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> i64 {
+fn components_to_timestamp(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> i64 {
     // Howard Hinnant's civil_from_days (inverse of days_from_civil)
-    let y = if month <= 2 { year as i64 - 1 } else { year as i64 };
-    let m = if month <= 2 { month as i64 + 9 } else { month as i64 - 3 };
+    let y = if month <= 2 {
+        year as i64 - 1
+    } else {
+        year as i64
+    };
+    let m = if month <= 2 {
+        month as i64 + 9
+    } else {
+        month as i64 - 3
+    };
     let era = if y >= 0 { y / 400 } else { (y - 399) / 400 };
     let yoe = (y - era * 400) as u64;
     let doy = (153 * m as u64 + 2) / 5 + day as u64 - 1;
@@ -279,7 +316,9 @@ pub extern "C" fn js_date_to_iso_string(timestamp: f64) -> *mut crate::StringHea
 /// Get the full year (date.getFullYear()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_full_year(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (year, _, _, _, _, _, _) = timestamp_to_local_components(secs);
@@ -289,17 +328,21 @@ pub extern "C" fn js_date_get_full_year(timestamp: f64) -> f64 {
 /// Get the month (0-11) (date.getMonth()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_month(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (_, month, _, _, _, _, _) = timestamp_to_local_components(secs);
-    (month - 1) as f64  // JavaScript months are 0-indexed
+    (month - 1) as f64 // JavaScript months are 0-indexed
 }
 
 /// Get the day of month (1-31) (date.getDate()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_date(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (_, _, day, _, _, _, _) = timestamp_to_local_components(secs);
@@ -309,7 +352,9 @@ pub extern "C" fn js_date_get_date(timestamp: f64) -> f64 {
 /// Get the hour (0-23) (date.getHours()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_hours(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (_, _, _, hour, _, _, _) = timestamp_to_local_components(secs);
@@ -319,7 +364,9 @@ pub extern "C" fn js_date_get_hours(timestamp: f64) -> f64 {
 /// Get the minutes (0-59) (date.getMinutes()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_minutes(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (_, _, _, _, minute, _, _) = timestamp_to_local_components(secs);
@@ -329,7 +376,9 @@ pub extern "C" fn js_date_get_minutes(timestamp: f64) -> f64 {
 /// Get the seconds (0-59) (date.getSeconds()) in LOCAL time.
 #[no_mangle]
 pub extern "C" fn js_date_get_seconds(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (_, _, _, _, _, second, _) = timestamp_to_local_components(secs);
@@ -339,7 +388,9 @@ pub extern "C" fn js_date_get_seconds(timestamp: f64) -> f64 {
 /// Get the milliseconds (0-999) (date.getMilliseconds())
 #[no_mangle]
 pub extern "C" fn js_date_get_milliseconds(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     ts_ms.rem_euclid(1000) as f64
 }
@@ -347,7 +398,9 @@ pub extern "C" fn js_date_get_milliseconds(timestamp: f64) -> f64 {
 /// Get the day of week (0-6, Sunday=0) in LOCAL time (date.getDay()).
 #[no_mangle]
 pub extern "C" fn js_date_get_day(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(secs);
@@ -366,7 +419,7 @@ fn weekday_from_timestamp(secs: i64) -> u32 {
     let days = if secs >= 0 {
         secs / 86400
     } else {
-        (secs - 86399) / 86400  // floor division for negatives
+        (secs - 86399) / 86400 // floor division for negatives
     };
     let dow = (days + 4).rem_euclid(7);
     dow as u32
@@ -424,7 +477,9 @@ pub extern "C" fn js_date_utc(
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_day(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     weekday_from_timestamp(secs) as f64
@@ -447,7 +502,9 @@ pub extern "C" fn js_date_get_utc_date(timestamp: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_hours(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (_, _, _, hour, _, _) = timestamp_to_components(secs);
@@ -456,7 +513,9 @@ pub extern "C" fn js_date_get_utc_hours(timestamp: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_minutes(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (_, _, _, _, minute, _) = timestamp_to_components(secs);
@@ -465,7 +524,9 @@ pub extern "C" fn js_date_get_utc_minutes(timestamp: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_date_get_utc_seconds(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (_, _, _, _, _, second) = timestamp_to_components(secs);
@@ -488,7 +549,9 @@ pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
 /// west of UTC, negative for those east (matches the JS/Node convention).
 #[no_mangle]
 pub extern "C" fn js_date_get_timezone_offset(timestamp: f64) -> f64 {
-    if timestamp.is_nan() { return f64::NAN; }
+    if timestamp.is_nan() {
+        return f64::NAN;
+    }
     let ts_ms = timestamp as i64;
     let secs = ts_ms.div_euclid(1000);
     let (_, _, _, _, _, _, tz_offset_secs) = timestamp_to_local_components(secs);
@@ -500,9 +563,14 @@ pub extern "C" fn js_date_get_timezone_offset(timestamp: f64) -> f64 {
 
 // --- UTC setters: rebuild the timestamp with one component replaced ---
 
-fn rebuild_with(timestamp: f64,
-    year: Option<i32>, month: Option<u32>, day: Option<u32>,
-    hour: Option<u32>, minute: Option<u32>, second: Option<u32>,
+fn rebuild_with(
+    timestamp: f64,
+    year: Option<i32>,
+    month: Option<u32>,
+    day: Option<u32>,
+    hour: Option<u32>,
+    minute: Option<u32>,
+    second: Option<u32>,
     millisecond: Option<i64>,
 ) -> f64 {
     let ts_ms = timestamp as i64;
@@ -523,46 +591,108 @@ fn rebuild_with(timestamp: f64,
 
 #[no_mangle]
 pub extern "C" fn js_date_set_utc_full_year(timestamp: f64, value: f64) -> f64 {
-    rebuild_with(timestamp, Some(value as i32), None, None, None, None, None, None)
+    rebuild_with(
+        timestamp,
+        Some(value as i32),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_date_set_utc_month(timestamp: f64, value: f64) -> f64 {
     // JS months are 0-based; components_to_timestamp wants 1-based.
-    rebuild_with(timestamp, None, Some(value as u32 + 1), None, None, None, None, None)
+    rebuild_with(
+        timestamp,
+        None,
+        Some(value as u32 + 1),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_date_set_utc_date(timestamp: f64, value: f64) -> f64 {
-    rebuild_with(timestamp, None, None, Some(value as u32), None, None, None, None)
+    rebuild_with(
+        timestamp,
+        None,
+        None,
+        Some(value as u32),
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_date_set_utc_hours(timestamp: f64, value: f64) -> f64 {
-    rebuild_with(timestamp, None, None, None, Some(value as u32), None, None, None)
+    rebuild_with(
+        timestamp,
+        None,
+        None,
+        None,
+        Some(value as u32),
+        None,
+        None,
+        None,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_date_set_utc_minutes(timestamp: f64, value: f64) -> f64 {
-    rebuild_with(timestamp, None, None, None, None, Some(value as u32), None, None)
+    rebuild_with(
+        timestamp,
+        None,
+        None,
+        None,
+        None,
+        Some(value as u32),
+        None,
+        None,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_date_set_utc_seconds(timestamp: f64, value: f64) -> f64 {
-    rebuild_with(timestamp, None, None, None, None, None, Some(value as u32), None)
+    rebuild_with(
+        timestamp,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(value as u32),
+        None,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_date_set_utc_milliseconds(timestamp: f64, value: f64) -> f64 {
-    rebuild_with(timestamp, None, None, None, None, None, None, Some(value as i64))
+    rebuild_with(
+        timestamp,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(value as i64),
+    )
 }
 
 // --- String-returning Date methods ---
 
 const WEEKDAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH_NAMES: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 /// date.toDateString() — e.g. "Mon Jan 15 2024" (local time).
@@ -574,7 +704,10 @@ pub extern "C" fn js_date_to_date_string(timestamp: f64) -> *mut crate::StringHe
     let dow = weekday_from_timestamp(secs + tz_offset) as usize;
     let s = format!(
         "{} {} {:02} {:04}",
-        WEEKDAY_NAMES[dow], MONTH_NAMES[(month - 1) as usize], day, year
+        WEEKDAY_NAMES[dow],
+        MONTH_NAMES[(month - 1) as usize],
+        day,
+        year
     );
     alloc_runtime_string(&s)
 }
@@ -640,7 +773,10 @@ pub extern "C" fn js_date_to_locale_string(timestamp: f64) -> *mut crate::String
     } else {
         (hour - 12, "PM")
     };
-    let s = format!("{}/{}/{}, {}:{:02}:{:02} {}", month, day, year, h12, minute, second, suffix);
+    let s = format!(
+        "{}/{}/{}, {}:{:02}:{:02} {}",
+        month, day, year, h12, minute, second, suffix
+    );
     alloc_runtime_string(&s)
 }
 
@@ -686,7 +822,11 @@ pub fn timestamp_to_components(secs: i64) -> (i32, u32, u32, u32, u32, u32) {
     // Using a simplified algorithm based on Howard Hinnant's date algorithms
     let z = days + 719468; // Days from 0000-03-01 to 1970-01-01 is 719468
 
-    let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
+    let era = if z >= 0 {
+        z / 146097
+    } else {
+        (z - 146096) / 146097
+    };
     let doe = (z - era * 146097) as u32; // Day of era [0, 146096]
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // Year of era [0, 399]
     let y = yoe as i64 + era * 400;

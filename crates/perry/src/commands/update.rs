@@ -26,13 +26,18 @@ pub fn run(args: UpdateArgs, format: OutputFormat, use_color: bool, verbose: u8)
         match update_checker::spawn_background_check() {
             (handle, rx) => {
                 let _ = handle.join();
-                rx.recv().unwrap_or(update_checker::UpdateStatus::CheckFailed)
+                rx.recv()
+                    .unwrap_or(update_checker::UpdateStatus::CheckFailed)
             }
         }
     };
 
     match status {
-        update_checker::UpdateStatus::UpdateAvailable { current: cur, latest, release_url } => {
+        update_checker::UpdateStatus::UpdateAvailable {
+            current: cur,
+            latest,
+            release_url,
+        } => {
             match format {
                 OutputFormat::Json => {
                     let output = serde_json::json!({
@@ -63,34 +68,30 @@ pub fn run(args: UpdateArgs, format: OutputFormat, use_color: bool, verbose: u8)
                 update_checker::perform_self_update(verbose > 0)?;
             }
         }
-        update_checker::UpdateStatus::UpToDate => {
-            match format {
-                OutputFormat::Json => {
-                    let output = serde_json::json!({
-                        "update_available": false,
-                        "current_version": current,
-                    });
-                    println!("{}", serde_json::to_string_pretty(&output)?);
-                }
-                OutputFormat::Text => {
-                    println!("Perry is up to date (v{})", current);
-                }
+        update_checker::UpdateStatus::UpToDate => match format {
+            OutputFormat::Json => {
+                let output = serde_json::json!({
+                    "update_available": false,
+                    "current_version": current,
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
             }
-        }
-        update_checker::UpdateStatus::CheckFailed => {
-            match format {
-                OutputFormat::Json => {
-                    let output = serde_json::json!({
-                        "error": "Failed to check for updates",
-                        "current_version": current,
-                    });
-                    println!("{}", serde_json::to_string_pretty(&output)?);
-                }
-                OutputFormat::Text => {
-                    eprintln!("Failed to check for updates. Current version: v{}", current);
-                }
+            OutputFormat::Text => {
+                println!("Perry is up to date (v{})", current);
             }
-        }
+        },
+        update_checker::UpdateStatus::CheckFailed => match format {
+            OutputFormat::Json => {
+                let output = serde_json::json!({
+                    "error": "Failed to check for updates",
+                    "current_version": current,
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            }
+            OutputFormat::Text => {
+                eprintln!("Failed to check for updates. Current version: v{}", current);
+            }
+        },
     }
 
     Ok(())

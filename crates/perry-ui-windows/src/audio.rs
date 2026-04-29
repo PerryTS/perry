@@ -27,25 +27,54 @@ struct AWeightState {
 
 impl AWeightState {
     fn new() -> Self {
-        AWeightState { sections: [[0.0; 4]; 3] }
+        AWeightState {
+            sections: [[0.0; 4]; 3],
+        }
     }
 }
 
 const A_WEIGHT_SOS: [[f64; 6]; 3] = [
-    [1.0, -2.0, 1.0, 1.0, -1.9746716508129498, 0.97504628855498883],
-    [1.0, -2.0, 1.0, 1.0, -1.1440825051498020, 0.20482985688498268],
-    [0.24649652853975498, -0.49299305707950996, 0.24649652853975498, 1.0, -0.48689808685150487, 0.0],
+    [
+        1.0,
+        -2.0,
+        1.0,
+        1.0,
+        -1.9746716508129498,
+        0.97504628855498883,
+    ],
+    [
+        1.0,
+        -2.0,
+        1.0,
+        1.0,
+        -1.1440825051498020,
+        0.20482985688498268,
+    ],
+    [
+        0.24649652853975498,
+        -0.49299305707950996,
+        0.24649652853975498,
+        1.0,
+        -0.48689808685150487,
+        0.0,
+    ],
 ];
 const A_WEIGHT_GAIN: f64 = 0.11310782960598924;
 
 fn a_weight_filter(sample: f64, state: &mut AWeightState) -> f64 {
     let mut x = sample * A_WEIGHT_GAIN;
     for (i, sos) in A_WEIGHT_SOS.iter().enumerate() {
-        let b0 = sos[0]; let b1 = sos[1]; let b2 = sos[2];
-        let a1 = sos[4]; let a2 = sos[5];
+        let b0 = sos[0];
+        let b1 = sos[1];
+        let b2 = sos[2];
+        let a1 = sos[4];
+        let a2 = sos[5];
         let s = &mut state.sections[i];
         let y = b0 * x + b1 * s[0] + b2 * s[1] - a1 * s[2] - a2 * s[3];
-        s[1] = s[0]; s[0] = x; s[3] = s[2]; s[2] = y;
+        s[1] = s[0];
+        s[0] = x;
+        s[3] = s[2];
+        s[2] = y;
         x = y;
     }
     x
@@ -63,9 +92,9 @@ extern "C" {
 
 #[cfg(target_os = "windows")]
 pub fn start() -> i64 {
+    use windows::core::*;
     use windows::Win32::Media::Audio::*;
     use windows::Win32::System::Com::*;
-    use windows::core::*;
 
     if RUNNING.load(Ordering::Relaxed) {
         return 1;
@@ -84,19 +113,16 @@ pub fn start() -> i64 {
             }
 
             // Get default capture device
-            let enumerator: IMMDeviceEnumerator = match CoCreateInstance(
-                &MMDeviceEnumerator,
-                None,
-                CLSCTX_ALL,
-            ) {
-                Ok(e) => e,
-                Err(_) => {
-                    eprintln!("[audio] Failed to create device enumerator");
-                    RUNNING.store(false, Ordering::Relaxed);
-                    CoUninitialize();
-                    return;
-                }
-            };
+            let enumerator: IMMDeviceEnumerator =
+                match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) {
+                    Ok(e) => e,
+                    Err(_) => {
+                        eprintln!("[audio] Failed to create device enumerator");
+                        RUNNING.store(false, Ordering::Relaxed);
+                        CoUninitialize();
+                        return;
+                    }
+                };
 
             let device = match enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) {
                 Ok(d) => d,
@@ -134,20 +160,25 @@ pub fn start() -> i64 {
             let channels = mix_format.nChannels as usize;
             let bits_per_sample = mix_format.wBitsPerSample;
 
-            eprintln!("[audio] WASAPI format: {}Hz, {} ch, {} bit",
-                sample_rate, channels, bits_per_sample);
+            eprintln!(
+                "[audio] WASAPI format: {}Hz, {} ch, {} bit",
+                sample_rate, channels, bits_per_sample
+            );
 
             // Initialize in shared mode
             // Buffer duration: 100ms in 100-nanosecond units
             let buffer_duration: i64 = 1_000_000; // 100ms
-            if audio_client.Initialize(
-                AUDCLNT_SHAREMODE_SHARED,
-                0,
-                buffer_duration,
-                0,
-                mix_format_ptr,
-                None,
-            ).is_err() {
+            if audio_client
+                .Initialize(
+                    AUDCLNT_SHAREMODE_SHARED,
+                    0,
+                    buffer_duration,
+                    0,
+                    mix_format_ptr,
+                    None,
+                )
+                .is_err()
+            {
                 eprintln!("[audio] Failed to initialize audio client");
                 RUNNING.store(false, Ordering::Relaxed);
                 CoUninitialize();
@@ -198,13 +229,10 @@ pub fn start() -> i64 {
                     let mut frames_available: u32 = 0;
                     let mut flags: u32 = 0;
 
-                    if capture_client.GetBuffer(
-                        &mut data_ptr,
-                        &mut frames_available,
-                        &mut flags,
-                        None,
-                        None,
-                    ).is_err() {
+                    if capture_client
+                        .GetBuffer(&mut data_ptr, &mut frames_available, &mut flags, None, None)
+                        .is_err()
+                    {
                         break;
                     }
 
@@ -225,7 +253,9 @@ pub fn start() -> i64 {
                             };
 
                             let abs_s = sample.abs();
-                            if abs_s > peak { peak = abs_s; }
+                            if abs_s > peak {
+                                peak = abs_s;
+                            }
                             let weighted = a_weight_filter(sample as f64, &mut filter_state);
                             sum_sq += weighted * weighted;
                         }
@@ -246,7 +276,8 @@ pub fn start() -> i64 {
                         CURRENT_DB.store(ema_db.to_bits(), Ordering::Relaxed);
                         CURRENT_PEAK.store((peak as f64).to_bits(), Ordering::Relaxed);
 
-                        let idx = WAVEFORM_WRITE_INDEX.load(Ordering::Relaxed) as usize % WAVEFORM_SIZE;
+                        let idx =
+                            WAVEFORM_WRITE_INDEX.load(Ordering::Relaxed) as usize % WAVEFORM_SIZE;
                         WAVEFORM_BUFFER[idx] = ema_db;
                         WAVEFORM_WRITE_INDEX.store((idx + 1) as u64, Ordering::Relaxed);
                     }
@@ -265,7 +296,9 @@ pub fn start() -> i64 {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn start() -> i64 { 0 }
+pub fn start() -> i64 {
+    0
+}
 
 pub fn stop() {
     RUNNING.store(false, Ordering::Relaxed);

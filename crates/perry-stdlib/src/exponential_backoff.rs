@@ -4,11 +4,10 @@
 //! Provides retry functionality with exponential delays.
 
 use perry_runtime::{
-    js_promise_new, js_promise_resolve, js_promise_reject, Promise,
-    ClosureHeader, js_closure_call0,
+    js_closure_call0, js_promise_new, js_promise_reject, js_promise_resolve, ClosureHeader, Promise,
 };
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 /// Check if an f64 value represents a "real" success value.
 /// NaN-boxed tagged values (pointers, strings, int32, booleans, etc.) are valid results.

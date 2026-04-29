@@ -34,9 +34,9 @@ pub fn save_file_dialog(callback: f64, default_name_ptr: *const u8, _allowed_typ
 
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::UI::Shell::{IFileSaveDialog, FileSaveDialog};
-        use windows::Win32::System::Com::*;
         use windows::core::*;
+        use windows::Win32::System::Com::*;
+        use windows::Win32::UI::Shell::{FileSaveDialog, IFileSaveDialog};
 
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -49,7 +49,9 @@ pub fn save_file_dialog(callback: f64, default_name_ptr: *const u8, _allowed_typ
                 }
                 if dialog.Show(None).is_ok() {
                     if let Ok(result) = dialog.GetResult() {
-                        if let Ok(path) = result.GetDisplayName(windows::Win32::UI::Shell::SIGDN_FILESYSPATH) {
+                        if let Ok(path) =
+                            result.GetDisplayName(windows::Win32::UI::Shell::SIGDN_FILESYSPATH)
+                        {
                             let path_str = path.to_string().unwrap_or_default();
                             let bytes = path_str.as_bytes();
                             let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
@@ -68,7 +70,9 @@ pub fn save_file_dialog(callback: f64, default_name_ptr: *const u8, _allowed_typ
 
     #[cfg(not(target_os = "windows"))]
     {
-        unsafe { js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001)); }
+        unsafe {
+            js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001));
+        }
     }
 }
 
@@ -79,8 +83,8 @@ pub fn alert_simple(title_ptr: *const u8, message_ptr: *const u8) {
 
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::UI::WindowsAndMessaging::*;
         use windows::core::PCWSTR;
+        use windows::Win32::UI::WindowsAndMessaging::*;
         let title_wide = to_wide(title);
         let message_wide = to_wide(message);
         unsafe {
@@ -107,8 +111,8 @@ pub fn alert(title_ptr: *const u8, message_ptr: *const u8, buttons_ptr: *const u
 
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::UI::WindowsAndMessaging::*;
         use windows::core::PCWSTR;
+        use windows::Win32::UI::WindowsAndMessaging::*;
 
         let title_wide = to_wide(title);
         let message_wide = to_wide(message);
@@ -135,7 +139,13 @@ pub fn alert(title_ptr: *const u8, message_ptr: *const u8, buttons_ptr: *const u
 
             let index = match result {
                 IDOK => 0.0,
-                IDCANCEL => if button_count >= 2 { 1.0 } else { 0.0 },
+                IDCANCEL => {
+                    if button_count >= 2 {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                }
                 IDYES => 0.0,
                 IDNO => 1.0,
                 _ => 0.0,
@@ -147,7 +157,9 @@ pub fn alert(title_ptr: *const u8, message_ptr: *const u8, buttons_ptr: *const u
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (title, message, buttons_ptr);
-        unsafe { js_closure_call1(closure_ptr, 0.0); }
+        unsafe {
+            js_closure_call1(closure_ptr, 0.0);
+        }
     }
 }
 

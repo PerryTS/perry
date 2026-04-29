@@ -12,13 +12,15 @@ mod interop;
 mod modules;
 mod ops;
 
-pub use bridge::{native_to_v8, v8_to_native, store_js_handle, get_js_handle, release_js_handle,
-    is_js_handle, get_handle_id, make_js_handle_value};
+pub use bridge::{
+    get_handle_id, get_js_handle, is_js_handle, make_js_handle_value, native_to_v8,
+    release_js_handle, store_js_handle, v8_to_native,
+};
 pub use interop::{
-    js_call_function, js_call_method, js_get_export, js_load_module, js_register_native_function,
-    js_runtime_init, js_runtime_shutdown, js_handle_object_get_property, js_set_property,
-    js_new_instance, js_new_from_handle, js_create_callback,
-    js_handle_array_get, js_handle_array_length,
+    js_call_function, js_call_method, js_create_callback, js_get_export, js_handle_array_get,
+    js_handle_array_length, js_handle_object_get_property, js_load_module, js_new_from_handle,
+    js_new_instance, js_register_native_function, js_runtime_init, js_runtime_shutdown,
+    js_set_property,
 };
 // Re-export deno_core's ModuleLoader trait for external use
 pub use deno_core::ModuleLoader;
@@ -99,14 +101,17 @@ impl JsRuntimeState {
                 fn v8_isolate_set_stack_limit(isolate: *mut std::ffi::c_void, stack_limit: usize);
             }
             let isolate: &mut deno_core::v8::Isolate = runtime.v8_isolate();
-            let isolate_ptr: *mut std::ffi::c_void = (isolate as *mut deno_core::v8::Isolate).cast();
+            let isolate_ptr: *mut std::ffi::c_void =
+                (isolate as *mut deno_core::v8::Isolate).cast();
 
             // Compute stack limit from actual thread stack bounds
             #[cfg(target_os = "macos")]
             let stack_limit = {
                 extern "C" {
                     fn pthread_self() -> *mut std::ffi::c_void;
-                    fn pthread_get_stackaddr_np(thread: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+                    fn pthread_get_stackaddr_np(
+                        thread: *mut std::ffi::c_void,
+                    ) -> *mut std::ffi::c_void;
                     fn pthread_get_stacksize_np(thread: *mut std::ffi::c_void) -> usize;
                 }
                 let thread = unsafe { pthread_self() };
@@ -119,11 +124,17 @@ impl JsRuntimeState {
             #[cfg(not(target_os = "macos"))]
             let stack_limit: usize = 0x10000;
 
-            unsafe { v8_isolate_set_stack_limit(isolate_ptr, stack_limit); }
+            unsafe {
+                v8_isolate_set_stack_limit(isolate_ptr, stack_limit);
+            }
         }
 
         // Set up Node.js global polyfills before any modules are loaded
-        runtime.execute_script("<node-polyfills>", deno_core::ascii_str_include!("node_polyfills.js"))
+        runtime
+            .execute_script(
+                "<node-polyfills>",
+                deno_core::ascii_str_include!("node_polyfills.js"),
+            )
             .expect("Failed to initialize Node.js polyfills");
 
         Self {

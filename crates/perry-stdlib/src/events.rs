@@ -3,7 +3,9 @@
 //! Native implementation of Node.js EventEmitter pattern.
 //! Provides on(), emit(), and removeListener() for event handling.
 
-use perry_runtime::{js_string_from_bytes, StringHeader, ClosureHeader, js_closure_call0, js_closure_call1};
+use perry_runtime::{
+    js_closure_call0, js_closure_call1, js_string_from_bytes, ClosureHeader, StringHeader,
+};
 use std::collections::HashMap;
 
 use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle};
@@ -35,9 +37,8 @@ fn scan_events_roots(mark: &mut dyn FnMut(f64)) {
         for cb_vec in emitter.listeners.values() {
             for &cb in cb_vec.iter() {
                 if cb != 0 {
-                    let boxed = f64::from_bits(
-                        0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF),
-                    );
+                    let boxed =
+                        f64::from_bits(0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF));
                     mark(boxed);
                 }
             }

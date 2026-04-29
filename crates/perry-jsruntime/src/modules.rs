@@ -4,7 +4,10 @@
 
 use anyhow::{anyhow, Result};
 use deno_core::error::AnyError;
-use deno_core::{ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, RequestedModuleType, ResolutionKind};
+use deno_core::{
+    ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType,
+    RequestedModuleType, ResolutionKind,
+};
 use std::path::{Path, PathBuf};
 
 /// Node.js-compatible module loader
@@ -43,7 +46,8 @@ impl NodeModuleLoader {
                         let relative_str = format!("./{}", relative.to_string_lossy());
                         if let Some(replacement) = browser_map.get(&relative_str) {
                             if let Some(replacement_str) = replacement.as_str() {
-                                let browser_path = dir.join(replacement_str.trim_start_matches("./"));
+                                let browser_path =
+                                    dir.join(replacement_str.trim_start_matches("./"));
                                 if browser_path.exists() {
                                     return Some(browser_path);
                                 }
@@ -131,18 +135,66 @@ impl NodeModuleLoader {
     fn is_node_builtin(specifier: &str) -> bool {
         matches!(
             specifier,
-            "net" | "tls" | "http" | "https" | "fs" | "path" | "os" | "crypto"
-            | "stream" | "buffer" | "util" | "events" | "assert" | "child_process"
-            | "dns" | "dgram" | "url" | "querystring" | "string_decoder" | "zlib"
-            | "readline" | "tty" | "vm" | "worker_threads" | "cluster" | "async_hooks"
-            | "perf_hooks" | "trace_events" | "inspector" | "v8"
-            | "node:net" | "node:tls" | "node:http" | "node:https" | "node:fs"
-            | "node:path" | "node:os" | "node:crypto" | "node:stream" | "node:buffer"
-            | "node:util" | "node:events" | "node:assert" | "node:child_process"
-            | "node:dns" | "node:dgram" | "node:url" | "node:querystring"
-            | "node:string_decoder" | "node:zlib" | "node:readline" | "node:tty"
-            | "node:vm" | "node:worker_threads" | "node:cluster" | "node:async_hooks"
-            | "node:perf_hooks" | "node:trace_events" | "node:inspector" | "node:v8"
+            "net"
+                | "tls"
+                | "http"
+                | "https"
+                | "fs"
+                | "path"
+                | "os"
+                | "crypto"
+                | "stream"
+                | "buffer"
+                | "util"
+                | "events"
+                | "assert"
+                | "child_process"
+                | "dns"
+                | "dgram"
+                | "url"
+                | "querystring"
+                | "string_decoder"
+                | "zlib"
+                | "readline"
+                | "tty"
+                | "vm"
+                | "worker_threads"
+                | "cluster"
+                | "async_hooks"
+                | "perf_hooks"
+                | "trace_events"
+                | "inspector"
+                | "v8"
+                | "node:net"
+                | "node:tls"
+                | "node:http"
+                | "node:https"
+                | "node:fs"
+                | "node:path"
+                | "node:os"
+                | "node:crypto"
+                | "node:stream"
+                | "node:buffer"
+                | "node:util"
+                | "node:events"
+                | "node:assert"
+                | "node:child_process"
+                | "node:dns"
+                | "node:dgram"
+                | "node:url"
+                | "node:querystring"
+                | "node:string_decoder"
+                | "node:zlib"
+                | "node:readline"
+                | "node:tty"
+                | "node:vm"
+                | "node:worker_threads"
+                | "node:cluster"
+                | "node:async_hooks"
+                | "node:perf_hooks"
+                | "node:trace_events"
+                | "node:inspector"
+                | "node:v8"
         )
     }
 
@@ -161,7 +213,9 @@ impl NodeModuleLoader {
                 // Check for package.json
                 let package_json = node_modules.join("package.json");
                 if package_json.exists() {
-                    if let Ok(entry_point) = self.resolve_package_entry(&node_modules, &package_json, subpath.as_deref()) {
+                    if let Ok(entry_point) =
+                        self.resolve_package_entry(&node_modules, &package_json, subpath.as_deref())
+                    {
                         return Ok(entry_point);
                     }
                 }
@@ -305,8 +359,7 @@ impl ModuleLoader for NodeModuleLoader {
 
         let resolved_path = self.resolve_module_path(specifier, &referrer_path)?;
 
-        let canonical = std::fs::canonicalize(&resolved_path)
-            .unwrap_or(resolved_path);
+        let canonical = std::fs::canonicalize(&resolved_path).unwrap_or(resolved_path);
 
         ModuleSpecifier::from_file_path(&canonical)
             .map_err(|_| anyhow!("Failed to create module specifier for {:?}", canonical).into())
@@ -338,7 +391,11 @@ impl ModuleLoader for NodeModuleLoader {
 
         let code = match std::fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(e) => return ModuleLoadResponse::Sync(Err(anyhow!("Failed to read module: {}", e).into())),
+            Err(e) => {
+                return ModuleLoadResponse::Sync(
+                    Err(anyhow!("Failed to read module: {}", e).into()),
+                )
+            }
         };
 
         let module_type = self.detect_module_type(&path);
@@ -438,13 +495,17 @@ fn wrap_commonjs(code: &str) -> String {
     }
 
     // Generate ESM import statements for each require() specifier
-    let imports = require_specs.iter().enumerate()
+    let imports = require_specs
+        .iter()
+        .enumerate()
         .map(|(i, spec)| format!("import _req_{} from '{}';", i, spec))
         .collect::<Vec<_>>()
         .join("\n");
 
     // Generate require() lookup cases
-    let require_cases = require_specs.iter().enumerate()
+    let require_cases = require_specs
+        .iter()
+        .enumerate()
         .map(|(i, spec)| format!("        if (specifier === '{}') return _req_{};", spec, i))
         .collect::<Vec<_>>()
         .join("\n");
@@ -453,7 +514,10 @@ fn wrap_commonjs(code: &str) -> String {
     let mut named_exports = Vec::new();
 
     // Find exports.X = assignments
-    for cap in regex::Regex::new(r"exports\.(\w+)\s*=").unwrap().captures_iter(code) {
+    for cap in regex::Regex::new(r"exports\.(\w+)\s*=")
+        .unwrap()
+        .captures_iter(code)
+    {
         if let Some(name) = cap.get(1) {
             let name = name.as_str();
             if name != "__esModule" && !named_exports.contains(&name.to_string()) {
@@ -468,7 +532,8 @@ fn wrap_commonjs(code: &str) -> String {
         String::new()
     } else {
         // Create individual export statements that reference the _cjs object
-        named_exports.iter()
+        named_exports
+            .iter()
             .map(|n| format!("export const {} = _cjs.{};", n, n))
             .collect::<Vec<_>>()
             .join("\n")

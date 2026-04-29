@@ -43,10 +43,15 @@ pub extern "C" fn perry_ios_get_connected_scene() -> u64 {
 /// Fallback scene delegate — creates a window with the native lib's view class,
 /// stores references so the game thread can create the wgpu surface.
 unsafe extern "C" fn fallback_scene_will_connect(
-    _this: *mut c_void, _sel: *const c_void,
-    scene: *const c_void, _session: *const c_void, _options: *const c_void,
+    _this: *mut c_void,
+    _sel: *const c_void,
+    scene: *const c_void,
+    _session: *const c_void,
+    _options: *const c_void,
 ) {
-    if scene.is_null() { return; }
+    if scene.is_null() {
+        return;
+    }
     CONNECTED_SCENE.store(scene as u64, std::sync::atomic::Ordering::Release);
 
     // Call the native library's scene setup function if it exists
@@ -56,9 +61,18 @@ unsafe extern "C" fn fallback_scene_will_connect(
 fn register_fallback_scene_delegate() {
     extern "C" {
         fn objc_getClass(name: *const u8) -> *const c_void;
-        fn objc_allocateClassPair(superclass: *const c_void, name: *const u8, extra: usize) -> *mut c_void;
+        fn objc_allocateClassPair(
+            superclass: *const c_void,
+            name: *const u8,
+            extra: usize,
+        ) -> *mut c_void;
         fn objc_registerClassPair(cls: *mut c_void);
-        fn class_addMethod(cls: *mut c_void, sel: *const c_void, imp: *const c_void, types: *const u8) -> bool;
+        fn class_addMethod(
+            cls: *mut c_void,
+            sel: *const c_void,
+            imp: *const c_void,
+            types: *const u8,
+        ) -> bool;
         fn sel_registerName(name: *const u8) -> *const c_void;
         fn objc_getProtocol(name: *const u8) -> *const c_void;
         fn class_addProtocol(cls: *mut c_void, protocol: *const c_void) -> bool;
@@ -67,16 +81,27 @@ fn register_fallback_scene_delegate() {
     unsafe {
         // Only register if the native lib didn't already register it
         let existing = objc_getClass(b"PerrySceneDelegate\0".as_ptr());
-        if !existing.is_null() { return; }
+        if !existing.is_null() {
+            return;
+        }
 
         let superclass = objc_getClass(b"UIResponder\0".as_ptr());
-        if superclass.is_null() { return; }
+        if superclass.is_null() {
+            return;
+        }
 
         let cls = objc_allocateClassPair(superclass, b"PerrySceneDelegate\0".as_ptr(), 0);
-        if cls.is_null() { return; }
+        if cls.is_null() {
+            return;
+        }
 
         let sel = sel_registerName(b"scene:willConnectToSession:connectionOptions:\0".as_ptr());
-        class_addMethod(cls, sel, fallback_scene_will_connect as *const c_void, b"v48@0:8@16@24@32\0".as_ptr());
+        class_addMethod(
+            cls,
+            sel,
+            fallback_scene_will_connect as *const c_void,
+            b"v48@0:8@16@24@32\0".as_ptr(),
+        );
 
         let protocol = objc_getProtocol(b"UIWindowSceneDelegate\0".as_ptr());
         if !protocol.is_null() {
@@ -90,8 +115,10 @@ fn register_fallback_scene_delegate() {
 /// App delegate — calls perry_scene_will_connect to create the window.
 /// We pass the scene as null; the native lib creates the window without a scene.
 unsafe extern "C" fn did_finish_launching(
-    _this: *mut c_void, _sel: *const c_void,
-    _app: *const c_void, _opts: *const c_void,
+    _this: *mut c_void,
+    _sel: *const c_void,
+    _app: *const c_void,
+    _opts: *const c_void,
 ) -> bool {
     // Create window directly from didFinishLaunching (no scene lifecycle)
     perry_scene_will_connect(std::ptr::null());
@@ -101,9 +128,18 @@ unsafe extern "C" fn did_finish_launching(
 fn register_app_delegate() {
     extern "C" {
         fn objc_getClass(name: *const u8) -> *const c_void;
-        fn objc_allocateClassPair(superclass: *const c_void, name: *const u8, extra: usize) -> *mut c_void;
+        fn objc_allocateClassPair(
+            superclass: *const c_void,
+            name: *const u8,
+            extra: usize,
+        ) -> *mut c_void;
         fn objc_registerClassPair(cls: *mut c_void);
-        fn class_addMethod(cls: *mut c_void, sel: *const c_void, imp: *const c_void, types: *const u8) -> bool;
+        fn class_addMethod(
+            cls: *mut c_void,
+            sel: *const c_void,
+            imp: *const c_void,
+            types: *const u8,
+        ) -> bool;
         fn sel_registerName(name: *const u8) -> *const c_void;
         fn objc_getProtocol(name: *const u8) -> *const c_void;
         fn class_addProtocol(cls: *mut c_void, protocol: *const c_void) -> bool;
@@ -112,17 +148,28 @@ fn register_app_delegate() {
     unsafe {
         // Check if already registered
         let existing = objc_getClass(b"PerryGameLoopAppDelegate\0".as_ptr());
-        if !existing.is_null() { return; }
+        if !existing.is_null() {
+            return;
+        }
 
         let superclass = objc_getClass(b"UIResponder\0".as_ptr());
-        if superclass.is_null() { return; }
+        if superclass.is_null() {
+            return;
+        }
 
         let cls = objc_allocateClassPair(superclass, b"PerryGameLoopAppDelegate\0".as_ptr(), 0);
-        if cls.is_null() { return; }
+        if cls.is_null() {
+            return;
+        }
 
         // Add application:didFinishLaunchingWithOptions:
         let sel = sel_registerName(b"application:didFinishLaunchingWithOptions:\0".as_ptr());
-        class_addMethod(cls, sel, did_finish_launching as *const c_void, b"B32@0:8@16@24\0".as_ptr());
+        class_addMethod(
+            cls,
+            sel,
+            did_finish_launching as *const c_void,
+            b"B32@0:8@16@24\0".as_ptr(),
+        );
 
         // Add UIApplicationDelegate protocol
         let protocol = objc_getProtocol(b"UIApplicationDelegate\0".as_ptr());
@@ -137,7 +184,8 @@ fn register_app_delegate() {
 /// Called by native libraries (e.g., Bloom Engine) to register their scene
 /// delegate class before UIApplicationMain creates the scene session.
 /// Must be called from the game thread during bloom_init_window or similar.
-static NATIVE_CLASSES_REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NATIVE_CLASSES_REGISTERED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Wait for native library classes (like PerrySceneDelegate) to be registered.
 fn wait_for_native_classes() {
@@ -167,13 +215,15 @@ pub extern "C" fn main() -> i32 {
     // Spawn the game thread — runs the user's TypeScript code
     std::thread::Builder::new()
         .name("perry-game".to_string())
-        .spawn(|| {
-            unsafe { _perry_user_main(); }
+        .spawn(|| unsafe {
+            _perry_user_main();
         })
         .expect("Failed to spawn game thread");
 
     // Register native library ObjC classes (e.g., PerrySceneDelegate with scene_will_connect)
-    unsafe { perry_register_native_classes(); }
+    unsafe {
+        perry_register_native_classes();
+    }
 
     // Also register PerrySceneDelegate if it doesn't exist yet (fallback)
     register_fallback_scene_delegate();
@@ -223,8 +273,11 @@ pub extern "C" fn main() -> i32 {
                         b"NSPrincipalClass\0".as_ptr(),
                         K_CF_STRING_ENCODING_UTF8,
                     );
-                    let obj_for_key: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void) -> *const c_void =
-                        std::mem::transmute(objc_msgSend as *const c_void);
+                    let obj_for_key: unsafe extern "C" fn(
+                        *const c_void,
+                        *const c_void,
+                        *const c_void,
+                    ) -> *const c_void = std::mem::transmute(objc_msgSend as *const c_void);
                     let sel_obj = sel_registerName(b"objectForKey:\0".as_ptr());
                     let val = obj_for_key(dict, sel_obj, key);
                     if !val.is_null() {

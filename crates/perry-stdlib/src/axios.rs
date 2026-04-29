@@ -3,8 +3,10 @@
 //! Native implementation of the 'axios' npm package using reqwest.
 //! Provides HTTP client functionality with a promise-based API.
 
-use perry_runtime::{js_promise_new, js_string_from_bytes, JSValue, ObjectHeader, Promise, StringHeader};
-use crate::common::{register_handle, get_handle, spawn_for_promise, Handle};
+use crate::common::{get_handle, register_handle, spawn_for_promise, Handle};
+use perry_runtime::{
+    js_promise_new, js_string_from_bytes, JSValue, ObjectHeader, Promise, StringHeader,
+};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -44,7 +46,11 @@ pub unsafe extern "C" fn js_axios_get(url_ptr: *const StringHeader) -> *mut Prom
         match client.get(&url).send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
                 let headers: Vec<(String, String)> = response
                     .headers()
                     .iter()
@@ -102,7 +108,11 @@ pub unsafe extern "C" fn js_axios_post(
         {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
                 let headers: Vec<(String, String)> = response
                     .headers()
                     .iter()
@@ -160,7 +170,11 @@ pub unsafe extern "C" fn js_axios_put(
         {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
                 let headers: Vec<(String, String)> = response
                     .headers()
                     .iter()
@@ -207,7 +221,11 @@ pub unsafe extern "C" fn js_axios_delete(url_ptr: *const StringHeader) -> *mut P
         match client.delete(&url).send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
                 let headers: Vec<(String, String)> = response
                     .headers()
                     .iter()
@@ -265,7 +283,11 @@ pub unsafe extern "C" fn js_axios_patch(
         {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
                 let headers: Vec<(String, String)> = response
                     .headers()
                     .iter()
@@ -306,7 +328,10 @@ pub unsafe extern "C" fn js_axios_response_status(handle: Handle) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_axios_response_status_text(handle: Handle) -> *mut StringHeader {
     if let Some(response) = get_handle::<AxiosResponseHandle>(handle) {
-        js_string_from_bytes(response.status_text.as_ptr(), response.status_text.len() as u32)
+        js_string_from_bytes(
+            response.status_text.as_ptr(),
+            response.status_text.len() as u32,
+        )
     } else {
         std::ptr::null_mut()
     }

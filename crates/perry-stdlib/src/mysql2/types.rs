@@ -1,9 +1,9 @@
 //! Type conversions between MySQL types and JSValue
 
 use perry_runtime::{
-    js_array_alloc, js_array_push,
-    js_object_alloc, js_object_get_field, js_object_get_field_by_name, js_object_set_field, js_object_set_keys,
-    js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
+    js_array_alloc, js_array_push, js_object_alloc, js_object_get_field,
+    js_object_get_field_by_name, js_object_set_field, js_object_set_keys, js_string_from_bytes,
+    JSValue, ObjectHeader, StringHeader,
 };
 use sqlx::mysql::MySqlRow;
 use sqlx::{Column, Row, TypeInfo};
@@ -39,10 +39,14 @@ impl MySqlConfig {
             .map(|d| format!("/{}", d))
             .unwrap_or_default();
         // URL-encode password to handle special characters (e.g., # @ : /)
-        let encoded_password: String = self.password.chars().map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-            c => format!("%{:02X}", c as u32),
-        }).collect();
+        let encoded_password: String = self
+            .password
+            .chars()
+            .map(|c| match c {
+                'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+                c => format!("%{:02X}", c as u32),
+            })
+            .collect();
         let url = format!(
             "mysql://{}:{}@{}:{}{}?ssl-mode=disabled",
             self.user, encoded_password, self.host, self.port, db_part
@@ -175,7 +179,10 @@ fn parse_mysql_uri(uri: &str) -> Option<MySqlConfig> {
 
     // Parse credentials (user:password)
     let (user, password) = if let Some(idx) = credentials.find(':') {
-        (credentials[..idx].to_string(), credentials[idx + 1..].to_string())
+        (
+            credentials[..idx].to_string(),
+            credentials[idx + 1..].to_string(),
+        )
     } else {
         (credentials.to_string(), String::new())
     };

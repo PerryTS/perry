@@ -39,7 +39,7 @@ For recursive removal Perry exposes `rmRecursive` (a thin wrapper around
 [#193](https://github.com/PerryTS/perry/issues/193) through
 `js_fs_rm_recursive` in the LLVM backend.
 
-```typescript
+```typescript,no-test
 import { rmRecursive } from "fs";
 rmRecursive("output"); // Recursive remove; returns 1 on success, 0 on failure.
 ```

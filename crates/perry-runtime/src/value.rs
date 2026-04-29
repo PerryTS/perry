@@ -167,7 +167,9 @@ pub extern "C" fn js_set_handle_typeof(func: JsHandleTypeofFn) {
 #[inline]
 pub(crate) fn js_handle_is_function(value: f64) -> bool {
     let ptr = JS_HANDLE_TYPEOF.load(Ordering::Relaxed);
-    if ptr.is_null() { return false; }
+    if ptr.is_null() {
+        return false;
+    }
     let func: JsHandleTypeofFn = unsafe { std::mem::transmute(ptr) };
     unsafe { func(value) == 1 }
 }
@@ -206,8 +208,10 @@ pub fn native_module_try_js_property(module_name: &str, property_name: &str) -> 
     let loader: JsNativeModuleJsLoaderFn = unsafe { std::mem::transmute(loader_ptr) };
     unsafe {
         loader(
-            module_name.as_ptr(), module_name.len(),
-            property_name.as_ptr(), property_name.len(),
+            module_name.as_ptr(),
+            module_name.len(),
+            property_name.as_ptr(),
+            property_name.len(),
         )
     }
 }
@@ -230,7 +234,9 @@ impl JSValue {
     /// Create undefined value
     #[inline]
     pub const fn undefined() -> Self {
-        Self { bits: TAG_UNDEFINED }
+        Self {
+            bits: TAG_UNDEFINED,
+        }
     }
 
     /// Create null value
@@ -242,27 +248,38 @@ impl JSValue {
     /// Create a boolean value
     #[inline]
     pub const fn bool(value: bool) -> Self {
-        Self { bits: if value { TAG_TRUE } else { TAG_FALSE } }
+        Self {
+            bits: if value { TAG_TRUE } else { TAG_FALSE },
+        }
     }
 
     /// Create an f64 number value
     #[inline]
     pub fn number(value: f64) -> Self {
         // Just reinterpret the bits - f64 values are stored directly
-        Self { bits: value.to_bits() }
+        Self {
+            bits: value.to_bits(),
+        }
     }
 
     /// Create an i32 value (stored in payload, faster than f64 for integers)
     #[inline]
     pub const fn int32(value: i32) -> Self {
-        Self { bits: INT32_TAG | ((value as u32) as u64) }
+        Self {
+            bits: INT32_TAG | ((value as u32) as u64),
+        }
     }
 
     /// Create a pointer value (for heap-allocated objects)
     #[inline]
     pub fn pointer(ptr: *const u8) -> Self {
-        debug_assert!((ptr as u64) <= POINTER_MASK, "Pointer too large for NaN-boxing");
-        Self { bits: POINTER_TAG | (ptr as u64 & POINTER_MASK) }
+        debug_assert!(
+            (ptr as u64) <= POINTER_MASK,
+            "Pointer too large for NaN-boxing"
+        );
+        Self {
+            bits: POINTER_TAG | (ptr as u64 & POINTER_MASK),
+        }
     }
 
     /// Check if this is a number (not a tagged value)
@@ -376,7 +393,11 @@ impl JSValue {
         } else if self.is_int32() {
             self.as_int32() as f64
         } else if self.is_bool() {
-            if self.as_bool() { 1.0 } else { 0.0 }
+            if self.as_bool() {
+                1.0
+            } else {
+                0.0
+            }
         } else if self.is_null() {
             0.0
         } else if self.is_undefined() {
@@ -419,8 +440,13 @@ impl JSValue {
     /// Create a string pointer value (uses STRING_TAG for type discrimination)
     #[inline]
     pub fn string_ptr(ptr: *mut crate::string::StringHeader) -> Self {
-        debug_assert!((ptr as u64) <= POINTER_MASK, "Pointer too large for NaN-boxing");
-        Self { bits: STRING_TAG | (ptr as u64 & POINTER_MASK) }
+        debug_assert!(
+            (ptr as u64) <= POINTER_MASK,
+            "Pointer too large for NaN-boxing"
+        );
+        Self {
+            bits: STRING_TAG | (ptr as u64 & POINTER_MASK),
+        }
     }
 
     /// Try to encode a byte slice as an inline SSO string. Returns
@@ -441,7 +467,9 @@ impl JSValue {
             payload |= (b as u64) << (i * 8);
         }
         let len_bits = (bytes.len() as u64) << SHORT_STRING_LEN_SHIFT;
-        Some(Self { bits: SHORT_STRING_TAG | len_bits | payload })
+        Some(Self {
+            bits: SHORT_STRING_TAG | len_bits | payload,
+        })
     }
 
     /// Unconditional SSO constructor. Caller must ensure
@@ -485,8 +513,13 @@ impl JSValue {
     /// Create a BigInt pointer value (uses BIGINT_TAG for type discrimination)
     #[inline]
     pub fn bigint_ptr(ptr: *mut crate::bigint::BigIntHeader) -> Self {
-        debug_assert!((ptr as u64) <= POINTER_MASK, "Pointer too large for NaN-boxing");
-        Self { bits: BIGINT_TAG | (ptr as u64 & POINTER_MASK) }
+        debug_assert!(
+            (ptr as u64) <= POINTER_MASK,
+            "Pointer too large for NaN-boxing"
+        );
+        Self {
+            bits: BIGINT_TAG | (ptr as u64 & POINTER_MASK),
+        }
     }
 
     /// Get BigInt pointer (panics if not a BigInt)
@@ -589,7 +622,13 @@ pub extern "C" fn js_checkpoint(n: i32) {
 pub extern "C" fn js_debug_val(label: i32, val: f64) {
     use std::io::Write;
     let bits = val.to_bits();
-    let _ = writeln!(std::io::stderr(), "[DEBUG_VAL] label={} bits=0x{:016X} f64={}", label, bits, val);
+    let _ = writeln!(
+        std::io::stderr(),
+        "[DEBUG_VAL] label={} bits=0x{:016X} f64={}",
+        label,
+        bits,
+        val
+    );
     let _ = std::io::stderr().flush();
 }
 
@@ -639,7 +678,6 @@ pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
 /// Dynamic add: BigInt + BigInt if either operand is BigInt, else f64 + f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
-
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
@@ -655,7 +693,6 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
 /// Dynamic subtract: BigInt - BigInt if either operand is BigInt, else f64 - f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
-
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
@@ -686,7 +723,6 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
 /// Dynamic modulo: BigInt % BigInt if either operand is BigInt, else f64 % f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
-
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
@@ -714,7 +750,6 @@ pub unsafe extern "C" fn js_dynamic_neg(a: f64) -> f64 {
 /// Dynamic right shift: BigInt >> if either operand is BigInt, else i32 >> for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
-
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
@@ -752,7 +787,6 @@ pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
 /// Dynamic bitwise AND: BigInt & if either operand is BigInt, else i32 & for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
-
     let a_val = JSValue::from_bits(a.to_bits());
     let b_val = JSValue::from_bits(b.to_bits());
     if a_val.is_bigint() || b_val.is_bigint() {
@@ -802,7 +836,11 @@ pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_nanbox_is_bigint(value: f64) -> i32 {
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_bigint() { 1 } else { 0 }
+    if jsval.is_bigint() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Extract a BigInt pointer from a NaN-boxed f64 value.
@@ -824,7 +862,11 @@ pub extern "C" fn js_nanbox_get_bigint(value: f64) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_nanbox_is_pointer(value: f64) -> i32 {
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_pointer() { 1 } else { 0 }
+    if jsval.is_pointer() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Extract a pointer from a NaN-boxed f64 value.
@@ -939,7 +981,11 @@ pub extern "C" fn js_get_string_pointer_unified(value: f64) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_nanbox_is_string(value: f64) -> i32 {
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_string() { 1 } else { 0 }
+    if jsval.is_string() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Check if a value should trigger a destructuring default.
@@ -1017,8 +1063,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // Symbols: detect via the side-table before any GC header read.
             if crate::symbol::is_registered_symbol(ptr as usize) {
                 return unsafe {
-                    crate::symbol::js_symbol_to_string(value)
-                        as *mut crate::string::StringHeader
+                    crate::symbol::js_symbol_to_string(value) as *mut crate::string::StringHeader
                 };
             }
             // Consult `[Symbol.toPrimitive]("string")` if the object has a
@@ -1062,7 +1107,10 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
 /// Convert a NaN-boxed f64 value to a string with the given radix.
 /// Handles BigInt (uses bigint_to_string_radix), numbers, strings, etc.
 #[no_mangle]
-pub extern "C" fn js_jsvalue_to_string_radix(value: f64, radix: i32) -> *mut crate::string::StringHeader {
+pub extern "C" fn js_jsvalue_to_string_radix(
+    value: f64,
+    radix: i32,
+) -> *mut crate::string::StringHeader {
     let jsval = JSValue::from_bits(value.to_bits());
 
     if jsval.is_bigint() {
@@ -1081,13 +1129,21 @@ pub extern "C" fn js_jsvalue_to_string_radix(value: f64, radix: i32) -> *mut cra
             let mut result = String::new();
             let mut val = if n < 0 { -(n as i64) as u64 } else { n as u64 };
             let r = radix as u64;
-            if val == 0 { return crate::string::js_string_from_bytes(b"0".as_ptr(), 1); }
+            if val == 0 {
+                return crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
+            }
             while val > 0 {
                 let digit = (val % r) as u8;
-                result.push(if digit < 10 { (b'0' + digit) as char } else { (b'a' + digit - 10) as char });
+                result.push(if digit < 10 {
+                    (b'0' + digit) as char
+                } else {
+                    (b'a' + digit - 10) as char
+                });
                 val /= r;
             }
-            if n < 0 { result.push('-'); }
+            if n < 0 {
+                result.push('-');
+            }
             let s: String = result.chars().rev().collect();
             return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
         };
@@ -1095,10 +1151,15 @@ pub extern "C" fn js_jsvalue_to_string_radix(value: f64, radix: i32) -> *mut cra
     } else {
         // Regular f64 number
         let n = value;
-        if n.is_nan() { return crate::string::js_string_from_bytes(b"NaN".as_ptr(), 3); }
+        if n.is_nan() {
+            return crate::string::js_string_from_bytes(b"NaN".as_ptr(), 3);
+        }
         if n.is_infinite() {
-            if n > 0.0 { return crate::string::js_string_from_bytes(b"Infinity".as_ptr(), 8); }
-            else { return crate::string::js_string_from_bytes(b"-Infinity".as_ptr(), 9); }
+            if n > 0.0 {
+                return crate::string::js_string_from_bytes(b"Infinity".as_ptr(), 8);
+            } else {
+                return crate::string::js_string_from_bytes(b"-Infinity".as_ptr(), 9);
+            }
         }
         if radix == 10 || radix == 0 {
             return crate::string::js_number_to_string(value);
@@ -1106,18 +1167,34 @@ pub extern "C" fn js_jsvalue_to_string_radix(value: f64, radix: i32) -> *mut cra
         // For hex and other radixes, convert via integer
         let n_i64 = n as i64;
         let s = if radix == 16 {
-            if n_i64 < 0 { format!("-{:x}", -n_i64) } else { format!("{:x}", n_i64) }
+            if n_i64 < 0 {
+                format!("-{:x}", -n_i64)
+            } else {
+                format!("{:x}", n_i64)
+            }
         } else {
             let mut result = String::new();
-            let mut val = if n_i64 < 0 { (-n_i64) as u64 } else { n_i64 as u64 };
+            let mut val = if n_i64 < 0 {
+                (-n_i64) as u64
+            } else {
+                n_i64 as u64
+            };
             let r = radix as u64;
-            if val == 0 { return crate::string::js_string_from_bytes(b"0".as_ptr(), 1); }
+            if val == 0 {
+                return crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
+            }
             while val > 0 {
                 let digit = (val % r) as u8;
-                result.push(if digit < 10 { (b'0' + digit) as char } else { (b'a' + digit - 10) as char });
+                result.push(if digit < 10 {
+                    (b'0' + digit) as char
+                } else {
+                    (b'a' + digit - 10) as char
+                });
                 val /= r;
             }
-            if n_i64 < 0 { result.push('-'); }
+            if n_i64 < 0 {
+                result.push('-');
+            }
             result.chars().rev().collect()
         };
         crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
@@ -1153,7 +1230,8 @@ pub extern "C" fn js_ensure_string_ptr(value: f64) -> i64 {
             unsafe {
                 let length = (*str_header).byte_len;
                 // Make a copy of the string to ensure we have a Perry-allocated string
-                let data_ptr = (str_header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                let data_ptr = (str_header as *const u8)
+                    .add(std::mem::size_of::<crate::string::StringHeader>());
                 let copy = crate::string::js_string_from_bytes(data_ptr, length);
                 return copy as i64;
             }
@@ -1211,8 +1289,12 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
         let a_view = crate::string::str_bytes_from_jsvalue(a, &mut a_scratch);
         let b_view = crate::string::str_bytes_from_jsvalue(b, &mut b_scratch);
         if let (Some((a_ptr, a_len)), Some((b_ptr, b_len))) = (a_view, b_view) {
-            if a_len != b_len { return 0; }
-            if a_len == 0 { return 1; }
+            if a_len != b_len {
+                return 0;
+            }
+            if a_len == 0 {
+                return 1;
+            }
             unsafe {
                 let a_slice = std::slice::from_raw_parts(a_ptr, a_len as usize);
                 let b_slice = std::slice::from_raw_parts(b_ptr, b_len as usize);
@@ -1236,12 +1318,20 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
     // Convert INT32 to f64 for numeric comparison (e.g., INT32(5) === 5.0 should be true).
     // This mirrors the conversion in js_jsvalue_compare.
     if a_val.is_int32() || b_val.is_int32() {
-        let af = if a_val.is_int32() { a_val.as_int32() as f64 }
-                 else if is_plain_number(abits) { a }
-                 else { return 0; }; // non-numeric type → not equal
-        let bf = if b_val.is_int32() { b_val.as_int32() as f64 }
-                 else if is_plain_number(bbits) { b }
-                 else { return 0; }; // non-numeric type → not equal
+        let af = if a_val.is_int32() {
+            a_val.as_int32() as f64
+        } else if is_plain_number(abits) {
+            a
+        } else {
+            return 0;
+        }; // non-numeric type → not equal
+        let bf = if b_val.is_int32() {
+            b_val.as_int32() as f64
+        } else if is_plain_number(bbits) {
+            b
+        } else {
+            return 0;
+        }; // non-numeric type → not equal
         return if af == bf { 1 } else { 0 };
     }
 
@@ -1307,8 +1397,12 @@ pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
             }
             let header = unsafe { &*ptr };
             let s = unsafe {
-                let data = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-                std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, header.byte_len as usize))
+                let data =
+                    (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    data,
+                    header.byte_len as usize,
+                ))
             };
             let trimmed = s.trim();
             if trimmed.is_empty() {
@@ -1338,8 +1432,16 @@ pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
 
     // Both numbers: numeric comparison
     if a_is_num && b_is_num {
-        let af = if a_val.is_int32() { a_val.as_int32() as f64 } else { a };
-        let bf = if b_val.is_int32() { b_val.as_int32() as f64 } else { b };
+        let af = if a_val.is_int32() {
+            a_val.as_int32() as f64
+        } else {
+            a
+        };
+        let bf = if b_val.is_int32() {
+            b_val.as_int32() as f64
+        } else {
+            b
+        };
         return if af == bf { 1 } else { 0 };
     }
 
@@ -1356,14 +1458,22 @@ pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
     // String == Number: convert string to number
     if a_is_str && b_is_num {
         if let Some(af) = to_number(&a_val, abits, a) {
-            let bf = if b_val.is_int32() { b_val.as_int32() as f64 } else { b };
+            let bf = if b_val.is_int32() {
+                b_val.as_int32() as f64
+            } else {
+                b
+            };
             return if af == bf { 1 } else { 0 };
         }
         return 0;
     }
     if a_is_num && b_is_str {
         if let Some(bf) = to_number(&b_val, bbits, b) {
-            let af = if a_val.is_int32() { a_val.as_int32() as f64 } else { a };
+            let af = if a_val.is_int32() {
+                a_val.as_int32() as f64
+            } else {
+                a
+            };
             return if af == bf { 1 } else { 0 };
         }
         return 0;
@@ -1426,7 +1536,13 @@ pub extern "C" fn js_jsvalue_compare(a: f64, b: f64) -> i32 {
     if a_val.is_int32() && b_val.is_int32() {
         let ai = a_val.as_int32();
         let bi = b_val.as_int32();
-        return if ai < bi { -1 } else if ai > bi { 1 } else { 0 };
+        return if ai < bi {
+            -1
+        } else if ai > bi {
+            1
+        } else {
+            0
+        };
     }
 
     // Convert to f64 for numeric comparison (handles Number, INT32 mixed with Number, etc.)
@@ -1435,16 +1551,32 @@ pub extern "C" fn js_jsvalue_compare(a: f64, b: f64) -> i32 {
     // (sign bit set → upper16 >= 0x8000, which is > 0x7FFF, not a NaN-box tag)
     let a_tag = abits >> 48;
     let b_tag = bbits >> 48;
-    let af = if a_val.is_int32() { a_val.as_int32() as f64 }
-             else if a_val.is_bigint() { crate::bigint::js_bigint_to_f64(a_val.as_bigint_ptr()) }
-             else if a_tag < 0x7FF8 || a_tag > 0x7FFF { a }
-             else { return 2; }; // undefined/null/boolean → incomparable sentinel
-    let bf = if b_val.is_int32() { b_val.as_int32() as f64 }
-             else if b_val.is_bigint() { crate::bigint::js_bigint_to_f64(b_val.as_bigint_ptr()) }
-             else if b_tag < 0x7FF8 || b_tag > 0x7FFF { b }
-             else { return 2; }; // undefined/null/boolean → incomparable sentinel
+    let af = if a_val.is_int32() {
+        a_val.as_int32() as f64
+    } else if a_val.is_bigint() {
+        crate::bigint::js_bigint_to_f64(a_val.as_bigint_ptr())
+    } else if a_tag < 0x7FF8 || a_tag > 0x7FFF {
+        a
+    } else {
+        return 2;
+    }; // undefined/null/boolean → incomparable sentinel
+    let bf = if b_val.is_int32() {
+        b_val.as_int32() as f64
+    } else if b_val.is_bigint() {
+        crate::bigint::js_bigint_to_f64(b_val.as_bigint_ptr())
+    } else if b_tag < 0x7FF8 || b_tag > 0x7FFF {
+        b
+    } else {
+        return 2;
+    }; // undefined/null/boolean → incomparable sentinel
 
-    if af < bf { -1 } else if af > bf { 1 } else { 0 }
+    if af < bf {
+        -1
+    } else if af > bf {
+        1
+    } else {
+        0
+    }
 }
 
 /// Check if a JavaScript value is truthy.
@@ -1501,7 +1633,11 @@ pub extern "C" fn js_is_truthy(value: f64) -> i32 {
         if ptr.is_null() {
             return 0;
         }
-        return if crate::bigint::js_bigint_is_zero(ptr as *const crate::bigint::BigIntHeader) != 0 { 0 } else { 1 };
+        return if crate::bigint::js_bigint_is_zero(ptr as *const crate::bigint::BigIntHeader) != 0 {
+            0
+        } else {
+            1
+        };
     }
 
     // Check for JS handle (always truthy - they represent objects)
@@ -1637,12 +1773,14 @@ pub extern "C" fn js_dynamic_array_get(value: f64, index: i32) -> f64 {
 
     // Check if this is a buffer (Uint8Array) - read individual bytes, not f64 values
     if crate::buffer::is_registered_buffer(ptr as usize) {
-        let byte_val = crate::buffer::js_buffer_get(ptr as *const crate::buffer::BufferHeader, index);
+        let byte_val =
+            crate::buffer::js_buffer_get(ptr as *const crate::buffer::BufferHeader, index);
         return byte_val as f64;
     }
 
     // Call the native array get function
-    let result_bits = crate::array::js_array_get_jsvalue(ptr as *const crate::array::ArrayHeader, index as u32);
+    let result_bits =
+        crate::array::js_array_get_jsvalue(ptr as *const crate::array::ArrayHeader, index as u32);
     let result_top16 = result_bits >> 48;
     // debug: DYNAMIC-ARRAY-GET-DEBUG disabled
     f64::from_bits(result_bits)
@@ -1797,7 +1935,10 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
 /// Takes the array as f64 (may be NaN-boxed or JS handle) and a callback closure.
 /// Returns the found element as f64, or NaN (undefined) if not found.
 #[no_mangle]
-pub extern "C" fn js_dynamic_array_find(arr_value: f64, callback: *const crate::closure::ClosureHeader) -> f64 {
+pub extern "C" fn js_dynamic_array_find(
+    arr_value: f64,
+    callback: *const crate::closure::ClosureHeader,
+) -> f64 {
     // Check if callback is null
     if callback.is_null() {
         return f64::NAN;
@@ -1833,7 +1974,10 @@ pub extern "C" fn js_dynamic_array_find(arr_value: f64, callback: *const crate::
 /// Takes the array as f64 (may be NaN-boxed or JS handle) and a callback closure.
 /// Returns the index as f64 (-1.0 if not found).
 #[no_mangle]
-pub extern "C" fn js_dynamic_array_findIndex(arr_value: f64, callback: *const crate::closure::ClosureHeader) -> f64 {
+pub extern "C" fn js_dynamic_array_findIndex(
+    arr_value: f64,
+    callback: *const crate::closure::ClosureHeader,
+) -> f64 {
     // Check if this is a JS handle array
     if is_js_handle(arr_value) {
         // For JS handle arrays, iterate using dynamic access
@@ -2057,10 +2201,8 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     }
 
     // Create a Perry string for the key
-    let key_ptr = crate::string::js_string_from_bytes(
-        property_name.as_ptr(),
-        property_name.len() as u32,
-    );
+    let key_ptr =
+        crate::string::js_string_from_bytes(property_name.as_ptr(), property_name.len() as u32);
 
     // Call native object property access
     let result = crate::object::js_object_get_field_by_name_f64(
@@ -2312,7 +2454,7 @@ mod tests {
 
     #[test]
     fn test_short_string_too_long_rejects() {
-        assert!(JSValue::try_short_string(b"abcdef").is_none());  // 6 bytes
+        assert!(JSValue::try_short_string(b"abcdef").is_none()); // 6 bytes
         assert!(JSValue::try_short_string(b"hello world").is_none()); // 11 bytes
     }
 
@@ -2334,8 +2476,12 @@ mod tests {
         // tags. `is_short_string()` is strict — returns false for
         // everything except the SSO tag band.
         let sso = JSValue::try_short_string(b"abcde").unwrap();
-        let heap_string = JSValue { bits: STRING_TAG | 0x1234 };
-        let pointer = JSValue { bits: POINTER_TAG | 0x5678 };
+        let heap_string = JSValue {
+            bits: STRING_TAG | 0x1234,
+        };
+        let pointer = JSValue {
+            bits: POINTER_TAG | 0x5678,
+        };
         let int32 = JSValue::int32(42);
         let number = JSValue::number(3.14);
         let undef = JSValue::undefined();

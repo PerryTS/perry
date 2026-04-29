@@ -1,8 +1,8 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
+use objc2_foundation::{MainThreadMarker, NSString};
 use objc2_ui_kit::UIView;
-use objc2_foundation::{NSString, MainThreadMarker};
 
 fn str_from_header(ptr: *const u8) -> &'static str {
     if ptr.is_null() {

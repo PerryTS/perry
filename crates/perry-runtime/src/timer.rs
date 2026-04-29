@@ -7,9 +7,9 @@
 //! on Android where TypeScript runs on the perry-native thread but the
 //! timer pump fires on the UI thread.
 
+use crate::promise::{js_promise_new, js_promise_resolve, Promise};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use crate::promise::{Promise, js_promise_new, js_promise_resolve};
 
 /// A scheduled timer
 struct Timer {
@@ -41,7 +41,8 @@ fn ensure_initialized() {
 pub extern "C" fn js_timer_now() -> f64 {
     ensure_initialized();
     let st = START_TIME.lock().unwrap();
-    st.map(|start| start.elapsed().as_millis() as f64).unwrap_or(0.0)
+    st.map(|start| start.elapsed().as_millis() as f64)
+        .unwrap_or(0.0)
 }
 
 /// Schedule a timer that resolves a promise after delay_ms milliseconds
@@ -115,7 +116,11 @@ pub extern "C" fn js_timer_tick() -> i32 {
 /// Check if there are any pending timers
 #[no_mangle]
 pub extern "C" fn js_timer_has_pending() -> i32 {
-    if TIMER_QUEUE.lock().unwrap().is_empty() { 0 } else { 1 }
+    if TIMER_QUEUE.lock().unwrap().is_empty() {
+        0
+    } else {
+        1
+    }
 }
 
 /// Get the time until the next timer fires (in ms), or -1 if no timers
@@ -123,7 +128,9 @@ pub extern "C" fn js_timer_has_pending() -> i32 {
 pub extern "C" fn js_timer_next_deadline() -> f64 {
     let now = Instant::now();
 
-    TIMER_QUEUE.lock().unwrap()
+    TIMER_QUEUE
+        .lock()
+        .unwrap()
         .iter()
         .map(|t| {
             if t.deadline <= now {
@@ -236,7 +243,11 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
 #[no_mangle]
 pub extern "C" fn js_callback_timer_has_pending() -> i32 {
     let q = CALLBACK_TIMERS.lock().unwrap();
-    if q.iter().any(|t| !t.cleared) { 1 } else { 0 }
+    if q.iter().any(|t| !t.cleared) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Get the time until the next callback timer fires (in ms), or -1 if
@@ -248,7 +259,9 @@ pub extern "C" fn js_callback_timer_has_pending() -> i32 {
 pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
     let now = Instant::now();
 
-    CALLBACK_TIMERS.lock().unwrap()
+    CALLBACK_TIMERS
+        .lock()
+        .unwrap()
         .iter()
         .filter(|t| !t.cleared)
         .map(|t| {
@@ -389,7 +402,11 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
 #[no_mangle]
 pub extern "C" fn js_interval_timer_has_pending() -> i32 {
     let timers = INTERVAL_TIMERS.lock().unwrap();
-    if timers.iter().any(|t| !t.cleared) { 1 } else { 0 }
+    if timers.iter().any(|t| !t.cleared) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Get the time until the next interval timer fires (in ms), or -1 if no timers
@@ -397,7 +414,9 @@ pub extern "C" fn js_interval_timer_has_pending() -> i32 {
 pub extern "C" fn js_interval_timer_next_deadline() -> f64 {
     let now = Instant::now();
 
-    INTERVAL_TIMERS.lock().unwrap()
+    INTERVAL_TIMERS
+        .lock()
+        .unwrap()
         .iter()
         .filter(|t| !t.cleared)
         .map(|t| {
@@ -418,7 +437,9 @@ pub fn scan_timer_roots(mark: &mut dyn FnMut(f64)) {
         let q = TIMER_QUEUE.lock().unwrap();
         for timer in q.iter() {
             if !timer.promise.is_null() {
-                let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (timer.promise as u64 & 0x0000_FFFF_FFFF_FFFF));
+                let boxed = f64::from_bits(
+                    0x7FFD_0000_0000_0000 | (timer.promise as u64 & 0x0000_FFFF_FFFF_FFFF),
+                );
                 mark(boxed);
             }
             mark(timer.value);
@@ -430,7 +451,9 @@ pub fn scan_timer_roots(mark: &mut dyn FnMut(f64)) {
         let q = CALLBACK_TIMERS.lock().unwrap();
         for timer in q.iter() {
             if !timer.cleared && timer.callback != 0 {
-                let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (timer.callback as u64 & 0x0000_FFFF_FFFF_FFFF));
+                let boxed = f64::from_bits(
+                    0x7FFD_0000_0000_0000 | (timer.callback as u64 & 0x0000_FFFF_FFFF_FFFF),
+                );
                 mark(boxed);
             }
         }
@@ -441,7 +464,9 @@ pub fn scan_timer_roots(mark: &mut dyn FnMut(f64)) {
         let q = INTERVAL_TIMERS.lock().unwrap();
         for timer in q.iter() {
             if !timer.cleared && timer.callback != 0 {
-                let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (timer.callback as u64 & 0x0000_FFFF_FFFF_FFFF));
+                let boxed = f64::from_bits(
+                    0x7FFD_0000_0000_0000 | (timer.callback as u64 & 0x0000_FFFF_FFFF_FFFF),
+                );
                 mark(boxed);
             }
         }

@@ -3,12 +3,12 @@
 //! Native implementation of the 'argon2' npm package.
 //! Provides secure password hashing using Argon2id algorithm.
 
+use crate::common::spawn_for_promise;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
 use perry_runtime::{js_promise_new, js_string_from_bytes, Promise, StringHeader};
-use crate::common::spawn_for_promise;
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -59,7 +59,9 @@ pub unsafe extern "C" fn js_argon2_hash(password_ptr: *const StringHeader) -> *m
 ///
 /// Synchronously hash a password using Argon2id.
 #[no_mangle]
-pub unsafe extern "C" fn js_argon2_hash_sync(password_ptr: *const StringHeader) -> *mut StringHeader {
+pub unsafe extern "C" fn js_argon2_hash_sync(
+    password_ptr: *const StringHeader,
+) -> *mut StringHeader {
     let password = match string_from_header(password_ptr) {
         Some(p) => p,
         None => return std::ptr::null_mut(),
@@ -114,7 +116,9 @@ pub unsafe extern "C" fn js_argon2_verify(
         };
 
         let argon2 = Argon2::default();
-        let is_valid = argon2.verify_password(password.as_bytes(), &parsed_hash).is_ok();
+        let is_valid = argon2
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .is_ok();
 
         Ok(perry_runtime::JSValue::bool(is_valid).bits())
     });
@@ -146,7 +150,14 @@ pub unsafe extern "C" fn js_argon2_verify_sync(
     };
 
     let argon2 = Argon2::default();
-    if argon2.verify_password(password.as_bytes(), &parsed_hash).is_ok() { 1 } else { 0 }
+    if argon2
+        .verify_password(password.as_bytes(), &parsed_hash)
+        .is_ok()
+    {
+        1
+    } else {
+        0
+    }
 }
 
 /// argon2.needsRehash(hash) -> boolean

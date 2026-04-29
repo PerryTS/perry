@@ -12,19 +12,16 @@ pub fn open_dialog(callback: f64) {
 
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::System::Com::*;
-        use windows::Win32::UI::Shell::*;
-        use windows::Win32::UI::Shell::Common::*;
         use windows::core::PWSTR;
+        use windows::Win32::System::Com::*;
+        use windows::Win32::UI::Shell::Common::*;
+        use windows::Win32::UI::Shell::*;
 
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-            let dialog: Result<IFileOpenDialog, _> = CoCreateInstance(
-                &FileOpenDialog,
-                None,
-                CLSCTX_ALL,
-            );
+            let dialog: Result<IFileOpenDialog, _> =
+                CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL);
 
             if let Ok(dialog) = dialog {
                 let hr = dialog.Show(None);

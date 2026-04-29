@@ -50,8 +50,12 @@ pub fn minify_js(input: &str) -> String {
                 if i < len {
                     i += 1;
                 } // skip newline
-                // Emit space if needed to prevent token merge
-                emit_separator_if_needed(&out, if i < len { Some(bytes[i]) } else { None }, &mut out.clone());
+                  // Emit space if needed to prevent token merge
+                emit_separator_if_needed(
+                    &out,
+                    if i < len { Some(bytes[i]) } else { None },
+                    &mut out.clone(),
+                );
                 if i < len && !out.is_empty() && needs_space(*out.last().unwrap(), bytes[i]) {
                     out.push(b' ');
                 }
@@ -65,7 +69,7 @@ pub fn minify_js(input: &str) -> String {
                 if i + 1 < len {
                     i += 2;
                 } // skip */
-                // Emit space if needed to prevent token merge
+                  // Emit space if needed to prevent token merge
                 if i < len && !out.is_empty() && needs_space(*out.last().unwrap(), bytes[i]) {
                     out.push(b' ');
                 }
@@ -106,7 +110,7 @@ pub fn minify_js(input: &str) -> String {
                     out.push(bytes[i]);
                     i += 1;
                 } // closing /
-                // Regex flags
+                  // Regex flags
                 while i < len && bytes[i].is_ascii_alphabetic() {
                     out.push(bytes[i]);
                     i += 1;

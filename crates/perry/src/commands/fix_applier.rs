@@ -97,7 +97,9 @@ impl FixApplier {
                     result.fixes_applied += count;
                 }
                 Err(e) => {
-                    result.errors.push(format!("{}: {}", file_path.display(), e));
+                    result
+                        .errors
+                        .push(format!("{}: {}", file_path.display(), e));
                 }
             }
         }
@@ -114,8 +116,7 @@ impl FixApplier {
 
         let new_content = apply_edits_to_string(source, edits);
 
-        fs::write(file_path, &new_content)
-            .map_err(|e| format!("Failed to write file: {}", e))?;
+        fs::write(file_path, &new_content).map_err(|e| format!("Failed to write file: {}", e))?;
 
         Ok(edits.len())
     }
@@ -230,8 +231,8 @@ mod tests {
         // "let x: any = 5;" - "any" is at string indices 7..10, so BytePos is 8..11
         let source = "let x: any = 5;";
         let edits = vec![TextEdit {
-            start: 8,  // BytePos for string index 7
-            end: 11,   // BytePos for string index 10
+            start: 8, // BytePos for string index 7
+            end: 11,  // BytePos for string index 10
             replacement: "unknown".to_string(),
         }];
         let result = apply_edits_to_string(source, &edits);

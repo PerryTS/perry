@@ -85,7 +85,9 @@ pub fn open_folder_dialog(callback: f64) {
 /// Save file dialog. Calls callback with selected path (NaN-boxed string) or TAG_UNDEFINED.
 pub fn save_dialog(callback: f64, default_name_ptr: *const u8, _allowed_types_ptr: *const u8) {
     fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() { return ""; }
+        if ptr.is_null() {
+            return "";
+        }
         unsafe {
             let header = ptr as *const crate::string_header::StringHeader;
             let len = (*header).byte_len as usize;

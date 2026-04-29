@@ -1,5 +1,5 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::MainThreadOnly;
 use objc2_app_kit::{NSProgressIndicator, NSView};
 use objc2_foundation::MainThreadMarker;
@@ -16,7 +16,8 @@ pub fn create() -> i64 {
         ];
         let _: () = msg_send![&*indicator, setStyle: 1i64]; // NSProgressIndicatorStyleSpinning
         let _: () = msg_send![&*indicator, setIndeterminate: true];
-        let _: () = msg_send![&*indicator, startAnimation: std::ptr::null::<objc2::runtime::AnyObject>()];
+        let _: () =
+            msg_send![&*indicator, startAnimation: std::ptr::null::<objc2::runtime::AnyObject>()];
 
         let view: Retained<NSView> = Retained::cast_unchecked(indicator);
         super::register_widget(view)

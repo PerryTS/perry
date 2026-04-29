@@ -1,25 +1,25 @@
 //! Widget registry — Vec<WidgetEntry> with 1-based handles.
 //! Each widget has an HWND (on Windows), a kind, children list, and layout info.
 
-pub mod text;
 pub mod button;
-pub mod vstack;
-pub mod hstack;
-pub mod spacer;
+pub mod canvas;
 pub mod divider;
-pub mod textfield;
-pub mod toggle;
-pub mod slider;
+pub mod form;
+pub mod hstack;
+pub mod image;
+pub mod lazyvstack;
+pub mod navstack;
+pub mod picker;
+pub mod progressview;
 pub mod scrollview;
 pub mod securefield;
-pub mod progressview;
-pub mod form;
+pub mod slider;
+pub mod spacer;
+pub mod text;
+pub mod textfield;
+pub mod toggle;
+pub mod vstack;
 pub mod zstack;
-pub mod picker;
-pub mod canvas;
-pub mod navstack;
-pub mod lazyvstack;
-pub mod image;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -27,11 +27,15 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::{CreateFontW, CreateRoundRectRgn, SetWindowRgn, InvalidateRect, HBRUSH, CreateSolidBrush, FillRect, HDC, GradientFill, TRIVERTEX, GRADIENT_RECT, GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V};
+use windows::Win32::Graphics::Gdi::{
+    CreateFontW, CreateRoundRectRgn, CreateSolidBrush, FillRect, GradientFill, InvalidateRect,
+    SetWindowRgn, GRADIENT_FILL_RECT_H, GRADIENT_FILL_RECT_V, GRADIENT_RECT, HBRUSH, HDC,
+    TRIVERTEX,
+};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum WidgetKind {
@@ -135,7 +139,8 @@ pub struct GradientInfo {
 /// Mutex-based HWND→GradientInfo map (keyed by HWND as isize for Send safety).
 /// Using Mutex (not RefCell) so it can be accessed during WM_PAINT without reentrancy issues.
 #[cfg(target_os = "windows")]
-pub static GRADIENT_MAP: std::sync::Mutex<Vec<(isize, GradientInfo)>> = std::sync::Mutex::new(Vec::new());
+pub static GRADIENT_MAP: std::sync::Mutex<Vec<(isize, GradientInfo)>> =
+    std::sync::Mutex::new(Vec::new());
 
 /// Store handle→HWND mapping in the Mutex-based map (called during widget registration).
 #[cfg(target_os = "windows")]
@@ -150,7 +155,9 @@ fn store_hwnd_mapping(handle: i64, hwnd: HWND) {
 pub fn get_hwnd_safe(handle: i64) -> Option<HWND> {
     if let Ok(map) = HWND_MAP.lock() {
         for &(h, hwnd_val) in map.iter().rev() {
-            if h == handle { return Some(HWND(hwnd_val as *mut _)); }
+            if h == handle {
+                return Some(HWND(hwnd_val as *mut _));
+            }
         }
     }
     None
@@ -197,12 +204,16 @@ pub fn get_parking_hwnd() -> HWND {
                 windows::core::PCWSTR(class.as_ptr()),
                 windows::core::PCWSTR(std::ptr::null()),
                 WINDOW_STYLE::default(),
-                0, 0, 0, 0,
+                0,
+                0,
+                0,
+                0,
                 HWND_MESSAGE,
                 HMENU::default(),
                 hinstance_h,
                 None,
-            ).unwrap();
+            )
+            .unwrap();
             *opt = Some(hwnd);
             hwnd
         }
@@ -274,7 +285,12 @@ pub fn register_widget(hwnd: isize, kind: WidgetKind, control_id: u16) -> i64 {
 
 /// Register a widget with spacing and insets (for stacks).
 #[cfg(target_os = "windows")]
-pub fn register_widget_with_layout(hwnd: HWND, kind: WidgetKind, spacing: f64, insets: (f64, f64, f64, f64)) -> i64 {
+pub fn register_widget_with_layout(
+    hwnd: HWND,
+    kind: WidgetKind,
+    spacing: f64,
+    insets: (f64, f64, f64, f64),
+) -> i64 {
     let control_id = alloc_control_id();
     let handle = WIDGETS.with(|w| {
         let mut widgets = w.borrow_mut();
@@ -302,7 +318,12 @@ pub fn register_widget_with_layout(hwnd: HWND, kind: WidgetKind, spacing: f64, i
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn register_widget_with_layout(hwnd: isize, kind: WidgetKind, spacing: f64, insets: (f64, f64, f64, f64)) -> i64 {
+pub fn register_widget_with_layout(
+    hwnd: isize,
+    kind: WidgetKind,
+    spacing: f64,
+    insets: (f64, f64, f64, f64),
+) -> i64 {
     let control_id = alloc_control_id();
     WIDGETS.with(|w| {
         let mut widgets = w.borrow_mut();
@@ -411,7 +432,9 @@ pub fn find_handle_by_hwnd(hwnd: HWND) -> i64 {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn find_handle_by_hwnd(_hwnd: isize) -> i64 { 0 }
+pub fn find_handle_by_hwnd(_hwnd: isize) -> i64 {
+    0
+}
 
 /// Find widget handle by control ID.
 pub fn find_handle_by_control_id(id: u16) -> i64 {
@@ -434,11 +457,17 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
     #[cfg(target_os = "windows")]
     {
         // Re-parent the child HWND
-        if let (Some(parent_hwnd), Some(child_hwnd)) = (get_hwnd(parent_handle), get_hwnd(child_handle)) {
+        if let (Some(parent_hwnd), Some(child_hwnd)) =
+            (get_hwnd(parent_handle), get_hwnd(child_handle))
+        {
             unsafe {
                 let _ = SetParent(child_hwnd, parent_hwnd);
                 let style = GetWindowLongW(child_hwnd, GWL_STYLE) as u32;
-                SetWindowLongW(child_hwnd, GWL_STYLE, (style | WS_CHILD.0 | WS_VISIBLE.0) as i32);
+                SetWindowLongW(
+                    child_hwnd,
+                    GWL_STYLE,
+                    (style | WS_CHILD.0 | WS_VISIBLE.0) as i32,
+                );
             }
         }
     }
@@ -456,11 +485,17 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
 pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
     #[cfg(target_os = "windows")]
     {
-        if let (Some(parent_hwnd), Some(child_hwnd)) = (get_hwnd(parent_handle), get_hwnd(child_handle)) {
+        if let (Some(parent_hwnd), Some(child_hwnd)) =
+            (get_hwnd(parent_handle), get_hwnd(child_handle))
+        {
             unsafe {
                 let _ = SetParent(child_hwnd, parent_hwnd);
                 let style = GetWindowLongW(child_hwnd, GWL_STYLE) as u32;
-                SetWindowLongW(child_hwnd, GWL_STYLE, (style | WS_CHILD.0 | WS_VISIBLE.0) as i32);
+                SetWindowLongW(
+                    child_hwnd,
+                    GWL_STYLE,
+                    (style | WS_CHILD.0 | WS_VISIBLE.0) as i32,
+                );
             }
         }
     }
@@ -482,7 +517,11 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
         let mut widgets = w.borrow_mut();
         let idx = (parent_handle - 1) as usize;
         if idx < widgets.len() {
-            if let Some(pos) = widgets[idx].children.iter().position(|&c| c == child_handle) {
+            if let Some(pos) = widgets[idx]
+                .children
+                .iter()
+                .position(|&c| c == child_handle)
+            {
                 widgets[idx].children.remove(pos);
                 true
             } else {
@@ -759,7 +798,19 @@ pub fn set_control_size(handle: i64, size: i64) {
         if let Some(hwnd) = get_hwnd(handle) {
             unsafe {
                 let font = CreateFontW(
-                    -font_height, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0,
+                    -font_height,
+                    0,
+                    0,
+                    0,
+                    400,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
                     windows::core::PCWSTR(
                         "Segoe UI\0".encode_utf16().collect::<Vec<u16>>().as_ptr(),
                     ),
@@ -817,8 +868,13 @@ static SHADOW_PARAMS: std::sync::Mutex<Vec<(i64, (f64, f64, f64, f64, f64, f64, 
 /// but not yet visible.
 pub fn set_shadow(
     handle: i64,
-    r: f64, g: f64, b: f64, a: f64,
-    blur: f64, offset_x: f64, offset_y: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+    blur: f64,
+    offset_x: f64,
+    offset_y: f64,
 ) {
     if let Ok(mut shadows) = SHADOW_PARAMS.lock() {
         let entry = (r, g, b, a, blur, offset_x, offset_y);
@@ -880,10 +936,12 @@ pub fn set_opacity(handle: i64, opacity: f64) {
 #[cfg(target_os = "windows")]
 fn apply_opacity(handle: i64, opacity: f64) {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, SetWindowLongW, SetLayeredWindowAttributes,
-        GWL_EXSTYLE, WS_EX_LAYERED, LWA_ALPHA,
+        GetWindowLongW, SetLayeredWindowAttributes, SetWindowLongW, GWL_EXSTYLE, LWA_ALPHA,
+        WS_EX_LAYERED,
     };
-    let Some(hwnd) = get_hwnd_safe(handle) else { return; };
+    let Some(hwnd) = get_hwnd_safe(handle) else {
+        return;
+    };
     let alpha = (opacity.clamp(0.0, 1.0) * 255.0) as u8;
     unsafe {
         let cur_ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
@@ -977,9 +1035,12 @@ pub fn apply_corner_radius(handle: i64) {
                 // Corner radius applied at layout time
                 if rect.right > 0 && rect.bottom > 0 {
                     let rgn = CreateRoundRectRgn(
-                        0, 0,
-                        rect.right + 1, rect.bottom + 1,
-                        radius as i32, radius as i32,
+                        0,
+                        0,
+                        rect.right + 1,
+                        rect.bottom + 1,
+                        radius as i32,
+                        radius as i32,
                     );
                     SetWindowRgn(hwnd, rgn, true);
                 }
@@ -1054,11 +1115,11 @@ unsafe extern "system" fn border_subclass_proc(
     _id: usize,
     refdata: usize,
 ) -> LRESULT {
-    use windows::Win32::UI::Shell::DefSubclassProc;
     use windows::Win32::Graphics::Gdi::{
-        CreatePen, GetDC, ReleaseDC, SelectObject, DeleteObject,
-        Rectangle, GetStockObject, NULL_BRUSH, PS_SOLID,
+        CreatePen, DeleteObject, GetDC, GetStockObject, Rectangle, ReleaseDC, SelectObject,
+        NULL_BRUSH, PS_SOLID,
     };
+    use windows::Win32::UI::Shell::DefSubclassProc;
 
     let result = DefSubclassProc(hwnd, msg, wparam, lparam);
 
@@ -1164,10 +1225,18 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
         let (fr, fg, fb) = if a < 0.999 {
             let ancestor = get_hwnd_safe(handle).and_then(|h| find_ancestor_hwnd_bg_color(h));
             let (ar, ag, ab) = match ancestor {
-                Some(c) => ((c & 0xFF) as f64 / 255.0, ((c >> 8) & 0xFF) as f64 / 255.0, ((c >> 16) & 0xFF) as f64 / 255.0),
+                Some(c) => (
+                    (c & 0xFF) as f64 / 255.0,
+                    ((c >> 8) & 0xFF) as f64 / 255.0,
+                    ((c >> 16) & 0xFF) as f64 / 255.0,
+                ),
                 None => (1.0, 1.0, 1.0),
             };
-            (r * a + ar * (1.0 - a), g * a + ag * (1.0 - a), b * a + ab * (1.0 - a))
+            (
+                r * a + ar * (1.0 - a),
+                g * a + ag * (1.0 - a),
+                b * a + ab * (1.0 - a),
+            )
         } else {
             (r, g, b)
         };
@@ -1178,7 +1247,9 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
         let hwnd_opt = get_hwnd_safe(handle);
         if let Some(hwnd) = hwnd_opt {
             set_hwnd_bg_color(hwnd, color);
-            unsafe { let _ = InvalidateRect(hwnd, None, true); }
+            unsafe {
+                let _ = InvalidateRect(hwnd, None, true);
+            }
         }
     }
     #[cfg(not(target_os = "windows"))]
@@ -1193,8 +1264,15 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
 pub fn set_hwnd_bg_color(hwnd: HWND, color: u32) {
     unsafe {
         // Store color+1 so we can distinguish "not set" (0) from black (0x000000).
-        let prop_name: Vec<u16> = "PerryBgColor".encode_utf16().chain(std::iter::once(0)).collect();
-        SetPropW(hwnd, windows::core::PCWSTR(prop_name.as_ptr()), HANDLE((color as usize + 1) as *mut _));
+        let prop_name: Vec<u16> = "PerryBgColor"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        SetPropW(
+            hwnd,
+            windows::core::PCWSTR(prop_name.as_ptr()),
+            HANDLE((color as usize + 1) as *mut _),
+        );
     }
 }
 
@@ -1202,7 +1280,10 @@ pub fn set_hwnd_bg_color(hwnd: HWND, color: u32) {
 #[cfg(target_os = "windows")]
 pub fn get_hwnd_bg_color(hwnd: HWND) -> Option<u32> {
     unsafe {
-        let prop_name: Vec<u16> = "PerryBgColor".encode_utf16().chain(std::iter::once(0)).collect();
+        let prop_name: Vec<u16> = "PerryBgColor"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         let val = GetPropW(hwnd, windows::core::PCWSTR(prop_name.as_ptr()));
         if val.is_invalid() || val.0.is_null() {
             None
@@ -1217,7 +1298,9 @@ pub fn get_hwnd_bg_color(hwnd: HWND) -> Option<u32> {
 pub fn find_ancestor_hwnd_bg_color(mut hwnd: HWND) -> Option<u32> {
     for _ in 0..10 {
         if let Ok(parent) = unsafe { GetParent(hwnd) } {
-            if parent.0.is_null() { break; }
+            if parent.0.is_null() {
+                break;
+            }
             if let Some(color) = get_hwnd_bg_color(parent) {
                 return Some(color);
             }
@@ -1278,7 +1361,11 @@ pub fn paint_gradient(hwnd: HWND, hdc: HDC, rect: &RECT) -> bool {
         LowerRight: 1,
     };
 
-    let mode = if vertical { GRADIENT_FILL_RECT_V } else { GRADIENT_FILL_RECT_H };
+    let mode = if vertical {
+        GRADIENT_FILL_RECT_V
+    } else {
+        GRADIENT_FILL_RECT_H
+    };
 
     unsafe {
         let _ = GradientFill(
@@ -1295,7 +1382,18 @@ pub fn paint_gradient(hwnd: HWND, hdc: HDC, rect: &RECT) -> bool {
 /// Set the background gradient of a widget.
 /// Stores gradient info in GRADIENT_MAP for WM_ERASEBKGND painting via GradientFill.
 /// Also stores c1 as a solid fallback for ancestor color inheritance.
-pub fn set_background_gradient(handle: i64, r1: f64, g1: f64, b1: f64, a1: f64, r2: f64, g2: f64, b2: f64, _a2: f64, _direction: f64) {
+pub fn set_background_gradient(
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    _a2: f64,
+    _direction: f64,
+) {
     #[cfg(target_os = "windows")]
     {
         let c1 = rgb_to_colorref(r1, g1, b1);
@@ -1315,10 +1413,24 @@ pub fn set_background_gradient(handle: i64, r1: f64, g1: f64, b1: f64, a1: f64, 
             // Also store gradient colors as HWND properties so paint handlers can
             // detect gradient presence without the Mutex if needed
             unsafe {
-                let prop_c1: Vec<u16> = "PerryGradC1".encode_utf16().chain(std::iter::once(0)).collect();
-                let prop_c2: Vec<u16> = "PerryGradC2".encode_utf16().chain(std::iter::once(0)).collect();
-                SetPropW(hwnd, windows::core::PCWSTR(prop_c1.as_ptr()), HANDLE((c1 as usize + 1) as *mut _));
-                SetPropW(hwnd, windows::core::PCWSTR(prop_c2.as_ptr()), HANDLE((c2 as usize + 1) as *mut _));
+                let prop_c1: Vec<u16> = "PerryGradC1"
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let prop_c2: Vec<u16> = "PerryGradC2"
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                SetPropW(
+                    hwnd,
+                    windows::core::PCWSTR(prop_c1.as_ptr()),
+                    HANDLE((c1 as usize + 1) as *mut _),
+                );
+                SetPropW(
+                    hwnd,
+                    windows::core::PCWSTR(prop_c2.as_ptr()),
+                    HANDLE((c2 as usize + 1) as *mut _),
+                );
             }
         }
 
@@ -1338,8 +1450,18 @@ pub fn set_on_hover(handle: i64, callback: f64) {
     let _ = handle;
     #[cfg(feature = "geisterhand")]
     {
-        extern "C" { fn perry_geisterhand_register(handle: i64, widget_type: u8, callback_kind: u8, closure_f64: f64, label_ptr: *const u8); }
-        unsafe { perry_geisterhand_register(handle, 0, 3, callback, std::ptr::null()); }
+        extern "C" {
+            fn perry_geisterhand_register(
+                handle: i64,
+                widget_type: u8,
+                callback_kind: u8,
+                closure_f64: f64,
+                label_ptr: *const u8,
+            );
+        }
+        unsafe {
+            perry_geisterhand_register(handle, 0, 3, callback, std::ptr::null());
+        }
     }
 }
 
@@ -1350,8 +1472,18 @@ pub fn set_on_double_click(handle: i64, callback: f64) {
     let _ = handle;
     #[cfg(feature = "geisterhand")]
     {
-        extern "C" { fn perry_geisterhand_register(handle: i64, widget_type: u8, callback_kind: u8, closure_f64: f64, label_ptr: *const u8); }
-        unsafe { perry_geisterhand_register(handle, 0, 4, callback, std::ptr::null()); }
+        extern "C" {
+            fn perry_geisterhand_register(
+                handle: i64,
+                widget_type: u8,
+                callback_kind: u8,
+                closure_f64: f64,
+                label_ptr: *const u8,
+            );
+        }
+        unsafe {
+            perry_geisterhand_register(handle, 0, 4, callback, std::ptr::null());
+        }
     }
 }
 

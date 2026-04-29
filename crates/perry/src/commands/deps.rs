@@ -1,9 +1,7 @@
 //! Dependency checking and validation
 
 use anyhow::Result;
-use perry_diagnostics::{
-    Diagnostic, DiagnosticCode, Diagnostics, SourceCache,
-};
+use perry_diagnostics::{Diagnostic, DiagnosticCode, Diagnostics, SourceCache};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -200,7 +198,8 @@ impl DependencyResolver {
 
         for package_name in packages {
             if let Some(package_path) = self.resolve_package(&package_name) {
-                let compat = check_package_compatibility(&package_name, &package_path, source_cache)?;
+                let compat =
+                    check_package_compatibility(&package_name, &package_path, source_cache)?;
                 results.push(compat);
             }
         }
@@ -212,11 +211,41 @@ impl DependencyResolver {
 /// Check if an import is a Node.js built-in module
 fn is_node_builtin(name: &str) -> bool {
     let builtins = [
-        "assert", "buffer", "child_process", "cluster", "console", "constants",
-        "crypto", "dgram", "dns", "domain", "events", "fs", "http", "https",
-        "module", "net", "os", "path", "perf_hooks", "process", "punycode",
-        "querystring", "readline", "repl", "stream", "string_decoder", "sys",
-        "timers", "tls", "tty", "url", "util", "v8", "vm", "worker_threads",
+        "assert",
+        "buffer",
+        "child_process",
+        "cluster",
+        "console",
+        "constants",
+        "crypto",
+        "dgram",
+        "dns",
+        "domain",
+        "events",
+        "fs",
+        "http",
+        "https",
+        "module",
+        "net",
+        "os",
+        "path",
+        "perf_hooks",
+        "process",
+        "punycode",
+        "querystring",
+        "readline",
+        "repl",
+        "stream",
+        "string_decoder",
+        "sys",
+        "timers",
+        "tls",
+        "tty",
+        "url",
+        "util",
+        "v8",
+        "vm",
+        "worker_threads",
         "zlib",
     ];
 
@@ -257,7 +286,9 @@ pub fn check_package_compatibility(
         // Check for @types package
         let _types_package = format!("@types/{}", package_name.replace('/', "__"));
         let node_modules = package_path.parent().unwrap();
-        let types_path = node_modules.join("@types").join(package_name.replace('/', "__"));
+        let types_path = node_modules
+            .join("@types")
+            .join(package_name.replace('/', "__"));
 
         if !types_path.exists() {
             issues.push(CompatibilityIssue {
@@ -344,7 +375,8 @@ fn scan_source_for_issues(path: &Path, source: &str) -> Vec<CompatibilityIssue> 
         let line_num = (line_num + 1) as u32;
 
         // Check for eval()
-        if line.contains("eval(") && !line.trim().starts_with("//") && !line.trim().starts_with("*") {
+        if line.contains("eval(") && !line.trim().starts_with("//") && !line.trim().starts_with("*")
+        {
             issues.push(CompatibilityIssue {
                 file: path.to_path_buf(),
                 line: Some(line_num),
@@ -365,7 +397,10 @@ fn scan_source_for_issues(path: &Path, source: &str) -> Vec<CompatibilityIssue> 
 
         // Check for dynamic import()
         // Match import( but not import.meta or static imports
-        if line.contains("import(") && !line.contains("import.meta") && !line.trim().starts_with("//") {
+        if line.contains("import(")
+            && !line.contains("import.meta")
+            && !line.trim().starts_with("//")
+        {
             // Try to determine if it's dynamic (variable argument)
             let is_dynamic = !line.contains("import('") && !line.contains("import(\"");
             if is_dynamic {
@@ -387,7 +422,8 @@ fn scan_source_for_issues(path: &Path, source: &str) -> Vec<CompatibilityIssue> 
                     file: path.to_path_buf(),
                     line: Some(line_num),
                     kind: IssueKind::AnyType,
-                    message: "'any' type may cause runtime issues in native compilation".to_string(),
+                    message: "'any' type may cause runtime issues in native compilation"
+                        .to_string(),
                 });
             }
         }
@@ -425,10 +461,7 @@ pub fn unresolved_imports_to_diagnostics(
 
         diagnostics.push(
             Diagnostic::error(DiagnosticCode::UnresolvedImport, message)
-                .with_help(format!(
-                    "Install the package with: npm install {}",
-                    package
-                ))
+                .with_help(format!("Install the package with: npm install {}", package))
                 .build(),
         );
     }
@@ -449,7 +482,12 @@ pub fn check_node_builtin_imports(
                 .get(import)
                 .map(|f| {
                     f.iter()
-                        .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
+                        .map(|p| {
+                            p.file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string()
+                        })
                         .collect::<Vec<_>>()
                         .join(", ")
                 })
@@ -481,9 +519,7 @@ pub fn scan_project_file_for_issues(path: &Path, source: &str) -> Vec<Compatibil
 }
 
 /// Create diagnostics from package compatibility issues
-pub fn compatibility_to_diagnostics(
-    packages: &[PackageCompatibility],
-) -> Diagnostics {
+pub fn compatibility_to_diagnostics(packages: &[PackageCompatibility]) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();
 
     for package in packages {

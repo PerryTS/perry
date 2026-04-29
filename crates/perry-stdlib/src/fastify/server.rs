@@ -14,11 +14,11 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
-use perry_runtime::{js_string_from_bytes, StringHeader, JSValue};
+use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
-use crate::common::{get_handle, get_handle_mut, register_handle, Handle, RUNTIME};
-use super::{FastifyApp, FastifyContext, ClosurePtr};
 use super::context::string_from_header;
+use super::{ClosurePtr, FastifyApp, FastifyContext};
+use crate::common::{get_handle, get_handle_mut, register_handle, Handle, RUNTIME};
 
 /// Server handle for managing the running server
 pub struct FastifyServerHandle {
@@ -155,7 +155,11 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
 
         // Call callback(null, address)
         let closure_ptr = callback as *const perry_runtime::ClosureHeader;
-        perry_runtime::js_closure_call2(closure_ptr, f64::from_bits(JSValue::null().bits()), addr_val);
+        perry_runtime::js_closure_call2(
+            closure_ptr,
+            f64::from_bits(JSValue::null().bits()),
+            addr_val,
+        );
     }
 
     println!("Server listening on http://0.0.0.0:{}", port);
@@ -252,14 +256,14 @@ async fn handle_request(
                 response = response.header(name, value);
             }
 
-            Ok(response.body(Full::new(Bytes::from(fastify_response.body))).unwrap())
-        }
-        Err(_) => {
-            Ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Full::new(Bytes::from("Handler error")))
+            Ok(response
+                .body(Full::new(Bytes::from(fastify_response.body)))
                 .unwrap())
         }
+        Err(_) => Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Full::new(Bytes::from("Handler error")))
+            .unwrap()),
     }
 }
 
@@ -279,10 +283,7 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
 
         // Try to receive a request (non-blocking with small timeout)
         let result = RUNTIME.block_on(async {
-            tokio::time::timeout(
-                std::time::Duration::from_millis(10),
-                request_rx.recv()
-            ).await
+            tokio::time::timeout(std::time::Duration::from_millis(10), request_rx.recv()).await
         });
 
         if let Ok(Some(pending)) = result {
@@ -301,11 +302,13 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
             let mut response_sent = false;
 
             // NaN-box the context handle with POINTER_TAG for hook calls
-            let nanboxed_ctx_for_hooks = f64::from_bits(0x7FFD_0000_0000_0000 | (ctx_handle as u64 & 0x0000_FFFF_FFFF_FFFF));
+            let nanboxed_ctx_for_hooks =
+                f64::from_bits(0x7FFD_0000_0000_0000 | (ctx_handle as u64 & 0x0000_FFFF_FFFF_FFFF));
 
             // Collect hook ptrs (copy i64 values to avoid holding borrow on app during hook execution)
             let on_request_hooks: Vec<ClosurePtr> = app.hooks.on_request.iter().copied().collect();
-            let pre_handler_hooks: Vec<ClosurePtr> = app.hooks.pre_handler.iter().copied().collect();
+            let pre_handler_hooks: Vec<ClosurePtr> =
+                app.hooks.pre_handler.iter().copied().collect();
 
             // Run onRequest hooks (e.g., auth middleware, rate limiting, CORS)
             for hook in &on_request_hooks {
@@ -354,10 +357,15 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                     if jsv.is_pointer() {
                         let ptr = jsv.as_pointer::<perry_runtime::Promise>();
                         // Try to treat it as a promise and wait for it
-                        if unsafe { perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise) } != 0 {
+                        if unsafe {
+                            perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise)
+                        } != 0
+                        {
                             wait_for_promise(ptr as *mut perry_runtime::Promise);
                             // Extract the resolved value from the promise
-                            final_result = unsafe { perry_runtime::js_promise_value(ptr as *mut perry_runtime::Promise) };
+                            final_result = unsafe {
+                                perry_runtime::js_promise_value(ptr as *mut perry_runtime::Promise)
+                            };
                         }
                     }
                 }
@@ -376,8 +384,14 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
 
                 // Ensure content-type is set
                 let mut final_response = response;
-                if !final_response.headers.iter().any(|(k, _)| k.to_lowercase() == "content-type") {
-                    final_response.headers.push(("content-type".to_string(), "application/json".to_string()));
+                if !final_response
+                    .headers
+                    .iter()
+                    .any(|(k, _)| k.to_lowercase() == "content-type")
+                {
+                    final_response
+                        .headers
+                        .push(("content-type".to_string(), "application/json".to_string()));
                 }
 
                 let _ = pending.response_tx.send(final_response);
@@ -667,7 +681,10 @@ mod tests {
         // Test header adding
         ctx.add_header("x-custom", "value");
         assert_eq!(ctx.response_headers.len(), 1);
-        assert_eq!(ctx.response_headers[0], ("x-custom".to_string(), "value".to_string()));
+        assert_eq!(
+            ctx.response_headers[0],
+            ("x-custom".to_string(), "value".to_string())
+        );
     }
 
     /// Test FastifyApp route management
@@ -692,6 +709,9 @@ mod tests {
         assert_eq!(app.match_route("DELETE", "/resource").unwrap().0.handler, 4);
         assert_eq!(app.match_route("PATCH", "/resource").unwrap().0.handler, 5);
         assert_eq!(app.match_route("HEAD", "/resource").unwrap().0.handler, 6);
-        assert_eq!(app.match_route("OPTIONS", "/resource").unwrap().0.handler, 7);
+        assert_eq!(
+            app.match_route("OPTIONS", "/resource").unwrap().0.handler,
+            7
+        );
     }
 }

@@ -7,15 +7,15 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::InvalidateRect;
 #[cfg(target_os = "windows")]
-use windows::Win32::System::SystemServices::{SS_ICON};
-#[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::SystemServices::SS_ICON;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, alloc_control_id, register_widget};
+use super::{alloc_control_id, register_widget, WidgetKind};
 
 fn str_from_header(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
@@ -59,7 +59,10 @@ thread_local! {
 /// so PNG transparency composites correctly over the parent's background (gradient or solid).
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn image_wnd_proc(
-    hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
 ) -> LRESULT {
     match msg {
         WM_PAINT => {
@@ -81,12 +84,21 @@ unsafe extern "system" fn image_wnd_proc(
                 let mut walk = hwnd;
                 for _ in 0..10 {
                     let parent = if let Some(p) = GetParent(walk).ok() {
-                        if p.0.is_null() { break; } else { p }
-                    } else { break };
+                        if p.0.is_null() {
+                            break;
+                        } else {
+                            p
+                        }
+                    } else {
+                        break;
+                    };
                     // Get child's position within parent
                     let mut rect = RECT::default();
                     let _ = GetWindowRect(walk, &mut rect);
-                    let mut pt = POINT { x: rect.left, y: rect.top };
+                    let mut pt = POINT {
+                        x: rect.left,
+                        y: rect.top,
+                    };
                     let _ = ScreenToClient(parent, &mut pt);
                     total_x += pt.x;
                     total_y += pt.y;
@@ -112,11 +124,15 @@ unsafe extern "system" fn image_wnd_proc(
             if let Some(path) = path {
                 let wide_path = to_wide(&path);
                 let mut token: usize = 0;
-                let input = GdiplusStartupInput { GdiplusVersion: 1, ..Default::default() };
+                let input = GdiplusStartupInput {
+                    GdiplusVersion: 1,
+                    ..Default::default()
+                };
                 if GdiplusStartup(&mut token, &input, std::ptr::null_mut()).0 == 0 {
                     let mut gp_image: *mut GpImage = std::ptr::null_mut();
                     let status = GdipLoadImageFromFile(
-                        windows::core::PCWSTR(wide_path.as_ptr()), &mut gp_image,
+                        windows::core::PCWSTR(wide_path.as_ptr()),
+                        &mut gp_image,
                     );
                     if status.0 == 0 && !gp_image.is_null() {
                         let mut rect = RECT::default();
@@ -128,9 +144,9 @@ unsafe extern "system" fn image_wnd_proc(
                         GdipCreateFromHDC(hdc, &mut graphics);
                         if !graphics.is_null() {
                             GdipSetInterpolationMode(graphics, InterpolationMode(7)); // HighQualityBicubic
-                            // Stretch to fill — layout engine controls the aspect ratio
-                            // via widget dimensions. No letterboxing to avoid gap areas
-                            // that can't show the parent's gradient background.
+                                                                                      // Stretch to fill — layout engine controls the aspect ratio
+                                                                                      // via widget dimensions. No letterboxing to avoid gap areas
+                                                                                      // that can't show the parent's gradient background.
                             GdipDrawImageRectI(graphics, gp_image, 0, 0, w, h);
                             GdipDeleteGraphics(graphics);
                         }
@@ -208,7 +224,10 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 None,
                 WS_CHILD | WS_VISIBLE,
-                0, 0, 100, 100,
+                0,
+                0,
+                100,
+                100,
                 super::get_parking_hwnd(),
                 HMENU(control_id as *mut _),
                 HINSTANCE::from(hinstance),
@@ -250,7 +269,10 @@ pub fn create_symbol(name_ptr: *const u8) -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
                 WINDOW_STYLE(SS_ICON.0 | WS_CHILD.0 | WS_VISIBLE.0),
-                0, 0, 32, 32,
+                0,
+                0,
+                32,
+                32,
                 super::get_parking_hwnd(),
                 HMENU(control_id as *mut _),
                 HINSTANCE::from(hinstance),
@@ -297,7 +319,9 @@ pub fn reload_bitmap_scaled(handle: i64, _w: i32, _h: i32) {
     // With GDI+ alpha-blended WM_PAINT, we just need to invalidate.
     // The paint handler reads the current client rect and draws at that size.
     if let Some(hwnd) = super::get_hwnd(handle) {
-        unsafe { let _ = InvalidateRect(hwnd, None, false); }
+        unsafe {
+            let _ = InvalidateRect(hwnd, None, false);
+        }
     }
 }
 
@@ -315,7 +339,15 @@ pub fn set_size(handle: i64, width: f64, height: f64) {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                let _ = SetWindowPos(hwnd, None, 0, 0, scaled_w, scaled_h, SWP_NOMOVE | SWP_NOZORDER);
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    scaled_w,
+                    scaled_h,
+                    SWP_NOMOVE | SWP_NOZORDER,
+                );
                 let _ = InvalidateRect(hwnd, None, false);
             }
         }
@@ -331,12 +363,15 @@ pub fn set_size(handle: i64, width: f64, height: f64) {
 /// On Win32, tinting is limited — we store the color for potential custom-draw use.
 pub fn set_tint(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     IMAGE_TINTS.with(|tints| {
-        tints.borrow_mut().insert(handle, ImageTint {
-            r: (r * 255.0) as u8,
-            g: (g * 255.0) as u8,
-            b: (b * 255.0) as u8,
-            a: (a * 255.0) as u8,
-        });
+        tints.borrow_mut().insert(
+            handle,
+            ImageTint {
+                r: (r * 255.0) as u8,
+                g: (g * 255.0) as u8,
+                b: (b * 255.0) as u8,
+                a: (a * 255.0) as u8,
+            },
+        );
     });
 
     #[cfg(target_os = "windows")]

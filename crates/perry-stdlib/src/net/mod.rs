@@ -23,8 +23,8 @@
 //! - `NR_PTR` return is `i64` and the codegen NaN-boxes with POINTER_TAG;
 //!   `NR_VOID` returns nothing and the codegen substitutes `undefined`.
 
-use perry_runtime::{ClosureHeader, JSValue, StringHeader, js_closure_call0, js_closure_call1};
 use perry_runtime::buffer::{js_buffer_alloc, BufferHeader};
+use perry_runtime::{js_closure_call0, js_closure_call1, ClosureHeader, JSValue, StringHeader};
 use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
@@ -129,8 +129,7 @@ fn scan_net_roots(mark: &mut dyn FnMut(f64)) {
                 for &cb in cb_vec.iter() {
                     if cb != 0 {
                         let boxed = f64::from_bits(
-                            0x7FFD_0000_0000_0000
-                                | (cb as u64 & 0x0000_FFFF_FFFF_FFFF),
+                            0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF),
                         );
                         mark(boxed);
                     }
@@ -343,10 +342,13 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
     let id = next_id();
     let (tx, mut rx) = mpsc::unbounded_channel::<SocketCommand>();
 
-    NET_SOCKETS.lock().unwrap().insert(id, SocketState {
-        cmd_tx: tx,
-        is_open: false,
-    });
+    NET_SOCKETS.lock().unwrap().insert(
+        id,
+        SocketState {
+            cmd_tx: tx,
+            is_open: false,
+        },
+    );
     NET_LISTENERS.lock().unwrap().insert(id, HashMap::new());
 
     spawn(async move {
@@ -375,7 +377,10 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
             },
             #[cfg(not(feature = "tls"))]
             Some(_) => {
-                push_event(PendingNetEvent::Error(id, "tls feature not compiled in".to_string()));
+                push_event(PendingNetEvent::Error(
+                    id,
+                    "tls feature not compiled in".to_string(),
+                ));
                 push_event(PendingNetEvent::Close(id));
                 mark_closed(id);
                 return;
@@ -612,7 +617,14 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
 
     let (reply_tx, reply_rx) = oneshot::channel::<Result<(), String>>();
     let verify = verify != 0.0;
-    if cmd_tx.send(SocketCommand::UpgradeTls { servername, verify, reply: reply_tx }).is_err() {
+    if cmd_tx
+        .send(SocketCommand::UpgradeTls {
+            servername,
+            verify,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
         let err = "socket task is gone".to_string();
         crate::common::async_bridge::spawn_for_promise(promise_ptr, async move {
             Err::<u64, String>(err)
@@ -686,9 +698,8 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 }
                 let bytes = msg.as_bytes();
                 let s = perry_runtime::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-                let s_f64 = f64::from_bits(
-                    0x7FFF_0000_0000_0000u64 | (s as u64 & 0x0000_FFFF_FFFF_FFFF)
-                );
+                let s_f64 =
+                    f64::from_bits(0x7FFF_0000_0000_0000u64 | (s as u64 & 0x0000_FFFF_FFFF_FFFF));
                 for cb in cbs {
                     if cb != 0 {
                         js_closure_call1(cb as *const ClosureHeader, s_f64);
@@ -711,7 +722,9 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
 }
 
 fn listeners_for(id: i64, event: &str) -> Vec<i64> {
-    NET_LISTENERS.lock().unwrap()
+    NET_LISTENERS
+        .lock()
+        .unwrap()
         .get(&id)
         .and_then(|m| m.get(event).cloned())
         .unwrap_or_default()

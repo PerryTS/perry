@@ -1,6 +1,6 @@
+use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2::{msg_send};
-use objc2_app_kit::{NSStackView, NSView, NSUserInterfaceLayoutOrientation, NSLayoutAttribute};
+use objc2_app_kit::{NSLayoutAttribute, NSStackView, NSUserInterfaceLayoutOrientation, NSView};
 use objc2_foundation::MainThreadMarker;
 
 /// Set distribution to Fill (0) so children fill available space based on
@@ -33,7 +33,10 @@ pub fn create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right:
     set_gravity_distribution(&stack);
     unsafe {
         stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
-            top, left, bottom, right,
+            top,
+            left,
+            bottom,
+            right,
         });
     }
     let view: Retained<NSView> = unsafe { Retained::cast_unchecked(stack) };

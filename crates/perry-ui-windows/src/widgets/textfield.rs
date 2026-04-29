@@ -6,17 +6,17 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::Graphics::Gdi::{CreateSolidBrush, InvalidateRect, SetBkColor, HBRUSH, HDC};
+#[cfg(target_os = "windows")]
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Controls::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 #[cfg(target_os = "windows")]
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-#[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::{HDC, HBRUSH, CreateSolidBrush, SetBkColor, InvalidateRect};
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, alloc_control_id, register_widget};
+use super::{alloc_control_id, register_widget, WidgetKind};
 
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
@@ -66,18 +66,34 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
                 WINDOW_EX_STYLE::default(),
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
-                WINDOW_STYLE(ES_AUTOHSCROLL as u32 | ES_LEFT as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | WS_BORDER.0),
-                0, 0, 200, 30,
+                WINDOW_STYLE(
+                    ES_AUTOHSCROLL as u32
+                        | ES_LEFT as u32
+                        | WS_CHILD.0
+                        | WS_VISIBLE.0
+                        | WS_TABSTOP.0
+                        | WS_BORDER.0,
+                ),
+                0,
+                0,
+                200,
+                30,
                 super::get_parking_hwnd(),
                 HMENU(control_id as *mut _),
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
             // Set placeholder text (cue banner)
             if !placeholder.is_empty() {
                 let wide = to_wide(placeholder);
-                SendMessageW(hwnd, EM_SETCUEBANNER, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+                SendMessageW(
+                    hwnd,
+                    EM_SETCUEBANNER,
+                    WPARAM(0),
+                    LPARAM(wide.as_ptr() as isize),
+                );
             }
 
             let handle = register_widget(hwnd, WidgetKind::TextField, control_id);
@@ -108,8 +124,12 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         });
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-            unsafe { perry_geisterhand_register(handle, 1, 1, on_change, placeholder_ptr); }
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 1, 1, on_change, placeholder_ptr);
+            }
         }
         handle
     }
@@ -142,7 +162,8 @@ pub fn handle_change(handle: i64) {
             });
             if let Some(ptr) = ptr {
                 let bytes = text.as_bytes();
-                let str_ptr = perry_runtime::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                let str_ptr =
+                    perry_runtime::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                 let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
                 unsafe { js_closure_call1(ptr, nanboxed) };
             }
@@ -277,7 +298,8 @@ pub fn get_string(handle: i64) -> i64 {
                 String::from_utf16_lossy(&buf[..len as usize])
             };
             let bytes = text.as_bytes();
-            return perry_runtime::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
+            return perry_runtime::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+                as i64;
         }
     }
     0

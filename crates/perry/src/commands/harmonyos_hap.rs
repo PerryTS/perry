@@ -61,8 +61,7 @@ const PLACEHOLDER_ICON_PNG: &[u8] = &[
     0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
     0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, // 8-bit RGB
     0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, // IDAT
-    0x54, 0x78, 0x9C, 0x62, 0xFF, 0xFF, 0xFF, 0x3F,
-    0x00, 0x05, 0xFE, 0x02, 0xFE, 0xDC, 0xCC, 0x59,
+    0x54, 0x78, 0x9C, 0x62, 0xFF, 0xFF, 0xFF, 0x3F, 0x00, 0x05, 0xFE, 0x02, 0xFE, 0xDC, 0xCC, 0x59,
     0xE7, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, // IEND
     0x44, 0xAE, 0x42, 0x60, 0x82,
 ];
@@ -130,7 +129,10 @@ pub fn build_hap(args: &HapBuildArgs) -> Result<HapBuildResult> {
             }
             Err(e) => {
                 if !args.quiet {
-                    eprintln!("  harmonyos: ets-loader run failed ({}); shipping .ets source.", e);
+                    eprintln!(
+                        "  harmonyos: ets-loader run failed ({}); shipping .ets source.",
+                        e
+                    );
                 }
                 false
             }
@@ -142,19 +144,32 @@ pub fn build_hap(args: &HapBuildArgs) -> Result<HapBuildResult> {
     let unsigned_hap = output_dir.join(format!("{}.unsigned.hap", args.stem));
     zip_staging(&staging, &unsigned_hap)?;
 
-    let signed = match sign_hap(&unsigned_hap, output_dir, args.stem, args.sdk_native, args.quiet) {
+    let signed = match sign_hap(
+        &unsigned_hap,
+        output_dir,
+        args.stem,
+        args.sdk_native,
+        args.quiet,
+    ) {
         Ok(signed_path) => {
             // Remove the unsigned intermediate once signing succeeds — the
             // staging dir is already kept for inspection; two .hap files in
             // the output dir is confusing.
             let _ = fs::remove_file(&unsigned_hap);
-            return Ok(HapBuildResult { hap_path: signed_path, signed: true, abc_compiled });
+            return Ok(HapBuildResult {
+                hap_path: signed_path,
+                signed: true,
+                abc_compiled,
+            });
         }
         Err(e) => {
             if !args.quiet {
-                eprintln!("  harmonyos: hap not signed ({}). Set PERRY_HARMONYOS_P12, \
+                eprintln!(
+                    "  harmonyos: hap not signed ({}). Set PERRY_HARMONYOS_P12, \
                            PERRY_HARMONYOS_P12_PASSWORD, and PERRY_HARMONYOS_PROFILE \
-                           to produce a signed HAP.", e);
+                           to produce a signed HAP.",
+                    e
+                );
             }
             false
         }
@@ -425,11 +440,12 @@ fn compile_ets_to_abc(sdk_native: &Path, staging: &Path, quiet: bool) -> Result<
     } else {
         "build"
     };
-    let exe_suffix = if cfg!(target_os = "windows") { ".exe" } else { "" };
-    let es2abc = ets_loader_dir.join(format!(
-        "bin/ark/{}/bin/es2abc{}",
-        host_dir, exe_suffix
-    ));
+    let exe_suffix = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    let es2abc = ets_loader_dir.join(format!("bin/ark/{}/bin/es2abc{}", host_dir, exe_suffix));
     if !es2abc.exists() {
         if !quiet {
             eprintln!(
@@ -453,7 +469,10 @@ fn compile_ets_to_abc(sdk_native: &Path, staging: &Path, quiet: bool) -> Result<
     }
     if inputs.is_empty() {
         if !quiet {
-            eprintln!("  harmonyos: no .ets files found under {}", ets_dir.display());
+            eprintln!(
+                "  harmonyos: no .ets files found under {}",
+                ets_dir.display()
+            );
         }
         return Ok(false);
     }
@@ -547,38 +566,46 @@ fn sign_hap(
     let p12 = std::env::var("PERRY_HARMONYOS_P12")
         .ok()
         .or_else(|| saved_h.and_then(|h| h.p12_path.clone()))
-        .ok_or_else(|| anyhow!(
-            "PERRY_HARMONYOS_P12 not set (path to .p12 keystore). \
+        .ok_or_else(|| {
+            anyhow!(
+                "PERRY_HARMONYOS_P12 not set (path to .p12 keystore). \
              Run `perry setup harmonyos` once to configure, or export the env var."
-        ))?;
+            )
+        })?;
     let p12_password = std::env::var("PERRY_HARMONYOS_P12_PASSWORD")
         .ok()
         .or_else(|| saved_h.and_then(|h| h.p12_password.clone()))
-        .ok_or_else(|| anyhow!(
-            "PERRY_HARMONYOS_P12_PASSWORD not set (keystore password). \
+        .ok_or_else(|| {
+            anyhow!(
+                "PERRY_HARMONYOS_P12_PASSWORD not set (keystore password). \
              Run `perry setup harmonyos` once to configure."
-        ))?;
+            )
+        })?;
     let cert_chain = std::env::var("PERRY_HARMONYOS_CERT")
         .ok()
         .or_else(|| saved_h.and_then(|h| h.cert_path.clone()))
-        .ok_or_else(|| anyhow!(
-            "PERRY_HARMONYOS_CERT not set (path to the cert chain .cer/.pem — DevEco \
+        .ok_or_else(|| {
+            anyhow!(
+                "PERRY_HARMONYOS_CERT not set (path to the cert chain .cer/.pem — DevEco \
              auto-signing names it <bundleName>.cer). Distinct from PERRY_HARMONYOS_PROFILE."
-        ))?;
+            )
+        })?;
     let profile = std::env::var("PERRY_HARMONYOS_PROFILE")
         .ok()
         .or_else(|| saved_h.and_then(|h| h.profile_path.clone()))
-        .ok_or_else(|| anyhow!(
-            "PERRY_HARMONYOS_PROFILE not set (path to the signed provisioning \
+        .ok_or_else(|| {
+            anyhow!(
+                "PERRY_HARMONYOS_PROFILE not set (path to the signed provisioning \
              profile .p7b — DevEco auto-signing names it <bundleName>.p7b)."
-        ))?;
+            )
+        })?;
 
     // -keyPwd unlocks the private-key entry inside the keystore. Often the
     // same value as -keystorePwd, but `hap-sign-tool` expects them as
     // separate args. DevEco-generated p12s always have a key password.
     // Default to the keystore password if the caller didn't split them.
-    let key_password = std::env::var("PERRY_HARMONYOS_KEY_PASSWORD")
-        .unwrap_or_else(|_| p12_password.clone());
+    let key_password =
+        std::env::var("PERRY_HARMONYOS_KEY_PASSWORD").unwrap_or_else(|_| p12_password.clone());
 
     // DevEco's auto-signing writes the alias into build-profile.json5;
     // a hardcoded string doesn't work. Default to "debugKey" (what DevEco
@@ -588,8 +615,8 @@ fn sign_hap(
         .or_else(|| saved_h.and_then(|h| h.key_alias.clone()))
         .unwrap_or_else(|| "debugKey".to_string());
 
-    let sign_alg = std::env::var("PERRY_HARMONYOS_SIGN_ALG")
-        .unwrap_or_else(|_| "SHA256withECDSA".to_string());
+    let sign_alg =
+        std::env::var("PERRY_HARMONYOS_SIGN_ALG").unwrap_or_else(|_| "SHA256withECDSA".to_string());
 
     let hapsign = resolve_hapsign_tool(sdk_native)?;
     let signed = output_dir.join(format!("{}.hap", stem));
@@ -640,10 +667,7 @@ mod tests {
     /// "shipped as unsigned, source-mode" path.
     #[test]
     fn assembles_unsigned_hap_with_expected_layout() {
-        let tmp = std::env::temp_dir().join(format!(
-            "perry-hap-test-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("perry-hap-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("ets/entryability")).unwrap();
         fs::write(tmp.join("libhi.so"), b"fake so").unwrap();
@@ -699,7 +723,8 @@ mod tests {
             assert!(
                 names.iter().any(|n| n == r),
                 "HAP missing {} — members: {:?}",
-                r, names
+                r,
+                names
             );
         }
 
@@ -720,9 +745,21 @@ mod tests {
             app.read_to_string(&mut s).unwrap();
         }
         assert!(s.contains("com.perry.app.hi"), "bundle fallback: {}", s);
-        assert!(s.contains("\"minAPIVersion\""), "app.json5 missing minAPIVersion: {}", s);
-        assert!(s.contains("\"targetAPIVersion\""), "app.json5 missing targetAPIVersion: {}", s);
-        assert!(s.contains("\"apiReleaseType\": \"Release\""), "app.json5 missing apiReleaseType: {}", s);
+        assert!(
+            s.contains("\"minAPIVersion\""),
+            "app.json5 missing minAPIVersion: {}",
+            s
+        );
+        assert!(
+            s.contains("\"targetAPIVersion\""),
+            "app.json5 missing targetAPIVersion: {}",
+            s
+        );
+        assert!(
+            s.contains("\"apiReleaseType\": \"Release\""),
+            "app.json5 missing apiReleaseType: {}",
+            s
+        );
 
         // pack.info: the `summary.modules[0].name` and `.package` must be
         // the *module* name ("entry"), not the bundleName. The apiVersion
@@ -734,8 +771,8 @@ mod tests {
             p.read_to_string(&mut pack).unwrap();
         }
         // Quick structural check: parse as JSON and walk the paths.
-        let pack_json: serde_json::Value = serde_json::from_str(&pack)
-            .expect("pack.info must be valid JSON (strict, not JSON5)");
+        let pack_json: serde_json::Value =
+            serde_json::from_str(&pack).expect("pack.info must be valid JSON (strict, not JSON5)");
         assert_eq!(
             pack_json["summary"]["modules"][0]["name"], "entry",
             "pack.info modules[0].name must be module name, not bundleName"
@@ -771,7 +808,10 @@ fn resolve_hapsign_tool(sdk_native: Option<&Path>) -> Result<PathBuf> {
         if p.exists() {
             return Ok(p);
         }
-        return Err(anyhow!("PERRY_HARMONYOS_HAPSIGN points at a missing file: {}", p.display()));
+        return Err(anyhow!(
+            "PERRY_HARMONYOS_HAPSIGN points at a missing file: {}",
+            p.display()
+        ));
     }
     if let Some(sdk) = sdk_native {
         // Ships under toolchains/lib in recent DevEco releases; walk a small
@@ -787,5 +827,7 @@ fn resolve_hapsign_tool(sdk_native: Option<&Path>) -> Result<PathBuf> {
             }
         }
     }
-    Err(anyhow!("hap-sign-tool.jar not found in OHOS SDK; set PERRY_HARMONYOS_HAPSIGN to its path"))
+    Err(anyhow!(
+        "hap-sign-tool.jar not found in OHOS SDK; set PERRY_HARMONYOS_HAPSIGN to its path"
+    ))
 }

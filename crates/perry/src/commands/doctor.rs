@@ -92,7 +92,9 @@ fn check_clang() -> CheckResult {
 
 #[cfg(target_os = "windows")]
 fn find_xwin_sysroot() -> Option<PathBuf> {
-    let explicit = std::env::var("PERRY_WINDOWS_SYSROOT").ok().map(PathBuf::from);
+    let explicit = std::env::var("PERRY_WINDOWS_SYSROOT")
+        .ok()
+        .map(PathBuf::from);
     let default = dirs::data_local_dir().map(|p| p.join("perry").join("windows-sdk"));
     for candidate in [explicit, default].into_iter().flatten() {
         if candidate.join("crt").join("lib").join("x86_64").exists()
@@ -136,7 +138,8 @@ fn check_system_linker() -> CheckResult {
 
         // Fall back to MSVC detection
         let mut linker = PathBuf::from("link.exe");
-        let vswhere = PathBuf::from(r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe");
+        let vswhere =
+            PathBuf::from(r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe");
         if vswhere.exists() {
             if let Ok(output) = Command::new(&vswhere)
                 .args(msvc_vswhere_installation_path_args())
@@ -310,17 +313,18 @@ pub fn run(args: DoctorArgs, format: OutputFormat, use_color: bool) -> Result<()
             }
 
             for check in &checks {
-                let (emoji, color_fn): (_, fn(&str) -> console::StyledObject<&str>) = match check.status {
-                    CheckStatus::Ok => (CHECK, |s| style(s).green()),
-                    CheckStatus::Warning => {
-                        has_warnings = true;
-                        (WARN, |s| style(s).yellow())
-                    }
-                    CheckStatus::Error => {
-                        has_errors = true;
-                        (CROSS, |s| style(s).red())
-                    }
-                };
+                let (emoji, color_fn): (_, fn(&str) -> console::StyledObject<&str>) =
+                    match check.status {
+                        CheckStatus::Ok => (CHECK, |s| style(s).green()),
+                        CheckStatus::Warning => {
+                            has_warnings = true;
+                            (WARN, |s| style(s).yellow())
+                        }
+                        CheckStatus::Error => {
+                            has_errors = true;
+                            (CROSS, |s| style(s).red())
+                        }
+                    };
 
                 let status_str = match check.status {
                     CheckStatus::Ok => "OK",

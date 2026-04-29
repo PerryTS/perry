@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Mutex;
 
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
@@ -20,16 +20,20 @@ fn pump_microtasks() {
         let ran = js_promise_run_microtasks();
         if ran > 0 {
             __android_log_print(
-                3, b"PerryCallback\0".as_ptr(),
+                3,
+                b"PerryCallback\0".as_ptr(),
                 b"pump_microtasks: ran %d tasks\0".as_ptr(),
                 ran,
             );
             // Keep pumping until no more tasks
             loop {
                 let more = js_promise_run_microtasks();
-                if more == 0 { break; }
+                if more == 0 {
+                    break;
+                }
                 __android_log_print(
-                    3, b"PerryCallback\0".as_ptr(),
+                    3,
+                    b"PerryCallback\0".as_ptr(),
                     b"pump_microtasks: ran %d more tasks\0".as_ptr(),
                     more,
                 );
@@ -51,9 +55,11 @@ pub fn register(closure_f64: f64) -> i64 {
     map.insert(key, closure_f64);
     unsafe {
         __android_log_print(
-            3, b"PerryCallback\0".as_ptr(),
+            3,
+            b"PerryCallback\0".as_ptr(),
             b"register: key=%lld bits=0x%llx\0".as_ptr(),
-            key, closure_f64.to_bits() as i64,
+            key,
+            closure_f64.to_bits() as i64,
         );
     }
     key
@@ -72,13 +78,16 @@ pub fn invoke0(key: i64) {
         let closure_ptr = closure_f64.to_bits() as *const u8;
         unsafe {
             __android_log_print(
-                3, b"PerryCallback\0".as_ptr(),
+                3,
+                b"PerryCallback\0".as_ptr(),
                 b"invoke0: key=%lld ptr=%p\0".as_ptr(),
-                key, closure_ptr,
+                key,
+                closure_ptr,
             );
             js_closure_call0(closure_ptr);
             __android_log_print(
-                3, b"PerryCallback\0".as_ptr(),
+                3,
+                b"PerryCallback\0".as_ptr(),
                 b"invoke0: closure returned for key=%lld\0".as_ptr(),
                 key,
             );
@@ -86,7 +95,8 @@ pub fn invoke0(key: i64) {
     } else {
         unsafe {
             __android_log_print(
-                3, b"PerryCallback\0".as_ptr(),
+                3,
+                b"PerryCallback\0".as_ptr(),
                 b"invoke0: key=%lld NOT FOUND\0".as_ptr(),
                 key,
             );
@@ -170,9 +180,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallbackWithString(
     key: jni::sys::jlong,
     text: jni::objects::JString,
 ) {
-    let rust_str: String = env.get_string(&text)
-        .map(|s| s.into())
-        .unwrap_or_default();
+    let rust_str: String = env.get_string(&text).map(|s| s.into()).unwrap_or_default();
     let bytes = rust_str.as_bytes();
     let nanboxed = unsafe {
         let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);

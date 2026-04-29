@@ -17,7 +17,10 @@ pub struct Violation {
 
 pub fn run(root: &Path) -> Result<Vec<Violation>> {
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -25,8 +28,8 @@ pub fn run(root: &Path) -> Result<Vec<Violation>> {
         if path.extension().and_then(|s| s.to_str()) != Some("md") {
             continue;
         }
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         scan_file(path, &text, &mut out);
     }
     out.sort_by(|a, b| (a.file.clone(), a.line).cmp(&(b.file.clone(), b.line)));
