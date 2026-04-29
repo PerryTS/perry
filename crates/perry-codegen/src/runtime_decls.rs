@@ -857,6 +857,50 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_response_static_redirect", DOUBLE, &[I64, DOUBLE]);
 
     // ──────────────────────────────────────────────────────────────────
+    // Web Streams API (issue #237) — perry-stdlib/src/streams.rs +
+    // blob.stream() / response.body bridge in perry-stdlib/src/fetch.rs.
+    // Handles are numeric registry ids carried as f64; promise-returning
+    // FFIs return *mut Promise (I64) which codegen NaN-boxes via
+    // nanbox_pointer_inline.
+    // ──────────────────────────────────────────────────────────────────
+    module.declare_function("js_blob_stream", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_response_body", DOUBLE, &[DOUBLE]);
+    // ReadableStream constructor + methods.
+    module.declare_function("js_readable_stream_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_readable_stream_get_reader", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_readable_stream_locked", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_readable_stream_cancel", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_readable_stream_tee", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_readable_stream_pipe_to", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_readable_stream_pipe_through", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_readable_stream_controller_enqueue", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_readable_stream_controller_close", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_readable_stream_controller_error", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_readable_stream_controller_desired_size", DOUBLE, &[DOUBLE]);
+    // ReadableStreamDefaultReader.
+    module.declare_function("js_reader_read", I64, &[DOUBLE]);
+    module.declare_function("js_reader_release_lock", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_reader_closed", I64, &[DOUBLE]);
+    module.declare_function("js_reader_cancel", I64, &[DOUBLE, DOUBLE]);
+    // WritableStream + Writer.
+    module.declare_function("js_writable_stream_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_writable_stream_get_writer", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_writable_stream_locked", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_writable_stream_close", I64, &[DOUBLE]);
+    module.declare_function("js_writable_stream_abort", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_writer_write", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_writer_close", I64, &[DOUBLE]);
+    module.declare_function("js_writer_abort", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_writer_release_lock", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_writer_closed", I64, &[DOUBLE]);
+    module.declare_function("js_writer_ready", I64, &[DOUBLE]);
+    module.declare_function("js_writer_desired_size", DOUBLE, &[DOUBLE]);
+    // TransformStream.
+    module.declare_function("js_transform_stream_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_transform_stream_readable", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_transform_stream_writable", DOUBLE, &[DOUBLE]);
+
+    // ──────────────────────────────────────────────────────────────────
     // AbortController / AbortSignal — perry-runtime/src/url.rs.
     // Returns *mut ObjectHeader (i64 pointer) — codegen NaN-boxes with
     // POINTER_TAG so regular property get can read fields.

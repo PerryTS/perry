@@ -3058,6 +3058,116 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             result.push(Stmt::Switch { discriminant, cases });
         }
         ast::Stmt::ForOf(for_of_stmt) => {
+            // --- Issue #237: `for await (const c of <ReadableStream>)` ---
+            // Lower to a getReader/read loop so the body sees Uint8Array
+            // chunks. Detect by checking the iterable's registered native
+            // instance type. Falls through to the generic async-iterator
+            // path if not a ReadableStream.
+            if for_of_stmt.is_await {
+                let is_readable_stream = if let ast::Expr::Ident(ident) = &*for_of_stmt.right {
+                    matches!(
+                        ctx.lookup_native_instance(ident.sym.as_ref()),
+                        Some((_, "ReadableStream"))
+                    )
+                } else { false };
+
+                if is_readable_stream {
+                    let scope_mark = ctx.push_block_scope();
+                    let stream_expr = lower_expr(ctx, &for_of_stmt.right)?;
+
+                    // const __reader = stream.getReader();
+                    let reader_id = ctx.fresh_local();
+                    ctx.locals.push((format!("__reader_{}", reader_id), reader_id, Type::Any));
+                    ctx.register_native_instance(
+                        format!("__reader_{}", reader_id),
+                        "readable_stream_reader".to_string(),
+                        "ReadableStreamDefaultReader".to_string(),
+                    );
+                    result.push(Stmt::Let {
+                        id: reader_id,
+                        name: format!("__reader_{}", reader_id),
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(Expr::NativeMethodCall {
+                            module: "readable_stream".to_string(),
+                            class_name: Some("ReadableStream".to_string()),
+                            object: Some(Box::new(stream_expr)),
+                            method: "getReader".to_string(),
+                            args: vec![],
+                        }),
+                    });
+
+                    // let __res = await __reader.read();
+                    let res_id = ctx.fresh_local();
+                    ctx.locals.push((format!("__res_{}", res_id), res_id, Type::Any));
+                    let read_call = || Expr::Await(Box::new(Expr::NativeMethodCall {
+                        module: "readable_stream_reader".to_string(),
+                        class_name: Some("ReadableStreamDefaultReader".to_string()),
+                        object: Some(Box::new(Expr::LocalGet(reader_id))),
+                        method: "read".to_string(),
+                        args: vec![],
+                    }));
+                    result.push(Stmt::Let {
+                        id: res_id,
+                        name: format!("__res_{}", res_id),
+                        ty: Type::Any,
+                        mutable: true,
+                        init: Some(read_call()),
+                    });
+
+                    let item_name = if let ast::ForHead::VarDecl(var_decl) = &for_of_stmt.left {
+                        if let Some(decl) = var_decl.decls.first() {
+                            if let ast::Pat::Ident(ident) = &decl.name {
+                                ident.id.sym.to_string()
+                            } else { "__chunk".to_string() }
+                        } else { "__chunk".to_string() }
+                    } else { "__chunk".to_string() };
+                    let item_id = ctx.define_local(item_name.clone(), Type::Any);
+
+                    let mut body_stmts: Vec<Stmt> = Vec::new();
+                    body_stmts.push(Stmt::Let {
+                        id: item_id,
+                        name: item_name,
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(res_id)),
+                            property: "value".to_string(),
+                        }),
+                    });
+                    let user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
+                    body_stmts.extend(user_body);
+                    body_stmts.push(Stmt::Expr(Expr::LocalSet(
+                        res_id,
+                        Box::new(read_call()),
+                    )));
+
+                    result.push(Stmt::While {
+                        condition: Expr::Unary {
+                            op: UnaryOp::Not,
+                            operand: Box::new(Expr::PropertyGet {
+                                object: Box::new(Expr::LocalGet(res_id)),
+                                property: "done".to_string(),
+                            }),
+                        },
+                        body: body_stmts,
+                    });
+
+                    // reader.releaseLock(); — best-effort cleanup so the
+                    // stream stays usable after the loop body falls out.
+                    result.push(Stmt::Expr(Expr::NativeMethodCall {
+                        module: "readable_stream_reader".to_string(),
+                        class_name: Some("ReadableStreamDefaultReader".to_string()),
+                        object: Some(Box::new(Expr::LocalGet(reader_id))),
+                        method: "releaseLock".to_string(),
+                        args: vec![],
+                    }));
+
+                    ctx.pop_block_scope(scope_mark);
+                    return Ok(result);
+                }
+            }
+
             // --- Iterator-protocol path for generator function calls ---
             // Detect: `for [await] (const x of genFunc(...))` where genFunc is
             // function* / async function*. Without this path the for-of falls

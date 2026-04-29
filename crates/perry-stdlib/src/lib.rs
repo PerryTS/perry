@@ -75,6 +75,12 @@ pub mod axios;
 #[cfg(feature = "http-client")]
 pub use axios::*;
 
+// === Web Streams API (issue #237) ===
+#[cfg(feature = "http-client")]
+pub mod streams;
+#[cfg(feature = "http-client")]
+pub use streams::*;
+
 // === WebSocket ===
 #[cfg(feature = "websocket")]
 pub mod ws;

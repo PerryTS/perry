@@ -1225,6 +1225,50 @@ pub unsafe extern "C" fn js_blob_slice(
     alloc_blob(BlobData { body: slice, content_type: new_type }) as f64
 }
 
+// ----------------- Web Streams bridge helpers (issue #237) -----------------
+//
+// `streams.rs` reaches in here for the bytes backing `blob.stream()` and
+// `response.body`. Going through these `pub(crate)` shims (rather than
+// re-implementing the `BLOB_REGISTRY` / `FETCH_RESPONSES` lookups in
+// `streams.rs`) keeps the registry types private to fetch.rs.
+
+/// Clone the bytes backing the given Blob handle. Returns `None` for an
+/// unknown handle.
+#[doc(hidden)]
+pub fn blob_bytes_clone(blob_id: usize) -> Option<Vec<u8>> {
+    BLOB_REGISTRY.lock().unwrap().get(&blob_id).map(|b| b.body.clone())
+}
+
+/// Clone the body bytes of the given fetch Response handle. Returns
+/// `None` for an unknown handle.
+#[doc(hidden)]
+pub fn response_bytes_clone(resp_id: usize) -> Option<Vec<u8>> {
+    FETCH_RESPONSES.lock().unwrap().get(&resp_id).map(|r| r.body.clone())
+}
+
+/// `blob.stream()` — returns a single-chunk ReadableStream handle (f64,
+/// numeric registry id) over the blob's byte payload. Closes the stream
+/// after the one chunk is delivered.
+#[no_mangle]
+pub unsafe extern "C" fn js_blob_stream(handle: f64) -> f64 {
+    let id = handle as usize;
+    let bytes = blob_bytes_clone(id).unwrap_or_default();
+    crate::streams::alloc_readable_from_bytes(bytes) as f64
+}
+
+/// `response.body` — returns a single-chunk ReadableStream handle over
+/// the buffered response body. Returns `null`-tagged f64 for an unknown
+/// response handle (matching the spec's `Response.body: ReadableStream
+/// | null`).
+#[no_mangle]
+pub unsafe extern "C" fn js_response_body(handle: f64) -> f64 {
+    let id = handle as usize;
+    match response_bytes_clone(id) {
+        Some(bytes) => crate::streams::alloc_readable_from_bytes(bytes) as f64,
+        None => f64::from_bits(TAG_NULL),
+    }
+}
+
 /// Response.json(value) — static method. Allocates a Response with JSON-stringified body
 /// and Content-Type: application/json. The value is passed as NaN-boxed JSValue bits (f64).
 #[no_mangle]

@@ -20,6 +20,93 @@ use crate::lower_types::extract_ts_type_with_ctx;
 use super::{lower_expr, LoweringContext};
 
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
+            // Issue #237: pre-register the controller param of every
+            // `start` / `pull` / `cancel` / `transform` / `flush` callback
+            // passed to `new ReadableStream({...})` /
+            // `new TransformStream({...})` as a native instance so
+            // `controller.enqueue(...)` etc. dispatch through the streams
+            // arms in lower_call.rs. Without this hook the callback's
+            // `controller` param has no type-tagged binding and method
+            // calls on it silently no-op. Each field maps to (param_index,
+            // module, class_name) — TransformStream's `transform(chunk,
+            // controller)` controller is param 1, the rest are param 0.
+            if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+                let cls = ident.sym.as_ref();
+                let field_specs: &[(&'static str, usize, &'static str, &'static str)] = match cls {
+                    "ReadableStream" => &[
+                        ("start", 0, "readable_stream", "ReadableStream"),
+                        ("pull", 0, "readable_stream", "ReadableStream"),
+                    ],
+                    "TransformStream" => &[
+                        ("transform", 1, "readable_stream", "ReadableStream"),
+                        ("flush", 0, "readable_stream", "ReadableStream"),
+                    ],
+                    _ => &[],
+                };
+                if !field_specs.is_empty() {
+                    if let Some(args) = new_expr.args.as_ref() {
+                        if let Some(first) = args.first() {
+                            if let ast::Expr::Object(obj_lit) = first.expr.as_ref() {
+                                for prop in &obj_lit.props {
+                                    if let ast::PropOrSpread::Prop(boxed_prop) = prop {
+                                        let mut handled = false;
+                                        match boxed_prop.as_ref() {
+                                            ast::Prop::KeyValue(kv) => {
+                                                let n = match &kv.key {
+                                                    ast::PropName::Ident(i) => Some(i.sym.as_ref()),
+                                                    ast::PropName::Str(s) => s.value.as_str(),
+                                                    _ => None,
+                                                };
+                                                if let Some(name) = n {
+                                                    if let Some((_, idx, mod_name, class_name)) = field_specs.iter().find(|(f, _, _, _)| *f == name) {
+                                                        let pat: Option<&ast::Pat> = match kv.value.as_ref() {
+                                                            ast::Expr::Arrow(arrow) => arrow.params.get(*idx),
+                                                            ast::Expr::Fn(fn_expr) => fn_expr.function.params.get(*idx).map(|p| &p.pat),
+                                                            _ => None,
+                                                        };
+                                                        if let Some(ast::Pat::Ident(pid)) = pat {
+                                                            ctx.register_native_instance(
+                                                                pid.id.sym.to_string(),
+                                                                mod_name.to_string(),
+                                                                class_name.to_string(),
+                                                            );
+                                                            handled = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            ast::Prop::Method(m) => {
+                                                let n = match &m.key {
+                                                    ast::PropName::Ident(i) => Some(i.sym.as_ref()),
+                                                    ast::PropName::Str(s) => s.value.as_str(),
+                                                    _ => None,
+                                                };
+                                                if let Some(name) = n {
+                                                    if let Some((_, idx, mod_name, class_name)) = field_specs.iter().find(|(f, _, _, _)| *f == name) {
+                                                        if let Some(param) = m.function.params.get(*idx) {
+                                                            if let ast::Pat::Ident(pid) = &param.pat {
+                                                                ctx.register_native_instance(
+                                                                    pid.id.sym.to_string(),
+                                                                    mod_name.to_string(),
+                                                                    class_name.to_string(),
+                                                                );
+                                                                handled = true;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                        let _ = handled;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Try to extract class name from callee
             match new_expr.callee.as_ref() {
                 ast::Expr::Ident(ident) => {

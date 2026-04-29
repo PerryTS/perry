@@ -361,6 +361,110 @@ pub(super) fn lower_builtin_new(
             Ok(Some(handle))
         }
 
+        // Issue #237: Web Streams API constructors. Source / sink / transform
+        // objects accept `start` / `pull` / `cancel` / `write` / `close` /
+        // `abort` / `transform` / `flush` callbacks; missing ones are passed
+        // as TAG_UNDEFINED so the runtime can no-op cleanly.
+        "ReadableStream" => {
+            let mut start = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut pull = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut cancel = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut hwm = double_literal(1.0);
+            if !args.is_empty() {
+                if let Some(props) = extract_options_fields(ctx, &args[0]) {
+                    for (k, vexpr) in &props {
+                        match k.as_str() {
+                            "start" => { start = lower_expr(ctx, vexpr)?; }
+                            "pull" => { pull = lower_expr(ctx, vexpr)?; }
+                            "cancel" => { cancel = lower_expr(ctx, vexpr)?; }
+                            _ => { let _ = lower_expr(ctx, vexpr)?; }
+                        }
+                    }
+                } else {
+                    let _ = lower_expr(ctx, &args[0])?;
+                }
+            }
+            if args.len() >= 2 {
+                if let Some(qprops) = extract_options_fields(ctx, &args[1]) {
+                    for (k, vexpr) in &qprops {
+                        if k == "highWaterMark" { hwm = lower_expr(ctx, vexpr)?; }
+                    }
+                }
+            }
+            let h = ctx.block().call(
+                DOUBLE,
+                "js_readable_stream_new",
+                &[(DOUBLE, &start), (DOUBLE, &pull), (DOUBLE, &cancel), (DOUBLE, &hwm)],
+            );
+            Ok(Some(h))
+        }
+
+        "WritableStream" => {
+            let mut write = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut close = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut abort = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut hwm = double_literal(1.0);
+            if !args.is_empty() {
+                if let Some(props) = extract_options_fields(ctx, &args[0]) {
+                    for (k, vexpr) in &props {
+                        match k.as_str() {
+                            "write" => { write = lower_expr(ctx, vexpr)?; }
+                            "close" => { close = lower_expr(ctx, vexpr)?; }
+                            "abort" => { abort = lower_expr(ctx, vexpr)?; }
+                            _ => { let _ = lower_expr(ctx, vexpr)?; }
+                        }
+                    }
+                } else {
+                    let _ = lower_expr(ctx, &args[0])?;
+                }
+            }
+            if args.len() >= 2 {
+                if let Some(qprops) = extract_options_fields(ctx, &args[1]) {
+                    for (k, vexpr) in &qprops {
+                        if k == "highWaterMark" { hwm = lower_expr(ctx, vexpr)?; }
+                    }
+                }
+            }
+            let h = ctx.block().call(
+                DOUBLE,
+                "js_writable_stream_new",
+                &[(DOUBLE, &write), (DOUBLE, &close), (DOUBLE, &abort), (DOUBLE, &hwm)],
+            );
+            Ok(Some(h))
+        }
+
+        "TransformStream" => {
+            let mut transform = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut flush = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut hwm = double_literal(1.0);
+            if !args.is_empty() {
+                if let Some(props) = extract_options_fields(ctx, &args[0]) {
+                    for (k, vexpr) in &props {
+                        match k.as_str() {
+                            "transform" => { transform = lower_expr(ctx, vexpr)?; }
+                            "flush" => { flush = lower_expr(ctx, vexpr)?; }
+                            _ => { let _ = lower_expr(ctx, vexpr)?; }
+                        }
+                    }
+                } else {
+                    let _ = lower_expr(ctx, &args[0])?;
+                }
+            }
+            if args.len() >= 2 {
+                if let Some(qprops) = extract_options_fields(ctx, &args[1]) {
+                    for (k, vexpr) in &qprops {
+                        if k == "highWaterMark" { hwm = lower_expr(ctx, vexpr)?; }
+                    }
+                }
+            }
+            let h = ctx.block().call(
+                DOUBLE,
+                "js_transform_stream_new",
+                &[(DOUBLE, &transform), (DOUBLE, &flush), (DOUBLE, &hwm)],
+            );
+            Ok(Some(h))
+        }
+
         "Promise" => {
             // `new Promise((resolve, reject) => { ... })` — the runtime's
             // `js_promise_new_with_executor` takes the closure, allocates

@@ -1314,6 +1314,19 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 ctx.register_native_instance(name.clone(), "Request".to_string(), "Request".to_string());
                                 ctx.uses_fetch = true;
                             }
+                            // Issue #237: Web Streams API constructors.
+                            "ReadableStream" => {
+                                ctx.register_native_instance(name.clone(), "readable_stream".to_string(), "ReadableStream".to_string());
+                                ctx.uses_fetch = true;
+                            }
+                            "WritableStream" => {
+                                ctx.register_native_instance(name.clone(), "writable_stream".to_string(), "WritableStream".to_string());
+                                ctx.uses_fetch = true;
+                            }
+                            "TransformStream" => {
+                                ctx.register_native_instance(name.clone(), "transform_stream".to_string(), "TransformStream".to_string());
+                                ctx.uses_fetch = true;
+                            }
                             _ => {}
                         }
                     }
@@ -1396,6 +1409,82 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             if c == "Blob" {
                                                 ctx.register_native_instance(name.clone(), "blob".to_string(), "Blob".to_string());
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Issue #237: Web Streams chained-typed-method bindings.
+                // Recognize chained method/property forms that return a new
+                // streams native instance so subsequent dispatch routes to
+                // the right `module == "..."` arm in lower_call.rs.
+                if let ast::Expr::Call(call_expr) = init_expr.as_ref() {
+                    if let ast::Callee::Expr(callee) = &call_expr.callee {
+                        if let ast::Expr::Member(member) = callee.as_ref() {
+                            if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                                if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                                    let m = prop_ident.sym.as_ref().to_string();
+                                    let class_owned = ctx
+                                        .lookup_native_instance(obj_ident.sym.as_ref())
+                                        .map(|(_, c)| c.to_string());
+                                    if let Some(c) = class_owned {
+                                        if m == "stream" && c == "Blob" {
+                                            ctx.register_native_instance(name.clone(), "readable_stream".to_string(), "ReadableStream".to_string());
+                                        }
+                                        if m == "getReader" && c == "ReadableStream" {
+                                            ctx.register_native_instance(name.clone(), "readable_stream_reader".to_string(), "ReadableStreamDefaultReader".to_string());
+                                        }
+                                        if m == "getWriter" && c == "WritableStream" {
+                                            ctx.register_native_instance(name.clone(), "writable_stream_writer".to_string(), "WritableStreamDefaultWriter".to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Issue #237: const stream = response.body / const r = ts.readable / .writable
+                // Property reads on a native instance — destructured as Member
+                // expressions (no Call wrapper).
+                if let ast::Expr::Member(member) = init_expr.as_ref() {
+                    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                        if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                            let p = prop_ident.sym.as_ref().to_string();
+                            let class_owned = ctx
+                                .lookup_native_instance(obj_ident.sym.as_ref())
+                                .map(|(_, c)| c.to_string());
+                            if let Some(c) = class_owned {
+                                if p == "body" && c == "Response" {
+                                    ctx.register_native_instance(name.clone(), "readable_stream".to_string(), "ReadableStream".to_string());
+                                }
+                                if p == "readable" && c == "TransformStream" {
+                                    ctx.register_native_instance(name.clone(), "readable_stream".to_string(), "ReadableStream".to_string());
+                                }
+                                if p == "writable" && c == "TransformStream" {
+                                    ctx.register_native_instance(name.clone(), "writable_stream".to_string(), "WritableStream".to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Issue #237: const stream = upstream.pipeThrough(transform)
+                // returns a ReadableStream (the transform's readable side).
+                if let ast::Expr::Call(call_expr) = init_expr.as_ref() {
+                    if let ast::Callee::Expr(callee) = &call_expr.callee {
+                        if let ast::Expr::Member(member) = callee.as_ref() {
+                            if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                                if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                                    if prop_ident.sym.as_ref() == "pipeThrough" {
+                                        let class_owned = ctx
+                                            .lookup_native_instance(obj_ident.sym.as_ref())
+                                            .map(|(_, c)| c.to_string());
+                                        if class_owned.as_deref() == Some("ReadableStream") {
+                                            ctx.register_native_instance(name.clone(), "readable_stream".to_string(), "ReadableStream".to_string());
                                         }
                                     }
                                 }
