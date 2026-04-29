@@ -7,10 +7,6 @@
     "status": "flake",
     "reason": "Same flake family as test_edge_control_flow: failed in parity run 2026-04-25 but passed on isolated re-run with the same binary. Pre-existing, appeared between 2026-04-24 and 2026-04-25 parity runs."
   },
-  "test_edge_promises": {
-    "status": "bug",
-    "reason": "Regression introduced by v0.5.371's async-to-generator transform (#256). Two distinct symptoms: (1) `if (cond) return await Promise.resolve('yes'); else return await Promise.resolve('no');` returns '0'/'0' instead of 'yes'/'no' — the conditional-await-return shape inside the state-machine transform produces wrong value propagation; (2) `await Promise.resolve(42)` deep in a chain returns 0 instead of 42. Same bug class as `test_stress_promises` Promise-constructor entry. Tracked as a v0.5.371 follow-up — the transform's conservative-scope guards (skip if classes have __perry_cap_* markers, skip if closures have non-empty captures) cover the most common patterns but miss this specific conditional-await-return shape."
-  },
   "test_gap_async_advanced": {
     "status": "known_limitation",
     "reason": "Async generators, for-await-of, Promise.allSettled not implemented (segfault)"

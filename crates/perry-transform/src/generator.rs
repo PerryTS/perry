@@ -1205,6 +1205,35 @@ fn linearize_body(
                 });
             }
 
+            // return (yield expr)  — i.e. `return await x` after async→generator rewrite
+            // The yield must be emitted as a real yield state so the async-step driver can
+            // await the expression; the continuation state then returns {value: __sent, done: true}
+            // where __sent is the resolved value delivered back by the step driver.
+            Stmt::Return(Some(yield_expr @ Expr::Yield { .. })) => {
+                let yield_val = if let Expr::Yield { value, .. } = yield_expr {
+                    value.as_ref().map(|v| *v.clone()).unwrap_or(Expr::Undefined)
+                } else {
+                    unreachable!()
+                };
+                // Flush pre-return code as a yield state
+                let this_state = *state_num;
+                *state_num += 1;
+                states.push(State {
+                    num: this_state,
+                    body: std::mem::take(current),
+                    exit: StateExit::Yield { value: yield_val, next_state: *state_num },
+                });
+                // Continuation state: return { value: __sent, done: true }
+                current.push(Stmt::Return(Some(make_iter_result(Expr::LocalGet(sent_id), true))));
+                let cont_state = *state_num;
+                *state_num += 1;
+                states.push(State {
+                    num: cont_state,
+                    body: std::mem::take(current),
+                    exit: StateExit::Done,
+                });
+            }
+
             // return expr (terminal - ends the generator)
             Stmt::Return(val) => {
                 // Add the return with {value: expr, done: true} wrapping
