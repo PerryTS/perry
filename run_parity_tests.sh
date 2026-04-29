@@ -319,11 +319,18 @@ for test_file in "$TEST_DIR"/*.ts; do
     node_exit=$?
 
     if [[ $node_exit -ne 0 && $node_exit -ne 124 ]]; then
-        # Node.js failed - might be expected for some tests
-        echo -e "${YELLOW}SKIP${NC}  $test_name (Node.js error: exit $node_exit)"
-        ((NODE_FAIL++))
-        [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
-        continue
+        # Node.js failed — if we have a stored expected-output file for this
+        # test (e.g. because the test uses syntax that this Node version
+        # doesn't support, like `await using` on Node <22.12), fall through
+        # to compile+run Perry and compare against the expected file.
+        # Otherwise record NODE_FAIL and skip.
+        if ! has_expected_output "$test_name"; then
+            echo -e "${YELLOW}SKIP${NC}  $test_name (Node.js error: exit $node_exit)"
+            ((NODE_FAIL++))
+            [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
+            continue
+        fi
+        echo -e "${YELLOW}NOTE${NC}  $test_name (Node.js error: exit $node_exit — using expected-output)"
     fi
 
     # Save Node.js output
