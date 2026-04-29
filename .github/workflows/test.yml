@@ -298,11 +298,9 @@ jobs:
 
       - name: Compile all test files
         run: |
-          PERRY="target/release/perry"
-          PASS=0
-          FAIL=0
-          SKIP=0
-          FAILURES=()
+          set -uo pipefail
+          export PERRY="$PWD/target/release/perry"
+          export LOGS_DIR="/tmp/perry_smoke_logs"
 
           # Tests that are known to not compile cleanly under the bare
           # `perry foo.ts -o out` smoke path. Sources:
@@ -317,59 +315,81 @@ jobs:
           # test_inline_uint8array_param, test_issue_167_*,
           # test_issue_227_*, test_gap_fetch_response,
           # test_issue_234_blob_methods, etc.) has been removed as of
-          # this PR: the actual root cause was a missing
+          # PR #239: the actual root cause was a missing
           # `module.declare_function("llvm.assume", VOID, &[I1])` in
           # `crates/perry-codegen/src/runtime_decls.rs`. Apple Clang
           # ≥21 (Xcode 26 / local) auto-recognised the intrinsic;
           # Apple Clang 15 (macos-14 runner / Xcode 15.x / LLVM 17)
           # errored with `error: use of undefined value '@llvm.assume'`.
-          # Not an SDK gap — a long-standing latent codegen bug
-          # diagnosed via the compile-stderr capture artifact added in
-          # PR #239 (now part of main).
           # Space-separated skip list (associative arrays require bash
-          # 4+; macOS-14 ships bash 3.2). Word-boundary match keeps
-          # the substring lookup safe.
-          SKIP_TESTS=" \
+          # 4+; macOS-14 ships bash 3.2). Word-boundary match keeps the
+          # substring lookup safe.
+          export SKIP_TESTS=" \
             test_ui_comprehensive \
             test_ui_controls \
             test_ui_phase4 \
             test_timer "
 
-          # Capture compile stderr per test so the artifact upload below
-          # can preserve the actual error message — pre-fix the loop
-          # discarded stderr (`2>/dev/null`) so the macOS-14-only failures
-          # (tracked as `ci-env` in test-parity/known_failures.json) had to
-          # be diagnosed by inference rather than data.
-          mkdir -p /tmp/perry_smoke_logs
-          for f in test-files/*.ts; do
-            [[ -d "$f" ]] && continue
+          rm -rf "$LOGS_DIR"
+          mkdir -p "$LOGS_DIR"
+
+          # Worker function. Each test owns a unique marker filename
+          # (.pass / .fail / .skip) under $LOGS_DIR, so concurrent
+          # workers never race on the same file. Counts + failure list
+          # are aggregated below AFTER all workers finish — no shared
+          # bash-counter state crosses subshell boundaries. Per-test
+          # stderr is captured to $LOGS_DIR/<name>.compile_error.log so
+          # the artifact upload step preserves the actual error
+          # messages (long-tail macOS-14 codegen failures are tracked
+          # as `ci-env` in test-parity/known_failures.json and are
+          # otherwise diagnosed by inference, not data).
+          compile_one() {
+            local f="$1"
+            [[ -d "$f" ]] && return 0
+            local name
             name=$(basename "$f" .ts)
             if [[ "$SKIP_TESTS" == *" $name "* ]]; then
-              ((SKIP++))
-              continue
+              : > "$LOGS_DIR/${name}.skip"
+              return 0
             fi
-            err_log="/tmp/perry_smoke_logs/${name}.compile_error.log"
-            if $PERRY "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log"; then
-              ((PASS++))
+            local err_log="$LOGS_DIR/${name}.compile_error.log"
+            if "$PERRY" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log"; then
+              : > "$LOGS_DIR/${name}.pass"
               rm -f "/tmp/perry_smoke_${name}" "$err_log"
             else
-              ((FAIL++))
-              FAILURES+=("$name")
+              : > "$LOGS_DIR/${name}.fail"
             fi
-          done
+          }
+          export -f compile_one
 
+          # macos-14 GitHub runner has 3 vCPUs; perry compile is
+          # CPU-bound for HIR/codegen but waits on the linker (clang)
+          # for a meaningful chunk of each test, so ~2× core count is
+          # the sweet spot. Pre-fix the sequential loop took ~26 min
+          # for ~130 files (≈12 s / file). Override with PERRY_SMOKE_JOBS
+          # if a future runner spec changes the math.
+          NJOBS="${PERRY_SMOKE_JOBS:-6}"
+          printf '%s\n' test-files/*.ts \
+            | xargs -P "$NJOBS" -n 1 -I{} bash -c 'compile_one "$@"' _ {}
+
+          PASS=$(ls -1 "$LOGS_DIR"/*.pass 2>/dev/null | wc -l | tr -d ' ')
+          FAIL=$(ls -1 "$LOGS_DIR"/*.fail 2>/dev/null | wc -l | tr -d ' ')
+          SKIP=$(ls -1 "$LOGS_DIR"/*.skip 2>/dev/null | wc -l | tr -d ' ')
           echo "Compile smoke: $PASS passed, $FAIL failed, $SKIP skipped"
 
           if [[ $FAIL -gt 0 ]]; then
             echo "Compile failures:"
-            for f in "${FAILURES[@]}"; do
-              echo "  - $f"
+            for marker in "$LOGS_DIR"/*.fail; do
+              [[ -e "$marker" ]] || continue
+              name=$(basename "$marker" .fail)
+              echo "  - $name"
               # Surface the head of each failure log directly in the job
-              # output so a quick scan reveals the underlying error without
-              # downloading the artifact.
-              if [[ -s "/tmp/perry_smoke_logs/${f}.compile_error.log" ]]; then
+              # output so a quick scan reveals the underlying error
+              # without downloading the artifact.
+              err_log="$LOGS_DIR/${name}.compile_error.log"
+              if [[ -s "$err_log" ]]; then
                 echo "    --- compile stderr (first 30 lines) ---"
-                head -n 30 "/tmp/perry_smoke_logs/${f}.compile_error.log" | sed 's/^/    /'
+                head -n 30 "$err_log" | sed 's/^/    /'
                 echo "    --- end ---"
               fi
             done

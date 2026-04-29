@@ -158,16 +158,20 @@ echo "   Perry Parity Test Runner ($BACKEND_LABEL)"
 echo "========================================"
 echo ""
 
-# Build the compiler first
-echo "Building compiler..."
-if ! cargo build --quiet 2>/dev/null; then
+# Build the compiler + runtime + stdlib in release mode. We invoke the
+# resulting `target/release/perry` binary directly per-test below — pre-fix
+# the loop ran `cargo run --quiet --bin perry` which (a) silently triggers a
+# *debug* build of perry that's slower at compile-time and runtime than the
+# release binary the prior step had just produced, and (b) adds cargo's own
+# per-invocation overhead × ~150 tests.
+PERRY_BIN="$SCRIPT_DIR/target/release/perry"
+echo "Building compiler (release)..."
+if ! cargo build --release --quiet -p perry -p perry-runtime -p perry-stdlib 2>/dev/null; then
     echo -e "${RED}Failed to build compiler${NC}"
     exit 1
 fi
-
-# Build runtime
-if ! cargo build --release -p perry-runtime --quiet 2>/dev/null; then
-    echo -e "${RED}Failed to build runtime${NC}"
+if [[ ! -x "$PERRY_BIN" ]]; then
+    echo -e "${RED}Expected $PERRY_BIN after release build${NC}"
     exit 1
 fi
 
@@ -214,8 +218,12 @@ for test_file in "$TEST_DIR"/*.ts; do
     # Save Node.js output
     echo "$node_output" > "$node_output_file"
 
-    # Compile with Perry
-    compile_output=$(cargo run --quiet --bin perry -- $BACKEND_FLAG "$test_file" -o "$perry_binary" 2>&1)
+    # Compile with Perry. Direct invocation of the release binary built
+    # above — pre-fix this was `cargo run --quiet --bin perry --` (no
+    # `--release`), which silently triggered a debug build of perry that
+    # was both slower as a compiler and incurred per-call cargo overhead
+    # × ~150 tests. Direct binary call shaves multiple minutes off CI.
+    compile_output=$("$PERRY_BIN" $BACKEND_FLAG "$test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
 
     if [[ $compile_exit -ne 0 ]]; then
