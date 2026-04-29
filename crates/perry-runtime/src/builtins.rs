@@ -460,31 +460,80 @@ fn format_jsvalue(value: f64, depth: usize) -> String {
                     }
                     let maybe_arr = ptr;
                     let length = (*maybe_arr).length as usize;
+                    if length == 0 {
+                        return "[]".to_string();
+                    }
                     let data_ptr = (maybe_arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
                     let mut parts: Vec<String> = Vec::with_capacity(length);
+                    let mut all_numeric = true;
                     for i in 0..length {
                         let elem_value = *data_ptr.add(i);
                         let elem_jsval = JSValue::from_bits(elem_value.to_bits());
                         // Quote string elements like Node's util.inspect: 'hello'
                         if elem_jsval.is_any_string() {
+                            all_numeric = false;
                             let s = format_jsvalue(elem_value, depth + 1);
                             parts.push(format!("'{}'", s));
                         } else {
+                            if !elem_jsval.is_number() && !elem_jsval.is_int32() {
+                                all_numeric = false;
+                            }
                             parts.push(format_jsvalue(elem_value, depth + 1));
                         }
                     }
                     let inner = parts.join(", ");
-                    // Node uses multi-line for arrays with >6 elements or >72 chars
-                    if length > 6 || inner.len() > 72 {
-                        let indent = "  ";
-                        let lines: Vec<String> = parts.chunks(4).map(|chunk| {
-                            format!("{}{}", indent, chunk.join(", "))
-                        }).collect();
-                        format!("[\n{}\n]", lines.join(",\n"))
-                    } else if length == 0 {
-                        "[]".to_string()
-                    } else {
+                    // Node uses multi-line when length > 6 or single-line exceeds breakLength (76)
+                    let use_multiline = length > 6 || inner.len() + 4 > 76;
+                    if !use_multiline {
                         format!("[ {} ]", inner)
+                    } else if all_numeric {
+                        // Node.js groupArrayElements for numeric arrays:
+                        // right-align each number to max width, compute per-line
+                        // column count via Node's sqrt heuristic.
+                        let max_len = parts.iter().map(|s| s.len()).max().unwrap_or(1);
+                        // biasedMax = max(maxLength - 2, 1)
+                        let biased_max = max_len.saturating_sub(2).max(1);
+                        // cols_by_sqrt = round(sqrt(2.5 * biasedMax * N) / biasedMax)
+                        let cols_by_sqrt = ((2.5_f64 * biased_max as f64 * length as f64).sqrt()
+                            / biased_max as f64)
+                            .round() as usize;
+                        // cols_by_width = ceil(breakLength / (maxLen + 2)); breakLength=76
+                        let actual_max = max_len + 2;
+                        let cols_by_width = (76 + actual_max - 1) / actual_max;
+                        let columns = cols_by_sqrt
+                            .min(cols_by_width.max(1))
+                            .min(12) // compact(3) * 4
+                            .min(15) // absolute max per Node
+                            .max(1);
+                        let indent = "  ";
+                        let mut lines: Vec<String> = parts
+                            .chunks(columns)
+                            .map(|chunk| {
+                                let elems: Vec<String> = chunk
+                                    .iter()
+                                    .map(|s| format!("{:>width$}", s, width = max_len))
+                                    .collect();
+                                format!("{}{}", indent, elems.join(", "))
+                            })
+                            .collect();
+                        // Trailing comma on every line but the last (Node format)
+                        let n_lines = lines.len();
+                        for line in lines.iter_mut().take(n_lines - 1) {
+                            line.push(',');
+                        }
+                        format!("[\n{}\n]", lines.join("\n"))
+                    } else {
+                        // Non-numeric multi-line: 4 per line, no padding
+                        let indent = "  ";
+                        let mut row_strs: Vec<String> = parts
+                            .chunks(4)
+                            .map(|chunk| format!("{}{}", indent, chunk.join(", ")))
+                            .collect();
+                        let n = row_strs.len();
+                        for line in row_strs.iter_mut().take(n - 1) {
+                            line.push(',');
+                        }
+                        format!("[\n{}\n]", row_strs.join("\n"))
                     }
                 } else if gc_type == crate::gc::GC_TYPE_OBJECT {
                     // Object — check for keys_array. Node's default depth

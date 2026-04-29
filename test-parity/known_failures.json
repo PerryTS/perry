@@ -31,10 +31,6 @@
     "status": "skip",
     "reason": "Compile failure — TLS connect not implemented"
   },
-  "test_stress_int_ops": {
-    "status": "bug",
-    "reason": "Console.log array-of-numbers inspection format: Node right-aligns + computes per-line count via util.inspect (`[\n   0,  1,  4,  9, 16,\n  25, 36, 49, 64, 81\n]`); Perry packs without padding 4 per line. NaN/Infinity ToInt32 coercion (`(NaN) | 0`, etc.) was fixed at v0.5.279 — that bug had `is_known_finite` accepting any `Expr::Number(_)` regardless of finite-ness; now checks `n.is_finite()`."
-  },
   "test_gap_console_methods": {
     "status": "ci-env",
     "reason": "Re-added v0.5.294 after the v0.5.290 stub-audit drop turned out to be premature: passes locally through the parity-runner's normalize_output (timer-value variation gets normalized) but fails on macOS-14 CI runners where normalize_output doesn't catch the variant produced. Either the normalize_output rule needs broadening or the test needs more determinism — investigate separately."
