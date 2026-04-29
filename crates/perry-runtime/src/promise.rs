@@ -188,17 +188,13 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
                 let outer_i64 = outer as i64;
 
                 // Create a resolve forwarding closure
-                let resolve_closure = crate::closure::js_closure_alloc(
-                    promise_forward_resolve as *const u8,
-                    1
-                );
+                let resolve_closure =
+                    crate::closure::js_closure_alloc(promise_forward_resolve as *const u8, 1);
                 crate::closure::js_closure_set_capture_ptr(resolve_closure, 0, outer_i64);
 
                 // Create a reject forwarding closure
-                let reject_closure = crate::closure::js_closure_alloc(
-                    promise_forward_reject as *const u8,
-                    1
-                );
+                let reject_closure =
+                    crate::closure::js_closure_alloc(promise_forward_reject as *const u8, 1);
                 crate::closure::js_closure_set_capture_ptr(reject_closure, 0, outer_i64);
 
                 // Register the forwarding callbacks on the inner promise
@@ -211,14 +207,20 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
 }
 
 /// Internal callback for forwarding resolve from inner to outer promise
-extern "C" fn promise_forward_resolve(closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+extern "C" fn promise_forward_resolve(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
     let outer_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     js_promise_resolve(outer_ptr, value);
     0.0
 }
 
 /// Internal callback for forwarding reject from inner to outer promise
-extern "C" fn promise_forward_reject(closure: *const crate::closure::ClosureHeader, reason: f64) -> f64 {
+extern "C" fn promise_forward_reject(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
     let outer_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     js_promise_reject(outer_ptr, reason);
     0.0
@@ -285,7 +287,8 @@ pub extern "C" fn js_promise_then(
             PromiseState::Rejected => {
                 if !on_rejected.is_null() || !next.is_null() {
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back((promise, (*promise).reason, false));
+                        q.borrow_mut()
+                            .push_back((promise, (*promise).reason, false));
                     });
                 }
             }
@@ -299,10 +302,7 @@ pub extern "C" fn js_promise_then(
 /// Register rejection callback, returns a new promise for chaining
 /// This is equivalent to .catch(onRejected) in JavaScript
 #[no_mangle]
-pub extern "C" fn js_promise_catch(
-    promise: *mut Promise,
-    on_rejected: ClosurePtr,
-) -> *mut Promise {
+pub extern "C" fn js_promise_catch(promise: *mut Promise, on_rejected: ClosurePtr) -> *mut Promise {
     js_promise_then(promise, ptr::null(), on_rejected)
 }
 
@@ -362,7 +362,8 @@ pub extern "C" fn js_promise_finally(
             }
             PromiseState::Rejected => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back((promise, (*promise).reason, false));
+                    q.borrow_mut()
+                        .push_back((promise, (*promise).reason, false));
                 });
             }
             PromiseState::Pending => {}
@@ -381,17 +382,19 @@ extern "C" fn finally_fulfill_wrapper(
     closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
-    use crate::closure::{js_closure_alloc, js_closure_get_capture_ptr,
-                         js_closure_set_capture_ptr};
+    use crate::closure::{
+        js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr,
+    };
 
-    let on_finally = js_closure_get_capture_ptr(closure, 0)
-        as *const crate::closure::ClosureHeader;
+    let on_finally = js_closure_get_capture_ptr(closure, 0) as *const crate::closure::ClosureHeader;
     let next = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
 
     // Call the user's finally callback (ignoring its return value).
     if !on_finally.is_null() {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-        unsafe { crate::closure::js_closure_call1(on_finally, undef); }
+        unsafe {
+            crate::closure::js_closure_call1(on_finally, undef);
+        }
     }
 
     // Add one extra microtask tick before settling `next` by registering a
@@ -420,7 +423,7 @@ extern "C" fn finally_passthrough_fulfill(
     closure: *const crate::closure::ClosureHeader,
     _: f64,
 ) -> f64 {
-    use crate::closure::{js_closure_get_capture_ptr, js_closure_get_capture_f64};
+    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
     let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     let value = js_closure_get_capture_f64(closure, 1);
     if !next.is_null() {
@@ -438,17 +441,19 @@ extern "C" fn finally_reject_wrapper(
     closure: *const crate::closure::ClosureHeader,
     reason: f64,
 ) -> f64 {
-    use crate::closure::{js_closure_alloc, js_closure_get_capture_ptr,
-                         js_closure_set_capture_ptr};
+    use crate::closure::{
+        js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr,
+    };
 
-    let on_finally = js_closure_get_capture_ptr(closure, 0)
-        as *const crate::closure::ClosureHeader;
+    let on_finally = js_closure_get_capture_ptr(closure, 0) as *const crate::closure::ClosureHeader;
     let next = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
 
     // Call the user's finally callback (ignoring its return value).
     if !on_finally.is_null() {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-        unsafe { crate::closure::js_closure_call1(on_finally, undef); }
+        unsafe {
+            crate::closure::js_closure_call1(on_finally, undef);
+        }
     }
 
     // Add one extra microtask tick before rejecting `next`.
@@ -471,7 +476,7 @@ extern "C" fn finally_passthrough_reject(
     closure: *const crate::closure::ClosureHeader,
     _: f64,
 ) -> f64 {
-    use crate::closure::{js_closure_get_capture_ptr, js_closure_get_capture_f64};
+    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
     let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     let reason = js_closure_get_capture_f64(closure, 1);
     if !next.is_null() {
@@ -558,8 +563,8 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                             // multiple `await`s observes a Pending Promise as
                             // the resolved value.
                             if js_value_is_promise(result) != 0 {
-                                let inner = crate::value::js_nanbox_get_pointer(result)
-                                    as *mut Promise;
+                                let inner =
+                                    crate::value::js_nanbox_get_pointer(result) as *mut Promise;
                                 if !inner.is_null() && inner != (*promise).next {
                                     js_promise_resolve_with_promise((*promise).next, inner);
                                 } else {
@@ -638,7 +643,9 @@ pub extern "C" fn js_array_from_async(input: f64) -> f64 {
     if raw_ptr == 0 {
         // null/undefined input — resolve to empty array
         let empty = js_array_alloc(0);
-        unsafe { (*empty).length = 0; }
+        unsafe {
+            (*empty).length = 0;
+        }
         let arr_f64 = crate::value::js_nanbox_pointer(empty as i64);
         let p = js_promise_resolved(arr_f64);
         return crate::value::js_nanbox_pointer(p as i64);
@@ -647,7 +654,8 @@ pub extern "C" fn js_array_from_async(input: f64) -> f64 {
     // Path 1: input is an Array. Reuse Promise.all behavior — js_promise_all
     // handles a mix of promise and non-promise elements correctly.
     unsafe {
-        let gc_header = (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let gc_header =
+            (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
             let arr_ptr = raw_ptr as *const ArrayHeader;
             let p = js_promise_all(arr_ptr);
@@ -659,7 +667,9 @@ pub extern "C" fn js_array_from_async(input: f64) -> f64 {
     // Promise and an empty result Array, then kick off the .next() chain.
     let result_promise = js_promise_new();
     let result_arr = js_array_alloc(0);
-    unsafe { (*result_arr).length = 0; }
+    unsafe {
+        (*result_arr).length = 0;
+    }
 
     // Build the recursive .next() handler closure. Captures:
     //   [0] result_promise (Promise to resolve at the end)
@@ -703,13 +713,17 @@ unsafe fn array_from_async_call_next(
     // If the result is a Promise pointer, attach the handler via .then.
     let next_ptr = crate::value::js_nanbox_get_pointer(next_result) as usize;
     if next_ptr != 0 {
-        let gc_header = (next_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-            as *const crate::gc::GcHeader;
+        let gc_header =
+            (next_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE {
             let next_promise = next_ptr as *mut Promise;
             // Use the chain_closure for both fulfill and reject. On rejection
             // we just propagate by resolving the result_promise with undefined.
-            js_promise_then(next_promise, chain_closure as *const _, chain_closure as *const _);
+            js_promise_then(
+                next_promise,
+                chain_closure as *const _,
+                chain_closure as *const _,
+            );
             return;
         }
     }
@@ -726,7 +740,7 @@ extern "C" fn array_from_async_step(
     closure: *const crate::closure::ClosureHeader,
     iter_result: f64,
 ) -> f64 {
-    use crate::array::{ArrayHeader, js_array_push_f64};
+    use crate::array::{js_array_push_f64, ArrayHeader};
     use crate::closure::{js_closure_get_capture_ptr, js_closure_set_capture_ptr};
 
     let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
@@ -752,26 +766,26 @@ extern "C" fn array_from_async_step(
     if result_obj_ptr.is_null() {
         // No more values — resolve the output promise with the collected array.
         let arr_f64 = crate::value::js_nanbox_pointer(result_arr as i64);
-        unsafe { js_promise_resolve(result_promise, arr_f64); }
+        unsafe {
+            js_promise_resolve(result_promise, arr_f64);
+        }
         return 0.0;
     }
 
     // Look up "done" and "value" fields by name.
     let done_key = make_static_string(b"done");
     let value_key = make_static_string(b"value");
-    let done_jv = unsafe {
-        crate::object::js_object_get_field_by_name(result_obj_ptr, done_key)
-    };
-    let value_jv = unsafe {
-        crate::object::js_object_get_field_by_name(result_obj_ptr, value_key)
-    };
+    let done_jv = unsafe { crate::object::js_object_get_field_by_name(result_obj_ptr, done_key) };
+    let value_jv = unsafe { crate::object::js_object_get_field_by_name(result_obj_ptr, value_key) };
     let done_f64 = f64::from_bits(done_jv.bits());
     let value_f64 = f64::from_bits(value_jv.bits());
 
     if crate::value::js_is_truthy(done_f64) != 0 {
         // Iteration complete — resolve with the accumulated array.
         let arr_f64 = crate::value::js_nanbox_pointer(result_arr as i64);
-        unsafe { js_promise_resolve(result_promise, arr_f64); }
+        unsafe {
+            js_promise_resolve(result_promise, arr_f64);
+        }
         return 0.0;
     }
 
@@ -839,8 +853,8 @@ pub extern "C" fn js_value_is_promise(value: f64) -> i32 {
         return 0;
     }
     unsafe {
-        let gc_header = (ptr_usize as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-            as *const crate::gc::GcHeader;
+        let gc_header =
+            (ptr_usize as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE {
             1
         } else {
@@ -886,7 +900,9 @@ fn process_scheduled_resolves() -> i32 {
 /// Arguments:
 /// - executor: A closure that takes 2 arguments (resolve_fn, reject_fn)
 #[no_mangle]
-pub extern "C" fn js_promise_new_with_executor(executor: *const crate::closure::ClosureHeader) -> *mut Promise {
+pub extern "C" fn js_promise_new_with_executor(
+    executor: *const crate::closure::ClosureHeader,
+) -> *mut Promise {
     use crate::closure::{js_closure_alloc, js_closure_call2, js_closure_set_capture_ptr};
 
     let promise = js_promise_new();
@@ -942,8 +958,12 @@ extern "C" fn promise_reject_fn(closure: *const crate::closure::ClosureHeader, r
 /// Returns: a new Promise that resolves with an array of results
 #[no_mangle]
 pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
-    use crate::array::{ArrayHeader, js_array_alloc, js_array_get_f64, js_array_length, js_array_set_f64};
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr, js_closure_set_capture_f64};
+    use crate::array::{
+        js_array_alloc, js_array_get_f64, js_array_length, js_array_set_f64, ArrayHeader,
+    };
+    use crate::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
     use crate::value::js_nanbox_get_pointer;
 
     // Create the result promise
@@ -952,7 +972,9 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
     if promises_arr.is_null() {
         // Promise.all([]) resolves immediately with empty array
         let empty_arr = js_array_alloc(0);
-        unsafe { (*empty_arr).length = 0; }
+        unsafe {
+            (*empty_arr).length = 0;
+        }
         let arr_f64 = crate::value::js_nanbox_pointer(empty_arr as i64);
         js_promise_resolve(result_promise, arr_f64);
         return result_promise;
@@ -963,7 +985,9 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
     if count == 0 {
         // Promise.all([]) resolves immediately with empty array
         let empty_arr = js_array_alloc(0);
-        unsafe { (*empty_arr).length = 0; }
+        unsafe {
+            (*empty_arr).length = 0;
+        }
         let arr_f64 = crate::value::js_nanbox_pointer(empty_arr as i64);
         js_promise_resolve(result_promise, arr_f64);
         return result_promise;
@@ -971,7 +995,9 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
 
     // Allocate result array to hold resolved values
     let results_arr = js_array_alloc(count);
-    unsafe { (*results_arr).length = count; }
+    unsafe {
+        (*results_arr).length = count;
+    }
 
     // Initialize all elements to undefined
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -982,9 +1008,11 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
     // Allocate state: [remaining_count, rejected_flag]
     // We use an array to hold mutable shared state across closures
     let state_arr = js_array_alloc(2);
-    unsafe { (*state_arr).length = 2; }
-    js_array_set_f64(state_arr, 0, count as f64);  // remaining count
-    js_array_set_f64(state_arr, 1, 0.0);            // rejected flag (0 = not rejected)
+    unsafe {
+        (*state_arr).length = 2;
+    }
+    js_array_set_f64(state_arr, 0, count as f64); // remaining count
+    js_array_set_f64(state_arr, 1, 0.0); // rejected flag (0 = not rejected)
 
     // For each promise in the array, attach a .then handler
     for i in 0..count {
@@ -1033,9 +1061,12 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
 }
 
 /// Internal handler called when a promise in Promise.all fulfills
-extern "C" fn promise_all_fulfill_handler(closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+extern "C" fn promise_all_fulfill_handler(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::{js_closure_get_capture_ptr, js_closure_get_capture_f64};
+    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
 
     let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     let results_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
@@ -1068,7 +1099,10 @@ extern "C" fn promise_all_fulfill_handler(closure: *const crate::closure::Closur
 }
 
 /// Internal handler called when a promise in Promise.all rejects
-extern "C" fn promise_all_reject_handler(closure: *const crate::closure::ClosureHeader, reason: f64) -> f64 {
+extern "C" fn promise_all_reject_handler(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
     use crate::closure::js_closure_get_capture_ptr;
 
@@ -1128,15 +1162,9 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
             // Non-promise value — wrap as an already-resolved promise so the
             // resolution goes through the normal microtask path.
             let wrapped = js_promise_resolved(promise_f64);
-            let resolve_closure = js_closure_alloc(
-                promise_race_resolve_handler as *const u8,
-                1,
-            );
+            let resolve_closure = js_closure_alloc(promise_race_resolve_handler as *const u8, 1);
             js_closure_set_capture_ptr(resolve_closure, 0, result_promise as i64);
-            let reject_closure = js_closure_alloc(
-                promise_race_reject_handler as *const u8,
-                1,
-            );
+            let reject_closure = js_closure_alloc(promise_race_reject_handler as *const u8, 1);
             js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
             js_promise_then(wrapped, resolve_closure, reject_closure);
             continue;
@@ -1153,10 +1181,7 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
         js_closure_set_capture_ptr(resolve_closure, 0, result_promise as i64);
 
         // Create reject handler closure (captures result_promise)
-        let reject_closure = js_closure_alloc(
-            promise_race_reject_handler as *const u8,
-            1,
-        );
+        let reject_closure = js_closure_alloc(promise_race_reject_handler as *const u8, 1);
         js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
 
         // Attach handlers via then — if the input is already settled this will
@@ -1168,10 +1193,15 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
 }
 
 /// Handler for Promise.race fulfill — resolves the race promise with the first value
-extern "C" fn promise_race_resolve_handler(closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+extern "C" fn promise_race_resolve_handler(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
     let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    if result_promise.is_null() { return 0.0; }
+    if result_promise.is_null() {
+        return 0.0;
+    }
     // Only settle if still pending (first one wins)
     if matches!(unsafe { (*result_promise).state }, PromiseState::Pending) {
         js_promise_resolve(result_promise, value);
@@ -1180,10 +1210,15 @@ extern "C" fn promise_race_resolve_handler(closure: *const crate::closure::Closu
 }
 
 /// Handler for Promise.race reject — rejects the race promise with the first reason
-extern "C" fn promise_race_reject_handler(closure: *const crate::closure::ClosureHeader, reason: f64) -> f64 {
+extern "C" fn promise_race_reject_handler(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
     let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    if result_promise.is_null() { return 0.0; }
+    if result_promise.is_null() {
+        return 0.0;
+    }
     if matches!(unsafe { (*result_promise).state }, PromiseState::Pending) {
         js_promise_reject(result_promise, reason);
     }
@@ -1208,7 +1243,11 @@ fn build_settled_fulfilled(value: f64) -> f64 {
     let obj = js_object_alloc_with_shape(0x7FFF_FF10, 2, packed.as_ptr(), packed.len() as u32);
     let status_str = crate::string::js_string_from_bytes(b"fulfilled".as_ptr(), 9);
     let status_nb = crate::value::js_nanbox_string(status_str as i64);
-    js_object_set_field(obj, 0, crate::value::JSValue::from_bits(status_nb.to_bits()));
+    js_object_set_field(
+        obj,
+        0,
+        crate::value::JSValue::from_bits(status_nb.to_bits()),
+    );
     js_object_set_field(obj, 1, crate::value::JSValue::from_bits(value.to_bits()));
     crate::value::js_nanbox_pointer(obj as i64)
 }
@@ -1220,7 +1259,11 @@ fn build_settled_rejected(reason: f64) -> f64 {
     let obj = js_object_alloc_with_shape(0x7FFF_FF11, 2, packed.as_ptr(), packed.len() as u32);
     let status_str = crate::string::js_string_from_bytes(b"rejected".as_ptr(), 8);
     let status_nb = crate::value::js_nanbox_string(status_str as i64);
-    js_object_set_field(obj, 0, crate::value::JSValue::from_bits(status_nb.to_bits()));
+    js_object_set_field(
+        obj,
+        0,
+        crate::value::JSValue::from_bits(status_nb.to_bits()),
+    );
     js_object_set_field(obj, 1, crate::value::JSValue::from_bits(reason.to_bits()));
     crate::value::js_nanbox_pointer(obj as i64)
 }
@@ -1228,16 +1271,22 @@ fn build_settled_rejected(reason: f64) -> f64 {
 /// Promise.allSettled — never rejects; resolves with an array of result objects
 /// where each entry is `{ status: "fulfilled", value }` or `{ status: "rejected", reason }`.
 #[no_mangle]
-pub extern "C" fn js_promise_all_settled(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
+pub extern "C" fn js_promise_all_settled(
+    promises_arr: *const crate::array::ArrayHeader,
+) -> *mut Promise {
     use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_set_f64};
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr, js_closure_set_capture_f64};
+    use crate::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
     use crate::value::js_nanbox_get_pointer;
 
     let result_promise = js_promise_new();
 
     if promises_arr.is_null() {
         let empty_arr = js_array_alloc(0);
-        unsafe { (*empty_arr).length = 0; }
+        unsafe {
+            (*empty_arr).length = 0;
+        }
         let arr_f64 = crate::value::js_nanbox_pointer(empty_arr as i64);
         js_promise_resolve(result_promise, arr_f64);
         return result_promise;
@@ -1246,14 +1295,18 @@ pub extern "C" fn js_promise_all_settled(promises_arr: *const crate::array::Arra
     let count = js_array_length(promises_arr);
     if count == 0 {
         let empty_arr = js_array_alloc(0);
-        unsafe { (*empty_arr).length = 0; }
+        unsafe {
+            (*empty_arr).length = 0;
+        }
         let arr_f64 = crate::value::js_nanbox_pointer(empty_arr as i64);
         js_promise_resolve(result_promise, arr_f64);
         return result_promise;
     }
 
     let results_arr = js_array_alloc(count);
-    unsafe { (*results_arr).length = count; }
+    unsafe {
+        (*results_arr).length = count;
+    }
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     for i in 0..count {
         js_array_set_f64(results_arr, i, f64::from_bits(TAG_UNDEFINED));
@@ -1261,7 +1314,9 @@ pub extern "C" fn js_promise_all_settled(promises_arr: *const crate::array::Arra
 
     // state: [remaining_count]
     let state_arr = js_array_alloc(1);
-    unsafe { (*state_arr).length = 1; }
+    unsafe {
+        (*state_arr).length = 1;
+    }
     js_array_set_f64(state_arr, 0, count as f64);
 
     for i in 0..count {
@@ -1312,14 +1367,19 @@ pub extern "C" fn js_promise_all_settled(promises_arr: *const crate::array::Arra
     result_promise
 }
 
-extern "C" fn promise_all_settled_fulfill_handler(closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+extern "C" fn promise_all_settled_fulfill_handler(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::{js_closure_get_capture_ptr, js_closure_get_capture_f64};
+    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
 
     let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     let results_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
     let state_arr = js_closure_get_capture_ptr(closure, 2) as *mut ArrayHeader;
-    if result_promise.is_null() || results_arr.is_null() || state_arr.is_null() { return 0.0; }
+    if result_promise.is_null() || results_arr.is_null() || state_arr.is_null() {
+        return 0.0;
+    }
     let index = js_closure_get_capture_f64(closure, 3) as u32;
 
     let wrapped = build_settled_fulfilled(value);
@@ -1335,14 +1395,19 @@ extern "C" fn promise_all_settled_fulfill_handler(closure: *const crate::closure
     0.0
 }
 
-extern "C" fn promise_all_settled_reject_handler(closure: *const crate::closure::ClosureHeader, reason: f64) -> f64 {
+extern "C" fn promise_all_settled_reject_handler(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::{js_closure_get_capture_ptr, js_closure_get_capture_f64};
+    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
 
     let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     let results_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
     let state_arr = js_closure_get_capture_ptr(closure, 2) as *mut ArrayHeader;
-    if result_promise.is_null() || results_arr.is_null() || state_arr.is_null() { return 0.0; }
+    if result_promise.is_null() || results_arr.is_null() || state_arr.is_null() {
+        return 0.0;
+    }
     let index = js_closure_get_capture_f64(closure, 3) as u32;
 
     let wrapped = build_settled_rejected(reason);
@@ -1363,7 +1428,9 @@ extern "C" fn promise_all_settled_reject_handler(closure: *const crate::closure:
 #[no_mangle]
 pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
     use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_set_f64};
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr, js_closure_set_capture_f64};
+    use crate::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
     use crate::value::js_nanbox_get_pointer;
 
     let result_promise = js_promise_new();
@@ -1371,7 +1438,9 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
     if promises_arr.is_null() {
         // Empty input — Promise.any rejects immediately with empty errors array
         let errors_arr = js_array_alloc(0);
-        unsafe { (*errors_arr).length = 0; }
+        unsafe {
+            (*errors_arr).length = 0;
+        }
         let arr_f64 = crate::value::js_nanbox_pointer(errors_arr as i64);
         js_promise_reject(result_promise, arr_f64);
         return result_promise;
@@ -1380,14 +1449,18 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
     let count = js_array_length(promises_arr);
     if count == 0 {
         let errors_arr = js_array_alloc(0);
-        unsafe { (*errors_arr).length = 0; }
+        unsafe {
+            (*errors_arr).length = 0;
+        }
         let arr_f64 = crate::value::js_nanbox_pointer(errors_arr as i64);
         js_promise_reject(result_promise, arr_f64);
         return result_promise;
     }
 
     let errors_arr = js_array_alloc(count);
-    unsafe { (*errors_arr).length = count; }
+    unsafe {
+        (*errors_arr).length = count;
+    }
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     for i in 0..count {
         js_array_set_f64(errors_arr, i, f64::from_bits(TAG_UNDEFINED));
@@ -1395,7 +1468,9 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
 
     // state: [remaining_rejections, settled_flag]
     let state_arr = js_array_alloc(2);
-    unsafe { (*state_arr).length = 2; }
+    unsafe {
+        (*state_arr).length = 2;
+    }
     js_array_set_f64(state_arr, 0, count as f64);
     js_array_set_f64(state_arr, 1, 0.0);
 
@@ -1431,34 +1506,48 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
     result_promise
 }
 
-extern "C" fn promise_any_fulfill_handler(closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+extern "C" fn promise_any_fulfill_handler(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
     use crate::closure::js_closure_get_capture_ptr;
 
     let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     let state_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
-    if result_promise.is_null() || state_arr.is_null() { return 0.0; }
+    if result_promise.is_null() || state_arr.is_null() {
+        return 0.0;
+    }
 
     let already_settled = js_array_get_f64(state_arr, 1);
-    if already_settled != 0.0 { return 0.0; }
+    if already_settled != 0.0 {
+        return 0.0;
+    }
     js_array_set_f64(state_arr, 1, 1.0);
 
     js_promise_resolve(result_promise, value);
     0.0
 }
 
-extern "C" fn promise_any_reject_handler(closure: *const crate::closure::ClosureHeader, reason: f64) -> f64 {
+extern "C" fn promise_any_reject_handler(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::{js_closure_get_capture_ptr, js_closure_get_capture_f64};
+    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
 
     let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     let errors_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
     let state_arr = js_closure_get_capture_ptr(closure, 2) as *mut ArrayHeader;
-    if result_promise.is_null() || errors_arr.is_null() || state_arr.is_null() { return 0.0; }
+    if result_promise.is_null() || errors_arr.is_null() || state_arr.is_null() {
+        return 0.0;
+    }
     let index = js_closure_get_capture_f64(closure, 3) as u32;
 
     let already_settled = js_array_get_f64(state_arr, 1);
-    if already_settled != 0.0 { return 0.0; }
+    if already_settled != 0.0 {
+        return 0.0;
+    }
 
     js_array_set_f64(errors_arr, index, reason);
 
@@ -1469,14 +1558,8 @@ extern "C" fn promise_any_reject_handler(closure: *const crate::closure::Closure
         // All rejected — create an AggregateError with the collected
         // errors array and reject the result promise with it.
         js_array_set_f64(state_arr, 1, 1.0);
-        let msg = crate::string::js_string_from_bytes(
-            b"All promises were rejected".as_ptr(),
-            26,
-        );
-        let agg_err = crate::error::js_aggregateerror_new(
-            errors_arr,
-            msg,
-        );
+        let msg = crate::string::js_string_from_bytes(b"All promises were rejected".as_ptr(), 26);
+        let agg_err = crate::error::js_aggregateerror_new(errors_arr, msg);
         let err_f64 = crate::value::js_nanbox_pointer(agg_err as i64);
         js_promise_reject(result_promise, err_f64);
     }
@@ -1491,7 +1574,9 @@ pub fn scan_promise_roots(mark: &mut dyn FnMut(f64)) {
         for &(promise_ptr, value, _) in q.iter() {
             // Mark the promise pointer (NaN-box it as a POINTER)
             if !promise_ptr.is_null() {
-                let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (promise_ptr as u64 & 0x0000_FFFF_FFFF_FFFF));
+                let boxed = f64::from_bits(
+                    0x7FFD_0000_0000_0000 | (promise_ptr as u64 & 0x0000_FFFF_FFFF_FFFF),
+                );
                 mark(boxed);
             }
             // Mark the value
@@ -1504,7 +1589,9 @@ pub fn scan_promise_roots(mark: &mut dyn FnMut(f64)) {
         let q = q.borrow();
         for &(promise_ptr, value) in q.iter() {
             if !promise_ptr.is_null() {
-                let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (promise_ptr as u64 & 0x0000_FFFF_FFFF_FFFF));
+                let boxed = f64::from_bits(
+                    0x7FFD_0000_0000_0000 | (promise_ptr as u64 & 0x0000_FFFF_FFFF_FFFF),
+                );
                 mark(boxed);
             }
             mark(value);
@@ -1516,9 +1603,8 @@ pub fn scan_promise_roots(mark: &mut dyn FnMut(f64)) {
 /// The resolve/reject are closures that settle the promise when called.
 #[no_mangle]
 pub extern "C" fn js_promise_with_resolvers() -> *mut crate::object::ObjectHeader {
-    
-    use crate::object::{js_object_alloc_with_shape, ObjectHeader};
     use crate::closure::js_closure_alloc;
+    use crate::object::{js_object_alloc_with_shape, ObjectHeader};
 
     // Create the pending promise.
     let promise = js_promise_new();
@@ -1535,10 +1621,7 @@ pub extern "C" fn js_promise_with_resolvers() -> *mut crate::object::ObjectHeade
     let resolve_box = crate::value::js_nanbox_pointer(resolve_fn as i64);
 
     // Create reject closure.
-    let reject_fn = js_closure_alloc(
-        with_resolvers_reject_handler as *const u8,
-        1,
-    );
+    let reject_fn = js_closure_alloc(with_resolvers_reject_handler as *const u8, 1);
     unsafe {
         crate::closure::js_closure_set_capture_f64(reject_fn, 0, promise_box);
     }
@@ -1557,9 +1640,9 @@ pub extern "C" fn js_promise_with_resolvers() -> *mut crate::object::ObjectHeade
     // Store the three fields.
     unsafe {
         let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut f64;
-        *fields.add(0) = promise_box;  // .promise
-        *fields.add(1) = resolve_box;  // .resolve
-        *fields.add(2) = reject_box;   // .reject
+        *fields.add(0) = promise_box; // .promise
+        *fields.add(1) = resolve_box; // .resolve
+        *fields.add(2) = reject_box; // .reject
     }
 
     obj

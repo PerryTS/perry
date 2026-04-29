@@ -26,12 +26,12 @@ pub fn request_location(callback: f64) {
             }
             let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
             match result {
-                Some((lat, lon)) => {
-                    unsafe { js_closure_call2(ptr, lat, lon); }
-                }
-                None => {
-                    unsafe { js_closure_call2(ptr, f64::NAN, f64::NAN); }
-                }
+                Some((lat, lon)) => unsafe {
+                    js_closure_call2(ptr, lat, lon);
+                },
+                None => unsafe {
+                    js_closure_call2(ptr, f64::NAN, f64::NAN);
+                },
             }
         });
     });
@@ -69,8 +69,10 @@ fn extract_json_f64(json: &str, key: &str) -> Option<f64> {
     let pattern = format!("\"{}\":", key);
     let start = json.find(&pattern)? + pattern.len();
     let rest = json[start..].trim_start();
-    let end = rest.find(|c: char| {
-        c != '.' && c != '-' && c != '+' && c != 'e' && c != 'E' && !c.is_ascii_digit()
-    }).unwrap_or(rest.len());
+    let end = rest
+        .find(|c: char| {
+            c != '.' && c != '-' && c != '+' && c != 'e' && c != 'E' && !c.is_ascii_digit()
+        })
+        .unwrap_or(rest.len());
     rest[..end].parse().ok()
 }

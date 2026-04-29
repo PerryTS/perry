@@ -3,12 +3,12 @@
 //! Uses hyper for high-performance HTTP serving.
 
 use bytes::Bytes;
-use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 use http_body_util::{BodyExt, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -202,7 +202,9 @@ async fn handle_request(
                 response = response.header(name, value);
             }
 
-            Ok(response.body(Full::new(Bytes::from(http_response.body))).unwrap())
+            Ok(response
+                .body(Full::new(Bytes::from(http_response.body)))
+                .unwrap())
         }
         Err(_) => {
             // Handler dropped without responding
@@ -318,7 +320,8 @@ pub unsafe extern "C" fn js_http_respond(
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 
     let body = string_from_header(body_ptr).unwrap_or_default();
-    let content_type = string_from_header(content_type_ptr).unwrap_or_else(|| "text/plain".to_string());
+    let content_type =
+        string_from_header(content_type_ptr).unwrap_or_else(|| "text/plain".to_string());
 
     if let Some(req) = get_handle::<RequestHandle>(req_handle) {
         // Take the response channel (can only respond once)

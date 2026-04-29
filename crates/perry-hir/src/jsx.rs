@@ -8,7 +8,7 @@ use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower::{LoweringContext, lower_expr};
+use crate::lower::{lower_expr, LoweringContext};
 
 pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement) -> Result<Expr> {
     let type_expr = lower_jsx_element_name(ctx, &jsx.opening.name)?;
@@ -79,7 +79,10 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
 }
 
 /// Lower a JSX fragment (`<>…</>`) to a `jsx(Fragment, { children })` call.
-pub(crate) fn lower_jsx_fragment(ctx: &mut LoweringContext, jsx: &ast::JSXFragment) -> Result<Expr> {
+pub(crate) fn lower_jsx_fragment(
+    ctx: &mut LoweringContext,
+    jsx: &ast::JSXFragment,
+) -> Result<Expr> {
     let mut children: Vec<Expr> = Vec::new();
     for child in &jsx.children {
         if let Some(child_expr) = lower_jsx_child(ctx, child)? {
@@ -122,7 +125,10 @@ pub(crate) fn lower_jsx_fragment(ctx: &mut LoweringContext, jsx: &ast::JSXFragme
 /// Lower a JSX element name to an HIR expression.
 /// Lowercase tag names (HTML intrinsics) become string literals.
 /// Uppercase tag names (components) are looked up as identifiers.
-pub(crate) fn lower_jsx_element_name(ctx: &mut LoweringContext, name: &ast::JSXElementName) -> Result<Expr> {
+pub(crate) fn lower_jsx_element_name(
+    ctx: &mut LoweringContext,
+    name: &ast::JSXElementName,
+) -> Result<Expr> {
     match name {
         ast::JSXElementName::Ident(ident) => {
             let sym = ident.sym.as_ref();
@@ -202,11 +208,12 @@ pub(crate) fn lower_jsx_object(ctx: &mut LoweringContext, obj: &ast::JSXObject) 
 }
 
 /// Lower a JSX attribute value to an HIR expression.
-pub(crate) fn lower_jsx_attr_value(ctx: &mut LoweringContext, value: &ast::JSXAttrValue) -> Result<Expr> {
+pub(crate) fn lower_jsx_attr_value(
+    ctx: &mut LoweringContext,
+    value: &ast::JSXAttrValue,
+) -> Result<Expr> {
     match value {
-        ast::JSXAttrValue::Str(s) => {
-            Ok(Expr::String(s.value.as_str().unwrap_or("").to_string()))
-        }
+        ast::JSXAttrValue::Str(s) => Ok(Expr::String(s.value.as_str().unwrap_or("").to_string())),
         ast::JSXAttrValue::JSXExprContainer(container) => match &container.expr {
             ast::JSXExpr::JSXEmptyExpr(_) => Ok(Expr::Undefined),
             ast::JSXExpr::Expr(expr) => lower_expr(ctx, expr),
@@ -218,7 +225,10 @@ pub(crate) fn lower_jsx_attr_value(ctx: &mut LoweringContext, value: &ast::JSXAt
 
 /// Lower a JSX child node to an optional HIR expression.
 /// Returns `None` for whitespace-only text nodes (they are elided, matching React's behaviour).
-pub(crate) fn lower_jsx_child(ctx: &mut LoweringContext, child: &ast::JSXElementChild) -> Result<Option<Expr>> {
+pub(crate) fn lower_jsx_child(
+    ctx: &mut LoweringContext,
+    child: &ast::JSXElementChild,
+) -> Result<Option<Expr>> {
     match child {
         ast::JSXElementChild::JSXText(text) => {
             let normalized = normalize_jsx_text(&text.value.to_string());
@@ -232,15 +242,9 @@ pub(crate) fn lower_jsx_child(ctx: &mut LoweringContext, child: &ast::JSXElement
             ast::JSXExpr::JSXEmptyExpr(_) => Ok(None),
             ast::JSXExpr::Expr(expr) => lower_expr(ctx, expr).map(Some),
         },
-        ast::JSXElementChild::JSXSpreadChild(spread) => {
-            lower_expr(ctx, &spread.expr).map(Some)
-        }
-        ast::JSXElementChild::JSXElement(elem) => {
-            lower_jsx_element(ctx, elem).map(Some)
-        }
-        ast::JSXElementChild::JSXFragment(frag) => {
-            lower_jsx_fragment(ctx, frag).map(Some)
-        }
+        ast::JSXElementChild::JSXSpreadChild(spread) => lower_expr(ctx, &spread.expr).map(Some),
+        ast::JSXElementChild::JSXElement(elem) => lower_jsx_element(ctx, elem).map(Some),
+        ast::JSXElementChild::JSXFragment(frag) => lower_jsx_fragment(ctx, frag).map(Some),
     }
 }
 
@@ -251,7 +255,8 @@ pub(crate) fn normalize_jsx_text(text: &str) -> String {
     if lines.len() == 1 {
         return text.trim().to_string();
     }
-    lines.iter()
+    lines
+        .iter()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()

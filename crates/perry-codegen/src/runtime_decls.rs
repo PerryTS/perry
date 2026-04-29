@@ -181,19 +181,95 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_closure_call2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_closure_call3", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call4", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call5", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call6", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call7", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call8", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call9", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call10", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call11", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call12", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call13", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call14", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call15", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call16", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_closure_call4",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_closure_call5",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_closure_call6",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_closure_call7",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_closure_call8",
+        DOUBLE,
+        &[
+            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function(
+        "js_closure_call9",
+        DOUBLE,
+        &[
+            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function(
+        "js_closure_call10",
+        DOUBLE,
+        &[
+            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function(
+        "js_closure_call11",
+        DOUBLE,
+        &[
+            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+            DOUBLE,
+        ],
+    );
+    module.declare_function(
+        "js_closure_call12",
+        DOUBLE,
+        &[
+            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+            DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function(
+        "js_closure_call13",
+        DOUBLE,
+        &[
+            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+            DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function(
+        "js_closure_call14",
+        DOUBLE,
+        &[
+            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+            DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function(
+        "js_closure_call15",
+        DOUBLE,
+        &[
+            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
+    module.declare_function(
+        "js_closure_call16",
+        DOUBLE,
+        &[
+            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+        ],
+    );
 
     // Phase B.16 / D follow-ups: more runtime functions discovered
     // by the test-files sweep histogram.
@@ -256,7 +332,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // fs.createReadStream(path[, options]) — returns NaN-boxed stream object.
     module.declare_function("js_fs_create_read_stream", DOUBLE, &[DOUBLE]);
     // fs.readFile(path, encoding, callback) — Node-compatible callback variant.
-    module.declare_function("js_fs_read_file_callback", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_fs_read_file_callback",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     // Stats helper: method dispatcher called from the LLVM dispatch fast path.
     module.declare_function("js_fs_stats_is_file", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fs_stats_is_directory", DOUBLE, &[DOUBLE]);
@@ -350,11 +430,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[I32, I32, I32, I64],
     );
-    module.declare_function(
-        "js_build_class_keys_array",
-        I64,
-        &[I32, I32, PTR, I32],
-    );
+    module.declare_function("js_build_class_keys_array", I64, &[I32, I32, PTR, I32]);
     // Inline bump-allocator state accessor + slow path. The codegen
     // calls `js_inline_arena_state` once per JS function entry, caches
     // the returned pointer in a stack slot, and reads/writes the
@@ -367,11 +443,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Field offsets are load-bearing — keep `#[repr(C)] InlineArenaState`
     // in sync with the GEPs we emit in `lower_call::compile_new`.
     module.declare_function("js_inline_arena_state", PTR, &[]);
-    module.declare_function(
-        "js_inline_arena_slow_alloc",
-        PTR,
-        &[PTR, I64, I64],
-    );
+    module.declare_function("js_inline_arena_slow_alloc", PTR, &[PTR, I64, I64]);
     module.declare_function("js_object_delete_field", I32, &[I64, I64]);
     // js_eq takes JSValue (#[repr(transparent)] u64) for both
     // params + return — i64 in the ABI, not double.
@@ -438,7 +510,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_to_sorted_with_comparator", I64, &[I64, I64]);
     module.declare_function("js_array_to_spliced", I64, &[I64, DOUBLE, DOUBLE, PTR, I32]);
     module.declare_function("js_array_with", I64, &[I64, DOUBLE, DOUBLE]);
-    module.declare_function("js_array_copy_within", I64, &[I64, DOUBLE, DOUBLE, I32, DOUBLE]);
+    module.declare_function(
+        "js_array_copy_within",
+        I64,
+        &[I64, DOUBLE, DOUBLE, I32, DOUBLE],
+    );
     module.declare_function("js_regexp_new", I64, &[I64, I64]);
     module.declare_function("js_regexp_test", I32, &[I64, I64]);
     module.declare_function("js_get_string_pointer_unified", I64, &[DOUBLE]);
@@ -538,7 +614,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_number_is_safe_integer", DOUBLE, &[DOUBLE]);
     // Date parsing / UTC constructors / UTC setters.
     module.declare_function("js_date_parse", DOUBLE, &[I64]);
-    module.declare_function("js_date_utc", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_date_utc",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_date_set_utc_full_year", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_date_set_utc_month", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_date_set_utc_date", DOUBLE, &[DOUBLE, DOUBLE]);
@@ -602,8 +682,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_typed_array_find_last_index", DOUBLE, &[I64, I64]);
     // Object introspection / mutation (Agent A's accessor-descriptor work).
     module.declare_function("js_object_has_own", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_object_define_property", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_object_get_own_property_descriptor", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_object_define_property",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_object_get_own_property_descriptor",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_object_get_own_property_names", DOUBLE, &[DOUBLE]);
     // Symbol runtime (perry-runtime/src/symbol.rs)
     module.declare_function("js_symbol_new", DOUBLE, &[DOUBLE]);
@@ -615,7 +703,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_symbol_equals", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_is_symbol", I32, &[DOUBLE]);
     module.declare_function("js_object_get_own_property_symbols", I64, &[DOUBLE]);
-    module.declare_function("js_object_set_symbol_property", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_object_set_symbol_property",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_object_get_symbol_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_create", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_freeze", DOUBLE, &[DOUBLE]);
@@ -656,7 +748,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_weakref_new", I64, &[DOUBLE]);
     module.declare_function("js_weakref_deref", DOUBLE, &[DOUBLE]);
     module.declare_function("js_finreg_new", I64, &[DOUBLE]);
-    module.declare_function("js_finreg_register", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_finreg_register",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_finreg_unregister", DOUBLE, &[DOUBLE, DOUBLE]);
     // atob/btoa: base64 decode/encode. Take a NaN-boxed string (f64),
     // return a raw *const StringHeader (i64, must be STRING_TAG-boxed).
@@ -992,7 +1088,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_reflect_delete", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_own_keys", DOUBLE, &[DOUBLE]);
     module.declare_function("js_reflect_apply", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_reflect_define_property", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_reflect_define_property",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
 
     declare_stdlib_ffi(module);
 }
@@ -1032,7 +1132,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_http_respond_redirect", DOUBLE, &[I64, I64, DOUBLE]);
     module.declare_function("js_http_respond_status_text", I64, &[DOUBLE]);
     module.declare_function("js_http_respond_text", DOUBLE, &[I64, DOUBLE, I64]);
-    module.declare_function("js_http_respond_with_headers", DOUBLE, &[I64, DOUBLE, I64, I64]);
+    module.declare_function(
+        "js_http_respond_with_headers",
+        DOUBLE,
+        &[I64, DOUBLE, I64, I64],
+    );
     module.declare_function("js_http_response_headers", DOUBLE, &[I64]);
     module.declare_function("js_http_server_accept_v2", I64, &[I64]);
     module.declare_function("js_http_server_close", DOUBLE, &[I64]);
@@ -1086,14 +1190,38 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_mongodb_client_new", I64, &[I64]);
     // _value wrappers (JSON-stringify f64 JSValue arg, forward to existing fns)
     module.declare_function("js_mongodb_collection_count_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_mongodb_collection_delete_many_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_mongodb_collection_delete_one_value", I64, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_mongodb_collection_delete_many_value",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_mongodb_collection_delete_one_value",
+        I64,
+        &[I64, DOUBLE],
+    );
     module.declare_function("js_mongodb_collection_find_one_value", I64, &[I64, DOUBLE]);
     module.declare_function("js_mongodb_collection_find_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_mongodb_collection_insert_many_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_mongodb_collection_insert_one_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_mongodb_collection_update_many_value", I64, &[I64, DOUBLE, DOUBLE]);
-    module.declare_function("js_mongodb_collection_update_one_value", I64, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_mongodb_collection_insert_many_value",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_mongodb_collection_insert_one_value",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_mongodb_collection_update_many_value",
+        I64,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_mongodb_collection_update_one_value",
+        I64,
+        &[I64, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_mongodb_collection_count", I64, &[I64, I64]);
     module.declare_function("js_mongodb_collection_delete_many", I64, &[I64, I64]);
     module.declare_function("js_mongodb_collection_delete_one", I64, &[I64, I64]);
@@ -1209,7 +1337,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_child_process_exec_sync", I64, &[I64, I64]);
     module.declare_function("js_child_process_get_process_status", I64, &[DOUBLE]);
     module.declare_function("js_child_process_kill_process", I32, &[DOUBLE]);
-    module.declare_function("js_child_process_spawn_background", I64, &[DOUBLE, I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_child_process_spawn_background",
+        I64,
+        &[DOUBLE, I64, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_child_process_spawn_sync", I64, &[I64, I64, I64]);
 
     // ========== cheerio ==========
@@ -1319,7 +1451,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_crypto_random_bytes_hex", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_nonce", I64, &[]);
     module.declare_function("js_crypto_scrypt", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_crypto_scrypt_custom", I64, &[I64, I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_crypto_scrypt_custom",
+        I64,
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_crypto_x25519_keypair", I64, &[]);
     module.declare_function("js_crypto_x25519_shared_secret", I64, &[I64, I64]);
     module.declare_function("js_keccak256_native", I64, &[I64]);
@@ -1355,7 +1491,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_datefns_add_years", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_datefns_difference_in_days", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_datefns_difference_in_hours", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_datefns_difference_in_minutes", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_datefns_difference_in_minutes",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_datefns_end_of_day", DOUBLE, &[DOUBLE]);
     module.declare_function("js_datefns_format", I64, &[DOUBLE, I64]);
     module.declare_function("js_datefns_is_after", DOUBLE, &[DOUBLE, DOUBLE]);
@@ -1693,7 +1833,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_get_export", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_get_property", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_load_module", I64, &[I64, I64]);
-    module.declare_function("js_native_call_method", DOUBLE, &[DOUBLE, I64, I64, I64, I64]);
+    module.declare_function(
+        "js_native_call_method",
+        DOUBLE,
+        &[DOUBLE, I64, I64, I64, I64],
+    );
     module.declare_function("js_native_call_value", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_new_from_handle", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_new_instance", DOUBLE, &[I64, I64, I64, I64, I64]);

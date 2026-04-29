@@ -113,7 +113,14 @@ pub fn run(args: DevArgs, _format: OutputFormat, use_color: bool, verbose: u8) -
     let verbose_cache = std::env::var("PERRY_DEV_VERBOSE").ok().as_deref() == Some("1");
 
     // Initial build + spawn.
-    let mut child: Option<Child> = match build_once(&input, &output_path, verbose, &mut parse_cache, verbose_cache, use_color) {
+    let mut child: Option<Child> = match build_once(
+        &input,
+        &output_path,
+        verbose,
+        &mut parse_cache,
+        verbose_cache,
+        use_color,
+    ) {
         Ok(()) => spawn_child(&output_path, &args.child_args, use_color).ok(),
         Err(e) => {
             eprintln!(
@@ -121,18 +128,15 @@ pub fn run(args: DevArgs, _format: OutputFormat, use_color: bool, verbose: u8) -
                 paint("✗", "red", use_color),
                 e
             );
-            eprintln!(
-                "  {}",
-                paint("waiting for changes...", "dim", use_color)
-            );
+            eprintln!("  {}", paint("waiting for changes...", "dim", use_color));
             None
         }
     };
 
     // Set up the watcher. Events arrive on `rx`.
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
-    let mut watcher = notify::recommended_watcher(tx)
-        .map_err(|e| anyhow!("failed to create watcher: {}", e))?;
+    let mut watcher =
+        notify::recommended_watcher(tx).map_err(|e| anyhow!("failed to create watcher: {}", e))?;
     for root in &watch_roots {
         watcher
             .watch(root, RecursiveMode::Recursive)
@@ -178,29 +182,26 @@ pub fn run(args: DevArgs, _format: OutputFormat, use_color: bool, verbose: u8) -
         cleanup_child(&mut child);
 
         let started = Instant::now();
-        match build_once(&input, &output_path, verbose, &mut parse_cache, verbose_cache, use_color) {
+        match build_once(
+            &input,
+            &output_path,
+            verbose,
+            &mut parse_cache,
+            verbose_cache,
+            use_color,
+        ) {
             Ok(()) => {
                 let ms = started.elapsed().as_millis();
-                eprintln!(
-                    "{} rebuilt in {}ms",
-                    paint("✓", "green", use_color),
-                    ms
-                );
+                eprintln!("{} rebuilt in {}ms", paint("✓", "green", use_color), ms);
                 match spawn_child(&output_path, &args.child_args, use_color) {
                     Ok(c) => child = Some(c),
-                    Err(e) => eprintln!(
-                        "{} failed to launch: {:#}",
-                        paint("✗", "red", use_color),
-                        e
-                    ),
+                    Err(e) => {
+                        eprintln!("{} failed to launch: {:#}", paint("✗", "red", use_color), e)
+                    }
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "{} build failed: {:#}",
-                    paint("✗", "red", use_color),
-                    e
-                );
+                eprintln!("{} build failed: {:#}", paint("✗", "red", use_color), e);
                 eprintln!(
                     "  {}",
                     paint("waiting for next change...", "dim", use_color)
@@ -219,12 +220,8 @@ fn resolve_output(output: &Option<PathBuf>, input: &Path) -> Result<PathBuf> {
     }
     let cwd = std::env::current_dir().map_err(|e| anyhow!("cannot read cwd: {}", e))?;
     let dir = cwd.join(".perry-dev");
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| anyhow!("cannot create {}: {}", dir.display(), e))?;
-    let stem = input
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("app");
+    std::fs::create_dir_all(&dir).map_err(|e| anyhow!("cannot create {}: {}", dir.display(), e))?;
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
     Ok(dir.join(stem))
 }
 
@@ -462,9 +459,10 @@ mod tests {
             EventKind::Modify(ModifyKind::Data(DataChange::Content)),
             "node_modules/x.ts"
         )));
-        assert!(!is_relevant(&ev(EventKind::Access(
-            notify::event::AccessKind::Read
-        ), "src/main.ts")));
+        assert!(!is_relevant(&ev(
+            EventKind::Access(notify::event::AccessKind::Read),
+            "src/main.ts"
+        )));
         assert!(!is_relevant(&Err(notify::Error::generic("boom"))));
     }
 

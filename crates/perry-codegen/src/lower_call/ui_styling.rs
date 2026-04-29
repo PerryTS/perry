@@ -132,7 +132,13 @@ pub(super) fn apply_inline_style(
                 ctx.block().call(
                     DOUBLE,
                     "perry_ui_widget_set_background_color",
-                    &[(I64, handle), (DOUBLE, &r), (DOUBLE, &g), (DOUBLE, &b), (DOUBLE, &a)],
+                    &[
+                        (I64, handle),
+                        (DOUBLE, &r),
+                        (DOUBLE, &g),
+                        (DOUBLE, &b),
+                        (DOUBLE, &a),
+                    ],
                 );
             }
             "color" => {
@@ -149,7 +155,13 @@ pub(super) fn apply_inline_style(
                 ctx.block().call(
                     DOUBLE,
                     "perry_ui_text_set_color",
-                    &[(I64, handle), (DOUBLE, &r), (DOUBLE, &g), (DOUBLE, &b), (DOUBLE, &a)],
+                    &[
+                        (I64, handle),
+                        (DOUBLE, &r),
+                        (DOUBLE, &g),
+                        (DOUBLE, &b),
+                        (DOUBLE, &a),
+                    ],
                 );
             }
             "borderColor" => {
@@ -162,7 +174,13 @@ pub(super) fn apply_inline_style(
                 ctx.block().call(
                     DOUBLE,
                     "perry_ui_widget_set_border_color",
-                    &[(I64, handle), (DOUBLE, &r), (DOUBLE, &g), (DOUBLE, &b), (DOUBLE, &a)],
+                    &[
+                        (I64, handle),
+                        (DOUBLE, &r),
+                        (DOUBLE, &g),
+                        (DOUBLE, &b),
+                        (DOUBLE, &a),
+                    ],
                 );
             }
             "padding" => {
@@ -194,7 +212,13 @@ pub(super) fn apply_inline_style(
                 ctx.block().call(
                     DOUBLE,
                     "perry_ui_widget_set_edge_insets",
-                    &[(I64, handle), (DOUBLE, &top), (DOUBLE, &right), (DOUBLE, &bottom), (DOUBLE, &left)],
+                    &[
+                        (I64, handle),
+                        (DOUBLE, &top),
+                        (DOUBLE, &right),
+                        (DOUBLE, &bottom),
+                        (DOUBLE, &left),
+                    ],
                 );
             }
             "shadow" => {
@@ -209,8 +233,13 @@ pub(super) fn apply_inline_style(
                         "perry_ui_widget_set_shadow",
                         &[
                             (I64, handle),
-                            (DOUBLE, &cr), (DOUBLE, &cg), (DOUBLE, &cb), (DOUBLE, &ca),
-                            (DOUBLE, &blur), (DOUBLE, &dx), (DOUBLE, &dy),
+                            (DOUBLE, &cr),
+                            (DOUBLE, &cg),
+                            (DOUBLE, &cb),
+                            (DOUBLE, &ca),
+                            (DOUBLE, &blur),
+                            (DOUBLE, &dx),
+                            (DOUBLE, &dy),
                         ],
                     );
                 }
@@ -246,15 +275,24 @@ pub(super) fn apply_inline_style(
                     ctx.pending_declares.push((
                         "perry_ui_widget_set_background_gradient".to_string(),
                         DOUBLE,
-                        vec![I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+                        vec![
+                            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
+                            DOUBLE,
+                        ],
                     ));
                     ctx.block().call(
                         DOUBLE,
                         "perry_ui_widget_set_background_gradient",
                         &[
                             (I64, handle),
-                            (DOUBLE, &r1), (DOUBLE, &g1), (DOUBLE, &b1), (DOUBLE, &a1),
-                            (DOUBLE, &r2), (DOUBLE, &g2), (DOUBLE, &b2), (DOUBLE, &a2),
+                            (DOUBLE, &r1),
+                            (DOUBLE, &g1),
+                            (DOUBLE, &b1),
+                            (DOUBLE, &a1),
+                            (DOUBLE, &r2),
+                            (DOUBLE, &g2),
+                            (DOUBLE, &b2),
+                            (DOUBLE, &a2),
                             (DOUBLE, &angle),
                         ],
                     );
@@ -478,7 +516,10 @@ fn extract_shadow_obj(
         match key.as_str() {
             "color" => {
                 if let Some((r, g, b, a)) = extract_perry_color(ctx, v)? {
-                    cr = r; cg = g; cb = b; ca = a;
+                    cr = r;
+                    cg = g;
+                    cb = b;
+                    ca = a;
                 }
             }
             "blur" => blur = lower_expr(ctx, v)?,
@@ -497,7 +538,13 @@ fn extract_shadow_obj(
 fn extract_gradient_obj(
     ctx: &mut FnCtx<'_>,
     val: &Expr,
-) -> Result<Option<(String, (String, String, String, String), (String, String, String, String))>> {
+) -> Result<
+    Option<(
+        String,
+        (String, String, String, String),
+        (String, String, String, String),
+    )>,
+> {
     let Some(props) = extract_options_fields(ctx, val) else {
         return Ok(None);
     };

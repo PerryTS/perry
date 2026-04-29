@@ -4,8 +4,7 @@
 //! Provides fetch() function for making HTTP requests.
 
 use perry_runtime::{
-    js_array_alloc, js_array_push, js_object_alloc,
-    js_object_set_field, js_object_set_keys,
+    js_array_alloc, js_array_push, js_object_alloc, js_object_set_field, js_object_set_keys,
     js_string_from_bytes, JSValue, StringHeader,
 };
 use std::collections::HashMap;
@@ -40,7 +39,7 @@ lazy_static::lazy_static! {
 }
 
 struct StreamState {
-    status: u8,           // 0=connecting, 1=streaming, 2=done, 3=error
+    status: u8, // 0=connecting, 1=streaming, 2=done, 3=error
     pending_lines: Vec<String>,
     partial: String,
     #[allow(dead_code)]
@@ -114,7 +113,11 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
         match HTTP_CLIENT.get(&url).send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
 
                 let mut headers = HashMap::new();
                 for (key, value) in response.headers() {
@@ -131,12 +134,15 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                 *id_guard += 1;
                 drop(id_guard);
 
-                FETCH_RESPONSES.lock().unwrap().insert(response_id, FetchResponse {
-                    status,
-                    status_text,
-                    headers,
-                    body,
-                });
+                FETCH_RESPONSES.lock().unwrap().insert(
+                    response_id,
+                    FetchResponse {
+                        status,
+                        status_text,
+                        headers,
+                        body,
+                    },
+                );
 
                 // Return response handle
                 let result_bits = (response_id as f64).to_bits();
@@ -184,7 +190,11 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
         match request.send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
 
                 let mut headers = HashMap::new();
                 for (key, value) in response.headers() {
@@ -200,12 +210,15 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                 *id_guard += 1;
                 drop(id_guard);
 
-                FETCH_RESPONSES.lock().unwrap().insert(response_id, FetchResponse {
-                    status,
-                    status_text,
-                    headers,
-                    body,
-                });
+                FETCH_RESPONSES.lock().unwrap().insert(
+                    response_id,
+                    FetchResponse {
+                        status,
+                        status_text,
+                        headers,
+                        body,
+                    },
+                );
 
                 let result_bits = (response_id as f64).to_bits();
                 queue_promise_resolution(promise_ptr, true, result_bits);
@@ -247,8 +260,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
 
     spawn(async move {
         let client = HTTP_CLIENT.clone();
-        let mut request = client.post(&url)
-            .header("Content-Type", "application/json");
+        let mut request = client.post(&url).header("Content-Type", "application/json");
         if !auth_header.is_empty() {
             request = request.header("Authorization", &auth_header);
         }
@@ -256,7 +268,11 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
         match request.send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
 
                 let mut headers = HashMap::new();
                 for (key, value) in response.headers() {
@@ -272,12 +288,15 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
                 *id_guard += 1;
                 drop(id_guard);
 
-                FETCH_RESPONSES.lock().unwrap().insert(response_id, FetchResponse {
-                    status,
-                    status_text,
-                    headers,
-                    body,
-                });
+                FETCH_RESPONSES.lock().unwrap().insert(
+                    response_id,
+                    FetchResponse {
+                        status,
+                        status_text,
+                        headers,
+                        body,
+                    },
+                );
 
                 let result_bits = (response_id as f64).to_bits();
                 queue_promise_resolution(promise_ptr, true, result_bits);
@@ -315,7 +334,8 @@ pub unsafe extern "C" fn js_fetch_post(
     };
 
     let body = string_from_header(body_ptr).unwrap_or_default();
-    let content_type = string_from_header(content_type_ptr).unwrap_or_else(|| "application/json".to_string());
+    let content_type =
+        string_from_header(content_type_ptr).unwrap_or_else(|| "application/json".to_string());
 
     spawn(async move {
         let client = HTTP_CLIENT.clone();
@@ -328,7 +348,11 @@ pub unsafe extern "C" fn js_fetch_post(
         {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
 
                 let mut headers = HashMap::new();
                 for (key, value) in response.headers() {
@@ -345,12 +369,15 @@ pub unsafe extern "C" fn js_fetch_post(
                 *id_guard += 1;
                 drop(id_guard);
 
-                FETCH_RESPONSES.lock().unwrap().insert(response_id, FetchResponse {
-                    status,
-                    status_text,
-                    headers,
-                    body,
-                });
+                FETCH_RESPONSES.lock().unwrap().insert(
+                    response_id,
+                    FetchResponse {
+                        status,
+                        status_text,
+                        headers,
+                        body,
+                    },
+                );
 
                 // Return response handle
                 let result_bits = (response_id as f64).to_bits();
@@ -393,9 +420,9 @@ pub unsafe extern "C" fn js_fetch_with_options(
     let body = string_from_header(body_ptr);
     let headers_json = string_from_header(headers_json_ptr).unwrap_or_else(|| "{}".to_string());
 
-
     // Parse headers from JSON
-    let custom_headers: HashMap<String, String> = serde_json::from_str(&headers_json).unwrap_or_default();
+    let custom_headers: HashMap<String, String> =
+        serde_json::from_str(&headers_json).unwrap_or_default();
 
     spawn(async move {
         let client = HTTP_CLIENT.clone();
@@ -421,7 +448,11 @@ pub unsafe extern "C" fn js_fetch_with_options(
         match request.send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+                let status_text = response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("")
+                    .to_string();
 
                 let mut headers = HashMap::new();
                 for (key, value) in response.headers() {
@@ -438,12 +469,15 @@ pub unsafe extern "C" fn js_fetch_with_options(
                 *id_guard += 1;
                 drop(id_guard);
 
-                FETCH_RESPONSES.lock().unwrap().insert(response_id, FetchResponse {
-                    status,
-                    status_text,
-                    headers,
-                    body,
-                });
+                FETCH_RESPONSES.lock().unwrap().insert(
+                    response_id,
+                    FetchResponse {
+                        status,
+                        status_text,
+                        headers,
+                        body,
+                    },
+                );
 
                 // Return response handle
                 let result_bits = (response_id as f64).to_bits();
@@ -493,7 +527,13 @@ pub extern "C" fn js_fetch_response_ok(handle: i64) -> f64 {
     let response_id = handle as usize;
     let guard = FETCH_RESPONSES.lock().unwrap();
     match guard.get(&response_id) {
-        Some(resp) => if resp.status >= 200 && resp.status < 300 { 1.0 } else { 0.0 },
+        Some(resp) => {
+            if resp.status >= 200 && resp.status < 300 {
+                1.0
+            } else {
+                0.0
+            }
+        }
         None => 0.0,
     }
 }
@@ -623,7 +663,9 @@ pub unsafe extern "C" fn js_fetch_response_json(handle: i64) -> *mut perry_runti
 /// Simple fetch that returns text directly (convenience function)
 /// fetchText(url) -> Promise<string>
 #[no_mangle]
-pub unsafe extern "C" fn js_fetch_text(url_ptr: *const StringHeader) -> *mut perry_runtime::Promise {
+pub unsafe extern "C" fn js_fetch_text(
+    url_ptr: *const StringHeader,
+) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
     let promise_ptr = promise as usize;
 
@@ -639,20 +681,18 @@ pub unsafe extern "C" fn js_fetch_text(url_ptr: *const StringHeader) -> *mut per
 
     spawn(async move {
         match HTTP_CLIENT.get(&url).send().await {
-            Ok(response) => {
-                match response.text().await {
-                    Ok(text) => {
-                        let result_str = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-                        let result_bits = JSValue::pointer(result_str as *const u8).bits();
-                        queue_promise_resolution(promise_ptr, true, result_bits);
-                    }
-                    Err(e) => {
-                        let err_msg = format!("Read error: {}", e);
-                        let err_bits = fetch_error_bits(&err_msg);
-                        queue_promise_resolution(promise_ptr, false, err_bits);
-                    }
+            Ok(response) => match response.text().await {
+                Ok(text) => {
+                    let result_str = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+                    let result_bits = JSValue::pointer(result_str as *const u8).bits();
+                    queue_promise_resolution(promise_ptr, true, result_bits);
                 }
-            }
+                Err(e) => {
+                    let err_msg = format!("Read error: {}", e);
+                    let err_bits = fetch_error_bits(&err_msg);
+                    queue_promise_resolution(promise_ptr, false, err_bits);
+                }
+            },
             Err(e) => {
                 let err_msg = format!("Fetch error: {}", e);
                 let err_bits = fetch_error_bits(&err_msg);
@@ -670,34 +710,56 @@ pub unsafe extern "C" fn js_fetch_text(url_ptr: *const StringHeader) -> *mut per
 
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_stream_start(
-    url_ptr: *const StringHeader, method_ptr: *const StringHeader,
-    body_ptr: *const StringHeader, headers_json_ptr: *const StringHeader,
+    url_ptr: *const StringHeader,
+    method_ptr: *const StringHeader,
+    body_ptr: *const StringHeader,
+    headers_json_ptr: *const StringHeader,
 ) -> f64 {
     let url = string_from_header(url_ptr).unwrap_or_default();
     let method = string_from_header(method_ptr).unwrap_or_else(|| "POST".to_string());
     let body = string_from_header(body_ptr);
     let headers_json = string_from_header(headers_json_ptr).unwrap_or_else(|| "{}".to_string());
-    let custom_headers: HashMap<String, String> = serde_json::from_str(&headers_json).unwrap_or_default();
+    let custom_headers: HashMap<String, String> =
+        serde_json::from_str(&headers_json).unwrap_or_default();
     let mut id_guard = NEXT_STREAM_ID.lock().unwrap();
     let stream_id = *id_guard;
     *id_guard += 1;
     drop(id_guard);
-    STREAM_HANDLES.lock().unwrap().insert(stream_id, StreamState {
-        status: 0, pending_lines: Vec::new(), partial: String::new(), http_status: 0, error: String::new(),
-    });
+    STREAM_HANDLES.lock().unwrap().insert(
+        stream_id,
+        StreamState {
+            status: 0,
+            pending_lines: Vec::new(),
+            partial: String::new(),
+            http_status: 0,
+            error: String::new(),
+        },
+    );
     let sid = stream_id;
     spawn(async move {
         let client = HTTP_CLIENT.clone();
         let mut request = match method.to_uppercase().as_str() {
-            "POST" => client.post(&url), "PUT" => client.put(&url),
-            "PATCH" => client.patch(&url), _ => client.get(&url),
+            "POST" => client.post(&url),
+            "PUT" => client.put(&url),
+            "PATCH" => client.patch(&url),
+            _ => client.get(&url),
         };
-        for (key, value) in &custom_headers { request = request.header(key.as_str(), value.as_str()); }
-        if let Some(b) = body { request = request.body(b); }
+        for (key, value) in &custom_headers {
+            request = request.header(key.as_str(), value.as_str());
+        }
+        if let Some(b) = body {
+            request = request.body(b);
+        }
         match request.send().await {
             Ok(mut response) => {
                 let http_status = response.status().as_u16();
-                { let mut g = STREAM_HANDLES.lock().unwrap(); if let Some(s) = g.get_mut(&sid) { s.http_status = http_status; s.status = 1; } }
+                {
+                    let mut g = STREAM_HANDLES.lock().unwrap();
+                    if let Some(s) = g.get_mut(&sid) {
+                        s.http_status = http_status;
+                        s.status = 1;
+                    }
+                }
                 loop {
                     match response.chunk().await {
                         Ok(Some(chunk)) => {
@@ -709,28 +771,46 @@ pub unsafe extern "C" fn js_fetch_stream_start(
                                     if let Some(pos) = s.partial.find('\n') {
                                         let line = s.partial[..pos].to_string();
                                         s.partial = s.partial[pos + 1..].to_string();
-                                        if !line.is_empty() { s.pending_lines.push(line); }
-                                    } else { break; }
+                                        if !line.is_empty() {
+                                            s.pending_lines.push(line);
+                                        }
+                                    } else {
+                                        break;
+                                    }
                                 }
-                            } else { break; }
+                            } else {
+                                break;
+                            }
                         }
                         Ok(None) => {
                             let mut g = STREAM_HANDLES.lock().unwrap();
                             if let Some(s) = g.get_mut(&sid) {
-                                if !s.partial.is_empty() { let r = std::mem::take(&mut s.partial); s.pending_lines.push(r); }
+                                if !s.partial.is_empty() {
+                                    let r = std::mem::take(&mut s.partial);
+                                    s.pending_lines.push(r);
+                                }
                                 s.status = 2;
                             }
                             break;
                         }
                         Err(e) => {
                             let mut g = STREAM_HANDLES.lock().unwrap();
-                            if let Some(s) = g.get_mut(&sid) { s.error = format!("Stream error: {}", e); s.status = 3; }
+                            if let Some(s) = g.get_mut(&sid) {
+                                s.error = format!("Stream error: {}", e);
+                                s.status = 3;
+                            }
                             break;
                         }
                     }
                 }
             }
-            Err(e) => { let mut g = STREAM_HANDLES.lock().unwrap(); if let Some(s) = g.get_mut(&sid) { s.error = format!("Connection error: {}", e); s.status = 3; } }
+            Err(e) => {
+                let mut g = STREAM_HANDLES.lock().unwrap();
+                if let Some(s) = g.get_mut(&sid) {
+                    s.error = format!("Connection error: {}", e);
+                    s.status = 3;
+                }
+            }
         }
     });
     stream_id as f64
@@ -753,14 +833,22 @@ pub extern "C" fn js_fetch_stream_poll(handle: f64) -> *mut StringHeader {
 pub extern "C" fn js_fetch_stream_status(handle: f64) -> f64 {
     let id = handle as usize;
     let g = STREAM_HANDLES.lock().unwrap();
-    if let Some(s) = g.get(&id) { s.status as f64 } else { 3.0 }
+    if let Some(s) = g.get(&id) {
+        s.status as f64
+    } else {
+        3.0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_fetch_stream_close(handle: f64) -> f64 {
     let id = handle as usize;
     let mut g = STREAM_HANDLES.lock().unwrap();
-    if g.remove(&id).is_some() { 1.0 } else { 0.0 }
+    if g.remove(&id).is_some() {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 // ========================================================================
@@ -791,7 +879,10 @@ impl HeadersStore {
     }
     fn get(&self, key: &str) -> Option<&str> {
         let lk = key.to_ascii_lowercase();
-        self.entries.iter().find(|(k, _)| *k == lk).map(|(_, v)| v.as_str())
+        self.entries
+            .iter()
+            .find(|(k, _)| *k == lk)
+            .map(|(_, v)| v.as_str())
     }
     fn has(&self, key: &str) -> bool {
         let lk = key.to_ascii_lowercase();
@@ -858,12 +949,15 @@ fn alloc_response(status: u16, status_text: String, headers: HeadersStore, body:
     *id_guard += 1;
     drop(id_guard);
     let hdr_map: HashMap<String, String> = headers.entries.iter().cloned().collect();
-    FETCH_RESPONSES.lock().unwrap().insert(id, FetchResponse {
-        status,
-        status_text,
-        headers: hdr_map,
-        body,
-    });
+    FETCH_RESPONSES.lock().unwrap().insert(
+        id,
+        FetchResponse {
+            status,
+            status_text,
+            headers: hdr_map,
+            body,
+        },
+    );
     id
 }
 
@@ -876,7 +970,11 @@ pub extern "C" fn js_headers_new() -> f64 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_headers_set(handle: f64, key_ptr: *const StringHeader, value_ptr: *const StringHeader) -> f64 {
+pub unsafe extern "C" fn js_headers_set(
+    handle: f64,
+    key_ptr: *const StringHeader,
+    value_ptr: *const StringHeader,
+) -> f64 {
     let id = handle as usize;
     let key = string_from_header(key_ptr).unwrap_or_default();
     let value = string_from_header(value_ptr).unwrap_or_default();
@@ -887,7 +985,10 @@ pub unsafe extern "C" fn js_headers_set(handle: f64, key_ptr: *const StringHeade
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_headers_get(handle: f64, key_ptr: *const StringHeader) -> *mut StringHeader {
+pub unsafe extern "C" fn js_headers_get(
+    handle: f64,
+    key_ptr: *const StringHeader,
+) -> *mut StringHeader {
     let id = handle as usize;
     let key = match string_from_header(key_ptr) {
         Some(k) => k,
@@ -968,11 +1069,20 @@ pub unsafe extern "C" fn js_response_new(
 ) -> f64 {
     let body_str = string_from_header(body_ptr).unwrap_or_default();
     let body = body_str.into_bytes();
-    let status_u16 = if status.is_nan() || status == 0.0 { 200 } else { status as u16 };
+    let status_u16 = if status.is_nan() || status == 0.0 {
+        200
+    } else {
+        status as u16
+    };
     let status_text = string_from_header(status_text_ptr)
         .unwrap_or_else(|| canonical_reason(status_u16).to_string());
     let headers = if headers_handle > 0.0 {
-        HEADERS_REGISTRY.lock().unwrap().get(&(headers_handle as usize)).cloned().unwrap_or_default()
+        HEADERS_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&(headers_handle as usize))
+            .cloned()
+            .unwrap_or_default()
     } else {
         HeadersStore::default()
     };
@@ -1086,13 +1196,21 @@ pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut perry_runtime::Pr
         let guard = FETCH_RESPONSES.lock().unwrap();
         match guard.get(&id) {
             Some(resp) => {
-                let ct = resp.headers.iter()
+                let ct = resp
+                    .headers
+                    .iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
                     .map(|(_, v)| v.clone())
                     .unwrap_or_default();
-                BlobData { body: resp.body.clone(), content_type: ct }
+                BlobData {
+                    body: resp.body.clone(),
+                    content_type: ct,
+                }
             }
-            None => BlobData { body: Vec::new(), content_type: String::new() },
+            None => BlobData {
+                body: Vec::new(),
+                content_type: String::new(),
+            },
         }
     };
     let blob_id = alloc_blob(data);
@@ -1110,7 +1228,9 @@ pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut perry_runtime::Pr
 #[no_mangle]
 pub extern "C" fn js_blob_size(handle: f64) -> f64 {
     let id = handle as usize;
-    BLOB_REGISTRY.lock().unwrap()
+    BLOB_REGISTRY
+        .lock()
+        .unwrap()
         .get(&id)
         .map(|b| b.body.len() as f64)
         .unwrap_or(0.0)
@@ -1120,7 +1240,9 @@ pub extern "C" fn js_blob_size(handle: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_type(handle: f64) -> *mut StringHeader {
     let id = handle as usize;
-    let ct = BLOB_REGISTRY.lock().unwrap()
+    let ct = BLOB_REGISTRY
+        .lock()
+        .unwrap()
         .get(&id)
         .map(|b| b.content_type.clone())
         .unwrap_or_default();
@@ -1136,7 +1258,9 @@ pub unsafe extern "C" fn js_blob_type(handle: f64) -> *mut StringHeader {
 pub unsafe extern "C" fn js_blob_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
     let id = handle as usize;
-    let body: Vec<u8> = BLOB_REGISTRY.lock().unwrap()
+    let body: Vec<u8> = BLOB_REGISTRY
+        .lock()
+        .unwrap()
         .get(&id)
         .map(|b| b.body.clone())
         .unwrap_or_default();
@@ -1170,7 +1294,9 @@ pub unsafe extern "C" fn js_blob_bytes(handle: f64) -> *mut perry_runtime::Promi
 pub unsafe extern "C" fn js_blob_text(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
     let id = handle as usize;
-    let body: Vec<u8> = BLOB_REGISTRY.lock().unwrap()
+    let body: Vec<u8> = BLOB_REGISTRY
+        .lock()
+        .unwrap()
         .get(&id)
         .map(|b| b.body.clone())
         .unwrap_or_default();
@@ -1222,7 +1348,10 @@ pub unsafe extern "C" fn js_blob_slice(
     } else {
         string_from_header(type_ptr).unwrap_or_default()
     };
-    alloc_blob(BlobData { body: slice, content_type: new_type }) as f64
+    alloc_blob(BlobData {
+        body: slice,
+        content_type: new_type,
+    }) as f64
 }
 
 /// Response.json(value) — static method. Allocates a Response with JSON-stringified body
@@ -1246,12 +1375,24 @@ pub unsafe extern "C" fn js_response_static_json(value: f64) -> f64 {
 
 /// Response.redirect(url, status) — static method. Allocates a redirect response.
 #[no_mangle]
-pub unsafe extern "C" fn js_response_static_redirect(url_ptr: *const StringHeader, status: f64) -> f64 {
+pub unsafe extern "C" fn js_response_static_redirect(
+    url_ptr: *const StringHeader,
+    status: f64,
+) -> f64 {
     let url = string_from_header(url_ptr).unwrap_or_default();
-    let status_u16 = if status == 0.0 || status.is_nan() { 302 } else { status as u16 };
+    let status_u16 = if status == 0.0 || status.is_nan() {
+        302
+    } else {
+        status as u16
+    };
     let mut headers = HeadersStore::default();
     headers.set("location", &url);
-    alloc_response(status_u16, canonical_reason(status_u16).to_string(), headers, Vec::new()) as f64
+    alloc_response(
+        status_u16,
+        canonical_reason(status_u16).to_string(),
+        headers,
+        Vec::new(),
+    ) as f64
 }
 
 // ----------------- Request FFI -----------------
@@ -1268,7 +1409,12 @@ pub unsafe extern "C" fn js_request_new(
     let method = string_from_header(method_ptr).unwrap_or_else(|| "GET".to_string());
     let body = string_from_header(body_ptr);
     let headers = if headers_handle > 0.0 {
-        HEADERS_REGISTRY.lock().unwrap().get(&(headers_handle as usize)).cloned().unwrap_or_default()
+        HEADERS_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&(headers_handle as usize))
+            .cloned()
+            .unwrap_or_default()
     } else {
         HeadersStore::default()
     };
@@ -1276,12 +1422,15 @@ pub unsafe extern "C" fn js_request_new(
     let id = *id_guard;
     *id_guard += 1;
     drop(id_guard);
-    REQUEST_REGISTRY.lock().unwrap().insert(id, RequestRecord {
-        url,
-        method,
-        body,
-        headers,
-    });
+    REQUEST_REGISTRY.lock().unwrap().insert(
+        id,
+        RequestRecord {
+            url,
+            method,
+            body,
+            headers,
+        },
+    );
     id as f64
 }
 

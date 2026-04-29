@@ -72,7 +72,8 @@ static APP_INITIALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 pub fn app_set_body(_app_handle: i64, root_handle: i64) {
     unsafe {
         __android_log_print(
-            3, b"PerryApp\0".as_ptr(),
+            3,
+            b"PerryApp\0".as_ptr(),
             b"app_set_body: root_handle=%lld\0".as_ptr(),
             root_handle,
         );
@@ -112,21 +113,21 @@ pub fn is_initialized() -> bool {
 fn attach_root_to_activity() {
     unsafe {
         __android_log_print(
-            3, b"PerryApp\0".as_ptr(),
+            3,
+            b"PerryApp\0".as_ptr(),
             b"attach_root_to_activity: called\0".as_ptr(),
         );
     }
     // Get root handle: prefer PENDING_BODY, fall back to GLOBAL_BODY
-    let mut root_handle = PENDING_BODY.with(|b| {
-        b.borrow().unwrap_or(0)
-    });
+    let mut root_handle = PENDING_BODY.with(|b| b.borrow().unwrap_or(0));
     // If body handle is invalid (0), use the global fallback
     if root_handle <= 0 {
         root_handle = GLOBAL_BODY.load(std::sync::atomic::Ordering::Relaxed);
     }
     unsafe {
         __android_log_print(
-            3, b"PerryApp\0".as_ptr(),
+            3,
+            b"PerryApp\0".as_ptr(),
             b"attach_root_to_activity: final root_handle=%lld\0".as_ptr(),
             root_handle,
         );
@@ -147,7 +148,8 @@ fn attach_root_to_activity() {
             );
             unsafe {
                 __android_log_print(
-                    3, b"PerryApp\0".as_ptr(),
+                    3,
+                    b"PerryApp\0".as_ptr(),
                     b"attach_root_to_activity: setContentView called\0".as_ptr(),
                 );
             }
@@ -168,7 +170,8 @@ extern "C" {
 fn start_timer_pump() {
     unsafe {
         __android_log_print(
-            3, b"PerryApp\0".as_ptr(),
+            3,
+            b"PerryApp\0".as_ptr(),
             b"start_timer_pump: setting up 8ms pump\0".as_ptr(),
         );
     }
@@ -176,9 +179,8 @@ fn start_timer_pump() {
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
 
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
 
     // Register the pump timer — fires every 8ms, calls nativePumpTick on UI thread
@@ -186,10 +188,12 @@ fn start_timer_pump() {
         bridge_cls,
         "startPumpTimer",
         "(J)V",
-        &[jni::objects::JValue::Long(8)],  // 8ms interval
+        &[jni::objects::JValue::Long(8)], // 8ms interval
     );
 
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
 }
 
 /// Counter for throttled pump tick logging
@@ -207,7 +211,8 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
     if count < 5 || count % 500 == 0 {
         unsafe {
             __android_log_print(
-                3, b"PerryPump\0".as_ptr(),
+                3,
+                b"PerryPump\0".as_ptr(),
                 b"nativePumpTick count=%llu\0".as_ptr(),
                 count,
             );
@@ -221,8 +226,12 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
     }
     #[cfg(feature = "geisterhand")]
     {
-        extern "C" { fn perry_geisterhand_pump(); }
-        unsafe { perry_geisterhand_pump(); }
+        extern "C" {
+            fn perry_geisterhand_pump();
+        }
+        unsafe {
+            perry_geisterhand_pump();
+        }
     }
 }
 
@@ -232,10 +241,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
 /// Unlike macOS/iOS, this does NOT block — the Activity keeps running.
 pub fn app_run(_app_handle: i64) {
     unsafe {
-        __android_log_print(
-            3, b"PerryApp\0".as_ptr(),
-            b"app_run: called\0".as_ptr(),
-        );
+        __android_log_print(3, b"PerryApp\0".as_ptr(), b"app_run: called\0".as_ptr());
     }
     // Attach the root widget to the Activity
     attach_root_to_activity();
@@ -257,7 +263,9 @@ pub fn app_run(_app_handle: i64) {
         }
         unsafe {
             perry_geisterhand_register_state_set(crate::perry_ui_state_set);
-            perry_geisterhand_register_screenshot_capture(crate::screenshot::perry_ui_screenshot_capture);
+            perry_geisterhand_register_screenshot_capture(
+                crate::screenshot::perry_ui_screenshot_capture,
+            );
             perry_geisterhand_register_textfield_set_string(crate::perry_ui_textfield_set_string);
         }
     }
@@ -303,9 +311,8 @@ pub fn set_timer(interval_ms: f64, callback: f64) {
     let _ = env.push_local_frame(16);
 
     let cb_key = crate::callback::register(callback);
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
 
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
     let _ = env.call_static_method(
@@ -315,7 +322,9 @@ pub fn set_timer(interval_ms: f64, callback: f64) {
         &[JValue::Long(cb_key), JValue::Long(interval_ms as i64)],
     );
 
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
 }
 
 /// Register callback for app activation (resume).
@@ -337,7 +346,9 @@ pub fn handle_activate() {
     ON_ACTIVATE_CALLBACK.with(|c| {
         if let Some(callback) = *c.borrow() {
             let ptr = callback.to_bits() as *const u8;
-            unsafe { js_closure_call1(ptr, 0.0); }
+            unsafe {
+                js_closure_call1(ptr, 0.0);
+            }
         }
     });
 }
@@ -347,7 +358,9 @@ pub fn handle_terminate() {
     ON_TERMINATE_CALLBACK.with(|c| {
         if let Some(callback) = *c.borrow() {
             let ptr = callback.to_bits() as *const u8;
-            unsafe { js_closure_call1(ptr, 0.0); }
+            unsafe {
+                js_closure_call1(ptr, 0.0);
+            }
         }
     });
 }

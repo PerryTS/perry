@@ -1,9 +1,9 @@
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_ui_kit::{UIScrollView, UIView};
-use objc2_foundation::NSObject;
 use objc2_core_foundation::CGPoint;
+use objc2_foundation::NSObject;
+use objc2_ui_kit::{UIScrollView, UIView};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -71,10 +71,8 @@ impl PerryRefreshTarget {
 /// Create a UIScrollView. Returns widget handle.
 pub fn create() -> i64 {
     unsafe {
-        let scroll: Retained<UIScrollView> = msg_send![
-            objc2::runtime::AnyClass::get(c"UIScrollView").unwrap(),
-            new
-        ];
+        let scroll: Retained<UIScrollView> =
+            msg_send![objc2::runtime::AnyClass::get(c"UIScrollView").unwrap(), new];
         let _: () = msg_send![&*scroll, setTranslatesAutoresizingMaskIntoConstraints: false];
         // Disable touch delay to avoid iOS 26 crash in
         // UIGestureRecognizer _delayTouchesForEvent:inPhase:
@@ -89,8 +87,12 @@ pub fn create() -> i64 {
         let handle = super::register_widget(view);
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-            unsafe { perry_geisterhand_register(handle, 8, 0, 0.0, std::ptr::null()); }
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 8, 0, 0.0, std::ptr::null());
+            }
         }
         handle
     }
@@ -110,28 +112,40 @@ pub extern "C" fn perry_ui_scroll_set_offset(scroll_handle: i64, x: f64, y: f64)
 
 /// Set the content child of a UIScrollView.
 pub fn set_child(scroll_handle: i64, child_handle: i64) {
-    if let (Some(scroll_view), Some(child)) = (super::get_widget(scroll_handle), super::get_widget(child_handle)) {
+    if let (Some(scroll_view), Some(child)) = (
+        super::get_widget(scroll_handle),
+        super::get_widget(child_handle),
+    ) {
         unsafe {
             // Add child as subview of the scroll view
             scroll_view.addSubview(&child);
 
             // Pin child to scroll view's content layout guide
-            let content_guide: *const objc2::runtime::AnyObject = msg_send![&*scroll_view, contentLayoutGuide];
+            let content_guide: *const objc2::runtime::AnyObject =
+                msg_send![&*scroll_view, contentLayoutGuide];
 
             let child_leading: *const objc2::runtime::AnyObject = msg_send![&*child, leadingAnchor];
-            let child_trailing: *const objc2::runtime::AnyObject = msg_send![&*child, trailingAnchor];
+            let child_trailing: *const objc2::runtime::AnyObject =
+                msg_send![&*child, trailingAnchor];
             let child_top: *const objc2::runtime::AnyObject = msg_send![&*child, topAnchor];
             let child_bottom: *const objc2::runtime::AnyObject = msg_send![&*child, bottomAnchor];
 
-            let guide_leading: *const objc2::runtime::AnyObject = msg_send![content_guide, leadingAnchor];
-            let guide_trailing: *const objc2::runtime::AnyObject = msg_send![content_guide, trailingAnchor];
+            let guide_leading: *const objc2::runtime::AnyObject =
+                msg_send![content_guide, leadingAnchor];
+            let guide_trailing: *const objc2::runtime::AnyObject =
+                msg_send![content_guide, trailingAnchor];
             let guide_top: *const objc2::runtime::AnyObject = msg_send![content_guide, topAnchor];
-            let guide_bottom: *const objc2::runtime::AnyObject = msg_send![content_guide, bottomAnchor];
+            let guide_bottom: *const objc2::runtime::AnyObject =
+                msg_send![content_guide, bottomAnchor];
 
-            let c1: Retained<objc2::runtime::AnyObject> = msg_send![child_leading, constraintEqualToAnchor: guide_leading];
-            let c2: Retained<objc2::runtime::AnyObject> = msg_send![child_trailing, constraintEqualToAnchor: guide_trailing];
-            let c3: Retained<objc2::runtime::AnyObject> = msg_send![child_top, constraintEqualToAnchor: guide_top];
-            let c4: Retained<objc2::runtime::AnyObject> = msg_send![child_bottom, constraintEqualToAnchor: guide_bottom];
+            let c1: Retained<objc2::runtime::AnyObject> =
+                msg_send![child_leading, constraintEqualToAnchor: guide_leading];
+            let c2: Retained<objc2::runtime::AnyObject> =
+                msg_send![child_trailing, constraintEqualToAnchor: guide_trailing];
+            let c3: Retained<objc2::runtime::AnyObject> =
+                msg_send![child_top, constraintEqualToAnchor: guide_top];
+            let c4: Retained<objc2::runtime::AnyObject> =
+                msg_send![child_bottom, constraintEqualToAnchor: guide_bottom];
 
             let _: () = msg_send![&*c1, setActive: true];
             let _: () = msg_send![&*c2, setActive: true];
@@ -139,10 +153,12 @@ pub fn set_child(scroll_handle: i64, child_handle: i64) {
             let _: () = msg_send![&*c4, setActive: true];
 
             // Match width to scroll view's frame layout guide
-            let frame_guide: *const objc2::runtime::AnyObject = msg_send![&*scroll_view, frameLayoutGuide];
+            let frame_guide: *const objc2::runtime::AnyObject =
+                msg_send![&*scroll_view, frameLayoutGuide];
             let child_width: *const objc2::runtime::AnyObject = msg_send![&*child, widthAnchor];
             let frame_width: *const objc2::runtime::AnyObject = msg_send![frame_guide, widthAnchor];
-            let cw: Retained<objc2::runtime::AnyObject> = msg_send![child_width, constraintEqualToAnchor: frame_width];
+            let cw: Retained<objc2::runtime::AnyObject> =
+                msg_send![child_width, constraintEqualToAnchor: frame_width];
             let _: () = msg_send![&*cw, setActive: true];
         }
     }
@@ -198,7 +214,8 @@ pub fn set_refresh_control(scroll_handle: i64, callback: f64) {
             let sel = Sel::register(c"handleRefresh:");
             let rc_cls = objc2::runtime::AnyClass::get(c"UIRefreshControl").unwrap();
             let rc: *mut AnyObject = msg_send![rc_cls, new];
-            let _: () = msg_send![rc, addTarget: &*target, action: sel, forControlEvents: 1u64 << 12]; // UIControlEventValueChanged
+            let _: () =
+                msg_send![rc, addTarget: &*target, action: sel, forControlEvents: 1u64 << 12]; // UIControlEventValueChanged
             let _: () = msg_send![&*scroll_view, setRefreshControl: rc];
 
             std::mem::forget(target); // keep alive

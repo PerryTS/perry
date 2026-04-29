@@ -1,10 +1,10 @@
 //! Fastify application creation and route registration
 
-use perry_runtime::{js_string_from_bytes, StringHeader, JSValue};
+use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
-use crate::common::{get_handle_mut, register_handle, Handle};
-use super::{FastifyApp, FastifyConfig, ensure_gc_scanner_registered};
 use super::context::string_from_nanboxed;
+use super::{ensure_gc_scanner_registered, FastifyApp, FastifyConfig};
+use crate::common::{get_handle_mut, register_handle, Handle};
 
 // ============================================================================
 // App Creation
@@ -123,7 +123,12 @@ pub unsafe extern "C" fn js_fastify_all(app_handle: Handle, path: i64, handler: 
 
 /// Register a route with any method (generic)
 #[no_mangle]
-pub unsafe extern "C" fn js_fastify_route(app_handle: Handle, method: i64, path: i64, handler: i64) -> bool {
+pub unsafe extern "C" fn js_fastify_route(
+    app_handle: Handle,
+    method: i64,
+    path: i64,
+    handler: i64,
+) -> bool {
     let method_str = match string_from_nanboxed(method) {
         Some(m) => m.to_uppercase(),
         None => return false,
@@ -158,7 +163,11 @@ unsafe fn register_route(app_handle: Handle, method: &str, path: i64, handler: i
 
 /// Add a lifecycle hook
 #[no_mangle]
-pub unsafe extern "C" fn js_fastify_add_hook(app_handle: Handle, hook_name: i64, handler: i64) -> bool {
+pub unsafe extern "C" fn js_fastify_add_hook(
+    app_handle: Handle,
+    hook_name: i64,
+    handler: i64,
+) -> bool {
     let name = match string_from_nanboxed(hook_name) {
         Some(n) => n,
         None => return false,
@@ -240,7 +249,8 @@ pub unsafe extern "C" fn js_fastify_register(app_handle: Handle, plugin: i64, op
     };
 
     // NaN-box the MAIN app handle so Perry's runtime dispatches method calls on it
-    let nanboxed_main = f64::from_bits(0x7FFD_0000_0000_0000 | (app_handle as u64 & 0x0000_FFFF_FFFF_FFFF));
+    let nanboxed_main =
+        f64::from_bits(0x7FFD_0000_0000_0000 | (app_handle as u64 & 0x0000_FFFF_FFFF_FFFF));
 
     // Strip NaN-box tag from plugin closure pointer if needed
     let raw_closure_ptr = if (plugin as u64 & 0xFFFF_0000_0000_0000) == 0x7FFD_0000_0000_0000 {

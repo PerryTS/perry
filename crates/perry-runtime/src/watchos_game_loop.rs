@@ -65,18 +65,25 @@ core::arch::global_asm!(
 
 /// App delegate — calls `perry_scene_will_connect(NULL)` on launch so
 /// native libs can set up their Metal view without owning the delegate.
-unsafe extern "C" fn app_did_finish_launching(
-    _this: *mut c_void, _sel: *const c_void,
-) {
+unsafe extern "C" fn app_did_finish_launching(_this: *mut c_void, _sel: *const c_void) {
     perry_scene_will_connect(std::ptr::null());
 }
 
 fn register_app_delegate() {
     extern "C" {
         fn objc_getClass(name: *const u8) -> *const c_void;
-        fn objc_allocateClassPair(superclass: *const c_void, name: *const u8, extra: usize) -> *mut c_void;
+        fn objc_allocateClassPair(
+            superclass: *const c_void,
+            name: *const u8,
+            extra: usize,
+        ) -> *mut c_void;
         fn objc_registerClassPair(cls: *mut c_void);
-        fn class_addMethod(cls: *mut c_void, sel: *const c_void, imp: *const c_void, types: *const u8) -> bool;
+        fn class_addMethod(
+            cls: *mut c_void,
+            sel: *const c_void,
+            imp: *const c_void,
+            types: *const u8,
+        ) -> bool;
         fn sel_registerName(name: *const u8) -> *const c_void;
         fn objc_getProtocol(name: *const u8) -> *const c_void;
         fn class_addProtocol(cls: *mut c_void, protocol: *const c_void) -> bool;
@@ -84,18 +91,30 @@ fn register_app_delegate() {
 
     unsafe {
         let existing = objc_getClass(b"PerryWatchGameLoopAppDelegate\0".as_ptr());
-        if !existing.is_null() { return; }
+        if !existing.is_null() {
+            return;
+        }
 
         let superclass = objc_getClass(b"NSObject\0".as_ptr());
-        if superclass.is_null() { return; }
+        if superclass.is_null() {
+            return;
+        }
 
-        let cls = objc_allocateClassPair(superclass, b"PerryWatchGameLoopAppDelegate\0".as_ptr(), 0);
-        if cls.is_null() { return; }
+        let cls =
+            objc_allocateClassPair(superclass, b"PerryWatchGameLoopAppDelegate\0".as_ptr(), 0);
+        if cls.is_null() {
+            return;
+        }
 
         // applicationDidFinishLaunching: `-(void)applicationDidFinishLaunching`
         // Type encoding: `v16@0:8` (void return, self+_cmd).
         let sel = sel_registerName(b"applicationDidFinishLaunching\0".as_ptr());
-        class_addMethod(cls, sel, app_did_finish_launching as *const c_void, b"v16@0:8\0".as_ptr());
+        class_addMethod(
+            cls,
+            sel,
+            app_did_finish_launching as *const c_void,
+            b"v16@0:8\0".as_ptr(),
+        );
 
         let protocol = objc_getProtocol(b"WKApplicationDelegate\0".as_ptr());
         if !protocol.is_null() {
@@ -106,7 +125,8 @@ fn register_app_delegate() {
     }
 }
 
-static NATIVE_CLASSES_REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NATIVE_CLASSES_REGISTERED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Called by native libraries after registering their ObjC classes.
 /// Mirrors `perry_ios_classes_registered` on iOS.
@@ -124,14 +144,16 @@ pub extern "C" fn main() -> i32 {
     // Spawn the game thread — runs the user's TypeScript code.
     std::thread::Builder::new()
         .name("perry-game".to_string())
-        .spawn(|| {
-            unsafe { _perry_user_main(); }
+        .spawn(|| unsafe {
+            _perry_user_main();
         })
         .expect("Failed to spawn game thread");
 
     // Register native library ObjC classes (e.g., a bloom-provided
     // PerryWatchGameLoopAppDelegate that owns the Metal view setup).
-    unsafe { perry_register_native_classes(); }
+    unsafe {
+        perry_register_native_classes();
+    }
 
     // Hint to suppress the unused-static warning when no native lib has
     // signalled back — the flag is observable from native libs that want

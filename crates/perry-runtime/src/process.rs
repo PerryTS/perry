@@ -19,13 +19,17 @@ pub extern "C" fn js_process_exit(code: f64) {
     // illegal instructions when exception handler state (jmp_buf), GC roots, or
     // V8 isolate state is invalid.
     #[cfg(unix)]
-    unsafe { libc::_exit(exit_code); }
+    unsafe {
+        libc::_exit(exit_code);
+    }
     #[cfg(windows)]
     {
         extern "system" {
             fn ExitProcess(uExitCode: u32);
         }
-        unsafe { ExitProcess(exit_code as u32); }
+        unsafe {
+            ExitProcess(exit_code as u32);
+        }
     }
     #[cfg(not(any(unix, windows)))]
     std::process::exit(exit_code);

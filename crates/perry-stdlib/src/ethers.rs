@@ -2,7 +2,7 @@
 //!
 //! Provides formatUnits, parseUnits, parseEther, formatEther, getAddress, and other ethers utilities.
 
-use perry_runtime::{js_string_from_bytes, js_bigint_from_string, BigIntHeader, StringHeader};
+use perry_runtime::{js_bigint_from_string, js_string_from_bytes, BigIntHeader, StringHeader};
 
 /// getAddress(address: string) -> string
 /// Returns the checksummed address (EIP-55 format).
@@ -105,24 +105,38 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
     // Keccak-256 constants
     const ROUNDS: usize = 24;
     const RC: [u64; 24] = [
-        0x0000000000000001, 0x0000000000008082, 0x800000000000808a,
-        0x8000000080008000, 0x000000000000808b, 0x0000000080000001,
-        0x8000000080008081, 0x8000000000008009, 0x000000000000008a,
-        0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
-        0x000000008000808b, 0x800000000000008b, 0x8000000000008089,
-        0x8000000000008003, 0x8000000000008002, 0x8000000000000080,
-        0x000000000000800a, 0x800000008000000a, 0x8000000080008081,
-        0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
+        0x0000000000000001,
+        0x0000000000008082,
+        0x800000000000808a,
+        0x8000000080008000,
+        0x000000000000808b,
+        0x0000000080000001,
+        0x8000000080008081,
+        0x8000000000008009,
+        0x000000000000008a,
+        0x0000000000000088,
+        0x0000000080008009,
+        0x000000008000000a,
+        0x000000008000808b,
+        0x800000000000008b,
+        0x8000000000008089,
+        0x8000000000008003,
+        0x8000000000008002,
+        0x8000000000000080,
+        0x000000000000800a,
+        0x800000008000000a,
+        0x8000000080008081,
+        0x8000000000008080,
+        0x0000000080000001,
+        0x8000000080008008,
     ];
 
     const ROTC: [u32; 24] = [
-        1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14,
-        27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44,
+        1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44,
     ];
 
     const PILN: [usize; 24] = [
-        10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4,
-        15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1,
+        10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1,
     ];
 
     fn keccak_f(state: &mut [u64; 25]) {
@@ -206,14 +220,16 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
 /// Takes a buffer pointer (I64) and returns a "0x"-prefixed hex string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn js_keccak256_native(buf_ptr: i64) -> *mut StringHeader {
-    let buf_ptr = (buf_ptr as u64 & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::buffer::BufferHeader;
+    let buf_ptr =
+        (buf_ptr as u64 & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::buffer::BufferHeader;
     if buf_ptr.is_null() {
         let s = "0x0000000000000000000000000000000000000000000000000000000000000000";
         return js_string_from_bytes(s.as_ptr(), s.len() as u32);
     }
 
     let len = (*buf_ptr).length as usize;
-    let data = (buf_ptr as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
+    let data =
+        (buf_ptr as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
     let bytes = std::slice::from_raw_parts(data, len);
 
     let hash = keccak256(bytes);
@@ -234,13 +250,17 @@ pub unsafe extern "C" fn js_keccak256_native(buf_ptr: i64) -> *mut StringHeader 
 /// Native keccak256 returning raw bytes (Uint8Array/buffer).
 /// Used for internal ethkit calls (computeAddress, etc.) that need raw hash bytes.
 #[no_mangle]
-pub unsafe extern "C" fn js_keccak256_native_bytes(buf_ptr: i64) -> *mut perry_runtime::buffer::BufferHeader {
-    let buf_ptr = (buf_ptr as u64 & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::buffer::BufferHeader;
+pub unsafe extern "C" fn js_keccak256_native_bytes(
+    buf_ptr: i64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    let buf_ptr =
+        (buf_ptr as u64 & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::buffer::BufferHeader;
     let (data, len) = if buf_ptr.is_null() {
         (&[] as &[u8], 0)
     } else {
         let len = (*buf_ptr).length as usize;
-        let data = (buf_ptr as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
+        let data =
+            (buf_ptr as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
         (std::slice::from_raw_parts(data, len), len)
     };
 
@@ -258,7 +278,10 @@ pub unsafe extern "C" fn js_keccak256_native_bytes(buf_ptr: i64) -> *mut perry_r
 /// Converts a BigInt to a human-readable string with the given number of decimals.
 /// Example: formatUnits(1000000n, 6) -> "1.0"
 #[no_mangle]
-pub extern "C" fn js_ethers_format_units(bigint_ptr: *const BigIntHeader, decimals: f64) -> *mut StringHeader {
+pub extern "C" fn js_ethers_format_units(
+    bigint_ptr: *const BigIntHeader,
+    decimals: f64,
+) -> *mut StringHeader {
     if bigint_ptr.is_null() {
         let s = "0";
         return js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -289,7 +312,10 @@ pub extern "C" fn js_ethers_format_units(bigint_ptr: *const BigIntHeader, decima
 /// Parses a human-readable string to a BigInt with the given number of decimals.
 /// Example: parseUnits("1.0", 6) -> 1000000n
 #[no_mangle]
-pub extern "C" fn js_ethers_parse_units(str_ptr: *const StringHeader, decimals: f64) -> *mut BigIntHeader {
+pub extern "C" fn js_ethers_parse_units(
+    str_ptr: *const StringHeader,
+    decimals: f64,
+) -> *mut BigIntHeader {
     if str_ptr.is_null() {
         let s = "0";
         return js_bigint_from_string(s.as_ptr(), s.len() as u32);
@@ -372,12 +398,20 @@ fn format_with_decimals(value: &str, decimals: usize) -> String {
         // Value is less than 1
         let zeros = decimals - len;
         let result = format!("0.{}{}", "0".repeat(zeros), value);
-        if is_negative { format!("-{}", result) } else { result }
+        if is_negative {
+            format!("-{}", result)
+        } else {
+            result
+        }
     } else {
         // Insert decimal point
         let split_pos = len - decimals;
         let result = format!("{}.{}", &value[..split_pos], &value[split_pos..]);
-        if is_negative { format!("-{}", result) } else { result }
+        if is_negative {
+            format!("-{}", result)
+        } else {
+            result
+        }
     }
 }
 
@@ -397,7 +431,12 @@ fn parse_units_to_string(value: &str, decimals: usize) -> String {
         format!("{}{}", integer_part, decimal_part)
     } else if decimal_len < decimals {
         // Pad with zeros
-        format!("{}{}{}", integer_part, decimal_part, "0".repeat(decimals - decimal_len))
+        format!(
+            "{}{}{}",
+            integer_part,
+            decimal_part,
+            "0".repeat(decimals - decimal_len)
+        )
     } else {
         // Truncate (round down)
         format!("{}{}", integer_part, &decimal_part[..decimals])

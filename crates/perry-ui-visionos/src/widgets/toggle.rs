@@ -1,7 +1,7 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
-use objc2_ui_kit::{UILabel, UIView};
+use objc2::rc::Retained;
 use objc2_foundation::NSString;
+use objc2_ui_kit::{UILabel, UIView};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -26,7 +26,11 @@ pub fn set_state(handle: i64, on: i64) {
     if let Some(view) = super::get_widget(handle) {
         TOGGLE_LABELS.with(|labels| {
             if let Some(label) = labels.borrow().get(&handle) {
-                let text = NSString::from_str(&format!("{}: {}", label, if on != 0 { "On" } else { "Off" }));
+                let text = NSString::from_str(&format!(
+                    "{}: {}",
+                    label,
+                    if on != 0 { "On" } else { "Off" }
+                ));
                 unsafe {
                     let _: () = msg_send![&*view, setText: &*text];
                 }
@@ -62,8 +66,12 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
 
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-            unsafe { perry_geisterhand_register(handle, 3, 1, on_change, label_ptr); }
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 3, 1, on_change, label_ptr);
+            }
         }
 
         handle

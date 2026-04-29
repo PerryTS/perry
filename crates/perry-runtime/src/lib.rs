@@ -21,95 +21,109 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-pub mod value;
-pub mod gc;
 pub mod arena;
-pub mod color_parse;
-pub mod object;
 pub mod array;
+pub mod bigint;
+pub mod r#box;
+pub mod buffer;
+pub mod builtins;
+pub mod child_process;
+pub mod closure;
+pub mod color_parse;
+pub mod date;
+pub mod error;
+pub mod event_pump;
+pub mod exception;
+pub mod fs;
+pub mod gc;
 pub mod map;
+pub mod math;
+pub mod object;
+pub mod os;
+pub mod path;
+pub mod process;
+pub mod promise;
+pub mod regex;
 pub mod set;
 pub mod string;
-pub mod bigint;
-pub mod closure;
-pub mod exception;
-pub mod error;
 pub mod symbol;
-pub mod promise;
-pub mod timer;
-pub mod event_pump;
-pub mod builtins;
-pub mod r#box;
-pub mod process;
-pub mod fs;
-pub mod path;
-pub mod math;
-pub mod date;
-pub mod url;
-pub mod regex;
-pub mod os;
-pub mod buffer;
-pub mod typedarray;
 pub mod text;
-pub mod child_process;
+pub mod timer;
+pub mod typedarray;
+pub mod url;
+pub mod value;
 // `net` moved to `perry-stdlib::net` (event-driven async) in A1/A1.5.
 // The old sync `perry-runtime::net` module is retained as source but
 // not exported so its `js_net_socket_{write,end,destroy}` symbols don't
 // collide with the new stdlib ones. Delete the file entirely once no
 // in-tree code references it.
 // pub mod net;
+pub mod geisterhand_registry;
+pub mod i18n;
+#[cfg(all(any(target_os = "ios", target_os = "tvos"), feature = "ios-game-loop"))]
+pub mod ios_game_loop;
 pub mod json;
 pub mod json_tape;
-pub mod i18n;
 pub mod jsx;
-pub mod weakref;
+#[cfg(feature = "ohos-napi")]
+pub mod ohos_napi;
+#[cfg(feature = "full")]
+pub mod plugin;
+pub mod proxy;
 pub mod static_plugins;
 #[cfg(not(feature = "stdlib"))]
 pub mod stdlib_stubs;
-#[cfg(feature = "full")]
-pub mod plugin;
 pub mod thread;
-pub mod geisterhand_registry;
-pub mod proxy;
-#[cfg(all(any(target_os = "ios", target_os = "tvos"), feature = "ios-game-loop"))]
-pub mod ios_game_loop;
 #[cfg(all(target_os = "watchos", feature = "watchos-game-loop"))]
 pub mod watchos_game_loop;
-#[cfg(feature = "ohos-napi")]
-pub mod ohos_napi;
+pub mod weakref;
 
-pub use value::JSValue;
-pub use promise::Promise;
-pub use object::ObjectHeader;
 pub use array::ArrayHeader;
+pub use bigint::BigIntHeader;
+pub use buffer::BufferHeader;
+pub use closure::ClosureHeader;
 pub use map::MapHeader;
+pub use object::ObjectHeader;
+pub use promise::Promise;
+pub use regex::RegExpHeader;
 pub use set::SetHeader;
 pub use string::StringHeader;
-pub use bigint::BigIntHeader;
-pub use closure::ClosureHeader;
-pub use regex::RegExpHeader;
-pub use buffer::BufferHeader;
+pub use value::JSValue;
 
 // Re-export closure module for stdlib to use js_closure_call* functions
 pub use closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
 
 // Re-export commonly used FFI functions for stdlib
-pub use array::{js_array_alloc, js_array_set, js_array_get, js_array_push, js_array_length, js_array_is_array, js_array_get_jsvalue};
-pub use object::{js_object_alloc, js_object_alloc_with_shape, js_object_set_field, js_object_set_field_f64, js_object_get_field, js_object_set_keys, js_object_keys, js_object_values, js_object_entries, js_object_get_field_by_name, js_object_get_field_by_name_f64};
-pub use string::js_string_from_bytes;
-pub use promise::{js_promise_new, js_promise_resolve, js_promise_reject};
+pub use array::js_array_push_f64;
+pub use array::{
+    js_array_alloc, js_array_get, js_array_get_jsvalue, js_array_is_array, js_array_length,
+    js_array_push, js_array_set,
+};
 pub use bigint::js_bigint_from_string;
-pub use value::{js_nanbox_get_pointer, js_nanbox_pointer, js_nanbox_string, js_get_string_pointer_unified, js_jsvalue_to_string};
-pub use value::{js_set_handle_array_get, js_set_handle_array_length, js_set_handle_object_get_property, js_set_handle_to_string, js_set_handle_call_method, js_set_native_module_js_loader, js_set_new_from_handle_v8, js_set_handle_typeof};
-pub use array::{js_array_push_f64};
 pub use object::js_object_set_field_by_name;
-pub use promise::{js_promise_run_microtasks, js_promise_state, js_is_promise, js_promise_value};
+pub use object::{
+    js_object_alloc, js_object_alloc_with_shape, js_object_entries, js_object_get_field,
+    js_object_get_field_by_name, js_object_get_field_by_name_f64, js_object_keys,
+    js_object_set_field, js_object_set_field_f64, js_object_set_keys, js_object_values,
+};
+pub use promise::{js_is_promise, js_promise_run_microtasks, js_promise_state, js_promise_value};
+pub use promise::{js_promise_new, js_promise_reject, js_promise_resolve};
+pub use string::js_string_from_bytes;
+pub use value::{
+    js_get_string_pointer_unified, js_jsvalue_to_string, js_nanbox_get_pointer, js_nanbox_pointer,
+    js_nanbox_string,
+};
+pub use value::{
+    js_set_handle_array_get, js_set_handle_array_length, js_set_handle_call_method,
+    js_set_handle_object_get_property, js_set_handle_to_string, js_set_handle_typeof,
+    js_set_native_module_js_loader, js_set_new_from_handle_v8,
+};
 
 // Stdlib pump registration — allows perry-ui-macos pump timer to call
 // js_stdlib_process_pending without a hard link dependency on perry-stdlib.
 mod stdlib_pump {
-    use std::sync::atomic::{AtomicPtr, Ordering};
     use std::ptr::null_mut;
+    use std::sync::atomic::{AtomicPtr, Ordering};
 
     static STDLIB_PUMP_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
@@ -181,7 +195,11 @@ mod init_guard {
         }
         let mask = 1u8 << bit_idx;
         let prev = INIT_GUARD[byte_idx].fetch_or(mask, Ordering::SeqCst);
-        if prev & mask != 0 { 1 } else { 0 }
+        if prev & mask != 0 {
+            1
+        } else {
+            0
+        }
     }
 }
 

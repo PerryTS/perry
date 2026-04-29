@@ -15,9 +15,8 @@ pub fn open_dialog(cb: f64) {
     let cb_key = callback::register(cb);
     let mut env = jni_bridge::get_env();
 
-    let bridge_class = jni_bridge::with_cache(|c| {
-        env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-    });
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
     let _ = env.call_static_method(
         bridge_cls,
@@ -41,7 +40,8 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeFileDialogResult(
         f64::from_bits(0x7FFC_0000_0000_0001)
     } else {
         // Convert Java String to NaN-boxed Perry string
-        let rust_str: String = env.get_string(&content)
+        let rust_str: String = env
+            .get_string(&content)
             .map(|s| s.into())
             .unwrap_or_default();
         let bytes = rust_str.as_bytes();

@@ -1,7 +1,7 @@
+use crate::string_header::StringHeader;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSTextField, NSView};
-use objc2_foundation::{NSString, MainThreadMarker};
-use crate::string_header::StringHeader;
+use objc2_foundation::{MainThreadMarker, NSString};
 
 use super::register_widget;
 
@@ -72,7 +72,9 @@ pub fn set_string(handle: i64, text_ptr: *const u8) {
 ///                 before this fix)
 /// - other       → silent no-op (matches the codegen's documented intent)
 pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
-    let Some(view) = super::get_widget(handle) else { return; };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     unsafe {
         if let Some(btn_cls) = objc2::runtime::AnyClass::get(c"NSButton") {
             let is_btn: bool = objc2::msg_send![&*view, isKindOfClass: btn_cls];
@@ -139,7 +141,7 @@ pub fn set_wraps(handle: i64, max_width: f64) {
             let cell = tf.cell().unwrap();
             let _: () = objc2::msg_send![&*cell, setWraps: true];
             let _: () = objc2::msg_send![&*cell, setLineBreakMode: 0u64]; // NSLineBreakByWordWrapping = 0
-            // Unlimited lines
+                                                                          // Unlimited lines
             let _: () = objc2::msg_send![tf, setMaximumNumberOfLines: 0i64];
             // Set preferred max layout width for Auto Layout wrapping
             if max_width > 0.0 {

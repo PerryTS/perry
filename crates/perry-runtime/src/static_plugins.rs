@@ -27,10 +27,7 @@ unsafe fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
 /// Register a pre-compiled plugin by its canonical source path.
 /// Called from the entry module's init function for each bundled extension.
 #[no_mangle]
-pub extern "C" fn perry_register_static_plugin(
-    path: *const StringHeader,
-    export_value: f64,
-) {
+pub extern "C" fn perry_register_static_plugin(path: *const StringHeader, export_value: f64) {
     let path_str = unsafe { string_as_str(path) }.to_string();
     STATIC_PLUGINS.with(|m| m.borrow_mut().insert(path_str, export_value));
 }
@@ -38,11 +35,12 @@ pub extern "C" fn perry_register_static_plugin(
 /// Look up a pre-compiled plugin by its canonical source path.
 /// Returns the plugin's default export (NaN-boxed value) or undefined.
 #[no_mangle]
-pub extern "C" fn perry_resolve_static_plugin(
-    path: *const StringHeader,
-) -> f64 {
+pub extern "C" fn perry_resolve_static_plugin(path: *const StringHeader) -> f64 {
     let path_str = unsafe { string_as_str(path) };
     STATIC_PLUGINS.with(|m| {
-        m.borrow().get(path_str).copied().unwrap_or(f64::from_bits(TAG_UNDEFINED))
+        m.borrow()
+            .get(path_str)
+            .copied()
+            .unwrap_or(f64::from_bits(TAG_UNDEFINED))
     })
 }

@@ -8,9 +8,9 @@ use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower::{LoweringContext, lower_expr};
-use crate::lower_types::*;
+use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_patterns::*;
+use crate::lower_types::*;
 
 pub(crate) fn lower_destructuring_assignment_stmt(
     ctx: &mut LoweringContext,
@@ -61,7 +61,8 @@ pub(crate) fn lower_destructuring_assignment_stmt(
                             // First create a temp for this element
                             let nested_tmp_id = ctx.fresh_local();
                             let nested_tmp_name = format!("__destruct_{}", nested_tmp_id);
-                            ctx.locals.push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
+                            ctx.locals
+                                .push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
                             result.push(Stmt::Let {
                                 id: nested_tmp_id,
                                 name: nested_tmp_name,
@@ -81,7 +82,8 @@ pub(crate) fn lower_destructuring_assignment_stmt(
                             // Nested object destructuring
                             let nested_tmp_id = ctx.fresh_local();
                             let nested_tmp_name = format!("__destruct_{}", nested_tmp_id);
-                            ctx.locals.push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
+                            ctx.locals
+                                .push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
                             result.push(Stmt::Let {
                                 id: nested_tmp_id,
                                 name: nested_tmp_name,
@@ -159,7 +161,8 @@ pub(crate) fn lower_destructuring_assignment_stmt(
                             ast::Pat::Ident(ident) => {
                                 let name = ident.id.sym.to_string();
                                 if let Some(id) = ctx.lookup_local(&name) {
-                                    result.push(Stmt::Expr(Expr::LocalSet(id, Box::new(prop_expr))));
+                                    result
+                                        .push(Stmt::Expr(Expr::LocalSet(id, Box::new(prop_expr))));
                                 } else {
                                     return Err(anyhow!(
                                         "Assignment to undeclared variable in destructuring: {}",
@@ -170,7 +173,11 @@ pub(crate) fn lower_destructuring_assignment_stmt(
                             ast::Pat::Array(nested_arr) => {
                                 let nested_tmp_id = ctx.fresh_local();
                                 let nested_tmp_name = format!("__destruct_{}", nested_tmp_id);
-                                ctx.locals.push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
+                                ctx.locals.push((
+                                    nested_tmp_name.clone(),
+                                    nested_tmp_id,
+                                    Type::Any,
+                                ));
                                 result.push(Stmt::Let {
                                     id: nested_tmp_id,
                                     name: nested_tmp_name,
@@ -188,7 +195,11 @@ pub(crate) fn lower_destructuring_assignment_stmt(
                             ast::Pat::Object(nested_obj) => {
                                 let nested_tmp_id = ctx.fresh_local();
                                 let nested_tmp_name = format!("__destruct_{}", nested_tmp_id);
-                                ctx.locals.push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
+                                ctx.locals.push((
+                                    nested_tmp_name.clone(),
+                                    nested_tmp_id,
+                                    Type::Any,
+                                ));
                                 result.push(Stmt::Let {
                                     id: nested_tmp_id,
                                     name: nested_tmp_name,
@@ -268,7 +279,8 @@ pub(crate) fn lower_destructuring_assignment_stmt_from_local(
                         ast::Pat::Array(nested_arr) => {
                             let nested_tmp_id = ctx.fresh_local();
                             let nested_tmp_name = format!("__destruct_{}", nested_tmp_id);
-                            ctx.locals.push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
+                            ctx.locals
+                                .push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
                             result.push(Stmt::Let {
                                 id: nested_tmp_id,
                                 name: nested_tmp_name,
@@ -286,7 +298,8 @@ pub(crate) fn lower_destructuring_assignment_stmt_from_local(
                         ast::Pat::Object(nested_obj) => {
                             let nested_tmp_id = ctx.fresh_local();
                             let nested_tmp_name = format!("__destruct_{}", nested_tmp_id);
-                            ctx.locals.push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
+                            ctx.locals
+                                .push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
                             result.push(Stmt::Let {
                                 id: nested_tmp_id,
                                 name: nested_tmp_name,
@@ -301,41 +314,39 @@ pub(crate) fn lower_destructuring_assignment_stmt_from_local(
                             )?;
                             result.extend(nested_stmts);
                         }
-                        ast::Pat::Expr(inner_expr) => {
-                            match inner_expr.as_ref() {
-                                ast::Expr::Member(member) => {
-                                    let object = Box::new(lower_expr(ctx, &member.obj)?);
-                                    match &member.prop {
-                                        ast::MemberProp::Ident(prop_ident) => {
-                                            let property = prop_ident.sym.to_string();
-                                            result.push(Stmt::Expr(Expr::PropertySet {
-                                                object,
-                                                property,
-                                                value: Box::new(index_expr),
-                                            }));
-                                        }
-                                        ast::MemberProp::Computed(computed) => {
-                                            let index = Box::new(lower_expr(ctx, &computed.expr)?);
-                                            result.push(Stmt::Expr(Expr::IndexSet {
-                                                object,
-                                                index,
-                                                value: Box::new(index_expr),
-                                            }));
-                                        }
-                                        _ => {
-                                            return Err(anyhow!(
+                        ast::Pat::Expr(inner_expr) => match inner_expr.as_ref() {
+                            ast::Expr::Member(member) => {
+                                let object = Box::new(lower_expr(ctx, &member.obj)?);
+                                match &member.prop {
+                                    ast::MemberProp::Ident(prop_ident) => {
+                                        let property = prop_ident.sym.to_string();
+                                        result.push(Stmt::Expr(Expr::PropertySet {
+                                            object,
+                                            property,
+                                            value: Box::new(index_expr),
+                                        }));
+                                    }
+                                    ast::MemberProp::Computed(computed) => {
+                                        let index = Box::new(lower_expr(ctx, &computed.expr)?);
+                                        result.push(Stmt::Expr(Expr::IndexSet {
+                                            object,
+                                            index,
+                                            value: Box::new(index_expr),
+                                        }));
+                                    }
+                                    _ => {
+                                        return Err(anyhow!(
                                                 "Unsupported member expression in destructuring assignment"
                                             ));
-                                        }
                                     }
                                 }
-                                _ => {
-                                    return Err(anyhow!(
-                                        "Unsupported expression pattern in destructuring assignment"
-                                    ));
-                                }
                             }
-                        }
+                            _ => {
+                                return Err(anyhow!(
+                                    "Unsupported expression pattern in destructuring assignment"
+                                ));
+                            }
+                        },
                         _ => {}
                     }
                 }
@@ -361,7 +372,8 @@ pub(crate) fn lower_destructuring_assignment_stmt_from_local(
                             ast::Pat::Ident(ident) => {
                                 let name = ident.id.sym.to_string();
                                 if let Some(id) = ctx.lookup_local(&name) {
-                                    result.push(Stmt::Expr(Expr::LocalSet(id, Box::new(prop_expr))));
+                                    result
+                                        .push(Stmt::Expr(Expr::LocalSet(id, Box::new(prop_expr))));
                                 } else {
                                     return Err(anyhow!(
                                         "Assignment to undeclared variable in destructuring: {}",
@@ -372,7 +384,11 @@ pub(crate) fn lower_destructuring_assignment_stmt_from_local(
                             ast::Pat::Array(nested_arr) => {
                                 let nested_tmp_id = ctx.fresh_local();
                                 let nested_tmp_name = format!("__destruct_{}", nested_tmp_id);
-                                ctx.locals.push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
+                                ctx.locals.push((
+                                    nested_tmp_name.clone(),
+                                    nested_tmp_id,
+                                    Type::Any,
+                                ));
                                 result.push(Stmt::Let {
                                     id: nested_tmp_id,
                                     name: nested_tmp_name,
@@ -390,7 +406,11 @@ pub(crate) fn lower_destructuring_assignment_stmt_from_local(
                             ast::Pat::Object(nested_obj) => {
                                 let nested_tmp_id = ctx.fresh_local();
                                 let nested_tmp_name = format!("__destruct_{}", nested_tmp_id);
-                                ctx.locals.push((nested_tmp_name.clone(), nested_tmp_id, Type::Any));
+                                ctx.locals.push((
+                                    nested_tmp_name.clone(),
+                                    nested_tmp_id,
+                                    Type::Any,
+                                ));
                                 result.push(Stmt::Let {
                                     id: nested_tmp_id,
                                     name: nested_tmp_name,
@@ -471,7 +491,9 @@ fn lower_pattern_binding_into(
     match pat {
         ast::Pat::Ident(ident) => {
             let name = ident.id.sym.to_string();
-            let ty = ident.type_ann.as_ref()
+            let ty = ident
+                .type_ann
+                .as_ref()
                 .map(|ann| extract_ts_type(&ann.type_ann))
                 .unwrap_or(Type::Any);
             let id = ctx.define_local(name.clone(), ty.clone());
@@ -510,7 +532,9 @@ fn lower_pattern_binding_into(
         }
         ast::Pat::Array(arr_pat) => {
             // Materialize source into a temp
-            let arr_ty = arr_pat.type_ann.as_ref()
+            let arr_ty = arr_pat
+                .type_ann
+                .as_ref()
                 .map(|ann| extract_ts_type(&ann.type_ann))
                 .unwrap_or(Type::Array(Box::new(Type::Any)));
             let tmp_id = ctx.fresh_local();
@@ -548,7 +572,9 @@ fn lower_pattern_binding_into(
         }
         ast::Pat::Object(obj_pat) => {
             // Materialize source into a temp
-            let obj_ty = obj_pat.type_ann.as_ref()
+            let obj_ty = obj_pat
+                .type_ann
+                .as_ref()
                 .map(|ann| extract_ts_type(&ann.type_ann))
                 .unwrap_or(Type::Any);
             let tmp_id = ctx.fresh_local();
@@ -610,7 +636,10 @@ fn lower_pattern_binding_into(
                         // Shorthand { key } or { key = default }
                         let name = assign.key.sym.to_string();
                         static_keys.push(name.clone());
-                        let ty = assign.key.type_ann.as_ref()
+                        let ty = assign
+                            .key
+                            .type_ann
+                            .as_ref()
                             .map(|ann| extract_ts_type(&ann.type_ann))
                             .unwrap_or(Type::Any);
                         let id = ctx.define_local(name.clone(), ty.clone());
@@ -622,7 +651,8 @@ fn lower_pattern_binding_into(
                             // correct NaN detection).
                             let val_tmp_id = ctx.fresh_local();
                             let val_tmp_name = format!("__destruct_{}", val_tmp_id);
-                            ctx.locals.push((val_tmp_name.clone(), val_tmp_id, Type::Any));
+                            ctx.locals
+                                .push((val_tmp_name.clone(), val_tmp_id, Type::Any));
                             result.push(Stmt::Let {
                                 id: val_tmp_id,
                                 name: val_tmp_name,
@@ -635,9 +665,9 @@ fn lower_pattern_binding_into(
                             });
                             let default_val = lower_expr(ctx, default_expr)?;
                             Expr::Conditional {
-                                condition: Box::new(Expr::IsUndefinedOrBareNan(
-                                    Box::new(Expr::LocalGet(val_tmp_id)),
-                                )),
+                                condition: Box::new(Expr::IsUndefinedOrBareNan(Box::new(
+                                    Expr::LocalGet(val_tmp_id),
+                                ))),
                                 then_expr: Box::new(default_val),
                                 else_expr: Box::new(Expr::LocalGet(val_tmp_id)),
                             }
@@ -671,14 +701,14 @@ fn lower_pattern_binding_into(
         }
         ast::Pat::Rest(_) => {
             // Rest patterns should be handled by their enclosing Array/Object
-            Err(anyhow!("Rest pattern outside of array/object destructuring"))
+            Err(anyhow!(
+                "Rest pattern outside of array/object destructuring"
+            ))
         }
-        ast::Pat::Expr(_) => {
-            Err(anyhow!("Expression patterns are not supported in binding destructuring"))
-        }
-        ast::Pat::Invalid(_) => {
-            Err(anyhow!("Invalid binding pattern"))
-        }
+        ast::Pat::Expr(_) => Err(anyhow!(
+            "Expression patterns are not supported in binding destructuring"
+        )),
+        ast::Pat::Invalid(_) => Err(anyhow!("Invalid binding pattern")),
     }
 }
 
@@ -894,9 +924,7 @@ pub(crate) fn lower_destructuring_assignment(
 
             Ok(Expr::Sequence(exprs))
         }
-        ast::AssignTargetPat::Invalid(_) => {
-            Err(anyhow!("Invalid assignment target pattern"))
-        }
+        ast::AssignTargetPat::Invalid(_) => Err(anyhow!("Invalid assignment target pattern")),
     }
 }
 
@@ -913,7 +941,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
         ast::Pat::Ident(ident) => {
             // Simple binding: let x = expr
             let name = ident.id.sym.to_string();
-            let mut ty = ident.type_ann.as_ref()
+            let mut ty = ident
+                .type_ann
+                .as_ref()
                 .map(|ann| extract_ts_type(&ann.type_ann))
                 .unwrap_or_else(|| {
                     // No type annotation: try local inference from initializer
@@ -940,10 +970,12 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             let class_name = class_ident.sym.as_ref();
                             if class_name == "Set" || class_name == "Map" {
                                 // Extract type arguments from new Set<T>() or new Map<K, V>()
-                                let type_args: Vec<Type> = new_expr.type_args.as_ref()
-                                    .map(|ta| ta.params.iter()
-                                        .map(|t| extract_ts_type(t))
-                                        .collect())
+                                let type_args: Vec<Type> = new_expr
+                                    .type_args
+                                    .as_ref()
+                                    .map(|ta| {
+                                        ta.params.iter().map(|t| extract_ts_type(t)).collect()
+                                    })
                                     .unwrap_or_default();
                                 ty = Type::Generic {
                                     base: class_name.to_string(),
@@ -957,17 +989,25 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 ty = Type::Named("TextDecoder".to_string());
                             } else if class_name == "Uint8Array" || class_name == "Buffer" {
                                 ty = Type::Named("Uint8Array".to_string());
-                            } else if matches!(class_name,
-                                "Int8Array" | "Int16Array" | "Uint16Array" |
-                                "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array"
+                            } else if matches!(
+                                class_name,
+                                "Int8Array"
+                                    | "Int16Array"
+                                    | "Uint16Array"
+                                    | "Int32Array"
+                                    | "Uint32Array"
+                                    | "Float32Array"
+                                    | "Float64Array"
                             ) {
                                 ty = Type::Named(class_name.to_string());
                             } else if ctx.classes_index.contains_key(class_name) {
                                 // User-defined class: infer type from new ClassName(...)
-                                let type_args: Vec<Type> = new_expr.type_args.as_ref()
-                                    .map(|ta| ta.params.iter()
-                                        .map(|t| extract_ts_type(t))
-                                        .collect())
+                                let type_args: Vec<Type> = new_expr
+                                    .type_args
+                                    .as_ref()
+                                    .map(|ta| {
+                                        ta.params.iter().map(|t| extract_ts_type(t)).collect()
+                                    })
                                     .unwrap_or_default();
                                 if type_args.is_empty() {
                                     ty = Type::Named(class_name.to_string());
@@ -989,7 +1029,8 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
                         let class_name = class_ident.sym.as_ref();
                         // First try the general native module lookup (covers all imported native classes)
-                        let module_name = if let Some((m, _)) = ctx.lookup_native_module(class_name) {
+                        let module_name = if let Some((m, _)) = ctx.lookup_native_module(class_name)
+                        {
                             Some(m.to_string())
                         } else {
                             // Fallback to hardcoded map for known classes
@@ -1011,7 +1052,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             }
                         };
                         if let Some(module) = module_name {
-                            ctx.register_native_instance(name.clone(), module, class_name.to_string());
+                            ctx.register_native_instance(
+                                name.clone(),
+                                module,
+                                class_name.to_string(),
+                            );
                         }
                     }
                 }
@@ -1024,27 +1069,32 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
                             let class_name = class_ident.sym.as_ref();
                             // First try the general native module lookup
-                            let module_name = if let Some((m, _)) = ctx.lookup_native_module(class_name) {
-                                Some(m.to_string())
-                            } else {
-                                match class_name {
-                                    "EventEmitter" => Some("events".to_string()),
-                                    "AsyncLocalStorage" => Some("async_hooks".to_string()),
-                                    "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
-                                    "Redis" => Some("ioredis".to_string()),
-                                    "LRUCache" => Some("lru-cache".to_string()),
-                                    "Command" => Some("commander".to_string()),
-                                    "Big" => Some("big.js".to_string()),
-                                    "Decimal" => Some("decimal.js".to_string()),
-                                    "BigNumber" => Some("bignumber.js".to_string()),
-                                    "Pool" => Some("pg".to_string()),
-                                    "Client" => Some("pg".to_string()),
-                                    "MongoClient" => Some("mongodb".to_string()),
-                                    _ => None,
-                                }
-                            };
+                            let module_name =
+                                if let Some((m, _)) = ctx.lookup_native_module(class_name) {
+                                    Some(m.to_string())
+                                } else {
+                                    match class_name {
+                                        "EventEmitter" => Some("events".to_string()),
+                                        "AsyncLocalStorage" => Some("async_hooks".to_string()),
+                                        "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
+                                        "Redis" => Some("ioredis".to_string()),
+                                        "LRUCache" => Some("lru-cache".to_string()),
+                                        "Command" => Some("commander".to_string()),
+                                        "Big" => Some("big.js".to_string()),
+                                        "Decimal" => Some("decimal.js".to_string()),
+                                        "BigNumber" => Some("bignumber.js".to_string()),
+                                        "Pool" => Some("pg".to_string()),
+                                        "Client" => Some("pg".to_string()),
+                                        "MongoClient" => Some("mongodb".to_string()),
+                                        _ => None,
+                                    }
+                                };
                             if let Some(module) = module_name {
-                                ctx.register_native_instance(name.clone(), module, class_name.to_string());
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    module,
+                                    class_name.to_string(),
+                                );
                             }
                         }
                     }
@@ -1064,10 +1114,16 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         let method_name = method_ident.sym.as_ref();
                                         // Map factory functions to their class names
                                         let class_name = match (module_name, method_name) {
-                                            ("mysql2" | "mysql2/promise", "createPool") => Some("Pool"),
-                                            ("mysql2" | "mysql2/promise", "createConnection") => Some("Connection"),
+                                            ("mysql2" | "mysql2/promise", "createPool") => {
+                                                Some("Pool")
+                                            }
+                                            ("mysql2" | "mysql2/promise", "createConnection") => {
+                                                Some("Connection")
+                                            }
                                             ("pg", "connect") => Some("Client"),
-                                            ("http" | "https", "request" | "get") => Some("ClientRequest"),
+                                            ("http" | "https", "request" | "get") => {
+                                                Some("ClientRequest")
+                                            }
                                             // node-cron's `cron.schedule(expr, cb)` returns a job
                                             // handle whose `start()`/`stop()`/`isRunning()` methods
                                             // dispatch via the ("node-cron", true, METHOD) entries
@@ -1079,7 +1135,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             _ => None,
                                         };
                                         if let Some(class_name) = class_name {
-                                            ctx.register_native_instance(name.clone(), module_name.to_string(), class_name.to_string());
+                                            ctx.register_native_instance(
+                                                name.clone(),
+                                                module_name.to_string(),
+                                                class_name.to_string(),
+                                            );
                                         }
                                     }
                                 }
@@ -1093,15 +1153,26 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             // Check if this is a default import from a native module
                             if let Some((module_name, None)) = ctx.lookup_native_module(func_name) {
                                 // Register as native instance - the "class" is "App" for default exports
-                                ctx.register_native_instance(name.clone(), module_name.to_string(), "App".to_string());
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    module_name.to_string(),
+                                    "App".to_string(),
+                                );
                             }
                             // Check if this is a named import that returns a handle (e.g., State from perry/ui)
-                            if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name) {
+                            if let Some((module_name, Some(method_name))) =
+                                ctx.lookup_native_module(func_name)
+                            {
                                 if module_name == "perry/ui" {
                                     match method_name {
-                                        "Canvas" | "State" | "Sheet" | "Toolbar" | "Window" | "LazyVStack"
-                                        | "NavigationStack" | "Picker" | "Table" | "TabBar" => {
-                                            ctx.register_native_instance(name.clone(), module_name.to_string(), method_name.to_string());
+                                        "Canvas" | "State" | "Sheet" | "Toolbar" | "Window"
+                                        | "LazyVStack" | "NavigationStack" | "Picker" | "Table"
+                                        | "TabBar" => {
+                                            ctx.register_native_instance(
+                                                name.clone(),
+                                                module_name.to_string(),
+                                                method_name.to_string(),
+                                            );
                                         }
                                         _ => {}
                                     }
@@ -1120,17 +1191,29 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             if let ast::Expr::Member(member) = callee.as_ref() {
                                 if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                                     let obj_name = obj_ident.sym.as_ref();
-                                    if let Some((module_name, _)) = ctx.lookup_native_module(obj_name) {
+                                    if let Some((module_name, _)) =
+                                        ctx.lookup_native_module(obj_name)
+                                    {
                                         if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                                            let class_name = match (module_name, method_ident.sym.as_ref()) {
-                                                ("mongodb", "connect") => Some("MongoClient"),
-                                                ("mysql2" | "mysql2/promise", "createPool") => Some("Pool"),
-                                                ("mysql2" | "mysql2/promise", "createConnection") => Some("Connection"),
-                                                ("pg", "connect") => Some("Client"),
-                                                _ => None,
-                                            };
+                                            let class_name =
+                                                match (module_name, method_ident.sym.as_ref()) {
+                                                    ("mongodb", "connect") => Some("MongoClient"),
+                                                    ("mysql2" | "mysql2/promise", "createPool") => {
+                                                        Some("Pool")
+                                                    }
+                                                    (
+                                                        "mysql2" | "mysql2/promise",
+                                                        "createConnection",
+                                                    ) => Some("Connection"),
+                                                    ("pg", "connect") => Some("Client"),
+                                                    _ => None,
+                                                };
                                             if let Some(class_name) = class_name {
-                                                ctx.register_native_instance(name.clone(), module_name.to_string(), class_name.to_string());
+                                                ctx.register_native_instance(
+                                                    name.clone(),
+                                                    module_name.to_string(),
+                                                    class_name.to_string(),
+                                                );
                                             }
                                         }
                                     }
@@ -1155,20 +1238,28 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         if let ast::Expr::Member(member) = callee.as_ref() {
                             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                                 let obj_name = obj_ident.sym.to_string();
-                                if let Some((module_name, _class)) = ctx.lookup_native_instance(&obj_name)
+                                if let Some((module_name, _class)) = ctx
+                                    .lookup_native_instance(&obj_name)
                                     .map(|(m, c)| (m.to_string(), c.to_string()))
                                 {
                                     if let ast::MemberProp::Ident(method_ident) = &member.prop {
                                         let method_name = method_ident.sym.as_ref();
                                         // Determine if the method returns a handle (another native instance)
-                                        let returns_handle = match (module_name.as_str(), method_name) {
-                                            ("mongodb", "db") => Some("Database"),
-                                            ("mongodb", "collection") => Some("Collection"),
-                                            ("mysql2" | "mysql2/promise", "getConnection") => Some("PoolConnection"),
-                                            _ => None,
-                                        };
+                                        let returns_handle =
+                                            match (module_name.as_str(), method_name) {
+                                                ("mongodb", "db") => Some("Database"),
+                                                ("mongodb", "collection") => Some("Collection"),
+                                                ("mysql2" | "mysql2/promise", "getConnection") => {
+                                                    Some("PoolConnection")
+                                                }
+                                                _ => None,
+                                            };
                                         if let Some(class_name) = returns_handle {
-                                            ctx.register_native_instance(name.clone(), module_name, class_name.to_string());
+                                            ctx.register_native_instance(
+                                                name.clone(),
+                                                module_name,
+                                                class_name.to_string(),
+                                            );
                                         }
                                     }
                                 }
@@ -1198,10 +1289,13 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     let method_name = method_ident.sym.as_ref();
                                     if method_name == "toString" || method_name == "get" {
                                         // Check if object is a URLSearchParams
-                                        if let ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref() {
+                                        if let ast::Expr::Ident(obj_ident) =
+                                            member_expr.obj.as_ref()
+                                        {
                                             let obj_name = obj_ident.sym.as_ref();
                                             if let Some(obj_ty) = ctx.lookup_local_type(obj_name) {
-                                                if matches!(obj_ty, Type::Named(name) if name == "URLSearchParams") {
+                                                if matches!(obj_ty, Type::Named(name) if name == "URLSearchParams")
+                                                {
                                                     ty = Type::String;
                                                 }
                                             }
@@ -1226,20 +1320,37 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             if let ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref() {
                                 let obj_name = obj_ident.sym.as_ref();
                                 // Check if object is a native instance
-                                if let Some((module, class)) = ctx.lookup_native_instance(obj_name) {
+                                if let Some((module, class)) = ctx.lookup_native_instance(obj_name)
+                                {
                                     // Check if this method returns the same type (builder pattern)
-                                    if let ast::MemberProp::Ident(method_ident) = &member_expr.prop {
+                                    if let ast::MemberProp::Ident(method_ident) = &member_expr.prop
+                                    {
                                         let method_name = method_ident.sym.as_ref();
                                         // Methods that return the same type (Decimal, etc.)
                                         let returns_same_type = match class {
-                                            "Decimal" | "Big" | "BigNumber" => matches!(method_name,
-                                                "plus" | "minus" | "times" | "div" | "mod" |
-                                                "pow" | "sqrt" | "abs" | "neg" | "round" | "floor" | "ceil"
+                                            "Decimal" | "Big" | "BigNumber" => matches!(
+                                                method_name,
+                                                "plus"
+                                                    | "minus"
+                                                    | "times"
+                                                    | "div"
+                                                    | "mod"
+                                                    | "pow"
+                                                    | "sqrt"
+                                                    | "abs"
+                                                    | "neg"
+                                                    | "round"
+                                                    | "floor"
+                                                    | "ceil"
                                             ),
                                             _ => false,
                                         };
                                         if returns_same_type {
-                                            ctx.register_native_instance(name.clone(), module.to_string(), class.to_string());
+                                            ctx.register_native_instance(
+                                                name.clone(),
+                                                module.to_string(),
+                                                class.to_string(),
+                                            );
                                             handled = true;
                                         }
                                     }
@@ -1247,7 +1358,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             }
                             // Second try: object is new Big(...) or a chained call like new Big(...).div(...)
                             if !handled {
-                                if let Some(module_name) = detect_native_instance_expr(&member_expr.obj) {
+                                if let Some(module_name) =
+                                    detect_native_instance_expr(&member_expr.obj)
+                                {
                                     let class_name = match module_name {
                                         "big.js" => "Big",
                                         "decimal.js" => "Decimal",
@@ -1257,7 +1370,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         _ => "",
                                     };
                                     if !class_name.is_empty() {
-                                        ctx.register_native_instance(name.clone(), module_name.to_string(), class_name.to_string());
+                                        ctx.register_native_instance(
+                                            name.clone(),
+                                            module_name.to_string(),
+                                            class_name.to_string(),
+                                        );
                                     }
                                 }
                             }
@@ -1288,12 +1405,20 @@ pub(crate) fn lower_var_decl_with_destructuring(
 
                 // Check for: const response = fetch(url) / fetchWithAuth(url, auth) / fetchPostWithAuth(url, auth, body)
                 if let Some(module) = get_fetch_module(init_expr) {
-                    ctx.register_native_instance(name.clone(), module.to_string(), "Response".to_string());
+                    ctx.register_native_instance(
+                        name.clone(),
+                        module.to_string(),
+                        "Response".to_string(),
+                    );
                 }
                 // Check for: const response = await fetch(url) / await fetchWithAuth(...) / await fetchPostWithAuth(...)
                 else if let ast::Expr::Await(await_expr) = init_expr.as_ref() {
                     if let Some(module) = get_fetch_module(&await_expr.arg) {
-                        ctx.register_native_instance(name.clone(), module.to_string(), "Response".to_string());
+                        ctx.register_native_instance(
+                            name.clone(),
+                            module.to_string(),
+                            "Response".to_string(),
+                        );
                     }
                 }
 
@@ -1303,15 +1428,27 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
                         match class_ident.sym.as_ref() {
                             "Response" => {
-                                ctx.register_native_instance(name.clone(), "fetch".to_string(), "Response".to_string());
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "fetch".to_string(),
+                                    "Response".to_string(),
+                                );
                                 ctx.uses_fetch = true;
                             }
                             "Headers" => {
-                                ctx.register_native_instance(name.clone(), "Headers".to_string(), "Headers".to_string());
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "Headers".to_string(),
+                                    "Headers".to_string(),
+                                );
                                 ctx.uses_fetch = true;
                             }
                             "Request" => {
-                                ctx.register_native_instance(name.clone(), "Request".to_string(), "Request".to_string());
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "Request".to_string(),
+                                    "Request".to_string(),
+                                );
                                 ctx.uses_fetch = true;
                             }
                             _ => {}
@@ -1327,7 +1464,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                                         match prop_ident.sym.as_ref() {
                                             "json" | "redirect" | "error" => {
-                                                ctx.register_native_instance(name.clone(), "fetch".to_string(), "Response".to_string());
+                                                ctx.register_native_instance(
+                                                    name.clone(),
+                                                    "fetch".to_string(),
+                                                    "Response".to_string(),
+                                                );
                                                 ctx.uses_fetch = true;
                                             }
                                             _ => {}
@@ -1347,10 +1488,16 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                                 if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                                     if prop_ident.sym.as_ref() == "clone" {
-                                        if let Some((m, c)) = ctx.lookup_native_instance(obj_ident.sym.as_ref()) {
+                                        if let Some((m, c)) =
+                                            ctx.lookup_native_instance(obj_ident.sym.as_ref())
+                                        {
                                             if c == "Response" {
                                                 let m = m.to_string();
-                                                ctx.register_native_instance(name.clone(), m, "Response".to_string());
+                                                ctx.register_native_instance(
+                                                    name.clone(),
+                                                    m,
+                                                    "Response".to_string(),
+                                                );
                                             }
                                         }
                                     }
@@ -1371,9 +1518,15 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                                         if prop_ident.sym.as_ref() == "blob" {
-                                            if let Some((_, c)) = ctx.lookup_native_instance(obj_ident.sym.as_ref()) {
+                                            if let Some((_, c)) =
+                                                ctx.lookup_native_instance(obj_ident.sym.as_ref())
+                                            {
                                                 if c == "Response" {
-                                                    ctx.register_native_instance(name.clone(), "blob".to_string(), "Blob".to_string());
+                                                    ctx.register_native_instance(
+                                                        name.clone(),
+                                                        "blob".to_string(),
+                                                        "Blob".to_string(),
+                                                    );
                                                 }
                                             }
                                         }
@@ -1392,9 +1545,15 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                                 if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                                     if prop_ident.sym.as_ref() == "slice" {
-                                        if let Some((_, c)) = ctx.lookup_native_instance(obj_ident.sym.as_ref()) {
+                                        if let Some((_, c)) =
+                                            ctx.lookup_native_instance(obj_ident.sym.as_ref())
+                                        {
                                             if c == "Blob" {
-                                                ctx.register_native_instance(name.clone(), "blob".to_string(), "Blob".to_string());
+                                                ctx.register_native_instance(
+                                                    name.clone(),
+                                                    "blob".to_string(),
+                                                    "Blob".to_string(),
+                                                );
                                             }
                                         }
                                     }
@@ -1429,25 +1588,41 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         // Check direct function calls: const x = someFunc()
                         if let ast::Expr::Ident(func_ident) = callee_expr.as_ref() {
                             let func_name = func_ident.sym.as_ref();
-                            if let Some((module, class)) = ctx.lookup_func_return_native_instance(func_name) {
-                                ctx.register_native_instance(name.clone(), module.to_string(), class.to_string());
+                            if let Some((module, class)) =
+                                ctx.lookup_func_return_native_instance(func_name)
+                            {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    module.to_string(),
+                                    class.to_string(),
+                                );
                             }
                         }
                         // Check method calls on native instances: const conn = pool.getConnection()
                         if let ast::Expr::Member(member_expr) = callee_expr.as_ref() {
                             if let ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref() {
                                 let obj_name = obj_ident.sym.as_ref();
-                                if let Some((module, class)) = ctx.lookup_native_instance(obj_name) {
-                                    if let ast::MemberProp::Ident(method_ident) = &member_expr.prop {
+                                if let Some((module, class)) = ctx.lookup_native_instance(obj_name)
+                                {
+                                    if let ast::MemberProp::Ident(method_ident) = &member_expr.prop
+                                    {
                                         let method_name = method_ident.sym.as_ref();
                                         // Map method calls to their return types
                                         let return_class = match (module, class, method_name) {
-                                            ("mysql2" | "mysql2/promise", "Pool", "getConnection") => Some("PoolConnection"),
+                                            (
+                                                "mysql2" | "mysql2/promise",
+                                                "Pool",
+                                                "getConnection",
+                                            ) => Some("PoolConnection"),
                                             ("pg", "Pool", "connect") => Some("Client"),
                                             _ => None,
                                         };
                                         if let Some(ret_class) = return_class {
-                                            ctx.register_native_instance(name.clone(), module.to_string(), ret_class.to_string());
+                                            ctx.register_native_instance(
+                                                name.clone(),
+                                                module.to_string(),
+                                                ret_class.to_string(),
+                                            );
                                         }
                                     }
                                 }
@@ -1462,7 +1637,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 // Reuse pre-registered LocalId from module-level forward-declaration pass
                 let id = ctx.lookup_local(&name).unwrap();
                 // Update the type now that we have full inference
-                if let Some((_, _, existing_ty)) = ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name) {
+                if let Some((_, _, existing_ty)) =
+                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
+                {
                     *existing_ty = ty.clone();
                 }
                 id
@@ -1481,7 +1658,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // Delegate to the recursive pattern binding helper so that all
             // destructuring features (nested patterns, defaults, rest, computed
             // keys) work consistently across all call sites.
-            let init_expr = decl.init.as_ref()
+            let init_expr = decl
+                .init
+                .as_ref()
                 .map(|e| lower_expr(ctx, e))
                 .transpose()?
                 .ok_or_else(|| anyhow!("Destructuring requires an initializer"))?;
@@ -1495,7 +1674,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
             let id = if ctx.pre_registered_module_vars.remove(&name) {
                 let id = ctx.lookup_local(&name).unwrap();
-                if let Some((_, _, existing_ty)) = ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name) {
+                if let Some((_, _, existing_ty)) =
+                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
+                {
                     *existing_ty = ty.clone();
                 }
                 id
@@ -1514,4 +1695,3 @@ pub(crate) fn lower_var_decl_with_destructuring(
 
     Ok(result)
 }
-

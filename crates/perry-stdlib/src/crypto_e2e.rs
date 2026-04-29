@@ -3,16 +3,16 @@
 //! Provides X25519 key exchange, AES-256-GCM authenticated encryption,
 //! and HKDF-SHA256 key derivation — all exposed as synchronous FFI functions.
 
-use perry_runtime::{js_string_from_bytes, StringHeader};
-use rand::RngCore;
-use base64::Engine as _;
-use x25519_dalek::{PublicKey, StaticSecret};
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
+use base64::Engine as _;
 use hkdf::Hkdf;
+use perry_runtime::{js_string_from_bytes, StringHeader};
+use rand::RngCore;
 use sha2::Sha256;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 /// Helper to extract bytes from a StringHeader pointer.
 unsafe fn str_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {

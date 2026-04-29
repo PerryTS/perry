@@ -1,7 +1,7 @@
 //! Form / Section — LinearLayout containers with styling
 
-use jni::objects::JValue;
 use crate::jni_bridge;
+use jni::objects::JValue;
 
 fn str_from_header(ptr: *const u8) -> &'static str {
     crate::app::str_from_header(ptr)
@@ -13,11 +13,13 @@ pub fn create() -> i64 {
     let _ = env.push_local_frame(32);
 
     let activity = super::get_activity(&mut env);
-    let layout = env.new_object(
-        "android/widget/LinearLayout",
-        "(Landroid/content/Context;)V",
-        &[JValue::Object(&activity)],
-    ).expect("Failed to create LinearLayout");
+    let layout = env
+        .new_object(
+            "android/widget/LinearLayout",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        )
+        .expect("Failed to create LinearLayout");
 
     // Set vertical orientation
     let _ = env.call_method(&layout, "setOrientation", "(I)V", &[JValue::Int(1)]);
@@ -28,12 +30,21 @@ pub fn create() -> i64 {
         &layout,
         "setPadding",
         "(IIII)V",
-        &[JValue::Int(pad), JValue::Int(pad), JValue::Int(pad), JValue::Int(pad)],
+        &[
+            JValue::Int(pad),
+            JValue::Int(pad),
+            JValue::Int(pad),
+            JValue::Int(pad),
+        ],
     );
 
-    let global = env.new_global_ref(layout).expect("Failed to create global ref");
+    let global = env
+        .new_global_ref(layout)
+        .expect("Failed to create global ref");
     let handle = super::register_widget(global);
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     handle
 }
 
@@ -46,11 +57,13 @@ pub fn section_create(title_ptr: *const u8) -> i64 {
     let activity = super::get_activity(&mut env);
 
     // Outer layout
-    let layout = env.new_object(
-        "android/widget/LinearLayout",
-        "(Landroid/content/Context;)V",
-        &[JValue::Object(&activity)],
-    ).expect("Failed to create LinearLayout");
+    let layout = env
+        .new_object(
+            "android/widget/LinearLayout",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        )
+        .expect("Failed to create LinearLayout");
     let _ = env.call_method(&layout, "setOrientation", "(I)V", &[JValue::Int(1)]);
 
     let pad = super::dp_to_px(&mut env, 8.0);
@@ -58,16 +71,23 @@ pub fn section_create(title_ptr: *const u8) -> i64 {
         &layout,
         "setPadding",
         "(IIII)V",
-        &[JValue::Int(pad), JValue::Int(pad), JValue::Int(pad), JValue::Int(pad)],
+        &[
+            JValue::Int(pad),
+            JValue::Int(pad),
+            JValue::Int(pad),
+            JValue::Int(pad),
+        ],
     );
 
     // Add title label
     if !title.is_empty() {
-        let title_view = env.new_object(
-            "android/widget/TextView",
-            "(Landroid/content/Context;)V",
-            &[JValue::Object(&activity)],
-        ).expect("Failed to create TextView");
+        let title_view = env
+            .new_object(
+                "android/widget/TextView",
+                "(Landroid/content/Context;)V",
+                &[JValue::Object(&activity)],
+            )
+            .expect("Failed to create TextView");
 
         let jstr = env.new_string(title).expect("Failed to create JNI string");
         let _ = env.call_method(
@@ -82,7 +102,10 @@ pub fn section_create(title_ptr: *const u8) -> i64 {
             &title_view,
             "setTypeface",
             "(Landroid/graphics/Typeface;I)V",
-            &[JValue::Object(&jni::objects::JObject::null()), JValue::Int(1)],
+            &[
+                JValue::Object(&jni::objects::JObject::null()),
+                JValue::Int(1),
+            ],
         );
 
         // setTextSize(TypedValue.COMPLEX_UNIT_SP=2, 14)
@@ -98,7 +121,12 @@ pub fn section_create(title_ptr: *const u8) -> i64 {
             &title_view,
             "setPadding",
             "(IIII)V",
-            &[JValue::Int(0), JValue::Int(0), JValue::Int(0), JValue::Int(bottom_pad)],
+            &[
+                JValue::Int(0),
+                JValue::Int(0),
+                JValue::Int(0),
+                JValue::Int(bottom_pad),
+            ],
         );
 
         let _ = env.call_method(
@@ -109,8 +137,12 @@ pub fn section_create(title_ptr: *const u8) -> i64 {
         );
     }
 
-    let global = env.new_global_ref(layout).expect("Failed to create global ref");
+    let global = env
+        .new_global_ref(layout)
+        .expect("Failed to create global ref");
     let handle = super::register_widget(global);
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     handle
 }

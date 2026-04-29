@@ -9,8 +9,8 @@
 use std::cell::RefCell;
 use std::io::{self, BufRead, Write};
 
-use perry_runtime::string::{StringHeader, js_string_from_bytes};
 use perry_runtime::closure::ClosureHeader;
+use perry_runtime::string::{js_string_from_bytes, StringHeader};
 use perry_runtime::value::JSValue;
 
 // JSON functions are in perry-stdlib/src/framework/json.rs (behind http-server feature).
@@ -81,7 +81,8 @@ pub extern "C" fn js_worker_threads_post_message(data: f64) -> f64 {
 pub extern "C" fn js_worker_threads_on(event_ptr: i64, callback: i64) -> f64 {
     // Extract event name
     let event_name = {
-        let raw_ptr = perry_runtime::value::js_get_string_pointer_unified(f64::from_bits(event_ptr as u64));
+        let raw_ptr =
+            perry_runtime::value::js_get_string_pointer_unified(f64::from_bits(event_ptr as u64));
         if raw_ptr == 0 {
             String::new()
         } else {

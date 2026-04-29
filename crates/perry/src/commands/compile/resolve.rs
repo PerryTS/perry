@@ -33,9 +33,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{
-    CompilationContext, NativeFunctionDecl, NativeLibraryManifest, TargetNativeConfig,
-};
+use super::{CompilationContext, NativeFunctionDecl, NativeLibraryManifest, TargetNativeConfig};
 
 /// Find the Perry workspace root by searching upward from the executable location.
 pub fn find_perry_workspace_root() -> Option<PathBuf> {
@@ -43,7 +41,12 @@ pub fn find_perry_workspace_root() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             // Binary in target/release/ → workspace is ../../
-            for ancestor in [dir, &dir.join(".."), &dir.join("../.."), &dir.join("../../..")] {
+            for ancestor in [
+                dir,
+                &dir.join(".."),
+                &dir.join("../.."),
+                &dir.join("../../.."),
+            ] {
                 let candidate = std::fs::canonicalize(ancestor).ok()?;
                 if candidate.join("crates/perry-runtime").is_dir()
                     && candidate.join("crates/perry-ui-geisterhand").is_dir()
@@ -73,7 +76,8 @@ pub(super) fn has_perry_native_library(package_dir: &Path) -> bool {
     let package_json = package_dir.join("package.json");
     if let Ok(content) = fs::read_to_string(&package_json) {
         if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
-            return pkg.get("perry")
+            return pkg
+                .get("perry")
                 .and_then(|p| p.get("nativeLibrary"))
                 .is_some();
         }
@@ -91,7 +95,8 @@ pub(super) fn has_perry_native_module(package_dir: &Path) -> bool {
     let package_json = package_dir.join("package.json");
     if let Ok(content) = fs::read_to_string(&package_json) {
         if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
-            return pkg.get("perry")
+            return pkg
+                .get("perry")
                 .and_then(|p| p.get("nativeModule"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
@@ -126,13 +131,15 @@ pub(super) fn parse_native_library_manifest(
     //                        counts, etc.
     //   "void"            → no return value.
     //   (anything else)   → treated as f64 (Perry double ABI).
-    let functions: Vec<NativeFunctionDecl> = native_lib.get("functions")?
+    let functions: Vec<NativeFunctionDecl> = native_lib
+        .get("functions")?
         .as_array()?
         .iter()
         .filter_map(|f| {
             Some(NativeFunctionDecl {
                 name: f.get("name")?.as_str()?.to_string(),
-                params: f.get("params")?
+                params: f
+                    .get("params")?
                     .as_array()?
                     .iter()
                     .filter_map(|p| p.as_str().map(|s| s.to_string()))
@@ -158,40 +165,61 @@ pub(super) fn parse_native_library_manifest(
         _ => "macos",
     };
 
-    let target_config = native_lib.get("targets")
+    let target_config = native_lib
+        .get("targets")
         .and_then(|t| t.get(target_key))
-        .map(|tc| {
-            TargetNativeConfig {
-                crate_path: package_dir.join(
-                    tc.get("crate").and_then(|c| c.as_str()).unwrap_or("")
-                ),
-                lib_name: tc.get("lib").and_then(|l| l.as_str())
-                    .unwrap_or("").to_string(),
-                frameworks: tc.get("frameworks")
-                    .and_then(|f| f.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                    .unwrap_or_default(),
-                libs: tc.get("libs")
-                    .and_then(|l| l.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                    .unwrap_or_default(),
-                pkg_config: tc.get("pkgConfig")
-                    .and_then(|p| p.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                    .unwrap_or_default(),
-                swift_sources: tc.get("swift_sources")
-                    .and_then(|s| s.as_array())
-                    .map(|a| a.iter()
+        .map(|tc| TargetNativeConfig {
+            crate_path: package_dir.join(tc.get("crate").and_then(|c| c.as_str()).unwrap_or("")),
+            lib_name: tc
+                .get("lib")
+                .and_then(|l| l.as_str())
+                .unwrap_or("")
+                .to_string(),
+            frameworks: tc
+                .get("frameworks")
+                .and_then(|f| f.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            libs: tc
+                .get("libs")
+                .and_then(|l| l.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            pkg_config: tc
+                .get("pkgConfig")
+                .and_then(|p| p.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            swift_sources: tc
+                .get("swift_sources")
+                .and_then(|s| s.as_array())
+                .map(|a| {
+                    a.iter()
                         .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
-                        .collect())
-                    .unwrap_or_default(),
-                metal_sources: tc.get("metal_sources")
-                    .and_then(|s| s.as_array())
-                    .map(|a| a.iter()
+                        .collect()
+                })
+                .unwrap_or_default(),
+            metal_sources: tc
+                .get("metal_sources")
+                .and_then(|s| s.as_array())
+                .map(|a| {
+                    a.iter()
                         .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
-                        .collect())
-                    .unwrap_or_default(),
-            }
+                        .collect()
+                })
+                .unwrap_or_default(),
         });
 
     Some(NativeLibraryManifest {
@@ -205,9 +233,7 @@ pub(super) fn parse_native_library_manifest(
 /// Packages that Perry provides built-in native extensions for.
 /// These must never be loaded into V8 — Perry's codegen intercepts all imports
 /// from these packages and replaces them with native calls.
-const PERRY_NATIVE_EXTENSION_PACKAGES: &[&str] = &[
-    "ioredis", "ethers", "mysql2", "ws", "dotenv",
-];
+const PERRY_NATIVE_EXTENSION_PACKAGES: &[&str] = &["ioredis", "ethers", "mysql2", "ws", "dotenv"];
 
 /// Check if a file path is inside a Perry native extension package (has built-in stdlib support)
 /// or a package that has perry.nativeLibrary in its package.json.
@@ -229,7 +255,11 @@ pub(super) fn is_in_perry_native_package(path: &Path) -> bool {
             return has_perry_native_library(dir);
         }
         // Stop at node_modules boundary
-        if dir.file_name().map(|n| n == "node_modules").unwrap_or(false) {
+        if dir
+            .file_name()
+            .map(|n| n == "node_modules")
+            .unwrap_or(false)
+        {
             break;
         }
         current = dir.parent();
@@ -240,7 +270,10 @@ pub(super) fn is_in_perry_native_package(path: &Path) -> bool {
 /// Extract the package directory from a resolved path for a given package name.
 /// E.g., for path "/project/node_modules/@noble/curves/node_modules/@noble/hashes/src/sha256.ts"
 /// and package_name "@noble/hashes", returns "/project/node_modules/@noble/curves/node_modules/@noble/hashes"
-pub(super) fn extract_compile_package_dir(resolved_path: &Path, package_name: &str) -> Option<PathBuf> {
+pub(super) fn extract_compile_package_dir(
+    resolved_path: &Path,
+    package_name: &str,
+) -> Option<PathBuf> {
     let path_str = resolved_path.to_string_lossy();
     let needle = format!("node_modules/{}", package_name);
     // Use rfind to handle deeply nested node_modules
@@ -502,7 +535,10 @@ pub(super) fn resolve_package_entry(package_dir: &Path, subpath: Option<&str>) -
 
 /// Resolve package entry preferring TypeScript source over compiled JS output.
 /// Used for compile_packages where we want to compile from TS source, not bundled JS.
-pub(super) fn resolve_package_source_entry(package_dir: &Path, subpath: Option<&str>) -> Option<PathBuf> {
+pub(super) fn resolve_package_source_entry(
+    package_dir: &Path,
+    subpath: Option<&str>,
+) -> Option<PathBuf> {
     // For subpaths, try src/<subpath>.ts
     if let Some(sub) = subpath {
         let src_path = package_dir.join("src").join(sub);
@@ -698,12 +734,22 @@ pub(super) fn resolve_import(
                             .get(&package_name)
                             .unwrap_or(&package_dir);
                         // Prefer TypeScript source over compiled JS
-                        if let Some(src_entry) = resolve_package_source_entry(effective_dir, subpath.as_deref()) {
-                            return Some((src_entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                        if let Some(src_entry) =
+                            resolve_package_source_entry(effective_dir, subpath.as_deref())
+                        {
+                            return Some((
+                                src_entry.canonicalize().ok()?,
+                                ModuleKind::NativeCompiled,
+                            ));
                         }
                         // Fall back to normal resolution but still mark as NativeCompiled
-                        if let Some(fallback_entry) = resolve_package_entry(effective_dir, subpath.as_deref()) {
-                            return Some((fallback_entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                        if let Some(fallback_entry) =
+                            resolve_package_entry(effective_dir, subpath.as_deref())
+                        {
+                            return Some((
+                                fallback_entry.canonicalize().ok()?,
+                                ModuleKind::NativeCompiled,
+                            ));
                         }
                         // If effective_dir failed (shouldn't happen), try the local dir
                         return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
@@ -746,11 +792,18 @@ pub(super) fn resolve_import(
                     return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
                 }
                 if compile_packages.contains(&package_name) {
-                    if let Some(src_entry) = resolve_package_source_entry(&file_dep_dir, subpath.as_deref()) {
+                    if let Some(src_entry) =
+                        resolve_package_source_entry(&file_dep_dir, subpath.as_deref())
+                    {
                         return Some((src_entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
                     }
-                    if let Some(fallback_entry) = resolve_package_entry(&file_dep_dir, subpath.as_deref()) {
-                        return Some((fallback_entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                    if let Some(fallback_entry) =
+                        resolve_package_entry(&file_dep_dir, subpath.as_deref())
+                    {
+                        return Some((
+                            fallback_entry.canonicalize().ok()?,
+                            ModuleKind::NativeCompiled,
+                        ));
                     }
                 }
                 return Some((entry.canonicalize().ok()?, ModuleKind::Interpreted));
@@ -768,7 +821,10 @@ pub(super) fn discover_extension_entries(dir: &Path) -> Result<Vec<(PathBuf, Str
     let mut entries = Vec::new();
 
     if !dir.is_dir() {
-        return Err(anyhow!("--bundle-extensions path is not a directory: {}", dir.display()));
+        return Err(anyhow!(
+            "--bundle-extensions path is not a directory: {}",
+            dir.display()
+        ));
     }
 
     for entry in fs::read_dir(dir)? {
@@ -778,7 +834,8 @@ pub(super) fn discover_extension_entries(dir: &Path) -> Result<Vec<(PathBuf, Str
             continue;
         }
 
-        let plugin_id = subdir.file_name()
+        let plugin_id = subdir
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string();
@@ -791,7 +848,8 @@ pub(super) fn discover_extension_entries(dir: &Path) -> Result<Vec<(PathBuf, Str
             let pkg: serde_json::Value = serde_json::from_str(&pkg_contents)
                 .map_err(|e| anyhow!("Failed to parse {}: {}", pkg_json_path.display(), e))?;
 
-            let extensions = pkg.get("openclaw")
+            let extensions = pkg
+                .get("openclaw")
                 .and_then(|oc| oc.get("extensions"))
                 .and_then(|ext| ext.as_array());
 
@@ -833,14 +891,22 @@ pub(super) fn compute_module_prefix(resolved_path: &str, project_root: &Path) ->
         .ok()
         .and_then(|p| p.to_str())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| source_path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("module")
-            .to_string());
+        .unwrap_or_else(|| {
+            source_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("module")
+                .to_string()
+        });
     let mut prefix = source_module_name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_");
     // LLVM IR identifiers cannot start with a digit. Prefix with `_`
     // if the first character would be one (e.g. `05_fibonacci.ts`).
-    if prefix.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if prefix
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         prefix.insert(0, '_');
     }
     prefix
@@ -852,12 +918,21 @@ pub(super) fn cached_resolve_import(
     importer_path: &Path,
     ctx: &mut CompilationContext,
 ) -> Option<(PathBuf, ModuleKind)> {
-    let importer_dir = importer_path.parent().unwrap_or(importer_path).to_path_buf();
+    let importer_dir = importer_path
+        .parent()
+        .unwrap_or(importer_path)
+        .to_path_buf();
     let cache_key = (import_source.to_string(), importer_dir);
     if let Some(cached) = ctx.resolve_cache.get(&cache_key) {
         return cached.clone();
     }
-    let result = resolve_import(import_source, importer_path, &ctx.project_root, &ctx.compile_packages, &ctx.compile_package_dirs);
+    let result = resolve_import(
+        import_source,
+        importer_path,
+        &ctx.project_root,
+        &ctx.compile_packages,
+        &ctx.compile_package_dirs,
+    );
     ctx.resolve_cache.insert(cache_key, result.clone());
     result
 }

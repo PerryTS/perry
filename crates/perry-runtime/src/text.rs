@@ -62,8 +62,7 @@ pub extern "C" fn js_text_encoder_encode_llvm(value: f64) -> i64 {
         (*arr).length = len as u32;
         if len > 0 {
             // Write each byte as an f64 at offset 8 + i*8.
-            let elems =
-                (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            let elems = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             for i in 0..len {
                 let byte = *data_ptr.add(i);
                 *elems.add(i) = byte as f64;
@@ -131,8 +130,7 @@ pub extern "C" fn js_text_decoder_decode_llvm(value: f64) -> i64 {
         unsafe {
             let arr = ptr_usize as *const ArrayHeader;
             let len = (*arr).length as usize;
-            let elems = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>())
-                as *const f64;
+            let elems = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
             let mut bytes = Vec::with_capacity(len);
             for i in 0..len {
                 let d = *elems.add(i);

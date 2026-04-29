@@ -39,7 +39,10 @@ pub fn add_item(menu_handle: i64, title_ptr: *const u8, cb: f64) {
         let mut menus = m.borrow_mut();
         let idx = (menu_handle - 1) as usize;
         if idx < menus.len() {
-            menus[idx].items.push(MenuItem { title, callback_key: cb_key });
+            menus[idx].items.push(MenuItem {
+                title,
+                callback_key: cb_key,
+            });
         }
     });
 }
@@ -53,9 +56,8 @@ pub fn set_context_menu(widget_handle: i64, menu_handle: i64) {
     // Set up long-click listener on the widget via PerryBridge
     if let Some(view_ref) = crate::widgets::get_widget(widget_handle) {
         let mut env = jni_bridge::get_env();
-        let bridge_class = jni_bridge::with_cache(|c| {
-            env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-        });
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
         let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
         let _ = env.call_static_method(
             bridge_cls,

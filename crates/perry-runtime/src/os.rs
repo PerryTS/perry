@@ -1,8 +1,8 @@
 //! OS module - provides operating system related utility functions
 
-use crate::string::{js_string_from_bytes, StringHeader};
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
+use crate::string::{js_string_from_bytes, StringHeader};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -34,7 +34,13 @@ pub extern "C" fn js_os_platform() -> *mut StringHeader {
     let platform = "win32";
     #[cfg(target_os = "freebsd")]
     let platform = "freebsd";
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "windows", target_os = "freebsd")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "freebsd"
+    )))]
     let platform = "unknown";
 
     let bytes = platform.as_bytes();
@@ -53,7 +59,12 @@ pub extern "C" fn js_os_arch() -> *mut StringHeader {
     let arch = "ia32";
     #[cfg(target_arch = "arm")]
     let arch = "arm";
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "x86", target_arch = "arm")))]
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "x86",
+        target_arch = "arm"
+    )))]
     let arch = "unknown";
 
     let bytes = arch.as_bytes();
@@ -179,8 +190,15 @@ pub extern "C" fn js_os_totalmem() -> f64 {
             }
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "windows")))]
-    { 0.0 }
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "windows"
+    )))]
+    {
+        0.0
+    }
 }
 
 /// Get the amount of free system memory in bytes
@@ -190,7 +208,8 @@ pub extern "C" fn js_os_freemem() -> f64 {
     {
         unsafe {
             let mut vm_info: libc::vm_statistics64 = std::mem::zeroed();
-            let mut count = (std::mem::size_of::<libc::vm_statistics64>() / std::mem::size_of::<libc::integer_t>()) as u32;
+            let mut count = (std::mem::size_of::<libc::vm_statistics64>()
+                / std::mem::size_of::<libc::integer_t>()) as u32;
             let ret = libc::host_statistics64(
                 libc::mach_host_self(),
                 libc::HOST_VM_INFO64,
@@ -239,8 +258,15 @@ pub extern "C" fn js_os_freemem() -> f64 {
             }
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "windows")))]
-    { 0.0 }
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "windows"
+    )))]
+    {
+        0.0
+    }
 }
 
 /// Get the system uptime in seconds
@@ -281,8 +307,15 @@ pub extern "C" fn js_os_uptime() -> f64 {
         }
         unsafe { (GetTickCount64() / 1000) as f64 }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "windows")))]
-    { 0.0 }
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "windows"
+    )))]
+    {
+        0.0
+    }
 }
 
 /// Get the process uptime in seconds (time since process started)
@@ -343,28 +376,38 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
 #[no_mangle]
 pub extern "C" fn js_process_pid() -> f64 {
     #[cfg(unix)]
-    unsafe { libc::getpid() as f64 }
+    unsafe {
+        libc::getpid() as f64
+    }
     #[cfg(windows)]
     {
-        extern "system" { fn GetCurrentProcessId() -> u32; }
+        extern "system" {
+            fn GetCurrentProcessId() -> u32;
+        }
         unsafe { GetCurrentProcessId() as f64 }
     }
     #[cfg(not(any(unix, windows)))]
-    { 0.0 }
+    {
+        0.0
+    }
 }
 
 /// Get the parent process ID (process.ppid)
 #[no_mangle]
 pub extern "C" fn js_process_ppid() -> f64 {
     #[cfg(unix)]
-    unsafe { libc::getppid() as f64 }
+    unsafe {
+        libc::getppid() as f64
+    }
     #[cfg(windows)]
     {
         // Fallback: return 1 (system process)
         1.0
     }
     #[cfg(not(any(unix, windows)))]
-    { 0.0 }
+    {
+        0.0
+    }
 }
 
 /// process.version -> string (e.g., "v22.0.0")
@@ -379,7 +422,7 @@ pub extern "C" fn js_process_version() -> *mut StringHeader {
 #[no_mangle]
 pub extern "C" fn js_process_versions() -> f64 {
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
-    use crate::value::{JSValue, js_nanbox_string};
+    use crate::value::{js_nanbox_string, JSValue};
 
     // Build the object via shape with packed keys
     let packed = b"node\0v8\0perry\0";
@@ -420,14 +463,17 @@ thread_local! {
 
 /// process.on(event, handler) — register an event listener.
 #[no_mangle]
-pub extern "C" fn js_process_on(_event_ptr: *const StringHeader, handler: *const crate::closure::ClosureHeader) {
+pub extern "C" fn js_process_on(
+    _event_ptr: *const StringHeader,
+    handler: *const crate::closure::ClosureHeader,
+) {
     EXIT_HANDLERS.with(|h| h.borrow_mut().push(handler));
 }
 
 /// process.nextTick(callback) — schedule callback as a microtask.
 #[no_mangle]
 pub extern "C" fn js_process_next_tick(callback: *const crate::closure::ClosureHeader) {
-    use crate::promise::{js_promise_new, js_promise_then, js_promise_schedule_resolve};
+    use crate::promise::{js_promise_new, js_promise_schedule_resolve, js_promise_then};
     use crate::value::JSValue;
 
     let p = js_promise_new();
@@ -455,7 +501,11 @@ pub extern "C" fn js_process_chdir(dir_ptr: *const StringHeader) {
 #[no_mangle]
 pub extern "C" fn js_process_kill(pid: f64, signal: f64) {
     let pid_i = pid as i32;
-    let sig_i = if signal.is_nan() || signal == 0.0 { 0 } else { signal as i32 };
+    let sig_i = if signal.is_nan() || signal == 0.0 {
+        0
+    } else {
+        signal as i32
+    };
     #[cfg(unix)]
     unsafe {
         libc::kill(pid_i, sig_i);
@@ -465,20 +515,25 @@ pub extern "C" fn js_process_kill(pid: f64, signal: f64) {
         let _ = (pid_i, sig_i);
     }
     #[cfg(not(any(unix, windows)))]
-    { let _ = (pid_i, sig_i); }
+    {
+        let _ = (pid_i, sig_i);
+    }
 }
 
 /// Stub `write` function used by process.stdin/stdout/stderr objects.
 /// Receives a single value, writes it to stdout/stderr, returns true.
-extern "C" fn process_stream_write_stub(_closure: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn process_stream_write_stub(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
     // Just return true
     f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
 }
 
 /// Build a stub stream object with a `write` field set to a closure.
 fn build_stream_object() -> *mut crate::object::ObjectHeader {
-    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::closure::js_closure_alloc;
+    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;
 
     let packed = b"write\0";
@@ -527,7 +582,13 @@ pub extern "C" fn js_os_type() -> *mut StringHeader {
     let os_type = "Windows_NT";
     #[cfg(target_os = "freebsd")]
     let os_type = "FreeBSD";
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "windows", target_os = "freebsd")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "freebsd"
+    )))]
     let os_type = "Unknown";
 
     let bytes = os_type.as_bytes();
@@ -570,7 +631,10 @@ pub extern "C" fn js_os_release() -> *mut StringHeader {
             let mut info: RTL_OSVERSIONINFOW = std::mem::zeroed();
             info.dw_os_version_info_size = std::mem::size_of::<RTL_OSVERSIONINFOW>() as u32;
             if RtlGetVersion(&mut info) == 0 {
-                let release = format!("{}.{}.{}", info.dw_major_version, info.dw_minor_version, info.dw_build_number);
+                let release = format!(
+                    "{}.{}.{}",
+                    info.dw_major_version, info.dw_minor_version, info.dw_build_number
+                );
                 let bytes = release.as_bytes();
                 js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
             } else {

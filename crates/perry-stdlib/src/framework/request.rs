@@ -5,8 +5,8 @@
 use perry_runtime::{js_string_from_bytes, StringHeader};
 use std::collections::HashMap;
 
-use crate::common::{get_handle, Handle};
 use super::server::RequestHandle;
+use crate::common::{get_handle, Handle};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {

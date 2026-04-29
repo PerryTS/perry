@@ -322,14 +322,42 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
 /// Walks the nested PropertyGet→Call structure looking for the
 /// `NativeModuleRef("crypto")` root.
 fn is_crypto_digest_chain(callee: &Expr) -> bool {
-    let Expr::PropertyGet { property: p1, object: o1 } = callee else { return false };
-    if p1 != "digest" { return false; }
-    let Expr::Call { callee: c2, .. } = o1.as_ref() else { return false };
-    let Expr::PropertyGet { property: p2, object: o2 } = c2.as_ref() else { return false };
-    if p2 != "update" { return false; }
-    let Expr::Call { callee: c3, .. } = o2.as_ref() else { return false };
-    let Expr::PropertyGet { property: p3, object: o3 } = c3.as_ref() else { return false };
-    if p3 != "createHash" && p3 != "createHmac" { return false; }
+    let Expr::PropertyGet {
+        property: p1,
+        object: o1,
+    } = callee
+    else {
+        return false;
+    };
+    if p1 != "digest" {
+        return false;
+    }
+    let Expr::Call { callee: c2, .. } = o1.as_ref() else {
+        return false;
+    };
+    let Expr::PropertyGet {
+        property: p2,
+        object: o2,
+    } = c2.as_ref()
+    else {
+        return false;
+    };
+    if p2 != "update" {
+        return false;
+    }
+    let Expr::Call { callee: c3, .. } = o2.as_ref() else {
+        return false;
+    };
+    let Expr::PropertyGet {
+        property: p3,
+        object: o3,
+    } = c3.as_ref()
+    else {
+        return false;
+    };
+    if p3 != "createHash" && p3 != "createHmac" {
+        return false;
+    }
     matches!(o3.as_ref(), Expr::NativeModuleRef(n) if n == "crypto")
 }
 
@@ -392,10 +420,7 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::BigInt(_) => true,
         // `BigInt(x)` always returns a bigint.
         Expr::BigIntCoerce(_) => true,
-        Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
-            Some(HirType::BigInt)
-        ),
+        Expr::LocalGet(id) => matches!(ctx.local_types.get(id), Some(HirType::BigInt)),
         // Nested bigint arithmetic — `(n * 10n) + d` must see the
         // inner `n * 10n` as bigint so the outer `+` routes through
         // the bigint dispatch instead of the float fallback.
@@ -444,9 +469,11 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Add to also be numeric, otherwise the outer one wraps the
         // inner result in `js_number_coerce` and prevents LLVM from
         // doing GVN/LICM on the chain.
-        Expr::Binary { op: BinaryOp::Add, left, right } => {
-            is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right)
-        }
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } => is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right),
         Expr::Binary { op, .. } => !matches!(op, BinaryOp::Add),
         Expr::Update { .. } => true,
         Expr::DateNow => true,
@@ -557,14 +584,20 @@ pub(crate) fn is_bool_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Bool(_) => true,
         Expr::Compare { .. } => true,
-        Expr::Logical { left, right, .. } => {
-            is_bool_expr(ctx, left) && is_bool_expr(ctx, right)
-        }
-        Expr::Unary { op: UnaryOp::Not, .. } => true,
+        Expr::Logical { left, right, .. } => is_bool_expr(ctx, left) && is_bool_expr(ctx, right),
+        Expr::Unary {
+            op: UnaryOp::Not, ..
+        } => true,
         Expr::BooleanCoerce(_) => true,
-        Expr::IsFinite(_) | Expr::IsNaN(_) | Expr::NumberIsNaN(_) | Expr::NumberIsFinite(_)
-        | Expr::NumberIsInteger(_) | Expr::IsUndefinedOrBareNan(_) => true,
-        Expr::SetHas { .. } | Expr::SetDelete { .. } | Expr::MapHas { .. }
+        Expr::IsFinite(_)
+        | Expr::IsNaN(_)
+        | Expr::NumberIsNaN(_)
+        | Expr::NumberIsFinite(_)
+        | Expr::NumberIsInteger(_)
+        | Expr::IsUndefinedOrBareNan(_) => true,
+        Expr::SetHas { .. }
+        | Expr::SetDelete { .. }
+        | Expr::MapHas { .. }
         | Expr::MapDelete { .. } => true,
         Expr::ArrayIncludes { .. } => true,
         Expr::LocalGet(id) => matches!(ctx.local_types.get(id), Some(HirType::Boolean)),
@@ -688,9 +721,11 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         {
             true
         }
-        Expr::Binary { op: BinaryOp::Add, left, right } => {
-            is_definitely_string_expr(ctx, left) || is_definitely_string_expr(ctx, right)
-        }
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } => is_definitely_string_expr(ctx, left) || is_definitely_string_expr(ctx, right),
         // Ternary `cond ? a : b` is definitely a string when BOTH
         // branches are definitely strings. Without this, code like
         //   (d ? "D" : "") + (v ? "V" : "")
@@ -698,10 +733,11 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // typed as Any, the `+` falls through to numeric Add, both
         // operands get js_number_coerce'd (string → NaN), and the
         // result prints as "NaN" instead of the concatenation.
-        Expr::Conditional { then_expr, else_expr, .. } => {
-            is_definitely_string_expr(ctx, then_expr)
-                && is_definitely_string_expr(ctx, else_expr)
-        }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => is_definitely_string_expr(ctx, then_expr) && is_definitely_string_expr(ctx, else_expr),
         _ => false,
     }
 }
@@ -892,9 +928,7 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     return true;
                 }
                 // `Array.fromAsync(...)` returns a Promise<Array>.
-                if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && property == "fromAsync"
-                {
+                if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == "fromAsync" {
                     return true;
                 }
                 // `.then(cb)` / `.catch(cb)` / `.finally(cb)` on a promise
@@ -944,12 +978,7 @@ pub(crate) fn class_field_global_index(
 ) -> Option<u32> {
     // Walk parent chain to find the field. Parent fields come first in
     // the slot layout, so we sum parent counts as we descend.
-    fn walk(
-        ctx: &FnCtx<'_>,
-        class_name: &str,
-        property: &str,
-        offset: u32,
-    ) -> Option<u32> {
+    fn walk(ctx: &FnCtx<'_>, class_name: &str, property: &str, offset: u32) -> Option<u32> {
         let class = ctx.classes.get(class_name)?;
         // Bail if a getter/setter shadows the field — those need real
         // method dispatch, not a direct memory access.
@@ -999,9 +1028,7 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
             // args and use the base class name. The codegen erases
             // type parameters anyway, so the dispatch is identical
             // to the non-generic Named form.
-            HirType::Generic { base, .. } if ctx.classes.contains_key(base) => {
-                Some(base.clone())
-            }
+            HirType::Generic { base, .. } if ctx.classes.contains_key(base) => Some(base.clone()),
             _ => None,
         },
         // `new ClassName(...)` — the receiver class is the constructed class.
@@ -1084,9 +1111,9 @@ pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // unions whose non-nullish variant is an array. Without this
         // `maybeArr.length` falls through to object-field access and
         // prints `undefined`.
-        Some(HirType::Union(variants)) => variants.iter().any(|v| {
-            matches!(v, HirType::Array(_) | HirType::Tuple(_))
-        }),
+        Some(HirType::Union(variants)) => variants
+            .iter()
+            .any(|v| matches!(v, HirType::Array(_) | HirType::Tuple(_))),
         _ => false,
     }
 }
@@ -1157,9 +1184,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         | Expr::ArrayValues(_)
         | Expr::ObjectKeys(_)
         | Expr::ObjectValues(_)
-        | Expr::ObjectEntries(_) => {
-            Some(HirType::Array(Box::new(HirType::Any)))
-        }
+        | Expr::ObjectEntries(_) => Some(HirType::Array(Box::new(HirType::Any))),
         // `str.split(delim)` returns Array<String>. Catches the generic
         // Call form that bypasses the `Expr::StringSplit` variant — e.g.
         // `"a,b,c".split(",")` in an expression position where we need
@@ -1183,9 +1208,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // on `Record<string, number[]>` finds the array fast path.
         Expr::IndexGet { object, .. } => match static_type_of(ctx, object)? {
             HirType::Array(inner) => Some(*inner),
-            HirType::Tuple(elems) if !elems.is_empty() => {
-                Some(elems[0].clone())
-            }
+            HirType::Tuple(elems) if !elems.is_empty() => Some(elems[0].clone()),
             HirType::Generic { base, type_args } if base == "Record" && type_args.len() == 2 => {
                 Some(type_args[1].clone())
             }
@@ -1210,7 +1233,11 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             }
         }
         // `cond ? a : b` — same logic as Logical.
-        Expr::Conditional { then_expr, else_expr, .. } => {
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
             let lt = static_type_of(ctx, then_expr);
             let rt = static_type_of(ctx, else_expr);
             match (lt, rt) {

@@ -63,9 +63,7 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
     });
 
     check.connect_toggled(move |check| {
-        let closure_f64 = TOGGLE_CALLBACKS.with(|cbs| {
-            cbs.borrow().get(&callback_id).copied()
-        });
+        let closure_f64 = TOGGLE_CALLBACKS.with(|cbs| cbs.borrow().get(&callback_id).copied());
         if let Some(closure_f64) = closure_f64 {
             let value = if check.is_active() {
                 f64::from_bits(TAG_TRUE)

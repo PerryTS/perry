@@ -23,14 +23,14 @@
 //! });
 //! ```
 
-pub mod router;
-pub mod context;
 pub mod app;
+pub mod context;
+pub mod router;
 pub mod server;
 
-pub use router::*;
-pub use context::*;
 pub use app::*;
+pub use context::*;
+pub use router::*;
 pub use server::*;
 
 use std::collections::HashMap;
@@ -62,9 +62,7 @@ pub(crate) fn ensure_gc_scanner_registered() {
 fn scan_fastify_roots(mark: &mut dyn FnMut(f64)) {
     let mark_cb = |cb: ClosurePtr, mark: &mut dyn FnMut(f64)| {
         if cb != 0 {
-            let boxed = f64::from_bits(
-                0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF),
-            );
+            let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF));
             mark(boxed);
         }
     };
@@ -73,7 +71,10 @@ fn scan_fastify_roots(mark: &mut dyn FnMut(f64)) {
         for route in app.routes.iter() {
             mark_cb(route.handler, mark);
         }
-        for cb in app.hooks.on_request.iter()
+        for cb in app
+            .hooks
+            .on_request
+            .iter()
             .chain(app.hooks.pre_parsing.iter())
             .chain(app.hooks.pre_validation.iter())
             .chain(app.hooks.pre_handler.iter())
@@ -225,7 +226,11 @@ impl FastifyApp {
     }
 
     /// Find matching route for a request
-    pub fn match_route(&self, method: &str, path: &str) -> Option<(&Route, HashMap<String, String>)> {
+    pub fn match_route(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> Option<(&Route, HashMap<String, String>)> {
         for route in &self.routes {
             if route.method == method {
                 if let Some(params) = route.pattern.match_path(path) {

@@ -47,10 +47,13 @@ pub fn create(count: f64, render_closure: f64) -> i64 {
     }
 
     LAZY_VSTACKS.with(|l| {
-        l.borrow_mut().insert(handle, LazyVStackState {
-            inner_box: inner,
-            render_closure,
-        });
+        l.borrow_mut().insert(
+            handle,
+            LazyVStackState {
+                inner_box: inner,
+                render_closure,
+            },
+        );
     });
 
     handle

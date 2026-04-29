@@ -33,10 +33,13 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
 
 /// Get a reference to a registered object and execute a closure with it.
 /// This is the safe way to access handle data without lifetime issues.
-pub fn with_handle<T: 'static + Send + Sync, R, F: FnOnce(&T) -> R>(handle: Handle, f: F) -> Option<R> {
-    HANDLES.get(&handle).and_then(|entry| {
-        entry.value().downcast_ref::<T>().map(f)
-    })
+pub fn with_handle<T: 'static + Send + Sync, R, F: FnOnce(&T) -> R>(
+    handle: Handle,
+    f: F,
+) -> Option<R> {
+    HANDLES
+        .get(&handle)
+        .and_then(|entry| entry.value().downcast_ref::<T>().map(f))
 }
 
 /// Get a reference to a registered object.
@@ -106,9 +109,10 @@ where
 /// Clone a handle's value if it implements Clone
 pub fn clone_handle<T: 'static + Send + Sync + Clone>(handle: Handle) -> Option<Handle> {
     HANDLES.get(&handle).and_then(|entry| {
-        entry.value().downcast_ref::<T>().map(|value| {
-            register_handle(value.clone())
-        })
+        entry
+            .value()
+            .downcast_ref::<T>()
+            .map(|value| register_handle(value.clone()))
     })
 }
 

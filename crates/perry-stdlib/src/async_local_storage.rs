@@ -16,9 +16,7 @@ pub struct AsyncLocalStorageHandle {
 
 impl AsyncLocalStorageHandle {
     pub fn new() -> Self {
-        AsyncLocalStorageHandle {
-            stores: Vec::new(),
-        }
+        AsyncLocalStorageHandle { stores: Vec::new() }
     }
 }
 
@@ -78,10 +76,7 @@ pub extern "C" fn js_async_local_storage_enter_with(handle: Handle, store: f64) 
 /// AsyncLocalStorage.exit(callback)
 /// Save current stack, clear it, call callback, restore stack
 #[no_mangle]
-pub unsafe extern "C" fn js_async_local_storage_exit(
-    handle: Handle,
-    callback: i64,
-) -> f64 {
+pub unsafe extern "C" fn js_async_local_storage_exit(handle: Handle, callback: i64) -> f64 {
     let saved = if let Some(als) = get_handle_mut::<AsyncLocalStorageHandle>(handle) {
         let saved = als.stores.clone();
         als.stores.clear();

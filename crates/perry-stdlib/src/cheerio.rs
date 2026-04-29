@@ -3,11 +3,9 @@
 //! Native implementation of the 'cheerio' npm package using scraper.
 //! Provides jQuery-like HTML parsing and manipulation.
 
-use perry_runtime::{
-    js_array_alloc, js_array_push, js_string_from_bytes, JSValue, StringHeader,
-};
-use scraper::{Html, Selector, ElementRef};
 use crate::common::{get_handle, register_handle, Handle};
+use perry_runtime::{js_array_alloc, js_array_push, js_string_from_bytes, JSValue, StringHeader};
+use scraper::{ElementRef, Html, Selector};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -42,7 +40,10 @@ pub unsafe extern "C" fn js_cheerio_load(html_ptr: *const StringHeader) -> Handl
         None => return -1,
     };
 
-    register_handle(CheerioHandle { html, is_fragment: false })
+    register_handle(CheerioHandle {
+        html,
+        is_fragment: false,
+    })
 }
 
 /// cheerio.loadFragment(html) -> CheerioAPI
@@ -55,7 +56,10 @@ pub unsafe extern "C" fn js_cheerio_load_fragment(html_ptr: *const StringHeader)
         None => return -1,
     };
 
-    register_handle(CheerioHandle { html, is_fragment: true })
+    register_handle(CheerioHandle {
+        html,
+        is_fragment: true,
+    })
 }
 
 /// $(selector) -> Selection

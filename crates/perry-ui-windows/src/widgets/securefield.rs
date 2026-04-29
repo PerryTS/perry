@@ -6,13 +6,13 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Controls::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, alloc_control_id, register_widget};
+use super::{alloc_control_id, register_widget, WidgetKind};
 
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
@@ -68,7 +68,10 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
                         | WS_VISIBLE.0
                         | WS_TABSTOP.0,
                 ),
-                0, 0, 200, 24,
+                0,
+                0,
+                200,
+                24,
                 // WS_CHILD requires a parent HWND; same pattern as picker/
                 // button/textfield — use the parking window until
                 // layout::relayout() moves the control to its real parent.
@@ -82,7 +85,12 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
             // Set placeholder text (cue banner)
             if !placeholder.is_empty() {
                 let wide = to_wide(placeholder);
-                SendMessageW(hwnd, EM_SETCUEBANNER, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+                SendMessageW(
+                    hwnd,
+                    EM_SETCUEBANNER,
+                    WPARAM(0),
+                    LPARAM(wide.as_ptr() as isize),
+                );
             }
 
             let handle = register_widget(hwnd, WidgetKind::SecureField, control_id);
@@ -129,8 +137,10 @@ pub fn handle_change(handle: i64) {
                 let callbacks = cb.borrow();
                 if let Some(&ptr) = callbacks.get(&handle) {
                     let bytes = text.as_bytes();
-                    let str_ptr =
-                        perry_runtime::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                    let str_ptr = perry_runtime::string::js_string_from_bytes(
+                        bytes.as_ptr(),
+                        bytes.len() as u32,
+                    );
                     let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
                     unsafe { js_closure_call1(ptr, nanboxed) };
                 }

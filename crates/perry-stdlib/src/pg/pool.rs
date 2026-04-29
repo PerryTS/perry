@@ -4,9 +4,9 @@ use perry_runtime::{js_promise_new, JSValue, Promise};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 
-use crate::common::{register_handle, Handle};
 use super::result::rows_to_pg_result;
 use super::types::parse_pg_config;
+use crate::common::{register_handle, Handle};
 
 /// Wrapper around PgPool that we can store in the handle registry.
 ///
@@ -25,11 +25,17 @@ pub struct PgPoolHandle {
 
 impl PgPoolHandle {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool: Some(pool), pending_url: None }
+        Self {
+            pool: Some(pool),
+            pending_url: None,
+        }
     }
 
     pub fn pending(url: String) -> Self {
-        Self { pool: None, pending_url: Some(url) }
+        Self {
+            pool: None,
+            pending_url: Some(url),
+        }
     }
 
     /// Lazy-build the sqlx pool on first use. Only callable from within a
@@ -37,7 +43,9 @@ impl PgPoolHandle {
     /// repeatedly — only the first call actually builds the pool.
     pub async fn ensure_pool(&mut self) -> Result<&PgPool, String> {
         if self.pool.is_none() {
-            let url = self.pending_url.take()
+            let url = self
+                .pending_url
+                .take()
                 .ok_or_else(|| "Pool config missing".to_string())?;
             let pool = PgPoolOptions::new()
                 .max_connections(10)
@@ -110,10 +118,7 @@ pub unsafe extern "C" fn js_pg_create_pool(config_f: f64) -> *mut Promise {
 ///
 /// Executes a query on the pool.
 #[no_mangle]
-pub unsafe extern "C" fn js_pg_pool_query(
-    pool_handle: Handle,
-    sql_ptr: *const u8,
-) -> *mut Promise {
+pub unsafe extern "C" fn js_pg_pool_query(pool_handle: Handle, sql_ptr: *const u8) -> *mut Promise {
     let promise = js_promise_new();
 
     // Extract the SQL string
@@ -128,8 +133,12 @@ pub unsafe extern "C" fn js_pg_pool_query(
     };
 
     // Determine command type from SQL
-    let command = sql.trim().split_whitespace().next()
-        .unwrap_or("SELECT").to_uppercase();
+    let command = sql
+        .trim()
+        .split_whitespace()
+        .next()
+        .unwrap_or("SELECT")
+        .to_uppercase();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::get_handle_mut;

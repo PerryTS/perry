@@ -2,7 +2,9 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{NSSecureTextField, NSTextField, NSView};
-use objc2_foundation::{NSNotification, NSNotificationCenter, NSObject, NSString, MainThreadMarker};
+use objc2_foundation::{
+    MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSString,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 

@@ -16,7 +16,9 @@ extern "C" {
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const perry_runtime::string::StringHeader;
         let len = (*header).byte_len as usize;
@@ -44,7 +46,11 @@ unsafe extern "system" fn sheet_default_wnd_proc(
 pub fn create(width: f64, height: f64, title_val: f64) -> i64 {
     let title = {
         let ptr = unsafe { js_get_string_pointer_unified(title_val) };
-        if ptr.is_null() { "Sheet".to_string() } else { str_from_header(ptr).to_string() }
+        if ptr.is_null() {
+            "Sheet".to_string()
+        } else {
+            str_from_header(ptr).to_string()
+        }
     };
 
     let id = NEXT_SHEET_ID.with(|id| {
@@ -56,12 +62,12 @@ pub fn create(width: f64, height: f64, title_val: f64) -> i64 {
 
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::*;
-        use windows::Win32::UI::WindowsAndMessaging::*;
-        use windows::Win32::Graphics::Gdi::{HBRUSH, COLOR_WINDOW, UpdateWindow};
-        use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
-        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows::core::PCWSTR;
+        use windows::Win32::Foundation::*;
+        use windows::Win32::Graphics::Gdi::{UpdateWindow, COLOR_WINDOW, HBRUSH};
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+        use windows::Win32::UI::WindowsAndMessaging::*;
 
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();
@@ -85,12 +91,16 @@ pub fn create(width: f64, height: f64, title_val: f64) -> i64 {
                 PCWSTR(class_name.as_ptr()),
                 PCWSTR(title_wide.as_ptr()),
                 WS_OVERLAPPEDWINDOW,
-                CW_USEDEFAULT, CW_USEDEFAULT,
-                width as i32, height as i32,
-                None, None,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                width as i32,
+                height as i32,
+                None,
+                None,
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
             SHEETS.with(|s| s.borrow_mut().insert(id, hwnd));
         }
@@ -109,9 +119,9 @@ pub fn create(width: f64, height: f64, title_val: f64) -> i64 {
 pub fn present(sheet_handle: i64) {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::UI::WindowsAndMessaging::*;
         use windows::Win32::Graphics::Gdi::UpdateWindow;
         use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+        use windows::Win32::UI::WindowsAndMessaging::*;
         SHEETS.with(|s| {
             if let Some(hwnd) = s.borrow().get(&sheet_handle) {
                 unsafe {
@@ -124,7 +134,9 @@ pub fn present(sheet_handle: i64) {
         });
     }
     #[cfg(not(target_os = "windows"))]
-    { let _ = sheet_handle; }
+    {
+        let _ = sheet_handle;
+    }
 }
 
 /// Dismiss (close) a sheet.
@@ -141,5 +153,7 @@ pub fn dismiss(sheet_handle: i64) {
         });
     }
     #[cfg(not(target_os = "windows"))]
-    { let _ = sheet_handle; }
+    {
+        let _ = sheet_handle;
+    }
 }

@@ -57,7 +57,9 @@ pub fn clean_bigint_ptr(p: *const BigIntHeader) -> *const BigIntHeader {
     if top16 >= 0x7FF8 {
         // NaN-boxed value — extract lower 48 bits
         let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *const BigIntHeader;
-        if (raw as usize) < 0x10000 { return std::ptr::null(); }
+        if (raw as usize) < 0x10000 {
+            return std::ptr::null();
+        }
         raw
     } else if bits < 0x10000 {
         std::ptr::null()
@@ -130,7 +132,8 @@ pub extern "C" fn js_bigint_from_f64(value: f64) -> *mut BigIntHeader {
         if !ptr.is_null() {
             unsafe {
                 let len = (*ptr).byte_len as u32;
-                let data = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                let data =
+                    (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
                 let result = js_bigint_from_string(data, len);
                 return result;
             }
@@ -235,7 +238,11 @@ pub extern "C" fn js_bigint_from_string(data: *const u8, len: u32) -> *mut BigIn
 /// Create a BigInt from a string with a given radix (for BN.js compatibility)
 /// Handles decimal (10), hex (16), and other bases.
 #[no_mangle]
-pub extern "C" fn js_bigint_from_string_radix(data: *const u8, len: u32, radix: i32) -> *mut BigIntHeader {
+pub extern "C" fn js_bigint_from_string_radix(
+    data: *const u8,
+    len: u32,
+    radix: i32,
+) -> *mut BigIntHeader {
     if data.is_null() || len == 0 {
         // Null input
         return js_bigint_from_i64(0);
@@ -292,7 +299,9 @@ pub extern "C" fn js_bigint_from_string_radix(data: *const u8, len: u32, radix: 
                     'A'..='Z' => (c as u64) - ('A' as u64) + 10,
                     _ => continue,
                 };
-                if digit >= radix { continue; }
+                if digit >= radix {
+                    continue;
+                }
                 let mut carry = digit;
                 for limb in limbs.iter_mut() {
                     let product = (*limb as u128) * (radix as u128) + carry as u128;
@@ -315,7 +324,10 @@ pub extern "C" fn js_bigint_from_string_radix(data: *const u8, len: u32, radix: 
 /// Convert BigInt to a byte array (big-endian, for BN.toArrayLike/toArray)
 /// Returns a buffer of the specified length, zero-padded on the left.
 #[no_mangle]
-pub extern "C" fn js_bigint_to_buffer(a: *const BigIntHeader, length: i32) -> *mut crate::buffer::BufferHeader {
+pub extern "C" fn js_bigint_to_buffer(
+    a: *const BigIntHeader,
+    length: i32,
+) -> *mut crate::buffer::BufferHeader {
     let a = clean_bigint_ptr(a);
     let length = if length <= 0 { 32 } else { length as usize };
 
@@ -351,11 +363,17 @@ pub extern "C" fn js_bigint_to_buffer(a: *const BigIntHeader, length: i32) -> *m
 #[inline(never)]
 pub extern "C" fn js_bigint_is_negative(a: *const BigIntHeader) -> i32 {
     let a = clean_bigint_ptr(a);
-    if a.is_null() { return 0; }
+    if a.is_null() {
+        return 0;
+    }
     unsafe {
         // In two's complement, negative numbers have MSB set in highest limb
         let msb = (*a).limbs[BIGINT_LIMBS - 1];
-        if msb & (1u64 << 63) != 0 { 1 } else { 0 }
+        if msb & (1u64 << 63) != 0 {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -364,7 +382,9 @@ pub extern "C" fn js_bigint_is_negative(a: *const BigIntHeader) -> i32 {
 #[inline(never)]
 pub extern "C" fn js_bigint_neg(a: *const BigIntHeader) -> *mut BigIntHeader {
     let a = clean_bigint_ptr(a);
-    if a.is_null() { return bigint_alloc(); }
+    if a.is_null() {
+        return bigint_alloc();
+    }
     let ptr = bigint_alloc();
     unsafe {
         let a_limbs = (*a).limbs;
@@ -388,10 +408,14 @@ pub extern "C" fn js_bigint_neg(a: *const BigIntHeader) -> *mut BigIntHeader {
 #[inline(never)]
 pub extern "C" fn js_bigint_is_zero(a: *const BigIntHeader) -> i32 {
     let a = clean_bigint_ptr(a);
-    if a.is_null() { return 1; }
+    if a.is_null() {
+        return 1;
+    }
     unsafe {
         for i in 0..BIGINT_LIMBS {
-            if (*a).limbs[i] != 0 { return 0; }
+            if (*a).limbs[i] != 0 {
+                return 0;
+            }
         }
         1
     }
@@ -400,10 +424,15 @@ pub extern "C" fn js_bigint_is_zero(a: *const BigIntHeader) -> i32 {
 /// Add two BigInts
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_add(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
+pub extern "C" fn js_bigint_add(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = clean_bigint_ptr(a);
     let b = clean_bigint_ptr(b);
-    if a.is_null() && b.is_null() { return bigint_alloc(); }
+    if a.is_null() && b.is_null() {
+        return bigint_alloc();
+    }
     let ptr = bigint_alloc();
     unsafe {
         let a_limbs = if a.is_null() { ZERO_LIMBS } else { (*a).limbs };
@@ -425,7 +454,10 @@ pub extern "C" fn js_bigint_add(a: *const BigIntHeader, b: *const BigIntHeader) 
 /// Subtract two BigInts (a - b)
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_sub(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
+pub extern "C" fn js_bigint_sub(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = clean_bigint_ptr(a);
     let b = clean_bigint_ptr(b);
     let ptr = bigint_alloc();
@@ -454,7 +486,10 @@ pub extern "C" fn js_bigint_sub(a: *const BigIntHeader, b: *const BigIntHeader) 
 /// Multiply two BigInts
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_mul(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
+pub extern "C" fn js_bigint_mul(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = std::hint::black_box(clean_bigint_ptr(a));
     let b = std::hint::black_box(clean_bigint_ptr(b));
     let ptr = bigint_alloc();
@@ -471,9 +506,8 @@ pub extern "C" fn js_bigint_mul(a: *const BigIntHeader, b: *const BigIntHeader) 
         for i in 0..BIGINT_LIMBS {
             let mut carry = 0u128;
             for j in 0..(BIGINT_LIMBS - i) {
-                let product = (a_limbs[i] as u128) * (b_limbs[j] as u128)
-                    + (result[i + j] as u128)
-                    + carry;
+                let product =
+                    (a_limbs[i] as u128) * (b_limbs[j] as u128) + (result[i + j] as u128) + carry;
                 result[i + j] = product as u64;
                 carry = product >> 64;
             }
@@ -485,7 +519,10 @@ pub extern "C" fn js_bigint_mul(a: *const BigIntHeader, b: *const BigIntHeader) 
 }
 
 /// Unsigned binary long division on magnitude limbs
-fn unsigned_div_limbs(a: &[u64; BIGINT_LIMBS], b: &[u64; BIGINT_LIMBS]) -> ([u64; BIGINT_LIMBS], [u64; BIGINT_LIMBS]) {
+fn unsigned_div_limbs(
+    a: &[u64; BIGINT_LIMBS],
+    b: &[u64; BIGINT_LIMBS],
+) -> ([u64; BIGINT_LIMBS], [u64; BIGINT_LIMBS]) {
     let mut quotient = ZERO_LIMBS;
     let mut remainder = ZERO_LIMBS;
 
@@ -507,8 +544,13 @@ fn unsigned_div_limbs(a: &[u64; BIGINT_LIMBS], b: &[u64; BIGINT_LIMBS]) -> ([u64
         // Use unsigned comparison for magnitude comparison
         let mut ge = true;
         for j in (0..BIGINT_LIMBS).rev() {
-            if remainder[j] > b[j] { break; }
-            if remainder[j] < b[j] { ge = false; break; }
+            if remainder[j] > b[j] {
+                break;
+            }
+            if remainder[j] < b[j] {
+                ge = false;
+                break;
+            }
         }
         if ge {
             subtract_limbs(&mut remainder, b);
@@ -524,7 +566,10 @@ fn unsigned_div_limbs(a: &[u64; BIGINT_LIMBS], b: &[u64; BIGINT_LIMBS]) -> ([u64
 /// Divide two BigInts (a / b) — truncates toward zero like JavaScript
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_div(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
+pub extern "C" fn js_bigint_div(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = clean_bigint_ptr(a);
     let b = clean_bigint_ptr(b);
     let ptr = bigint_alloc();
@@ -542,8 +587,16 @@ pub extern "C" fn js_bigint_div(a: *const BigIntHeader, b: *const BigIntHeader) 
         let b_neg = is_negative(&b_limbs);
 
         // Get magnitudes
-        let abs_a = if a_neg { negate_limbs(&a_limbs) } else { a_limbs };
-        let abs_b = if b_neg { negate_limbs(&b_limbs) } else { b_limbs };
+        let abs_a = if a_neg {
+            negate_limbs(&a_limbs)
+        } else {
+            a_limbs
+        };
+        let abs_b = if b_neg {
+            negate_limbs(&b_limbs)
+        } else {
+            b_limbs
+        };
 
         let (quotient, _) = unsigned_div_limbs(&abs_a, &abs_b);
 
@@ -560,7 +613,10 @@ pub extern "C" fn js_bigint_div(a: *const BigIntHeader, b: *const BigIntHeader) 
 /// Modulo of two BigInts (a % b) — result has sign of dividend (like JavaScript)
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_mod(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
+pub extern "C" fn js_bigint_mod(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = std::hint::black_box(clean_bigint_ptr(a));
     let b = std::hint::black_box(clean_bigint_ptr(b));
     let ptr = bigint_alloc();
@@ -578,8 +634,16 @@ pub extern "C" fn js_bigint_mod(a: *const BigIntHeader, b: *const BigIntHeader) 
         let b_neg = is_negative(&b_limbs);
 
         // Get magnitudes
-        let abs_a = if a_neg { negate_limbs(&a_limbs) } else { a_limbs };
-        let abs_b = if b_neg { negate_limbs(&b_limbs) } else { b_limbs };
+        let abs_a = if a_neg {
+            negate_limbs(&a_limbs)
+        } else {
+            a_limbs
+        };
+        let abs_b = if b_neg {
+            negate_limbs(&b_limbs)
+        } else {
+            b_limbs
+        };
 
         let (_, remainder) = unsigned_div_limbs(&abs_a, &abs_b);
 
@@ -597,7 +661,10 @@ pub extern "C" fn js_bigint_mod(a: *const BigIntHeader, b: *const BigIntHeader) 
 /// Note: b is interpreted as a u64 (only lower 64 bits are used)
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_pow(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
+pub extern "C" fn js_bigint_pow(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = clean_bigint_ptr(a);
     let b = clean_bigint_ptr(b);
     let ptr = bigint_alloc();
@@ -637,9 +704,7 @@ fn mul_limbs(a: &[u64; BIGINT_LIMBS], b: &[u64; BIGINT_LIMBS]) -> [u64; BIGINT_L
     for i in 0..BIGINT_LIMBS {
         let mut carry = 0u128;
         for j in 0..(BIGINT_LIMBS - i) {
-            let product = (a[i] as u128) * (b[j] as u128)
-                + (result[i + j] as u128)
-                + carry;
+            let product = (a[i] as u128) * (b[j] as u128) + (result[i + j] as u128) + carry;
             result[i + j] = product as u64;
             carry = product >> 64;
         }
@@ -651,12 +716,19 @@ fn mul_limbs(a: &[u64; BIGINT_LIMBS], b: &[u64; BIGINT_LIMBS]) -> [u64; BIGINT_L
 /// Note: b is interpreted as a u64 (only lower 64 bits are used)
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_shl(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
+pub extern "C" fn js_bigint_shl(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = clean_bigint_ptr(a);
     let b = clean_bigint_ptr(b);
     let ptr = bigint_alloc();
     unsafe {
-        let shift = if b.is_null() { 0usize } else { (*b).limbs[0] as usize };
+        let shift = if b.is_null() {
+            0usize
+        } else {
+            (*b).limbs[0] as usize
+        };
         if shift >= BIGINT_BITS {
             (*ptr).limbs = ZERO_LIMBS;
             return ptr;
@@ -693,8 +765,10 @@ pub extern "C" fn js_bigint_shl(a: *const BigIntHeader, b: *const BigIntHeader) 
 /// Note: b is interpreted as a u64 (only lower 64 bits are used)
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_shr(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
-
+pub extern "C" fn js_bigint_shr(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = clean_bigint_ptr(a);
     let b = clean_bigint_ptr(b);
     let ptr = bigint_alloc();
@@ -704,7 +778,11 @@ pub extern "C" fn js_bigint_shr(a: *const BigIntHeader, b: *const BigIntHeader) 
         // Fill value for sign extension: 0xFF..FF for negative, 0x00..00 for positive
         let fill: u64 = if neg { !0u64 } else { 0u64 };
 
-        let shift = if b.is_null() { 0usize } else { (*b).limbs[0] as usize };
+        let shift = if b.is_null() {
+            0usize
+        } else {
+            (*b).limbs[0] as usize
+        };
         if shift >= BIGINT_BITS {
             // Arithmetic: negative → all 1s (-1), positive → all 0s (0)
             (*ptr).limbs = [fill; BIGINT_LIMBS];
@@ -744,8 +822,10 @@ pub extern "C" fn js_bigint_shr(a: *const BigIntHeader, b: *const BigIntHeader) 
 /// Bitwise AND of two BigInts (a & b)
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_and(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
-
+pub extern "C" fn js_bigint_and(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = clean_bigint_ptr(a);
     let b = clean_bigint_ptr(b);
     let ptr = bigint_alloc();
@@ -766,7 +846,10 @@ pub extern "C" fn js_bigint_and(a: *const BigIntHeader, b: *const BigIntHeader) 
 /// Bitwise OR of two BigInts (a | b)
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_or(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
+pub extern "C" fn js_bigint_or(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = clean_bigint_ptr(a);
     let b = clean_bigint_ptr(b);
     let ptr = bigint_alloc();
@@ -785,7 +868,10 @@ pub extern "C" fn js_bigint_or(a: *const BigIntHeader, b: *const BigIntHeader) -
 /// Bitwise XOR of two BigInts (a ^ b)
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_bigint_xor(a: *const BigIntHeader, b: *const BigIntHeader) -> *mut BigIntHeader {
+pub extern "C" fn js_bigint_xor(
+    a: *const BigIntHeader,
+    b: *const BigIntHeader,
+) -> *mut BigIntHeader {
     let a = clean_bigint_ptr(a);
     let b = clean_bigint_ptr(b);
     let ptr = bigint_alloc();
@@ -810,9 +896,7 @@ pub extern "C" fn js_bigint_cmp(a: *const BigIntHeader, b: *const BigIntHeader) 
     if a.is_null() || b.is_null() {
         return 0;
     }
-    unsafe {
-        compare_limbs(&(*a).limbs, &(*b).limbs)
-    }
+    unsafe { compare_limbs(&(*a).limbs, &(*b).limbs) }
 }
 
 /// Check if two BigInts are equal
@@ -825,7 +909,11 @@ pub extern "C" fn js_bigint_eq(a: *const BigIntHeader, b: *const BigIntHeader) -
         return if a == b { 1 } else { 0 }; // both null = equal, one null = not equal
     }
     unsafe {
-        if (*a).limbs == (*b).limbs { 1 } else { 0 }
+        if (*a).limbs == (*b).limbs {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -846,7 +934,11 @@ pub extern "C" fn js_bigint_to_f64(a: *const BigIntHeader) -> f64 {
             result += (*limb as f64) * multiplier;
             multiplier *= 18446744073709551616.0; // 2^64
         }
-        if neg { -result } else { result }
+        if neg {
+            -result
+        } else {
+            result
+        }
     }
 }
 
@@ -932,7 +1024,11 @@ fn limbs_to_radix_string(limbs: &[u64; BIGINT_LIMBS], radix: u32) -> String {
             remainder = dividend % radix_u128;
         }
         let digit = remainder as u8;
-        let ch = if digit < 10 { b'0' + digit } else { b'a' + (digit - 10) };
+        let ch = if digit < 10 {
+            b'0' + digit
+        } else {
+            b'a' + (digit - 10)
+        };
         digits.push(ch as char);
     }
 
@@ -959,7 +1055,10 @@ pub extern "C" fn js_bigint_to_string(a: *const BigIntHeader) -> *mut crate::str
 
 /// Convert BigInt to string with radix
 #[no_mangle]
-pub extern "C" fn js_bigint_to_string_radix(a: *const BigIntHeader, radix: i32) -> *mut crate::string::StringHeader {
+pub extern "C" fn js_bigint_to_string_radix(
+    a: *const BigIntHeader,
+    radix: i32,
+) -> *mut crate::string::StringHeader {
     unsafe {
         if a.is_null() || (a as usize) < 0x10000 || (a as u64) >> 48 != 0 {
             return std::ptr::null_mut();
@@ -1098,13 +1197,24 @@ mod tests {
 
         let a_f64 = js_bigint_to_f64(a);
         let b_f64 = js_bigint_to_f64(b);
-        assert!((a_f64 - 1e39).abs() / 1e39 < 1e-15, "a parse wrong: {}", a_f64);
-        assert!((b_f64 - 2e39).abs() / 2e39 < 1e-15, "b parse wrong: {}", b_f64);
+        assert!(
+            (a_f64 - 1e39).abs() / 1e39 < 1e-15,
+            "a parse wrong: {}",
+            a_f64
+        );
+        assert!(
+            (b_f64 - 2e39).abs() / 2e39 < 1e-15,
+            "b parse wrong: {}",
+            b_f64
+        );
 
         let c = js_bigint_mul(a, b);
         let c_f64 = js_bigint_to_f64(c);
-        assert!((c_f64 - 2e78).abs() / 2e78 < 1e-15,
-            "3L*3L multiply wrong: got {}, expected 2e78", c_f64);
+        assert!(
+            (c_f64 - 2e78).abs() / 2e78 < 1e-15,
+            "3L*3L multiply wrong: got {}, expected 2e78",
+            c_f64
+        );
     }
 
     #[test]
@@ -1122,8 +1232,11 @@ mod tests {
         let product_f64 = js_bigint_to_f64(product);
 
         // Expected: ~1.458e81
-        assert!(product_f64 > 1e80,
-            "shifted*b too small: got {}, expected ~1.458e81", product_f64);
+        assert!(
+            product_f64 > 1e80,
+            "shifted*b too small: got {}, expected ~1.458e81",
+            product_f64
+        );
     }
 
     #[test]
@@ -1136,7 +1249,10 @@ mod tests {
         let product = js_bigint_mul(a, b);
         let quotient = js_bigint_div(product, a);
         let q_f64 = js_bigint_to_f64(quotient);
-        assert!((q_f64 - 2e39).abs() / 2e39 < 1e-15,
-            "division wrong: got {}, expected 2e39", q_f64);
+        assert!(
+            (q_f64 - 2e39).abs() / 2e39 < 1e-15,
+            "division wrong: got {}, expected 2e39",
+            q_f64
+        );
     }
 }

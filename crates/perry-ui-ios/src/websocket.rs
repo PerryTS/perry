@@ -5,7 +5,7 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
-use objc2::{msg_send, define_class, DefinedClass, AnyThread};
+use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_foundation::{NSObject, NSString};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -120,54 +120,72 @@ impl PerryWsDelegate {
 
 /// Schedule receiving one message, then re-schedule on success.
 fn schedule_receive_raw(conn_id: u32, task_ptr: *const AnyObject) {
-    crate::ws_log!("[WS-iOS] schedule_receive_raw conn_id={} task_null={}", conn_id, task_ptr.is_null());
+    crate::ws_log!(
+        "[WS-iOS] schedule_receive_raw conn_id={} task_null={}",
+        conn_id,
+        task_ptr.is_null()
+    );
     if task_ptr.is_null() {
         return;
     }
     unsafe {
-        let block = block2::RcBlock::new(move |message: *const AnyObject, error: *const AnyObject| {
-            if !error.is_null() || message.is_null() {
-                // Error or nil message — connection likely closed
-                if !error.is_null() {
-                    let desc: *const NSString = msg_send![error, localizedDescription];
-                    if !desc.is_null() {
-                        crate::ws_log!("[WS-iOS] recv error conn_id={}: {}", conn_id, (*desc).to_string());
+        let block =
+            block2::RcBlock::new(move |message: *const AnyObject, error: *const AnyObject| {
+                if !error.is_null() || message.is_null() {
+                    // Error or nil message — connection likely closed
+                    if !error.is_null() {
+                        let desc: *const NSString = msg_send![error, localizedDescription];
+                        if !desc.is_null() {
+                            crate::ws_log!(
+                                "[WS-iOS] recv error conn_id={}: {}",
+                                conn_id,
+                                (*desc).to_string()
+                            );
+                        }
+                    } else {
+                        crate::ws_log!("[WS-iOS] recv nil message conn_id={}", conn_id);
                     }
-                } else {
-                    crate::ws_log!("[WS-iOS] recv nil message conn_id={}", conn_id);
-                }
-                CONNECTIONS.with(|conns| {
-                    if let Some(conn) = conns.borrow_mut().get_mut(&conn_id) {
-                        conn.is_open = false;
-                    }
-                });
-                return;
-            }
-            // NSURLSessionWebSocketMessage: type 0=data, 1=string
-            let msg_type: i64 = msg_send![message, type];
-            if msg_type == 1 {
-                let ns_string: *const NSString = msg_send![message, string];
-                if !ns_string.is_null() {
-                    let rust_string = (*ns_string).to_string();
-                    crate::ws_log!("[WS-iOS] recv conn_id={} len={} first80={}", conn_id, rust_string.len(), &rust_string[..rust_string.len().min(80)]);
                     CONNECTIONS.with(|conns| {
                         if let Some(conn) = conns.borrow_mut().get_mut(&conn_id) {
-                            conn.messages.push(rust_string);
+                            conn.is_open = false;
                         }
                     });
+                    return;
                 }
-            }
-            // Re-schedule next receive
-            let still_open = CONNECTIONS.with(|conns| {
-                conns.borrow().get(&conn_id).map(|c| c.is_open).unwrap_or(false)
+                // NSURLSessionWebSocketMessage: type 0=data, 1=string
+                let msg_type: i64 = msg_send![message, type];
+                if msg_type == 1 {
+                    let ns_string: *const NSString = msg_send![message, string];
+                    if !ns_string.is_null() {
+                        let rust_string = (*ns_string).to_string();
+                        crate::ws_log!(
+                            "[WS-iOS] recv conn_id={} len={} first80={}",
+                            conn_id,
+                            rust_string.len(),
+                            &rust_string[..rust_string.len().min(80)]
+                        );
+                        CONNECTIONS.with(|conns| {
+                            if let Some(conn) = conns.borrow_mut().get_mut(&conn_id) {
+                                conn.messages.push(rust_string);
+                            }
+                        });
+                    }
+                }
+                // Re-schedule next receive
+                let still_open = CONNECTIONS.with(|conns| {
+                    conns
+                        .borrow()
+                        .get(&conn_id)
+                        .map(|c| c.is_open)
+                        .unwrap_or(false)
+                });
+                crate::ws_log!("[WS-iOS] re-schedule? still_open={}", still_open);
+                if still_open {
+                    schedule_receive_raw(conn_id, task_ptr);
+                } else {
+                    crate::ws_log!("[WS-iOS] NOT re-scheduling, conn closed");
+                }
             });
-            crate::ws_log!("[WS-iOS] re-schedule? still_open={}", still_open);
-            if still_open {
-                schedule_receive_raw(conn_id, task_ptr);
-            } else {
-                crate::ws_log!("[WS-iOS] NOT re-scheduling, conn closed");
-            }
-        });
         let _: () = msg_send![task_ptr, receiveMessageWithCompletionHandler: &*block];
     }
 }
@@ -227,12 +245,15 @@ pub fn connect(url_ptr: *const u8) -> f64 {
 
         // Store connection
         CONNECTIONS.with(|conns| {
-            conns.borrow_mut().insert(conn_id, WsConn {
-                task,
-                session,
-                is_open: false,
-                messages: Vec::new(),
-            });
+            conns.borrow_mut().insert(
+                conn_id,
+                WsConn {
+                    task,
+                    session,
+                    is_open: false,
+                    messages: Vec::new(),
+                },
+            );
         });
 
         // Keep delegate alive
@@ -248,22 +269,18 @@ pub fn connect(url_ptr: *const u8) -> f64 {
 /// Check if a WebSocket connection is open.
 pub fn is_open(handle: f64) -> f64 {
     let conn_id = handle as u32;
-    CONNECTIONS.with(|conns| {
-        match conns.borrow().get(&conn_id) {
-            Some(conn) if conn.is_open => 1.0,
-            _ => 0.0,
-        }
+    CONNECTIONS.with(|conns| match conns.borrow().get(&conn_id) {
+        Some(conn) if conn.is_open => 1.0,
+        _ => 0.0,
     })
 }
 
 /// Get pending message count.
 pub fn message_count(handle: f64) -> f64 {
     let conn_id = handle as u32;
-    CONNECTIONS.with(|conns| {
-        match conns.borrow().get(&conn_id) {
-            Some(conn) => conn.messages.len() as f64,
-            None => 0.0,
-        }
+    CONNECTIONS.with(|conns| match conns.borrow().get(&conn_id) {
+        Some(conn) => conn.messages.len() as f64,
+        None => 0.0,
     })
 }
 

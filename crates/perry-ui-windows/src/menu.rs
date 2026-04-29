@@ -68,7 +68,10 @@ pub fn create() -> i64 {
         let hmenu = unsafe { CreatePopupMenu().unwrap() };
         MENUS.with(|menus| {
             let mut menus = menus.borrow_mut();
-            menus.push(MenuEntry { hmenu, items: Vec::new() });
+            menus.push(MenuEntry {
+                hmenu,
+                items: Vec::new(),
+            });
             menus.len() as i64
         })
     }
@@ -77,7 +80,10 @@ pub fn create() -> i64 {
     {
         MENUS.with(|menus| {
             let mut menus = menus.borrow_mut();
-            menus.push(MenuEntry { hmenu: 0, items: Vec::new() });
+            menus.push(MenuEntry {
+                hmenu: 0,
+                items: Vec::new(),
+            });
             menus.len() as i64
         })
     }
@@ -121,14 +127,29 @@ pub fn add_item(menu_handle: i64, title_ptr: *const u8, callback: f64) {
 
     #[cfg(feature = "geisterhand")]
     {
-        extern "C" { fn perry_geisterhand_register(handle: i64, widget_type: u8, callback_kind: u8, closure_f64: f64, label_ptr: *const u8); }
-        unsafe { perry_geisterhand_register(menu_handle, 5, 0, callback, title_ptr); }
+        extern "C" {
+            fn perry_geisterhand_register(
+                handle: i64,
+                widget_type: u8,
+                callback_kind: u8,
+                closure_f64: f64,
+                label_ptr: *const u8,
+            );
+        }
+        unsafe {
+            perry_geisterhand_register(menu_handle, 5, 0, callback, title_ptr);
+        }
     }
 }
 
 /// Add an item to a menu with title, callback, and keyboard shortcut.
 /// Shortcut is formatted as tab-separated display text (e.g., "New\tCtrl+N").
-pub fn add_item_with_shortcut(menu_handle: i64, title_ptr: *const u8, callback: f64, shortcut_ptr: *const u8) {
+pub fn add_item_with_shortcut(
+    menu_handle: i64,
+    title_ptr: *const u8,
+    callback: f64,
+    shortcut_ptr: *const u8,
+) {
     let title = str_from_header(title_ptr);
     let shortcut = str_from_header(shortcut_ptr);
     // Convert "Cmd+N" to "Ctrl+N" for Windows display
@@ -149,7 +170,10 @@ pub fn add_item_with_shortcut(menu_handle: i64, title_ptr: *const u8, callback: 
         if idx < menus.len() {
             #[cfg(target_os = "windows")]
             {
-                let wide: Vec<u16> = display_title.encode_utf16().chain(std::iter::once(0)).collect();
+                let wide: Vec<u16> = display_title
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
                 unsafe {
                     let _ = AppendMenuW(
                         menus[idx].hmenu,
@@ -169,8 +193,18 @@ pub fn add_item_with_shortcut(menu_handle: i64, title_ptr: *const u8, callback: 
 
     #[cfg(feature = "geisterhand")]
     {
-        extern "C" { fn perry_geisterhand_register(handle: i64, widget_type: u8, callback_kind: u8, closure_f64: f64, label_ptr: *const u8); }
-        unsafe { perry_geisterhand_register(menu_handle, 5, 0, callback, title_ptr); }
+        extern "C" {
+            fn perry_geisterhand_register(
+                handle: i64,
+                widget_type: u8,
+                callback_kind: u8,
+                closure_f64: f64,
+                label_ptr: *const u8,
+            );
+        }
+        unsafe {
+            perry_geisterhand_register(menu_handle, 5, 0, callback, title_ptr);
+        }
     }
 }
 
@@ -254,7 +288,8 @@ pub fn menubar_add_menu(bar_handle: i64, title_ptr: *const u8, menu_handle: i64)
                 if menu_idx < menus.len() {
                     #[cfg(target_os = "windows")]
                     {
-                        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+                        let wide: Vec<u16> =
+                            title.encode_utf16().chain(std::iter::once(0)).collect();
                         unsafe {
                             let _ = AppendMenuW(
                                 bars[bar_idx].hmenu,
@@ -355,7 +390,8 @@ pub fn handle_context_menu(parent_hwnd: HWND, child_hwnd: HWND, x: i32, y: i32) 
                 let result = TrackPopupMenu(
                     menus[idx].hmenu,
                     TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-                    x, y,
+                    x,
+                    y,
                     0,
                     parent_hwnd,
                     None,

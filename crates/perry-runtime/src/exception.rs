@@ -21,7 +21,9 @@ struct JmpBuf {
 
 impl JmpBuf {
     const fn new() -> Self {
-        JmpBuf { data: [0; JMP_BUF_SIZE] }
+        JmpBuf {
+            data: [0; JMP_BUF_SIZE],
+        }
     }
 
     fn as_mut_ptr(&mut self) -> *mut i32 {
@@ -100,7 +102,13 @@ pub extern "C" fn js_get_exception() -> f64 {
 /// Check if there's an active exception
 #[no_mangle]
 pub extern "C" fn js_has_exception() -> i32 {
-    unsafe { if HAS_EXCEPTION { 1 } else { 0 } }
+    unsafe {
+        if HAS_EXCEPTION {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// Clear the current exception
@@ -115,13 +123,17 @@ pub extern "C" fn js_clear_exception() {
 /// Mark entering a finally block
 #[no_mangle]
 pub extern "C" fn js_enter_finally() {
-    unsafe { IN_FINALLY = true; }
+    unsafe {
+        IN_FINALLY = true;
+    }
 }
 
 /// Mark leaving a finally block
 #[no_mangle]
 pub extern "C" fn js_leave_finally() {
-    unsafe { IN_FINALLY = false; }
+    unsafe {
+        IN_FINALLY = false;
+    }
 }
 
 /// Read a StringHeader into an owned Rust String (empty on null/garbage).
@@ -160,7 +172,11 @@ fn print_uncaught(value: f64) {
                 let name_str = unsafe { string_header_to_string((*eh).name) };
                 let msg_str = unsafe { string_header_to_string((*eh).message) };
                 let stack_str = unsafe { string_header_to_string((*eh).stack) };
-                let name_display = if name_str.is_empty() { "Error" } else { &name_str };
+                let name_display = if name_str.is_empty() {
+                    "Error"
+                } else {
+                    &name_str
+                };
                 if msg_str.is_empty() {
                     eprintln!("Uncaught exception: {}", name_display);
                 } else {
@@ -194,10 +210,7 @@ fn print_uncaught(value: f64) {
                     let obj_str_ptr = crate::value::js_jsvalue_to_string(value);
                     let obj_str = unsafe { string_header_to_string(obj_str_ptr) };
                     if obj_str.is_empty() || obj_str == "[object Object]" {
-                        eprintln!(
-                            "Uncaught exception: [object] (bits=0x{:016X})",
-                            bits
-                        );
+                        eprintln!("Uncaught exception: [object] (bits=0x{:016X})", bits);
                     } else {
                         eprintln!("Uncaught exception: {}", obj_str);
                     }

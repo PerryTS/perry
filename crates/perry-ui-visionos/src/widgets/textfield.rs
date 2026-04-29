@@ -1,8 +1,8 @@
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_ui_kit::{UITextField, UIView};
 use objc2_foundation::{NSObject, NSString};
+use objc2_ui_kit::{UITextField, UIView};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -76,10 +76,8 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
     let placeholder = str_from_header(placeholder_ptr);
 
     unsafe {
-        let text_field: Retained<UITextField> = msg_send![
-            objc2::runtime::AnyClass::get(c"UITextField").unwrap(),
-            new
-        ];
+        let text_field: Retained<UITextField> =
+            msg_send![objc2::runtime::AnyClass::get(c"UITextField").unwrap(), new];
         let ns_placeholder = NSString::from_str(placeholder);
         let _: () = msg_send![&*text_field, setPlaceholder: &*ns_placeholder];
         let _: () = msg_send![&*text_field, setAccessibilityLabel: &*ns_placeholder];
@@ -96,7 +94,8 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
 
         let sel = Sel::register(c"textFieldChanged:");
         // UIControlEventEditingChanged = 1 << 17 = 131072
-        let _: () = msg_send![&*text_field, addTarget: &*target, action: sel, forControlEvents: 131072u64];
+        let _: () =
+            msg_send![&*text_field, addTarget: &*target, action: sel, forControlEvents: 131072u64];
 
         std::mem::forget(target);
 
@@ -104,8 +103,12 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         let handle = super::register_widget(view);
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-            unsafe { perry_geisterhand_register(handle, 1, 1, on_change, placeholder_ptr); }
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 1, 1, on_change, placeholder_ptr);
+            }
         }
         handle
     }
@@ -274,7 +277,8 @@ pub fn set_on_submit(handle: i64, on_submit: f64) {
 
             let sel = Sel::register(c"textFieldDidReturn:");
             // UIControlEventEditingDidEndOnExit = 1 << 19 = 524288
-            let _: () = msg_send![&*view, addTarget: &*target, action: sel, forControlEvents: 524288_u64];
+            let _: () =
+                msg_send![&*view, addTarget: &*target, action: sel, forControlEvents: 524288_u64];
 
             std::mem::forget(target);
         }

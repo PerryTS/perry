@@ -3,10 +3,10 @@
 //! Native implementation of the 'sharp' npm package using the image crate.
 //! Provides image processing functionality.
 
-use perry_runtime::{js_promise_new, js_string_from_bytes, JSValue, Promise, StringHeader};
-use image::{DynamicImage, ImageFormat, GenericImageView, imageops::FilterType};
-use std::io::Cursor;
 use crate::common::{get_handle, register_handle, spawn_for_promise, Handle};
+use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageFormat};
+use perry_runtime::{js_promise_new, js_string_from_bytes, JSValue, Promise, StringHeader};
+use std::io::Cursor;
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -98,7 +98,9 @@ pub unsafe extern "C" fn js_sharp_resize(handle: Handle, width: f64, height: f64
             (new_width as f64 * orig_h as f64 / orig_w as f64) as u32
         };
 
-        let resized = sharp.image.resize(new_width, new_height, FilterType::Lanczos3);
+        let resized = sharp
+            .image
+            .resize(new_width, new_height, FilterType::Lanczos3);
         return register_handle(SharpHandle {
             image: resized,
             format: sharp.format,
@@ -221,12 +223,9 @@ pub unsafe extern "C" fn js_sharp_crop(
     height: f64,
 ) -> Handle {
     if let Some(sharp) = get_handle::<SharpHandle>(handle) {
-        let cropped = sharp.image.crop_imm(
-            left as u32,
-            top as u32,
-            width as u32,
-            height as u32,
-        );
+        let cropped = sharp
+            .image
+            .crop_imm(left as u32, top as u32, width as u32, height as u32);
         return register_handle(SharpHandle {
             image: cropped,
             format: sharp.format,
@@ -285,7 +284,10 @@ pub unsafe extern "C" fn js_sharp_webp(handle: Handle, quality: f64) -> Handle {
 ///
 /// Write the image to a file.
 #[no_mangle]
-pub unsafe extern "C" fn js_sharp_to_file(handle: Handle, path_ptr: *const StringHeader) -> *mut Promise {
+pub unsafe extern "C" fn js_sharp_to_file(
+    handle: Handle,
+    path_ptr: *const StringHeader,
+) -> *mut Promise {
     let promise = js_promise_new();
 
     let path = match string_from_header(path_ptr) {
@@ -306,7 +308,8 @@ pub unsafe extern "C" fn js_sharp_to_file(handle: Handle, path_ptr: *const Strin
                     // Return info as JSON string
                     let info = format!(
                         r#"{{"width":{},"height":{},"format":"{}"}}"#,
-                        width, height,
+                        width,
+                        height,
                         match sharp.format {
                             ImageFormat::Jpeg => "jpeg",
                             ImageFormat::Png => "png",
@@ -342,10 +345,8 @@ pub unsafe extern "C" fn js_sharp_to_buffer(handle: Handle) -> *mut Promise {
                 Ok(_) => {
                     let bytes = buffer.into_inner();
                     // Return as hex string for now (or base64)
-                    let encoded = base64::Engine::encode(
-                        &base64::engine::general_purpose::STANDARD,
-                        &bytes,
-                    );
+                    let encoded =
+                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
                     let ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
                     Ok(JSValue::string_ptr(ptr).bits())
                 }
@@ -373,7 +374,9 @@ pub unsafe extern "C" fn js_sharp_metadata(handle: Handle) -> *mut Promise {
 
             let info = format!(
                 r#"{{"width":{},"height":{},"channels":{},"format":"{}"}}"#,
-                width, height, channels,
+                width,
+                height,
+                channels,
                 match sharp.format {
                     ImageFormat::Jpeg => "jpeg",
                     ImageFormat::Png => "png",

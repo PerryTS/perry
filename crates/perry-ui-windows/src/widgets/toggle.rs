@@ -6,13 +6,13 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED};
 #[cfg(target_os = "windows")]
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, alloc_control_id, register_widget};
+use super::{alloc_control_id, register_widget, WidgetKind};
 
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
@@ -57,12 +57,16 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(wide.as_ptr()),
                 WINDOW_STYLE(BS_AUTOCHECKBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0),
-                0, 0, 100, 24,
+                0,
+                0,
+                100,
+                24,
                 super::get_parking_hwnd(),
                 HMENU(control_id as *mut _),
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
             let handle = register_widget(hwnd, WidgetKind::Toggle, control_id);
             TOGGLE_CALLBACKS.with(|cb| {
@@ -70,8 +74,12 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
             });
             #[cfg(feature = "geisterhand")]
             {
-                extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-                unsafe { perry_geisterhand_register(handle, 3, 1, on_change, label_ptr); }
+                extern "C" {
+                    fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+                }
+                unsafe {
+                    perry_geisterhand_register(handle, 3, 1, on_change, label_ptr);
+                }
             }
             handle
         }
@@ -86,8 +94,12 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
         });
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-            unsafe { perry_geisterhand_register(handle, 3, 1, on_change, label_ptr); }
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 3, 1, on_change, label_ptr);
+            }
         }
         handle
     }

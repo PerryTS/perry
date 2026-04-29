@@ -121,7 +121,9 @@ pub fn add_item(menu_handle: i64, title_ptr: *const u8, callback: f64) {
 
             #[cfg(feature = "geisterhand")]
             {
-                extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
+                extern "C" {
+                    fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+                }
                 perry_geisterhand_register(menu_handle, 5, 0, callback, title_ptr);
             }
 
@@ -131,7 +133,12 @@ pub fn add_item(menu_handle: i64, title_ptr: *const u8, callback: f64) {
 }
 
 /// Add an item to a menu with a title, callback, and keyboard shortcut.
-pub fn add_item_with_shortcut(menu_handle: i64, title_ptr: *const u8, callback: f64, shortcut_ptr: *const u8) {
+pub fn add_item_with_shortcut(
+    menu_handle: i64,
+    title_ptr: *const u8,
+    callback: f64,
+    shortcut_ptr: *const u8,
+) {
     let title = str_from_header(title_ptr);
     let shortcut_str = str_from_header(shortcut_ptr);
     let (key, flags) = parse_shortcut(shortcut_str);
@@ -164,14 +171,24 @@ pub fn add_item_with_shortcut(menu_handle: i64, title_ptr: *const u8, callback: 
             {
                 extern "C" {
                     fn perry_geisterhand_register_with_shortcut(
-                        h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8,
-                        shortcut_ptr: *const u8, shortcut_len: usize,
+                        h: i64,
+                        wt: u8,
+                        ck: u8,
+                        cb: f64,
+                        lbl: *const u8,
+                        shortcut_ptr: *const u8,
+                        shortcut_len: usize,
                     );
                 }
                 let shortcut_bytes = shortcut_str.as_bytes();
                 perry_geisterhand_register_with_shortcut(
-                    menu_handle, 5, 0, callback, title_ptr,
-                    shortcut_bytes.as_ptr(), shortcut_bytes.len(),
+                    menu_handle,
+                    5,
+                    0,
+                    callback,
+                    title_ptr,
+                    shortcut_bytes.as_ptr(),
+                    shortcut_bytes.len(),
                 );
             }
 
@@ -273,7 +290,12 @@ pub fn menubar_attach(bar_handle: i64) {
 /// Add a menu item with a standard action selector and nil target.
 /// Used for Edit menu items (Copy, Paste, Cut, Undo, Redo, Select All) so that
 /// macOS routes them through the responder chain to the first responder.
-pub fn add_standard_action(menu_handle: i64, title_ptr: *const u8, selector_ptr: *const u8, shortcut_ptr: *const u8) {
+pub fn add_standard_action(
+    menu_handle: i64,
+    title_ptr: *const u8,
+    selector_ptr: *const u8,
+    shortcut_ptr: *const u8,
+) {
     let title = str_from_header(title_ptr);
     let selector_name = str_from_header(selector_ptr);
     let shortcut_str = str_from_header(shortcut_ptr);
@@ -301,7 +323,10 @@ pub fn add_standard_action(menu_handle: i64, title_ptr: *const u8, selector_ptr:
 
 /// Set a context menu on a widget. Right-click will show this menu.
 pub fn set_context_menu(widget_handle: i64, menu_handle: i64) {
-    if let (Some(view), Some(menu)) = (crate::widgets::get_widget(widget_handle), get_menu(menu_handle)) {
+    if let (Some(view), Some(menu)) = (
+        crate::widgets::get_widget(widget_handle),
+        get_menu(menu_handle),
+    ) {
         unsafe {
             let _: () = msg_send![&*view, setMenu: &*menu];
         }
@@ -320,10 +345,22 @@ fn parse_shortcut(s: &str) -> (String, NSEventModifierFlags) {
     for part in &parts {
         let trimmed = part.trim();
         match trimmed.to_lowercase().as_str() {
-            "cmd" | "command" => { flags |= NSEventModifierFlags::Command; has_explicit_modifier = true; },
-            "shift" => { flags |= NSEventModifierFlags::Shift; has_explicit_modifier = true; },
-            "option" | "alt" => { flags |= NSEventModifierFlags::Option; has_explicit_modifier = true; },
-            "ctrl" | "control" => { flags |= NSEventModifierFlags::Control; has_explicit_modifier = true; },
+            "cmd" | "command" => {
+                flags |= NSEventModifierFlags::Command;
+                has_explicit_modifier = true;
+            }
+            "shift" => {
+                flags |= NSEventModifierFlags::Shift;
+                has_explicit_modifier = true;
+            }
+            "option" | "alt" => {
+                flags |= NSEventModifierFlags::Option;
+                has_explicit_modifier = true;
+            }
+            "ctrl" | "control" => {
+                flags |= NSEventModifierFlags::Control;
+                has_explicit_modifier = true;
+            }
             _ => key = trimmed.to_string(),
         }
     }

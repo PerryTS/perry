@@ -4,15 +4,18 @@
 //! Provides hashing (sha256, md5), random byte generation, AES encryption,
 //! and key derivation (pbkdf2, scrypt).
 
-use perry_runtime::{js_string_from_bytes, StringHeader};
-use md5::{Md5, Digest as Md5Digest};
-use sha1::Sha1;
-use sha2::{Sha256, Sha512, Digest as Sha256Digest};
-use rand::RngCore;
+use crate::common::handle::{get_handle_mut, register_handle, Handle};
 use aes::Aes256;
-use cbc::{Encryptor, Decryptor, cipher::{KeyIvInit, block_padding::Pkcs7, BlockEncryptMut, BlockDecryptMut}};
 use base64::Engine as _;
-use crate::common::handle::{register_handle, get_handle_mut, Handle};
+use cbc::{
+    cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit},
+    Decryptor, Encryptor,
+};
+use md5::{Digest as Md5Digest, Md5};
+use perry_runtime::{js_string_from_bytes, StringHeader};
+use rand::RngCore;
+use sha1::Sha1;
+use sha2::{Digest as Sha256Digest, Sha256, Sha512};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
@@ -41,7 +44,8 @@ unsafe fn bytes_from_ptr(ptr: i64) -> Vec<u8> {
     if perry_runtime::buffer::is_registered_buffer(addr) {
         let buf = ptr as *const perry_runtime::buffer::BufferHeader;
         let len = (*buf).length as usize;
-        let data = (buf as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
+        let data =
+            (buf as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
         return std::slice::from_raw_parts(data, len).to_vec();
     }
     // Fall back to StringHeader layout — the common case for literal
@@ -90,7 +94,9 @@ pub unsafe extern "C" fn js_crypto_sha256(data_ptr: *const StringHeader) -> *mut
 /// Pointer is passed as `i64` so the codegen can feed either a NaN-unboxed
 /// Buffer handle or a StringHeader pointer through the same FFI slot.
 #[no_mangle]
-pub unsafe extern "C" fn js_crypto_sha256_bytes(data_ptr: i64) -> *mut perry_runtime::buffer::BufferHeader {
+pub unsafe extern "C" fn js_crypto_sha256_bytes(
+    data_ptr: i64,
+) -> *mut perry_runtime::buffer::BufferHeader {
     let bytes = bytes_from_ptr(data_ptr);
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
@@ -109,11 +115,7 @@ pub unsafe extern "C" fn js_crypto_sha256_bytes(data_ptr: i64) -> *mut perry_run
 /// Returns 1 on valid signature, 0 on any error (size mismatch, malformed key,
 /// signature mismatch).
 #[no_mangle]
-pub unsafe extern "C" fn js_crypto_ed25519_verify(
-    msg_ptr: i64,
-    sig_ptr: i64,
-    pk_ptr: i64,
-) -> i32 {
+pub unsafe extern "C" fn js_crypto_ed25519_verify(msg_ptr: i64, sig_ptr: i64, pk_ptr: i64) -> i32 {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
     let msg = bytes_from_ptr(msg_ptr);
@@ -161,7 +163,9 @@ pub unsafe extern "C" fn js_crypto_md5(data_ptr: *const StringHeader) -> *mut St
 /// Generate random bytes and return as a Buffer
 /// crypto.randomBytes(size) -> Buffer
 #[no_mangle]
-pub extern "C" fn js_crypto_random_bytes_buffer(size: f64) -> *mut perry_runtime::buffer::BufferHeader {
+pub extern "C" fn js_crypto_random_bytes_buffer(
+    size: f64,
+) -> *mut perry_runtime::buffer::BufferHeader {
     let size = size as usize;
     if size == 0 || size > 1024 * 1024 {
         return perry_runtime::buffer::buffer_alloc(0);
@@ -210,8 +214,8 @@ pub unsafe extern "C" fn js_crypto_hmac_sha256(
     key_ptr: *const StringHeader,
     data_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    use sha2::Sha256;
     use hmac::{Hmac, Mac};
+    use sha2::Sha256;
 
     type HmacSha256 = Hmac<Sha256>;
 
@@ -348,7 +352,7 @@ pub unsafe extern "C" fn js_crypto_aes256_encrypt(
 /// All pointers must be valid StringHeader pointers.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_aes256_decrypt(
-    data_ptr: *const StringHeader,  // base64 encoded ciphertext
+    data_ptr: *const StringHeader, // base64 encoded ciphertext
     key_ptr: *const StringHeader,
     iv_ptr: *const StringHeader,
 ) -> *mut StringHeader {
@@ -466,9 +470,8 @@ pub unsafe extern "C" fn js_crypto_scrypt(
     }
 
     // Use recommended scrypt parameters (N=16384, r=8, p=1)
-    let params = scrypt::Params::new(14, 8, 1, key_length).unwrap_or_else(|_| {
-        scrypt::Params::new(14, 8, 1, 32).unwrap()
-    });
+    let params = scrypt::Params::new(14, 8, 1, key_length)
+        .unwrap_or_else(|_| scrypt::Params::new(14, 8, 1, 32).unwrap());
 
     let mut output = vec![0u8; key_length];
     if scrypt::scrypt(&password, &salt, &params, &mut output).is_err() {
@@ -489,7 +492,7 @@ pub unsafe extern "C" fn js_crypto_scrypt_custom(
     password_ptr: *const StringHeader,
     salt_ptr: *const StringHeader,
     key_length: f64,
-    log_n: f64,  // log2(N)
+    log_n: f64, // log2(N)
     r: f64,
     p: f64,
 ) -> *mut StringHeader {
@@ -560,7 +563,9 @@ pub struct HashHandle {
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_create_hash(alg_ptr: i64) -> f64 {
     let alg_bytes = bytes_from_ptr(alg_ptr);
-    let alg = std::str::from_utf8(&alg_bytes).unwrap_or("").to_ascii_lowercase();
+    let alg = std::str::from_utf8(&alg_bytes)
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let state = match alg.as_str() {
         "sha1" | "sha-1" => HashState::Sha1(Sha1::new()),
         "sha256" | "sha-256" => HashState::Sha256(Sha256::new()),
@@ -610,9 +615,7 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             };
             if args.is_empty() || is_undefined_f64(args[0]) {
                 let buf = alloc_buffer_from_slice(&digest);
-                f64::from_bits(
-                    0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF),
-                )
+                f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
             } else {
                 let enc_ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
                 let enc_bytes = bytes_from_ptr(enc_ptr);
@@ -627,9 +630,7 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
                     _ => hex::encode(&digest),
                 };
                 let s = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
-                f64::from_bits(
-                    0x7FFF_0000_0000_0000u64 | ((s as u64) & 0x0000_FFFF_FFFF_FFFF),
-                )
+                f64::from_bits(0x7FFF_0000_0000_0000u64 | ((s as u64) & 0x0000_FFFF_FFFF_FFFF))
             }
         }
         _ => f64::from_bits(0x7FFC_0000_0000_0001),

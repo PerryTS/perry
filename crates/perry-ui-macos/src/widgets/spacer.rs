@@ -10,8 +10,14 @@ pub fn create() -> i64 {
 
     unsafe {
         // Low hugging priority = spacer stretches to fill
-        view.setContentHuggingPriority_forOrientation(1.0, objc2_app_kit::NSLayoutConstraintOrientation::Vertical);
-        view.setContentHuggingPriority_forOrientation(1.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
+        view.setContentHuggingPriority_forOrientation(
+            1.0,
+            objc2_app_kit::NSLayoutConstraintOrientation::Vertical,
+        );
+        view.setContentHuggingPriority_forOrientation(
+            1.0,
+            objc2_app_kit::NSLayoutConstraintOrientation::Horizontal,
+        );
 
         // Minimum height so it's not zero-sized when there's no pressure
         let height = NSLayoutConstraint::constraintWithItem_attribute_relatedBy_toItem_attribute_multiplier_constant(

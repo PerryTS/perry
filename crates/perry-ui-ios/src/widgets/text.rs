@@ -1,8 +1,8 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::runtime::AnyClass;
-use objc2_ui_kit::{UILabel, UIView};
 use objc2_foundation::NSString;
+use objc2_ui_kit::{UILabel, UIView};
 use perry_runtime::string::StringHeader;
 
 use super::register_widget;
@@ -25,7 +25,8 @@ pub fn create(text_ptr: *const u8) -> i64 {
     let text = str_from_header(text_ptr);
 
     unsafe {
-        let label: Retained<UILabel> = msg_send![objc2::runtime::AnyClass::get(c"UILabel").unwrap(), new];
+        let label: Retained<UILabel> =
+            msg_send![objc2::runtime::AnyClass::get(c"UILabel").unwrap(), new];
         let ns_string = NSString::from_str(text);
         let _: () = msg_send![&*label, setText: &*ns_string];
         let _: () = msg_send![&*label, setAccessibilityLabel: &*ns_string];
@@ -64,7 +65,9 @@ pub fn set_string(handle: i64, text_ptr: *const u8) {
 ///                 would raise `unrecognized selector` → non-unwinding
 ///                 panic across the FFI boundary → process abort)
 pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
-    let Some(view) = super::get_widget(handle) else { return; };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     unsafe {
         if let Some(btn_cls) = AnyClass::get(c"UIButton") {
             let is_btn: bool = msg_send![&*view, isKindOfClass: btn_cls];
@@ -175,9 +178,11 @@ pub fn set_decoration(handle: i64, decoration: i64) {
                 let _: () = msg_send![label, setText: &*current];
                 return;
             }
-            let key = objc2_foundation::NSString::from_str(
-                if decoration == 1 { "NSUnderline" } else { "NSStrikethrough" }
-            );
+            let key = objc2_foundation::NSString::from_str(if decoration == 1 {
+                "NSUnderline"
+            } else {
+                "NSStrikethrough"
+            });
             let num_cls = AnyClass::get(c"NSNumber").unwrap();
             let one: Retained<AnyObject> = msg_send![num_cls, numberWithInt: 1i32];
             let attrs: Retained<AnyObject> = msg_send![

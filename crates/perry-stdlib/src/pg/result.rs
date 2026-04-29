@@ -20,7 +20,11 @@ pub fn rows_to_pg_result(rows: Vec<PgRow>, columns: &[PgColumn], command: &str) 
     let rows_array = js_array_alloc(rows.len() as u32);
     for (i, row) in rows.iter().enumerate() {
         let row_obj = row_to_js_object(row);
-        js_array_set(rows_array, i as u32, JSValue::object_ptr(row_obj as *mut u8));
+        js_array_set(
+            rows_array,
+            i as u32,
+            JSValue::object_ptr(row_obj as *mut u8),
+        );
     }
     js_object_set_field(result_obj, 0, JSValue::array_ptr(rows_array));
 
@@ -28,7 +32,11 @@ pub fn rows_to_pg_result(rows: Vec<PgRow>, columns: &[PgColumn], command: &str) 
     let fields_array = js_array_alloc(columns.len() as u32);
     for (i, col) in columns.iter().enumerate() {
         let field_obj = column_to_field_def(col);
-        js_array_set(fields_array, i as u32, JSValue::object_ptr(field_obj as *mut u8));
+        js_array_set(
+            fields_array,
+            i as u32,
+            JSValue::object_ptr(field_obj as *mut u8),
+        );
     }
     js_object_set_field(result_obj, 1, JSValue::array_ptr(fields_array));
 

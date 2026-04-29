@@ -25,7 +25,9 @@ pub fn emit_widget(widget: &WidgetDecl, name: &str, package: &str) -> String {
 
     // Data class for entry
     write!(out, "data class {}Entry(", name).unwrap();
-    let field_strs: Vec<String> = widget.entry_fields.iter()
+    let field_strs: Vec<String> = widget
+        .entry_fields
+        .iter()
         .map(|(fname, ftype)| format!("val {}: {}", fname, kotlin_type_for_field(ftype)))
         .collect();
     write!(out, "{}", field_strs.join(", ")).unwrap();
@@ -34,15 +36,26 @@ pub fn emit_widget(widget: &WidgetDecl, name: &str, package: &str) -> String {
 
     // GlanceAppWidget class
     writeln!(out, "class {}Widget : GlanceAppWidget() {{", name).unwrap();
-    writeln!(out, "    override suspend fun provideGlance(context: Context, id: GlanceId) {{").unwrap();
+    writeln!(
+        out,
+        "    override suspend fun provideGlance(context: Context, id: GlanceId) {{"
+    )
+    .unwrap();
     writeln!(out, "        provideContent {{").unwrap();
 
     if widget.provider_func_name.is_some() {
-        writeln!(out, "            val {} = {}Bridge.fetchEntry(context)", entry_param, name).unwrap();
+        writeln!(
+            out,
+            "            val {} = {}Bridge.fetchEntry(context)",
+            entry_param, name
+        )
+        .unwrap();
     } else {
         // Create a default entry
         write!(out, "            val {} = {}Entry(", entry_param, name).unwrap();
-        let defaults: Vec<String> = widget.entry_fields.iter()
+        let defaults: Vec<String> = widget
+            .entry_fields
+            .iter()
             .map(|(_, ftype)| kotlin_default_value(ftype))
             .collect();
         write!(out, "{}", defaults.join(", ")).unwrap();
@@ -71,10 +84,19 @@ pub fn emit_receiver(name: &str, package: &str) -> String {
     writeln!(out, "package {}", package).unwrap();
     writeln!(out).unwrap();
     writeln!(out, "import androidx.glance.appwidget.GlanceAppWidget").unwrap();
-    writeln!(out, "import androidx.glance.appwidget.GlanceAppWidgetReceiver").unwrap();
+    writeln!(
+        out,
+        "import androidx.glance.appwidget.GlanceAppWidgetReceiver"
+    )
+    .unwrap();
     writeln!(out).unwrap();
     writeln!(out, "class {}Receiver : GlanceAppWidgetReceiver() {{", name).unwrap();
-    writeln!(out, "    override val glanceAppWidget: GlanceAppWidget = {}Widget()", name).unwrap();
+    writeln!(
+        out,
+        "    override val glanceAppWidget: GlanceAppWidget = {}Widget()",
+        name
+    )
+    .unwrap();
     writeln!(out, "}}").unwrap();
     out
 }
@@ -98,58 +120,115 @@ pub fn emit_config_activity(widget: &WidgetDecl, name: &str, package: &str) -> S
     writeln!(out).unwrap();
 
     writeln!(out, "class {}ConfigActivity : Activity() {{", name).unwrap();
-    writeln!(out, "    private var appWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID").unwrap();
+    writeln!(
+        out,
+        "    private var appWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID"
+    )
+    .unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "    override fun onCreate(savedInstanceState: Bundle?) {{").unwrap();
+    writeln!(
+        out,
+        "    override fun onCreate(savedInstanceState: Bundle?) {{"
+    )
+    .unwrap();
     writeln!(out, "        super.onCreate(savedInstanceState)").unwrap();
     writeln!(out, "        setResult(RESULT_CANCELED)").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "        appWidgetId = intent?.extras?.getInt(").unwrap();
-    writeln!(out, "            AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID").unwrap();
+    writeln!(
+        out,
+        "            AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID"
+    )
+    .unwrap();
     writeln!(out, "        ) ?: AppWidgetManager.INVALID_APPWIDGET_ID").unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "        if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {{").unwrap();
+    writeln!(
+        out,
+        "        if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {{"
+    )
+    .unwrap();
     writeln!(out, "            finish()").unwrap();
     writeln!(out, "            return").unwrap();
     writeln!(out, "        }}").unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "        val layout = LinearLayout(this).apply {{ orientation = LinearLayout.VERTICAL }}").unwrap();
+    writeln!(
+        out,
+        "        val layout = LinearLayout(this).apply {{ orientation = LinearLayout.VERTICAL }}"
+    )
+    .unwrap();
 
     for param in &widget.config_params {
         match &param.param_type {
             WidgetConfigParamType::Enum { values, default } => {
                 writeln!(out, "        val {}Spinner = Spinner(this)", param.name).unwrap();
-                writeln!(out, "        val {}Values = arrayOf({})", param.name,
-                    values.iter().map(|v| format!("\"{}\"", v)).collect::<Vec<_>>().join(", ")
-                ).unwrap();
+                writeln!(
+                    out,
+                    "        val {}Values = arrayOf({})",
+                    param.name,
+                    values
+                        .iter()
+                        .map(|v| format!("\"{}\"", v))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+                .unwrap();
                 writeln!(out, "        {}Spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, {}Values).apply {{", param.name, param.name).unwrap();
                 writeln!(out, "            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)").unwrap();
                 writeln!(out, "        }}").unwrap();
                 let default_idx = values.iter().position(|v| v == default).unwrap_or(0);
-                writeln!(out, "        {}Spinner.setSelection({})", param.name, default_idx).unwrap();
+                writeln!(
+                    out,
+                    "        {}Spinner.setSelection({})",
+                    param.name, default_idx
+                )
+                .unwrap();
                 writeln!(out, "        layout.addView({}Spinner)", param.name).unwrap();
             }
             WidgetConfigParamType::Bool { default } => {
-                writeln!(out, "        val {}Switch = Switch(this).apply {{ text = \"{}\"; isChecked = {} }}", param.name, param.title, default).unwrap();
+                writeln!(
+                    out,
+                    "        val {}Switch = Switch(this).apply {{ text = \"{}\"; isChecked = {} }}",
+                    param.name, param.title, default
+                )
+                .unwrap();
                 writeln!(out, "        layout.addView({}Switch)", param.name).unwrap();
             }
             WidgetConfigParamType::String { .. } => {
-                writeln!(out, "        // String param: {} (use EditText)", param.name).unwrap();
+                writeln!(
+                    out,
+                    "        // String param: {} (use EditText)",
+                    param.name
+                )
+                .unwrap();
             }
         }
     }
 
     writeln!(out).unwrap();
-    writeln!(out, "        val saveButton = Button(this).apply {{ text = \"Save\" }}").unwrap();
+    writeln!(
+        out,
+        "        val saveButton = Button(this).apply {{ text = \"Save\" }}"
+    )
+    .unwrap();
     writeln!(out, "        saveButton.setOnClickListener {{").unwrap();
     writeln!(out, "            val prefs = getSharedPreferences(\"widget_$appWidgetId\", MODE_PRIVATE).edit()").unwrap();
     for param in &widget.config_params {
         match &param.param_type {
             WidgetConfigParamType::Enum { .. } => {
-                writeln!(out, "            prefs.putString(\"{}\", {}Spinner.selectedItem.toString())", param.name, param.name).unwrap();
+                writeln!(
+                    out,
+                    "            prefs.putString(\"{}\", {}Spinner.selectedItem.toString())",
+                    param.name, param.name
+                )
+                .unwrap();
             }
             WidgetConfigParamType::Bool { .. } => {
-                writeln!(out, "            prefs.putBoolean(\"{}\", {}Switch.isChecked)", param.name, param.name).unwrap();
+                writeln!(
+                    out,
+                    "            prefs.putBoolean(\"{}\", {}Switch.isChecked)",
+                    param.name, param.name
+                )
+                .unwrap();
             }
             _ => {}
         }
@@ -172,21 +251,39 @@ pub fn emit_widget_info_xml(widget: &WidgetDecl, name: &str) -> String {
 
     let mut out = String::new();
     writeln!(out, "<?xml version=\"1.0\" encoding=\"utf-8\"?>").unwrap();
-    write!(out, "<appwidget-provider xmlns:android=\"http://schemas.android.com/apk/res/android\"").unwrap();
+    write!(
+        out,
+        "<appwidget-provider xmlns:android=\"http://schemas.android.com/apk/res/android\""
+    )
+    .unwrap();
     writeln!(out).unwrap();
     writeln!(out, "    android:minWidth=\"{}dp\"", min_width).unwrap();
     writeln!(out, "    android:minHeight=\"{}dp\"", min_height).unwrap();
     writeln!(out, "    android:updatePeriodMillis=\"1800000\"").unwrap();
-    writeln!(out, "    android:initialLayout=\"@layout/glance_default_loading_layout\"").unwrap();
+    writeln!(
+        out,
+        "    android:initialLayout=\"@layout/glance_default_loading_layout\""
+    )
+    .unwrap();
     writeln!(out, "    android:resizeMode=\"horizontal|vertical\"").unwrap();
     writeln!(out, "    android:widgetCategory=\"home_screen\"").unwrap();
 
     if !widget.config_params.is_empty() {
-        writeln!(out, "    android:configure=\"{}.{}ConfigActivity\"", "PACKAGE", name).unwrap();
+        writeln!(
+            out,
+            "    android:configure=\"{}.{}ConfigActivity\"",
+            "PACKAGE", name
+        )
+        .unwrap();
     }
 
     if !widget.description.is_empty() {
-        writeln!(out, "    android:description=\"@string/{}_description\"", name.to_lowercase()).unwrap();
+        writeln!(
+            out,
+            "    android:description=\"@string/{}_description\"",
+            name.to_lowercase()
+        )
+        .unwrap();
     }
 
     writeln!(out, "    />").unwrap();
@@ -196,25 +293,47 @@ pub fn emit_widget_info_xml(widget: &WidgetDecl, name: &str) -> String {
 /// Emit AndroidManifest receiver snippet
 pub fn emit_manifest_snippet(widget: &WidgetDecl, name: &str, package: &str) -> String {
     let mut out = String::new();
-    writeln!(out, "<!-- Add to AndroidManifest.xml inside <application> -->").unwrap();
+    writeln!(
+        out,
+        "<!-- Add to AndroidManifest.xml inside <application> -->"
+    )
+    .unwrap();
     writeln!(out, "<receiver").unwrap();
     writeln!(out, "    android:name=\"{}.{}Receiver\"", package, name).unwrap();
     writeln!(out, "    android:exported=\"true\">").unwrap();
     writeln!(out, "    <intent-filter>").unwrap();
-    writeln!(out, "        <action android:name=\"android.appwidget.action.APPWIDGET_UPDATE\" />").unwrap();
+    writeln!(
+        out,
+        "        <action android:name=\"android.appwidget.action.APPWIDGET_UPDATE\" />"
+    )
+    .unwrap();
     writeln!(out, "    </intent-filter>").unwrap();
     writeln!(out, "    <meta-data").unwrap();
     writeln!(out, "        android:name=\"android.appwidget.provider\"").unwrap();
-    writeln!(out, "        android:resource=\"@xml/widget_info_{}\" />", name.to_lowercase()).unwrap();
+    writeln!(
+        out,
+        "        android:resource=\"@xml/widget_info_{}\" />",
+        name.to_lowercase()
+    )
+    .unwrap();
     writeln!(out, "</receiver>").unwrap();
 
     if !widget.config_params.is_empty() {
         writeln!(out).unwrap();
         writeln!(out, "<activity").unwrap();
-        writeln!(out, "    android:name=\"{}.{}ConfigActivity\"", package, name).unwrap();
+        writeln!(
+            out,
+            "    android:name=\"{}.{}ConfigActivity\"",
+            package, name
+        )
+        .unwrap();
         writeln!(out, "    android:exported=\"true\">").unwrap();
         writeln!(out, "    <intent-filter>").unwrap();
-        writeln!(out, "        <action android:name=\"android.appwidget.action.APPWIDGET_CONFIGURE\" />").unwrap();
+        writeln!(
+            out,
+            "        <action android:name=\"android.appwidget.action.APPWIDGET_CONFIGURE\" />"
+        )
+        .unwrap();
         writeln!(out, "    </intent-filter>").unwrap();
         writeln!(out, "</activity>").unwrap();
     }
@@ -229,8 +348,13 @@ fn widget_dimensions(families: &[String]) -> (u32, u32) {
 
     for family in families {
         match family.as_str() {
-            "systemMedium" => { min_width = 250; }
-            "systemLarge" => { min_width = 250; min_height = 250; }
+            "systemMedium" => {
+                min_width = 250;
+            }
+            "systemLarge" => {
+                min_width = 250;
+                min_height = 250;
+            }
             _ => {}
         }
     }
@@ -251,7 +375,12 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             let _ = modifiers;
             writeln!(out).unwrap();
         }
-        WidgetNode::Stack { kind, spacing, children, modifiers } => {
+        WidgetNode::Stack {
+            kind,
+            spacing,
+            children,
+            modifiers,
+        } => {
             let composable = match kind {
                 WidgetStackKind::VStack => "Column",
                 WidgetStackKind::HStack => "Row",
@@ -268,10 +397,18 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             }
             writeln!(out, "{}}}", pad).unwrap();
         }
-        WidgetNode::Image { system_name, modifiers } => {
+        WidgetNode::Image {
+            system_name,
+            modifiers,
+        } => {
             // Map SF Symbol names to Android drawable resources
             let _ = modifiers;
-            writeln!(out, "{}// Image: {} (provide R.drawable resource)", pad, system_name).unwrap();
+            writeln!(
+                out,
+                "{}// Image: {} (provide R.drawable resource)",
+                pad, system_name
+            )
+            .unwrap();
             writeln!(out, "{}Image(provider = ImageProvider(R.drawable.ic_placeholder), contentDescription = \"{}\")", pad, system_name).unwrap();
         }
         WidgetNode::Spacer => {
@@ -280,7 +417,13 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
         WidgetNode::Divider => {
             writeln!(out, "{}Spacer(modifier = GlanceModifier.height(1.dp).fillMaxWidth().background(Color.Gray))", pad).unwrap();
         }
-        WidgetNode::Conditional { field, op, value, then_node, else_node } => {
+        WidgetNode::Conditional {
+            field,
+            op,
+            value,
+            then_node,
+            else_node,
+        } => {
             let cond = emit_kotlin_condition(field, op, value, entry_param);
             writeln!(out, "{}if ({}) {{", pad, cond).unwrap();
             out.push_str(&emit_node(then_node, entry_param, indent + 1));
@@ -290,21 +433,44 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             }
             writeln!(out, "{}}}", pad).unwrap();
         }
-        WidgetNode::ForEach { collection_field, item_param, body } => {
-            writeln!(out, "{}{}.{}.forEach {{ {} ->", pad, entry_param, collection_field, item_param).unwrap();
+        WidgetNode::ForEach {
+            collection_field,
+            item_param,
+            body,
+        } => {
+            writeln!(
+                out,
+                "{}{}.{}.forEach {{ {} ->",
+                pad, entry_param, collection_field, item_param
+            )
+            .unwrap();
             out.push_str(&emit_node(body, item_param, indent + 1));
             writeln!(out, "{}}}", pad).unwrap();
         }
-        WidgetNode::Label { text, system_image, modifiers } => {
+        WidgetNode::Label {
+            text,
+            system_image,
+            modifiers,
+        } => {
             let _ = modifiers;
             let text_arg = emit_text_content(text, entry_param);
             writeln!(out, "{}Row {{", pad).unwrap();
-            writeln!(out, "{}    // Icon: {} (provide R.drawable resource)", pad, system_image).unwrap();
+            writeln!(
+                out,
+                "{}    // Icon: {} (provide R.drawable resource)",
+                pad, system_image
+            )
+            .unwrap();
             writeln!(out, "{}    Text(text = {})", pad, text_arg).unwrap();
             writeln!(out, "{}}}", pad).unwrap();
         }
         WidgetNode::FamilySwitch { cases, default } => {
-            writeln!(out, "{}// Family switch — check LocalSize.current for different layouts", pad).unwrap();
+            writeln!(
+                out,
+                "{}// Family switch — check LocalSize.current for different layouts",
+                pad
+            )
+            .unwrap();
             writeln!(out, "{}val currentSize = LocalSize.current", pad).unwrap();
             for (i, (family_value, node)) in cases.iter().enumerate() {
                 let (width_check, _) = family_to_size_check(family_value);
@@ -321,10 +487,25 @@ fn emit_node(node: &WidgetNode, entry_param: &str, indent: usize) -> String {
             }
             writeln!(out, "{}}}", pad).unwrap();
         }
-        WidgetNode::Gauge { value_expr, label, style, modifiers } => {
+        WidgetNode::Gauge {
+            value_expr,
+            label,
+            style,
+            modifiers,
+        } => {
             let _ = (style, modifiers);
-            writeln!(out, "{}// Gauge not natively supported in Glance — using text fallback", pad).unwrap();
-            writeln!(out, "{}Text(text = \"{}: ${{{}.{}}}\")", pad, label, entry_param, value_expr).unwrap();
+            writeln!(
+                out,
+                "{}// Gauge not natively supported in Glance — using text fallback",
+                pad
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "{}Text(text = \"{}: ${{{}.{}}}\")",
+                pad, label, entry_param, value_expr
+            )
+            .unwrap();
         }
     }
 
@@ -341,7 +522,9 @@ fn emit_text_content(content: &WidgetTextContent, entry_param: &str) -> String {
             for part in parts {
                 match part {
                     WidgetTemplatePart::Literal(lit) => s.push_str(&escape_kotlin_string(lit)),
-                    WidgetTemplatePart::Field(field) => write!(s, "${{{}.{}}}", entry_param, field).unwrap(),
+                    WidgetTemplatePart::Field(field) => {
+                        write!(s, "${{{}.{}}}", entry_param, field).unwrap()
+                    }
                 }
             }
             s.push('"');
@@ -366,7 +549,9 @@ fn emit_glance_modifiers(modifiers: &[WidgetModifier], spacing: &Option<f64>) ->
                 let c = kotlin_color_expr(color);
                 parts.push(format!("background(day = {}, night = {})", c, c));
             }
-            WidgetModifier::CornerRadius(r) => parts.push(format!("cornerRadius({}. dp)", *r as u32)),
+            WidgetModifier::CornerRadius(r) => {
+                parts.push(format!("cornerRadius({}. dp)", *r as u32))
+            }
             WidgetModifier::FrameMaxWidth => parts.push("fillMaxWidth()".to_string()),
             WidgetModifier::WidgetURL(url) => {
                 parts.push(format!("clickable(actionStartActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(\"{}\"))))", escape_kotlin_string(url)));
@@ -383,7 +568,12 @@ fn emit_glance_modifiers(modifiers: &[WidgetModifier], spacing: &Option<f64>) ->
 }
 
 /// Emit a condition as Kotlin expression
-fn emit_kotlin_condition(field: &str, op: &WidgetConditionOp, value: &WidgetTextContent, entry_param: &str) -> String {
+fn emit_kotlin_condition(
+    field: &str,
+    op: &WidgetConditionOp,
+    value: &WidgetTextContent,
+    entry_param: &str,
+) -> String {
     let lhs = format!("{}.{}", entry_param, field);
     match op {
         WidgetConditionOp::Truthy => lhs,
@@ -398,7 +588,11 @@ fn emit_kotlin_value(value: &WidgetTextContent) -> String {
     match value {
         WidgetTextContent::Literal(s) => {
             if let Ok(n) = s.parse::<f64>() {
-                if n == n.floor() { format!("{:.0}", n) } else { format!("{}", n) }
+                if n == n.floor() {
+                    format!("{:.0}", n)
+                } else {
+                    format!("{}", n)
+                }
             } else {
                 format!("\"{}\"", escape_kotlin_string(s))
             }
@@ -411,9 +605,18 @@ fn emit_kotlin_value(value: &WidgetTextContent) -> String {
 /// Map family to size check condition for Glance
 fn family_to_size_check(family: &str) -> (String, String) {
     match family {
-        "systemSmall" => ("currentSize.width < 200.dp".to_string(), "small".to_string()),
-        "systemMedium" => ("currentSize.width >= 200.dp && currentSize.height < 200.dp".to_string(), "medium".to_string()),
-        "systemLarge" => ("currentSize.width >= 200.dp && currentSize.height >= 200.dp".to_string(), "large".to_string()),
+        "systemSmall" => (
+            "currentSize.width < 200.dp".to_string(),
+            "small".to_string(),
+        ),
+        "systemMedium" => (
+            "currentSize.width >= 200.dp && currentSize.height < 200.dp".to_string(),
+            "medium".to_string(),
+        ),
+        "systemLarge" => (
+            "currentSize.width >= 200.dp && currentSize.height >= 200.dp".to_string(),
+            "large".to_string(),
+        ),
         _ => (format!("true /* {} */", family), family.to_string()),
     }
 }
@@ -463,11 +666,11 @@ fn kotlin_color_expr(color: &str) -> String {
 /// Escape a string for Kotlin string literals
 fn escape_kotlin_string(s: &str) -> String {
     s.replace('\\', "\\\\")
-     .replace('"', "\\\"")
-     .replace('\n', "\\n")
-     .replace('\r', "\\r")
-     .replace('\t', "\\t")
-     .replace('$', "\\$")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('$', "\\$")
 }
 
 #[cfg(test)]

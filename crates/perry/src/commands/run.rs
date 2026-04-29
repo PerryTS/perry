@@ -108,12 +108,17 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
     let (target, device_udid) = resolve_target(platform, &args)?;
 
     // 3. Decide local vs remote compilation
-    let needs_cross = matches!(target.as_deref(),
-        Some("ios-simulator") | Some("ios") |
-        Some("visionos-simulator") | Some("visionos") |
-        Some("android") |
-        Some("watchos-simulator") | Some("watchos") |
-        Some("tvos-simulator") | Some("tvos")
+    let needs_cross = matches!(
+        target.as_deref(),
+        Some("ios-simulator")
+            | Some("ios")
+            | Some("visionos-simulator")
+            | Some("visionos")
+            | Some("android")
+            | Some("watchos-simulator")
+            | Some("watchos")
+            | Some("tvos-simulator")
+            | Some("tvos")
     );
     let can_local = !needs_cross || can_compile_locally(target.as_deref());
 
@@ -151,8 +156,11 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
     }
 
     // Read app metadata from perry.toml / package.json
-    let project_dir = input.parent().unwrap_or(Path::new("."))
-        .canonicalize().unwrap_or_else(|_| PathBuf::from("."));
+    let project_dir = input
+        .parent()
+        .unwrap_or(Path::new("."))
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let project_root = find_project_root(&project_dir);
     let (app_name, bundle_id) = read_app_metadata(&project_root, &input);
 
@@ -185,7 +193,12 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         if let Some(udid) = device_udid.as_deref() {
             let config = super::publish::load_config();
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(resign_for_development(&result.output_path, &config, udid, format))?;
+            rt.block_on(resign_for_development(
+                &result.output_path,
+                &config,
+                udid,
+                format,
+            ))?;
         }
     }
 
@@ -206,7 +219,9 @@ fn can_compile_locally(target: Option<&str>) -> bool {
     }
     // Check original source tree (when cargo install'd)
     let source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target").join(triple).join("release/libperry_runtime.a");
+        .join("../../target")
+        .join(triple)
+        .join("release/libperry_runtime.a");
     source_path.exists()
 }
 
@@ -316,9 +331,14 @@ async fn remote_build_and_launch(
         .ok()
         .and_then(|s| s.parse::<toml::Value>().ok())
         .and_then(|v| v.get("publish")?.get("exclude")?.as_array().cloned())
-        .map(|arr| arr.into_iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+        .map(|arr| {
+            arr.into_iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
-    let tarball = create_project_tarball_with_excludes(&project_root, &publish_excludes).context("Failed to create project tarball")?;
+    let tarball = create_project_tarball_with_excludes(&project_root, &publish_excludes)
+        .context("Failed to create project tarball")?;
 
     if let OutputFormat::Text = format {
         println!(
@@ -330,7 +350,7 @@ async fn remote_build_and_launch(
 
     // Build manifest
     let ios_distribute = match target {
-        "ios" => "development",   // device build needs dev signing, not distribution
+        "ios" => "development", // device build needs dev signing, not distribution
         "ios-simulator" => "simulator",
         _ => "none",
     };
@@ -407,13 +427,22 @@ async fn remote_build_and_launch(
     }
 
     // WebSocket progress
-    let ws_url = if build_resp.ws_url.starts_with("ws://") || build_resp.ws_url.starts_with("wss://") {
-        build_resp.ws_url.clone()
-    } else if server_url.starts_with("https://") {
-        format!("wss://{}{}", &server_url["https://".len()..], build_resp.ws_url)
-    } else {
-        format!("ws://{}{}", &server_url["http://".len()..], build_resp.ws_url)
-    };
+    let ws_url =
+        if build_resp.ws_url.starts_with("ws://") || build_resp.ws_url.starts_with("wss://") {
+            build_resp.ws_url.clone()
+        } else if server_url.starts_with("https://") {
+            format!(
+                "wss://{}{}",
+                &server_url["https://".len()..],
+                build_resp.ws_url
+            )
+        } else {
+            format!(
+                "ws://{}{}",
+                &server_url["http://".len()..],
+                build_resp.ws_url
+            )
+        };
 
     let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
         .await
@@ -546,10 +575,7 @@ async fn remote_build_and_launch(
             } => {
                 if let Some(ref pb) = pb {
                     pb.set_position(100);
-                    pb.finish_with_message(format!(
-                        "✓ Build complete: {}",
-                        style(&name).bold()
-                    ));
+                    pb.finish_with_message(format!("✓ Build complete: {}", style(&name).bold()));
                 }
                 download_url = Some(url);
                 download_path = path;
@@ -619,8 +645,7 @@ async fn remote_build_and_launch(
                     || b == b'='
                     || b == b'\n'
                     || b == b'\r'
-            })
-        {
+            }) {
             base64::engine::general_purpose::STANDARD
                 .decode(&bytes)
                 .unwrap_or_else(|_| bytes.to_vec())
@@ -631,12 +656,20 @@ async fn remote_build_and_launch(
     }
 
     if let OutputFormat::Text = format {
-        println!(" {} → {}", style("done").green(), style(dest.display()).bold());
+        println!(
+            " {} → {}",
+            style("done").green(),
+            style(dest.display()).bold()
+        );
         println!();
     }
 
     // For iOS: extract .app from .ipa and install
-    if target == "ios-simulator" || target == "ios" || target == "visionos-simulator" || target == "visionos" {
+    if target == "ios-simulator"
+        || target == "ios"
+        || target == "visionos-simulator"
+        || target == "visionos"
+    {
         let app_dir = extract_app_from_ipa(&dest, &dist_dir)?;
         let udid = device_udid.ok_or_else(|| anyhow!("No device UDID for iOS launch"))?;
 
@@ -724,8 +757,12 @@ fn embed_app_icon(app_dir: &Path, project_root: &Path) {
         let dest = app_dir.join(name);
         let _ = Command::new("sips")
             .args([
-                "-z", &size.to_string(), &size.to_string(),
-                "--setProperty", "format", "png",
+                "-z",
+                &size.to_string(),
+                &size.to_string(),
+                "--setProperty",
+                "format",
+                "png",
             ])
             .arg(&icon_path)
             .args(["--out"])
@@ -744,19 +781,31 @@ fn embed_app_icon(app_dir: &Path, project_root: &Path) {
         .arg(&info_plist)
         .output();
     let _ = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles array"])
+        .args([
+            "-c",
+            "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles array",
+        ])
         .arg(&info_plist)
         .output();
     let _ = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:0 string AppIcon60x60"])
+        .args([
+            "-c",
+            "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:0 string AppIcon60x60",
+        ])
         .arg(&info_plist)
         .output();
     let _ = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:1 string AppIcon76x76"])
+        .args([
+            "-c",
+            "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:1 string AppIcon76x76",
+        ])
         .arg(&info_plist)
         .output();
     let _ = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:2 string AppIcon83.5x83.5"])
+        .args([
+            "-c",
+            "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:2 string AppIcon83.5x83.5",
+        ])
         .arg(&info_plist)
         .output();
 }
@@ -782,7 +831,11 @@ fn find_icon_source(project_root: &Path) -> Option<PathBuf> {
     let pkg_path = project_root.join("package.json");
     if let Ok(content) = std::fs::read_to_string(&pkg_path) {
         if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(icon) = pkg.get("perry").and_then(|p| p.get("icon")).and_then(|i| i.as_str()) {
+            if let Some(icon) = pkg
+                .get("perry")
+                .and_then(|p| p.get("icon"))
+                .and_then(|i| i.as_str())
+            {
                 return Some(project_root.join(icon));
             }
         }
@@ -792,8 +845,6 @@ fn find_icon_source(project_root: &Path) -> Option<PathBuf> {
 }
 
 fn extract_app_from_ipa(ipa_path: &Path, dest_dir: &Path) -> Result<PathBuf> {
-    
-
     let file = std::fs::File::open(ipa_path).context("Failed to open .ipa")?;
     let mut archive = zip::ZipArchive::new(file).context("Failed to read .ipa as ZIP")?;
 
@@ -865,8 +916,7 @@ async fn resign_for_development(
     format: OutputFormat,
 ) -> Result<()> {
     // Read bundle ID from Info.plist
-    let bundle_id = read_bundle_id_from_app(app_dir)
-        .unwrap_or_else(|| "com.perry.app".to_string());
+    let bundle_id = read_bundle_id_from_app(app_dir).unwrap_or_else(|| "com.perry.app".to_string());
 
     // Find all development signing identities (we'll pick the right one after
     // determining the provisioning profile, since the profile must contain the
@@ -883,14 +933,18 @@ async fn resign_for_development(
             let line = line.trim();
             let q1 = line.find('"')?;
             let q2 = line.rfind('"')?;
-            if q2 <= q1 { return None; }
+            if q2 <= q1 {
+                return None;
+            }
             let name = line[q1 + 1..q2].to_string();
             if !name.starts_with("Apple Development") && !name.starts_with("iPhone Developer") {
                 return None;
             }
             let after_paren = line.find(") ").map(|i| i + 2).unwrap_or(0);
             let hash_end = line.find(" \"").unwrap_or(line.len());
-            if hash_end <= after_paren { return None; }
+            if hash_end <= after_paren {
+                return None;
+            }
             let hash = line[after_paren..hash_end].trim().to_string();
             Some((hash, name))
         })
@@ -905,21 +959,25 @@ async fn resign_for_development(
 
     // Use team ID from saved config (NOT from the identity name — the parenthesized
     // part in "Apple Development: Name (XXXXX)" is a personal cert ID, not the team ID)
-    let team_id = config.apple.as_ref()
+    let team_id = config
+        .apple
+        .as_ref()
         .and_then(|a| a.team_id.clone())
-        .ok_or_else(|| anyhow!(
-            "No Apple team ID in ~/.perry/config.toml — run `perry setup ios` first"
-        ))?;
+        .ok_or_else(|| {
+            anyhow!("No Apple team ID in ~/.perry/config.toml — run `perry setup ios` first")
+        })?;
 
     // Pick the identity that belongs to our team by checking TeamIdentifier
     // via a test codesign. The cert ID in the name (e.g. RY57F22743) is NOT
     // the team ID — we must verify which hash produces the right TeamIdentifier.
-    let identity_hash = find_identity_for_team(&dev_identities, &team_id)
-        .ok_or_else(|| anyhow!(
+    let identity_hash = find_identity_for_team(&dev_identities, &team_id).ok_or_else(|| {
+        anyhow!(
             "No Apple Development certificate for team {team_id} found in Keychain.\n\
              Use Xcode to set up development signing for this team."
-        ))?;
-    let identity = dev_identities.iter()
+        )
+    })?;
+    let identity = dev_identities
+        .iter()
         .find(|(h, _)| h == &identity_hash)
         .map(|(_, n)| n.clone())
         .unwrap_or_else(|| identity_hash.clone());
@@ -935,7 +993,10 @@ async fn resign_for_development(
     // Step 1: Find or create a development provisioning profile
     let profile_data = if let Some(path) = find_system_dev_profile(&bundle_id, &team_id) {
         if let OutputFormat::Text = format {
-            println!("  Using existing dev profile: {}", style(path.display()).dim());
+            println!(
+                "  Using existing dev profile: {}",
+                style(path.display()).dim()
+            );
         }
         std::fs::read(&path)?
     } else {
@@ -943,11 +1004,12 @@ async fn resign_for_development(
         if let OutputFormat::Text = format {
             println!("  Creating development provisioning profile via App Store Connect...");
         }
-        create_dev_profile_via_api(config, &bundle_id, &team_id, device_udid, format).await
+        create_dev_profile_via_api(config, &bundle_id, &team_id, device_udid, format)
+            .await
             .context(
                 "Could not create development provisioning profile.\n\
                  Ensure your App Store Connect API key has the right permissions,\n\
-                 or use a simulator instead: perry run ios --simulator <UDID>"
+                 or use a simulator instead: perry run ios --simulator <UDID>",
             )?
     };
 
@@ -1019,10 +1081,7 @@ fn find_identity_for_team(identities: &[(String, String)], team_id: &str) -> Opt
             .arg(&tmp)
             .output();
         if sign.map(|o| o.status.success()).unwrap_or(false) {
-            let verify = Command::new("codesign")
-                .args(["-dvv"])
-                .arg(&tmp)
-                .output();
+            let verify = Command::new("codesign").args(["-dvv"]).arg(&tmp).output();
             if let Ok(v) = verify {
                 let stderr = String::from_utf8_lossy(&v.stderr);
                 if let Some(line) = stderr.lines().find(|l| l.starts_with("TeamIdentifier=")) {
@@ -1046,7 +1105,9 @@ fn find_system_dev_profile(bundle_id: &str, team_id: &str) -> Option<PathBuf> {
     ];
 
     for dir in &profile_dirs {
-        if !dir.exists() { continue; }
+        if !dir.exists() {
+            continue;
+        }
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -1054,13 +1115,16 @@ fn find_system_dev_profile(bundle_id: &str, team_id: &str) -> Option<PathBuf> {
                     continue;
                 }
                 if let Ok(output) = Command::new("security")
-                    .args(["cms", "-D", "-i"]).arg(&path).output()
+                    .args(["cms", "-D", "-i"])
+                    .arg(&path)
+                    .output()
                 {
                     if output.status.success() {
                         let c = String::from_utf8_lossy(&output.stdout);
                         let is_dev = c.contains("<key>ProvisionedDevices</key>")
                             || c.contains("<key>get-task-allow</key>\n\t\t<true/>");
-                        let matches = (c.contains(bundle_id) || c.contains(&format!("{team_id}.*")))
+                        let matches = (c.contains(bundle_id)
+                            || c.contains(&format!("{team_id}.*")))
                             && c.contains(team_id);
                         if is_dev && matches {
                             return Some(path);
@@ -1084,14 +1148,21 @@ async fn create_dev_profile_via_api(
     device_udid: &str,
     format: OutputFormat,
 ) -> Result<Vec<u8>> {
-    let apple = config.apple.as_ref()
-        .ok_or_else(|| anyhow!("No Apple credentials in ~/.perry/config.toml — run `perry setup ios` first"))?;
+    let apple = config.apple.as_ref().ok_or_else(|| {
+        anyhow!("No Apple credentials in ~/.perry/config.toml — run `perry setup ios` first")
+    })?;
 
-    let key_id = apple.key_id.as_deref()
+    let key_id = apple
+        .key_id
+        .as_deref()
         .ok_or_else(|| anyhow!("Missing apple.key_id in config"))?;
-    let issuer_id = apple.issuer_id.as_deref()
+    let issuer_id = apple
+        .issuer_id
+        .as_deref()
         .ok_or_else(|| anyhow!("Missing apple.issuer_id in config"))?;
-    let p8_path = apple.p8_key_path.as_deref()
+    let p8_path = apple
+        .p8_key_path
+        .as_deref()
         .ok_or_else(|| anyhow!("Missing apple.p8_key_path in config"))?;
     let p8_key = std::fs::read_to_string(p8_path)
         .with_context(|| format!("Failed to read .p8 key from {p8_path}"))?;
@@ -1107,8 +1178,12 @@ async fn create_dev_profile_via_api(
         print!("    Registering device...");
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
-    let device_name = format!("Perry Dev Device {}", &device_udid[..8.min(device_udid.len())]);
-    let _ = client.post(format!("{base}/devices"))
+    let device_name = format!(
+        "Perry Dev Device {}",
+        &device_udid[..8.min(device_udid.len())]
+    );
+    let _ = client
+        .post(format!("{base}/devices"))
         .bearer_auth(&token)
         .json(&serde_json::json!({
             "data": {
@@ -1120,27 +1195,34 @@ async fn create_dev_profile_via_api(
                 }
             }
         }))
-        .send().await;
-    if let OutputFormat::Text = format { println!(" done"); }
+        .send()
+        .await;
+    if let OutputFormat::Text = format {
+        println!(" done");
+    }
 
     // 2. Find or create App ID (bundleId)
     if let OutputFormat::Text = format {
         print!("    Resolving App ID...");
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
-    let resp = client.get(format!("{base}/bundleIds"))
+    let resp = client
+        .get(format!("{base}/bundleIds"))
         .bearer_auth(&token)
         .query(&[("filter[identifier]", bundle_id)])
-        .send().await
+        .send()
+        .await
         .context("Failed to query bundleIds")?;
     let body: serde_json::Value = resp.json().await?;
 
-    let bundle_id_resource_id = if let Some(first) = body["data"].as_array().and_then(|a| a.first()) {
+    let bundle_id_resource_id = if let Some(first) = body["data"].as_array().and_then(|a| a.first())
+    {
         first["id"].as_str().unwrap_or("").to_string()
     } else {
         // Create App ID
         let app_name = bundle_id.split('.').last().unwrap_or("app");
-        let resp = client.post(format!("{base}/bundleIds"))
+        let resp = client
+            .post(format!("{base}/bundleIds"))
             .bearer_auth(&token)
             .json(&serde_json::json!({
                 "data": {
@@ -1152,7 +1234,8 @@ async fn create_dev_profile_via_api(
                     }
                 }
             }))
-            .send().await
+            .send()
+            .await
             .context("Failed to create bundleId")?;
         let body: serde_json::Value = resp.json().await?;
         body["data"]["id"].as_str().unwrap_or("").to_string()
@@ -1160,37 +1243,55 @@ async fn create_dev_profile_via_api(
     if bundle_id_resource_id.is_empty() {
         bail!("Could not resolve App ID for {bundle_id}");
     }
-    if let OutputFormat::Text = format { println!(" done"); }
+    if let OutputFormat::Text = format {
+        println!(" done");
+    }
 
     // 3. Find a development certificate
     if let OutputFormat::Text = format {
         print!("    Finding development certificate...");
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
-    let resp = client.get(format!("{base}/certificates"))
+    let resp = client
+        .get(format!("{base}/certificates"))
         .bearer_auth(&token)
         .query(&[("filter[certificateType]", "IOS_DEVELOPMENT,DEVELOPMENT")])
-        .send().await
+        .send()
+        .await
         .context("Failed to query certificates")?;
     let body: serde_json::Value = resp.json().await?;
 
-    let cert_ids: Vec<String> = body["data"].as_array()
-        .map(|arr| arr.iter().filter_map(|c| c["id"].as_str().map(|s| s.to_string())).collect())
+    let cert_ids: Vec<String> = body["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c["id"].as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
     if cert_ids.is_empty() {
         bail!("No iOS development certificates found in your Apple Developer account");
     }
-    if let OutputFormat::Text = format { println!(" done ({})", cert_ids.len()); }
+    if let OutputFormat::Text = format {
+        println!(" done ({})", cert_ids.len());
+    }
 
     // 4. Get all registered device IDs
-    let resp = client.get(format!("{base}/devices"))
+    let resp = client
+        .get(format!("{base}/devices"))
         .bearer_auth(&token)
         .query(&[("filter[platform]", "IOS"), ("limit", "200")])
-        .send().await
+        .send()
+        .await
         .context("Failed to query devices")?;
     let body: serde_json::Value = resp.json().await?;
-    let device_ids: Vec<String> = body["data"].as_array()
-        .map(|arr| arr.iter().filter_map(|d| d["id"].as_str().map(|s| s.to_string())).collect())
+    let device_ids: Vec<String> = body["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|d| d["id"].as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     // 5. Create the provisioning profile
@@ -1199,15 +1300,18 @@ async fn create_dev_profile_via_api(
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
 
-    let cert_relationships: Vec<serde_json::Value> = cert_ids.iter()
+    let cert_relationships: Vec<serde_json::Value> = cert_ids
+        .iter()
         .map(|id| serde_json::json!({"type": "certificates", "id": id}))
         .collect();
-    let device_relationships: Vec<serde_json::Value> = device_ids.iter()
+    let device_relationships: Vec<serde_json::Value> = device_ids
+        .iter()
         .map(|id| serde_json::json!({"type": "devices", "id": id}))
         .collect();
 
     let profile_name = format!("Perry Dev - {bundle_id}");
-    let resp = client.post(format!("{base}/profiles"))
+    let resp = client
+        .post(format!("{base}/profiles"))
         .bearer_auth(&token)
         .json(&serde_json::json!({
             "data": {
@@ -1229,7 +1333,8 @@ async fn create_dev_profile_via_api(
                 }
             }
         }))
-        .send().await
+        .send()
+        .await
         .context("Failed to create provisioning profile")?;
 
     if !resp.status().is_success() {
@@ -1250,11 +1355,16 @@ async fn create_dev_profile_via_api(
         .decode(profile_b64)
         .context("Failed to decode profile content")?;
 
-    if let OutputFormat::Text = format { println!(" done"); }
+    if let OutputFormat::Text = format {
+        println!(" done");
+    }
 
     // Save for future use
     if let Some(home) = dirs::home_dir() {
-        let save_path = home.join(".perry").join(format!("{}_dev.mobileprovision", bundle_id.replace('.', "_")));
+        let save_path = home.join(".perry").join(format!(
+            "{}_dev.mobileprovision",
+            bundle_id.replace('.', "_")
+        ));
         let _ = std::fs::write(&save_path, &profile_data);
     }
 
@@ -1263,7 +1373,7 @@ async fn create_dev_profile_via_api(
 
 /// Generate a JWT for App Store Connect API authentication
 fn generate_asc_jwt(key_id: &str, issuer_id: &str, p8_key: &str) -> Result<String> {
-    use jsonwebtoken::{encode, EncodingKey, Header, Algorithm};
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -1288,11 +1398,9 @@ fn generate_asc_jwt(key_id: &str, issuer_id: &str, p8_key: &str) -> Result<Strin
     header.kid = Some(key_id.to_string());
     header.typ = Some("JWT".to_string());
 
-    let key = EncodingKey::from_ec_pem(p8_key.as_bytes())
-        .context("Failed to parse .p8 key")?;
+    let key = EncodingKey::from_ec_pem(p8_key.as_bytes()).context("Failed to parse .p8 key")?;
 
-    encode(&header, &claims, &key)
-        .context("Failed to generate JWT")
+    encode(&header, &claims, &key).context("Failed to generate JWT")
 }
 
 /// Find project root by walking up from a directory
@@ -1346,9 +1454,7 @@ fn read_app_metadata(project_root: &Path, input: &Path) -> (String, String) {
             // Check [visionos].bundle_id, [ios].bundle_id, [macos].bundle_id, [app].bundle_id, [project].bundle_id, then top-level
             t.get("visionos")
                 .and_then(|i| i.get("bundle_id"))
-                .or_else(|| t.get("ios")
-                .and_then(|i| i.get("bundle_id"))
-                )
+                .or_else(|| t.get("ios").and_then(|i| i.get("bundle_id")))
                 .or_else(|| t.get("macos").and_then(|m| m.get("bundle_id")))
                 .or_else(|| t.get("app").and_then(|a| a.get("bundle_id")))
                 .or_else(|| t.get("project").and_then(|p| p.get("bundle_id")))
@@ -1378,11 +1484,13 @@ fn read_app_metadata(project_root: &Path, input: &Path) -> (String, String) {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let name = toml_name
-        .or(pkg_name)
-        .unwrap_or_else(|| {
-            input.file_stem().and_then(|s| s.to_str()).unwrap_or("app").to_string()
-        });
+    let name = toml_name.or(pkg_name).unwrap_or_else(|| {
+        input
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("app")
+            .to_string()
+    });
 
     let bundle_id = toml_bundle_id
         .or(pkg_bundle_id)
@@ -1506,7 +1614,11 @@ fn detect_signing_identity() -> Option<String> {
     identities
         .iter()
         .find(|n| n.starts_with("Apple Distribution"))
-        .or_else(|| identities.iter().find(|n| n.starts_with("iPhone Distribution")))
+        .or_else(|| {
+            identities
+                .iter()
+                .find(|n| n.starts_with("iPhone Distribution"))
+        })
         .or_else(|| identities.first())
         .cloned()
 }
@@ -1694,7 +1806,10 @@ fn read_perry_toml_entry() -> Option<PathBuf> {
 }
 
 /// Resolve the compilation target and optional device UDID
-fn resolve_target(platform: Option<Platform>, args: &RunArgs) -> Result<(Option<String>, Option<String>)> {
+fn resolve_target(
+    platform: Option<Platform>,
+    args: &RunArgs,
+) -> Result<(Option<String>, Option<String>)> {
     match platform {
         Some(Platform::Web) => Ok((Some("web".to_string()), None)),
         Some(Platform::Android) => {
@@ -1779,7 +1894,10 @@ fn resolve_target(platform: Option<Platform>, args: &RunArgs) -> Result<(Option<
             let names: Vec<String> = simulators.iter().map(|d| d.name.clone()).collect();
             let selection = pick_from_list(&names, "Select Apple Vision Pro simulator")?;
             let dev = &simulators[selection];
-            Ok((Some("visionos-simulator".to_string()), Some(dev.udid.clone())))
+            Ok((
+                Some("visionos-simulator".to_string()),
+                Some(dev.udid.clone()),
+            ))
         }
         Some(Platform::Watchos) => {
             if let Some(ref udid) = args.simulator {
@@ -1808,7 +1926,10 @@ fn resolve_target(platform: Option<Platform>, args: &RunArgs) -> Result<(Option<
             let names: Vec<String> = simulators.iter().map(|d| d.name.clone()).collect();
             let selection = pick_from_list(&names, "Select Apple Watch simulator")?;
             let dev = &simulators[selection];
-            Ok((Some("watchos-simulator".to_string()), Some(dev.udid.clone())))
+            Ok((
+                Some("watchos-simulator".to_string()),
+                Some(dev.udid.clone()),
+            ))
         }
         Some(Platform::Tvos) => {
             if let Some(ref udid) = args.simulator {
@@ -1910,10 +2031,7 @@ fn launch(
             launch_ios_simulator(&result.output_path, bundle_id, udid, format)
         }
         "android" => {
-            let bundle_id = result
-                .bundle_id
-                .as_deref()
-                .unwrap_or("com.perry.app");
+            let bundle_id = result.bundle_id.as_deref().unwrap_or("com.perry.app");
             let serial = device_udid.unwrap_or("");
             build_and_run_android(&result.output_path, bundle_id, serial, format)
         }
@@ -1932,10 +2050,7 @@ fn launch_native(exe_path: &Path, program_args: &[String], format: OutputFormat)
     };
 
     if !exe.exists() {
-        return Err(anyhow!(
-            "Compiled executable not found: {}",
-            exe.display()
-        ));
+        return Err(anyhow!("Compiled executable not found: {}", exe.display()));
     }
 
     if let OutputFormat::Text = format {
@@ -2063,7 +2178,10 @@ fn build_and_run_android(
     }
 
     // Create a build directory alongside the .so
-    let build_dir = so_path.parent().unwrap_or(Path::new(".")).join("android-build");
+    let build_dir = so_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("android-build");
     if build_dir.exists() {
         std::fs::remove_dir_all(&build_dir).ok();
     }
@@ -2146,7 +2264,12 @@ fn build_and_run_android(
         .arg("assembleDebug")
         .current_dir(&build_dir)
         .status()
-        .map_err(|e| anyhow!("Failed to run Gradle: {}. Is the Android SDK/Gradle installed?", e))?;
+        .map_err(|e| {
+            anyhow!(
+                "Failed to run Gradle: {}. Is the Android SDK/Gradle installed?",
+                e
+            )
+        })?;
 
     if !gradle_status.success() {
         bail!("Gradle build failed. Check the output above for errors.");
@@ -2179,15 +2302,24 @@ fn debug_sign_apk(apk_path: &Path, format: OutputFormat) -> Result<PathBuf> {
         }
         let status = Command::new("keytool")
             .args([
-                "-genkeypair", "-v",
-                "-keystore", &debug_keystore.to_string_lossy(),
-                "-storepass", "android",
-                "-alias", "androiddebugkey",
-                "-keypass", "android",
-                "-keyalg", "RSA",
-                "-keysize", "2048",
-                "-validity", "10000",
-                "-dname", "CN=Android Debug,O=Android,C=US",
+                "-genkeypair",
+                "-v",
+                "-keystore",
+                &debug_keystore.to_string_lossy(),
+                "-storepass",
+                "android",
+                "-alias",
+                "androiddebugkey",
+                "-keypass",
+                "android",
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+                "-validity",
+                "10000",
+                "-dname",
+                "CN=Android Debug,O=Android,C=US",
             ])
             .status()
             .map_err(|e| anyhow!("keytool not found: {}", e))?;
@@ -2228,10 +2360,14 @@ fn debug_sign_apk(apk_path: &Path, format: OutputFormat) -> Result<PathBuf> {
         let status = Command::new(&signer)
             .args([
                 "sign",
-                "--ks", &debug_keystore.to_string_lossy(),
-                "--ks-pass", "pass:android",
-                "--ks-key-alias", "androiddebugkey",
-                "--key-pass", "pass:android",
+                "--ks",
+                &debug_keystore.to_string_lossy(),
+                "--ks-pass",
+                "pass:android",
+                "--ks-key-alias",
+                "androiddebugkey",
+                "--key-pass",
+                "pass:android",
             ])
             .arg(apk_path)
             .status()
@@ -2243,9 +2379,12 @@ fn debug_sign_apk(apk_path: &Path, format: OutputFormat) -> Result<PathBuf> {
         // Fallback: use jarsigner
         let status = Command::new("jarsigner")
             .args([
-                "-keystore", &debug_keystore.to_string_lossy(),
-                "-storepass", "android",
-                "-keypass", "android",
+                "-keystore",
+                &debug_keystore.to_string_lossy(),
+                "-storepass",
+                "android",
+                "-keypass",
+                "android",
                 "-signedjar",
             ])
             .arg(apk_path)
@@ -2263,7 +2402,10 @@ fn debug_sign_apk(apk_path: &Path, format: OutputFormat) -> Result<PathBuf> {
 
 /// Find apksigner in the Android SDK build-tools
 fn find_apksigner(android_home: &str) -> Option<PathBuf> {
-    find_latest_build_tool(&PathBuf::from(android_home).join("build-tools"), "apksigner")
+    find_latest_build_tool(
+        &PathBuf::from(android_home).join("build-tools"),
+        "apksigner",
+    )
 }
 
 /// Find the latest version of a build tool
@@ -2307,7 +2449,12 @@ fn install_and_launch_android(
     if !install.status.success() {
         let stderr = String::from_utf8_lossy(&install.stderr);
         let stdout = String::from_utf8_lossy(&install.stdout);
-        return Err(anyhow!("Failed to install APK on device {}: {}{}", serial, stderr, stdout));
+        return Err(anyhow!(
+            "Failed to install APK on device {}: {}{}",
+            serial,
+            stderr,
+            stdout
+        ));
     }
 
     if let OutputFormat::Text = format {
@@ -2350,9 +2497,7 @@ fn install_and_launch_android(
         let _ = Command::new("adb")
             .args(["-s", serial, "logcat", "-c"])
             .status();
-        let _ = Command::new("adb")
-            .args(["-s", serial, "logcat"])
-            .status();
+        let _ = Command::new("adb").args(["-s", serial, "logcat"]).status();
     }
 
     Ok(())
@@ -2643,10 +2788,7 @@ fn detect_android_devices() -> Result<Vec<DeviceInfo>> {
                 .find(|p| p.starts_with("model:"))
                 .map(|p| p.trim_start_matches("model:").to_string())
                 .unwrap_or_else(|| serial.clone());
-            devices.push(DeviceInfo {
-                udid: serial,
-                name,
-            });
+            devices.push(DeviceInfo { udid: serial, name });
         }
     }
 

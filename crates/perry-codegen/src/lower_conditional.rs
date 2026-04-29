@@ -41,9 +41,7 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
         let bits = blk.bitcast_double_to_i64(cond_val);
         return blk.icmp_ne(I64, &bits, crate::nanbox::TAG_FALSE_I64);
     }
-    let i32_truthy = ctx
-        .block()
-        .call(I32, "js_is_truthy", &[(DOUBLE, cond_val)]);
+    let i32_truthy = ctx.block().call(I32, "js_is_truthy", &[(DOUBLE, cond_val)]);
     ctx.block().icmp_ne(I32, &i32_truthy, "0")
 }
 
@@ -87,7 +85,10 @@ pub(crate) fn lower_conditional(
     ctx.current_block = merge_idx;
     Ok(ctx.block().phi(
         DOUBLE,
-        &[(&then_val, &then_after_label), (&else_val, &else_after_label)],
+        &[
+            (&then_val, &then_after_label),
+            (&else_val, &else_after_label),
+        ],
     ))
 }
 
@@ -147,10 +148,9 @@ pub(crate) fn lower_logical(
         }
 
         ctx.current_block = merge_idx;
-        return Ok(ctx.block().phi(
-            DOUBLE,
-            &[(&l, &l_block_label), (&r, &r_block_label)],
-        ));
+        return Ok(ctx
+            .block()
+            .phi(DOUBLE, &[(&l, &l_block_label), (&r, &r_block_label)]));
     }
 
     // Lower left in the current block.

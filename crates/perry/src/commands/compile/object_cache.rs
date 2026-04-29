@@ -97,10 +97,7 @@ pub fn compute_object_cache_key(
     // emit_ir_only=true, but include it so key-space is disjoint if the
     // caller ever forgets to check).
     h.field("v", perry_version);
-    h.field(
-        "ir_only",
-        if opts.emit_ir_only { "1" } else { "0" },
-    );
+    h.field("ir_only", if opts.emit_ir_only { "1" } else { "0" });
 
     // Module source hash — captures the module's HIR input verbatim.
     h.field("src", &format!("{:016x}", source_hash));
@@ -121,7 +118,10 @@ pub fn compute_object_cache_key(
 
     // Ordered lists (order is significant — topological init, FFI index,
     // bundled extension order, etc.)
-    h.field("non_entry_prefixes", &opts.non_entry_module_prefixes.join("|"));
+    h.field(
+        "non_entry_prefixes",
+        &opts.non_entry_module_prefixes.join("|"),
+    );
     h.field("mod_init_names", &opts.native_module_init_names.join("|"));
     h.field("js_specs", &opts.js_module_specifiers.join("|"));
     {
@@ -199,12 +199,14 @@ pub fn compute_object_cache_key(
                 c.constructor_param_count,
                 c.parent_name.as_deref().unwrap_or(""),
                 c.local_alias.as_deref().unwrap_or(""),
-                c.source_class_id
-                    .map(|i| i.to_string())
-                    .unwrap_or_default(),
+                c.source_class_id.map(|i| i.to_string()).unwrap_or_default(),
                 c.field_names.join(","),
                 c.method_names.join(","),
-                c.method_param_counts.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(","),
+                c.method_param_counts
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
             ));
         }
         h.field("imported_classes", &buf);
@@ -579,10 +581,14 @@ mod object_cache_tests {
         // sort entries so two equivalent maps produce the same hash.
         let mut a = empty_opts();
         let mut b = empty_opts();
-        a.import_function_prefixes.insert("foo".into(), "mod_a".into());
-        a.import_function_prefixes.insert("bar".into(), "mod_b".into());
-        b.import_function_prefixes.insert("bar".into(), "mod_b".into());
-        b.import_function_prefixes.insert("foo".into(), "mod_a".into());
+        a.import_function_prefixes
+            .insert("foo".into(), "mod_a".into());
+        a.import_function_prefixes
+            .insert("bar".into(), "mod_b".into());
+        b.import_function_prefixes
+            .insert("bar".into(), "mod_b".into());
+        b.import_function_prefixes
+            .insert("foo".into(), "mod_a".into());
         assert_eq!(
             compute_object_cache_key(&a, 1, "0.5.156"),
             compute_object_cache_key(&b, 1, "0.5.156")

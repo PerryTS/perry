@@ -26,10 +26,7 @@ pub struct WidgetBundle {
 /// - {Name}Glue.swift: Native FFI bridge (if provider_func_name is set)
 /// - {Name}Intent.swift: AppIntent configuration (if config_params is non-empty)
 /// - Info.plist
-pub fn compile_widget(
-    widget: &WidgetDecl,
-    app_bundle_id: &str,
-) -> Result<WidgetBundle> {
+pub fn compile_widget(widget: &WidgetDecl, app_bundle_id: &str) -> Result<WidgetBundle> {
     let safe_name = sanitize_kind(&widget.kind);
     let bundle_id = format!("{}.widget", app_bundle_id);
 
@@ -62,9 +59,7 @@ pub fn compile_widget(
     swift_source.push_str("\n");
     swift_source.push_str(&widget_bundle);
 
-    let mut swift_files = vec![
-        (format!("{}.swift", safe_name), swift_source),
-    ];
+    let mut swift_files = vec![(format!("{}.swift", safe_name), swift_source)];
 
     // Generate AppIntent configuration if config params exist
     if !widget.config_params.is_empty() {

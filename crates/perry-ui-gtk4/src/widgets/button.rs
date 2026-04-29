@@ -45,9 +45,7 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
     });
 
     button.connect_clicked(move |_btn| {
-        let closure_f64 = BUTTON_CALLBACKS.with(|cbs| {
-            cbs.borrow().get(&callback_id).copied()
-        });
+        let closure_f64 = BUTTON_CALLBACKS.with(|cbs| cbs.borrow().get(&callback_id).copied());
         if let Some(closure_f64) = closure_f64 {
             let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
             unsafe {
@@ -59,8 +57,12 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
     let handle = super::register_widget(button.upcast());
     #[cfg(feature = "geisterhand")]
     {
-        extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-        unsafe { perry_geisterhand_register(handle, 0, 0, on_press, label_ptr); }
+        extern "C" {
+            fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+        }
+        unsafe {
+            perry_geisterhand_register(handle, 0, 0, on_press, label_ptr);
+        }
     }
     handle
 }

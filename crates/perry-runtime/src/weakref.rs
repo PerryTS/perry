@@ -76,12 +76,7 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
 /// provided, we still record an `[undefined, held]` pair so the registration count
 /// is correct (but it can never be unregistered).
 #[no_mangle]
-pub extern "C" fn js_finreg_register(
-    registry: f64,
-    _target: f64,
-    held: f64,
-    token: f64,
-) -> f64 {
+pub extern "C" fn js_finreg_register(registry: f64, _target: f64, held: f64, token: f64) -> f64 {
     let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -291,7 +286,11 @@ pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
             js_array_push_f64(new_arr, pair_val_f);
         }
         js_object_set_field(map_ptr, 0, JSValue::array_ptr(new_arr));
-        if found { f64::from_bits(TAG_TRUE) } else { f64::from_bits(TAG_FALSE) }
+        if found {
+            f64::from_bits(TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        }
     }
 }
 

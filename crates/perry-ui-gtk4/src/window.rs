@@ -104,7 +104,9 @@ pub fn on_focus_lost(window_handle: i64, callback: f64) {
             win.connect_notify(Some("is-active"), move |window, _| {
                 if !window.is_active() {
                     let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
-                    unsafe { js_closure_call0(ptr); }
+                    unsafe {
+                        js_closure_call0(ptr);
+                    }
                 }
             });
         }

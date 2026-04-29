@@ -1,8 +1,8 @@
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_ui_kit::{UISlider, UIView};
 use objc2_foundation::NSObject;
+use objc2_ui_kit::{UISlider, UIView};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -64,10 +64,8 @@ pub fn set_value(handle: i64, value: f64) {
 /// Create a UISlider with min, max, initial values and onChange callback.
 pub fn create(min: f64, max: f64, initial: f64, on_change: f64) -> i64 {
     unsafe {
-        let slider: Retained<UISlider> = msg_send![
-            objc2::runtime::AnyClass::get(c"UISlider").unwrap(),
-            new
-        ];
+        let slider: Retained<UISlider> =
+            msg_send![objc2::runtime::AnyClass::get(c"UISlider").unwrap(), new];
         let _: () = msg_send![&*slider, setMinimumValue: min as f32];
         let _: () = msg_send![&*slider, setMaximumValue: max as f32];
         let _: () = msg_send![&*slider, setValue: initial as f32];
@@ -84,7 +82,8 @@ pub fn create(min: f64, max: f64, initial: f64, on_change: f64) -> i64 {
 
         let sel = Sel::register(c"sliderChanged:");
         // UIControlEventValueChanged = 4096
-        let _: () = msg_send![&*slider, addTarget: &*target, action: sel, forControlEvents: 4096u64];
+        let _: () =
+            msg_send![&*slider, addTarget: &*target, action: sel, forControlEvents: 4096u64];
 
         std::mem::forget(target);
 

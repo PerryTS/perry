@@ -25,7 +25,12 @@ pub fn emit_bridge(widget: &WidgetDecl, name: &str, package: &str) -> String {
 
     if let Some(ref func_name) = widget.provider_func_name {
         writeln!(out, "    @JvmStatic").unwrap();
-        writeln!(out, "    private external fun {}(configJson: String): String", func_name).unwrap();
+        writeln!(
+            out,
+            "    private external fun {}(configJson: String): String",
+            func_name
+        )
+        .unwrap();
         writeln!(out).unwrap();
         writeln!(out, "    @JvmStatic").unwrap();
         writeln!(out, "    private external fun perry_runtime_widget_init()").unwrap();
@@ -42,7 +47,12 @@ pub fn emit_bridge(widget: &WidgetDecl, name: &str, package: &str) -> String {
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
 
-    writeln!(out, "    fun fetchEntry(context: Context): {}Entry {{", name).unwrap();
+    writeln!(
+        out,
+        "    fun fetchEntry(context: Context): {}Entry {{",
+        name
+    )
+    .unwrap();
     writeln!(out, "        appContext = context.applicationContext").unwrap();
 
     if let Some(ref func_name) = widget.provider_func_name {
@@ -50,18 +60,24 @@ pub fn emit_bridge(widget: &WidgetDecl, name: &str, package: &str) -> String {
         writeln!(out, "        val resultJson = {}(\"{{}}\")", func_name).unwrap();
         writeln!(out, "        return try {{").unwrap();
         writeln!(out, "            val result = JSONObject(resultJson)").unwrap();
-        writeln!(out, "            val entries = result.getJSONArray(\"entries\")").unwrap();
+        writeln!(
+            out,
+            "            val entries = result.getJSONArray(\"entries\")"
+        )
+        .unwrap();
         writeln!(out, "            if (entries.length() > 0) {{").unwrap();
         writeln!(out, "                val e = entries.getJSONObject(0)").unwrap();
         write!(out, "                {}Entry(", name).unwrap();
-        let field_strs: Vec<String> = widget.entry_fields.iter()
-            .map(|(fname, ftype)| {
-                match ftype {
-                    WidgetFieldType::String => format!("{} = e.optString(\"{}\", \"\")", fname, fname),
-                    WidgetFieldType::Number => format!("{} = e.optDouble(\"{}\", 0.0)", fname, fname),
-                    WidgetFieldType::Boolean => format!("{} = e.optBoolean(\"{}\", false)", fname, fname),
-                    _ => format!("{} = e.optString(\"{}\", \"\")", fname, fname),
+        let field_strs: Vec<String> = widget
+            .entry_fields
+            .iter()
+            .map(|(fname, ftype)| match ftype {
+                WidgetFieldType::String => format!("{} = e.optString(\"{}\", \"\")", fname, fname),
+                WidgetFieldType::Number => format!("{} = e.optDouble(\"{}\", 0.0)", fname, fname),
+                WidgetFieldType::Boolean => {
+                    format!("{} = e.optBoolean(\"{}\", false)", fname, fname)
                 }
+                _ => format!("{} = e.optString(\"{}\", \"\")", fname, fname),
             })
             .collect();
         write!(out, "{}", field_strs.join(", ")).unwrap();
@@ -76,7 +92,9 @@ pub fn emit_bridge(widget: &WidgetDecl, name: &str, package: &str) -> String {
     writeln!(out).unwrap();
 
     write!(out, "    private fun defaultEntry() = {}Entry(", name).unwrap();
-    let defaults: Vec<String> = widget.entry_fields.iter()
+    let defaults: Vec<String> = widget
+        .entry_fields
+        .iter()
         .map(|(_, ftype)| kotlin_default_value(ftype))
         .collect();
     write!(out, "{}", defaults.join(", ")).unwrap();

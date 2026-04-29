@@ -375,11 +375,7 @@ pub(super) fn lower_builtin_new(
             let exec_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let exec_handle = unbox_to_i64(blk, &exec_box);
-            let p = blk.call(
-                I64,
-                "js_promise_new_with_executor",
-                &[(I64, &exec_handle)],
-            );
+            let p = blk.call(I64, "js_promise_new_with_executor", &[(I64, &exec_handle)]);
             Ok(Some(nanbox_pointer_inline(blk, &p)))
         }
         "WeakMap" => {
@@ -425,11 +421,8 @@ pub(super) fn lower_builtin_new(
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
-            ctx.pending_declares.push((
-                "js_ws_server_new".to_string(),
-                I64,
-                vec![DOUBLE],
-            ));
+            ctx.pending_declares
+                .push(("js_ws_server_new".to_string(), I64, vec![DOUBLE]));
             let blk = ctx.block();
             let handle = blk.call(I64, "js_ws_server_new", &[(DOUBLE, &opts)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))

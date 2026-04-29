@@ -6,15 +6,15 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::SystemServices::SS_LEFT;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, alloc_control_id, register_widget};
+use super::{alloc_control_id, register_widget, WidgetKind};
 
 fn str_from_header(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
@@ -36,7 +36,7 @@ fn to_wide(s: &str) -> Vec<u16> {
 /// Per-widget text color (COLORREF) and background brush
 #[cfg(target_os = "windows")]
 struct TextStyle {
-    color: u32,         // COLORREF (0x00BBGGRR)
+    color: u32, // COLORREF (0x00BBGGRR)
     bg_brush: HBRUSH,
     font: HFONT,
 }
@@ -69,12 +69,16 @@ pub fn create(text_ptr: *const u8) -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(wide.as_ptr()),
                 WINDOW_STYLE(SS_LEFT.0 | WS_CHILD.0 | WS_VISIBLE.0),
-                0, 0, 100, 20,
+                0,
+                0,
+                100,
+                20,
                 super::get_parking_hwnd(),
                 HMENU(control_id as *mut _),
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
             let handle = register_widget(hwnd, WidgetKind::Text, control_id);
 
@@ -119,9 +123,7 @@ pub fn set_text_str(handle: i64, text: &str) {
 
 /// Set the text color (RGBA 0.0-1.0).
 pub fn set_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
-    let cr = ((r * 255.0) as u32)
-        | (((g * 255.0) as u32) << 8)
-        | (((b * 255.0) as u32) << 16);
+    let cr = ((r * 255.0) as u32) | (((g * 255.0) as u32) << 8) | (((b * 255.0) as u32) << 16);
 
     #[cfg(target_os = "windows")]
     {
@@ -174,11 +176,25 @@ pub fn set_font_weight(handle: i64, size: f64, weight: f64) {
     {
         // Perry weight: 0.0=ultralight, 0.25=light, 0.4=regular, 0.5=medium,
         // 0.6=semibold, 0.7=bold, 1.0=heavy. Map to Win32 FW_ values.
-        let win32_weight = if weight >= 0.9 { 800 }      // heavy/black
-            else if weight >= 0.65 { 700 }                 // bold
-            else if weight >= 0.55 { 600 }                 // semi-bold
-            else if weight >= 0.45 { 500 }                 // medium
-            else { 400 };                                   // regular
+        let win32_weight = if weight >= 0.9 {
+            800
+        }
+        // heavy/black
+        else if weight >= 0.65 {
+            700
+        }
+        // bold
+        else if weight >= 0.55 {
+            600
+        }
+        // semi-bold
+        else if weight >= 0.45 {
+            500
+        }
+        // medium
+        else {
+            400
+        }; // regular
         let font = create_font(size as i32, win32_weight);
         apply_font(handle, font);
     }
@@ -210,7 +226,13 @@ pub fn set_font_family(handle: i64, family_ptr: *const u8) {
             if let Some(style) = styles.get(&handle) {
                 if !style.font.is_invalid() {
                     let mut lf = LOGFONTW::default();
-                    unsafe { GetObjectW(style.font, std::mem::size_of::<LOGFONTW>() as i32, Some(&mut lf as *mut _ as *mut _)); }
+                    unsafe {
+                        GetObjectW(
+                            style.font,
+                            std::mem::size_of::<LOGFONTW>() as i32,
+                            Some(&mut lf as *mut _ as *mut _),
+                        );
+                    }
                     // Undo DPI scaling to get the logical size back
                     let logical_size = ((-lf.lfHeight) as f64 / crate::app::get_dpi_scale()) as i32;
                     return (logical_size.max(1), lf.lfWeight);
@@ -243,7 +265,9 @@ pub fn set_selectable(handle: i64, _selectable: bool) {
 fn find_ancestor_brush(mut hwnd: HWND) -> Option<HBRUSH> {
     for _ in 0..10 {
         if let Ok(parent) = unsafe { GetParent(hwnd) } {
-            if parent.0.is_null() { break; }
+            if parent.0.is_null() {
+                break;
+            }
             let parent_handle = super::find_handle_by_hwnd(parent);
             if parent_handle > 0 {
                 if let Some(brush) = super::get_bg_brush(parent_handle) {
@@ -261,9 +285,7 @@ fn find_ancestor_brush(mut hwnd: HWND) -> Option<HBRUSH> {
 /// Handle WM_CTLCOLORSTATIC — set text color and background for styled text widgets.
 #[cfg(target_os = "windows")]
 pub fn handle_ctlcolor(hdc: HDC, child_hwnd: HWND) -> Option<LRESULT> {
-    let handle = HWND_TO_HANDLE.with(|m| {
-        m.borrow().get(&(child_hwnd.0 as isize)).copied()
-    });
+    let handle = HWND_TO_HANDLE.with(|m| m.borrow().get(&(child_hwnd.0 as isize)).copied());
 
     let handle = handle?;
 
@@ -275,7 +297,9 @@ pub fn handle_ctlcolor(hdc: HDC, child_hwnd: HWND) -> Option<LRESULT> {
     // With WS_CLIPCHILDREN on parent VStack/HStack, the parent doesn't paint
     // under child controls. Return the ancestor brush so the Text control fills
     // its own background with the correct color.
-    let bg_brush = ancestor_brush.map(|b| LRESULT(b.0 as isize)).unwrap_or(null_brush);
+    let bg_brush = ancestor_brush
+        .map(|b| LRESULT(b.0 as isize))
+        .unwrap_or(null_brush);
 
     TEXT_STYLES.with(|styles| {
         let styles = styles.borrow();
@@ -285,12 +309,16 @@ pub fn handle_ctlcolor(hdc: HDC, child_hwnd: HWND) -> Option<LRESULT> {
                 SetBkMode(hdc, TRANSPARENT);
             }
             if !style.font.is_invalid() {
-                unsafe { SelectObject(hdc, style.font); }
+                unsafe {
+                    SelectObject(hdc, style.font);
+                }
             }
             Some(bg_brush)
         } else {
             if ancestor_brush.is_some() {
-                unsafe { SetBkMode(hdc, TRANSPARENT); }
+                unsafe {
+                    SetBkMode(hdc, TRANSPARENT);
+                }
                 Some(bg_brush)
             } else {
                 None
@@ -316,19 +344,19 @@ fn create_font_with_family(size: i32, weight: i32, family: &str) -> HFONT {
     let scaled_size = (size as f64 * crate::app::get_dpi_scale()) as i32;
     unsafe {
         CreateFontW(
-            -scaled_size,       // nHeight (negative = character height, DPI-scaled)
-            0,                  // nWidth (0 = default)
-            0,                  // nEscapement
-            0,                  // nOrientation
-            weight,             // fnWeight
-            0,                  // fdwItalic
-            0,                  // fdwUnderline
-            0,                  // fdwStrikeOut
-            0,                  // fdwCharSet (DEFAULT_CHARSET)
-            0,                  // fdwOutputPrecision
-            0,                  // fdwClipPrecision
-            0,                  // fdwQuality
-            0,                  // fdwPitchAndFamily
+            -scaled_size, // nHeight (negative = character height, DPI-scaled)
+            0,            // nWidth (0 = default)
+            0,            // nEscapement
+            0,            // nOrientation
+            weight,       // fnWeight
+            0,            // fdwItalic
+            0,            // fdwUnderline
+            0,            // fdwStrikeOut
+            0,            // fdwCharSet (DEFAULT_CHARSET)
+            0,            // fdwOutputPrecision
+            0,            // fdwClipPrecision
+            0,            // fdwQuality
+            0,            // fdwPitchAndFamily
             windows::core::PCWSTR(family_wide.as_ptr()),
         )
     }
@@ -345,7 +373,9 @@ fn apply_font(handle: i64, font: HFONT) {
         });
         // Clean up old font
         if !entry.font.is_invalid() {
-            unsafe { let _ = DeleteObject(entry.font); }
+            unsafe {
+                let _ = DeleteObject(entry.font);
+            }
         }
         entry.font = font;
     });
@@ -359,8 +389,7 @@ fn apply_font(handle: i64, font: HFONT) {
 
 /// Stored text-decoration values per widget (issue #185 Phase B closure).
 /// 0=none, 1=underline, 2=strikethrough.
-static DECORATION_VALUES: std::sync::Mutex<Vec<(i64, i64)>> =
-    std::sync::Mutex::new(Vec::new());
+static DECORATION_VALUES: std::sync::Mutex<Vec<(i64, i64)>> = std::sync::Mutex::new(Vec::new());
 
 /// Set text decoration on a Text widget (issue #185 Phase B / #210
 /// closure). Values: 0=none, 1=underline, 2=strikethrough.
@@ -399,7 +428,10 @@ pub fn set_decoration(handle: i64, decoration: i64) {
 fn apply_decoration(handle: i64, decoration: i64) {
     let existing = TEXT_STYLES.with(|styles| {
         let styles = styles.borrow();
-        styles.get(&handle).map(|s| s.font).filter(|f| !f.is_invalid())
+        styles
+            .get(&handle)
+            .map(|s| s.font)
+            .filter(|f| !f.is_invalid())
     });
 
     let mut lf = LOGFONTW::default();

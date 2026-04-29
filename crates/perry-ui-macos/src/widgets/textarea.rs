@@ -2,7 +2,9 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_app_kit::NSView;
-use objc2_foundation::{NSNotification, NSNotificationCenter, NSObject, NSString, MainThreadMarker};
+use objc2_foundation::{
+    MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSString,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -74,7 +76,9 @@ impl PerryTextAreaObserver {
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const crate::string_header::StringHeader;
         let len = (*header).byte_len as usize;
@@ -151,7 +155,8 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         observer.ivars().callback_key.set(observer_addr);
 
         TEXTAREA_CALLBACKS.with(|cbs| {
-            cbs.borrow_mut().insert(observer_addr, (on_change, text_view as *const AnyObject));
+            cbs.borrow_mut()
+                .insert(observer_addr, (on_change, text_view as *const AnyObject));
         });
 
         let center = NSNotificationCenter::defaultCenter();

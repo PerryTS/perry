@@ -138,7 +138,10 @@ pub(crate) fn send_event(event: &str, dims: &[(&str, &str)]) {
     };
 
     let event = event.to_string();
-    let dims: Vec<(String, String)> = dims.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let dims: Vec<(String, String)> = dims
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     let client_id = config.client_id.clone();
 
     let (tx, rx) = std::sync::mpsc::channel();

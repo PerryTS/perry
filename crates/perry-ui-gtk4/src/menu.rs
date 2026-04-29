@@ -1,13 +1,20 @@
-use gtk4::prelude::*;
 use gtk4::gio;
+use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// Stored menu item — regular item, separator, or submenu.
 enum MenuItemEntry {
-    Item { title: String, callback: f64, shortcut: Option<String> },
+    Item {
+        title: String,
+        callback: f64,
+        shortcut: Option<String>,
+    },
     Separator,
-    Submenu { title: String, submenu_handle: i64 },
+    Submenu {
+        title: String,
+        submenu_handle: i64,
+    },
 }
 
 thread_local! {
@@ -57,20 +64,33 @@ pub fn add_item(menu_handle: i64, title_ptr: *const u8, callback: f64) {
         let mut menus = m.borrow_mut();
         let idx = (menu_handle - 1) as usize;
         if idx < menus.len() {
-            menus[idx].push(MenuItemEntry::Item { title, callback, shortcut: None });
+            menus[idx].push(MenuItemEntry::Item {
+                title,
+                callback,
+                shortcut: None,
+            });
         }
     });
 }
 
 /// Add an item with a keyboard shortcut.
-pub fn add_item_with_shortcut(menu_handle: i64, title_ptr: *const u8, callback: f64, shortcut_ptr: *const u8) {
+pub fn add_item_with_shortcut(
+    menu_handle: i64,
+    title_ptr: *const u8,
+    callback: f64,
+    shortcut_ptr: *const u8,
+) {
     let title = str_from_header(title_ptr).to_string();
     let shortcut = str_from_header(shortcut_ptr).to_string();
     MENUS.with(|m| {
         let mut menus = m.borrow_mut();
         let idx = (menu_handle - 1) as usize;
         if idx < menus.len() {
-            menus[idx].push(MenuItemEntry::Item { title, callback, shortcut: Some(shortcut) });
+            menus[idx].push(MenuItemEntry::Item {
+                title,
+                callback,
+                shortcut: Some(shortcut),
+            });
         }
     });
 }
@@ -104,7 +124,10 @@ pub fn add_submenu(menu_handle: i64, title_ptr: *const u8, submenu_handle: i64) 
         let mut menus = m.borrow_mut();
         let idx = (menu_handle - 1) as usize;
         if idx < menus.len() {
-            menus[idx].push(MenuItemEntry::Submenu { title, submenu_handle });
+            menus[idx].push(MenuItemEntry::Submenu {
+                title,
+                submenu_handle,
+            });
         }
     });
 }
@@ -154,16 +177,21 @@ fn build_gio_menu(menu_handle: i64, app: &gtk4::Application) -> gio::Menu {
         let idx = (menu_handle - 1) as usize;
         if idx < menus.len() {
             // Clone the data we need without holding the borrow
-            menus[idx].iter().map(|entry| {
-                match entry {
-                    MenuItemEntry::Item { title, callback, shortcut } =>
-                        (0, title.clone(), *callback, shortcut.clone(), 0),
-                    MenuItemEntry::Separator =>
-                        (1, String::new(), 0.0, None, 0),
-                    MenuItemEntry::Submenu { title, submenu_handle } =>
-                        (2, title.clone(), 0.0, None, *submenu_handle),
-                }
-            }).collect()
+            menus[idx]
+                .iter()
+                .map(|entry| match entry {
+                    MenuItemEntry::Item {
+                        title,
+                        callback,
+                        shortcut,
+                    } => (0, title.clone(), *callback, shortcut.clone(), 0),
+                    MenuItemEntry::Separator => (1, String::new(), 0.0, None, 0),
+                    MenuItemEntry::Submenu {
+                        title,
+                        submenu_handle,
+                    } => (2, title.clone(), 0.0, None, *submenu_handle),
+                })
+                .collect()
         } else {
             Vec::new()
         }
@@ -191,9 +219,8 @@ fn build_gio_menu(menu_handle: i64, app: &gtk4::Application) -> gio::Menu {
                 let action = gio::SimpleAction::new(&action_name.1, None);
                 let action_name_clone = action_name.1.clone();
                 action.connect_activate(move |_action, _param| {
-                    let closure_f64 = MENU_ITEM_CALLBACKS.with(|cbs| {
-                        cbs.borrow().get(&action_name_clone).copied()
-                    });
+                    let closure_f64 = MENU_ITEM_CALLBACKS
+                        .with(|cbs| cbs.borrow().get(&action_name_clone).copied());
                     if let Some(closure_f64) = closure_f64 {
                         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
                         unsafe {
@@ -293,13 +320,19 @@ pub fn set_context_menu(widget_handle: i64, menu_handle: i64) {
             let menus = m.borrow();
             let idx = (menu_handle - 1) as usize;
             if idx < menus.len() {
-                menus[idx].iter().filter_map(|entry| {
-                    if let MenuItemEntry::Item { title, callback, .. } = entry {
-                        Some((title.clone(), *callback))
-                    } else {
-                        None
-                    }
-                }).collect()
+                menus[idx]
+                    .iter()
+                    .filter_map(|entry| {
+                        if let MenuItemEntry::Item {
+                            title, callback, ..
+                        } = entry
+                        {
+                            Some((title.clone(), *callback))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
             } else {
                 Vec::new()
             }
@@ -323,9 +356,8 @@ pub fn set_context_menu(widget_handle: i64, menu_handle: i64) {
             let action = gio::SimpleAction::new(&action_name, None);
             let action_name_clone = action_name.clone();
             action.connect_activate(move |_action, _param| {
-                let closure_f64 = MENU_ITEM_CALLBACKS.with(|cbs| {
-                    cbs.borrow().get(&action_name_clone).copied()
-                });
+                let closure_f64 =
+                    MENU_ITEM_CALLBACKS.with(|cbs| cbs.borrow().get(&action_name_clone).copied());
                 if let Some(closure_f64) = closure_f64 {
                     let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
                     unsafe {

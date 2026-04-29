@@ -32,7 +32,11 @@ impl Span {
 
     /// Create a new span.
     pub fn new(file_id: FileId, start: u32, end: u32) -> Self {
-        Self { file_id, start, end }
+        Self {
+            file_id,
+            start,
+            end,
+        }
     }
 
     /// Check if this is a dummy/unknown span.

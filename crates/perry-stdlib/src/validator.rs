@@ -59,8 +59,9 @@ pub unsafe extern "C" fn js_validator_is_uuid(input_ptr: *const StringHeader) ->
 
     // Simple UUID regex pattern
     let uuid_pattern = regex::Regex::new(
-        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-    ).unwrap();
+        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+    )
+    .unwrap();
 
     if uuid_pattern.is_match(&input) {
         1.0
@@ -186,7 +187,10 @@ pub unsafe extern "C" fn js_validator_is_hexadecimal(input_ptr: *const StringHea
     }
 
     // Remove optional 0x prefix
-    let to_check = input.strip_prefix("0x").or_else(|| input.strip_prefix("0X")).unwrap_or(&input);
+    let to_check = input
+        .strip_prefix("0x")
+        .or_else(|| input.strip_prefix("0X"))
+        .unwrap_or(&input);
 
     if to_check.is_empty() {
         return 0.0;
@@ -328,7 +332,11 @@ pub unsafe extern "C" fn js_validator_is_lowercase(input_ptr: *const StringHeade
         None => return 0.0,
     };
 
-    if input.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_lowercase()) {
+    if input
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .all(|c| c.is_lowercase())
+    {
         1.0
     } else {
         0.0
@@ -344,7 +352,11 @@ pub unsafe extern "C" fn js_validator_is_uppercase(input_ptr: *const StringHeade
         None => return 0.0,
     };
 
-    if input.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase()) {
+    if input
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .all(|c| c.is_uppercase())
+    {
         1.0
     } else {
         0.0

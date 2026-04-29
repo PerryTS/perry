@@ -1,7 +1,7 @@
+use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use gtk4::prelude::*;
 
 extern "C" {
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
@@ -27,11 +27,10 @@ fn str_from_header(ptr: *const u8) -> &'static str {
 }
 
 fn prefs_path() -> PathBuf {
-    let config = std::env::var("XDG_CONFIG_HOME")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{}/.config", home)
-        });
+    let config = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        format!("{}/.config", home)
+    });
     PathBuf::from(config).join("perry")
 }
 
@@ -81,7 +80,9 @@ fn save_prefs() {
 pub fn open_url(url_ptr: *const u8) {
     let url = str_from_header(url_ptr);
     // Try gio first, fall back to xdg-open
-    if gtk4::gio::AppInfo::launch_default_for_uri(url, None::<&gtk4::gio::AppLaunchContext>).is_err() {
+    if gtk4::gio::AppInfo::launch_default_for_uri(url, None::<&gtk4::gio::AppLaunchContext>)
+        .is_err()
+    {
         let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     }
 }

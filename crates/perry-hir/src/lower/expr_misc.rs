@@ -34,7 +34,11 @@ pub(super) fn lower_cond(ctx: &mut LoweringContext, cond: &ast::CondExpr) -> Res
     let condition = Box::new(lower_expr(ctx, &cond.test)?);
     let then_expr = Box::new(lower_expr(ctx, &cond.cons)?);
     let else_expr = Box::new(lower_expr(ctx, &cond.alt)?);
-    Ok(Expr::Conditional { condition, then_expr, else_expr })
+    Ok(Expr::Conditional {
+        condition,
+        then_expr,
+        else_expr,
+    })
 }
 
 pub(super) fn lower_await(ctx: &mut LoweringContext, await_expr: &ast::AwaitExpr) -> Result<Expr> {
@@ -42,7 +46,10 @@ pub(super) fn lower_await(ctx: &mut LoweringContext, await_expr: &ast::AwaitExpr
     Ok(Expr::Await(inner))
 }
 
-pub(super) fn lower_super_prop(_ctx: &mut LoweringContext, super_prop: &ast::SuperPropExpr) -> Result<Expr> {
+pub(super) fn lower_super_prop(
+    _ctx: &mut LoweringContext,
+    super_prop: &ast::SuperPropExpr,
+) -> Result<Expr> {
     // super.property access — used in super.method() calls. When used
     // as a call target, the Call expression detects this and routes
     // through SuperMethodCall. Direct super property access (without
@@ -70,7 +77,8 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
         // Simple identifier: x++ or ++x
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
-            let id = ctx.lookup_local(&name)
+            let id = ctx
+                .lookup_local(&name)
                 .ok_or_else(|| anyhow!("Undefined variable in update expression: {}", name))?;
             let op = match update.op {
                 ast::UpdateOp::PlusPlus => UpdateOp::Increment,
@@ -120,7 +128,9 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                 }
             }
         }
-        _ => Err(anyhow!("Update expression only supports identifiers and member expressions")),
+        _ => Err(anyhow!(
+            "Update expression only supports identifiers and member expressions"
+        )),
     }
 }
 
@@ -133,9 +143,7 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
     }
 
     // Start with the first quasi
-    let first_raw = tpl.quasis.first()
-        .map(|q| q.raw.as_ref())
-        .unwrap_or("");
+    let first_raw = tpl.quasis.first().map(|q| q.raw.as_ref()).unwrap_or("");
     let mut result = Expr::String(unescape_template(first_raw));
 
     // Interleave expressions and remaining quasis
@@ -180,7 +188,10 @@ pub(super) fn lower_seq(ctx: &mut LoweringContext, seq: &ast::SeqExpr) -> Result
     }
 }
 
-pub(super) fn lower_meta_prop(ctx: &mut LoweringContext, meta_prop: &ast::MetaPropExpr) -> Result<Expr> {
+pub(super) fn lower_meta_prop(
+    ctx: &mut LoweringContext,
+    meta_prop: &ast::MetaPropExpr,
+) -> Result<Expr> {
     // import.meta / new.target. Property access on either (e.g.
     // `import.meta.url`) is handled by the Member expression arm.
     match meta_prop.kind {
@@ -190,9 +201,10 @@ pub(super) fn lower_meta_prop(ctx: &mut LoweringContext, meta_prop: &ast::MetaPr
             // we synthesise a small one-field object so the Member
             // arm's PropertyGet path resolves it.
             let file_url = format!("file://{}", ctx.source_file_path);
-            Ok(Expr::Object(vec![
-                ("url".to_string(), Expr::String(file_url)),
-            ]))
+            Ok(Expr::Object(vec![(
+                "url".to_string(),
+                Expr::String(file_url),
+            )]))
         }
         ast::MetaPropKind::NewTarget => {
             // Inside a class constructor, `new.target` evaluates to the
@@ -203,9 +215,10 @@ pub(super) fn lower_meta_prop(ctx: &mut LoweringContext, meta_prop: &ast::MetaPr
             // Outside a constructor (e.g., a regular function called
             // without `new`), `new.target` is `undefined`.
             if let Some(class_name) = ctx.in_constructor_class.clone() {
-                Ok(Expr::Object(vec![
-                    ("name".to_string(), Expr::String(class_name)),
-                ]))
+                Ok(Expr::Object(vec![(
+                    "name".to_string(),
+                    Expr::String(class_name),
+                )]))
             } else {
                 Ok(Expr::Undefined)
             }
@@ -218,5 +231,8 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext, y: &ast::YieldExpr) -> Resu
         Some(arg) => Some(Box::new(lower_expr(ctx, arg)?)),
         None => None,
     };
-    Ok(Expr::Yield { value, delegate: y.delegate })
+    Ok(Expr::Yield {
+        value,
+        delegate: y.delegate,
+    })
 }

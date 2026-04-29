@@ -58,12 +58,14 @@ fn op_perry_fetch(
             let mut resp_headers = serde_json::Map::new();
             for name in resp.headers_names() {
                 if let Some(value) = resp.header(&name) {
-                    resp_headers.insert(name.to_string(), serde_json::Value::String(value.to_string()));
+                    resp_headers.insert(
+                        name.to_string(),
+                        serde_json::Value::String(value.to_string()),
+                    );
                 }
             }
 
-            let resp_body = resp.into_string()
-                .unwrap_or_default();
+            let resp_body = resp.into_string().unwrap_or_default();
 
             Ok(serde_json::json!({
                 "status": status,
@@ -81,17 +83,11 @@ fn op_perry_fetch(
                 "body": resp_body,
             }))
         }
-        Err(e) => {
-            Err(anyhow::anyhow!("fetch error: {}", e).into())
-        }
+        Err(e) => Err(anyhow::anyhow!("fetch error: {}", e).into()),
     }
 }
 
 extension!(
     perry_ops,
-    ops = [
-        op_perry_log,
-        op_perry_call_native,
-        op_perry_fetch,
-    ],
+    ops = [op_perry_log, op_perry_call_native, op_perry_fetch,],
 );

@@ -1,8 +1,8 @@
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_ui_kit::{UIButton, UIView};
 use objc2_foundation::{NSObject, NSString};
+use objc2_ui_kit::{UIButton, UIView};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -117,8 +117,12 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
         let handle = super::register_widget(view);
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-            unsafe { perry_geisterhand_register(handle, 0, 0, on_press, label_ptr); }
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 0, 0, on_press, label_ptr);
+            }
         }
         handle
     }
@@ -193,7 +197,8 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
                         config_cls, configurationWithScale: 3_i64
                     ];
                     if !config.is_null() {
-                        let scaled_img: *mut AnyObject = msg_send![img, imageWithConfiguration: config];
+                        let scaled_img: *mut AnyObject =
+                            msg_send![img, imageWithConfiguration: config];
                         if !scaled_img.is_null() {
                             let _: () = msg_send![&*view, setImage: scaled_img, forState: 0_u64];
                         } else {

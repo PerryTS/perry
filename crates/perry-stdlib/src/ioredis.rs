@@ -41,14 +41,14 @@ unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
 /// Create a new Redis client (synchronous, connects lazily like real ioredis)
 /// new Redis() or new Redis(options)
 #[no_mangle]
-pub unsafe extern "C" fn js_ioredis_new(
-    _config_ptr: *const std::ffi::c_void,
-) -> Handle {
+pub unsafe extern "C" fn js_ioredis_new(_config_ptr: *const std::ffi::c_void) -> Handle {
     // Build connection URL from environment variables (same as TS redis-config.ts)
     let host = std::env::var("REDIS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = std::env::var("REDIS_PORT").unwrap_or_else(|_| "6379".to_string());
     let password = std::env::var("REDIS_PASSWORD").ok();
-    let use_tls = std::env::var("REDIS_TLS").map(|v| v != "false").unwrap_or(true);
+    let use_tls = std::env::var("REDIS_TLS")
+        .map(|v| v != "false")
+        .unwrap_or(true);
 
     let scheme = if use_tls { "rediss" } else { "redis" };
     let url = if let Some(pw) = password {
@@ -82,15 +82,20 @@ async fn get_connection(handle: Handle) -> Result<redis::aio::MultiplexedConnect
     let url = url.ok_or_else(|| "Invalid Redis handle".to_string())?;
 
     // Create new connection with timeout
-    let client = redis::Client::open(url.as_str())
-        .map_err(|e| format!("Redis client error: {}", e))?;
+    let client =
+        redis::Client::open(url.as_str()).map_err(|e| format!("Redis client error: {}", e))?;
 
     let conn = tokio::time::timeout(
         Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-        client.get_multiplexed_async_connection()
+        client.get_multiplexed_async_connection(),
     )
     .await
-    .map_err(|_| format!("Redis connection timed out after {} seconds", DEFAULT_TIMEOUT_SECS))?
+    .map_err(|_| {
+        format!(
+            "Redis connection timed out after {} seconds",
+            DEFAULT_TIMEOUT_SECS
+        )
+    })?
     .map_err(|e| format!("Redis connection error: {}", e))?;
 
     // Cache the connection
@@ -135,24 +140,28 @@ pub unsafe extern "C" fn js_ioredis_set(
             Ok(mut conn) => {
                 let result: redis::RedisResult<()> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.set::<_, _, ()>(&key, &value)
+                    conn.set::<_, _, ()>(&key, &value),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
                     Ok(_) => {
                         queue_deferred_resolution(promise_ptr, true, || {
                             let ok_str = "OK";
-                            let result_str = js_string_from_bytes(ok_str.as_ptr(), ok_str.len() as u32);
+                            let result_str =
+                                js_string_from_bytes(ok_str.as_ptr(), ok_str.len() as u32);
                             JSValue::string_ptr(result_str).bits()
                         });
                     }
                     Err(e) => {
                         let err_msg = format!("Redis SET error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -193,18 +202,22 @@ pub unsafe extern "C" fn js_ioredis_get(
     spawn(async move {
         match get_connection(handle).await {
             Ok(mut conn) => {
-                let result: redis::RedisResult<Option<String>> = tokio::time::timeout(
-                    Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.get(&key)
-                )
-                .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
-                .and_then(|r| r);
+                let result: redis::RedisResult<Option<String>> =
+                    tokio::time::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS), conn.get(&key))
+                        .await
+                        .map_err(|_| {
+                            redis::RedisError::from((
+                                redis::ErrorKind::IoError,
+                                "Operation timed out",
+                            ))
+                        })
+                        .and_then(|r| r);
 
                 match result {
                     Ok(Some(value)) => {
                         queue_deferred_resolution(promise_ptr, true, move || {
-                            let result_str = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+                            let result_str =
+                                js_string_from_bytes(value.as_ptr(), value.len() as u32);
                             JSValue::string_ptr(result_str).bits()
                         });
                     }
@@ -214,7 +227,8 @@ pub unsafe extern "C" fn js_ioredis_get(
                     Err(e) => {
                         let err_msg = format!("Redis GET error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -255,13 +269,16 @@ pub unsafe extern "C" fn js_ioredis_del(
     spawn(async move {
         match get_connection(handle).await {
             Ok(mut conn) => {
-                let result: redis::RedisResult<i64> = tokio::time::timeout(
-                    Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.del(&key)
-                )
-                .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
-                .and_then(|r| r);
+                let result: redis::RedisResult<i64> =
+                    tokio::time::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS), conn.del(&key))
+                        .await
+                        .map_err(|_| {
+                            redis::RedisError::from((
+                                redis::ErrorKind::IoError,
+                                "Operation timed out",
+                            ))
+                        })
+                        .and_then(|r| r);
 
                 match result {
                     Ok(count) => {
@@ -270,7 +287,8 @@ pub unsafe extern "C" fn js_ioredis_del(
                     Err(e) => {
                         let err_msg = format!("Redis DEL error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -313,10 +331,12 @@ pub unsafe extern "C" fn js_ioredis_exists(
             Ok(mut conn) => {
                 let result: redis::RedisResult<i64> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.exists(&key)
+                    conn.exists(&key),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
@@ -326,7 +346,8 @@ pub unsafe extern "C" fn js_ioredis_exists(
                     Err(e) => {
                         let err_msg = format!("Redis EXISTS error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -369,10 +390,12 @@ pub unsafe extern "C" fn js_ioredis_incr(
             Ok(mut conn) => {
                 let result: redis::RedisResult<i64> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.incr(&key, 1)
+                    conn.incr(&key, 1),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
@@ -382,7 +405,8 @@ pub unsafe extern "C" fn js_ioredis_incr(
                     Err(e) => {
                         let err_msg = format!("Redis INCR error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -425,10 +449,12 @@ pub unsafe extern "C" fn js_ioredis_decr(
             Ok(mut conn) => {
                 let result: redis::RedisResult<i64> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.decr(&key, 1)
+                    conn.decr(&key, 1),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
@@ -438,7 +464,8 @@ pub unsafe extern "C" fn js_ioredis_decr(
                     Err(e) => {
                         let err_msg = format!("Redis DECR error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -484,10 +511,12 @@ pub unsafe extern "C" fn js_ioredis_expire(
             Ok(mut conn) => {
                 let result: redis::RedisResult<i64> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.expire(&key, secs)
+                    conn.expire(&key, secs),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
@@ -497,7 +526,8 @@ pub unsafe extern "C" fn js_ioredis_expire(
                     Err(e) => {
                         let err_msg = format!("Redis EXPIRE error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -578,24 +608,28 @@ pub unsafe extern "C" fn js_ioredis_setex(
             Ok(mut conn) => {
                 let result: redis::RedisResult<()> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.set_ex::<_, _, ()>(&key, &value, secs)
+                    conn.set_ex::<_, _, ()>(&key, &value, secs),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
                     Ok(_) => {
                         queue_deferred_resolution(promise_ptr, true, || {
                             let ok_str = "OK";
-                            let result_str = js_string_from_bytes(ok_str.as_ptr(), ok_str.len() as u32);
+                            let result_str =
+                                js_string_from_bytes(ok_str.as_ptr(), ok_str.len() as u32);
                             JSValue::string_ptr(result_str).bits()
                         });
                     }
                     Err(e) => {
                         let err_msg = format!("Redis SETEX error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -632,10 +666,12 @@ pub unsafe extern "C" fn js_ioredis_ping(handle: Handle) -> *mut perry_runtime::
             Ok(mut conn) => {
                 let result: redis::RedisResult<String> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    redis::cmd("PING").query_async(&mut conn)
+                    redis::cmd("PING").query_async(&mut conn),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
@@ -648,7 +684,8 @@ pub unsafe extern "C" fn js_ioredis_ping(handle: Handle) -> *mut perry_runtime::
                     Err(e) => {
                         let err_msg = format!("Redis PING error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -698,16 +735,19 @@ pub unsafe extern "C" fn js_ioredis_hget(
             Ok(mut conn) => {
                 let result: redis::RedisResult<Option<String>> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.hget(&key, &field)
+                    conn.hget(&key, &field),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
                     Ok(Some(value)) => {
                         queue_deferred_resolution(promise_ptr, true, move || {
-                            let result_str = js_string_from_bytes(value.as_ptr(), value.len() as u32);
+                            let result_str =
+                                js_string_from_bytes(value.as_ptr(), value.len() as u32);
                             JSValue::string_ptr(result_str).bits()
                         });
                     }
@@ -717,7 +757,8 @@ pub unsafe extern "C" fn js_ioredis_hget(
                     Err(e) => {
                         let err_msg = format!("Redis HGET error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -776,10 +817,12 @@ pub unsafe extern "C" fn js_ioredis_hset(
             Ok(mut conn) => {
                 let result: redis::RedisResult<i64> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.hset(&key, &field, &value)
+                    conn.hset(&key, &field, &value),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
@@ -789,7 +832,8 @@ pub unsafe extern "C" fn js_ioredis_hset(
                     Err(e) => {
                         let err_msg = format!("Redis HSET error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -834,10 +878,12 @@ pub unsafe extern "C" fn js_ioredis_hgetall(
             Ok(mut conn) => {
                 let result: redis::RedisResult<HashMap<String, String>> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.hgetall(&key)
+                    conn.hgetall(&key),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
@@ -846,13 +892,16 @@ pub unsafe extern "C" fn js_ioredis_hgetall(
                         let entries: Vec<(String, String)> = hash.into_iter().collect();
                         queue_deferred_resolution(promise_ptr, true, move || {
                             // Create a Perry object with dynamic fields
-                            let obj = perry_runtime::object::js_object_alloc(0, entries.len() as u32);
+                            let obj =
+                                perry_runtime::object::js_object_alloc(0, entries.len() as u32);
                             for (k, v) in &entries {
                                 let key_str = js_string_from_bytes(k.as_ptr(), k.len() as u32);
                                 let val_str = js_string_from_bytes(v.as_ptr(), v.len() as u32);
                                 let val_bits = JSValue::string_ptr(val_str).bits();
                                 perry_runtime::object::js_object_set_field_by_name(
-                                    obj, key_str, f64::from_bits(val_bits)
+                                    obj,
+                                    key_str,
+                                    f64::from_bits(val_bits),
                                 );
                             }
                             JSValue::pointer(obj as *mut u8).bits()
@@ -861,7 +910,8 @@ pub unsafe extern "C" fn js_ioredis_hgetall(
                     Err(e) => {
                         let err_msg = format!("Redis HGETALL error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -911,10 +961,12 @@ pub unsafe extern "C" fn js_ioredis_hdel(
             Ok(mut conn) => {
                 let result: redis::RedisResult<i64> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.hdel(&key, &field)
+                    conn.hdel(&key, &field),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
@@ -924,7 +976,8 @@ pub unsafe extern "C" fn js_ioredis_hdel(
                     Err(e) => {
                         let err_msg = format!("Redis HDEL error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }
@@ -965,10 +1018,12 @@ pub unsafe extern "C" fn js_ioredis_hlen(
             Ok(mut conn) => {
                 let result: redis::RedisResult<i64> = tokio::time::timeout(
                     Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-                    conn.hlen(&key)
+                    conn.hlen(&key),
                 )
                 .await
-                .map_err(|_| redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out")))
+                .map_err(|_| {
+                    redis::RedisError::from((redis::ErrorKind::IoError, "Operation timed out"))
+                })
                 .and_then(|r| r);
 
                 match result {
@@ -978,7 +1033,8 @@ pub unsafe extern "C" fn js_ioredis_hlen(
                     Err(e) => {
                         let err_msg = format!("Redis HLEN error: {}", e);
                         queue_deferred_resolution(promise_ptr, false, move || {
-                            let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
+                            let err_str =
+                                js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
                             JSValue::string_ptr(err_str).bits()
                         });
                     }

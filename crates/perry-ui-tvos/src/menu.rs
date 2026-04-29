@@ -237,7 +237,8 @@ pub(crate) unsafe fn build_uimenu(menu_handle: i64) -> Option<Retained<AnyObject
                 if let Some(sub) = build_uimenu(*submenu_handle) {
                     // Set title on the submenu
                     let ns_title = objc2_foundation::NSString::from_str(title);
-                    let sub_with_title: Retained<AnyObject> = build_uimenu_with_title(&ns_title, &sub);
+                    let sub_with_title: Retained<AnyObject> =
+                        build_uimenu_with_title(&ns_title, &sub);
                     current_group.push(sub_with_title);
                 }
             }
@@ -383,17 +384,14 @@ pub(crate) unsafe fn dispatch_menu_action(sender: *mut AnyObject) {
     if disc_title.is_null() {
         return;
     }
-    let ns_str: &objc2_foundation::NSString =
-        &*(disc_title as *const objc2_foundation::NSString);
+    let ns_str: &objc2_foundation::NSString = &*(disc_title as *const objc2_foundation::NSString);
     let rust_str = ns_str.to_string();
 
     if let Some(tag_str) = rust_str.strip_prefix("__perry_tag_") {
         if let Ok(tag) = tag_str.parse::<usize>() {
             let callback = ACTION_CALLBACKS.with(|cbs| {
                 let cbs = cbs.borrow();
-                cbs.iter()
-                    .find(|&&(t, _)| t == tag)
-                    .map(|&(_, cb)| cb)
+                cbs.iter().find(|&&(t, _)| t == tag).map(|&(_, cb)| cb)
             });
             if let Some(cb) = callback {
                 let ptr = js_nanbox_get_pointer(cb) as *const u8;
@@ -412,9 +410,9 @@ fn parse_shortcut(s: &str) -> (String, u64) {
     for part in s.split('+') {
         let trimmed = part.trim();
         match trimmed.to_lowercase().as_str() {
-            "cmd" | "command" => flags |= 1 << 20, // UIKeyModifierCommand
-            "shift" => flags |= 1 << 17,           // UIKeyModifierShift
-            "option" | "alt" => flags |= 1 << 19,  // UIKeyModifierAlternate
+            "cmd" | "command" => flags |= 1 << 20,  // UIKeyModifierCommand
+            "shift" => flags |= 1 << 17,            // UIKeyModifierShift
+            "option" | "alt" => flags |= 1 << 19,   // UIKeyModifierAlternate
             "ctrl" | "control" => flags |= 1 << 18, // UIKeyModifierControl
             _ => key = trimmed.to_lowercase(),
         }

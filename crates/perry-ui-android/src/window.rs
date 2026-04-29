@@ -1,9 +1,9 @@
 //! Multi-window — Dialog-based windows on Android
 
+use crate::jni_bridge;
+use jni::objects::{GlobalRef, JValue};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use jni::objects::{GlobalRef, JValue};
-use crate::jni_bridge;
 
 fn str_from_header(ptr: *const u8) -> &'static str {
     crate::app::str_from_header(ptr)
@@ -32,13 +32,16 @@ pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     });
 
     WINDOWS.with(|w| {
-        w.borrow_mut().insert(id, WindowState {
-            title,
-            width,
-            height,
-            body_handle: None,
-            dialog_ref: None,
-        });
+        w.borrow_mut().insert(
+            id,
+            WindowState {
+                title,
+                width,
+                height,
+                body_handle: None,
+                dialog_ref: None,
+            },
+        );
     });
 
     id
@@ -56,7 +59,10 @@ pub fn set_body(window_handle: i64, widget_handle: i64) {
 pub fn show(window_handle: i64) {
     let (body, title) = WINDOWS.with(|w| {
         let windows = w.borrow();
-        windows.get(&window_handle).map(|st| (st.body_handle, st.title.clone())).unwrap_or((None, String::new()))
+        windows
+            .get(&window_handle)
+            .map(|st| (st.body_handle, st.title.clone()))
+            .unwrap_or((None, String::new()))
     });
 
     if let Some(body_handle) = body {
@@ -66,11 +72,13 @@ pub fn show(window_handle: i64) {
 
             let activity = crate::widgets::get_activity(&mut env);
 
-            let dialog = env.new_object(
-                "android/app/Dialog",
-                "(Landroid/content/Context;)V",
-                &[JValue::Object(&activity)],
-            ).expect("Failed to create Dialog");
+            let dialog = env
+                .new_object(
+                    "android/app/Dialog",
+                    "(Landroid/content/Context;)V",
+                    &[JValue::Object(&activity)],
+                )
+                .expect("Failed to create Dialog");
 
             // Set title
             if !title.is_empty() {
@@ -93,7 +101,9 @@ pub fn show(window_handle: i64) {
 
             let _ = env.call_method(&dialog, "show", "()V", &[]);
 
-            let global = env.new_global_ref(dialog).expect("Failed to create global ref");
+            let global = env
+                .new_global_ref(dialog)
+                .expect("Failed to create global ref");
             WINDOWS.with(|w| {
                 let mut windows = w.borrow_mut();
                 if let Some(state) = windows.get_mut(&window_handle) {
@@ -101,7 +111,9 @@ pub fn show(window_handle: i64) {
                 }
             });
 
-            unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+            unsafe {
+                env.pop_local_frame(&jni::objects::JObject::null());
+            }
         }
     }
 }
@@ -109,13 +121,17 @@ pub fn show(window_handle: i64) {
 pub fn close(window_handle: i64) {
     let dialog = WINDOWS.with(|w| {
         let mut windows = w.borrow_mut();
-        windows.get_mut(&window_handle).and_then(|st| st.dialog_ref.take())
+        windows
+            .get_mut(&window_handle)
+            .and_then(|st| st.dialog_ref.take())
     });
 
     if let Some(dialog_ref) = dialog {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);
         let _ = env.call_method(dialog_ref.as_obj(), "dismiss", "()V", &[]);
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }

@@ -1,6 +1,6 @@
+use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use gtk4::prelude::*;
 
 use crate::widgets;
 
@@ -175,7 +175,11 @@ pub fn state_set(handle: i64, value: f64) {
     TOGGLE_BINDINGS.with(|b| {
         if let Some(bindings) = b.borrow().get(&handle) {
             for binding in bindings {
-                let on = if value != 0.0 && !value.is_nan() { 1 } else { 0 };
+                let on = if value != 0.0 && !value.is_nan() {
+                    1
+                } else {
+                    0
+                };
                 widgets::toggle::set_state(binding.toggle_handle, on);
             }
         }
@@ -200,7 +204,12 @@ pub fn state_set(handle: i64, value: f64) {
     let foreach_snapshot: Vec<(i64, f64)> = FOR_EACH_BINDINGS.with(|b| {
         b.borrow()
             .get(&handle)
-            .map(|bindings| bindings.iter().map(|b| (b.container_handle, b.render_closure)).collect())
+            .map(|bindings| {
+                bindings
+                    .iter()
+                    .map(|b| (b.container_handle, b.render_closure))
+                    .collect()
+            })
             .unwrap_or_default()
     });
     for (container, closure) in foreach_snapshot {
@@ -222,7 +231,9 @@ pub fn state_set(handle: i64, value: f64) {
     });
     for closure_f64 in callbacks_snapshot {
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
-        unsafe { js_closure_call1(closure_ptr, value); }
+        unsafe {
+            js_closure_call1(closure_ptr, value);
+        }
     }
 
     // Update textfield bindings (state -> textfield direction)
@@ -296,14 +307,23 @@ fn render_for_each(container: i64, closure: f64, count: f64) {
 }
 
 /// Bind a text widget to a state cell with prefix and suffix strings.
-pub fn bind_text_numeric(state_handle: i64, text_handle: i64, prefix_ptr: *const u8, suffix_ptr: *const u8) {
+pub fn bind_text_numeric(
+    state_handle: i64,
+    text_handle: i64,
+    prefix_ptr: *const u8,
+    suffix_ptr: *const u8,
+) {
     let prefix = str_from_header(prefix_ptr).to_string();
     let suffix = str_from_header(suffix_ptr).to_string();
     TEXT_BINDINGS.with(|b| {
         b.borrow_mut()
             .entry(state_handle)
             .or_default()
-            .push(TextBinding { text_handle, prefix, suffix });
+            .push(TextBinding {
+                text_handle,
+                prefix,
+                suffix,
+            });
     });
 }
 
@@ -328,7 +348,12 @@ pub fn bind_toggle(state_handle: i64, toggle_handle: i64) {
 }
 
 /// Bind a text widget to multiple states with a template.
-pub fn bind_text_template(text_handle: i64, num_parts: i32, types_ptr: *const i32, values_ptr: *const i64) {
+pub fn bind_text_template(
+    text_handle: i64,
+    num_parts: i32,
+    types_ptr: *const i32,
+    values_ptr: *const i64,
+) {
     let mut parts = Vec::new();
     let mut state_handles = Vec::new();
 
@@ -365,7 +390,10 @@ pub fn bind_visibility(state_handle: i64, show_handle: i64, hide_handle: i64) {
         b.borrow_mut()
             .entry(state_handle)
             .or_default()
-            .push(VisibilityBinding { show_handle, hide_handle });
+            .push(VisibilityBinding {
+                show_handle,
+                hide_handle,
+            });
     });
     // Set initial visibility
     let value = state_get(state_handle);
@@ -385,7 +413,10 @@ pub fn for_each_init(container_handle: i64, state_handle: i64, render_closure: f
         b.borrow_mut()
             .entry(state_handle)
             .or_default()
-            .push(ForEachBinding { container_handle, render_closure });
+            .push(ForEachBinding {
+                container_handle,
+                render_closure,
+            });
     });
 }
 

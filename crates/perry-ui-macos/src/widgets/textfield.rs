@@ -2,7 +2,9 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_app_kit::{NSTextField, NSView};
-use objc2_foundation::{NSNotification, NSNotificationCenter, NSObject, NSString, MainThreadMarker};
+use objc2_foundation::{
+    MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSString,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -190,8 +192,12 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
 
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-            unsafe { perry_geisterhand_register(handle, 1, 1, on_change, placeholder_ptr); }
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 1, 1, on_change, placeholder_ptr);
+            }
         }
 
         // Register for NSControlTextDidChangeNotification
@@ -272,7 +278,9 @@ pub fn set_on_submit(handle: i64, on_submit: f64) {
 
             #[cfg(feature = "geisterhand")]
             {
-                extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
+                extern "C" {
+                    fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+                }
                 perry_geisterhand_register(handle, 1, 2, on_submit, std::ptr::null());
             }
 

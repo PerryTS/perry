@@ -18,33 +18,33 @@
 pub use perry_updater;
 
 // Core modules - always available
-pub mod common;
-pub mod dotenv;
-pub mod slugify;
-pub mod dayjs;
-pub mod moment;
-pub mod lodash;
-pub mod events;
-pub mod lru_cache;
-pub mod commander;
-pub mod decimal;
-pub mod exponential_backoff;
 pub mod async_local_storage;
+pub mod commander;
+pub mod common;
+pub mod dayjs;
+pub mod decimal;
+pub mod dotenv;
+pub mod events;
+pub mod exponential_backoff;
+pub mod lodash;
+pub mod lru_cache;
+pub mod moment;
+pub mod slugify;
 pub mod worker_threads;
 
 // Re-export core
-pub use common::*;
-pub use dotenv::*;
-pub use slugify::*;
-pub use dayjs::*;
-pub use moment::*;
-pub use lodash::*;
-pub use events::*;
-pub use lru_cache::*;
-pub use commander::*;
-pub use decimal::*;
-pub use exponential_backoff::*;
 pub use async_local_storage::*;
+pub use commander::*;
+pub use common::*;
+pub use dayjs::*;
+pub use decimal::*;
+pub use dotenv::*;
+pub use events::*;
+pub use exponential_backoff::*;
+pub use lodash::*;
+pub use lru_cache::*;
+pub use moment::*;
+pub use slugify::*;
 pub use worker_threads::*;
 
 // === HTTP Server ===
@@ -189,10 +189,14 @@ pub use cron::*;
 // symbol error in that case.
 #[cfg(not(feature = "scheduler"))]
 #[no_mangle]
-pub extern "C" fn js_cron_timer_tick() -> i32 { 0 }
+pub extern "C" fn js_cron_timer_tick() -> i32 {
+    0
+}
 #[cfg(not(feature = "scheduler"))]
 #[no_mangle]
-pub extern "C" fn js_cron_timer_has_pending() -> i32 { 0 }
+pub extern "C" fn js_cron_timer_has_pending() -> i32 {
+    0
+}
 
 // === Rate Limiting ===
 #[cfg(feature = "rate-limit")]

@@ -19,6 +19,32 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Lint: cargo fmt --check (formatting gate for every PR)
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # ---------------------------------------------------------------------------
   # Build compiler + runtime once, cache for downstream jobs
   # ---------------------------------------------------------------------------
   build:

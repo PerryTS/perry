@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use super::publish::{
-    AndroidSavedConfig, AppleSavedConfig, HarmonyosSavedConfig, PerryConfig,
-    config_path, is_interactive, load_config, save_config,
+    config_path, is_interactive, load_config, save_config, AndroidSavedConfig, AppleSavedConfig,
+    HarmonyosSavedConfig, PerryConfig,
 };
 
 #[derive(Args, Debug)]
@@ -41,7 +41,16 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let platform = match args.platform.as_deref() {
         Some(p) => p.to_string(),
         None => {
-            let options = &["Android", "iOS", "visionOS", "macOS", "tvOS", "watchOS", "Windows (toolchain)", "HarmonyOS"];
+            let options = &[
+                "Android",
+                "iOS",
+                "visionOS",
+                "macOS",
+                "tvOS",
+                "watchOS",
+                "Windows (toolchain)",
+                "HarmonyOS",
+            ];
             let selection = Select::new()
                 .with_prompt("  Which platform to configure?")
                 .items(options)
@@ -100,10 +109,10 @@ fn find_xwin_exe() -> Option<PathBuf> {
         }
     }
     if let Some(home) = dirs::home_dir() {
-        let cargo_bin = home
-            .join(".cargo")
-            .join("bin")
-            .join(if cfg!(windows) { "xwin.exe" } else { "xwin" });
+        let cargo_bin =
+            home.join(".cargo")
+                .join("bin")
+                .join(if cfg!(windows) { "xwin.exe" } else { "xwin" });
         if cargo_bin.exists() {
             return Some(cargo_bin);
         }
@@ -142,19 +151,24 @@ pub(crate) fn windows_wizard(accept_license: bool) -> Result<()> {
     }
 
     // 2. Locate xwin.
-    let xwin = find_xwin_exe().ok_or_else(|| anyhow::anyhow!(
-        "xwin.exe not found. The Perry Windows release zip bundles it alongside \
+    let xwin = find_xwin_exe().ok_or_else(|| {
+        anyhow::anyhow!(
+            "xwin.exe not found. The Perry Windows release zip bundles it alongside \
          perry.exe. If you installed Perry from source (cargo install), install xwin \
          separately:\n  \
          cargo install xwin --locked --version 0.9.0"
-    ))?;
+        )
+    })?;
     println!("  {} xwin found: {}", style("✓").green(), xwin.display());
     println!();
 
     // 3. Microsoft license acceptance. xwin's own URL (src/main.rs:269 in xwin 0.9.0).
     let license_url = "https://go.microsoft.com/fwlink/?LinkId=2086102";
     if !accept_license {
-        println!("  {} Microsoft Visual Studio Build Tools License", style("⚠").yellow().bold());
+        println!(
+            "  {} Microsoft Visual Studio Build Tools License",
+            style("⚠").yellow().bold()
+        );
         println!();
         println!("  The Microsoft CRT + Windows SDK libraries are redistributable under");
         println!("  the Microsoft Software License Terms. By proceeding you accept:");
@@ -169,7 +183,10 @@ pub(crate) fn windows_wizard(accept_license: bool) -> Result<()> {
             bail!("License not accepted — aborting.");
         }
     } else {
-        println!("  {} License accepted via --accept-license", style("ℹ").cyan());
+        println!(
+            "  {} License accepted via --accept-license",
+            style("ℹ").cyan()
+        );
     }
 
     // 4. Output directory — %LOCALAPPDATA%\perry\windows-sdk (matches what
@@ -197,12 +214,16 @@ pub(crate) fn windows_wizard(accept_license: bool) -> Result<()> {
     let start = Instant::now();
     let mut cmd = Command::new(&xwin);
     cmd.arg("--accept-license")
-        .arg("--arch").arg("x86_64")
+        .arg("--arch")
+        .arg("x86_64")
         .arg("splat")
         .arg("--disable-symlinks")
-        .arg("--output").arg(&output_dir);
+        .arg("--output")
+        .arg(&output_dir);
 
-    let status = cmd.status().with_context(|| format!("Failed to invoke {}", xwin.display()))?;
+    let status = cmd
+        .status()
+        .with_context(|| format!("Failed to invoke {}", xwin.display()))?;
     if !status.success() {
         bail!(
             "xwin splat failed (status {}). The partial download at {} can be retried \
@@ -214,10 +235,17 @@ pub(crate) fn windows_wizard(accept_license: bool) -> Result<()> {
 
     let elapsed = start.elapsed();
     println!();
-    println!("  {} Windows SDK ready at {}", style("✓").green().bold(), output_dir.display());
+    println!(
+        "  {} Windows SDK ready at {}",
+        style("✓").green().bold(),
+        output_dir.display()
+    );
     println!("    ({:.1}s)", elapsed.as_secs_f64());
     println!();
-    println!("  Try it:  {}", style("perry compile hello.ts && ./hello.exe").bold());
+    println!(
+        "  Try it:  {}",
+        style("perry compile hello.ts && ./hello.exe").bold()
+    );
     println!();
     println!("  Run `perry doctor` to verify the full toolchain.");
     Ok(())
@@ -312,20 +340,37 @@ pub(crate) fn android_wizard(saved: &mut PerryConfig) -> Result<()> {
         }
 
         println!();
-        println!("  {} Keystore created at {}", style("✓").green(), style(&path).bold());
+        println!(
+            "  {} Keystore created at {}",
+            style("✓").green(),
+            style(&path).bold()
+        );
         (path, alias)
     };
 
-    let android = saved.android.get_or_insert_with(AndroidSavedConfig::default);
+    let android = saved
+        .android
+        .get_or_insert_with(AndroidSavedConfig::default);
     android.keystore_path = Some(keystore_path.clone());
     android.key_alias = Some(key_alias.clone());
 
-    println!("  {} Keystore: {}", style("✓").green(), style(&keystore_path).bold());
-    println!("  {} Key alias: {}", style("✓").green(), style(&key_alias).bold());
+    println!(
+        "  {} Keystore: {}",
+        style("✓").green(),
+        style(&keystore_path).bold()
+    );
+    println!(
+        "  {} Key alias: {}",
+        style("✓").green(),
+        style(&key_alias).bold()
+    );
     println!();
 
     // --- Step 2: Google Play Service Account ---
-    println!("  {} Google Play Service Account", style("Step 2/2 —").cyan().bold());
+    println!(
+        "  {} Google Play Service Account",
+        style("Step 2/2 —").cyan().bold()
+    );
     println!();
     println!("  Follow these steps to enable automated Play Store uploads:");
     println!();
@@ -376,7 +421,9 @@ pub(crate) fn android_wizard(saved: &mut PerryConfig) -> Result<()> {
         style(client_email).bold()
     );
 
-    let android = saved.android.get_or_insert_with(AndroidSavedConfig::default);
+    let android = saved
+        .android
+        .get_or_insert_with(AndroidSavedConfig::default);
     android.google_play_key_path = Some(json_path);
 
     // Update project perry.toml with distribute = "playstore"
@@ -385,7 +432,10 @@ pub(crate) fn android_wizard(saved: &mut PerryConfig) -> Result<()> {
     if !perry_toml_path.exists() {
         std::fs::write(&perry_toml_path, "")?;
     }
-    let gp_key = saved.android.as_ref().and_then(|a| a.google_play_key_path.as_deref());
+    let gp_key = saved
+        .android
+        .as_ref()
+        .and_then(|a| a.google_play_key_path.as_deref());
     match update_perry_toml_android(&perry_toml_path, &keystore_path, &key_alias, gp_key) {
         Ok(()) => {}
         Err(e) => {
@@ -402,14 +452,16 @@ pub(crate) fn android_wizard(saved: &mut PerryConfig) -> Result<()> {
     println!();
     println!("  {}", style("Setup complete!").green().bold());
     println!();
-    println!("  {} {} {}",
+    println!(
+        "  {} {} {}",
         style("Global").bold(),
         style("→").dim(),
         style(config_path().display()).dim(),
     );
     println!("    keystore_path, key_alias, google_play_key_path");
     println!();
-    println!("  {} {} {}",
+    println!(
+        "  {} {} {}",
         style("Project").bold(),
         style("→").dim(),
         style(perry_toml_path.display()).dim(),
@@ -417,7 +469,10 @@ pub(crate) fn android_wizard(saved: &mut PerryConfig) -> Result<()> {
     println!("    keystore, key_alias, google_play_key, distribute");
     println!();
     println!("  Tip: to target a specific track, use:");
-    println!("  distribute = \"playstore:beta\"  {} :internal, :alpha, :beta, :production", style("#").dim());
+    println!(
+        "  distribute = \"playstore:beta\"  {} :internal, :alpha, :beta, :production",
+        style("#").dim()
+    );
     println!();
     println!("  Then run: {}", style("perry publish android").bold());
 
@@ -437,7 +492,10 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     // Check for existing credentials first
     let existing_apple = saved.apple.clone().unwrap_or_default();
 
-    println!("  {} App Store Connect API Key", style("Step 1 —").cyan().bold());
+    println!(
+        "  {} App Store Connect API Key",
+        style("Step 1 —").cyan().bold()
+    );
     println!();
 
     let has_existing = existing_apple.p8_key_path.is_some()
@@ -465,8 +523,14 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
         }
     } else {
         println!("  You need an App Store Connect API key.");
-        println!("  1. Go to: {}", style("https://appstoreconnect.apple.com/access/integrations/api").underlined());
-        println!("  2. Click '+', create a key with {} role.", style("App Manager").bold());
+        println!(
+            "  1. Go to: {}",
+            style("https://appstoreconnect.apple.com/access/integrations/api").underlined()
+        );
+        println!(
+            "  2. Click '+', create a key with {} role.",
+            style("App Manager").bold()
+        );
         println!("  3. Download the .p8 file (only downloadable once).");
         println!("  4. Note the Key ID and Issuer ID.");
         println!();
@@ -499,7 +563,8 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     print!("  Verifying API access... ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
     let client = reqwest::blocking::Client::new();
-    let resp = client.get("https://api.appstoreconnect.apple.com/v1/certificates?limit=1")
+    let resp = client
+        .get("https://api.appstoreconnect.apple.com/v1/certificates?limit=1")
         .bearer_auth(&jwt)
         .send()
         .context("Failed to connect to App Store Connect API")?;
@@ -518,9 +583,22 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     let bundle_id = if perry_toml_path.exists() {
         let content = std::fs::read_to_string(&perry_toml_path)?;
         let parsed: toml::Value = toml::from_str(&content)?;
-        parsed.get("ios").and_then(|i| i.get("bundle_id")).and_then(|v| v.as_str())
-            .or_else(|| parsed.get("app").and_then(|a| a.get("bundle_id")).and_then(|v| v.as_str()))
-            .or_else(|| parsed.get("project").and_then(|p| p.get("bundle_id")).and_then(|v| v.as_str()))
+        parsed
+            .get("ios")
+            .and_then(|i| i.get("bundle_id"))
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                parsed
+                    .get("app")
+                    .and_then(|a| a.get("bundle_id"))
+                    .and_then(|v| v.as_str())
+            })
+            .or_else(|| {
+                parsed
+                    .get("project")
+                    .and_then(|p| p.get("bundle_id"))
+                    .and_then(|v| v.as_str())
+            })
             .map(|s| s.to_string())
     } else {
         None
@@ -532,7 +610,9 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
             .with_prompt("  Use this bundle ID?")
             .default(true)
             .interact()?;
-        if use_it { bid } else {
+        if use_it {
+            bid
+        } else {
             Input::<String>::new()
                 .with_prompt("  Bundle ID (e.g. com.company.app)")
                 .interact_text()?
@@ -550,9 +630,13 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-    let resp = client.get("https://api.appstoreconnect.apple.com/v1/bundleIds")
+    let resp = client
+        .get("https://api.appstoreconnect.apple.com/v1/bundleIds")
         .bearer_auth(&jwt)
-        .query(&[("filter[identifier]", &bundle_id), ("limit", &"1".to_string())])
+        .query(&[
+            ("filter[identifier]", &bundle_id),
+            ("limit", &"1".to_string()),
+        ])
         .send()?;
     let body: serde_json::Value = resp.json()?;
     let existing_bundle_ids = body["data"].as_array();
@@ -572,7 +656,8 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
                     }
                 }
             });
-            let resp = client.post("https://api.appstoreconnect.apple.com/v1/bundleIds")
+            let resp = client
+                .post("https://api.appstoreconnect.apple.com/v1/bundleIds")
                 .bearer_auth(&jwt)
                 .json(&create_body)
                 .send()?;
@@ -581,10 +666,15 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
                 bail!("Failed to register Bundle ID: {err}");
             }
             let resp_body: serde_json::Value = resp.json()?;
-            let rid = resp_body["data"]["id"].as_str()
+            let rid = resp_body["data"]["id"]
+                .as_str()
                 .ok_or_else(|| anyhow::anyhow!("No ID in bundle registration response"))?
                 .to_string();
-            println!("  {} Registered: {}", style("✓").green().bold(), style(&bundle_id).bold());
+            println!(
+                "  {} Registered: {}",
+                style("✓").green().bold(),
+                style(&bundle_id).bold()
+            );
             rid
         } else {
             println!("{}", style("exists").green());
@@ -596,12 +686,19 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     println!();
 
     // --- Step 3: Create App in App Store Connect if needed ---
-    println!("  {} App Store Connect App", style("Step 3 —").cyan().bold());
-    print!("  Checking if app exists for {}... ", style(&bundle_id).bold());
+    println!(
+        "  {} App Store Connect App",
+        style("Step 3 —").cyan().bold()
+    );
+    print!(
+        "  Checking if app exists for {}... ",
+        style(&bundle_id).bold()
+    );
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-    let resp = client.get("https://api.appstoreconnect.apple.com/v1/apps")
+    let resp = client
+        .get("https://api.appstoreconnect.apple.com/v1/apps")
         .bearer_auth(&jwt)
         .query(&[("filter[bundleId]", bundle_id.as_str()), ("limit", "1")])
         .send()?;
@@ -615,8 +712,16 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
             let app_name = if perry_toml_path.exists() {
                 let content = std::fs::read_to_string(&perry_toml_path)?;
                 let parsed: toml::Value = toml::from_str(&content)?;
-                parsed.get("app").and_then(|a| a.get("name")).and_then(|v| v.as_str())
-                    .or_else(|| parsed.get("project").and_then(|p| p.get("name")).and_then(|v| v.as_str()))
+                parsed
+                    .get("app")
+                    .and_then(|a| a.get("name"))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| {
+                        parsed
+                            .get("project")
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                    })
                     .map(|s| s.to_string())
             } else {
                 None
@@ -628,7 +733,9 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
                     .with_prompt("  Use this name?")
                     .default(true)
                     .interact()?;
-                if use_it { name } else {
+                if use_it {
+                    name
+                } else {
                     Input::<String>::new()
                         .with_prompt("  App name (as shown on App Store)")
                         .interact_text()?
@@ -661,7 +768,8 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
             });
 
             let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-            let resp = client.post("https://api.appstoreconnect.apple.com/v1/apps")
+            let resp = client
+                .post("https://api.appstoreconnect.apple.com/v1/apps")
                 .bearer_auth(&jwt)
                 .json(&create_body)
                 .send()?;
@@ -671,7 +779,11 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
                 println!("  {} Could not create app: {}", style("!").yellow(), err);
                 println!("  You may need to create the app manually in App Store Connect.");
             } else {
-                println!("  {} App \"{}\" created in App Store Connect", style("✓").green().bold(), style(&app_name).bold());
+                println!(
+                    "  {} App \"{}\" created in App Store Connect",
+                    style("✓").green().bold(),
+                    style(&app_name).bold()
+                );
             }
         } else {
             let name = apps[0]["attributes"]["name"].as_str().unwrap_or("unknown");
@@ -683,14 +795,21 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     println!();
 
     // --- Step 4: Create or find Distribution Certificate ---
-    println!("  {} Distribution Certificate", style("Step 4 —").cyan().bold());
+    println!(
+        "  {} Distribution Certificate",
+        style("Step 4 —").cyan().bold()
+    );
     print!("  Checking for existing distribution certificates... ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-    let resp = client.get("https://api.appstoreconnect.apple.com/v1/certificates")
+    let resp = client
+        .get("https://api.appstoreconnect.apple.com/v1/certificates")
         .bearer_auth(&jwt)
-        .query(&[("filter[certificateType]", "DISTRIBUTION"), ("limit", "200")])
+        .query(&[
+            ("filter[certificateType]", "DISTRIBUTION"),
+            ("limit", "200"),
+        ])
         .send()?;
     let body: serde_json::Value = resp.json()?;
     let certs = body["data"].as_array();
@@ -703,7 +822,8 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     // Check if we already have a valid .p12 with matching cert
     // Collect ALL valid distribution cert IDs — profile will include all of them
     let all_cert_ids: Vec<String> = if let Some(cert_list) = certs {
-        let valid: Vec<String> = cert_list.iter()
+        let valid: Vec<String> = cert_list
+            .iter()
             .filter(|c| c["attributes"]["certificateType"].as_str() == Some("DISTRIBUTION"))
             .filter_map(|c| c["id"].as_str().map(|s| s.to_string()))
             .collect();
@@ -719,7 +839,10 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     };
 
     let existing_cert_id = if !all_cert_ids.is_empty() && p12_path.exists() {
-        println!("  Found existing .p12 at {}", style(p12_path.display()).dim());
+        println!(
+            "  Found existing .p12 at {}",
+            style(p12_path.display()).dim()
+        );
         let keep = Confirm::new()
             .with_prompt("  Keep existing certificate?")
             .default(true)
@@ -743,8 +866,10 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
         // Check if perry.toml already has a signing_identity
         let existing_identity = if perry_toml_path.exists() {
             let content = std::fs::read_to_string(&perry_toml_path).unwrap_or_default();
-            let parsed: toml::Value = toml::from_str(&content).unwrap_or(toml::Value::Table(toml::Table::new()));
-            parsed.get("ios")
+            let parsed: toml::Value =
+                toml::from_str(&content).unwrap_or(toml::Value::Table(toml::Table::new()));
+            parsed
+                .get("ios")
                 .and_then(|i| i.get("signing_identity"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
@@ -764,7 +889,9 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
                 let mut identities: Vec<String> = Vec::new();
                 for line in stdout.lines() {
                     let line = line.trim();
-                    if !line.starts_with(|c: char| c.is_ascii_digit()) { continue; }
+                    if !line.starts_with(|c: char| c.is_ascii_digit()) {
+                        continue;
+                    }
                     if let Some(quote_start) = line.find('"') {
                         if let Some(quote_end) = line.rfind('"') {
                             if quote_end > quote_start {
@@ -777,11 +904,17 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
                     }
                 }
                 if identities.len() == 1 {
-                    println!("  Detected signing identity: {}", style(&identities[0]).bold());
+                    println!(
+                        "  Detected signing identity: {}",
+                        style(&identities[0]).bold()
+                    );
                     created_signing_identity = Some(identities[0].clone());
                 } else if identities.len() > 1 {
                     // Filter for "Apple Distribution" for iOS
-                    let dist: Vec<&String> = identities.iter().filter(|n| n.starts_with("Apple Distribution")).collect();
+                    let dist: Vec<&String> = identities
+                        .iter()
+                        .filter(|n| n.starts_with("Apple Distribution"))
+                        .collect();
                     if dist.len() == 1 {
                         println!("  Detected signing identity: {}", style(dist[0]).bold());
                         created_signing_identity = Some(dist[0].clone());
@@ -834,7 +967,8 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
 
         // Read CSR as DER (base64)
         let csr_pem = std::fs::read_to_string(&csr_path)?;
-        let csr_b64: String = csr_pem.lines()
+        let csr_b64: String = csr_pem
+            .lines()
             .filter(|l| !l.starts_with("-----"))
             .collect::<Vec<_>>()
             .join("");
@@ -853,7 +987,8 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
                 }
             }
         });
-        let resp = client.post("https://api.appstoreconnect.apple.com/v1/certificates")
+        let resp = client
+            .post("https://api.appstoreconnect.apple.com/v1/certificates")
             .bearer_auth(&jwt)
             .json(&create_body)
             .send()?;
@@ -866,18 +1001,26 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No certificate content in response"))?;
         let cert_id = resp_body["data"]["id"].as_str().unwrap_or("").to_string();
-        let cert_name = resp_body["data"]["attributes"]["name"].as_str().unwrap_or("Unknown");
+        let cert_name = resp_body["data"]["attributes"]["name"]
+            .as_str()
+            .unwrap_or("Unknown");
         println!("{}", style("done").green());
-        println!("  {} Certificate: {}", style("✓").green().bold(), style(cert_name).bold());
+        println!(
+            "  {} Certificate: {}",
+            style("✓").green().bold(),
+            style(cert_name).bold()
+        );
 
         // Decode cert and write as PEM
         use base64::Engine;
-        let cert_der = base64::engine::general_purpose::STANDARD.decode(cert_content_b64)
+        let cert_der = base64::engine::general_purpose::STANDARD
+            .decode(cert_content_b64)
             .context("Failed to decode certificate from Apple")?;
         let cert_pem_path = perry_dir.join("distribution.cer.pem");
         let cert_pem = format!(
             "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
-            base64::engine::general_purpose::STANDARD.encode(&cert_der)
+            base64::engine::general_purpose::STANDARD
+                .encode(&cert_der)
                 .as_bytes()
                 .chunks(76)
                 .map(|c| std::str::from_utf8(c).unwrap_or(""))
@@ -891,22 +1034,19 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
         std::io::Write::flush(&mut std::io::stdout()).ok();
 
         let status = Command::new("openssl")
-            .args(["pkcs12", "-export",
-                   "-inkey"])
+            .args(["pkcs12", "-export", "-inkey"])
             .arg(&key_path)
             .args(["-in"])
             .arg(&cert_pem_path)
             .args(["-out"])
             .arg(&p12_path)
-            .args(["-password", &format!("pass:{p12_password}"),
-                   "-legacy"]) // macOS openssl compatibility
+            .args(["-password", &format!("pass:{p12_password}"), "-legacy"]) // macOS openssl compatibility
             .stderr(std::process::Stdio::null())
             .status()?;
         if !status.success() {
             // Try without -legacy flag (older openssl)
             let status = Command::new("openssl")
-                .args(["pkcs12", "-export",
-                       "-inkey"])
+                .args(["pkcs12", "-export", "-inkey"])
                 .arg(&key_path)
                 .args(["-in"])
                 .arg(&cert_pem_path)
@@ -922,10 +1062,18 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
         println!("{}", style("done").green());
 
         // Derive signing identity from cert (will be saved to perry.toml, not global config)
-        let identity = format!("Apple Distribution: {} ({})",
-            cert_name.strip_prefix("Apple Distribution: ").unwrap_or(cert_name),
-            &team_id);
-        println!("  {} Identity: {}", style("✓").green().bold(), style(&identity).bold());
+        let identity = format!(
+            "Apple Distribution: {} ({})",
+            cert_name
+                .strip_prefix("Apple Distribution: ")
+                .unwrap_or(cert_name),
+            &team_id
+        );
+        println!(
+            "  {} Identity: {}",
+            style("✓").green().bold(),
+            style(&identity).bold()
+        );
         created_signing_identity = Some(identity);
 
         // Clean up intermediate files (keep the private key for potential re-use)
@@ -940,25 +1088,34 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
 
     // --- Step 5: Create Provisioning Profile ---
     println!("  {} Provisioning Profile", style("Step 5 —").cyan().bold());
-    print!("  Creating provisioning profile for {}... ", style(&bundle_id).bold());
+    print!(
+        "  Creating provisioning profile for {}... ",
+        style(&bundle_id).bold()
+    );
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
 
     // First check if one already exists
-    let resp = client.get("https://api.appstoreconnect.apple.com/v1/profiles")
+    let resp = client
+        .get("https://api.appstoreconnect.apple.com/v1/profiles")
         .bearer_auth(&jwt)
-        .query(&[("filter[profileType]", "IOS_APP_STORE"), ("include", "bundleId"), ("limit", "200")])
+        .query(&[
+            ("filter[profileType]", "IOS_APP_STORE"),
+            ("include", "bundleId"),
+            ("limit", "200"),
+        ])
         .send()?;
     let body: serde_json::Value = resp.json()?;
-    let existing_profile = body["data"].as_array()
-        .and_then(|profiles| {
-            profiles.iter().find(|p| {
-                // Check if this profile's bundle ID matches ours
-                let bid_id = p["relationships"]["bundleId"]["data"]["id"].as_str().unwrap_or("");
-                bid_id == bundle_id_resource_id
-            })
-        });
+    let existing_profile = body["data"].as_array().and_then(|profiles| {
+        profiles.iter().find(|p| {
+            // Check if this profile's bundle ID matches ours
+            let bid_id = p["relationships"]["bundleId"]["data"]["id"]
+                .as_str()
+                .unwrap_or("");
+            bid_id == bundle_id_resource_id
+        })
+    });
 
     let profile_b64 = if let Some(profile) = existing_profile {
         // Delete existing profile and recreate — it may reference an old certificate
@@ -967,7 +1124,10 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
             print!("{}, replacing... ", style("found existing").yellow());
             std::io::Write::flush(&mut std::io::stdout()).ok();
             let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-            let _ = client.delete(format!("https://api.appstoreconnect.apple.com/v1/profiles/{profile_id}"))
+            let _ = client
+                .delete(format!(
+                    "https://api.appstoreconnect.apple.com/v1/profiles/{profile_id}"
+                ))
                 .bearer_auth(&jwt)
                 .send();
         }
@@ -1001,7 +1161,8 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
             }
         });
         let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
-        let resp = client.post("https://api.appstoreconnect.apple.com/v1/profiles")
+        let resp = client
+            .post("https://api.appstoreconnect.apple.com/v1/profiles")
             .bearer_auth(&jwt)
             .json(&create_body)
             .send()?;
@@ -1021,13 +1182,18 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
 
     // Decode and save the provisioning profile
     use base64::Engine;
-    let profile_data = base64::engine::general_purpose::STANDARD.decode(&profile_b64)
+    let profile_data = base64::engine::general_purpose::STANDARD
+        .decode(&profile_b64)
         .context("Failed to decode provisioning profile")?;
     let profile_filename = format!("{}.mobileprovision", bundle_id.replace('.', "_"));
     let profile_path = perry_dir.join(profile_filename);
     std::fs::write(&profile_path, &profile_data)?;
 
-    println!("  {} Profile saved to {}", style("✓").green().bold(), style(profile_path.display()).dim());
+    println!(
+        "  {} Profile saved to {}",
+        style("✓").green().bold(),
+        style(profile_path.display()).dim()
+    );
     println!();
 
     // --- Save project-specific credentials to perry.toml ---
@@ -1046,8 +1212,11 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
         &bundle_id,
     ) {
         Ok(()) => {
-            println!("  {} Project credentials saved to {}", style("✓").green().bold(),
-                style(perry_toml_path.display()).dim());
+            println!(
+                "  {} Project credentials saved to {}",
+                style("✓").green().bold(),
+                style(perry_toml_path.display()).dim()
+            );
         }
         Err(e) => {
             println!("  {} Could not update perry.toml: {e}", style("!").yellow());
@@ -1072,19 +1241,23 @@ pub(crate) fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     // --- Summary ---
     println!("  {}", style("Setup complete!").green().bold());
     println!();
-    println!("  {} {} {}",
+    println!(
+        "  {} {} {}",
         style("Global").bold(),
         style("→").dim(),
         style(config_path().display()).dim(),
     );
     println!("    p8_key_path, key_id, issuer_id, team_id");
     println!();
-    println!("  {} {} {}",
+    println!(
+        "  {} {} {}",
         style("Project").bold(),
         style("→").dim(),
         style(perry_toml_path.display()).dim(),
     );
-    println!("    bundle_id, certificate, provisioning_profile, signing_identity, encryption_exempt");
+    println!(
+        "    bundle_id, certificate, provisioning_profile, signing_identity, encryption_exempt"
+    );
     println!();
     println!("  Certificate:  {}", style(p12_path.display()).dim());
     println!("  Profile:      {}", style(profile_path.display()).dim());
@@ -1124,8 +1297,7 @@ fn generate_asc_jwt(key_id: &str, issuer_id: &str, p8_content: &str) -> Result<S
     let encoding_key = EncodingKey::from_ec_pem(p8_content.as_bytes())
         .context("Failed to parse .p8 key — ensure it's a valid EC private key")?;
 
-    let token = encode(&header, &claims, &encoding_key)
-        .context("Failed to generate JWT")?;
+    let token = encode(&header, &claims, &encoding_key).context("Failed to generate JWT")?;
 
     Ok(token)
 }
@@ -1157,7 +1329,10 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
     // Check for existing credentials (shared with iOS — same Apple account)
     let existing_apple = saved.apple.clone().unwrap_or_default();
 
-    println!("  {} App Store Connect API Key", style("Step 1/2 —").cyan().bold());
+    println!(
+        "  {} App Store Connect API Key",
+        style("Step 1/2 —").cyan().bold()
+    );
     println!();
 
     let has_existing = existing_apple.p8_key_path.is_some()
@@ -1188,8 +1363,14 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
         }
     } else {
         println!("  You need an App Store Connect API key.");
-        println!("  1. Go to: {}", style("https://appstoreconnect.apple.com/access/integrations/api").underlined());
-        println!("  2. Click '+', create a key with {} role.", style("App Manager").bold());
+        println!(
+            "  1. Go to: {}",
+            style("https://appstoreconnect.apple.com/access/integrations/api").underlined()
+        );
+        println!(
+            "  2. Click '+', create a key with {} role.",
+            style("App Manager").bold()
+        );
         println!("  3. Download the .p8 file (only downloadable once).");
         println!("  4. Note the Key ID and Issuer ID.");
         println!();
@@ -1216,14 +1397,25 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
 
     println!();
     println!("  {} Key ID: {}", style("✓").green(), style(&key_id).bold());
-    println!("  {} Issuer ID: {}", style("✓").green(), style(&issuer_id).bold());
+    println!(
+        "  {} Issuer ID: {}",
+        style("✓").green(),
+        style(&issuer_id).bold()
+    );
     if !team_id.is_empty() {
-        println!("  {} Team ID: {}", style("✓").green(), style(&team_id).bold());
+        println!(
+            "  {} Team ID: {}",
+            style("✓").green(),
+            style(&team_id).bold()
+        );
     }
     println!();
 
     // --- Step 2: Distribution method ---
-    println!("  {} Distribution Method", style("Step 2/3 —").cyan().bold());
+    println!(
+        "  {} Distribution Method",
+        style("Step 2/3 —").cyan().bold()
+    );
     println!();
 
     let cert_types = &[
@@ -1255,7 +1447,8 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
     let jwt = generate_asc_jwt(&key_id, &issuer_id, &p8_content)?;
     print!("  Verifying API access... ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
-    let resp = client.get("https://api.appstoreconnect.apple.com/v1/certificates?limit=1")
+    let resp = client
+        .get("https://api.appstoreconnect.apple.com/v1/certificates?limit=1")
         .bearer_auth(&jwt)
         .send()
         .context("Failed to connect to App Store Connect API")?;
@@ -1310,9 +1503,15 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
     // -- App Store certificate (MAC_APP_DISTRIBUTION + MAC_INSTALLER_DISTRIBUTION) --
     if needs_appstore_cert {
         let (p12, identity) = create_apple_certificate(
-            &client, &key_id, &issuer_id, &p8_content,
-            "MAC_APP_DISTRIBUTION", &csr_pem, &key_path,
-            &perry_dir.join("macos_appstore.p12"), p12_password,
+            &client,
+            &key_id,
+            &issuer_id,
+            &p8_content,
+            "MAC_APP_DISTRIBUTION",
+            &csr_pem,
+            &key_path,
+            &perry_dir.join("macos_appstore.p12"),
+            p12_password,
             "Mac App Distribution",
         )?;
         cert_path = p12;
@@ -1321,16 +1520,31 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
         // Also create MAC_INSTALLER_DISTRIBUTION for .pkg signing
         // Stored as a separate .p12 since openssl can only export one key per .p12
         match create_apple_certificate(
-            &client, &key_id, &issuer_id, &p8_content,
-            "MAC_INSTALLER_DISTRIBUTION", &csr_pem, &key_path,
-            &perry_dir.join("macos_installer.p12"), p12_password,
+            &client,
+            &key_id,
+            &issuer_id,
+            &p8_content,
+            "MAC_INSTALLER_DISTRIBUTION",
+            &csr_pem,
+            &key_path,
+            &perry_dir.join("macos_installer.p12"),
+            p12_password,
             "Mac Installer Distribution",
         ) {
             Ok((_installer_p12, _installer_identity)) => {
-                installer_cert_path = Some(perry_dir.join("macos_installer.p12").to_string_lossy().to_string());
+                installer_cert_path = Some(
+                    perry_dir
+                        .join("macos_installer.p12")
+                        .to_string_lossy()
+                        .to_string(),
+                );
             }
             Err(e) => {
-                println!("  {} Installer cert: {} (pkg signing may fail)", style("!").yellow(), e);
+                println!(
+                    "  {} Installer cert: {} (pkg signing may fail)",
+                    style("!").yellow(),
+                    e
+                );
             }
         }
     }
@@ -1338,9 +1552,15 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
     // -- Developer ID certificate (DEVELOPER_ID_APPLICATION) --
     if needs_notarize_cert {
         let (p12, identity) = create_apple_certificate(
-            &client, &key_id, &issuer_id, &p8_content,
-            "DEVELOPER_ID_APPLICATION", &csr_pem, &key_path,
-            &perry_dir.join("macos_devid.p12"), p12_password,
+            &client,
+            &key_id,
+            &issuer_id,
+            &p8_content,
+            "DEVELOPER_ID_APPLICATION",
+            &csr_pem,
+            &key_path,
+            &perry_dir.join("macos_devid.p12"),
+            p12_password,
             "Developer ID Application",
         )?;
         if distribute_value == "both" {
@@ -1366,8 +1586,16 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
         &perry_toml_path,
         distribute_value,
         &cert_path,
-        if signing_identity.is_empty() { None } else { Some(&signing_identity) },
-        if distribute_value == "both" { Some(&notarize_cert_path) } else { None },
+        if signing_identity.is_empty() {
+            None
+        } else {
+            Some(&signing_identity)
+        },
+        if distribute_value == "both" {
+            Some(&notarize_cert_path)
+        } else {
+            None
+        },
         if distribute_value == "both" && !notarize_signing_identity.is_empty() {
             Some(&notarize_signing_identity)
         } else {
@@ -1376,8 +1604,11 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
         installer_cert_path.as_deref(),
     ) {
         Ok(()) => {
-            println!("  {} macOS credentials saved to {}", style("✓").green().bold(),
-                style(perry_toml_path.display()).dim());
+            println!(
+                "  {} macOS credentials saved to {}",
+                style("✓").green().bold(),
+                style(perry_toml_path.display()).dim()
+            );
         }
         Err(e) => {
             println!("  {} Could not update perry.toml: {e}", style("!").yellow());
@@ -1396,7 +1627,12 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
             .with_prompt("  Does your app ONLY use standard HTTPS? (no custom encryption)")
             .default(true)
             .interact()?;
-        if let Err(e) = update_perry_toml_section_bool(&perry_toml_path, "macos", "encryption_exempt", encryption_exempt) {
+        if let Err(e) = update_perry_toml_section_bool(
+            &perry_toml_path,
+            "macos",
+            "encryption_exempt",
+            encryption_exempt,
+        ) {
             println!("  {} Could not update perry.toml: {e}", style("!").yellow());
             println!("  Add manually to [macos]: encryption_exempt = {encryption_exempt}");
         }
@@ -1406,14 +1642,16 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
     // --- Summary ---
     println!("  {}", style("Setup complete!").green().bold());
     println!();
-    println!("  {} {} {}",
+    println!(
+        "  {} {} {}",
         style("Global").bold(),
         style("→").dim(),
         style(config_path().display()).dim(),
     );
     println!("    p8_key_path, key_id, issuer_id, team_id");
     println!();
-    println!("  {} {} {}",
+    println!(
+        "  {} {} {}",
         style("Project").bold(),
         style("→").dim(),
         style(perry_toml_path.display()).dim(),
@@ -1430,7 +1668,10 @@ pub(crate) fn macos_wizard(saved: &mut PerryConfig) -> Result<()> {
         }
     }
     println!("  Distribute:   {}", style(distribute_value).bold());
-    println!("  Cert password: auto-managed ({})", style("perry-auto").dim());
+    println!(
+        "  Cert password: auto-managed ({})",
+        style("perry-auto").dim()
+    );
     println!();
     println!("  Then run: {}", style("perry publish macos").bold());
 
@@ -1451,17 +1692,26 @@ fn merge_p12_files(
     let combined = tmpdir.join("_merge_combined.pem");
 
     // Extract both to PEM (try with -legacy first, fall back without)
-    for (p12, pem) in [(primary_p12.as_os_str(), pem_a.as_os_str()), (std::ffi::OsStr::new(secondary_p12), pem_b.as_os_str())] {
+    for (p12, pem) in [
+        (primary_p12.as_os_str(), pem_a.as_os_str()),
+        (std::ffi::OsStr::new(secondary_p12), pem_b.as_os_str()),
+    ] {
         let ok = Command::new("openssl")
-            .args(["pkcs12", "-in"]).arg(p12)
-            .args(["-out"]).arg(pem)
+            .args(["pkcs12", "-in"])
+            .arg(p12)
+            .args(["-out"])
+            .arg(pem)
             .args(["-nodes", "-password", &pass, "-legacy"])
             .stderr(std::process::Stdio::null())
-            .status().map(|s| s.success()).unwrap_or(false);
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
         if !ok {
             Command::new("openssl")
-                .args(["pkcs12", "-in"]).arg(p12)
-                .args(["-out"]).arg(pem)
+                .args(["pkcs12", "-in"])
+                .arg(p12)
+                .args(["-out"])
+                .arg(pem)
                 .args(["-nodes", "-password", &pass])
                 .stderr(std::process::Stdio::null())
                 .status()?;
@@ -1475,15 +1725,21 @@ fn merge_p12_files(
 
     // Re-package into .p12
     let ok = Command::new("openssl")
-        .args(["pkcs12", "-export", "-in"]).arg(&combined)
-        .args(["-out"]).arg(primary_p12)
+        .args(["pkcs12", "-export", "-in"])
+        .arg(&combined)
+        .args(["-out"])
+        .arg(primary_p12)
         .args(["-password", &pass, "-legacy"])
         .stderr(std::process::Stdio::null())
-        .status().map(|s| s.success()).unwrap_or(false);
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
     if !ok {
         Command::new("openssl")
-            .args(["pkcs12", "-export", "-in"]).arg(&combined)
-            .args(["-out"]).arg(primary_p12)
+            .args(["pkcs12", "-export", "-in"])
+            .arg(&combined)
+            .args(["-out"])
+            .arg(primary_p12)
             .args(["-password", &pass])
             .stderr(std::process::Stdio::null())
             .status()?;
@@ -1515,42 +1771,49 @@ fn create_apple_certificate(
     p12_password: &str,
     display_name: &str,
 ) -> Result<(String, String)> {
-    
-
     // Check for existing certs of this type
-    print!("  Checking for existing {} certificate... ", style(display_name).bold());
+    print!(
+        "  Checking for existing {} certificate... ",
+        style(display_name).bold()
+    );
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let jwt = generate_asc_jwt(key_id, issuer_id, p8_content)?;
-    let resp = client.get("https://api.appstoreconnect.apple.com/v1/certificates")
+    let resp = client
+        .get("https://api.appstoreconnect.apple.com/v1/certificates")
         .bearer_auth(&jwt)
         .query(&[("filter[certificateType]", cert_type), ("limit", "200")])
         .send()?;
     let body: serde_json::Value = resp.json()?;
-    let existing = body["data"].as_array()
-        .and_then(|arr| arr.first())
-        .cloned();
+    let existing = body["data"].as_array().and_then(|arr| arr.first()).cloned();
 
     if let Some(ref cert) = existing {
         if p12_output_path.exists() {
             let name = cert["attributes"]["name"].as_str().unwrap_or(display_name);
             println!("{} ({})", style("found").green(), name);
-            println!("  {} Using existing .p12 at {}", style("✓").green().bold(),
-                style(p12_output_path.display()).dim());
+            println!(
+                "  {} Using existing .p12 at {}",
+                style("✓").green().bold(),
+                style(p12_output_path.display()).dim()
+            );
             let identity = name.to_string();
             return Ok((p12_output_path.to_string_lossy().to_string(), identity));
         } else {
             // Existing cert was created elsewhere (e.g. Xcode) — we don't have the
             // matching private key, so we can't make a .p12 from it.
             // Create a brand-new cert with our CSR instead.
-            println!("{}", style("found (no local key), creating new...").yellow());
+            println!(
+                "{}",
+                style("found (no local key), creating new...").yellow()
+            );
         }
     } else {
         println!("{}", style("not found, creating...").yellow());
     }
 
     // Strip PEM headers for API (Apple wants raw base64)
-    let csr_b64: String = csr_pem.lines()
+    let csr_b64: String = csr_pem
+        .lines()
         .filter(|l| !l.starts_with("-----"))
         .collect::<Vec<_>>()
         .join("");
@@ -1569,7 +1832,8 @@ fn create_apple_certificate(
             }
         }
     });
-    let resp = client.post("https://api.appstoreconnect.apple.com/v1/certificates")
+    let resp = client
+        .post("https://api.appstoreconnect.apple.com/v1/certificates")
         .bearer_auth(&jwt)
         .json(&create_body)
         .send()?;
@@ -1582,7 +1846,10 @@ fn create_apple_certificate(
         // Fall back to exporting from the local Keychain.
         if status == 403 {
             println!("{}", style("forbidden (Account Holder required)").yellow());
-            println!("  {} Developer ID certificates require Account Holder role to create via API.", style("ℹ").blue());
+            println!(
+                "  {} Developer ID certificates require Account Holder role to create via API.",
+                style("ℹ").blue()
+            );
             println!("  Attempting to export from your local Keychain instead...");
             println!();
             return export_cert_from_keychain(display_name, p12_output_path, p12_password);
@@ -1598,10 +1865,18 @@ fn create_apple_certificate(
         .as_str()
         .unwrap_or(display_name);
     println!("{}", style("done").green());
-    println!("  {} Certificate: {}", style("✓").green().bold(), style(cert_name).bold());
+    println!(
+        "  {} Certificate: {}",
+        style("✓").green().bold(),
+        style(cert_name).bold()
+    );
 
     let identity = create_p12_from_cert_content(
-        cert_content, private_key_path, p12_output_path, p12_password, display_name,
+        cert_content,
+        private_key_path,
+        p12_output_path,
+        p12_password,
+        display_name,
     )?;
 
     Ok((p12_output_path.to_string_lossy().to_string(), identity))
@@ -1647,7 +1922,8 @@ fn export_cert_from_keychain(
     }
 
     // Filter to matching identities (e.g. "Developer ID Application")
-    let matching: Vec<_> = identities.iter()
+    let matching: Vec<_> = identities
+        .iter()
         .filter(|(_, name)| name.starts_with(display_name))
         .collect();
 
@@ -1665,7 +1941,10 @@ fn export_cert_from_keychain(
     } else {
         let labels: Vec<&str> = matching.iter().map(|(_, n)| n.as_str()).collect();
         let selection = Select::new()
-            .with_prompt(format!("  Multiple {} certs found — select one", display_name))
+            .with_prompt(format!(
+                "  Multiple {} certs found — select one",
+                display_name
+            ))
             .items(&labels)
             .default(0)
             .interact()?;
@@ -1684,10 +1963,15 @@ fn export_cert_from_keychain(
     );
     let export_result = Command::new("security")
         .args([
-            "export", "-k", &keychain_path,
-            "-t", "identities",
-            "-f", "pkcs12",
-            "-P", p12_password,
+            "export",
+            "-k",
+            &keychain_path,
+            "-t",
+            "identities",
+            "-f",
+            "pkcs12",
+            "-P",
+            p12_password,
             "-o",
         ])
         .arg(p12_output_path)
@@ -1721,7 +2005,12 @@ fn export_cert_from_keychain(
         .arg(&temp_all)
         .args(["-out"])
         .arg(p12_output_path.with_extension("pem"))
-        .args(["-nodes", "-password", &format!("pass:{p12_password}"), "-legacy"])
+        .args([
+            "-nodes",
+            "-password",
+            &format!("pass:{p12_password}"),
+            "-legacy",
+        ])
         .stderr(std::process::Stdio::null())
         .status();
 
@@ -1743,8 +2032,16 @@ fn export_cert_from_keychain(
     std::fs::rename(&temp_all, p12_output_path)?;
     let _ = std::fs::remove_file(p12_output_path.with_extension("pem"));
 
-    println!("  {} Certificate: {}", style("✓").green().bold(), style(&identity_name).bold());
-    println!("  {} Saved to {}", style("✓").green().bold(), style(p12_output_path.display()).dim());
+    println!(
+        "  {} Certificate: {}",
+        style("✓").green().bold(),
+        style(&identity_name).bold()
+    );
+    println!(
+        "  {} Saved to {}",
+        style("✓").green().bold(),
+        style(p12_output_path.display()).dim()
+    );
 
     Ok((p12_output_path.to_string_lossy().to_string(), identity_name))
 }
@@ -1760,14 +2057,16 @@ fn create_p12_from_cert_content(
 ) -> Result<String> {
     use base64::Engine;
 
-    let cert_der = base64::engine::general_purpose::STANDARD.decode(cert_content_b64)
+    let cert_der = base64::engine::general_purpose::STANDARD
+        .decode(cert_content_b64)
         .context("Failed to decode certificate from Apple")?;
 
     // Write cert as PEM for openssl
     let cert_pem_path = p12_output_path.with_extension("cer.pem");
     let cert_pem = format!(
         "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
-        base64::engine::general_purpose::STANDARD.encode(&cert_der)
+        base64::engine::general_purpose::STANDARD
+            .encode(&cert_der)
             .as_bytes()
             .chunks(76)
             .map(|c| std::str::from_utf8(c).unwrap_or(""))
@@ -1785,10 +2084,11 @@ fn create_p12_from_cert_content(
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_default();
     let identity = identity_output
-        .split("CN=").nth(1)  // old format: subject= /CN=.../O=...
-        .or_else(|| identity_output.split("CN = ").nth(1))  // new format: subject=CN = ..., O = ...
-        .map(|s| s.split('/').next().unwrap_or(s))  // strip /O=...
-        .map(|s| s.split(", O").next().unwrap_or(s))  // strip , O = ...
+        .split("CN=")
+        .nth(1) // old format: subject= /CN=.../O=...
+        .or_else(|| identity_output.split("CN = ").nth(1)) // new format: subject=CN = ..., O = ...
+        .map(|s| s.split('/').next().unwrap_or(s)) // strip /O=...
+        .map(|s| s.split(", O").next().unwrap_or(s)) // strip , O = ...
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| display_name.to_string());
 
@@ -1847,9 +2147,7 @@ fn expand_tilde(path: &str) -> String {
 
 /// Prompt for a file path, validate it exists and has the expected extension.
 fn prompt_file_path(prompt: &str, expected_ext: &str) -> Result<String> {
-    let path = Input::<String>::new()
-        .with_prompt(prompt)
-        .interact_text()?;
+    let path = Input::<String>::new().with_prompt(prompt).interact_text()?;
     let path = expand_tilde(&path);
     if !std::path::Path::new(&path).exists() {
         bail!("File not found: {path}");
@@ -1877,27 +2175,42 @@ fn update_perry_toml_ios(
     bundle_id: &str,
 ) -> Result<()> {
     let content = std::fs::read_to_string(perry_toml_path)?;
-    let mut doc = content.parse::<toml::Table>()
+    let mut doc = content
+        .parse::<toml::Table>()
         .context("Failed to parse perry.toml")?;
 
-    let ios = doc.entry("ios")
+    let ios = doc
+        .entry("ios")
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[ios] in perry.toml is not a table"))?;
 
     ios.insert("bundle_id".into(), toml::Value::String(bundle_id.into()));
-    ios.insert("certificate".into(), toml::Value::String(certificate.into()));
-    ios.insert("provisioning_profile".into(), toml::Value::String(provisioning_profile.into()));
+    ios.insert(
+        "certificate".into(),
+        toml::Value::String(certificate.into()),
+    );
+    ios.insert(
+        "provisioning_profile".into(),
+        toml::Value::String(provisioning_profile.into()),
+    );
     if let Some(identity) = signing_identity {
-        ios.insert("signing_identity".into(), toml::Value::String(identity.into()));
+        ios.insert(
+            "signing_identity".into(),
+            toml::Value::String(identity.into()),
+        );
     }
     if !ios.contains_key("distribute") {
-        ios.insert("distribute".into(), toml::Value::String("testflight".into()));
+        ios.insert(
+            "distribute".into(),
+            toml::Value::String("testflight".into()),
+        );
     }
 
     // Ensure [project] has version and build_number — required for App Store uploads.
     // build_number is auto-incremented by `perry publish` on each upload.
-    let project = doc.entry("project")
+    let project = doc
+        .entry("project")
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[project] in perry.toml is not a table"))?;
@@ -1908,8 +2221,7 @@ fn update_perry_toml_ios(
         project.insert("build_number".into(), toml::Value::Integer(0));
     }
 
-    let new_content = toml::to_string_pretty(&doc)
-        .context("Failed to serialize perry.toml")?;
+    let new_content = toml::to_string_pretty(&doc).context("Failed to serialize perry.toml")?;
     std::fs::write(perry_toml_path, new_content)?;
     Ok(())
 }
@@ -1919,7 +2231,12 @@ fn update_perry_toml_encryption_exempt(
     perry_toml_path: &std::path::Path,
     encryption_exempt: bool,
 ) -> Result<()> {
-    update_perry_toml_section_bool(perry_toml_path, "ios", "encryption_exempt", encryption_exempt)
+    update_perry_toml_section_bool(
+        perry_toml_path,
+        "ios",
+        "encryption_exempt",
+        encryption_exempt,
+    )
 }
 
 /// Update a boolean field in a named section of perry.toml.
@@ -1930,18 +2247,19 @@ fn update_perry_toml_section_bool(
     value: bool,
 ) -> Result<()> {
     let content = std::fs::read_to_string(perry_toml_path)?;
-    let mut doc = content.parse::<toml::Table>()
+    let mut doc = content
+        .parse::<toml::Table>()
         .context("Failed to parse perry.toml")?;
 
-    let table = doc.entry(section)
+    let table = doc
+        .entry(section)
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[{section}] in perry.toml is not a table"))?;
 
     table.insert(key.into(), toml::Value::Boolean(value));
 
-    let new_content = toml::to_string_pretty(&doc)
-        .context("Failed to serialize perry.toml")?;
+    let new_content = toml::to_string_pretty(&doc).context("Failed to serialize perry.toml")?;
     std::fs::write(perry_toml_path, new_content)?;
     Ok(())
 }
@@ -1954,10 +2272,12 @@ fn update_perry_toml_android(
     google_play_key: Option<&str>,
 ) -> Result<()> {
     let content = std::fs::read_to_string(perry_toml_path)?;
-    let mut doc = content.parse::<toml::Table>()
+    let mut doc = content
+        .parse::<toml::Table>()
         .context("Failed to parse perry.toml")?;
 
-    let android = doc.entry("android")
+    let android = doc
+        .entry("android")
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[android] in perry.toml is not a table"))?;
@@ -1973,7 +2293,8 @@ fn update_perry_toml_android(
 
     // Ensure [project] has version and build_number — required for Play Store uploads.
     // build_number is auto-incremented by `perry publish` on each upload.
-    let project = doc.entry("project")
+    let project = doc
+        .entry("project")
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[project] in perry.toml is not a table"))?;
@@ -1984,8 +2305,7 @@ fn update_perry_toml_android(
         project.insert("build_number".into(), toml::Value::Integer(0));
     }
 
-    let new_content = toml::to_string_pretty(&doc)
-        .context("Failed to serialize perry.toml")?;
+    let new_content = toml::to_string_pretty(&doc).context("Failed to serialize perry.toml")?;
     std::fs::write(perry_toml_path, new_content)?;
     Ok(())
 }
@@ -2001,31 +2321,47 @@ fn update_perry_toml_macos(
     installer_certificate: Option<&str>,
 ) -> Result<()> {
     let content = std::fs::read_to_string(perry_toml_path)?;
-    let mut doc = content.parse::<toml::Table>()
+    let mut doc = content
+        .parse::<toml::Table>()
         .context("Failed to parse perry.toml")?;
 
-    let macos = doc.entry("macos")
+    let macos = doc
+        .entry("macos")
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[macos] in perry.toml is not a table"))?;
 
     macos.insert("distribute".into(), toml::Value::String(distribute.into()));
-    macos.insert("certificate".into(), toml::Value::String(certificate.into()));
+    macos.insert(
+        "certificate".into(),
+        toml::Value::String(certificate.into()),
+    );
     if let Some(identity) = signing_identity {
-        macos.insert("signing_identity".into(), toml::Value::String(identity.into()));
+        macos.insert(
+            "signing_identity".into(),
+            toml::Value::String(identity.into()),
+        );
     }
     if let Some(notarize_cert) = notarize_certificate {
-        macos.insert("notarize_certificate".into(), toml::Value::String(notarize_cert.into()));
+        macos.insert(
+            "notarize_certificate".into(),
+            toml::Value::String(notarize_cert.into()),
+        );
     }
     if let Some(notarize_identity) = notarize_signing_identity {
-        macos.insert("notarize_signing_identity".into(), toml::Value::String(notarize_identity.into()));
+        macos.insert(
+            "notarize_signing_identity".into(),
+            toml::Value::String(notarize_identity.into()),
+        );
     }
     if let Some(installer_cert) = installer_certificate {
-        macos.insert("installer_certificate".into(), toml::Value::String(installer_cert.into()));
+        macos.insert(
+            "installer_certificate".into(),
+            toml::Value::String(installer_cert.into()),
+        );
     }
 
-    let new_content = toml::to_string_pretty(&doc)
-        .context("Failed to serialize perry.toml")?;
+    let new_content = toml::to_string_pretty(&doc).context("Failed to serialize perry.toml")?;
     std::fs::write(perry_toml_path, new_content)?;
     Ok(())
 }
@@ -2040,7 +2376,10 @@ pub(crate) fn visionos_wizard(saved: &mut PerryConfig) -> Result<()> {
 
     let existing_apple = saved.apple.clone().unwrap_or_default();
 
-    println!("  {} App Store Connect API Key", style("Step 1/2 —").cyan().bold());
+    println!(
+        "  {} App Store Connect API Key",
+        style("Step 1/2 —").cyan().bold()
+    );
     println!();
 
     let has_existing = existing_apple.p8_key_path.is_some()
@@ -2071,7 +2410,10 @@ pub(crate) fn visionos_wizard(saved: &mut PerryConfig) -> Result<()> {
         }
     } else {
         println!("  You need an App Store Connect API key.");
-        println!("  1. Go to: {}", style("https://appstoreconnect.apple.com/access/integrations/api").underlined());
+        println!(
+            "  1. Go to: {}",
+            style("https://appstoreconnect.apple.com/access/integrations/api").underlined()
+        );
         println!("  2. Create an API key with \"App Manager\" or \"Admin\" role.");
         println!("  3. Download the .p8 file and note the Key ID and Issuer ID.");
         println!();
@@ -2082,7 +2424,11 @@ pub(crate) fn visionos_wizard(saved: &mut PerryConfig) -> Result<()> {
         p8_key_path: Some(p8_path),
         key_id: Some(key_id),
         issuer_id: Some(issuer_id),
-        team_id: if team_id.is_empty() { None } else { Some(team_id) },
+        team_id: if team_id.is_empty() {
+            None
+        } else {
+            Some(team_id)
+        },
         ..existing_apple
     });
 
@@ -2094,10 +2440,28 @@ pub(crate) fn visionos_wizard(saved: &mut PerryConfig) -> Result<()> {
     let existing_bid = if perry_toml_path.exists() {
         let content = std::fs::read_to_string(&perry_toml_path)?;
         let parsed: toml::Table = content.parse().unwrap_or_default();
-        parsed.get("visionos").and_then(|w| w.get("bundle_id")).and_then(|v| v.as_str())
-            .or_else(|| parsed.get("app").and_then(|a| a.get("bundle_id")).and_then(|v| v.as_str()))
-            .or_else(|| parsed.get("project").and_then(|p| p.get("bundle_id")).and_then(|v| v.as_str()))
-            .or_else(|| parsed.get("ios").and_then(|p| p.get("bundle_id")).and_then(|v| v.as_str()))
+        parsed
+            .get("visionos")
+            .and_then(|w| w.get("bundle_id"))
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                parsed
+                    .get("app")
+                    .and_then(|a| a.get("bundle_id"))
+                    .and_then(|v| v.as_str())
+            })
+            .or_else(|| {
+                parsed
+                    .get("project")
+                    .and_then(|p| p.get("bundle_id"))
+                    .and_then(|v| v.as_str())
+            })
+            .or_else(|| {
+                parsed
+                    .get("ios")
+                    .and_then(|p| p.get("bundle_id"))
+                    .and_then(|v| v.as_str())
+            })
             .map(|s| s.to_string())
     } else {
         None
@@ -2148,18 +2512,19 @@ fn save_visionos_bundle_id(perry_toml_path: &std::path::Path, bundle_id: &str) -
     } else {
         String::new()
     };
-    let mut doc = content.parse::<toml::Table>()
+    let mut doc = content
+        .parse::<toml::Table>()
         .unwrap_or_else(|_| toml::Table::new());
 
-    let visionos = doc.entry("visionos")
+    let visionos = doc
+        .entry("visionos")
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[visionos] in perry.toml is not a table"))?;
 
     visionos.insert("bundle_id".into(), toml::Value::String(bundle_id.into()));
 
-    let new_content = toml::to_string_pretty(&doc)
-        .context("Failed to serialize perry.toml")?;
+    let new_content = toml::to_string_pretty(&doc).context("Failed to serialize perry.toml")?;
     std::fs::write(perry_toml_path, new_content)?;
     Ok(())
 }
@@ -2176,7 +2541,10 @@ pub(crate) fn watchos_wizard(saved: &mut PerryConfig) -> Result<()> {
     // Shared with iOS — same Apple account
     let existing_apple = saved.apple.clone().unwrap_or_default();
 
-    println!("  {} App Store Connect API Key", style("Step 1/2 —").cyan().bold());
+    println!(
+        "  {} App Store Connect API Key",
+        style("Step 1/2 —").cyan().bold()
+    );
     println!();
 
     let has_existing = existing_apple.p8_key_path.is_some()
@@ -2207,7 +2575,10 @@ pub(crate) fn watchos_wizard(saved: &mut PerryConfig) -> Result<()> {
         }
     } else {
         println!("  You need an App Store Connect API key.");
-        println!("  1. Go to: {}", style("https://appstoreconnect.apple.com/access/integrations/api").underlined());
+        println!(
+            "  1. Go to: {}",
+            style("https://appstoreconnect.apple.com/access/integrations/api").underlined()
+        );
         println!("  2. Create an API key with \"App Manager\" or \"Admin\" role.");
         println!("  3. Download the .p8 file and note the Key ID and Issuer ID.");
         println!();
@@ -2218,7 +2589,11 @@ pub(crate) fn watchos_wizard(saved: &mut PerryConfig) -> Result<()> {
         p8_key_path: Some(p8_path),
         key_id: Some(key_id),
         issuer_id: Some(issuer_id),
-        team_id: if team_id.is_empty() { None } else { Some(team_id) },
+        team_id: if team_id.is_empty() {
+            None
+        } else {
+            Some(team_id)
+        },
         ..existing_apple
     });
 
@@ -2232,9 +2607,22 @@ pub(crate) fn watchos_wizard(saved: &mut PerryConfig) -> Result<()> {
     let existing_bid = if perry_toml_path.exists() {
         let content = std::fs::read_to_string(&perry_toml_path)?;
         let parsed: toml::Table = content.parse().unwrap_or_default();
-        parsed.get("watchos").and_then(|w| w.get("bundle_id")).and_then(|v| v.as_str())
-            .or_else(|| parsed.get("app").and_then(|a| a.get("bundle_id")).and_then(|v| v.as_str()))
-            .or_else(|| parsed.get("project").and_then(|p| p.get("bundle_id")).and_then(|v| v.as_str()))
+        parsed
+            .get("watchos")
+            .and_then(|w| w.get("bundle_id"))
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                parsed
+                    .get("app")
+                    .and_then(|a| a.get("bundle_id"))
+                    .and_then(|v| v.as_str())
+            })
+            .or_else(|| {
+                parsed
+                    .get("project")
+                    .and_then(|p| p.get("bundle_id"))
+                    .and_then(|v| v.as_str())
+            })
             .map(|s| s.to_string())
     } else {
         None
@@ -2286,18 +2674,19 @@ fn save_watchos_bundle_id(perry_toml_path: &std::path::Path, bundle_id: &str) ->
     } else {
         String::new()
     };
-    let mut doc = content.parse::<toml::Table>()
+    let mut doc = content
+        .parse::<toml::Table>()
         .unwrap_or_else(|_| toml::Table::new());
 
-    let watchos = doc.entry("watchos")
+    let watchos = doc
+        .entry("watchos")
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[watchos] in perry.toml is not a table"))?;
 
     watchos.insert("bundle_id".into(), toml::Value::String(bundle_id.into()));
 
-    let new_content = toml::to_string_pretty(&doc)
-        .context("Failed to serialize perry.toml")?;
+    let new_content = toml::to_string_pretty(&doc).context("Failed to serialize perry.toml")?;
     std::fs::write(perry_toml_path, new_content)?;
     Ok(())
 }
@@ -2310,7 +2699,10 @@ pub(crate) fn tvos_wizard(saved: &mut PerryConfig) -> Result<()> {
     // Shared with iOS/macOS — same Apple account
     let existing_apple = saved.apple.clone().unwrap_or_default();
 
-    println!("  {} App Store Connect API Key", style("Step 1/2 —").cyan().bold());
+    println!(
+        "  {} App Store Connect API Key",
+        style("Step 1/2 —").cyan().bold()
+    );
     println!();
 
     let has_existing = existing_apple.p8_key_path.is_some()
@@ -2341,7 +2733,10 @@ pub(crate) fn tvos_wizard(saved: &mut PerryConfig) -> Result<()> {
         }
     } else {
         println!("  You need an App Store Connect API key.");
-        println!("  1. Go to: {}", style("https://appstoreconnect.apple.com/access/integrations/api").underlined());
+        println!(
+            "  1. Go to: {}",
+            style("https://appstoreconnect.apple.com/access/integrations/api").underlined()
+        );
         println!("  2. Create an API key with \"App Manager\" or \"Admin\" role.");
         println!("  3. Download the .p8 file and note the Key ID and Issuer ID.");
         println!();
@@ -2352,7 +2747,11 @@ pub(crate) fn tvos_wizard(saved: &mut PerryConfig) -> Result<()> {
         p8_key_path: Some(p8_path),
         key_id: Some(key_id),
         issuer_id: Some(issuer_id),
-        team_id: if team_id.is_empty() { None } else { Some(team_id) },
+        team_id: if team_id.is_empty() {
+            None
+        } else {
+            Some(team_id)
+        },
         ..existing_apple
     });
 
@@ -2366,9 +2765,22 @@ pub(crate) fn tvos_wizard(saved: &mut PerryConfig) -> Result<()> {
     let existing_bid = if perry_toml_path.exists() {
         let content = std::fs::read_to_string(&perry_toml_path)?;
         let parsed: toml::Table = content.parse().unwrap_or_default();
-        parsed.get("tvos").and_then(|w| w.get("bundle_id")).and_then(|v| v.as_str())
-            .or_else(|| parsed.get("app").and_then(|a| a.get("bundle_id")).and_then(|v| v.as_str()))
-            .or_else(|| parsed.get("project").and_then(|p| p.get("bundle_id")).and_then(|v| v.as_str()))
+        parsed
+            .get("tvos")
+            .and_then(|w| w.get("bundle_id"))
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                parsed
+                    .get("app")
+                    .and_then(|a| a.get("bundle_id"))
+                    .and_then(|v| v.as_str())
+            })
+            .or_else(|| {
+                parsed
+                    .get("project")
+                    .and_then(|p| p.get("bundle_id"))
+                    .and_then(|v| v.as_str())
+            })
             .map(|s| s.to_string())
     } else {
         None
@@ -2420,18 +2832,19 @@ fn save_tvos_bundle_id(perry_toml_path: &std::path::Path, bundle_id: &str) -> Re
     } else {
         String::new()
     };
-    let mut doc = content.parse::<toml::Table>()
+    let mut doc = content
+        .parse::<toml::Table>()
         .unwrap_or_else(|_| toml::Table::new());
 
-    let tvos = doc.entry("tvos")
+    let tvos = doc
+        .entry("tvos")
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[tvos] in perry.toml is not a table"))?;
 
     tvos.insert("bundle_id".into(), toml::Value::String(bundle_id.into()));
 
-    let new_content = toml::to_string_pretty(&doc)
-        .context("Failed to serialize perry.toml")?;
+    let new_content = toml::to_string_pretty(&doc).context("Failed to serialize perry.toml")?;
     std::fs::write(perry_toml_path, new_content)?;
     Ok(())
 }
@@ -2460,7 +2873,10 @@ pub(crate) fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
     let existing = saved.harmonyos.clone().unwrap_or_default();
 
     // ---- Step 1: locate the signing materials ----
-    println!("  {} Locate signing materials", style("Step 1/3 —").cyan().bold());
+    println!(
+        "  {} Locate signing materials",
+        style("Step 1/3 —").cyan().bold()
+    );
     println!();
 
     let ohos_config = dirs::home_dir()
@@ -2485,7 +2901,8 @@ pub(crate) fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
         .map(|e| e.path())
         .collect();
 
-    let p12_candidates: Vec<PathBuf> = entries.iter()
+    let p12_candidates: Vec<PathBuf> = entries
+        .iter()
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("p12"))
         .cloned()
         .collect();
@@ -2504,20 +2921,31 @@ pub(crate) fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
 
     let p12_path = if p12_candidates.len() == 1 {
         let only = p12_candidates[0].clone();
-        println!("  Found {} signing materials in {}:",
+        println!(
+            "  Found {} signing materials in {}:",
             style("1").green(),
             ohos_config.display()
         );
-        println!("    {}", only.file_name().unwrap_or_default().to_string_lossy());
+        println!(
+            "    {}",
+            only.file_name().unwrap_or_default().to_string_lossy()
+        );
         println!();
         only
     } else {
-        println!("  Found {} signing materials in {}:",
+        println!(
+            "  Found {} signing materials in {}:",
             style(p12_candidates.len().to_string()).green(),
             ohos_config.display()
         );
-        let labels: Vec<String> = p12_candidates.iter()
-            .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
+        let labels: Vec<String> = p12_candidates
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            })
             .collect();
         let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
         let pick = Select::new()
@@ -2529,7 +2957,8 @@ pub(crate) fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
     };
 
     // The matching .p7b + .cer live next to the .p12 with the same stem.
-    let stem = p12_path.file_stem()
+    let stem = p12_path
+        .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| anyhow::anyhow!("invalid .p12 filename"))?;
     let profile_path = ohos_config.join(format!("{}.p7b", stem));
@@ -2559,12 +2988,10 @@ pub(crate) fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
     // bundle-name string is plain UTF-8 inside.
     let profile_bytes = std::fs::read(&profile_path)?;
     let profile_text = String::from_utf8_lossy(&profile_bytes);
-    let bundle_name = profile_text
-        .find("\"bundle-name\":\"")
-        .and_then(|i| {
-            let after = &profile_text[i + 15..];
-            after.find('"').map(|j| after[..j].to_string())
-        });
+    let bundle_name = profile_text.find("\"bundle-name\":\"").and_then(|i| {
+        let after = &profile_text[i + 15..];
+        after.find('"').map(|j| after[..j].to_string())
+    });
 
     println!("  {} {}", style("✓").green(), p12_path.display());
     println!("  {} {}", style("✓").green(), profile_path.display());
@@ -2575,7 +3002,10 @@ pub(crate) fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
     println!();
 
     // ---- Step 2: keystore password ----
-    println!("  {} p12 keystore password", style("Step 2/3 —").cyan().bold());
+    println!(
+        "  {} p12 keystore password",
+        style("Step 2/3 —").cyan().bold()
+    );
     println!();
     println!("  DevEco encrypts the password in build-profile.json5 with a");
     println!("  machine-bound key that's not externally accessible. The simplest");
@@ -2616,11 +3046,16 @@ pub(crate) fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
     std::io::stdout().flush().ok();
     let keytool_ok = Command::new("keytool")
         .arg("-list")
-        .arg("-keystore").arg(&p12_path)
-        .arg("-storetype").arg("PKCS12")
-        .arg("-storepass").arg(&password)
+        .arg("-keystore")
+        .arg(&p12_path)
+        .arg("-storetype")
+        .arg("PKCS12")
+        .arg("-storepass")
+        .arg(&password)
         .output()
-        .map(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).contains("Your keystore"))
+        .map(|out| {
+            out.status.success() && String::from_utf8_lossy(&out.stdout).contains("Your keystore")
+        })
         .unwrap_or(false);
     if !keytool_ok {
         println!("{}", style("FAILED").red().bold());
@@ -2654,8 +3089,13 @@ pub(crate) fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
                 .interact_text()?
         }
     } else {
-        println!("  Couldn't auto-extract bundleName from {} — please enter it",
-            profile_path.file_name().unwrap_or_default().to_string_lossy());
+        println!(
+            "  Couldn't auto-extract bundleName from {} — please enter it",
+            profile_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        );
         println!("  manually. (You can find it in DevEco's app.json5 under `app.bundleName`.)");
         println!();
         Input::<String>::new()
@@ -2665,7 +3105,10 @@ pub(crate) fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
 
     // Most users have DevEco's auto-generated cert which uses the alias `debugKey`.
     // Allow override for users who imported their own keystore.
-    let key_alias = existing.key_alias.clone().unwrap_or_else(|| "debugKey".to_string());
+    let key_alias = existing
+        .key_alias
+        .clone()
+        .unwrap_or_else(|| "debugKey".to_string());
 
     // ---- Persist ----
     saved.harmonyos = Some(HarmonyosSavedConfig {
@@ -2683,7 +3126,10 @@ pub(crate) fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
     println!("  Saved to {}", config_path().display());
     println!("  Try it now:");
     println!();
-    println!("    {}", style("perry compile your-app.ts --target harmonyos -o /tmp/your-app.so").dim());
+    println!(
+        "    {}",
+        style("perry compile your-app.ts --target harmonyos -o /tmp/your-app.so").dim()
+    );
     println!("    {}", style("hdc install /tmp/your-app.hap").dim());
     println!();
 

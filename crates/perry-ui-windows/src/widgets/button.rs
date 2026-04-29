@@ -6,13 +6,16 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::{InvalidateRect, SetTextColor, SetBkMode, TRANSPARENT, DrawTextW, DT_CENTER, DT_VCENTER, DT_SINGLELINE, FillRect, SelectObject, HGDIOBJ};
+use windows::Win32::Graphics::Gdi::{
+    DrawTextW, FillRect, InvalidateRect, SelectObject, SetBkMode, SetTextColor, DT_CENTER,
+    DT_SINGLELINE, DT_VCENTER, HGDIOBJ, TRANSPARENT,
+};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, alloc_control_id, register_widget};
+use super::{alloc_control_id, register_widget, WidgetKind};
 
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
@@ -64,12 +67,16 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(wide.as_ptr()),
                 WINDOW_STYLE(BS_OWNERDRAW as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0),
-                0, 0, 100, 34,
+                0,
+                0,
+                100,
+                34,
                 super::get_parking_hwnd(),
                 HMENU(control_id as *mut _),
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
             let handle = register_widget(hwnd, WidgetKind::Button, control_id);
             BTN_HWND_TO_HANDLE.with(|m| m.borrow_mut().insert(hwnd.0 as isize, handle));
@@ -78,8 +85,12 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
             });
             #[cfg(feature = "geisterhand")]
             {
-                extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-                unsafe { perry_geisterhand_register(handle, 0, 0, on_press, label_ptr); }
+                extern "C" {
+                    fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+                }
+                unsafe {
+                    perry_geisterhand_register(handle, 0, 0, on_press, label_ptr);
+                }
             }
             handle
         }
@@ -94,8 +105,12 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
         });
         #[cfg(feature = "geisterhand")]
         {
-            extern "C" { fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8); }
-            unsafe { perry_geisterhand_register(handle, 0, 0, on_press, label_ptr); }
+            extern "C" {
+                fn perry_geisterhand_register(h: i64, wt: u8, ck: u8, cb: f64, lbl: *const u8);
+            }
+            unsafe {
+                perry_geisterhand_register(handle, 0, 0, on_press, label_ptr);
+            }
         }
         handle
     }
@@ -171,42 +186,42 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
     // Emoji glyphs (U+1Fxxx) use color fonts and IGNORE SetTextColor.
     let fallback = match name {
         // Activity bar & common UI icons — use Segoe UI Symbol / basic Unicode
-        "doc.on.doc" | "doc.on.doc.fill" => "\u{25A1}\u{25A0}",  // □■ (files)
-        "magnifyingglass" => "\u{2315}",                   // ⌕ (search)
-        "arrow.triangle.branch" => "\u{2387}",              // ⎇ (git branch)
-        "arrow.triangle.2.circlepath" => "\u{21BB}",           // ↻ (sync)
-        "sparkles" => "\u{2606}",                            // ☆ (AI)
-        "terminal" => ">_",                                  // terminal prompt
-        "ladybug" | "ladybug.fill" => "\u{25C8}",           // ◈ (debug)
+        "doc.on.doc" | "doc.on.doc.fill" => "\u{25A1}\u{25A0}", // □■ (files)
+        "magnifyingglass" => "\u{2315}",                        // ⌕ (search)
+        "arrow.triangle.branch" => "\u{2387}",                  // ⎇ (git branch)
+        "arrow.triangle.2.circlepath" => "\u{21BB}",            // ↻ (sync)
+        "sparkles" => "\u{2606}",                               // ☆ (AI)
+        "terminal" => ">_",                                     // terminal prompt
+        "ladybug" | "ladybug.fill" => "\u{25C8}",               // ◈ (debug)
         "puzzlepiece.extension" | "puzzlepiece.extension.fill" => "\u{29C9}", // ⧉ (extensions)
-        "gearshape" | "gearshape.fill" | "gear" => "\u{2699}", // ⚙
-        "gearshape.2" => "\u{2699}",                         // ⚙
-        "folder" | "folder.fill" => "\u{25B7}",             // ▷ (folder)
+        "gearshape" | "gearshape.fill" | "gear" => "\u{2699}",  // ⚙
+        "gearshape.2" => "\u{2699}",                            // ⚙
+        "folder" | "folder.fill" => "\u{25B7}",                 // ▷ (folder)
         "doc.text" | "doc.text.fill" | "doc.plaintext" => "\u{25A1}", // □ (doc)
-        "doc" => "\u{25A1}",                                 // □
-        "doc.badge.plus" => "+\u{25A1}",                    // new file
-        "folder.badge.plus" => "+\u{25B7}",                 // new folder
-        "xmark" => "\u{2715}",                               // ✕
-        "circle.fill" => "\u{25CF}",                         // ●
-        "chevron.right" => "\u{203A}",                       // ›
-        "chevron.down" => "\u{2304}",                        // ⌄
-        "chevron.left.forwardslash.chevron.right" => "</>",  // code
-        "sidebar.left" | "sidebar.leading" => "\u{2261}",   // ≡
+        "doc" => "\u{25A1}",                                    // □
+        "doc.badge.plus" => "+\u{25A1}",                        // new file
+        "folder.badge.plus" => "+\u{25B7}",                     // new folder
+        "xmark" => "\u{2715}",                                  // ✕
+        "circle.fill" => "\u{25CF}",                            // ●
+        "chevron.right" => "\u{203A}",                          // ›
+        "chevron.down" => "\u{2304}",                           // ⌄
+        "chevron.left.forwardslash.chevron.right" => "</>",     // code
+        "sidebar.left" | "sidebar.leading" => "\u{2261}",       // ≡
         "plus" => "+",
-        "ellipsis" => "\u{22EF}",                            // ⋯
+        "ellipsis" => "\u{22EF}", // ⋯
         // File type icons
-        "swift" => "TS",                                     // TypeScript (maps from swift)
-        "curlybraces" => "{}",                               // JSON
-        "paintbrush" => "\u{2338}",                          // ⌸ (CSS)
+        "swift" => "TS",            // TypeScript (maps from swift)
+        "curlybraces" => "{}",      // JSON
+        "paintbrush" => "\u{2338}", // ⌸ (CSS)
         // Debug icons
-        "play.fill" => "\u{25B6}",                           // ▶
-        "pause.fill" => "\u{2016}",                          // ‖ (pause)
-        "stop.fill" => "\u{25A0}",                           // ■
-        "arrow.right" => "\u{2192}",                         // → (step over)
-        "arrow.down.right" => "\u{2198}",                    // ↘ (step into)
-        "arrow.up.left" => "\u{2196}",                       // ↖ (step out)
-        "arrow.up.left.and.arrow.down.right" => "\u{2922}",  // ⤢ (maximize)
-        "arrow.down.right.and.arrow.up.left" => "\u{2925}",  // ⤥ (collapse)
+        "play.fill" => "\u{25B6}",                          // ▶
+        "pause.fill" => "\u{2016}",                         // ‖ (pause)
+        "stop.fill" => "\u{25A0}",                          // ■
+        "arrow.right" => "\u{2192}",                        // → (step over)
+        "arrow.down.right" => "\u{2198}",                   // ↘ (step into)
+        "arrow.up.left" => "\u{2196}",                      // ↖ (step out)
+        "arrow.up.left.and.arrow.down.right" => "\u{2922}", // ⤢ (maximize)
+        "arrow.down.right.and.arrow.up.left" => "\u{2925}", // ⤥ (collapse)
         _ => name,
     };
 
@@ -221,7 +236,8 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
             // Set font to "Segoe UI Symbol" so Unicode glyphs render at the correct
             // size. The default "Segoe UI" doesn't contain these symbols and Win32
             // falls back to a tiny glyph from another font.
-            let font = crate::widgets::text::create_font_with_family_pub(20, 400, "Segoe UI Symbol");
+            let font =
+                crate::widgets::text::create_font_with_family_pub(20, 400, "Segoe UI Symbol");
             unsafe {
                 SendMessageW(hwnd, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
             }
@@ -288,7 +304,12 @@ pub fn handle_draw_item(lparam: LPARAM) -> bool {
             if has_own_bg {
                 // Button has its own bg color — draw rounded rect
                 let rgn = windows::Win32::Graphics::Gdi::CreateRoundRectRgn(
-                    rect.left, rect.top, rect.right + 1, rect.bottom + 1, 8, 8
+                    rect.left,
+                    rect.top,
+                    rect.right + 1,
+                    rect.bottom + 1,
+                    8,
+                    8,
                 );
                 windows::Win32::Graphics::Gdi::FillRgn(hdc, rgn, brush);
                 let _ = windows::Win32::Graphics::Gdi::DeleteObject(rgn);
@@ -303,7 +324,7 @@ pub fn handle_draw_item(lparam: LPARAM) -> bool {
         SetBkMode(hdc, TRANSPARENT);
 
         let hfont = windows::Win32::Graphics::Gdi::HFONT(
-            SendMessageW(dis.hwndItem, WM_GETFONT, WPARAM(0), LPARAM(0)).0 as *mut _
+            SendMessageW(dis.hwndItem, WM_GETFONT, WPARAM(0), LPARAM(0)).0 as *mut _,
         );
         let old_font = if !hfont.is_invalid() {
             SelectObject(hdc, hfont)
@@ -316,8 +337,12 @@ pub fn handle_draw_item(lparam: LPARAM) -> bool {
             let mut buf = vec![0u16; (text_len + 1) as usize];
             GetWindowTextW(dis.hwndItem, &mut buf);
             let mut text_rect = rect;
-            DrawTextW(hdc, &mut buf[..text_len as usize], &mut text_rect,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            DrawTextW(
+                hdc,
+                &mut buf[..text_len as usize],
+                &mut text_rect,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+            );
         }
 
         if !old_font.is_invalid() {

@@ -29,8 +29,16 @@ pub struct ExtractArgs {
 
 /// UI widget constructors whose first string argument is localizable.
 const LOCALIZABLE_WIDGETS: &[&str] = &[
-    "Button", "Text", "Label", "TextField", "TextArea",
-    "Tab", "NavigationTitle", "SectionHeader", "SecureField", "Alert",
+    "Button",
+    "Text",
+    "Label",
+    "TextField",
+    "TextArea",
+    "Tab",
+    "NavigationTitle",
+    "SectionHeader",
+    "SecureField",
+    "Alert",
 ];
 
 pub fn run(args: I18nArgs, format: OutputFormat) -> Result<()> {
@@ -40,16 +48,22 @@ pub fn run(args: I18nArgs, format: OutputFormat) -> Result<()> {
 }
 
 fn run_extract(args: ExtractArgs, format: OutputFormat) -> Result<()> {
-    let input = args.input.canonicalize()
+    let input = args
+        .input
+        .canonicalize()
         .map_err(|_| anyhow!("Input file not found: {}", args.input.display()))?;
 
     // Find project root (where perry.toml lives)
     let mut project_root = input.parent().unwrap_or(Path::new(".")).to_path_buf();
     for _ in 0..5 {
-        if project_root.join("perry.toml").exists() { break; }
+        if project_root.join("perry.toml").exists() {
+            break;
+        }
         if let Some(parent) = project_root.parent() {
             project_root = parent.to_path_buf();
-        } else { break; }
+        } else {
+            break;
+        }
     }
 
     // Read i18n config from perry.toml
@@ -59,17 +73,24 @@ fn run_extract(args: ExtractArgs, format: OutputFormat) -> Result<()> {
     }
 
     let toml_content = fs::read_to_string(&toml_path)?;
-    let doc = toml_content.parse::<toml::Table>()
+    let doc = toml_content
+        .parse::<toml::Table>()
         .map_err(|e| anyhow!("Failed to parse perry.toml: {}", e))?;
 
     let i18n = doc.get("i18n").and_then(|v| v.as_table())
         .ok_or_else(|| anyhow!("No [i18n] section in perry.toml. Add:\n\n[i18n]\nlocales = [\"en\", \"de\"]\ndefault_locale = \"en\""))?;
 
-    let locales: Vec<String> = i18n.get("locales")
+    let locales: Vec<String> = i18n
+        .get("locales")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
-    let default_locale = i18n.get("default_locale")
+    let default_locale = i18n
+        .get("default_locale")
         .and_then(|v| v.as_str())
         .unwrap_or("en")
         .to_string();
@@ -126,7 +147,8 @@ fn run_extract(args: ExtractArgs, format: OutputFormat) -> Result<()> {
         }
 
         // Count removed keys (keys in file but not in source)
-        let stale: Vec<String> = existing.keys()
+        let stale: Vec<String> = existing
+            .keys()
             .filter(|k| !keys.contains(*k))
             .cloned()
             .collect();
@@ -138,7 +160,10 @@ fn run_extract(args: ExtractArgs, format: OutputFormat) -> Result<()> {
 
         match format {
             OutputFormat::Text => {
-                println!("  Updated locales/{}.json ({} new, {} unused)", locale, new_count, removed_count);
+                println!(
+                    "  Updated locales/{}.json ({} new, {} unused)",
+                    locale, new_count, removed_count
+                );
             }
             OutputFormat::Json => {}
         }
@@ -182,13 +207,22 @@ fn scan_file_for_keys(path: &Path, keys: &mut BTreeSet<String>) -> Result<()> {
 
 /// Scan all .ts files in a directory for localizable strings.
 fn scan_directory_for_keys(dir: &Path, keys: &mut BTreeSet<String>) -> Result<()> {
-    if !dir.is_dir() { return Ok(()); }
+    if !dir.is_dir() {
+        return Ok(());
+    }
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() && !path.file_name().map_or(false, |n| n == "node_modules" || n == "dist" || n == ".perry") {
+        if path.is_dir()
+            && !path.file_name().map_or(false, |n| {
+                n == "node_modules" || n == "dist" || n == ".perry"
+            })
+        {
             scan_directory_for_keys(&path, keys)?;
-        } else if path.extension().map_or(false, |ext| ext == "ts" || ext == "tsx") {
+        } else if path
+            .extension()
+            .map_or(false, |ext| ext == "ts" || ext == "tsx")
+        {
             scan_file_for_keys(&path, keys)?;
         }
     }

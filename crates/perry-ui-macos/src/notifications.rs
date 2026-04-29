@@ -82,13 +82,19 @@ impl PerryNotificationDelegate {
 /// action id passed to `UNNotificationAction.actionWithIdentifier:`.
 unsafe fn dispatch_tap(response: &AnyObject) {
     let cb = ON_TAP_CALLBACK.with(|c| *c.borrow());
-    let Some(callback) = cb else { return; };
+    let Some(callback) = cb else {
+        return;
+    };
 
     // response.notification.request.identifier — UTF8String onto the Perry heap.
     let notification: *mut AnyObject = msg_send![response, notification];
-    if notification.is_null() { return; }
+    if notification.is_null() {
+        return;
+    }
     let request: *mut AnyObject = msg_send![notification, request];
-    if request.is_null() { return; }
+    if request.is_null() {
+        return;
+    }
     let id_str: *mut AnyObject = msg_send![request, identifier];
     let id_value = nsstring_to_perry(id_str);
 
@@ -130,9 +136,13 @@ unsafe fn dispatch_tap(response: &AnyObject) {
 /// JSValue (`f64::from_bits` of the boxed bits). Returns `undefined` if the
 /// argument is null.
 unsafe fn nsstring_to_perry(s: *mut AnyObject) -> f64 {
-    if s.is_null() { return f64::from_bits(TAG_UNDEFINED); }
+    if s.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     let utf8: *const u8 = msg_send![s, UTF8String];
-    if utf8.is_null() { return f64::from_bits(TAG_UNDEFINED); }
+    if utf8.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     let len = libc::strlen(utf8 as *const i8);
     let str_ptr = js_string_from_bytes(utf8, len as u32);
     js_nanbox_string(str_ptr as i64)
@@ -154,7 +164,9 @@ unsafe fn build_content(title: &str, body: &str) -> Option<Retained<AnyObject>> 
 /// Submit a `UNNotificationRequest` with the given identifier + content +
 /// trigger to the current notification center.
 unsafe fn submit_request(identifier: &str, content: &AnyObject, trigger: &AnyObject) {
-    let Some(request_cls) = AnyClass::get(c"UNNotificationRequest") else { return; };
+    let Some(request_cls) = AnyClass::get(c"UNNotificationRequest") else {
+        return;
+    };
     let ident = NSString::from_str(identifier);
     let request: Retained<AnyObject> = msg_send![
         request_cls,
@@ -162,7 +174,9 @@ unsafe fn submit_request(identifier: &str, content: &AnyObject, trigger: &AnyObj
         content: content,
         trigger: trigger
     ];
-    let Some(center_cls) = AnyClass::get(c"UNUserNotificationCenter") else { return; };
+    let Some(center_cls) = AnyClass::get(c"UNUserNotificationCenter") else {
+        return;
+    };
     let center: Retained<AnyObject> = msg_send![center_cls, currentNotificationCenter];
     let _: () = msg_send![
         &*center,
@@ -172,7 +186,9 @@ unsafe fn submit_request(identifier: &str, content: &AnyObject, trigger: &AnyObj
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const crate::string_header::StringHeader;
         let len = (*header).byte_len as usize;
@@ -206,7 +222,8 @@ pub fn send(title_ptr: *const u8, body_ptr: *const u8) {
 
         // Create trigger (immediate)
         let trigger_cls = AnyClass::get(c"UNTimeIntervalNotificationTrigger").unwrap();
-        let trigger: Retained<AnyObject> = msg_send![trigger_cls, triggerWithTimeInterval: 0.1f64, repeats: false];
+        let trigger: Retained<AnyObject> =
+            msg_send![trigger_cls, triggerWithTimeInterval: 0.1f64, repeats: false];
 
         // Create request
         let request_cls = AnyClass::get(c"UNNotificationRequest").unwrap();
@@ -233,9 +250,13 @@ pub fn send(title_ptr: *const u8, body_ptr: *const u8) {
 pub fn register_remote(callback: f64) {
     ON_REMOTE_TOKEN_CALLBACK.with(|c| *c.borrow_mut() = Some(callback));
     unsafe {
-        let Some(app_cls) = AnyClass::get(c"NSApplication") else { return; };
+        let Some(app_cls) = AnyClass::get(c"NSApplication") else {
+            return;
+        };
         let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
-        if app.is_null() { return; }
+        if app.is_null() {
+            return;
+        }
         let _: () = msg_send![app, registerForRemoteNotifications];
     }
 }
@@ -250,12 +271,18 @@ pub fn on_receive(callback: f64) {
 /// Hex-format an APNs device token and invoke the stored closure.
 pub unsafe fn dispatch_device_token(device_token: *mut AnyObject) {
     let cb = ON_REMOTE_TOKEN_CALLBACK.with(|c| *c.borrow());
-    let Some(callback) = cb else { return; };
-    if device_token.is_null() { return; }
+    let Some(callback) = cb else {
+        return;
+    };
+    if device_token.is_null() {
+        return;
+    }
 
     let bytes: *const u8 = msg_send![device_token, bytes];
     let length: usize = msg_send![device_token, length];
-    if bytes.is_null() || length == 0 { return; }
+    if bytes.is_null() || length == 0 {
+        return;
+    }
 
     let slice = std::slice::from_raw_parts(bytes, length);
     let mut hex = String::with_capacity(length * 2);
@@ -301,10 +328,16 @@ pub unsafe fn dispatch_registration_failure(error: *mut AnyObject) {
 /// callback with it.
 pub unsafe fn dispatch_remote_payload(user_info: *mut AnyObject) {
     let cb = ON_REMOTE_RECEIVE_CALLBACK.with(|c| *c.borrow());
-    let Some(callback) = cb else { return; };
-    if user_info.is_null() { return; }
+    let Some(callback) = cb else {
+        return;
+    };
+    if user_info.is_null() {
+        return;
+    }
 
-    let Some(json_cls) = AnyClass::get(c"NSJSONSerialization") else { return; };
+    let Some(json_cls) = AnyClass::get(c"NSJSONSerialization") else {
+        return;
+    };
     let mut err: *mut AnyObject = std::ptr::null_mut();
     let data: *mut AnyObject = msg_send![
         json_cls,
@@ -312,11 +345,15 @@ pub unsafe fn dispatch_remote_payload(user_info: *mut AnyObject) {
         options: 0u64,
         error: &mut err
     ];
-    if data.is_null() { return; }
+    if data.is_null() {
+        return;
+    }
 
     let bytes: *const u8 = msg_send![data, bytes];
     let length: usize = msg_send![data, length];
-    if bytes.is_null() || length == 0 { return; }
+    if bytes.is_null() || length == 0 {
+        return;
+    }
 
     js_run_stdlib_pump();
     js_promise_run_microtasks();
@@ -349,8 +386,12 @@ pub fn schedule_interval(
     let interval = if seconds < 0.0 { 0.0 } else { seconds };
 
     unsafe {
-        let Some(content) = build_content(title, body) else { return; };
-        let Some(trigger_cls) = AnyClass::get(c"UNTimeIntervalNotificationTrigger") else { return; };
+        let Some(content) = build_content(title, body) else {
+            return;
+        };
+        let Some(trigger_cls) = AnyClass::get(c"UNTimeIntervalNotificationTrigger") else {
+            return;
+        };
         let trigger: Retained<AnyObject> = msg_send![
             trigger_cls,
             triggerWithTimeInterval: interval,
@@ -376,13 +417,19 @@ pub fn schedule_calendar(
     let body = str_from_header(body_ptr);
 
     unsafe {
-        let Some(content) = build_content(title, body) else { return; };
-        let Some(date_cls) = AnyClass::get(c"NSDate") else { return; };
+        let Some(content) = build_content(title, body) else {
+            return;
+        };
+        let Some(date_cls) = AnyClass::get(c"NSDate") else {
+            return;
+        };
         let date: Retained<AnyObject> = msg_send![
             date_cls,
             dateWithTimeIntervalSince1970: timestamp_ms / 1000.0
         ];
-        let Some(cal_cls) = AnyClass::get(c"NSCalendar") else { return; };
+        let Some(cal_cls) = AnyClass::get(c"NSCalendar") else {
+            return;
+        };
         let cal: Retained<AnyObject> = msg_send![cal_cls, currentCalendar];
         // NSCalendarUnit bitmask: Year(4) | Month(8) | Day(16) | Hour(32) |
         // Minute(64) | Second(128) = 252.
@@ -392,7 +439,9 @@ pub fn schedule_calendar(
             components: units,
             fromDate: &*date
         ];
-        let Some(trigger_cls) = AnyClass::get(c"UNCalendarNotificationTrigger") else { return; };
+        let Some(trigger_cls) = AnyClass::get(c"UNCalendarNotificationTrigger") else {
+            return;
+        };
         let trigger: Retained<AnyObject> = msg_send![
             trigger_cls,
             triggerWithDateMatchingComponents: &*comps,
@@ -434,8 +483,12 @@ pub fn set_on_tap(callback: f64) {
             if d.is_none() {
                 *d = Some(PerryNotificationDelegate::new());
             }
-            let Some(delegate) = d.as_ref() else { return; };
-            let Some(center_cls) = AnyClass::get(c"UNUserNotificationCenter") else { return; };
+            let Some(delegate) = d.as_ref() else {
+                return;
+            };
+            let Some(center_cls) = AnyClass::get(c"UNUserNotificationCenter") else {
+                return;
+            };
             let center: Retained<AnyObject> = msg_send![center_cls, currentNotificationCenter];
             let delegate_ref: *const AnyObject = &**delegate as *const _ as *const AnyObject;
             let _: () = msg_send![&*center, setDelegate: delegate_ref];
@@ -447,10 +500,14 @@ pub fn set_on_tap(callback: f64) {
 pub fn cancel(id_ptr: *const u8) {
     let id = str_from_header(id_ptr);
     unsafe {
-        let Some(center_cls) = AnyClass::get(c"UNUserNotificationCenter") else { return; };
+        let Some(center_cls) = AnyClass::get(c"UNUserNotificationCenter") else {
+            return;
+        };
         let center: Retained<AnyObject> = msg_send![center_cls, currentNotificationCenter];
         let ident = NSString::from_str(id);
-        let Some(arr_cls) = AnyClass::get(c"NSArray") else { return; };
+        let Some(arr_cls) = AnyClass::get(c"NSArray") else {
+            return;
+        };
         let ident_ref: *const AnyObject = &*ident as *const NSString as *const AnyObject;
         let arr: Retained<AnyObject> = msg_send![
             arr_cls,
@@ -465,7 +522,9 @@ pub fn cancel(id_ptr: *const u8) {
 /// Fallback for non-bundled apps using deprecated NSUserNotification
 unsafe fn send_legacy(title: &str, body: &str) {
     let notif_cls = AnyClass::get(c"NSUserNotification");
-    if notif_cls.is_none() { return; }
+    if notif_cls.is_none() {
+        return;
+    }
     let notif: Retained<AnyObject> = msg_send![notif_cls.unwrap(), new];
 
     let ns_title = NSString::from_str(title);
@@ -475,7 +534,9 @@ unsafe fn send_legacy(title: &str, body: &str) {
     let _: () = msg_send![&*notif, setInformativeText: &*ns_body];
 
     let center_cls = AnyClass::get(c"NSUserNotificationCenter");
-    if center_cls.is_none() { return; }
+    if center_cls.is_none() {
+        return;
+    }
     let center: *mut AnyObject = msg_send![center_cls.unwrap(), defaultUserNotificationCenter];
     if !center.is_null() {
         let _: () = msg_send![center, deliverNotification: &*notif];

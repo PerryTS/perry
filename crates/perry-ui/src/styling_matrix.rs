@@ -137,17 +137,28 @@ impl MatrixRow {
 
 /// Wired everywhere — including Web, which uses CSS via the WASM
 /// emitter dispatch table at `crates/perry-codegen-wasm/src/emit.rs`.
-const W_ALL_NATIVE_WEB_TODO: [Status; 9] =
-    [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired];
+const W_ALL_NATIVE_WEB_TODO: [Status; 9] = [
+    Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired,
+];
 
 /// Wired everywhere except GTK4 + Windows (the two desktop backends with
 /// the most native-API rough edges) and Web.
-const W_NO_GTK4_WIN_WEB: [Status; 9] =
-    [Wired, Wired, Wired, Wired, Wired, Wired, Missing, Missing, Missing];
+const W_NO_GTK4_WIN_WEB: [Status; 9] = [
+    Wired, Wired, Wired, Wired, Wired, Wired, Missing, Missing, Missing,
+];
 
 /// Wired only on GTK4 + Windows + Apple desktop — the desktop-class targets.
-const W_DESKTOP_ONLY: [Status; 9] =
-    [Wired, NotApplicable, NotApplicable, NotApplicable, NotApplicable, NotApplicable, Wired, Wired, NotApplicable];
+const W_DESKTOP_ONLY: [Status; 9] = [
+    Wired,
+    NotApplicable,
+    NotApplicable,
+    NotApplicable,
+    NotApplicable,
+    NotApplicable,
+    Wired,
+    Wired,
+    NotApplicable,
+];
 
 /// Missing everywhere — aspirational rows surfaced for Phase B (shadow,
 /// text decoration, etc.).
@@ -165,17 +176,20 @@ const M_ALL: [Status; 9] = [Missing; 9];
 pub const MATRIX: &[MatrixRow] = &[
     // ---- Generic widget styling (apply to any widget) ------------------
     MatrixRow {
-        widget: "*", prop: "background_color",
+        widget: "*",
+        prop: "background_color",
         ffi: "perry_ui_widget_set_background_color",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "background_gradient",
+        widget: "*",
+        prop: "background_gradient",
         ffi: "perry_ui_widget_set_background_gradient",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "border_color",
+        widget: "*",
+        prop: "border_color",
         ffi: "perry_ui_widget_set_border_color",
         // Apple + Android wired since baseline. GTK4 wired via per-handle
         // CSS class with joint (color, width) state (v0.5.298). Web wired
@@ -184,28 +198,36 @@ pub const MATRIX: &[MatrixRow] = &[
         // a one-time `SetWindowSubclass` per HWND that draws a `Rectangle`
         // outline in the WM_PAINT subclass proc using the joint
         // `BORDER_STATE` color + width.
-        statuses: [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired],
+        statuses: [
+            Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired,
+        ],
     },
     MatrixRow {
-        widget: "*", prop: "border_width",
+        widget: "*",
+        prop: "border_width",
         ffi: "perry_ui_widget_set_border_width",
         // Symmetric with `border_color` — both setters share the joint
         // state on each backend so calling either one alone produces a
         // visible border with sensible defaults (black / 1px).
-        statuses: [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired],
+        statuses: [
+            Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired,
+        ],
     },
     MatrixRow {
-        widget: "*", prop: "corner_radius",
+        widget: "*",
+        prop: "corner_radius",
         ffi: "perry_ui_widget_set_corner_radius",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "edge_insets",
+        widget: "*",
+        prop: "edge_insets",
         ffi: "perry_ui_widget_set_edge_insets",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "opacity",
+        widget: "*",
+        prop: "opacity",
         ffi: "perry_ui_widget_set_opacity",
         // Apple platforms + Android wired since the audit baseline.
         // GTK4 wired via `Widget::set_opacity` (v0.5.298). Windows wired
@@ -213,15 +235,19 @@ pub const MATRIX: &[MatrixRow] = &[
         // `SetLayeredWindowAttributes(LWA_ALPHA)`. Web aliased to the
         // existing `perry_ui_set_opacity` JS function via the WASM
         // emitter dispatch table — no new JS code needed.
-        statuses: [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired],
+        statuses: [
+            Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired,
+        ],
     },
     MatrixRow {
-        widget: "*", prop: "tooltip",
+        widget: "*",
+        prop: "tooltip",
         ffi: "perry_ui_widget_set_tooltip",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "hidden",
+        widget: "*",
+        prop: "hidden",
         // Canonical FFI name is `set_widget_hidden` (matches the codegen
         // dispatch table at `lower_call.rs::NATIVE_MODULE_TABLE` row for
         // `widgetSetHidden`). The Phase A matrix initially listed the
@@ -230,179 +256,215 @@ pub const MATRIX: &[MatrixRow] = &[
         // every other platform appear Missing despite all 8 backends
         // having `set_widget_hidden`. Fixed in v0.5.301.
         ffi: "perry_ui_set_widget_hidden",
-        statuses: [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired],
+        statuses: [
+            Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired,
+        ],
     },
     MatrixRow {
-        widget: "*", prop: "enabled",
+        widget: "*",
+        prop: "enabled",
         ffi: "perry_ui_widget_set_enabled",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "control_size",
+        widget: "*",
+        prop: "control_size",
         ffi: "perry_ui_widget_set_control_size",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "hugging",
+        widget: "*",
+        prop: "hugging",
         ffi: "perry_ui_widget_set_hugging",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "width",
+        widget: "*",
+        prop: "width",
         ffi: "perry_ui_widget_set_width",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "height",
+        widget: "*",
+        prop: "height",
         ffi: "perry_ui_widget_set_height",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "match_parent_width",
+        widget: "*",
+        prop: "match_parent_width",
         ffi: "perry_ui_widget_match_parent_width",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "match_parent_height",
+        widget: "*",
+        prop: "match_parent_height",
         ffi: "perry_ui_widget_match_parent_height",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "on_click",
+        widget: "*",
+        prop: "on_click",
         ffi: "perry_ui_widget_set_on_click",
-        statuses: [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired],
+        statuses: [
+            Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired,
+        ],
     },
     MatrixRow {
-        widget: "*", prop: "on_double_click",
+        widget: "*",
+        prop: "on_double_click",
         ffi: "perry_ui_widget_set_on_double_click",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "on_hover",
+        widget: "*",
+        prop: "on_hover",
         ffi: "perry_ui_widget_set_on_hover",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "animate_opacity",
+        widget: "*",
+        prop: "animate_opacity",
         ffi: "perry_ui_widget_animate_opacity",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "animate_position",
+        widget: "*",
+        prop: "animate_position",
         ffi: "perry_ui_widget_animate_position",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "*", prop: "context_menu",
+        widget: "*",
+        prop: "context_menu",
         ffi: "perry_ui_widget_set_context_menu",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
-
     // ---- text widget styling ------------------------------------------
     MatrixRow {
-        widget: "text", prop: "color",
+        widget: "text",
+        prop: "color",
         ffi: "perry_ui_text_set_color",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "text", prop: "font_size",
+        widget: "text",
+        prop: "font_size",
         ffi: "perry_ui_text_set_font_size",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "text", prop: "font_weight",
+        widget: "text",
+        prop: "font_weight",
         ffi: "perry_ui_text_set_font_weight",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "text", prop: "font_family",
+        widget: "text",
+        prop: "font_family",
         ffi: "perry_ui_text_set_font_family",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "text", prop: "selectable",
+        widget: "text",
+        prop: "selectable",
         ffi: "perry_ui_text_set_selectable",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "text", prop: "wraps",
+        widget: "text",
+        prop: "wraps",
         ffi: "perry_ui_text_set_wraps",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
-
     // ---- textfield widget styling -------------------------------------
     MatrixRow {
-        widget: "textfield", prop: "background_color",
+        widget: "textfield",
+        prop: "background_color",
         ffi: "perry_ui_textfield_set_background_color",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "textfield", prop: "text_color",
+        widget: "textfield",
+        prop: "text_color",
         ffi: "perry_ui_textfield_set_text_color",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "textfield", prop: "font_size",
+        widget: "textfield",
+        prop: "font_size",
         ffi: "perry_ui_textfield_set_font_size",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "textfield", prop: "borderless",
+        widget: "textfield",
+        prop: "borderless",
         ffi: "perry_ui_textfield_set_borderless",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
-
     // ---- button widget styling ----------------------------------------
     MatrixRow {
-        widget: "button", prop: "text_color",
+        widget: "button",
+        prop: "text_color",
         ffi: "perry_ui_button_set_text_color",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "button", prop: "content_tint_color",
+        widget: "button",
+        prop: "content_tint_color",
         ffi: "perry_ui_button_set_content_tint_color",
-        statuses: [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired],
+        statuses: [
+            Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired,
+        ],
     },
     MatrixRow {
-        widget: "button", prop: "bordered",
+        widget: "button",
+        prop: "bordered",
         ffi: "perry_ui_button_set_bordered",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "button", prop: "image_position",
+        widget: "button",
+        prop: "image_position",
         ffi: "perry_ui_button_set_image_position",
-        statuses: [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired],
+        statuses: [
+            Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired,
+        ],
     },
-
     // ---- image widget styling -----------------------------------------
     MatrixRow {
-        widget: "image", prop: "tint",
+        widget: "image",
+        prop: "tint",
         ffi: "perry_ui_image_set_tint",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "image", prop: "size",
+        widget: "image",
+        prop: "size",
         ffi: "perry_ui_image_set_size",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
-
     // ---- stack widget styling -----------------------------------------
     MatrixRow {
-        widget: "stack", prop: "alignment",
+        widget: "stack",
+        prop: "alignment",
         ffi: "perry_ui_stack_set_alignment",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "stack", prop: "distribution",
+        widget: "stack",
+        prop: "distribution",
         ffi: "perry_ui_stack_set_distribution",
         statuses: W_ALL_NATIVE_WEB_TODO,
     },
     MatrixRow {
-        widget: "stack", prop: "detaches_hidden",
+        widget: "stack",
+        prop: "detaches_hidden",
         ffi: "perry_ui_stack_set_detaches_hidden",
-        statuses: [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired],
+        statuses: [
+            Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired,
+        ],
     },
-
     // ---- Aspirational (Phase B targets) -------------------------------
     // (Aspirational rows surface gaps that Phase B will close; their FFI
     // symbol doesn't exist anywhere yet so the drift check skips them.)
@@ -411,7 +473,8 @@ pub const MATRIX: &[MatrixRow] = &[
     // its cell from Missing to Wired and add the symbol to that
     // backend's lib.rs.
     MatrixRow {
-        widget: "*", prop: "shadow",
+        widget: "*",
+        prop: "shadow",
         ffi: "perry_ui_widget_set_shadow",
         // Phase B shadow closure — landed across all 9 platforms in
         // v0.5.296 (Apple CALayer.shadow*) → v0.5.297 (Web CSS
@@ -426,7 +489,8 @@ pub const MATRIX: &[MatrixRow] = &[
         statuses: [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Stub, Wired],
     },
     MatrixRow {
-        widget: "text", prop: "decoration",
+        widget: "text",
+        prop: "decoration",
         ffi: "perry_ui_text_set_decoration",
         // Issue #185 Phase B closure (v0.5.298). Cross-platform `text-
         // decoration` mapped to each backend's native mechanism: Apple
@@ -441,7 +505,9 @@ pub const MATRIX: &[MatrixRow] = &[
         // mutating `lfUnderline` / `lfStrikeOut`, recreating via
         // CreateFontIndirectW, and re-emitting through the existing
         // `apply_font` lifecycle (handles old-HFONT DeleteObject).
-        statuses: [Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired],
+        statuses: [
+            Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired, Wired,
+        ],
     },
 ];
 
@@ -496,8 +562,7 @@ pub mod drift {
 
     impl PlatformDrift {
         pub fn is_clean(&self) -> bool {
-            self.wired_but_missing.is_empty()
-                && self.present_but_marked_missing.is_empty()
+            self.wired_but_missing.is_empty() && self.present_but_marked_missing.is_empty()
         }
     }
 

@@ -8,8 +8,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::CStr;
 
-use crate::widgets;
 use crate::menu;
+use crate::widgets;
 
 thread_local! {
     static PENDING_CONFIG: RefCell<Option<AppConfig>> = RefCell::new(None);
@@ -105,7 +105,8 @@ unsafe extern "C" fn scene_will_connect(
     let window_cls = AnyClass::get(c"UIWindow").unwrap();
     let window_alloc: *mut AnyObject = msg_send![window_cls, alloc];
     let window_raw: *mut AnyObject = msg_send![window_alloc, initWithWindowScene: scene];
-    let window: Retained<UIWindow> = Retained::cast_unchecked(Retained::retain(window_raw as *mut AnyObject).unwrap());
+    let window: Retained<UIWindow> =
+        Retained::cast_unchecked(Retained::retain(window_raw as *mut AnyObject).unwrap());
 
     // Create root PerryViewController (custom subclass with menu bar support).
     // Falls back to UIViewController if PerryViewController isn't registered yet.
@@ -114,10 +115,7 @@ unsafe extern "C" fn scene_will_connect(
     let vc: Retained<UIViewController> = msg_send![vc_cls, new];
 
     // Set white background
-    let white: Retained<AnyObject> = msg_send![
-        AnyClass::get(c"UIColor").unwrap(),
-        whiteColor
-    ];
+    let white: Retained<AnyObject> = msg_send![AnyClass::get(c"UIColor").unwrap(), whiteColor];
     let vc_view: Retained<UIView> = msg_send![&*vc, view];
     let _: () = msg_send![&*vc_view, setBackgroundColor: &*white];
 
@@ -125,7 +123,8 @@ unsafe extern "C" fn scene_will_connect(
     PENDING_BODY.with(|b| {
         if let Some(root_handle) = b.borrow().as_ref() {
             if let Some(root_view) = widgets::get_widget(*root_handle) {
-                let _: () = msg_send![&*root_view, setTranslatesAutoresizingMaskIntoConstraints: false];
+                let _: () =
+                    msg_send![&*root_view, setTranslatesAutoresizingMaskIntoConstraints: false];
 
                 vc_view.addSubview(&root_view);
 
@@ -140,10 +139,14 @@ unsafe extern "C" fn scene_will_connect(
                 let view_top: *const AnyObject = msg_send![&*vc_view, topAnchor];
                 let view_bottom: *const AnyObject = msg_send![&*vc_view, bottomAnchor];
 
-                let c1: Retained<AnyObject> = msg_send![root_leading, constraintEqualToAnchor: view_leading];
-                let c2: Retained<AnyObject> = msg_send![root_trailing, constraintEqualToAnchor: view_trailing];
-                let c3: Retained<AnyObject> = msg_send![root_top, constraintEqualToAnchor: view_top];
-                let c4: Retained<AnyObject> = msg_send![root_bottom, constraintEqualToAnchor: view_bottom];
+                let c1: Retained<AnyObject> =
+                    msg_send![root_leading, constraintEqualToAnchor: view_leading];
+                let c2: Retained<AnyObject> =
+                    msg_send![root_trailing, constraintEqualToAnchor: view_trailing];
+                let c3: Retained<AnyObject> =
+                    msg_send![root_top, constraintEqualToAnchor: view_top];
+                let c4: Retained<AnyObject> =
+                    msg_send![root_bottom, constraintEqualToAnchor: view_bottom];
 
                 let _: () = msg_send![&*c1, setActive: true];
                 let _: () = msg_send![&*c2, setActive: true];
@@ -215,9 +218,18 @@ unsafe fn install_test_mode_exit_timer() {
 
 // Raw ObjC runtime FFI for dynamic class registration
 extern "C" {
-    fn objc_allocateClassPair(superclass: *const std::ffi::c_void, name: *const i8, extra_bytes: usize) -> *mut std::ffi::c_void;
+    fn objc_allocateClassPair(
+        superclass: *const std::ffi::c_void,
+        name: *const i8,
+        extra_bytes: usize,
+    ) -> *mut std::ffi::c_void;
     fn objc_registerClassPair(cls: *mut std::ffi::c_void);
-    fn class_addMethod(cls: *mut std::ffi::c_void, sel: *const std::ffi::c_void, imp: *const std::ffi::c_void, types: *const i8) -> bool;
+    fn class_addMethod(
+        cls: *mut std::ffi::c_void,
+        sel: *const std::ffi::c_void,
+        imp: *const std::ffi::c_void,
+        types: *const i8,
+    ) -> bool;
     fn class_addProtocol(cls: *mut std::ffi::c_void, protocol: *const std::ffi::c_void) -> bool;
     fn sel_registerName(name: *const i8) -> *const std::ffi::c_void;
     fn objc_getClass(name: *const i8) -> *const std::ffi::c_void;
@@ -366,7 +378,9 @@ pub fn app_run(_app_handle: i64) {
         }
         unsafe {
             perry_geisterhand_register_state_set(crate::perry_ui_state_set);
-            perry_geisterhand_register_screenshot_capture(crate::screenshot::perry_ui_screenshot_capture);
+            perry_geisterhand_register_screenshot_capture(
+                crate::screenshot::perry_ui_screenshot_capture,
+            );
             perry_geisterhand_register_textfield_set_string(crate::perry_ui_textfield_set_string);
             perry_geisterhand_register_apply_style(crate::geisterhand_style::apply_style);
         }
@@ -682,25 +696,31 @@ impl PerryKeyboardObserver {
 /// Find the currently focused UITextField/UISecureTextField and scroll its
 /// parent UIScrollView so the field is visible above the keyboard.
 unsafe fn scroll_focused_field_into_view(keyboard_height: f64) {
-    if keyboard_height <= 0.0 { return; }
+    if keyboard_height <= 0.0 {
+        return;
+    }
 
     // Find the first responder
-    let app: *const AnyObject = msg_send![
-        AnyClass::get(c"UIApplication").unwrap(),
-        sharedApplication
-    ];
+    let app: *const AnyObject =
+        msg_send![AnyClass::get(c"UIApplication").unwrap(), sharedApplication];
     let key_window: *const AnyObject = msg_send![app, keyWindow];
-    if key_window.is_null() { return; }
+    if key_window.is_null() {
+        return;
+    }
 
     // Use a private but widely-used method to find first responder
     // Alternatively, walk the view hierarchy
     let first_responder: *const AnyObject = find_first_responder(key_window as *const AnyObject);
-    if first_responder.is_null() { return; }
+    if first_responder.is_null() {
+        return;
+    }
 
     // Check if it's a text field
     let tf_cls = AnyClass::get(c"UITextField").unwrap();
     let is_tf: bool = msg_send![first_responder, isKindOfClass: tf_cls];
-    if !is_tf { return; }
+    if !is_tf {
+        return;
+    }
 
     // Find parent UIScrollView
     let mut parent: *const AnyObject = msg_send![first_responder, superview];
@@ -740,14 +760,18 @@ unsafe fn scroll_focused_field_into_view(keyboard_height: f64) {
 /// Recursively find the first responder in the view hierarchy.
 unsafe fn find_first_responder(view: *const AnyObject) -> *const AnyObject {
     let is_first: bool = msg_send![view, isFirstResponder];
-    if is_first { return view; }
+    if is_first {
+        return view;
+    }
 
     let subviews: *const AnyObject = msg_send![view, subviews];
     let count: usize = msg_send![subviews, count];
     for i in 0..count {
         let subview: *const AnyObject = msg_send![subviews, objectAtIndex: i];
         let result = find_first_responder(subview);
-        if !result.is_null() { return result; }
+        if !result.is_null() {
+            return result;
+        }
     }
 
     std::ptr::null()

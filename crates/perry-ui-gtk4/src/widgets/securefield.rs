@@ -47,9 +47,7 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
     });
 
     entry.connect_changed(move |entry| {
-        let closure_f64 = SECUREFIELD_CALLBACKS.with(|cbs| {
-            cbs.borrow().get(&callback_id).copied()
-        });
+        let closure_f64 = SECUREFIELD_CALLBACKS.with(|cbs| cbs.borrow().get(&callback_id).copied());
         if let Some(closure_f64) = closure_f64 {
             let text = entry.text().to_string();
             let bytes = text.as_bytes();

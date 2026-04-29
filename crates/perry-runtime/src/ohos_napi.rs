@@ -22,24 +22,24 @@
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr;
 
-#[repr(C)] pub struct NapiEnv(());
-#[repr(C)] pub struct NapiValue(());
-#[repr(C)] pub struct NapiCallbackInfo(());
+#[repr(C)]
+pub struct NapiEnv(());
+#[repr(C)]
+pub struct NapiValue(());
+#[repr(C)]
+pub struct NapiCallbackInfo(());
 
 pub type NapiStatus = c_int;
-pub type NapiCallback = unsafe extern "C" fn(
-    env: *mut NapiEnv,
-    info: *mut NapiCallbackInfo,
-) -> *mut NapiValue;
+pub type NapiCallback =
+    unsafe extern "C" fn(env: *mut NapiEnv, info: *mut NapiCallbackInfo) -> *mut NapiValue;
 
 #[repr(C)]
 pub struct NapiModule {
     pub nm_version: c_int,
     pub nm_flags: c_uint,
     pub nm_filename: *const c_char,
-    pub nm_register_func: Option<
-        unsafe extern "C" fn(env: *mut NapiEnv, exports: *mut NapiValue) -> *mut NapiValue,
-    >,
+    pub nm_register_func:
+        Option<unsafe extern "C" fn(env: *mut NapiEnv, exports: *mut NapiValue) -> *mut NapiValue>,
     pub nm_modname: *const c_char,
     pub nm_priv: *mut c_void,
     pub reserved: [*mut c_void; 4],
@@ -83,20 +83,14 @@ extern "C" {
     fn main() -> c_int;
 }
 
-unsafe extern "C" fn run(
-    env: *mut NapiEnv,
-    _info: *mut NapiCallbackInfo,
-) -> *mut NapiValue {
+unsafe extern "C" fn run(env: *mut NapiEnv, _info: *mut NapiCallbackInfo) -> *mut NapiValue {
     let exit_code = main();
     let mut out: *mut NapiValue = ptr::null_mut();
     let _ = napi_create_int32(env, exit_code, &mut out);
     out
 }
 
-unsafe extern "C" fn napi_init(
-    env: *mut NapiEnv,
-    exports: *mut NapiValue,
-) -> *mut NapiValue {
+unsafe extern "C" fn napi_init(env: *mut NapiEnv, exports: *mut NapiValue) -> *mut NapiValue {
     // Export a single function, `run`. ArkTS callers do `entry.run()`.
     let name = b"run\0";
     let mut fn_val: *mut NapiValue = ptr::null_mut();
@@ -108,12 +102,7 @@ unsafe extern "C" fn napi_init(
         ptr::null_mut(),
         &mut fn_val,
     );
-    let _ = napi_set_named_property(
-        env,
-        exports,
-        name.as_ptr() as *const c_char,
-        fn_val,
-    );
+    let _ = napi_set_named_property(env, exports, name.as_ptr() as *const c_char, fn_val);
     exports
 }
 

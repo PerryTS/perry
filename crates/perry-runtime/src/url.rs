@@ -3,9 +3,9 @@
 //! Provides JavaScript URL functionality for parsing and working with URLs.
 //! URLs are represented as regular JavaScript objects with string fields.
 
-use crate::{ObjectHeader, js_object_alloc, js_string_from_bytes, StringHeader, ArrayHeader};
-use crate::object::{js_object_set_field_f64, js_object_set_keys};
 use crate::array::{js_array_alloc, js_array_push_f64};
+use crate::object::{js_object_set_field_f64, js_object_set_keys};
+use crate::{js_object_alloc, js_string_from_bytes, ArrayHeader, ObjectHeader, StringHeader};
 
 /// Create a string from a Rust str (returns a StringHeader pointer as f64)
 /// Uses proper NaN-boxing with STRING_TAG so is_string() will return true
@@ -148,7 +148,9 @@ fn resolve_url(url_str: &str, base_str: &str) -> String {
     for part in url_str.split('/') {
         match part {
             "." | "" => continue,
-            ".." => { segments.pop(); },
+            ".." => {
+                segments.pop();
+            }
             _ => segments.push(part),
         }
     }
@@ -204,16 +206,16 @@ fn create_url_object(url_string: &str) -> *mut ObjectHeader {
 
         // Create the keys array with property names (order must match field indices)
         let mut keys = js_array_alloc(URL_FIELD_COUNT);
-        keys = js_array_push_f64(keys, create_string_f64("href"));          // 0
-        keys = js_array_push_f64(keys, create_string_f64("protocol"));      // 1
-        keys = js_array_push_f64(keys, create_string_f64("host"));          // 2
-        keys = js_array_push_f64(keys, create_string_f64("hostname"));      // 3
-        keys = js_array_push_f64(keys, create_string_f64("port"));          // 4
-        keys = js_array_push_f64(keys, create_string_f64("pathname"));      // 5
-        keys = js_array_push_f64(keys, create_string_f64("search"));        // 6
-        keys = js_array_push_f64(keys, create_string_f64("hash"));          // 7
-        keys = js_array_push_f64(keys, create_string_f64("origin"));        // 8
-        keys = js_array_push_f64(keys, create_string_f64("searchParams"));  // 9
+        keys = js_array_push_f64(keys, create_string_f64("href")); // 0
+        keys = js_array_push_f64(keys, create_string_f64("protocol")); // 1
+        keys = js_array_push_f64(keys, create_string_f64("host")); // 2
+        keys = js_array_push_f64(keys, create_string_f64("hostname")); // 3
+        keys = js_array_push_f64(keys, create_string_f64("port")); // 4
+        keys = js_array_push_f64(keys, create_string_f64("pathname")); // 5
+        keys = js_array_push_f64(keys, create_string_f64("search")); // 6
+        keys = js_array_push_f64(keys, create_string_f64("hash")); // 7
+        keys = js_array_push_f64(keys, create_string_f64("origin")); // 8
+        keys = js_array_push_f64(keys, create_string_f64("searchParams")); // 9
         js_object_set_keys(obj, keys);
 
         // Set all the URL properties
@@ -386,7 +388,7 @@ pub extern "C" fn js_url_get_search_params(url: *mut ObjectHeader) -> f64 {
 // ============================================================================
 
 /// Field indices for URLSearchParams object
-const URL_SEARCH_PARAMS_ENTRIES: u32 = 0;  // Array of [key, value] pairs
+const URL_SEARCH_PARAMS_ENTRIES: u32 = 0; // Array of [key, value] pairs
 const URL_SEARCH_PARAMS_FIELD_COUNT: u32 = 1;
 
 /// Parse a query string into key-value pairs
@@ -397,7 +399,8 @@ fn parse_query_string(query: &str) -> Vec<(String, String)> {
         return Vec::new();
     }
 
-    query.split('&')
+    query
+        .split('&')
         .filter_map(|pair| {
             if pair.is_empty() {
                 return None;
@@ -490,7 +493,8 @@ fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(String, Stri
     }
 
     let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
-    let entries_ptr: *mut ArrayHeader = unsafe { std::mem::transmute::<f64, i64>(entries_f64) as *mut ArrayHeader };
+    let entries_ptr: *mut ArrayHeader =
+        unsafe { std::mem::transmute::<f64, i64>(entries_f64) as *mut ArrayHeader };
 
     if entries_ptr.is_null() {
         return Vec::new();
@@ -501,7 +505,8 @@ fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(String, Stri
 
     for i in 0..len {
         let pair_f64 = crate::array::js_array_get_f64(entries_ptr, i as u32);
-        let pair_ptr: *mut ArrayHeader = unsafe { std::mem::transmute::<f64, i64>(pair_f64) as *mut ArrayHeader };
+        let pair_ptr: *mut ArrayHeader =
+            unsafe { std::mem::transmute::<f64, i64>(pair_f64) as *mut ArrayHeader };
 
         if !pair_ptr.is_null() {
             let key_f64 = crate::array::js_array_get_f64(pair_ptr, 0);
@@ -519,7 +524,9 @@ fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(String, Stri
 /// Create a new URLSearchParams from a string
 /// js_url_search_params_new(init: *mut StringHeader) -> *mut ObjectHeader
 #[no_mangle]
-pub extern "C" fn js_url_search_params_new(init_str: *mut crate::StringHeader) -> *mut ObjectHeader {
+pub extern "C" fn js_url_search_params_new(
+    init_str: *mut crate::StringHeader,
+) -> *mut ObjectHeader {
     let init_string = if init_str.is_null() {
         String::new()
     } else {
@@ -545,7 +552,10 @@ pub extern "C" fn js_url_search_params_new_empty() -> *mut ObjectHeader {
 /// Get a value by name
 /// js_url_search_params_get(params: *mut ObjectHeader, name: *mut StringHeader) -> *mut StringHeader (string or null)
 #[no_mangle]
-pub extern "C" fn js_url_search_params_get(params: *mut ObjectHeader, name_str: *mut crate::StringHeader) -> *mut crate::StringHeader {
+pub extern "C" fn js_url_search_params_get(
+    params: *mut ObjectHeader,
+    name_str: *mut crate::StringHeader,
+) -> *mut crate::StringHeader {
     let name = if name_str.is_null() {
         String::new()
     } else {
@@ -572,7 +582,10 @@ pub extern "C" fn js_url_search_params_get(params: *mut ObjectHeader, name_str: 
 /// Check if a name exists
 /// js_url_search_params_has(params: *mut ObjectHeader, name: *mut StringHeader) -> f64 (boolean)
 #[no_mangle]
-pub extern "C" fn js_url_search_params_has(params: *mut ObjectHeader, name_str: *mut crate::StringHeader) -> f64 {
+pub extern "C" fn js_url_search_params_has(
+    params: *mut ObjectHeader,
+    name_str: *mut crate::StringHeader,
+) -> f64 {
     let name = if name_str.is_null() {
         String::new()
     } else {
@@ -586,7 +599,11 @@ pub extern "C" fn js_url_search_params_has(params: *mut ObjectHeader, name_str: 
 
     let entries = get_url_search_params_entries(params);
     let found = entries.iter().any(|(key, _)| key == &name);
-    if found { 1.0 } else { 0.0 }
+    if found {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// Set a value (replaces existing or adds new)
@@ -727,7 +744,9 @@ pub extern "C" fn js_url_search_params_delete(
 /// Convert to query string
 /// js_url_search_params_to_string(params: *mut ObjectHeader) -> *mut StringHeader (raw string pointer)
 #[no_mangle]
-pub extern "C" fn js_url_search_params_to_string(params: *mut ObjectHeader) -> *mut crate::StringHeader {
+pub extern "C" fn js_url_search_params_to_string(
+    params: *mut ObjectHeader,
+) -> *mut crate::StringHeader {
     let entries = get_url_search_params_entries(params);
 
     if entries.is_empty() {
@@ -747,7 +766,10 @@ pub extern "C" fn js_url_search_params_to_string(params: *mut ObjectHeader) -> *
 /// Get all values for a name
 /// js_url_search_params_get_all(params: *mut ObjectHeader, name: *mut StringHeader) -> f64 (array)
 #[no_mangle]
-pub extern "C" fn js_url_search_params_get_all(params: *mut ObjectHeader, name_str: *mut crate::StringHeader) -> f64 {
+pub extern "C" fn js_url_search_params_get_all(
+    params: *mut ObjectHeader,
+    name_str: *mut crate::StringHeader,
+) -> f64 {
     let name = if name_str.is_null() {
         String::new()
     } else {
@@ -848,7 +870,11 @@ pub extern "C" fn js_abort_controller_new() -> *mut ObjectHeader {
 
         // Store signal in controller (NaN-boxed with POINTER_TAG)
         js_object_set_field_f64(controller, ABORT_SIGNAL_FIELD, nanbox_pointer_ac(signal));
-        js_object_set_field_f64(controller, ABORT_ABORTED_FIELD, f64::from_bits(TAG_FALSE_AC));
+        js_object_set_field_f64(
+            controller,
+            ABORT_ABORTED_FIELD,
+            f64::from_bits(TAG_FALSE_AC),
+        );
 
         controller
     }
@@ -1032,8 +1058,7 @@ mod tests {
 
     #[test]
     fn test_parse_file_url() {
-        let (protocol, host, hostname, _, pathname, _, _) =
-            parse_url("file:///Users/test/file.ts");
+        let (protocol, host, hostname, _, pathname, _, _) = parse_url("file:///Users/test/file.ts");
         assert_eq!(protocol, "file:");
         assert_eq!(host, "");
         assert_eq!(hostname, "");
@@ -1066,7 +1091,12 @@ mod tests {
         let params = create_url_search_params_object(entries);
 
         let read_entries = get_url_search_params_entries(params);
-        assert_eq!(read_entries.len(), 2, "Expected 2 entries, got {}", read_entries.len());
+        assert_eq!(
+            read_entries.len(),
+            2,
+            "Expected 2 entries, got {}",
+            read_entries.len()
+        );
         assert_eq!(read_entries[0].0, "key1");
         assert_eq!(read_entries[0].1, "value1");
         assert_eq!(read_entries[1].0, "key2");
@@ -1079,6 +1109,10 @@ mod tests {
         let original = "test string";
         let f64_val = create_string_f64(original);
         let recovered = get_string_content(f64_val);
-        assert_eq!(recovered, original, "String round-trip failed: expected '{}', got '{}'", original, recovered);
+        assert_eq!(
+            recovered, original,
+            "String round-trip failed: expected '{}', got '{}'",
+            original, recovered
+        );
     }
 }

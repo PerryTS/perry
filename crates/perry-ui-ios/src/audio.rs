@@ -1,6 +1,6 @@
+use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::msg_send;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -33,9 +33,30 @@ impl AWeightState {
 
 // A-weighting coefficients for 48kHz (default on modern Apple devices).
 const A_WEIGHT_SOS: [[f64; 6]; 3] = [
-    [1.0, -2.0, 1.0, 1.0, -1.9746716508129498, 0.97504628855498883],
-    [1.0, -2.0, 1.0, 1.0, -1.1440825051498020, 0.20482985688498268],
-    [0.24649652853975498, -0.49299305707950996, 0.24649652853975498, 1.0, -0.48689808685150487, 0.0],
+    [
+        1.0,
+        -2.0,
+        1.0,
+        1.0,
+        -1.9746716508129498,
+        0.97504628855498883,
+    ],
+    [
+        1.0,
+        -2.0,
+        1.0,
+        1.0,
+        -1.1440825051498020,
+        0.20482985688498268,
+    ],
+    [
+        0.24649652853975498,
+        -0.49299305707950996,
+        0.24649652853975498,
+        1.0,
+        -0.48689808685150487,
+        0.0,
+    ],
 ];
 
 const A_WEIGHT_GAIN: f64 = 0.11310782960598924;
@@ -43,11 +64,17 @@ const A_WEIGHT_GAIN: f64 = 0.11310782960598924;
 fn a_weight_filter(sample: f64, state: &mut AWeightState) -> f64 {
     let mut x = sample * A_WEIGHT_GAIN;
     for (i, sos) in A_WEIGHT_SOS.iter().enumerate() {
-        let b0 = sos[0]; let b1 = sos[1]; let b2 = sos[2];
-        let a1 = sos[4]; let a2 = sos[5];
+        let b0 = sos[0];
+        let b1 = sos[1];
+        let b2 = sos[2];
+        let a1 = sos[4];
+        let a2 = sos[5];
         let s = &mut state.sections[i];
         let y = b0 * x + b1 * s[0] + b2 * s[1] - a1 * s[2] - a2 * s[3];
-        s[1] = s[0]; s[0] = x; s[3] = s[2]; s[2] = y;
+        s[1] = s[0];
+        s[0] = x;
+        s[3] = s[2];
+        s[2] = y;
         x = y;
     }
     x
@@ -155,9 +182,10 @@ pub fn start() -> i64 {
         crate::ws_log!("[audio] input format: {}Hz", sample_rate);
 
         // Create tap block
-        let tap_block = block2::RcBlock::new(move |buffer: *mut AnyObject, _when: *mut AnyObject| {
-            process_audio_buffer(buffer, sample_rate);
-        });
+        let tap_block =
+            block2::RcBlock::new(move |buffer: *mut AnyObject, _when: *mut AnyObject| {
+                process_audio_buffer(buffer, sample_rate);
+            });
 
         // Install tap
         let buffer_size: u32 = 1024;
@@ -179,7 +207,9 @@ pub fn start() -> i64 {
         }
 
         crate::ws_log!("[audio] engine started successfully");
-        ENGINE.with(|e| { *e.borrow_mut() = Some(engine); });
+        ENGINE.with(|e| {
+            *e.borrow_mut() = Some(engine);
+        });
         1
     }
 }
@@ -222,9 +252,7 @@ pub fn get_waveform(count: f64) -> f64 {
 
 pub fn get_device_model() -> i64 {
     let model = get_sysctl_model();
-    unsafe {
-        js_string_from_bytes(model.as_ptr(), model.len() as i32)
-    }
+    unsafe { js_string_from_bytes(model.as_ptr(), model.len() as i32) }
 }
 
 // =============================================================================
@@ -232,16 +260,24 @@ pub fn get_device_model() -> i64 {
 // =============================================================================
 
 unsafe fn process_audio_buffer(buffer: *mut AnyObject, sample_rate: f64) {
-    if buffer.is_null() { return; }
+    if buffer.is_null() {
+        return;
+    }
 
     let float_channel_data: *const *const f32 = msg_send![buffer, floatChannelData];
-    if float_channel_data.is_null() { return; }
+    if float_channel_data.is_null() {
+        return;
+    }
 
     let frame_length: u32 = msg_send![buffer, frameLength];
-    if frame_length == 0 { return; }
+    if frame_length == 0 {
+        return;
+    }
 
     let samples: *const f32 = *float_channel_data;
-    if samples.is_null() { return; }
+    if samples.is_null() {
+        return;
+    }
 
     let n = frame_length as usize;
     let mut sum_sq = 0.0f64;
@@ -252,7 +288,9 @@ unsafe fn process_audio_buffer(buffer: *mut AnyObject, sample_rate: f64) {
         for i in 0..n {
             let sample = *samples.add(i);
             let abs_sample = sample.abs();
-            if abs_sample > peak { peak = abs_sample; }
+            if abs_sample > peak {
+                peak = abs_sample;
+            }
             let weighted = a_weight_filter(sample as f64, &mut state);
             sum_sq += weighted * weighted;
         }
@@ -296,7 +334,13 @@ fn get_sysctl_model() -> String {
     // On iOS, hw.machine returns the device identifier (e.g., "iPhone15,2")
     let name = c"hw.machine";
     unsafe {
-        libc::sysctlbyname(name.as_ptr(), std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0);
+        libc::sysctlbyname(
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        );
         if size == 0 {
             return "Unknown".to_string();
         }

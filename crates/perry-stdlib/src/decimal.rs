@@ -53,15 +53,21 @@ pub unsafe extern "C" fn js_decimal_from_string(value_ptr: *const StringHeader) 
 /// Decimal.plus(other) - Addition
 #[no_mangle]
 pub extern "C" fn js_decimal_plus(handle: Handle, other: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(a + b))
 }
 
 /// Decimal.plus with number
 #[no_mangle]
 pub extern "C" fn js_decimal_plus_number(handle: Handle, other: f64) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     let b = Decimal::from_f64(other).unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(a + b))
 }
@@ -69,15 +75,21 @@ pub extern "C" fn js_decimal_plus_number(handle: Handle, other: f64) -> Handle {
 /// Decimal.minus(other) - Subtraction
 #[no_mangle]
 pub extern "C" fn js_decimal_minus(handle: Handle, other: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(a - b))
 }
 
 /// Decimal.minus with number
 #[no_mangle]
 pub extern "C" fn js_decimal_minus_number(handle: Handle, other: f64) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     let b = Decimal::from_f64(other).unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(a - b))
 }
@@ -85,15 +97,21 @@ pub extern "C" fn js_decimal_minus_number(handle: Handle, other: f64) -> Handle 
 /// Decimal.times(other) - Multiplication
 #[no_mangle]
 pub extern "C" fn js_decimal_times(handle: Handle, other: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(a * b))
 }
 
 /// Decimal.times with number
 #[no_mangle]
 pub extern "C" fn js_decimal_times_number(handle: Handle, other: f64) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     let b = Decimal::from_f64(other).unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(a * b))
 }
@@ -101,8 +119,12 @@ pub extern "C" fn js_decimal_times_number(handle: Handle, other: f64) -> Handle 
 /// Decimal.div(other) - Division
 #[no_mangle]
 pub extern "C" fn js_decimal_div(handle: Handle, other: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ONE);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ONE);
 
     if b.is_zero() {
         return register_handle(DecimalHandle::new(Decimal::ZERO));
@@ -114,7 +136,9 @@ pub extern "C" fn js_decimal_div(handle: Handle, other: Handle) -> Handle {
 /// Decimal.div with number
 #[no_mangle]
 pub extern "C" fn js_decimal_div_number(handle: Handle, other: f64) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     let b = Decimal::from_f64(other).unwrap_or(Decimal::ONE);
 
     if b.is_zero() {
@@ -127,8 +151,12 @@ pub extern "C" fn js_decimal_div_number(handle: Handle, other: f64) -> Handle {
 /// Decimal.mod(other) - Modulo
 #[no_mangle]
 pub extern "C" fn js_decimal_mod(handle: Handle, other: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ONE);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ONE);
 
     if b.is_zero() {
         return register_handle(DecimalHandle::new(Decimal::ZERO));
@@ -140,7 +168,9 @@ pub extern "C" fn js_decimal_mod(handle: Handle, other: Handle) -> Handle {
 /// Decimal.pow(n) - Power
 #[no_mangle]
 pub extern "C" fn js_decimal_pow(handle: Handle, n: f64) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     let exp = Decimal::from_f64(n).unwrap_or(Decimal::ZERO);
 
     // Use checked_powd with Decimal exponent
@@ -151,7 +181,9 @@ pub extern "C" fn js_decimal_pow(handle: Handle, n: f64) -> Handle {
 /// Decimal.sqrt() - Square root
 #[no_mangle]
 pub extern "C" fn js_decimal_sqrt(handle: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
 
     // Use the sqrt method from rust_decimal with maths feature
     let result = a.sqrt().unwrap_or(Decimal::ZERO);
@@ -161,42 +193,54 @@ pub extern "C" fn js_decimal_sqrt(handle: Handle) -> Handle {
 /// Decimal.abs() - Absolute value
 #[no_mangle]
 pub extern "C" fn js_decimal_abs(handle: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(a.abs()))
 }
 
 /// Decimal.neg() - Negation
 #[no_mangle]
 pub extern "C" fn js_decimal_neg(handle: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(-a))
 }
 
 /// Decimal.round() - Round to nearest integer
 #[no_mangle]
 pub extern "C" fn js_decimal_round(handle: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(a.round()))
 }
 
 /// Decimal.floor() - Round down
 #[no_mangle]
 pub extern "C" fn js_decimal_floor(handle: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(a.floor()))
 }
 
 /// Decimal.ceil() - Round up
 #[no_mangle]
 pub extern "C" fn js_decimal_ceil(handle: Handle) -> Handle {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     register_handle(DecimalHandle::new(a.ceil()))
 }
 
 /// Decimal.toFixed(decimals) - Format with fixed decimal places
 #[no_mangle]
 pub extern "C" fn js_decimal_to_fixed(handle: Handle, decimals: f64) -> *const StringHeader {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     let dp = decimals as u32;
 
     let rounded = a.round_dp(dp);
@@ -208,7 +252,9 @@ pub extern "C" fn js_decimal_to_fixed(handle: Handle, decimals: f64) -> *const S
 /// Decimal.toString() - Convert to string
 #[no_mangle]
 pub extern "C" fn js_decimal_to_string(handle: Handle) -> *const StringHeader {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     let result = a.to_string();
 
     unsafe { js_string_from_bytes(result.as_ptr(), result.len() as u32) }
@@ -217,7 +263,9 @@ pub extern "C" fn js_decimal_to_string(handle: Handle) -> *const StringHeader {
 /// Decimal.toNumber() - Convert to number
 #[no_mangle]
 pub extern "C" fn js_decimal_to_number(handle: Handle) -> f64 {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     a.to_f64().unwrap_or(0.0)
 }
 
@@ -225,79 +273,113 @@ pub extern "C" fn js_decimal_to_number(handle: Handle) -> f64 {
 // runtime fns return raw 1.0 / 0.0, which user TS code prints as "1" / "0"
 // instead of "true" / "false" — a regression vs npm decimal.js. The bits
 // match perry-runtime/src/value.rs's TAG_TRUE / TAG_FALSE.
-const JSBOOL_TRUE_BITS:  u64 = 0x7FFC_0000_0000_0004;
+const JSBOOL_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
 const JSBOOL_FALSE_BITS: u64 = 0x7FFC_0000_0000_0003;
 #[inline(always)]
 fn js_bool(b: bool) -> f64 {
-    f64::from_bits(if b { JSBOOL_TRUE_BITS } else { JSBOOL_FALSE_BITS })
+    f64::from_bits(if b {
+        JSBOOL_TRUE_BITS
+    } else {
+        JSBOOL_FALSE_BITS
+    })
 }
 
 /// Decimal.eq(other) - Equality comparison
 #[no_mangle]
 pub extern "C" fn js_decimal_eq(handle: Handle, other: Handle) -> f64 {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     js_bool(a == b)
 }
 
 /// Decimal.lt(other) - Less than
 #[no_mangle]
 pub extern "C" fn js_decimal_lt(handle: Handle, other: Handle) -> f64 {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     js_bool(a < b)
 }
 
 /// Decimal.lte(other) - Less than or equal
 #[no_mangle]
 pub extern "C" fn js_decimal_lte(handle: Handle, other: Handle) -> f64 {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     js_bool(a <= b)
 }
 
 /// Decimal.gt(other) - Greater than
 #[no_mangle]
 pub extern "C" fn js_decimal_gt(handle: Handle, other: Handle) -> f64 {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     js_bool(a > b)
 }
 
 /// Decimal.gte(other) - Greater than or equal
 #[no_mangle]
 pub extern "C" fn js_decimal_gte(handle: Handle, other: Handle) -> f64 {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     js_bool(a >= b)
 }
 
 /// Decimal.isZero() - Check if zero
 #[no_mangle]
 pub extern "C" fn js_decimal_is_zero(handle: Handle) -> f64 {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     js_bool(a.is_zero())
 }
 
 /// Decimal.isPositive() - Check if positive
 #[no_mangle]
 pub extern "C" fn js_decimal_is_positive(handle: Handle) -> f64 {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     js_bool(a.is_sign_positive() && !a.is_zero())
 }
 
 /// Decimal.isNegative() - Check if negative
 #[no_mangle]
 pub extern "C" fn js_decimal_is_negative(handle: Handle) -> f64 {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
     js_bool(a.is_sign_negative())
 }
 
 /// Decimal.cmp(other) - Compare: -1, 0, or 1
 #[no_mangle]
 pub extern "C" fn js_decimal_cmp(handle: Handle, other: Handle) -> f64 {
-    let a = get_handle_mut::<DecimalHandle>(handle).map(|h| h.value).unwrap_or(Decimal::ZERO);
-    let b = get_handle_mut::<DecimalHandle>(other).map(|h| h.value).unwrap_or(Decimal::ZERO);
+    let a = get_handle_mut::<DecimalHandle>(handle)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
+    let b = get_handle_mut::<DecimalHandle>(other)
+        .map(|h| h.value)
+        .unwrap_or(Decimal::ZERO);
 
     match a.cmp(&b) {
         std::cmp::Ordering::Less => -1.0,
@@ -314,8 +396,8 @@ pub extern "C" fn js_decimal_cmp(handle: Handle, other: Handle) -> f64 {
 // works regardless of what the user actually passed.
 
 const POINTER_TAG_HI16: u64 = 0x7FFD;
-const STRING_TAG_HI16:  u64 = 0x7FFF;
-const INT32_TAG_HI16:   u64 = 0x7FFE;
+const STRING_TAG_HI16: u64 = 0x7FFF;
+const INT32_TAG_HI16: u64 = 0x7FFE;
 const SHORT_STRING_HI16: u64 = 0x7FF9;
 
 /// Decode a NaN-boxed JSValue (f64) into a Decimal handle. Always returns a

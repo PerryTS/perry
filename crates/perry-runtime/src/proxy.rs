@@ -17,9 +17,7 @@
 
 use std::cell::RefCell;
 
-use crate::closure::{
-    js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3,
-};
+use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
 
 /// A single Proxy registry entry.
 #[repr(C)]
@@ -142,7 +140,11 @@ pub extern "C" fn js_proxy_is_revoked(proxy_boxed: f64) -> i32 {
 /// Query whether the given NaN-boxed value is a Proxy instance. Returns 1/0.
 #[no_mangle]
 pub extern "C" fn js_proxy_is_proxy(value: f64) -> i32 {
-    if lookup(value).is_some() { 1 } else { 0 }
+    if lookup(value).is_some() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Return the proxy's target (for Proxy.revocable.proxy revocation checks).
@@ -177,8 +179,7 @@ fn handler_trap(handler: f64, trap_name: &str) -> f64 {
 fn revoked_return() -> f64 {
     unsafe {
         let msg = "Cannot perform operation on a proxy that has been revoked";
-        let msg_handle =
-            crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let msg_handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err = crate::error::js_typeerror_new(msg_handle);
         let boxed = f64::from_bits(POINTER_TAG | ((err as u64) & POINTER_MASK));
         crate::exception::js_throw(boxed);
@@ -434,9 +435,7 @@ pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f6
             // js_native_call_method now returns when a method dispatch
             // on a closure falls off the end), call the target directly
             // with the args so the expected value still flows through.
-            if trap_result.to_bits() == TAG_UNDEFINED
-                || is_null_object_sentinel(trap_result)
-            {
+            if trap_result.to_bits() == TAG_UNDEFINED || is_null_object_sentinel(trap_result) {
                 return call_with_args_array(target, args_array);
             }
             return trap_result;
@@ -483,11 +482,7 @@ pub(crate) fn call_with_args_array(callee: f64, args_array: f64) -> f64 {
 /// `new Proxy(target_class, handler)` — if handler.construct exists, call it
 /// with (targetClass, argsArray); else construct the target class directly.
 #[no_mangle]
-pub extern "C" fn js_proxy_construct(
-    proxy_boxed: f64,
-    args_array: f64,
-    _new_target: f64,
-) -> f64 {
+pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, _new_target: f64) -> f64 {
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),

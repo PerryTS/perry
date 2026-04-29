@@ -1,8 +1,8 @@
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
+use objc2_foundation::{MainThreadMarker, NSObject, NSString};
 use objc2_ui_kit::UIView;
-use objc2_foundation::{NSObject, NSString, MainThreadMarker};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -52,7 +52,7 @@ fn icon_for_label(label: &str) -> &'static str {
 // ── State ─────────────────────────────────────────────────────
 
 struct TabBarState {
-    items: Vec<*mut AnyObject>,    // UITabBarItem raw pointers (kept alive by UITabBar)
+    items: Vec<*mut AnyObject>, // UITabBarItem raw pointers (kept alive by UITabBar)
     on_change: f64,
 }
 
@@ -156,10 +156,13 @@ pub fn create(on_change: f64) -> i64 {
         });
 
         TABBAR_STATE.with(|s| {
-            s.borrow_mut().insert(handle, TabBarState {
-                items: Vec::new(),
-                on_change,
-            });
+            s.borrow_mut().insert(
+                handle,
+                TabBarState {
+                    items: Vec::new(),
+                    on_change,
+                },
+            );
         });
 
         handle
@@ -172,7 +175,10 @@ pub fn add_tab(tabbar_handle: i64, label_ptr: *const u8) {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     let tab_index = TABBAR_STATE.with(|s| {
-        s.borrow().get(&tabbar_handle).map(|st| st.items.len() as i64).unwrap_or(0)
+        s.borrow()
+            .get(&tabbar_handle)
+            .map(|st| st.items.len() as i64)
+            .unwrap_or(0)
     });
 
     unsafe {
@@ -203,7 +209,8 @@ pub fn add_tab(tabbar_handle: i64, label_ptr: *const u8) {
                 // Build NSArray of all items
                 if let Some(bar_view) = super::get_widget(tabbar_handle) {
                     let arr_cls = objc2::runtime::AnyClass::get(c"NSMutableArray").unwrap();
-                    let arr: *mut AnyObject = msg_send![arr_cls, arrayWithCapacity: state.items.len()];
+                    let arr: *mut AnyObject =
+                        msg_send![arr_cls, arrayWithCapacity: state.items.len()];
                     for &itm in &state.items {
                         let _: () = msg_send![arr, addObject: itm];
                     }

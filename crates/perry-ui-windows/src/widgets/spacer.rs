@@ -1,7 +1,7 @@
 //! Spacer widget — virtual entry (no HWND), just a layout weight placeholder.
 //! Spacers expand to fill remaining space in VStack/HStack containers.
 
-use super::{WidgetKind, alloc_control_id, register_widget};
+use super::{alloc_control_id, register_widget, WidgetKind};
 
 /// Create a Spacer. Returns widget handle.
 pub fn create() -> i64 {

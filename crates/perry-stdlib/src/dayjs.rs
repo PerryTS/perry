@@ -3,8 +3,8 @@
 //! Native implementation of dayjs and date-fns using chrono.
 //! Provides date parsing, formatting, manipulation, and comparison.
 
-use perry_runtime::{js_string_from_bytes, StringHeader};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
+use perry_runtime::{js_string_from_bytes, StringHeader};
 
 use crate::common::{register_handle, Handle};
 
@@ -349,21 +349,19 @@ pub unsafe extern "C" fn js_dayjs_start_of(handle: Handle, unit_ptr: *const Stri
         let dt = &wrapper.datetime;
 
         let new_dt = match unit.as_str() {
-            "year" | "years" | "y" => {
-                Utc.with_ymd_and_hms(dt.year(), 1, 1, 0, 0, 0).unwrap()
-            }
-            "month" | "months" | "M" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0).unwrap()
-            }
-            "day" | "days" | "d" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 0, 0, 0).unwrap()
-            }
-            "hour" | "hours" | "h" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 0, 0).unwrap()
-            }
-            "minute" | "minutes" | "m" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), 0).unwrap()
-            }
+            "year" | "years" | "y" => Utc.with_ymd_and_hms(dt.year(), 1, 1, 0, 0, 0).unwrap(),
+            "month" | "months" | "M" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0)
+                .unwrap(),
+            "day" | "days" | "d" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 0, 0, 0)
+                .unwrap(),
+            "hour" | "hours" | "h" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 0, 0)
+                .unwrap(),
+            "minute" | "minutes" | "m" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), 0)
+                .unwrap(),
             _ => *dt,
         };
 
@@ -387,26 +385,25 @@ pub unsafe extern "C" fn js_dayjs_end_of(handle: Handle, unit_ptr: *const String
         let dt = &wrapper.datetime;
 
         let new_dt = match unit.as_str() {
-            "year" | "years" | "y" => {
-                Utc.with_ymd_and_hms(dt.year(), 12, 31, 23, 59, 59).unwrap()
-            }
+            "year" | "years" | "y" => Utc.with_ymd_and_hms(dt.year(), 12, 31, 23, 59, 59).unwrap(),
             "month" | "months" | "M" => {
                 let last_day = NaiveDate::from_ymd_opt(dt.year(), dt.month() + 1, 1)
                     .unwrap_or_else(|| NaiveDate::from_ymd_opt(dt.year() + 1, 1, 1).unwrap())
                     .pred_opt()
                     .unwrap()
                     .day();
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), last_day, 23, 59, 59).unwrap()
+                Utc.with_ymd_and_hms(dt.year(), dt.month(), last_day, 23, 59, 59)
+                    .unwrap()
             }
-            "day" | "days" | "d" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 23, 59, 59).unwrap()
-            }
-            "hour" | "hours" | "h" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 59, 59).unwrap()
-            }
-            "minute" | "minutes" | "m" => {
-                Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), 59).unwrap()
-            }
+            "day" | "days" | "d" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 23, 59, 59)
+                .unwrap(),
+            "hour" | "hours" | "h" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 59, 59)
+                .unwrap(),
+            "minute" | "minutes" | "m" => Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), 59)
+                .unwrap(),
             _ => *dt,
         };
 
@@ -609,7 +606,10 @@ pub extern "C" fn js_datefns_difference_in_hours(timestamp_left: f64, timestamp_
 
 /// differenceInMinutes(dateLeft, dateRight) -> number (date-fns compatible)
 #[no_mangle]
-pub extern "C" fn js_datefns_difference_in_minutes(timestamp_left: f64, timestamp_right: f64) -> f64 {
+pub extern "C" fn js_datefns_difference_in_minutes(
+    timestamp_left: f64,
+    timestamp_right: f64,
+) -> f64 {
     let diff_ms = timestamp_left - timestamp_right;
     (diff_ms / (1000.0 * 60.0)).floor()
 }

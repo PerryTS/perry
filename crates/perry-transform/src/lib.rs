@@ -16,5 +16,5 @@ pub mod inline;
 pub use async_to_generator::transform_async_to_generator;
 pub use closure::convert_closures;
 pub use generator::transform_generators;
-pub use i18n::{apply_i18n, I18nStringTable, I18nDiagnostic};
+pub use i18n::{apply_i18n, I18nDiagnostic, I18nStringTable};
 pub use inline::inline_functions;

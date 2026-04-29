@@ -1,9 +1,9 @@
 //! NavigationStack — FrameLayout with page stack (show/hide)
 
+use crate::jni_bridge;
+use jni::objects::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use jni::objects::JValue;
-use crate::jni_bridge;
 
 fn str_from_header(ptr: *const u8) -> &'static str {
     crate::app::str_from_header(ptr)
@@ -23,25 +23,34 @@ pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
     let _ = env.push_local_frame(32);
 
     let activity = super::get_activity(&mut env);
-    let frame_layout = env.new_object(
-        "android/widget/FrameLayout",
-        "(Landroid/content/Context;)V",
-        &[JValue::Object(&activity)],
-    ).expect("Failed to create FrameLayout");
+    let frame_layout = env
+        .new_object(
+            "android/widget/FrameLayout",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        )
+        .expect("Failed to create FrameLayout");
 
-    let global = env.new_global_ref(frame_layout).expect("Failed to create global ref");
+    let global = env
+        .new_global_ref(frame_layout)
+        .expect("Failed to create global ref");
     let handle = super::register_widget(global);
 
     // Add the initial page
     super::add_child(handle, body_handle);
 
     NAV_STATES.with(|s| {
-        s.borrow_mut().insert(handle, NavState {
-            pages: vec![body_handle],
-        });
+        s.borrow_mut().insert(
+            handle,
+            NavState {
+                pages: vec![body_handle],
+            },
+        );
     });
 
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     handle
 }
 

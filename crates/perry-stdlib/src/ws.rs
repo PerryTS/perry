@@ -3,9 +3,12 @@
 //! Native implementation of the 'ws' npm package using tokio-tungstenite.
 //! Provides WebSocket client and server functionality.
 
-use perry_runtime::{js_string_from_bytes, JSValue, StringHeader, ClosureHeader, js_closure_call0, js_closure_call1, js_closure_call2};
 #[cfg(not(target_os = "ios"))]
 use futures_util::{SinkExt, StreamExt};
+use perry_runtime::{
+    js_closure_call0, js_closure_call1, js_closure_call2, js_string_from_bytes, ClosureHeader,
+    JSValue, StringHeader,
+};
 use std::collections::HashMap;
 use std::sync::Mutex;
 #[cfg(not(target_os = "ios"))]
@@ -15,11 +18,15 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[cfg(not(target_os = "ios"))]
 use crate::common::async_bridge::{queue_promise_resolution, spawn};
-use crate::common::{register_handle, get_handle_mut, for_each_handle_of, Handle};
+use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle};
 
 fn ws_file_log(msg: &str) {
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/hone-ws-macos.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/hone-ws-macos.log")
+    {
         let _ = writeln!(f, "{}", msg);
     }
 }
@@ -77,9 +84,7 @@ fn ensure_gc_scanner_registered() {
 fn scan_ws_roots(mark: &mut dyn FnMut(f64)) {
     let mark_cb = |cb: i64, mark: &mut dyn FnMut(f64)| {
         if cb != 0 {
-            let boxed = f64::from_bits(
-                0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF),
-            );
+            let boxed = f64::from_bits(0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF));
             mark(boxed);
         }
     };
@@ -181,11 +186,15 @@ unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
 /// new WebSocket(url) -> Promise<WebSocket>
 #[cfg(not(target_os = "ios"))]
 #[no_mangle]
-pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut perry_runtime::Promise {
+pub unsafe extern "C" fn js_ws_connect(
+    url_ptr: *const StringHeader,
+) -> *mut perry_runtime::Promise {
     ensure_gc_scanner_registered();
     #[cfg(target_os = "android")]
     {
-        extern "C" { fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32; }
+        extern "C" {
+            fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
+        }
         __android_log_print(3, b"PerryWS\0".as_ptr(), b"js_ws_connect called\0".as_ptr());
     }
     let promise = perry_runtime::js_promise_new();
@@ -204,23 +213,50 @@ pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut per
 
     #[cfg(target_os = "android")]
     {
-        extern "C" { fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32; }
-        __android_log_print(3, b"PerryWS\0".as_ptr(), b"ws_connect: spawning async for URL\0".as_ptr());
+        extern "C" {
+            fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
+        }
+        __android_log_print(
+            3,
+            b"PerryWS\0".as_ptr(),
+            b"ws_connect: spawning async for URL\0".as_ptr(),
+        );
     }
 
     let url_for_log = url.clone();
     spawn(async move {
         #[cfg(target_os = "android")]
         {
-            extern "C" { fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32; }
-            unsafe { __android_log_print(3, b"PerryWS\0".as_ptr(), b"ws_connect: connect_async starting\0".as_ptr()); }
+            extern "C" {
+                fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
+            }
+            unsafe {
+                __android_log_print(
+                    3,
+                    b"PerryWS\0".as_ptr(),
+                    b"ws_connect: connect_async starting\0".as_ptr(),
+                );
+            }
         }
         match connect_async(&url_for_log).await {
             Ok((ws_stream, _response)) => {
                 #[cfg(target_os = "android")]
                 {
-                    extern "C" { fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32; }
-                    unsafe { __android_log_print(3, b"PerryWS\0".as_ptr(), b"ws_connect: SUCCESS connected\0".as_ptr()); }
+                    extern "C" {
+                        fn __android_log_print(
+                            prio: i32,
+                            tag: *const u8,
+                            fmt: *const u8,
+                            ...
+                        ) -> i32;
+                    }
+                    unsafe {
+                        __android_log_print(
+                            3,
+                            b"PerryWS\0".as_ptr(),
+                            b"ws_connect: SUCCESS connected\0".as_ptr(),
+                        );
+                    }
                 }
                 // Create command channel
                 let (tx, mut rx) = mpsc::unbounded_channel::<WsCommand>();
@@ -232,16 +268,22 @@ pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut per
                 drop(id_guard);
 
                 // Store connection
-                WS_CONNECTIONS.lock().unwrap().insert(ws_id, WsConnection {
-                    sender: tx,
-                    messages: Vec::new(),
-                    is_open: true,
-                });
+                WS_CONNECTIONS.lock().unwrap().insert(
+                    ws_id,
+                    WsConnection {
+                        sender: tx,
+                        messages: Vec::new(),
+                        is_open: true,
+                    },
+                );
 
                 // Initialize client listeners
-                WS_CLIENT_LISTENERS.lock().unwrap().insert(ws_id, WsClientListeners {
-                    listeners: HashMap::new(),
-                });
+                WS_CLIENT_LISTENERS.lock().unwrap().insert(
+                    ws_id,
+                    WsClientListeners {
+                        listeners: HashMap::new(),
+                    },
+                );
 
                 // Single task handles both read and write (avoids BiLock split issue)
                 let ws_id_io = ws_id;
@@ -334,9 +376,23 @@ pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut per
             Err(e) => {
                 #[cfg(target_os = "android")]
                 {
-                    extern "C" { fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32; }
+                    extern "C" {
+                        fn __android_log_print(
+                            prio: i32,
+                            tag: *const u8,
+                            fmt: *const u8,
+                            ...
+                        ) -> i32;
+                    }
                     let msg = format!("ws_connect: FAILED: {}\0", e);
-                    unsafe { __android_log_print(6, b"PerryWS\0".as_ptr(), b"%s\0".as_ptr(), msg.as_ptr()); }
+                    unsafe {
+                        __android_log_print(
+                            6,
+                            b"PerryWS\0".as_ptr(),
+                            b"%s\0".as_ptr(),
+                            msg.as_ptr(),
+                        );
+                    }
                 }
                 let err_msg = format!("WebSocket connection error: {}", e);
                 let err_str = js_string_from_bytes(err_msg.as_ptr(), err_msg.len() as u32);
@@ -359,8 +415,14 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     ensure_gc_scanner_registered();
     #[cfg(target_os = "android")]
     {
-        extern "C" { fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32; }
-        __android_log_print(3, b"PerryWS\0".as_ptr(), b"js_ws_connect_start called\0".as_ptr());
+        extern "C" {
+            fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
+        }
+        __android_log_print(
+            3,
+            b"PerryWS\0".as_ptr(),
+            b"js_ws_connect_start called\0".as_ptr(),
+        );
     }
     // Extract string pointer from NaN-boxed value
     let url_ptr = perry_runtime::js_get_string_pointer_unified(url_nanboxed) as *const StringHeader;
@@ -379,16 +441,22 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     let (tx, mut rx) = mpsc::unbounded_channel::<WsCommand>();
 
     // Store connection (initially NOT open)
-    WS_CONNECTIONS.lock().unwrap().insert(ws_id, WsConnection {
-        sender: tx,
-        messages: Vec::new(),
-        is_open: false,
-    });
+    WS_CONNECTIONS.lock().unwrap().insert(
+        ws_id,
+        WsConnection {
+            sender: tx,
+            messages: Vec::new(),
+            is_open: false,
+        },
+    );
 
     // Initialize client listeners
-    WS_CLIENT_LISTENERS.lock().unwrap().insert(ws_id, WsClientListeners {
-        listeners: HashMap::new(),
-    });
+    WS_CLIENT_LISTENERS.lock().unwrap().insert(
+        ws_id,
+        WsClientListeners {
+            listeners: HashMap::new(),
+        },
+    );
 
     // Connect in background
     spawn(async move {
@@ -477,9 +545,10 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                 });
             }
             Err(e) => {
-                push_ws_event(
-                    PendingWsEvent::Error(ws_id, format!("WebSocket connection error: {}", e))
-                );
+                push_ws_event(PendingWsEvent::Error(
+                    ws_id,
+                    format!("WebSocket connection error: {}", e),
+                ));
             }
         }
     });
@@ -498,7 +567,9 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
 /// iOS: delegate to native
 #[cfg(target_os = "ios")]
 #[no_mangle]
-pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut perry_runtime::Promise {
+pub unsafe extern "C" fn js_ws_connect(
+    url_ptr: *const StringHeader,
+) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
     let handle = perry_native_ws_connect(url_ptr as *const u8);
     let result_bits = handle.to_bits();
@@ -517,11 +588,11 @@ pub unsafe extern "C" fn js_ws_send(handle: i64, message_ptr: *const StringHeade
         Some(m) => {
             ws_file_log(&format!("[WS-send] id={} len={}", ws_id, m.len()));
             m
-        },
+        }
         None => {
             ws_file_log(&format!("[WS-send] id={} string_from_header=None", ws_id));
             return;
-        },
+        }
     };
 
     let guard = WS_CONNECTIONS.lock().unwrap();
@@ -564,7 +635,9 @@ pub unsafe extern "C" fn js_ws_close(handle: i64) {
 #[cfg(target_os = "ios")]
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_close(handle: i64) {
-    unsafe { perry_native_ws_close(handle as f64); }
+    unsafe {
+        perry_native_ws_close(handle as f64);
+    }
 }
 
 /// Server-side bridges: `sendToClient(handle, msg)` / `closeClient(handle)`.
@@ -591,7 +664,13 @@ pub extern "C" fn js_ws_is_open(handle: i64) -> f64 {
 
     let guard = WS_CONNECTIONS.lock().unwrap();
     match guard.get(&ws_id) {
-        Some(conn) => if conn.is_open { 1.0 } else { 0.0 },
+        Some(conn) => {
+            if conn.is_open {
+                1.0
+            } else {
+                0.0
+            }
+        }
         None => 0.0,
     }
 }
@@ -657,7 +736,10 @@ pub extern "C" fn js_ws_receive(handle: i64) -> *mut StringHeader {
 /// ws.waitForMessage(timeoutMs) -> Promise<string | null>
 #[cfg(not(target_os = "ios"))]
 #[no_mangle]
-pub unsafe extern "C" fn js_ws_wait_for_message(handle: i64, timeout_ms: f64) -> *mut perry_runtime::Promise {
+pub unsafe extern "C" fn js_ws_wait_for_message(
+    handle: i64,
+    timeout_ms: f64,
+) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
     let promise_ptr = promise as usize;
     let ws_id = handle as usize;
@@ -744,7 +826,10 @@ pub unsafe extern "C" fn js_ws_on(
     let event_name = match string_from_header(event_name_ptr) {
         Some(name) => name,
         None => {
-            eprintln!("[ws_on] Failed to extract event name from handle={}", handle);
+            eprintln!(
+                "[ws_on] Failed to extract event name from handle={}",
+                handle
+            );
             return handle;
         }
     };
@@ -836,17 +921,16 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
         let listener = match tokio::net::TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => {
-                push_ws_event(
-                    PendingWsEvent::ServerError(handle_id, format!("WebSocketServer bind error: {}", e))
-                );
+                push_ws_event(PendingWsEvent::ServerError(
+                    handle_id,
+                    format!("WebSocketServer bind error: {}", e),
+                ));
                 return;
             }
         };
 
         // Queue 'listening' event
-        push_ws_event(
-            PendingWsEvent::Listening(handle_id)
-        );
+        push_ws_event(PendingWsEvent::Listening(handle_id));
 
         // Mark as listening
         if let Some(server) = get_handle_mut::<WsServerHandle>(handle_id) {
@@ -1087,7 +1171,8 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
                 // Get 'message' listeners from client
                 let listeners: Vec<i64> = {
                     let guard = WS_CLIENT_LISTENERS.lock().unwrap();
-                    guard.get(&ws_id)
+                    guard
+                        .get(&ws_id)
                         .and_then(|l| l.listeners.get("message").cloned())
                         .unwrap_or_default()
                 };
@@ -1095,7 +1180,7 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
                 // Create string on main thread and NaN-box with STRING_TAG
                 let msg_str = js_string_from_bytes(message.as_ptr(), message.len() as u32);
                 let msg_f64 = f64::from_bits(
-                    0x7FFF_0000_0000_0000u64 | (msg_str as u64 & 0x0000_FFFF_FFFF_FFFF)
+                    0x7FFF_0000_0000_0000u64 | (msg_str as u64 & 0x0000_FFFF_FFFF_FFFF),
                 );
 
                 if !listeners.is_empty() {
@@ -1109,9 +1194,10 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
                     // Fall through to parent server's 'message' listeners (ws, data)
                     let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
                     if let Some(server_handle) = parent {
-                        let server_listeners: Vec<i64> = get_handle_mut::<WsServerHandle>(server_handle)
-                            .and_then(|s| s.listeners.get("message").cloned())
-                            .unwrap_or_default();
+                        let server_listeners: Vec<i64> =
+                            get_handle_mut::<WsServerHandle>(server_handle)
+                                .and_then(|s| s.listeners.get("message").cloned())
+                                .unwrap_or_default();
                         // Pass ws_id as regular f64 number (not NaN-boxed) so === comparison works
                         let client_handle_f64 = ws_id as f64;
                         for cb in server_listeners {
@@ -1126,7 +1212,8 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
             PendingWsEvent::Close(ws_id, _code, _reason) => {
                 let listeners: Vec<i64> = {
                     let guard = WS_CLIENT_LISTENERS.lock().unwrap();
-                    guard.get(&ws_id)
+                    guard
+                        .get(&ws_id)
                         .and_then(|l| l.listeners.get("close").cloned())
                         .unwrap_or_default()
                 };
@@ -1142,9 +1229,10 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
                     // Fall through to parent server's 'close' listeners (ws)
                     let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
                     if let Some(server_handle) = parent {
-                        let server_listeners: Vec<i64> = get_handle_mut::<WsServerHandle>(server_handle)
-                            .and_then(|s| s.listeners.get("close").cloned())
-                            .unwrap_or_default();
+                        let server_listeners: Vec<i64> =
+                            get_handle_mut::<WsServerHandle>(server_handle)
+                                .and_then(|s| s.listeners.get("close").cloned())
+                                .unwrap_or_default();
                         let client_handle_f64 = ws_id as f64;
                         for cb in server_listeners {
                             if cb != 0 {
@@ -1161,14 +1249,15 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
             PendingWsEvent::Error(ws_id, error_msg) => {
                 let listeners: Vec<i64> = {
                     let guard = WS_CLIENT_LISTENERS.lock().unwrap();
-                    guard.get(&ws_id)
+                    guard
+                        .get(&ws_id)
                         .and_then(|l| l.listeners.get("error").cloned())
                         .unwrap_or_default()
                 };
 
                 let err_str = js_string_from_bytes(error_msg.as_ptr(), error_msg.len() as u32);
                 let err_f64 = f64::from_bits(
-                    0x7FFF_0000_0000_0000u64 | (err_str as u64 & 0x0000_FFFF_FFFF_FFFF)
+                    0x7FFF_0000_0000_0000u64 | (err_str as u64 & 0x0000_FFFF_FFFF_FFFF),
                 );
 
                 if !listeners.is_empty() {
@@ -1182,9 +1271,10 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
                     // Fall through to parent server's 'error' listeners (ws, error)
                     let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
                     if let Some(server_handle) = parent {
-                        let server_listeners: Vec<i64> = get_handle_mut::<WsServerHandle>(server_handle)
-                            .and_then(|s| s.listeners.get("client_error").cloned())
-                            .unwrap_or_default();
+                        let server_listeners: Vec<i64> =
+                            get_handle_mut::<WsServerHandle>(server_handle)
+                                .and_then(|s| s.listeners.get("client_error").cloned())
+                                .unwrap_or_default();
                         let client_handle_f64 = ws_id as f64;
                         for cb in server_listeners {
                             if cb != 0 {
@@ -1202,7 +1292,7 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
 
                 let err_str = js_string_from_bytes(error_msg.as_ptr(), error_msg.len() as u32);
                 let err_f64 = f64::from_bits(
-                    0x7FFF_0000_0000_0000u64 | (err_str as u64 & 0x0000_FFFF_FFFF_FFFF)
+                    0x7FFF_0000_0000_0000u64 | (err_str as u64 & 0x0000_FFFF_FFFF_FFFF),
                 );
 
                 for cb in listeners {

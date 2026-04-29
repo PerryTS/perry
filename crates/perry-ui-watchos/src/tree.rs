@@ -255,10 +255,7 @@ pub extern "C" fn perry_watchos_node_child_count(id: i64) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn perry_watchos_node_child(id: i64, index: i32) -> i64 {
-    with_node(id, |n| {
-        n.children.get(index as usize).copied().unwrap_or(0)
-    })
-    .unwrap_or(0)
+    with_node(id, |n| n.children.get(index as usize).copied().unwrap_or(0)).unwrap_or(0)
 }
 
 #[no_mangle]

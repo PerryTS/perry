@@ -1,15 +1,17 @@
 //! Screenshot capture for macOS (behind geisterhand feature).
 
+use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::msg_send;
 
 /// Capture the main application window as PNG bytes.
 /// Returns a malloc'd buffer (caller frees with libc::free). Sets *out_len to byte count.
 /// Returns null on failure.
 #[no_mangle]
 pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
-    unsafe { *out_len = 0; }
+    unsafe {
+        *out_len = 0;
+    }
 
     // Get the main window's windowNumber for CGWindowListCreateImage
     // Check APPS first (main app window), then WINDOWS (multi-window)
@@ -37,17 +39,29 @@ pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
         // CGRectNull — capture the window's bounds automatically
         #[repr(C)]
         #[derive(Copy, Clone)]
-        struct CGPoint { x: f64, y: f64 }
+        struct CGPoint {
+            x: f64,
+            y: f64,
+        }
         #[repr(C)]
         #[derive(Copy, Clone)]
-        struct CGSize { width: f64, height: f64 }
+        struct CGSize {
+            width: f64,
+            height: f64,
+        }
         #[repr(C)]
         #[derive(Copy, Clone)]
-        struct CGRect { origin: CGPoint, size: CGSize }
+        struct CGRect {
+            origin: CGPoint,
+            size: CGSize,
+        }
 
         let cg_rect_null = CGRect {
             origin: CGPoint { x: 0.0, y: 0.0 },
-            size: CGSize { width: 0.0, height: 0.0 },
+            size: CGSize {
+                width: 0.0,
+                height: 0.0,
+            },
         };
 
         extern "C" {
@@ -64,9 +78,9 @@ pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
         // kCGWindowImageBoundsIgnoreFraming = 1 << 0 = 1
         let cg_image = CGWindowListCreateImage(
             cg_rect_null,
-            8,  // kCGWindowListOptionIncludingWindow
+            8, // kCGWindowListOptionIncludingWindow
             window_id,
-            1,  // kCGWindowImageBoundsIgnoreFraming
+            1, // kCGWindowImageBoundsIgnoreFraming
         );
 
         if cg_image.is_null() {
@@ -87,7 +101,8 @@ pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
         // NSBitmapImageFileType.png = 4
         let empty_dict_cls = AnyClass::get(c"NSDictionary").unwrap();
         let empty_dict: Retained<AnyObject> = msg_send![empty_dict_cls, dictionary];
-        let png_data: *const AnyObject = msg_send![bitmap, representationUsingType: 4_usize, properties: &*empty_dict];
+        let png_data: *const AnyObject =
+            msg_send![bitmap, representationUsingType: 4_usize, properties: &*empty_dict];
 
         if png_data.is_null() {
             CGImageRelease(cg_image);

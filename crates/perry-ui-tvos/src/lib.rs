@@ -76,9 +76,11 @@ pub extern "C" fn perry_ui_embed_nsview(uiview_ptr: i64) -> i64 {
             // Disable autoresizing mask → Auto Layout constraint translation.
             // Without this, the embedded view's autoresizing mask conflicts with
             // UIStackView layout constraints, causing black screen in HStack.
-            let _: () = unsafe { objc2::msg_send![&*view, setTranslatesAutoresizingMaskIntoConstraints: false] };
+            let _: () = unsafe {
+                objc2::msg_send![&*view, setTranslatesAutoresizingMaskIntoConstraints: false]
+            };
             widgets::register_widget(view)
-        },
+        }
         None => 0,
     }
 }
@@ -92,8 +94,15 @@ pub extern "C" fn perry_ui_splitview_create(left_width: f64) -> i64 {
 
 /// Add a child to a split view. First call adds left panel, second adds right panel.
 #[no_mangle]
-pub extern "C" fn perry_ui_splitview_add_child(parent_handle: i64, child_handle: i64, child_index: f64) {
-    if let (Some(parent), Some(child)) = (widgets::get_widget(parent_handle), widgets::get_widget(child_handle)) {
+pub extern "C" fn perry_ui_splitview_add_child(
+    parent_handle: i64,
+    child_handle: i64,
+    child_index: f64,
+) {
+    if let (Some(parent), Some(child)) = (
+        widgets::get_widget(parent_handle),
+        widgets::get_widget(child_handle),
+    ) {
         widgets::splitview::add_child(&parent, &child, child_index as usize);
     }
 }
@@ -107,7 +116,10 @@ pub extern "C" fn perry_ui_vbox_create() -> i64 {
 /// Add a child to a vbox at a slot: 0=top, 1=middle(fills), 2=bottom.
 #[no_mangle]
 pub extern "C" fn perry_ui_vbox_add_child(parent_handle: i64, child_handle: i64, slot: f64) {
-    if let (Some(parent), Some(child)) = (widgets::get_widget(parent_handle), widgets::get_widget(child_handle)) {
+    if let (Some(parent), Some(child)) = (
+        widgets::get_widget(parent_handle),
+        widgets::get_widget(child_handle),
+    ) {
         widgets::splitview::vbox_add_child(&parent, &child, slot as usize);
     }
 }
@@ -132,7 +144,10 @@ pub extern "C" fn perry_ui_frame_split_create(left_width: f64) -> i64 {
 /// Children use frame-based layout (translatesAutoresizingMaskIntoConstraints = true).
 #[no_mangle]
 pub extern "C" fn perry_ui_frame_split_add_child(parent_handle: i64, child_handle: i64) {
-    if let (Some(parent), Some(child)) = (widgets::get_widget(parent_handle), widgets::get_widget(child_handle)) {
+    if let (Some(parent), Some(child)) = (
+        widgets::get_widget(parent_handle),
+        widgets::get_widget(child_handle),
+    ) {
         widgets::splitview::frame_split_add_child(&parent, &child);
     }
 }
@@ -178,8 +193,18 @@ pub extern "C" fn perry_ui_state_set(state_handle: i64, value: f64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_state_bind_text_numeric(state_handle: i64, text_handle: i64, prefix_ptr: i64, suffix_ptr: i64) {
-    state::bind_text_numeric(state_handle, text_handle, prefix_ptr as *const u8, suffix_ptr as *const u8);
+pub extern "C" fn perry_ui_state_bind_text_numeric(
+    state_handle: i64,
+    text_handle: i64,
+    prefix_ptr: i64,
+    suffix_ptr: i64,
+) {
+    state::bind_text_numeric(
+        state_handle,
+        text_handle,
+        prefix_ptr as *const u8,
+        suffix_ptr as *const u8,
+    );
 }
 
 #[no_mangle]
@@ -243,11 +268,20 @@ pub extern "C" fn perry_ui_state_bind_text_template(
     types_ptr: i64,
     values_ptr: i64,
 ) {
-    state::bind_text_template(text_handle, num_parts, types_ptr as *const i32, values_ptr as *const i64);
+    state::bind_text_template(
+        text_handle,
+        num_parts,
+        types_ptr as *const i32,
+        values_ptr as *const i64,
+    );
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_state_bind_visibility(state_handle: i64, show_handle: i64, hide_handle: i64) {
+pub extern "C" fn perry_ui_state_bind_visibility(
+    state_handle: i64,
+    show_handle: i64,
+    hide_handle: i64,
+) {
     state::bind_visibility(state_handle, show_handle, hide_handle);
 }
 
@@ -257,7 +291,11 @@ pub extern "C" fn perry_ui_set_widget_hidden(handle: i64, hidden: i64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_for_each_init(container_handle: i64, state_handle: i64, render_closure: f64) {
+pub extern "C" fn perry_ui_for_each_init(
+    container_handle: i64,
+    state_handle: i64,
+    render_closure: f64,
+) {
     state::for_each_init(container_handle, state_handle, render_closure);
 }
 
@@ -276,12 +314,24 @@ pub extern "C" fn perry_ui_text_set_string(handle: i64, text_ptr: i64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_vstack_create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right: f64) -> i64 {
+pub extern "C" fn perry_ui_vstack_create_with_insets(
+    spacing: f64,
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+) -> i64 {
     widgets::vstack::create_with_insets(spacing, top, left, bottom, right)
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_hstack_create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right: f64) -> i64 {
+pub extern "C" fn perry_ui_hstack_create_with_insets(
+    spacing: f64,
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+) -> i64 {
     widgets::hstack::create_with_insets(spacing, top, left, bottom, right)
 }
 
@@ -318,7 +368,9 @@ pub extern "C" fn perry_ui_add_keyboard_shortcut(key_ptr: i64, modifiers: f64, c
 pub extern "C" fn perry_ui_register_global_hotkey(_key: i64, _mods: f64, _cb: f64) {}
 
 #[no_mangle]
-pub extern "C" fn perry_system_get_app_icon(_path: i64) -> i64 { 0 }
+pub extern "C" fn perry_system_get_app_icon(_path: i64) -> i64 {
+    0
+}
 
 // =============================================================================
 // Phase A.3: Text Styling & Button Styling
@@ -381,7 +433,13 @@ pub extern "C" fn perry_ui_button_set_image_position(handle: i64, position: i64)
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_button_set_content_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+pub extern "C" fn perry_ui_button_set_content_tint_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
     widgets::button::set_content_tint_color(handle, r, g, b, a);
 }
 
@@ -406,7 +464,11 @@ pub extern "C" fn perry_ui_widget_remove_child(parent_handle: i64, child_handle:
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_reorder_child(parent_handle: i64, from_index: f64, to_index: f64) {
+pub extern "C" fn perry_ui_widget_reorder_child(
+    parent_handle: i64,
+    from_index: f64,
+    to_index: f64,
+) {
     widgets::reorder_child(parent_handle, from_index as i64, to_index as i64);
 }
 
@@ -436,7 +498,11 @@ pub extern "C" fn perry_ui_stack_set_distribution(handle: i64, distribution: f64
             false
         };
         if is_stack {
-            let dist = if distribution < 0.0 { 0_i64 } else { distribution as i64 };
+            let dist = if distribution < 0.0 {
+                0_i64
+            } else {
+                distribution as i64
+            };
             unsafe {
                 let _: () = objc2::msg_send![&*view, setDistribution: dist];
             }
@@ -517,9 +583,19 @@ pub extern "C" fn perry_ui_widget_set_context_menu(widget_handle: i64, menu_hand
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_menu_add_item_with_shortcut(menu_handle: i64, title_ptr: i64, shortcut_ptr: i64, callback: f64) {
+pub extern "C" fn perry_ui_menu_add_item_with_shortcut(
+    menu_handle: i64,
+    title_ptr: i64,
+    shortcut_ptr: i64,
+    callback: f64,
+) {
     // Arg order matches the TS-side API: `menuAddItemWithShortcut(menu, title, shortcut, callback)`.
-    menu::add_item_with_shortcut(menu_handle, title_ptr as *const u8, callback, shortcut_ptr as *const u8);
+    menu::add_item_with_shortcut(
+        menu_handle,
+        title_ptr as *const u8,
+        callback,
+        shortcut_ptr as *const u8,
+    );
 }
 
 #[no_mangle]
@@ -555,7 +631,12 @@ pub extern "C" fn perry_ui_menu_clear(menu_handle: i64) {
 
 /// Add a menu item with a standard action (no-op on iOS — macOS responder chain concept).
 #[no_mangle]
-pub extern "C" fn perry_ui_menu_add_standard_action(_menu_handle: i64, _title_ptr: i64, _selector_ptr: i64, _shortcut_ptr: i64) {
+pub extern "C" fn perry_ui_menu_add_standard_action(
+    _menu_handle: i64,
+    _title_ptr: i64,
+    _selector_ptr: i64,
+    _shortcut_ptr: i64,
+) {
     // No-op on iOS — standard Edit menu actions are handled by UIResponder chain natively
 }
 
@@ -606,7 +687,13 @@ pub extern "C" fn perry_ui_textfield_set_borderless(handle: i64, borderless: f64
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_textfield_set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+pub extern "C" fn perry_ui_textfield_set_background_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
     widgets::textfield::set_background_color(handle, r, g, b, a);
 }
 
@@ -636,15 +723,27 @@ pub extern "C" fn perry_ui_app_set_timer(_app_handle: i64, interval_ms: f64, cal
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_background_color(
-    handle: i64, r: f64, g: f64, b: f64, a: f64,
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
 ) {
     widgets::set_background_color(handle, r, g, b, a);
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_background_gradient(
-    handle: i64, r1: f64, g1: f64, b1: f64, a1: f64,
-    r2: f64, g2: f64, b2: f64, a2: f64, direction: f64,
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
+    direction: f64,
 ) {
     widgets::set_background_gradient(handle, r1, g1, b1, a1, r2, g2, b2, a2, direction);
 }
@@ -681,31 +780,58 @@ pub extern "C" fn perry_ui_canvas_line_to(handle: i64, x: f64, y: f64) {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_stroke(
-    handle: i64, r: f64, g: f64, b: f64, a: f64, line_width: f64,
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+    line_width: f64,
 ) {
     widgets::canvas::stroke(handle, r, g, b, a, line_width);
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_fill_gradient(
-    handle: i64, r1: f64, g1: f64, b1: f64, a1: f64,
-    r2: f64, g2: f64, b2: f64, a2: f64, direction: f64,
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    a2: f64,
+    direction: f64,
 ) {
     widgets::canvas::fill_gradient(handle, r1, g1, b1, a1, r2, g2, b2, a2, direction);
 }
 
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_fill_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_stroke_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_line_width(_h: i64, _w: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_fill_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_stroke_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) { widgets::canvas::clear(h); }
-#[no_mangle] pub extern "C" fn perry_ui_canvas_arc(_h: i64, _x: f64, _y: f64, _r: f64, _sa: f64, _ea: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_close_path(_h: i64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_fill(_h: i64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_stroke_path(_h: i64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
-#[no_mangle] pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_fill_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_stroke_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_line_width(_h: i64, _w: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_stroke_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {
+    widgets::canvas::clear(h);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_arc(_h: i64, _x: f64, _y: f64, _r: f64, _sa: f64, _ea: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_close_path(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_stroke_path(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
 
 // =============================================================================
 // New Widgets: SecureField, ProgressView, Image, Picker, Form, NavStack, ZStack
@@ -846,7 +972,9 @@ pub extern "C" fn perry_ui_widget_set_enabled(handle: i64, enabled: i64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_tooltip(handle: i64, text_ptr: i64) {
     fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() { return ""; }
+        if ptr.is_null() {
+            return "";
+        }
         unsafe {
             let header = ptr as *const perry_runtime::string::StringHeader;
             let len = (*header).byte_len as usize;
@@ -889,7 +1017,12 @@ pub extern "C" fn perry_ui_widget_animate_opacity(handle: i64, target: f64, dura
 
 /// Animate the position of a widget by delta. `duration_secs` is in seconds.
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_animate_position(handle: i64, dx: f64, dy: f64, duration_secs: f64) {
+pub extern "C" fn perry_ui_widget_animate_position(
+    handle: i64,
+    dx: f64,
+    dy: f64,
+    duration_secs: f64,
+) {
     widgets::animate_position(handle, dx, dy, duration_secs);
 }
 
@@ -907,7 +1040,9 @@ pub extern "C" fn perry_ui_state_on_change(state_handle: i64, callback: f64) {
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(url_ptr: i64) {
     fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() { return ""; }
+        if ptr.is_null() {
+            return "";
+        }
         unsafe {
             let header = ptr as *const perry_runtime::string::StringHeader;
             let len = (*header).byte_len as usize;
@@ -919,7 +1054,8 @@ pub extern "C" fn perry_system_open_url(url_ptr: i64) {
     unsafe {
         let ns_url_str = objc2_foundation::NSString::from_str(url_str);
         let url_cls = objc2::runtime::AnyClass::get(c"NSURL").unwrap();
-        let url: *mut objc2::runtime::AnyObject = objc2::msg_send![url_cls, URLWithString: &*ns_url_str];
+        let url: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![url_cls, URLWithString: &*ns_url_str];
         if !url.is_null() {
             let app_cls = objc2::runtime::AnyClass::get(c"UIApplication").unwrap();
             let app: *mut objc2::runtime::AnyObject = objc2::msg_send![app_cls, sharedApplication];
@@ -973,7 +1109,9 @@ pub extern "C" fn perry_system_get_device_model() -> i64 {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_create() -> i64 { 0 }
+pub extern "C" fn perry_ui_camera_create() -> i64 {
+    0
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_camera_start(_handle: i64) {}
@@ -988,7 +1126,9 @@ pub extern "C" fn perry_ui_camera_freeze(_handle: i64) {}
 pub extern "C" fn perry_ui_camera_unfreeze(_handle: i64) {}
 
 #[no_mangle]
-pub extern "C" fn perry_ui_camera_sample_color(_x: f64, _y: f64) -> f64 { 0.0 }
+pub extern "C" fn perry_ui_camera_sample_color(_x: f64, _y: f64) -> f64 {
+    0.0
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_camera_set_on_tap(_handle: i64, _callback: f64) {}
@@ -999,9 +1139,15 @@ pub extern "C" fn perry_system_is_dark_mode() -> i64 {
     unsafe {
         let tc_cls = objc2::runtime::AnyClass::get(c"UITraitCollection").unwrap();
         let tc: *mut objc2::runtime::AnyObject = objc2::msg_send![tc_cls, currentTraitCollection];
-        if tc.is_null() { return 0; }
+        if tc.is_null() {
+            return 0;
+        }
         let style: i64 = objc2::msg_send![tc, userInterfaceStyle];
-        if style == 2 { 1 } else { 0 } // 2 = UIUserInterfaceStyleDark
+        if style == 2 {
+            1
+        } else {
+            0
+        } // 2 = UIUserInterfaceStyleDark
     }
 }
 
@@ -1009,7 +1155,9 @@ pub extern "C" fn perry_system_is_dark_mode() -> i64 {
 #[no_mangle]
 pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {
     fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() { return ""; }
+        if ptr.is_null() {
+            return "";
+        }
         unsafe {
             let header = ptr as *const perry_runtime::string::StringHeader;
             let len = (*header).byte_len as usize;
@@ -1024,7 +1172,8 @@ pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {
     let bits = value.to_bits();
     unsafe {
         let defaults_cls = objc2::runtime::AnyClass::get(c"NSUserDefaults").unwrap();
-        let defaults: *mut objc2::runtime::AnyObject = objc2::msg_send![defaults_cls, standardUserDefaults];
+        let defaults: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![defaults_cls, standardUserDefaults];
         let ns_key = objc2_foundation::NSString::from_str(key);
         if (bits >> 48) == 0x7FFF {
             let str_ptr = js_nanbox_get_pointer(value) as *const u8;
@@ -1044,7 +1193,9 @@ pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {
 #[no_mangle]
 pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
     fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() { return ""; }
+        if ptr.is_null() {
+            return "";
+        }
         unsafe {
             let header = ptr as *const perry_runtime::string::StringHeader;
             let len = (*header).byte_len as usize;
@@ -1059,16 +1210,19 @@ pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
     let key = str_from_header(key_ptr as *const u8);
     unsafe {
         let defaults_cls = objc2::runtime::AnyClass::get(c"NSUserDefaults").unwrap();
-        let defaults: *mut objc2::runtime::AnyObject = objc2::msg_send![defaults_cls, standardUserDefaults];
+        let defaults: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![defaults_cls, standardUserDefaults];
         let ns_key = objc2_foundation::NSString::from_str(key);
-        let obj: *mut objc2::runtime::AnyObject = objc2::msg_send![defaults, objectForKey: &*ns_key];
+        let obj: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![defaults, objectForKey: &*ns_key];
         if obj.is_null() {
             return f64::from_bits(0x7FFC_0000_0000_0001);
         }
         if let Some(str_cls) = objc2::runtime::AnyClass::get(c"NSString") {
             let is_string: bool = objc2::msg_send![obj, isKindOfClass: str_cls];
             if is_string {
-                let ns_str: &objc2_foundation::NSString = &*(obj as *const objc2_foundation::NSString);
+                let ns_str: &objc2_foundation::NSString =
+                    &*(obj as *const objc2_foundation::NSString);
                 let rust_str = ns_str.to_string();
                 let bytes = rust_str.as_bytes();
                 let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
@@ -1095,7 +1249,9 @@ pub extern "C" fn perry_ui_widget_set_border_color(handle: i64, r: f64, g: f64, 
             if !layer.is_null() {
                 let cg_color = widgets::create_cg_color(r, g, b, a);
                 let _: () = objc2::msg_send![layer, setBorderColor: cg_color];
-                extern "C" { fn CGColorRelease(color: *mut std::ffi::c_void); }
+                extern "C" {
+                    fn CGColorRelease(color: *mut std::ffi::c_void);
+                }
                 CGColorRelease(cg_color);
             }
         }
@@ -1110,8 +1266,13 @@ pub extern "C" fn perry_ui_widget_set_border_color(handle: i64, r: f64, g: f64, 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_shadow(
     handle: i64,
-    r: f64, g: f64, b: f64, a: f64,
-    blur: f64, offset_x: f64, offset_y: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+    blur: f64,
+    offset_x: f64,
+    offset_y: f64,
 ) {
     if let Some(view) = widgets::get_widget(handle) {
         unsafe {
@@ -1119,7 +1280,9 @@ pub extern "C" fn perry_ui_widget_set_shadow(
             if !layer.is_null() {
                 let cg_color = widgets::create_cg_color(r, g, b, 1.0);
                 let _: () = objc2::msg_send![layer, setShadowColor: cg_color];
-                extern "C" { fn CGColorRelease(color: *mut std::ffi::c_void); }
+                extern "C" {
+                    fn CGColorRelease(color: *mut std::ffi::c_void);
+                }
                 CGColorRelease(cg_color);
                 let _: () = objc2::msg_send![layer, setShadowOpacity: a as f32];
                 let _: () = objc2::msg_send![layer, setShadowRadius: blur];
@@ -1146,7 +1309,13 @@ pub extern "C" fn perry_ui_widget_set_border_width(handle: i64, width: f64) {
 
 /// Set edge insets (padding) on a UIStackView. No-op for other widget types.
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_edge_insets(handle: i64, top: f64, left: f64, bottom: f64, right: f64) {
+pub extern "C" fn perry_ui_widget_set_edge_insets(
+    handle: i64,
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+) {
     if let Some(view) = widgets::get_widget(handle) {
         unsafe {
             let is_stack = if let Some(cls) = objc2::runtime::AnyClass::get(c"UIStackView") {
@@ -1157,7 +1326,12 @@ pub extern "C" fn perry_ui_widget_set_edge_insets(handle: i64, top: f64, left: f
             };
             if is_stack {
                 let _: () = objc2::msg_send![&*view, setLayoutMarginsRelativeArrangement: true];
-                let insets = objc2_ui_kit::UIEdgeInsets { top, left, bottom, right };
+                let insets = objc2_ui_kit::UIEdgeInsets {
+                    top,
+                    left,
+                    bottom,
+                    right,
+                };
                 let _: () = objc2::msg_send![&*view, setDirectionalLayoutMargins: insets];
             }
         }
@@ -1178,7 +1352,9 @@ pub extern "C" fn perry_ui_widget_set_opacity(handle: i64, alpha: f64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
     fn str_from_header(ptr: *const u8) -> &'static str {
-        if ptr.is_null() { return ""; }
+        if ptr.is_null() {
+            return "";
+        }
         unsafe {
             let header = ptr as *const perry_runtime::string::StringHeader;
             let len = (*header).byte_len as usize;
@@ -1191,29 +1367,30 @@ pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
         unsafe {
             let size: f64 = objc2::msg_send![&*view, font];
             let size = 13.0f64; // Default size for iOS
-            let font: objc2::rc::Retained<objc2::runtime::AnyObject> = if family == "monospaced" || family == "monospace" {
-                objc2::msg_send![
-                    objc2::runtime::AnyClass::get(c"UIFont").unwrap(),
-                    monospacedSystemFontOfSize: size,
-                    weight: 0.0f64
-                ]
-            } else {
-                let ns_name = objc2_foundation::NSString::from_str(family);
-                let raw_font: *mut objc2::runtime::AnyObject = objc2::msg_send![
-                    objc2::runtime::AnyClass::get(c"UIFont").unwrap(),
-                    fontWithName: &*ns_name,
-                    size: size
-                ];
-                if raw_font.is_null() {
-                    // Font not found — fall back to system font
+            let font: objc2::rc::Retained<objc2::runtime::AnyObject> =
+                if family == "monospaced" || family == "monospace" {
                     objc2::msg_send![
                         objc2::runtime::AnyClass::get(c"UIFont").unwrap(),
-                        systemFontOfSize: size
+                        monospacedSystemFontOfSize: size,
+                        weight: 0.0f64
                     ]
                 } else {
-                    objc2::rc::Retained::retain(raw_font).unwrap()
-                }
-            };
+                    let ns_name = objc2_foundation::NSString::from_str(family);
+                    let raw_font: *mut objc2::runtime::AnyObject = objc2::msg_send![
+                        objc2::runtime::AnyClass::get(c"UIFont").unwrap(),
+                        fontWithName: &*ns_name,
+                        size: size
+                    ];
+                    if raw_font.is_null() {
+                        // Font not found — fall back to system font
+                        objc2::msg_send![
+                            objc2::runtime::AnyClass::get(c"UIFont").unwrap(),
+                            systemFontOfSize: size
+                        ]
+                    } else {
+                        objc2::rc::Retained::retain(raw_font).unwrap()
+                    }
+                };
             let _: () = objc2::msg_send![&*view, setFont: &*font];
         }
     }
@@ -1225,7 +1402,9 @@ pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
 
 // QR Code — not available on tvOS (no camera for scanning)
 #[no_mangle]
-pub extern "C" fn perry_ui_qrcode_create(_data_ptr: i64, _size: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_qrcode_create(_data_ptr: i64, _size: f64) -> i64 {
+    0
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_qrcode_set_data(_handle: i64, _data_ptr: i64) {}
@@ -1245,7 +1424,11 @@ pub extern "C" fn perry_ui_open_folder_dialog(callback: f64) {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_save_file_dialog(_callback: f64, _default_name: i64, _allowed_types: i64) {
+pub extern "C" fn perry_ui_save_file_dialog(
+    _callback: f64,
+    _default_name: i64,
+    _allowed_types: i64,
+) {
     // iOS: UIDocumentPickerViewController needed — stub for now
 }
 
@@ -1271,7 +1454,13 @@ pub extern "C" fn perry_ui_widget_add_overlay(_parent_handle: i64, _child_handle
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_overlay_frame(_handle: i64, _x: f64, _y: f64, _w: f64, _h: f64) {
+pub extern "C" fn perry_ui_widget_set_overlay_frame(
+    _handle: i64,
+    _x: f64,
+    _y: f64,
+    _w: f64,
+    _h: f64,
+) {
     // Stub
 }
 
@@ -1444,7 +1633,13 @@ pub extern "C" fn perry_ui_toolbar_create() -> i64 {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_toolbar_add_item(_toolbar: i64, _label: i64, _icon: i64, _callback: f64) {}
+pub extern "C" fn perry_ui_toolbar_add_item(
+    _toolbar: i64,
+    _label: i64,
+    _icon: i64,
+    _callback: f64,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_toolbar_attach(_toolbar: i64) {}
@@ -1454,7 +1649,9 @@ pub extern "C" fn perry_ui_toolbar_attach(_toolbar: i64) {}
 // =============================================================================
 
 fn keychain_str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const perry_runtime::string::StringHeader;
         let len = (*header).byte_len as usize;
@@ -1464,8 +1661,12 @@ fn keychain_str_from_header(ptr: *const u8) -> &'static str {
 }
 
 extern "C" {
-    fn SecItemAdd(attributes: *const std::ffi::c_void, result: *mut *const std::ffi::c_void) -> i32;
-    fn SecItemCopyMatching(query: *const std::ffi::c_void, result: *mut *const std::ffi::c_void) -> i32;
+    fn SecItemAdd(attributes: *const std::ffi::c_void, result: *mut *const std::ffi::c_void)
+        -> i32;
+    fn SecItemCopyMatching(
+        query: *const std::ffi::c_void,
+        result: *mut *const std::ffi::c_void,
+    ) -> i32;
     fn SecItemUpdate(query: *const std::ffi::c_void, attrs: *const std::ffi::c_void) -> i32;
     fn SecItemDelete(query: *const std::ffi::c_void) -> i32;
     static kSecClass: *const std::ffi::c_void;
@@ -1501,13 +1702,21 @@ pub extern "C" fn perry_system_keychain_save(key_ptr: i64, value_ptr: i64) {
         // Try update first
         let query = keychain_make_query(key);
         let dict_cls = objc2::runtime::AnyClass::get(c"NSMutableDictionary").unwrap();
-        let update: objc2::rc::Retained<objc2::runtime::AnyObject> = objc2::msg_send![dict_cls, new];
+        let update: objc2::rc::Retained<objc2::runtime::AnyObject> =
+            objc2::msg_send![dict_cls, new];
         let _: () = objc2::msg_send![&*update, setObject: &*value_data, forKey: kSecValueData as *const objc2::runtime::AnyObject];
-        let status = SecItemUpdate(&*query as *const _ as *const std::ffi::c_void, &*update as *const _ as *const std::ffi::c_void);
-        if status == -25300 { // errSecItemNotFound
+        let status = SecItemUpdate(
+            &*query as *const _ as *const std::ffi::c_void,
+            &*update as *const _ as *const std::ffi::c_void,
+        );
+        if status == -25300 {
+            // errSecItemNotFound
             let add = keychain_make_query(key);
             let _: () = objc2::msg_send![&*add, setObject: &*value_data, forKey: kSecValueData as *const objc2::runtime::AnyObject];
-            SecItemAdd(&*add as *const _ as *const std::ffi::c_void, std::ptr::null_mut());
+            SecItemAdd(
+                &*add as *const _ as *const std::ffi::c_void,
+                std::ptr::null_mut(),
+            );
         }
     }
 }
@@ -1523,7 +1732,8 @@ pub extern "C" fn perry_system_keychain_get(key_ptr: i64) -> f64 {
         let _: () = objc2::msg_send![&*dict, setObject: cf_true, forKey: kSecReturnData as *const objc2::runtime::AnyObject];
         let _: () = objc2::msg_send![&*dict, setObject: kSecMatchLimitOne as *const objc2::runtime::AnyObject, forKey: kSecMatchLimit as *const objc2::runtime::AnyObject];
         let mut result: *const std::ffi::c_void = std::ptr::null();
-        let status = SecItemCopyMatching(&*dict as *const _ as *const std::ffi::c_void, &mut result);
+        let status =
+            SecItemCopyMatching(&*dict as *const _ as *const std::ffi::c_void, &mut result);
         if status == 0 && !result.is_null() {
             let data = result as *const objc2::runtime::AnyObject;
             let bytes: *const u8 = objc2::msg_send![data, bytes];
@@ -1570,18 +1780,33 @@ pub extern "C" fn perry_system_notification_on_background_receive(_callback: f64
 
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_interval(
-    _id_ptr: i64, _title_ptr: i64, _body_ptr: i64, _seconds: f64, _repeats: f64,
-) {}
+    _id_ptr: i64,
+    _title_ptr: i64,
+    _body_ptr: i64,
+    _seconds: f64,
+    _repeats: f64,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_calendar(
-    _id_ptr: i64, _title_ptr: i64, _body_ptr: i64, _timestamp_ms: f64,
-) {}
+    _id_ptr: i64,
+    _title_ptr: i64,
+    _body_ptr: i64,
+    _timestamp_ms: f64,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_location(
-    _id_ptr: i64, _title_ptr: i64, _body_ptr: i64, _lat: f64, _lon: f64, _radius: f64,
-) {}
+    _id_ptr: i64,
+    _title_ptr: i64,
+    _body_ptr: i64,
+    _lat: f64,
+    _lon: f64,
+    _radius: f64,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn perry_system_notification_cancel(_id_ptr: i64) {}
@@ -1684,14 +1909,17 @@ pub extern "C" fn hone_get_documents_dir() -> f64 {
         fn js_nanbox_string(ptr: i64) -> f64;
     }
     unsafe {
-        let file_manager: *const objc2::runtime::AnyObject =
-            objc2::msg_send![objc2::runtime::AnyClass::get(c"NSFileManager").unwrap(), defaultManager];
+        let file_manager: *const objc2::runtime::AnyObject = objc2::msg_send![
+            objc2::runtime::AnyClass::get(c"NSFileManager").unwrap(),
+            defaultManager
+        ];
         // NSDocumentDirectory = 9, NSUserDomainMask = 1
         let urls: objc2::rc::Retained<objc2_foundation::NSArray<objc2_foundation::NSURL>> =
             objc2::msg_send![file_manager, URLsForDirectory: 9u64, inDomains: 1u64];
         let count: usize = objc2::msg_send![&*urls, count];
         if count > 0 {
-            let url: *const objc2::runtime::AnyObject = objc2::msg_send![&*urls, objectAtIndex: 0usize];
+            let url: *const objc2::runtime::AnyObject =
+                objc2::msg_send![&*urls, objectAtIndex: 0usize];
             let path: objc2::rc::Retained<objc2_foundation::NSString> = objc2::msg_send![url, path];
             let rust_str = path.to_string();
             let bytes = rust_str.as_bytes();
@@ -1719,7 +1947,11 @@ pub extern "C" fn __wrapper_hone_get_documents_dir() -> f64 {
 pub extern "C" fn hone_ws_connect(url_ptr: i64) -> f64 {
     // Log to file for debugging (Perry GUI apps don't show stderr)
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/hone-ws-debug.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/hone-ws-debug.log")
+    {
         let _ = writeln!(f, "hone_ws_connect called, url_ptr={}", url_ptr);
         let ptr = url_ptr as *const u8;
         if !ptr.is_null() && url_ptr > 0x1000 {
@@ -1739,9 +1971,17 @@ pub extern "C" fn hone_ws_connect(url_ptr: i64) -> f64 {
 pub extern "C" fn __wrapper_hone_ws_connect(url_nanboxed: f64) -> f64 {
     // Wrapper called with f64 NaN-boxed string — extract pointer
     let ptr = perry_runtime::js_get_string_pointer_unified(url_nanboxed);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/hone-ws-debug.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/hone-ws-debug.log")
+    {
         use std::io::Write;
-        let _ = writeln!(f, "__wrapper_hone_ws_connect called, nanboxed={}, extracted_ptr={}", url_nanboxed, ptr);
+        let _ = writeln!(
+            f,
+            "__wrapper_hone_ws_connect called, nanboxed={}, extracted_ptr={}",
+            url_nanboxed, ptr
+        );
     }
     hone_ws_connect(ptr)
 }

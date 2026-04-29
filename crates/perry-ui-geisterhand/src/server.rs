@@ -2,7 +2,7 @@
 //! Routes: /widgets, /click/:handle, /type/:handle, /slide/:handle,
 //! /toggle/:handle, /state/:handle, /key, /scroll/:handle, /chaos/start, /chaos/stop, /chaos/status
 
-use tiny_http::{Server, Response, Header, Method};
+use tiny_http::{Header, Method, Response, Server};
 
 extern "C" {
     fn perry_geisterhand_get_registry_json(out_len: *mut usize) -> *mut u8;
@@ -65,7 +65,10 @@ fn style_prop_id(name: &str) -> Option<u32> {
 }
 
 fn is_color_prop(prop_id: u32) -> bool {
-    matches!(prop_id, STYLE_BACKGROUND_COLOR | STYLE_COLOR | STYLE_BORDER_COLOR)
+    matches!(
+        prop_id,
+        STYLE_BACKGROUND_COLOR | STYLE_COLOR | STYLE_BORDER_COLOR
+    )
 }
 fn is_bool_prop(prop_id: u32) -> bool {
     matches!(prop_id, STYLE_HIDDEN | STYLE_ENABLED)
@@ -230,8 +233,13 @@ pub fn run_server(port: u16) {
         if matches!(method, Method::Options) {
             let resp = Response::from_data(Vec::<u8>::new())
                 .with_header(cors_header())
-                .with_header(Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS").unwrap())
-                .with_header(Header::from_bytes("Access-Control-Allow-Headers", "Content-Type").unwrap());
+                .with_header(
+                    Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                        .unwrap(),
+                )
+                .with_header(
+                    Header::from_bytes("Access-Control-Allow-Headers", "Content-Type").unwrap(),
+                );
             let _ = request.respond(resp);
             continue;
         }
@@ -251,8 +259,12 @@ pub fn run_server(port: u16) {
                 let mut len: usize = 0;
                 let ptr = unsafe { perry_geisterhand_request_tree(&mut len) };
                 if !ptr.is_null() && len > 0 {
-                    let tree_json = unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned() };
-                    unsafe { perry_geisterhand_free_string(ptr, len); }
+                    let tree_json = unsafe {
+                        String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned()
+                    };
+                    unsafe {
+                        perry_geisterhand_free_string(ptr, len);
+                    }
                     ok_json(&tree_json)
                 } else {
                     ok_json("[]")
@@ -262,8 +274,12 @@ pub fn run_server(port: u16) {
                 let mut len: usize = 0;
                 let ptr = unsafe { perry_geisterhand_get_registry_json(&mut len) };
                 let json = if !ptr.is_null() && len > 0 {
-                    let s = unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned() };
-                    unsafe { perry_geisterhand_free_string(ptr, len); }
+                    let s = unsafe {
+                        String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned()
+                    };
+                    unsafe {
+                        perry_geisterhand_free_string(ptr, len);
+                    }
                     s
                 } else {
                     "[]".to_string()
@@ -276,21 +292,32 @@ pub fn run_server(port: u16) {
                 } else {
                     serde_json::from_str::<Vec<serde_json::Value>>(&json)
                         .map(|arr| {
-                            let kept: Vec<&serde_json::Value> = arr.iter().filter(|w| {
-                                if let Some(ref needle) = label_filter {
-                                    let hit = w.get("label").and_then(|l| l.as_str())
-                                        .map(|l| l.to_lowercase().contains(needle))
-                                        .unwrap_or(false);
-                                    if !hit { return false; }
-                                }
-                                if let Some(wt) = type_filter {
-                                    let hit = w.get("widget_type").and_then(|t| t.as_u64())
-                                        .map(|v| v == wt as u64)
-                                        .unwrap_or(false);
-                                    if !hit { return false; }
-                                }
-                                true
-                            }).collect();
+                            let kept: Vec<&serde_json::Value> = arr
+                                .iter()
+                                .filter(|w| {
+                                    if let Some(ref needle) = label_filter {
+                                        let hit = w
+                                            .get("label")
+                                            .and_then(|l| l.as_str())
+                                            .map(|l| l.to_lowercase().contains(needle))
+                                            .unwrap_or(false);
+                                        if !hit {
+                                            return false;
+                                        }
+                                    }
+                                    if let Some(wt) = type_filter {
+                                        let hit = w
+                                            .get("widget_type")
+                                            .and_then(|t| t.as_u64())
+                                            .map(|v| v == wt as u64)
+                                            .unwrap_or(false);
+                                        if !hit {
+                                            return false;
+                                        }
+                                    }
+                                    true
+                                })
+                                .collect();
                             serde_json::to_string(&kept).unwrap_or_else(|_| "[]".to_string())
                         })
                         .unwrap_or(json)
@@ -299,20 +326,20 @@ pub fn run_server(port: u16) {
             }
 
             // POST /click/:handle — fire onClick
-            (Method::Post, p) if p.starts_with("/click/") => {
-                match parse_handle(p, "/click/") {
-                    Some(handle) => {
-                        let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_CLICK) };
-                        if closure != 0.0 {
-                            unsafe { perry_geisterhand_queue_action(closure); }
-                            ok_json(r#"{"ok":true}"#)
-                        } else {
-                            error_json(404, "no onClick callback for this handle")
+            (Method::Post, p) if p.starts_with("/click/") => match parse_handle(p, "/click/") {
+                Some(handle) => {
+                    let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_CLICK) };
+                    if closure != 0.0 {
+                        unsafe {
+                            perry_geisterhand_queue_action(closure);
                         }
+                        ok_json(r#"{"ok":true}"#)
+                    } else {
+                        error_json(404, "no onClick callback for this handle")
                     }
-                    None => error_json(400, "invalid handle"),
                 }
-            }
+                None => error_json(400, "invalid handle"),
+            },
 
             // POST /type/:handle — set textfield text + fire onChange
             (Method::Post, p) if p.starts_with("/type/") => {
@@ -320,7 +347,11 @@ pub fn run_server(port: u16) {
                     Some(handle) => {
                         let body = read_body(&mut request);
                         let text = match serde_json::from_str::<serde_json::Value>(&body) {
-                            Ok(v) => v.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+                            Ok(v) => v
+                                .get("text")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("")
+                                .to_string(),
                             Err(_) => body.clone(),
                         };
                         // Use SendMessageW directly from this thread (thread-safe Win32 call)
@@ -333,31 +364,48 @@ pub fn run_server(port: u16) {
                             {
                                 // Use raw Win32 FFI — no windows crate dependency needed
                                 extern "system" {
-                                    fn SendMessageW(hwnd: usize, msg: u32, wparam: usize, lparam: isize) -> isize;
+                                    fn SendMessageW(
+                                        hwnd: usize,
+                                        msg: u32,
+                                        wparam: usize,
+                                        lparam: isize,
+                                    ) -> isize;
                                 }
                                 const WM_SETTEXT: u32 = 0x000C;
-                                let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+                                let wide: Vec<u16> =
+                                    text.encode_utf16().chain(std::iter::once(0)).collect();
                                 unsafe {
                                     SendMessageW(hwnd_val, WM_SETTEXT, 0, wide.as_ptr() as isize);
                                 }
                             }
                             // Also fire onChange callback via the action queue
-                            let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_CHANGE) };
+                            let closure =
+                                unsafe { perry_geisterhand_get_closure(handle, CB_ON_CHANGE) };
                             if closure != 0.0 {
                                 extern "C" {
                                     fn js_string_from_bytes(ptr: *const u8, len: usize) -> *mut u8;
                                     fn js_nanbox_string(ptr: i64) -> f64;
                                 }
                                 let text_bytes = text.as_bytes();
-                                let str_ptr = unsafe { js_string_from_bytes(text_bytes.as_ptr(), text_bytes.len()) };
+                                let str_ptr = unsafe {
+                                    js_string_from_bytes(text_bytes.as_ptr(), text_bytes.len())
+                                };
                                 let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
-                                unsafe { perry_geisterhand_queue_action1(closure, nanboxed); }
+                                unsafe {
+                                    perry_geisterhand_queue_action1(closure, nanboxed);
+                                }
                             }
                             ok_json(r#"{"ok":true}"#)
                         } else {
                             // Non-Windows: queue text set via the action queue
                             let text_bytes = text.as_bytes();
-                            unsafe { perry_geisterhand_queue_set_text(handle, text_bytes.as_ptr(), text_bytes.len()); }
+                            unsafe {
+                                perry_geisterhand_queue_set_text(
+                                    handle,
+                                    text_bytes.as_ptr(),
+                                    text_bytes.len(),
+                                );
+                            }
                             ok_json(r#"{"ok":true}"#)
                         }
                     }
@@ -366,35 +414,38 @@ pub fn run_server(port: u16) {
             }
 
             // POST /slide/:handle — set slider value + fire onChange
-            (Method::Post, p) if p.starts_with("/slide/") => {
-                match parse_handle(p, "/slide/") {
-                    Some(handle) => {
-                        let body = read_body(&mut request);
-                        let value = match serde_json::from_str::<serde_json::Value>(&body) {
-                            Ok(v) => v.get("value").and_then(|v| v.as_f64()).unwrap_or(0.5),
-                            Err(_) => 0.5,
-                        };
-                        let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_CHANGE) };
-                        if closure != 0.0 {
-                            unsafe { perry_geisterhand_queue_action1(closure, value); }
-                            ok_json(r#"{"ok":true}"#)
-                        } else {
-                            error_json(404, "no onChange callback for this handle")
+            (Method::Post, p) if p.starts_with("/slide/") => match parse_handle(p, "/slide/") {
+                Some(handle) => {
+                    let body = read_body(&mut request);
+                    let value = match serde_json::from_str::<serde_json::Value>(&body) {
+                        Ok(v) => v.get("value").and_then(|v| v.as_f64()).unwrap_or(0.5),
+                        Err(_) => 0.5,
+                    };
+                    let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_CHANGE) };
+                    if closure != 0.0 {
+                        unsafe {
+                            perry_geisterhand_queue_action1(closure, value);
                         }
+                        ok_json(r#"{"ok":true}"#)
+                    } else {
+                        error_json(404, "no onChange callback for this handle")
                     }
-                    None => error_json(400, "invalid handle"),
                 }
-            }
+                None => error_json(400, "invalid handle"),
+            },
 
             // POST /toggle/:handle — toggle + fire onChange
             (Method::Post, p) if p.starts_with("/toggle/") => {
                 match parse_handle(p, "/toggle/") {
                     Some(handle) => {
-                        let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_CHANGE) };
+                        let closure =
+                            unsafe { perry_geisterhand_get_closure(handle, CB_ON_CHANGE) };
                         if closure != 0.0 {
                             // Toggle with TAG_TRUE (0x7FFC_0000_0000_0004)
                             let tag_true = f64::from_bits(0x7FFC_0000_0000_0004u64);
-                            unsafe { perry_geisterhand_queue_action1(closure, tag_true); }
+                            unsafe {
+                                perry_geisterhand_queue_action1(closure, tag_true);
+                            }
                             ok_json(r#"{"ok":true}"#)
                         } else {
                             error_json(404, "no onChange callback for this handle")
@@ -405,20 +456,20 @@ pub fn run_server(port: u16) {
             }
 
             // POST /state/:handle — set state value
-            (Method::Post, p) if p.starts_with("/state/") => {
-                match parse_handle(p, "/state/") {
-                    Some(handle) => {
-                        let body = read_body(&mut request);
-                        let value = match serde_json::from_str::<serde_json::Value>(&body) {
-                            Ok(v) => v.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                            Err(_) => 0.0,
-                        };
-                        unsafe { perry_geisterhand_queue_state_set(handle, value); }
-                        ok_json(r#"{"ok":true}"#)
+            (Method::Post, p) if p.starts_with("/state/") => match parse_handle(p, "/state/") {
+                Some(handle) => {
+                    let body = read_body(&mut request);
+                    let value = match serde_json::from_str::<serde_json::Value>(&body) {
+                        Ok(v) => v.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                        Err(_) => 0.0,
+                    };
+                    unsafe {
+                        perry_geisterhand_queue_state_set(handle, value);
                     }
-                    None => error_json(400, "invalid handle"),
+                    ok_json(r#"{"ok":true}"#)
                 }
-            }
+                None => error_json(400, "invalid handle"),
+            },
 
             // POST /style/:handle — apply one or more StyleProps to a widget
             // (issue #185 Phase D step 2). Body shape: a JSON object whose
@@ -431,97 +482,97 @@ pub fn run_server(port: u16) {
             // the main-thread pump drains and dispatches them via the
             // platform-registered `apply_style` function pointer (see
             // `perry-ui-macos/src/geisterhand_style.rs`).
-            (Method::Post, p) if p.starts_with("/style/") => {
-                match parse_handle(p, "/style/") {
-                    Some(handle) => {
-                        let body = read_body(&mut request);
-                        match serde_json::from_str::<serde_json::Value>(&body) {
-                            Ok(parsed) => match parsed.as_object() {
-                                Some(obj) => {
-                                    let mut applied: Vec<String> = Vec::new();
-                                    for (key, value) in obj {
-                                        let prop_id = match style_prop_id(key) {
-                                            Some(id) => id,
-                                            None => continue,
+            (Method::Post, p) if p.starts_with("/style/") => match parse_handle(p, "/style/") {
+                Some(handle) => {
+                    let body = read_body(&mut request);
+                    match serde_json::from_str::<serde_json::Value>(&body) {
+                        Ok(parsed) => match parsed.as_object() {
+                            Some(obj) => {
+                                let mut applied: Vec<String> = Vec::new();
+                                for (key, value) in obj {
+                                    let prop_id = match style_prop_id(key) {
+                                        Some(id) => id,
+                                        None => continue,
+                                    };
+                                    if is_color_prop(prop_id) {
+                                        let color = if let Some(s) = value.as_str() {
+                                            parse_color_string(s)
+                                        } else if let Some(o) = value.as_object() {
+                                            Some((
+                                                o.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                                o.get("g").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                                o.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                                o.get("a").and_then(|v| v.as_f64()).unwrap_or(1.0),
+                                            ))
+                                        } else {
+                                            None
                                         };
-                                        if is_color_prop(prop_id) {
-                                            let color = if let Some(s) = value.as_str() {
-                                                parse_color_string(s)
-                                            } else if let Some(o) = value.as_object() {
-                                                Some((
-                                                    o.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                                    o.get("g").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                                    o.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                                    o.get("a").and_then(|v| v.as_f64()).unwrap_or(1.0),
-                                                ))
-                                            } else {
-                                                None
-                                            };
-                                            if let Some((r, g, b, a)) = color {
-                                                unsafe {
-                                                    perry_geisterhand_queue_apply_style(
-                                                        handle, prop_id, r, g, b, a,
-                                                    );
-                                                }
-                                                applied.push(key.clone());
-                                            }
-                                        } else if is_bool_prop(prop_id) {
-                                            let v = value.as_bool().unwrap_or(false);
-                                            let a0 = if v { 1.0 } else { 0.0 };
+                                        if let Some((r, g, b, a)) = color {
                                             unsafe {
                                                 perry_geisterhand_queue_apply_style(
-                                                    handle, prop_id, a0, 0.0, 0.0, 0.0,
-                                                );
-                                            }
-                                            applied.push(key.clone());
-                                        } else if let Some(v) = value.as_f64() {
-                                            unsafe {
-                                                perry_geisterhand_queue_apply_style(
-                                                    handle, prop_id, v, 0.0, 0.0, 0.0,
+                                                    handle, prop_id, r, g, b, a,
                                                 );
                                             }
                                             applied.push(key.clone());
                                         }
+                                    } else if is_bool_prop(prop_id) {
+                                        let v = value.as_bool().unwrap_or(false);
+                                        let a0 = if v { 1.0 } else { 0.0 };
+                                        unsafe {
+                                            perry_geisterhand_queue_apply_style(
+                                                handle, prop_id, a0, 0.0, 0.0, 0.0,
+                                            );
+                                        }
+                                        applied.push(key.clone());
+                                    } else if let Some(v) = value.as_f64() {
+                                        unsafe {
+                                            perry_geisterhand_queue_apply_style(
+                                                handle, prop_id, v, 0.0, 0.0, 0.0,
+                                            );
+                                        }
+                                        applied.push(key.clone());
                                     }
-                                    let body = format!(
-                                        r#"{{"ok":true,"applied":{}}}"#,
-                                        serde_json::to_string(&applied)
-                                            .unwrap_or_else(|_| "[]".into())
-                                    );
-                                    ok_json(&body)
                                 }
-                                None => error_json(400, "expected JSON object"),
-                            },
-                            Err(_) => error_json(400, "invalid JSON"),
-                        }
+                                let body = format!(
+                                    r#"{{"ok":true,"applied":{}}}"#,
+                                    serde_json::to_string(&applied).unwrap_or_else(|_| "[]".into())
+                                );
+                                ok_json(&body)
+                            }
+                            None => error_json(400, "expected JSON object"),
+                        },
+                        Err(_) => error_json(400, "invalid JSON"),
                     }
-                    None => error_json(400, "invalid handle"),
                 }
-            }
+                None => error_json(400, "invalid handle"),
+            },
 
             // POST /hover/:handle — fire onHover
-            (Method::Post, p) if p.starts_with("/hover/") => {
-                match parse_handle(p, "/hover/") {
-                    Some(handle) => {
-                        let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_HOVER) };
-                        if closure != 0.0 {
-                            unsafe { perry_geisterhand_queue_action(closure); }
-                            ok_json(r#"{"ok":true}"#)
-                        } else {
-                            error_json(404, "no onHover callback for this handle")
+            (Method::Post, p) if p.starts_with("/hover/") => match parse_handle(p, "/hover/") {
+                Some(handle) => {
+                    let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_HOVER) };
+                    if closure != 0.0 {
+                        unsafe {
+                            perry_geisterhand_queue_action(closure);
                         }
+                        ok_json(r#"{"ok":true}"#)
+                    } else {
+                        error_json(404, "no onHover callback for this handle")
                     }
-                    None => error_json(400, "invalid handle"),
                 }
-            }
+                None => error_json(400, "invalid handle"),
+            },
 
             // POST /doubleclick/:handle — fire onDoubleClick
             (Method::Post, p) if p.starts_with("/doubleclick/") => {
                 match parse_handle(p, "/doubleclick/") {
                     Some(handle) => {
-                        let closure = unsafe { perry_geisterhand_get_closure(handle, CB_ON_DOUBLE_CLICK) };
+                        let closure =
+                            unsafe { perry_geisterhand_get_closure(handle, CB_ON_DOUBLE_CLICK) };
                         if closure != 0.0 {
-                            unsafe { perry_geisterhand_queue_action(closure); }
+                            unsafe {
+                                perry_geisterhand_queue_action(closure);
+                            }
                             ok_json(r#"{"ok":true}"#)
                         } else {
                             error_json(404, "no onDoubleClick callback for this handle")
@@ -559,9 +610,7 @@ pub fn run_server(port: u16) {
             }
 
             // GET /health
-            (Method::Get, "/health") => {
-                ok_json(r#"{"status":"ok"}"#)
-            }
+            (Method::Get, "/health") => ok_json(r#"{"status":"ok"}"#),
 
             // GET /screenshot — capture the app window as PNG
             (Method::Get, "/screenshot") => {
@@ -569,7 +618,9 @@ pub fn run_server(port: u16) {
                 let ptr = unsafe { perry_geisterhand_request_screenshot(&mut len) };
                 if !ptr.is_null() && len > 0 {
                     let data = unsafe { std::slice::from_raw_parts(ptr, len).to_vec() };
-                    unsafe { perry_geisterhand_free_string(ptr, len); }
+                    unsafe {
+                        perry_geisterhand_free_string(ptr, len);
+                    }
                     Response::from_data(data)
                         .with_header(Header::from_bytes("Content-Type", "image/png").unwrap())
                         .with_header(cors_header())
@@ -582,7 +633,11 @@ pub fn run_server(port: u16) {
             (Method::Post, "/key") => {
                 let body = read_body(&mut request);
                 let shortcut = match serde_json::from_str::<serde_json::Value>(&body) {
-                    Ok(v) => v.get("shortcut").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    Ok(v) => v
+                        .get("shortcut")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     Err(_) => body.trim().to_string(),
                 };
                 if shortcut.is_empty() {
@@ -592,7 +647,9 @@ pub fn run_server(port: u16) {
                         perry_geisterhand_find_by_shortcut(shortcut.as_ptr(), shortcut.len())
                     };
                     if closure != 0.0 {
-                        unsafe { perry_geisterhand_queue_action(closure); }
+                        unsafe {
+                            perry_geisterhand_queue_action(closure);
+                        }
                         ok_json(r#"{"ok":true}"#)
                     } else {
                         error_json(404, "no registered shortcut matches")
@@ -601,30 +658,33 @@ pub fn run_server(port: u16) {
             }
 
             // POST /scroll/:handle — scroll a scrollview
-            (Method::Post, p) if p.starts_with("/scroll/") => {
-                match parse_handle(p, "/scroll/") {
-                    Some(handle) => {
-                        let body = read_body(&mut request);
-                        let (x, y) = match serde_json::from_str::<serde_json::Value>(&body) {
-                            Ok(v) => (
-                                v.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                v.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                            ),
-                            Err(_) => (0.0, 0.0),
-                        };
-                        unsafe { perry_geisterhand_queue_scroll(handle, x, y); }
-                        ok_json(r#"{"ok":true}"#)
+            (Method::Post, p) if p.starts_with("/scroll/") => match parse_handle(p, "/scroll/") {
+                Some(handle) => {
+                    let body = read_body(&mut request);
+                    let (x, y) = match serde_json::from_str::<serde_json::Value>(&body) {
+                        Ok(v) => (
+                            v.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            v.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                        ),
+                        Err(_) => (0.0, 0.0),
+                    };
+                    unsafe {
+                        perry_geisterhand_queue_scroll(handle, x, y);
                     }
-                    None => error_json(400, "invalid handle"),
+                    ok_json(r#"{"ok":true}"#)
                 }
-            }
+                None => error_json(400, "invalid handle"),
+            },
 
             // POST /wait — wait for a widget with matching label to appear
             (Method::Post, "/wait") => {
                 let body = read_body(&mut request);
                 let (label, timeout_ms) = match serde_json::from_str::<serde_json::Value>(&body) {
                     Ok(v) => (
-                        v.get("label").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                        v.get("label")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         v.get("timeout").and_then(|t| t.as_u64()).unwrap_or(5000),
                     ),
                     Err(_) => (String::new(), 5000),
@@ -639,15 +699,24 @@ pub fn run_server(port: u16) {
                         let mut len: usize = 0;
                         let ptr = unsafe { perry_geisterhand_get_registry_json(&mut len) };
                         if !ptr.is_null() && len > 0 {
-                            let json = unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned() };
-                            unsafe { perry_geisterhand_free_string(ptr, len); }
+                            let json = unsafe {
+                                String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len))
+                                    .into_owned()
+                            };
+                            unsafe {
+                                perry_geisterhand_free_string(ptr, len);
+                            }
                             if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&json) {
                                 if let Some(w) = arr.iter().find(|w| {
-                                    w.get("label").and_then(|l| l.as_str())
+                                    w.get("label")
+                                        .and_then(|l| l.as_str())
                                         .map(|l| l.to_lowercase().contains(&needle))
                                         .unwrap_or(false)
                                 }) {
-                                    break ok_json(&serde_json::to_string(w).unwrap_or_else(|_| "{}".to_string()));
+                                    break ok_json(
+                                        &serde_json::to_string(w)
+                                            .unwrap_or_else(|_| "{}".to_string()),
+                                    );
                                 }
                             }
                         }
@@ -660,22 +729,29 @@ pub fn run_server(port: u16) {
             }
 
             // GET /value/:handle — read current widget value
-            (Method::Get, p) if p.starts_with("/value/") => {
-                match parse_handle(p, "/value/") {
-                    Some(handle) => {
-                        let mut len: usize = 0;
-                        let ptr = unsafe { perry_geisterhand_request_value(handle, &mut len) };
-                        if !ptr.is_null() && len > 0 {
-                            let val = unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned() };
-                            unsafe { perry_geisterhand_free_string(ptr, len); }
-                            ok_json(&format!(r#"{{"handle":{},"value":"{}"}}"#, handle, val.replace('"', "\\\"")))
-                        } else {
-                            ok_json(&format!(r#"{{"handle":{},"value":null}}"#, handle))
+            (Method::Get, p) if p.starts_with("/value/") => match parse_handle(p, "/value/") {
+                Some(handle) => {
+                    let mut len: usize = 0;
+                    let ptr = unsafe { perry_geisterhand_request_value(handle, &mut len) };
+                    if !ptr.is_null() && len > 0 {
+                        let val = unsafe {
+                            String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len))
+                                .into_owned()
+                        };
+                        unsafe {
+                            perry_geisterhand_free_string(ptr, len);
                         }
+                        ok_json(&format!(
+                            r#"{{"handle":{},"value":"{}"}}"#,
+                            handle,
+                            val.replace('"', "\\\"")
+                        ))
+                    } else {
+                        ok_json(&format!(r#"{{"handle":{},"value":null}}"#, handle))
                     }
-                    None => error_json(400, "invalid handle"),
                 }
-            }
+                None => error_json(400, "invalid handle"),
+            },
 
             _ => error_json(404, "not found"),
         };

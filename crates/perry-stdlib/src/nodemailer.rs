@@ -3,10 +3,12 @@
 //! Native implementation of the 'nodemailer' npm package using lettre.
 //! Supports sending emails via SMTP.
 
-use perry_runtime::{js_promise_new, js_string_from_bytes, JSValue, ObjectHeader, Promise, StringHeader};
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+use perry_runtime::{
+    js_promise_new, js_string_from_bytes, JSValue, ObjectHeader, Promise, StringHeader,
+};
 
 use crate::common::{register_handle, Handle};
 
@@ -235,8 +237,16 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
 
             // Build the email message
             let mut email_builder = Message::builder()
-                .from(mail_opts.from.parse().map_err(|e| format!("Invalid from address: {}", e))?)
-                .to(mail_opts.to.parse().map_err(|e| format!("Invalid to address: {}", e))?)
+                .from(
+                    mail_opts
+                        .from
+                        .parse()
+                        .map_err(|e| format!("Invalid from address: {}", e))?,
+                )
+                .to(mail_opts
+                    .to
+                    .parse()
+                    .map_err(|e| format!("Invalid to address: {}", e))?)
                 .subject(mail_opts.subject);
 
             let email = if let Some(html) = mail_opts.html {

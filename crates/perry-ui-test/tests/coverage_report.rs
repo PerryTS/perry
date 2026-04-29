@@ -1,4 +1,4 @@
-use perry_ui_test::{FEATURES, CATEGORY_ORDER, Support, features_by_category};
+use perry_ui_test::{features_by_category, Support, CATEGORY_ORDER, FEATURES};
 
 #[test]
 fn coverage_matrix() {
@@ -43,21 +43,30 @@ fn coverage_matrix() {
     // Summary
     let total = FEATURES.len();
     let platforms: &[(&str, fn(&perry_ui_test::Feature) -> Support)] = &[
-        ("macOS",   |f| f.macos),
-        ("iOS",     |f| f.ios),
+        ("macOS", |f| f.macos),
+        ("iOS", |f| f.ios),
         ("Android", |f| f.android),
-        ("GTK4",    |f| f.gtk4),
+        ("GTK4", |f| f.gtk4),
         ("Windows", |f| f.windows),
-        ("Web",     |f| f.web),
+        ("Web", |f| f.web),
     ];
 
     println!("Summary ({} total features):", total);
     for &(name, get_support) in platforms {
-        let supported = FEATURES.iter().filter(|f| {
-            let s = get_support(f);
-            s == Support::Supported || s == Support::Stub
-        }).count();
-        println!("  {:<10} {:>3}/{} ({:.0}%)", name, supported, total, supported as f64 / total as f64 * 100.0);
+        let supported = FEATURES
+            .iter()
+            .filter(|f| {
+                let s = get_support(f);
+                s == Support::Supported || s == Support::Stub
+            })
+            .count();
+        println!(
+            "  {:<10} {:>3}/{} ({:.0}%)",
+            name,
+            supported,
+            total,
+            supported as f64 / total as f64 * 100.0
+        );
     }
     println!();
 }

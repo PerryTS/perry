@@ -113,7 +113,6 @@ pub struct PublishArgs {
     /// Overrides the `distribute` setting in perry.toml.
     #[arg(long)]
     pub notarize: bool,
-
 }
 
 // --- Config types matching perry.toml ---
@@ -538,10 +537,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     // Read perry.toml
     let perry_toml_path = project_dir.join("perry.toml");
     let mut config: PerryToml = if perry_toml_path.exists() {
-        let content = fs::read_to_string(&perry_toml_path)
-            .context("Failed to read perry.toml")?;
-        toml::from_str(&content)
-            .context("Failed to parse perry.toml")?
+        let content = fs::read_to_string(&perry_toml_path).context("Failed to read perry.toml")?;
+        toml::from_str(&content).context("Failed to parse perry.toml")?
     } else {
         bail!(
             "No perry.toml found in {}. Run 'perry init' first.",
@@ -587,7 +584,13 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
         // Infer app_type from target
         let app_type = match args.platform {
-            Some(Platform::Ios) | Some(Platform::Visionos) | Some(Platform::Android) | Some(Platform::Macos) | Some(Platform::Tvos) | Some(Platform::Web) | Some(Platform::Windows) => "gui",
+            Some(Platform::Ios)
+            | Some(Platform::Visionos)
+            | Some(Platform::Android)
+            | Some(Platform::Macos)
+            | Some(Platform::Tvos)
+            | Some(Platform::Web)
+            | Some(Platform::Windows) => "gui",
             _ => "server",
         };
 
@@ -605,11 +608,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         {
             Ok(_) => {}
             Err(e) => {
-                bail!(
-                    "{}\n  Use {} to bypass.",
-                    e,
-                    style("--skip-audit").yellow()
-                );
+                bail!("{}\n  Use {} to bypass.", e, style("--skip-audit").yellow());
             }
         }
     }
@@ -697,27 +696,42 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
     // --- Resolve entry point ---
     let entry = if is_android {
-        config.android.as_ref().and_then(|a| a.entry.clone())
+        config
+            .android
+            .as_ref()
+            .and_then(|a| a.entry.clone())
             .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
             .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
             .unwrap_or_else(|| "src/main.ts".into())
     } else if is_ios {
-        config.ios.as_ref().and_then(|i| i.entry.clone())
+        config
+            .ios
+            .as_ref()
+            .and_then(|i| i.entry.clone())
             .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
             .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
             .unwrap_or_else(|| "src/main_ios.ts".into())
     } else if is_visionos {
-        config.visionos.as_ref().and_then(|i| i.entry.clone())
+        config
+            .visionos
+            .as_ref()
+            .and_then(|i| i.entry.clone())
             .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
             .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
             .unwrap_or_else(|| "src/main_visionos.ts".into())
     } else if is_tvos {
-        config.tvos.as_ref().and_then(|t| t.entry.clone())
+        config
+            .tvos
+            .as_ref()
+            .and_then(|t| t.entry.clone())
             .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
             .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
             .unwrap_or_else(|| "src/main_tvos.ts".into())
     } else {
-        config.app.as_ref().and_then(|a| a.entry.clone())
+        config
+            .app
+            .as_ref()
+            .and_then(|a| a.entry.clone())
             .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
             .unwrap_or_else(|| "src/main.ts".into())
     };
@@ -757,11 +771,10 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     // Auto-increment build_number for targets that need monotonic build numbers
     let is_windows = target_name == "windows";
     let is_web = target_name == "web";
-    let is_macos = !is_ios && !is_visionos && !is_tvos && !is_android && !is_linux && !is_windows && !is_web;
-    let macos_needs_upload = is_macos && matches!(
-        macos_distribute.as_deref(),
-        Some("appstore") | Some("both")
-    );
+    let is_macos =
+        !is_ios && !is_visionos && !is_tvos && !is_android && !is_linux && !is_windows && !is_web;
+    let macos_needs_upload =
+        is_macos && matches!(macos_distribute.as_deref(), Some("appstore") | Some("both"));
     let build_number = if is_ios || is_visionos || is_tvos || is_android || macos_needs_upload {
         let n = toml_build_number + 1;
         if let Ok(content) = fs::read_to_string(&perry_toml_path) {
@@ -787,55 +800,83 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let app_bundle_id = config.app.as_ref().and_then(|a| a.bundle_id.clone());
     let project_bundle_id = config.project.as_ref().and_then(|p| p.bundle_id.clone());
     let bundle_id = if is_android {
-        config.android.as_ref().and_then(|a| a.package_name.clone())
+        config
+            .android
+            .as_ref()
+            .and_then(|a| a.package_name.clone())
             .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
             .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
             .or_else(|| app_bundle_id.clone())
             .or_else(|| project_bundle_id.clone())
             .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
     } else if is_ios {
-        config.ios.as_ref().and_then(|i| i.bundle_id.clone())
+        config
+            .ios
+            .as_ref()
+            .and_then(|i| i.bundle_id.clone())
             .or_else(|| app_bundle_id.clone())
             .or_else(|| project_bundle_id.clone())
             .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
             .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
     } else if is_visionos {
-        config.visionos.as_ref().and_then(|i| i.bundle_id.clone())
+        config
+            .visionos
+            .as_ref()
+            .and_then(|i| i.bundle_id.clone())
             .or_else(|| app_bundle_id.clone())
             .or_else(|| project_bundle_id.clone())
             .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
             .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
             .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
     } else if is_tvos {
-        config.tvos.as_ref().and_then(|t| t.bundle_id.clone())
+        config
+            .tvos
+            .as_ref()
+            .and_then(|t| t.bundle_id.clone())
             .or_else(|| app_bundle_id.clone())
             .or_else(|| project_bundle_id.clone())
             .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
             .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
     } else {
-        config.macos.as_ref().and_then(|m| m.bundle_id.clone())
+        config
+            .macos
+            .as_ref()
+            .and_then(|m| m.bundle_id.clone())
             .or_else(|| app_bundle_id.clone())
             .or_else(|| project_bundle_id.clone())
             .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
     };
 
-    let mut icon = config.project.as_ref().and_then(|p| p.icons.as_ref()).and_then(|i| i.source.clone())
-        .or_else(|| config.app.as_ref().and_then(|a| a.icons.as_ref()).and_then(|i| i.source.clone()));
+    let mut icon = config
+        .project
+        .as_ref()
+        .and_then(|p| p.icons.as_ref())
+        .and_then(|i| i.source.clone())
+        .or_else(|| {
+            config
+                .app
+                .as_ref()
+                .and_then(|a| a.icons.as_ref())
+                .and_then(|i| i.source.clone())
+        });
 
     // Prompt for icon if missing and building for a platform that needs one
-    let needs_icon = is_ios || is_visionos || is_android
+    let needs_icon = is_ios
+        || is_visionos
+        || is_android
         || (is_macos && matches!(macos_distribute.as_deref(), Some("appstore") | Some("both")));
     if icon.is_none() && interactive && needs_icon {
         println!();
         println!("  {} No app icon configured.", style("!").yellow().bold());
         println!("  App Store requires a 1024\u{00d7}1024 PNG icon.");
-        if let Some(path_str) = prompt_input(
-            "  Path to icon image (or Enter to skip)",
-            None,
-        ) {
+        if let Some(path_str) = prompt_input("  Path to icon image (or Enter to skip)", None) {
             let src_path = Path::new(&path_str);
             if !src_path.exists() {
-                println!("  {} Icon file not found: {}", style("!").yellow(), path_str);
+                println!(
+                    "  {} Icon file not found: {}",
+                    style("!").yellow(),
+                    path_str
+                );
             } else {
                 // Copy to assets/icon.png in the project
                 let assets_dir = project_dir.join("assets");
@@ -866,8 +907,11 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                         fs::write(&perry_toml_path, &updated).ok();
                     }
                     icon = Some(icon_rel.to_string());
-                    println!("  {} Icon saved to {} and perry.toml updated.",
-                        style("✓").green().bold(), icon_rel);
+                    println!(
+                        "  {} Icon saved to {} and perry.toml updated.",
+                        style("✓").green().bold(),
+                        icon_rel
+                    );
                 }
             }
         }
@@ -878,16 +922,28 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let entitlements = config.macos.as_ref().and_then(|m| m.entitlements.clone());
     // macos_distribute already extracted above (before build_number auto-increment)
     let macos_signing_identity = if args.notarize {
-        config.macos.as_ref()
+        config
+            .macos
+            .as_ref()
             .and_then(|m| m.notarize_signing_identity.clone())
-            .or_else(|| config.macos.as_ref().and_then(|m| m.signing_identity.clone()))
+            .or_else(|| {
+                config
+                    .macos
+                    .as_ref()
+                    .and_then(|m| m.signing_identity.clone())
+            })
     } else {
-        config.macos.as_ref().and_then(|m| m.signing_identity.clone())
+        config
+            .macos
+            .as_ref()
+            .and_then(|m| m.signing_identity.clone())
     };
 
     // iOS-specific config from perry.toml
     let ios_deployment_target = config.ios.as_ref().and_then(|i| {
-        i.deployment_target.clone().or_else(|| i.minimum_version.clone())
+        i.deployment_target
+            .clone()
+            .or_else(|| i.minimum_version.clone())
     });
     let ios_device_family = config.ios.as_ref().and_then(|i| i.device_family.clone());
     let ios_orientations = config.ios.as_ref().and_then(|i| i.orientations.clone());
@@ -896,7 +952,9 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let ios_encryption_exempt = config.ios.as_ref().and_then(|i| i.encryption_exempt);
     let ios_info_plist = config.ios.as_ref().and_then(|i| i.info_plist.clone());
     let visionos_deployment_target = config.visionos.as_ref().and_then(|i| {
-        i.deployment_target.clone().or_else(|| i.minimum_version.clone())
+        i.deployment_target
+            .clone()
+            .or_else(|| i.minimum_version.clone())
     });
     let visionos_distribute = config.visionos.as_ref().and_then(|i| i.distribute.clone());
     let visionos_encryption_exempt = config.visionos.as_ref().and_then(|i| i.encryption_exempt);
@@ -933,7 +991,11 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                 let key = auto_register_license(&server_url).await?;
                 if let OutputFormat::Text = format {
                     println!(" {}", style("done").green());
-                    println!("  {} License: {}", style("✓").green().bold(), style(&key).bold());
+                    println!(
+                        "  {} License: {}",
+                        style("✓").green().bold(),
+                        style(&key).bold()
+                    );
                 }
                 // Save immediately
                 saved.license_key = Some(key.clone());
@@ -946,9 +1008,17 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     // Auto-trigger iOS/macOS setup if not configured
     if (is_ios || is_macos) && interactive {
         let has_platform_cert = if is_ios {
-            config.ios.as_ref().and_then(|i| i.certificate.as_deref()).is_some()
+            config
+                .ios
+                .as_ref()
+                .and_then(|i| i.certificate.as_deref())
+                .is_some()
         } else {
-            config.macos.as_ref().and_then(|m| m.certificate.as_deref()).is_some()
+            config
+                .macos
+                .as_ref()
+                .and_then(|m| m.certificate.as_deref())
+                .is_some()
         };
         let has_apple_config = args.certificate.is_some()
             || std::env::var("PERRY_APPLE_CERTIFICATE").is_ok()
@@ -956,7 +1026,10 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         if !has_apple_config {
             let platform = if is_ios { "iOS" } else { "macOS" };
             println!();
-            println!("  {} {platform} not configured — running setup wizard", style("!").yellow());
+            println!(
+                "  {} {platform} not configured — running setup wizard",
+                style("!").yellow()
+            );
             println!();
             if is_ios {
                 super::setup::ios_wizard(&mut saved)?;
@@ -987,17 +1060,29 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         config.ios.as_ref().and_then(|i| i.signing_identity.clone())
     } else if args.notarize {
         // --notarize: use Developer ID identity/cert instead of App Store ones
-        config.macos.as_ref()
+        config
+            .macos
+            .as_ref()
             .and_then(|m| m.notarize_signing_identity.clone())
-            .or_else(|| config.macos.as_ref().and_then(|m| m.signing_identity.clone()))
+            .or_else(|| {
+                config
+                    .macos
+                    .as_ref()
+                    .and_then(|m| m.signing_identity.clone())
+            })
     } else {
-        config.macos.as_ref().and_then(|m| m.signing_identity.clone())
+        config
+            .macos
+            .as_ref()
+            .and_then(|m| m.signing_identity.clone())
     };
     let toml_certificate = if is_ios {
         config.ios.as_ref().and_then(|i| i.certificate.clone())
     } else if args.notarize {
         // --notarize: use the Developer ID cert for notarization
-        config.macos.as_ref()
+        config
+            .macos
+            .as_ref()
             .and_then(|m| m.notarize_certificate.clone())
             .or_else(|| config.macos.as_ref().and_then(|m| m.certificate.clone()))
     } else {
@@ -1019,9 +1104,15 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         config.macos.as_ref().and_then(|m| m.p8_key_path.clone())
     };
     let toml_provisioning_profile = if is_ios {
-        config.ios.as_ref().and_then(|i| i.provisioning_profile.clone())
+        config
+            .ios
+            .as_ref()
+            .and_then(|i| i.provisioning_profile.clone())
     } else if is_macos {
-        config.macos.as_ref().and_then(|m| m.provisioning_profile.clone())
+        config
+            .macos
+            .as_ref()
+            .and_then(|m| m.provisioning_profile.clone())
     } else {
         None
     };
@@ -1031,7 +1122,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         resolve_credential(
             args.apple_team_id.as_deref(),
             "PERRY_APPLE_TEAM_ID",
-            toml_team_id.as_deref()
+            toml_team_id
+                .as_deref()
                 .or_else(|| saved.apple.as_ref().and_then(|a| a.team_id.as_deref())),
             "  Apple Team ID",
             false,
@@ -1055,7 +1147,9 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     };
     // For macOS, prefer a target-specific signing_identity from perry.toml [macos]
     let apple_identity = if !is_ios && !is_android && !is_linux {
-        macos_signing_identity.clone().or_else(|| apple_identity_base.clone())
+        macos_signing_identity
+            .clone()
+            .or_else(|| apple_identity_base.clone())
     } else {
         apple_identity_base.clone()
     };
@@ -1064,13 +1158,16 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         resolve_path_credential(
             args.apple_p8_key.as_deref(),
             "PERRY_APPLE_P8_KEY",
-            toml_p8_key_path.as_deref()
+            toml_p8_key_path
+                .as_deref()
                 .or_else(|| saved.apple.as_ref().and_then(|a| a.p8_key_path.as_deref())),
             "  App Store Connect .p8 key path",
             interactive,
         )
     } else {
-        args.apple_p8_key.as_ref().map(|p| p.to_string_lossy().to_string())
+        args.apple_p8_key
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
     };
 
     // .p12 certificate for code signing (path saved, password never saved)
@@ -1081,17 +1178,14 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             args.certificate.as_deref(),
             "PERRY_APPLE_CERTIFICATE",
             toml_certificate.as_deref(),
-            "", // empty prompt — don't prompt, we'll try auto-export instead
+            "",    // empty prompt — don't prompt, we'll try auto-export instead
             false, // never prompt for path
         );
         if explicit_path.is_some() {
             (explicit_path, None)
         } else {
             // Try auto-export from Keychain
-            let auto = auto_export_p12_from_keychain(
-                apple_identity.as_deref(),
-                interactive,
-            );
+            let auto = auto_export_p12_from_keychain(apple_identity.as_deref(), interactive);
             (None, auto)
         }
     } else {
@@ -1100,7 +1194,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let apple_certificate_password = if apple_certificate_path.is_some() {
         // Explicit .p12 file — need password
         // Check for auto-generated cert (lives in ~/.perry/) — use known password
-        let is_auto_generated = apple_certificate_path.as_deref()
+        let is_auto_generated = apple_certificate_path
+            .as_deref()
             .map(|p| p.contains("/.perry/"))
             .unwrap_or(false);
         std::env::var("PERRY_APPLE_CERTIFICATE_PASSWORD")
@@ -1127,7 +1222,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         resolve_credential(
             args.apple_key_id.as_deref(),
             "PERRY_APPLE_KEY_ID",
-            toml_key_id.as_deref()
+            toml_key_id
+                .as_deref()
                 .or_else(|| saved.apple.as_ref().and_then(|a| a.key_id.as_deref())),
             "  App Store Connect Key ID",
             false,
@@ -1141,7 +1237,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         resolve_credential(
             args.apple_issuer_id.as_deref(),
             "PERRY_APPLE_ISSUER_ID",
-            toml_issuer_id.as_deref()
+            toml_issuer_id
+                .as_deref()
                 .or_else(|| saved.apple.as_ref().and_then(|a| a.issuer_id.as_deref())),
             "  App Store Connect Issuer ID",
             false,
@@ -1152,9 +1249,11 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     };
 
     // Provisioning profile (iOS always, macOS when distributing to App Store)
-    let macos_needs_profile = is_macos && matches!(
-        macos_distribute.as_deref(), Some("appstore") | Some("both") | Some("testflight")
-    );
+    let macos_needs_profile = is_macos
+        && matches!(
+            macos_distribute.as_deref(),
+            Some("appstore") | Some("both") | Some("testflight")
+        );
     let provisioning_profile_path = if is_ios || macos_needs_profile {
         resolve_path_credential(
             args.provisioning_profile.as_deref(),
@@ -1164,18 +1263,31 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             interactive,
         )
     } else {
-        args.provisioning_profile.as_ref().map(|p| p.to_string_lossy().to_string())
+        args.provisioning_profile
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
     };
 
     // Auto-trigger Android setup if not configured
     if is_android && interactive {
         let has_keystore = args.android_keystore.is_some()
             || std::env::var("PERRY_ANDROID_KEYSTORE").is_ok()
-            || saved.android.as_ref().and_then(|a| a.keystore_path.as_deref()).is_some()
-            || config.android.as_ref().and_then(|a| a.keystore.as_deref()).is_some();
+            || saved
+                .android
+                .as_ref()
+                .and_then(|a| a.keystore_path.as_deref())
+                .is_some()
+            || config
+                .android
+                .as_ref()
+                .and_then(|a| a.keystore.as_deref())
+                .is_some();
         if !has_keystore {
             println!();
-            println!("  {} Android not configured — running setup wizard", style("!").yellow());
+            println!(
+                "  {} Android not configured — running setup wizard",
+                style("!").yellow()
+            );
             println!();
             super::setup::android_wizard(&mut saved)?;
             save_config(&saved)?;
@@ -1191,19 +1303,29 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         resolve_path_credential(
             args.android_keystore.as_deref(),
             "PERRY_ANDROID_KEYSTORE",
-            saved.android.as_ref().and_then(|a| a.keystore_path.as_deref()).or(toml_android_keystore),
+            saved
+                .android
+                .as_ref()
+                .and_then(|a| a.keystore_path.as_deref())
+                .or(toml_android_keystore),
             "  Android keystore path",
             interactive,
         )
     } else {
-        args.android_keystore.as_ref().map(|p| p.to_string_lossy().to_string())
+        args.android_keystore
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
     };
 
     let android_key_alias = if is_android {
         resolve_credential(
             args.android_key_alias.as_deref(),
             "PERRY_ANDROID_KEY_ALIAS",
-            saved.android.as_ref().and_then(|a| a.key_alias.as_deref()).or(toml_android_key_alias),
+            saved
+                .android
+                .as_ref()
+                .and_then(|a| a.key_alias.as_deref())
+                .or(toml_android_key_alias),
             "  Android key alias",
             false,
             interactive,
@@ -1217,7 +1339,11 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         .android_keystore_password
         .clone()
         .or_else(|| std::env::var("PERRY_ANDROID_KEYSTORE_PASSWORD").ok());
-    let android_keystore_password = if android_keystore_password.is_none() && is_android && android_keystore_path.is_some() && interactive {
+    let android_keystore_password = if android_keystore_password.is_none()
+        && is_android
+        && android_keystore_path.is_some()
+        && interactive
+    {
         prompt_input("  Android keystore password", None)
     } else {
         android_keystore_password
@@ -1229,25 +1355,36 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         .or_else(|| std::env::var("PERRY_ANDROID_KEY_PASSWORD").ok());
 
     // Google Play service account JSON
-    let toml_google_play_key = config.android.as_ref().and_then(|a| a.google_play_key.as_deref());
+    let toml_google_play_key = config
+        .android
+        .as_ref()
+        .and_then(|a| a.google_play_key.as_deref());
     let google_play_key_path = if is_android {
         resolve_path_credential(
             args.google_play_key.as_deref(),
             "PERRY_GOOGLE_PLAY_KEY_PATH",
-            saved.android.as_ref().and_then(|a| a.google_play_key_path.as_deref()).or(toml_google_play_key),
+            saved
+                .android
+                .as_ref()
+                .and_then(|a| a.google_play_key_path.as_deref())
+                .or(toml_google_play_key),
             "  Google Play service account JSON path",
             interactive && android_distribute.as_deref() == Some("playstore"),
         )
     } else {
-        args.google_play_key.as_ref().map(|p| p.to_string_lossy().to_string())
+        args.google_play_key
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
     };
 
     // Read file contents for credentials that need to be sent as content
     let p8_key_content = if let Some(ref path_str) = apple_p8_key_path {
         let path = Path::new(path_str);
         if path.exists() {
-            Some(fs::read_to_string(path)
-                .with_context(|| format!("Failed to read .p8 key from {path_str}"))?)
+            Some(
+                fs::read_to_string(path)
+                    .with_context(|| format!("Failed to read .p8 key from {path_str}"))?,
+            )
         } else {
             None
         }
@@ -1283,57 +1420,68 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         None
     };
 
-    let (apple_certificate_p12_b64, apple_certificate_password) = if let Some((b64, pass)) = auto_exported_p12 {
-        // Auto-exported from Keychain — data and password already available
-        (Some(b64), Some(pass))
-    } else if let Some(ref path_str) = apple_certificate_path {
-        let path = Path::new(path_str);
-        if path.exists() {
-            use base64::Engine;
-            let data = fs::read(path)
-                .with_context(|| format!("Failed to read .p12 certificate: {path_str}"))?;
-            (Some(base64::engine::general_purpose::STANDARD.encode(&data)), apple_certificate_password)
-        } else {
-            (None, apple_certificate_password)
-        }
-    } else {
-        (None, None)
-    };
-
-    // For macOS distribute = "both": resolve the separate Developer ID cert for notarization
-    let (notarize_cert_b64, notarize_cert_password, notarize_identity) = if is_macos
-        && macos_distribute.as_deref() == Some("both")
-    {
-        let notarize_cert_path = config.macos.as_ref().and_then(|m| m.notarize_certificate.clone());
-        let notarize_identity = config.macos.as_ref().and_then(|m| m.notarize_signing_identity.clone());
-        let cert_b64 = if let Some(ref path_str) = notarize_cert_path {
+    let (apple_certificate_p12_b64, apple_certificate_password) =
+        if let Some((b64, pass)) = auto_exported_p12 {
+            // Auto-exported from Keychain — data and password already available
+            (Some(b64), Some(pass))
+        } else if let Some(ref path_str) = apple_certificate_path {
             let path = Path::new(path_str);
             if path.exists() {
                 use base64::Engine;
                 let data = fs::read(path)
-                    .with_context(|| format!("Failed to read notarize .p12: {path_str}"))?;
-                Some(base64::engine::general_purpose::STANDARD.encode(&data))
+                    .with_context(|| format!("Failed to read .p12 certificate: {path_str}"))?;
+                (
+                    Some(base64::engine::general_purpose::STANDARD.encode(&data)),
+                    apple_certificate_password,
+                )
             } else {
-                None
+                (None, apple_certificate_password)
             }
         } else {
-            None
+            (None, None)
         };
-        let is_auto_generated_notarize = notarize_cert_path.as_deref()
-            .map(|p| p.contains("/.perry/"))
-            .unwrap_or(false);
-        let password = std::env::var("PERRY_APPLE_NOTARIZE_CERTIFICATE_PASSWORD").ok()
-            .or_else(|| {
-                if is_auto_generated_notarize {
-                    Some("perry-auto".to_string())
+
+    // For macOS distribute = "both": resolve the separate Developer ID cert for notarization
+    let (notarize_cert_b64, notarize_cert_password, notarize_identity) =
+        if is_macos && macos_distribute.as_deref() == Some("both") {
+            let notarize_cert_path = config
+                .macos
+                .as_ref()
+                .and_then(|m| m.notarize_certificate.clone());
+            let notarize_identity = config
+                .macos
+                .as_ref()
+                .and_then(|m| m.notarize_signing_identity.clone());
+            let cert_b64 = if let Some(ref path_str) = notarize_cert_path {
+                let path = Path::new(path_str);
+                if path.exists() {
+                    use base64::Engine;
+                    let data = fs::read(path)
+                        .with_context(|| format!("Failed to read notarize .p12: {path_str}"))?;
+                    Some(base64::engine::general_purpose::STANDARD.encode(&data))
                 } else {
-                    apple_certificate_password.clone()
+                    None
                 }
-            });
-        (cert_b64, password, notarize_identity)
-    } else {
-        (None, None, None)
-    };
+            } else {
+                None
+            };
+            let is_auto_generated_notarize = notarize_cert_path
+                .as_deref()
+                .map(|p| p.contains("/.perry/"))
+                .unwrap_or(false);
+            let password = std::env::var("PERRY_APPLE_NOTARIZE_CERTIFICATE_PASSWORD")
+                .ok()
+                .or_else(|| {
+                    if is_auto_generated_notarize {
+                        Some("perry-auto".to_string())
+                    } else {
+                        apple_certificate_password.clone()
+                    }
+                });
+            (cert_b64, password, notarize_identity)
+        } else {
+            (None, None, None)
+        };
 
     // For macOS appstore/both: resolve the separate installer cert for .pkg signing
     let (installer_cert_b64, installer_cert_password) = if is_macos
@@ -1341,7 +1489,10 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             || macos_distribute.as_deref() == Some("appstore")
             || macos_distribute.as_deref() == Some("testflight"))
     {
-        let installer_cert_path = config.macos.as_ref().and_then(|m| m.installer_certificate.clone());
+        let installer_cert_path = config
+            .macos
+            .as_ref()
+            .and_then(|m| m.installer_certificate.clone());
         let cert_b64 = if let Some(ref path_str) = installer_cert_path {
             let path = Path::new(path_str);
             if path.exists() {
@@ -1355,10 +1506,12 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         } else {
             None
         };
-        let is_auto_generated = installer_cert_path.as_deref()
+        let is_auto_generated = installer_cert_path
+            .as_deref()
             .map(|p| p.contains("/.perry/"))
             .unwrap_or(false);
-        let password = std::env::var("PERRY_APPLE_INSTALLER_CERTIFICATE_PASSWORD").ok()
+        let password = std::env::var("PERRY_APPLE_INSTALLER_CERTIFICATE_PASSWORD")
+            .ok()
             .or_else(|| {
                 if is_auto_generated {
                     Some("perry-auto".to_string())
@@ -1374,8 +1527,10 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let google_play_json = if let Some(ref path_str) = google_play_key_path {
         let path = Path::new(path_str);
         if path.exists() {
-            Some(fs::read_to_string(path)
-                .with_context(|| format!("Failed to read Google Play key: {path_str}"))?)
+            Some(
+                fs::read_to_string(path)
+                    .with_context(|| format!("Failed to read Google Play key: {path_str}"))?,
+            )
         } else {
             None
         }
@@ -1409,24 +1564,29 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
             // 1. Validate provisioning profile bundle ID matches project bundle_id
             if let Some(ref profile_path) = provisioning_profile_path {
-                let profile_data = fs::read(profile_path)
-                    .with_context(|| format!("Failed to read provisioning profile: {profile_path}"))?;
+                let profile_data = fs::read(profile_path).with_context(|| {
+                    format!("Failed to read provisioning profile: {profile_path}")
+                })?;
                 let data_str = String::from_utf8_lossy(&profile_data);
-                if let (Some(xml_start), Some(xml_end)) = (data_str.find("<?xml"), data_str.find("</plist>")) {
+                if let (Some(xml_start), Some(xml_end)) =
+                    (data_str.find("<?xml"), data_str.find("</plist>"))
+                {
                     let plist_xml = &data_str[xml_start..xml_end + "</plist>".len()];
 
                     // Extract application-identifier from Entitlements
                     if let Some(app_id_pos) = plist_xml.find("<key>application-identifier</key>") {
-                        let after_key = &plist_xml[app_id_pos + "<key>application-identifier</key>".len()..];
+                        let after_key =
+                            &plist_xml[app_id_pos + "<key>application-identifier</key>".len()..];
                         if let Some(s_start) = after_key.find("<string>") {
                             if let Some(s_end) = after_key.find("</string>") {
                                 let app_identifier = &after_key[s_start + "<string>".len()..s_end];
                                 // application-identifier is "TEAMID.bundle.id" — strip team prefix
-                                let profile_bundle_id = if let Some(dot_pos) = app_identifier.find('.') {
-                                    &app_identifier[dot_pos + 1..]
-                                } else {
-                                    app_identifier
-                                };
+                                let profile_bundle_id =
+                                    if let Some(dot_pos) = app_identifier.find('.') {
+                                        &app_identifier[dot_pos + 1..]
+                                    } else {
+                                        app_identifier
+                                    };
 
                                 if profile_bundle_id != bundle_id && profile_bundle_id != "*" {
                                     errors.push(format!(
@@ -1462,7 +1622,11 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                                     format!("{:04}-{:02}-{:02}", years, month, day)
                                 };
                                 // Only compare date portion (first 10 chars)
-                                let expiry_date = if expiry_str.len() >= 10 { &expiry_str[..10] } else { expiry_str };
+                                let expiry_date = if expiry_str.len() >= 10 {
+                                    &expiry_str[..10]
+                                } else {
+                                    expiry_str
+                                };
                                 let now_date = &now[..10];
                                 if expiry_date < now_date {
                                     errors.push(format!(
@@ -1478,10 +1642,12 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                     // Extract and validate team ID matches
                     if let Some(ref expected_team) = apple_team_id {
                         if let Some(team_pos) = plist_xml.find("<key>TeamIdentifier</key>") {
-                            let after_key = &plist_xml[team_pos + "<key>TeamIdentifier</key>".len()..];
+                            let after_key =
+                                &plist_xml[team_pos + "<key>TeamIdentifier</key>".len()..];
                             if let Some(s_start) = after_key.find("<string>") {
                                 if let Some(s_end) = after_key.find("</string>") {
-                                    let profile_team = &after_key[s_start + "<string>".len()..s_end];
+                                    let profile_team =
+                                        &after_key[s_start + "<string>".len()..s_end];
                                     if profile_team != expected_team.as_str() {
                                         errors.push(format!(
                                             "Provisioning profile team ID mismatch:\n\
@@ -1496,7 +1662,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                         }
                     }
                 } else {
-                    warnings.push("Could not parse provisioning profile to validate bundle ID.".into());
+                    warnings
+                        .push("Could not parse provisioning profile to validate bundle ID.".into());
                 }
             } else {
                 errors.push(
@@ -1513,7 +1680,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                     "No app icon configured. App Store requires a 1024×1024 icon.\n\
                      \x20\x20  Add to [project] in perry.toml:\n\
                      \x20\x20  icons = { source = \"assets/icon.png\" }"
-                    .into()
+                        .into(),
                 );
             } else if let Some(ref icon_path) = icon {
                 let full_icon_path = project_dir.join(icon_path);
@@ -1528,7 +1695,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
             // 3. Validate version string (must be MAJOR.MINOR or MAJOR.MINOR.PATCH)
             let version_parts: Vec<&str> = version.split('.').collect();
-            if version_parts.len() < 2 || version_parts.len() > 3
+            if version_parts.len() < 2
+                || version_parts.len() > 3
                 || !version_parts.iter().all(|p| p.parse::<u32>().is_ok())
             {
                 warnings.push(format!(
@@ -1540,9 +1708,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
             // 4. Validate build number is positive
             if build_number == 0 {
-                errors.push(
-                    "Build number must be positive for App Store submission.".into()
-                );
+                errors.push("Build number must be positive for App Store submission.".into());
             }
 
             // 5. Check signing certificate is provided
@@ -1601,7 +1767,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                     "No app icon configured. App Store requires a 1024×1024 icon.\n\
                      \x20\x20  Add to [project] in perry.toml:\n\
                      \x20\x20  icons = { source = \"assets/icon.png\" }"
-                    .into()
+                        .into(),
                 );
             } else if let Some(ref icon_path) = icon {
                 let full_icon_path = project_dir.join(icon_path);
@@ -1616,7 +1782,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
             // 2. Validate version string
             let version_parts: Vec<&str> = version.split('.').collect();
-            if version_parts.len() < 2 || version_parts.len() > 3
+            if version_parts.len() < 2
+                || version_parts.len() > 3
                 || !version_parts.iter().all(|p| p.parse::<u32>().is_ok())
             {
                 warnings.push(format!(
@@ -1628,9 +1795,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
             // 3. Validate build number is positive
             if build_number == 0 {
-                errors.push(
-                    "Build number must be positive for App Store submission.".into()
-                );
+                errors.push("Build number must be positive for App Store submission.".into());
             }
 
             // 4. Check signing certificate
@@ -1693,7 +1858,12 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         println!("  Target:    {target_display}");
         println!("  Server:    {server_url}");
         if is_windows {
-            if config.windows.as_ref().and_then(|w| w.gcloud_kms_key.as_ref()).is_some() {
+            if config
+                .windows
+                .as_ref()
+                .and_then(|w| w.gcloud_kms_key.as_ref())
+                .is_some()
+            {
                 println!("  Signing:   Google Cloud KMS (EV code signing)");
             }
         } else if is_ios || is_macos {
@@ -1703,7 +1873,12 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         }
         if is_android && android_distribute.as_deref() == Some("playstore") {
             println!("  Distribute: Google Play");
-        } else if is_ios && matches!(ios_distribute.as_deref(), Some("appstore") | Some("testflight")) {
+        } else if is_ios
+            && matches!(
+                ios_distribute.as_deref(),
+                Some("appstore") | Some("testflight")
+            )
+        {
             println!("  Distribute: App Store Connect (TestFlight)");
         } else if is_macos {
             match macos_distribute.as_deref() {
@@ -1736,36 +1911,56 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     }
     if !is_android {
         let apple = saved.apple.get_or_insert_with(AppleSavedConfig::default);
-        if apple_team_id.is_some() { apple.team_id = apple_team_id.clone(); }
-        if apple_p8_key_path.is_some() { apple.p8_key_path = apple_p8_key_path.clone(); }
-        if apple_key_id.is_some() { apple.key_id = apple_key_id.clone(); }
-        if apple_issuer_id.is_some() { apple.issuer_id = apple_issuer_id.clone(); }
+        if apple_team_id.is_some() {
+            apple.team_id = apple_team_id.clone();
+        }
+        if apple_p8_key_path.is_some() {
+            apple.p8_key_path = apple_p8_key_path.clone();
+        }
+        if apple_key_id.is_some() {
+            apple.key_id = apple_key_id.clone();
+        }
+        if apple_issuer_id.is_some() {
+            apple.issuer_id = apple_issuer_id.clone();
+        }
         // Project-specific fields (signing_identity, certificate, provisioning_profile)
         // are NOT saved to global config — they belong in perry.toml [ios]/[macos]
     }
     if is_android {
-        let android_saved = saved.android.get_or_insert_with(AndroidSavedConfig::default);
-        if android_keystore_path.is_some() { android_saved.keystore_path = android_keystore_path.clone(); }
-        if android_key_alias.is_some() { android_saved.key_alias = android_key_alias.clone(); }
-        if google_play_key_path.is_some() { android_saved.google_play_key_path = google_play_key_path.clone(); }
+        let android_saved = saved
+            .android
+            .get_or_insert_with(AndroidSavedConfig::default);
+        if android_keystore_path.is_some() {
+            android_saved.keystore_path = android_keystore_path.clone();
+        }
+        if android_key_alias.is_some() {
+            android_saved.key_alias = android_key_alias.clone();
+        }
+        if google_play_key_path.is_some() {
+            android_saved.google_play_key_path = google_play_key_path.clone();
+        }
     }
     if let Err(e) = save_config(&saved) {
         if let OutputFormat::Text = format {
             println!("  {} Could not save config: {e}", style("!").yellow());
         }
     } else if interactive {
-        println!("  Saved settings to {}", style(config_path().display()).dim());
+        println!(
+            "  Saved settings to {}",
+            style(config_path().display()).dim()
+        );
         println!();
     }
 
     // Build manifest
     // For iOS/Android/macOS-appstore: version = build_number (CFBundleVersion), short_version = marketing version
     // For macOS-notarize/Linux: version = marketing version string, short_version = None
-    let (manifest_version, manifest_short_version) = if is_ios || is_visionos || is_android || macos_needs_upload {
-        (build_number.to_string(), Some(version.clone()))
-    } else {
-        (version.clone(), None)
-    };
+    let (manifest_version, manifest_short_version) =
+        if is_ios || is_visionos || is_android || macos_needs_upload {
+            (build_number.to_string(), Some(version.clone()))
+        } else {
+            (version.clone(), None)
+        };
     let manifest = BuildManifest {
         app_name: app_name.clone(),
         bundle_id,
@@ -1784,25 +1979,77 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         ios_distribute: if is_ios { ios_distribute } else { None },
         ios_encryption_exempt: if is_ios { ios_encryption_exempt } else { None },
         ios_info_plist: if is_ios { ios_info_plist } else { None },
-        visionos_deployment_target: if is_visionos { visionos_deployment_target } else { None },
-        visionos_distribute: if is_visionos { visionos_distribute } else { None },
-        visionos_encryption_exempt: if is_visionos { visionos_encryption_exempt } else { None },
-        visionos_info_plist: if is_visionos { visionos_info_plist } else { None },
+        visionos_deployment_target: if is_visionos {
+            visionos_deployment_target
+        } else {
+            None
+        },
+        visionos_distribute: if is_visionos {
+            visionos_distribute
+        } else {
+            None
+        },
+        visionos_encryption_exempt: if is_visionos {
+            visionos_encryption_exempt
+        } else {
+            None
+        },
+        visionos_info_plist: if is_visionos {
+            visionos_info_plist
+        } else {
+            None
+        },
         macos_distribute: if is_macos { macos_distribute } else { None },
-        macos_encryption_exempt: if is_macos { macos_encryption_exempt } else { None },
-        tvos_deployment_target: if is_tvos { config.tvos.as_ref().and_then(|t| t.deployment_target.clone()) } else { None },
-        tvos_encryption_exempt: if is_tvos { config.tvos.as_ref().and_then(|t| t.encryption_exempt) } else { None },
-        tvos_info_plist: if is_tvos { config.tvos.as_ref().and_then(|t| t.info_plist.clone()) } else { None },
+        macos_encryption_exempt: if is_macos {
+            macos_encryption_exempt
+        } else {
+            None
+        },
+        tvos_deployment_target: if is_tvos {
+            config
+                .tvos
+                .as_ref()
+                .and_then(|t| t.deployment_target.clone())
+        } else {
+            None
+        },
+        tvos_encryption_exempt: if is_tvos {
+            config.tvos.as_ref().and_then(|t| t.encryption_exempt)
+        } else {
+            None
+        },
+        tvos_info_plist: if is_tvos {
+            config.tvos.as_ref().and_then(|t| t.info_plist.clone())
+        } else {
+            None
+        },
         android_min_sdk: if is_android { android_min_sdk } else { None },
         android_target_sdk: if is_android { android_target_sdk } else { None },
-        android_permissions: if is_android { android_permissions } else { None },
+        android_permissions: if is_android {
+            android_permissions
+        } else {
+            None
+        },
         android_distribute: if is_android { android_distribute } else { None },
-        linux_format: if is_linux { config.linux.as_ref().and_then(|l| l.format.clone()) } else { None },
-        linux_category: if is_linux { config.linux.as_ref().and_then(|l| l.category.clone()) } else { None },
+        linux_format: if is_linux {
+            config.linux.as_ref().and_then(|l| l.format.clone())
+        } else {
+            None
+        },
+        linux_category: if is_linux {
+            config.linux.as_ref().and_then(|l| l.category.clone())
+        } else {
+            None
+        },
         linux_description: if is_linux {
-            config.linux.as_ref().and_then(|l| l.description.clone())
+            config
+                .linux
+                .as_ref()
+                .and_then(|l| l.description.clone())
                 .or_else(|| config.app.as_ref().and_then(|a| a.description.clone()))
-        } else { None },
+        } else {
+            None
+        },
         release_notes: config.release_notes.clone(),
         features: config.project.as_ref().and_then(|p| p.features.clone()),
     };
@@ -1811,32 +2058,40 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let (gcloud_kms_key, gcloud_kms_cert_b64, gcloud_sa_b64) = if is_windows {
         let win = config.windows.as_ref();
         let kms_key = win.and_then(|w| w.gcloud_kms_key.clone());
-        let cert_b64 = win.and_then(|w| w.gcloud_kms_cert.as_ref()).and_then(|path_str| {
-            let path = if path_str.starts_with("~/") {
-                dirs::home_dir().unwrap_or_default().join(&path_str[2..])
-            } else {
-                std::path::PathBuf::from(path_str)
-            };
-            if path.exists() {
-                use base64::Engine;
-                fs::read(&path).ok().map(|data| base64::engine::general_purpose::STANDARD.encode(&data))
-            } else {
-                None
-            }
-        });
-        let sa_b64 = win.and_then(|w| w.gcloud_service_account.as_ref()).and_then(|path_str| {
-            let path = if path_str.starts_with("~/") {
-                dirs::home_dir().unwrap_or_default().join(&path_str[2..])
-            } else {
-                std::path::PathBuf::from(path_str)
-            };
-            if path.exists() {
-                use base64::Engine;
-                fs::read(&path).ok().map(|data| base64::engine::general_purpose::STANDARD.encode(&data))
-            } else {
-                None
-            }
-        });
+        let cert_b64 = win
+            .and_then(|w| w.gcloud_kms_cert.as_ref())
+            .and_then(|path_str| {
+                let path = if path_str.starts_with("~/") {
+                    dirs::home_dir().unwrap_or_default().join(&path_str[2..])
+                } else {
+                    std::path::PathBuf::from(path_str)
+                };
+                if path.exists() {
+                    use base64::Engine;
+                    fs::read(&path)
+                        .ok()
+                        .map(|data| base64::engine::general_purpose::STANDARD.encode(&data))
+                } else {
+                    None
+                }
+            });
+        let sa_b64 = win
+            .and_then(|w| w.gcloud_service_account.as_ref())
+            .and_then(|path_str| {
+                let path = if path_str.starts_with("~/") {
+                    dirs::home_dir().unwrap_or_default().join(&path_str[2..])
+                } else {
+                    std::path::PathBuf::from(path_str)
+                };
+                if path.exists() {
+                    use base64::Engine;
+                    fs::read(&path)
+                        .ok()
+                        .map(|data| base64::engine::general_purpose::STANDARD.encode(&data))
+                } else {
+                    None
+                }
+            });
         (kms_key, cert_b64, sa_b64)
     } else {
         (None, None, None)
@@ -1872,7 +2127,9 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         std::io::stdout().flush().ok();
     }
 
-    let publish_excludes = config.publish.as_ref()
+    let publish_excludes = config
+        .publish
+        .as_ref()
         .and_then(|p| p.exclude.clone())
         .unwrap_or_default();
     let tarball = create_project_tarball_with_excludes(&project_dir, &publish_excludes)
@@ -1929,17 +2186,29 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
         // Handle specific error codes with helpful messages
         if let Ok(err_json) = serde_json::from_str::<serde_json::Value>(&body) {
-            if let Some(code) = err_json.get("error").and_then(|e| e.get("code")).and_then(|c| c.as_str()) {
+            if let Some(code) = err_json
+                .get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|c| c.as_str())
+            {
                 match code {
                     "PUBLISH_LIMIT_REACHED" => {
-                        let msg = err_json.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("Monthly publish limit reached");
+                        let msg = err_json
+                            .get("error")
+                            .and_then(|e| e.get("message"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("Monthly publish limit reached");
                         eprintln!();
                         eprintln!("  {} {}", style("!").yellow().bold(), msg);
                         eprintln!();
                         bail!("Publish limit reached");
                     }
                     "ACCOUNT_REQUIRED" => {
-                        let msg = err_json.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("Account required for multiple projects");
+                        let msg = err_json
+                            .get("error")
+                            .and_then(|e| e.get("message"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("Account required for multiple projects");
                         eprintln!();
                         eprintln!("  {} {}", style("!").yellow().bold(), msg);
                         eprintln!();
@@ -1957,35 +2226,30 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
     if let OutputFormat::Text = format {
         println!(" {}", style("done").green());
-        println!(
-            "  Job ID:    {}",
-            style(&build_resp.job_id).dim()
-        );
-        println!(
-            "  Position:  {}",
-            build_resp.position
-        );
+        println!("  Job ID:    {}", style(&build_resp.job_id).dim());
+        println!("  Position:  {}", build_resp.position);
         println!();
     }
 
     // Connect WebSocket for progress
     // Hub returns either an absolute WS URL (ws://host:port) or a relative path
-    let ws_url = if build_resp.ws_url.starts_with("ws://") || build_resp.ws_url.starts_with("wss://") {
-        // Absolute URL from hub
-        build_resp.ws_url.clone()
-    } else if server_url.starts_with("https://") {
-        format!(
-            "wss://{}{}",
-            &server_url["https://".len()..],
-            build_resp.ws_url
-        )
-    } else {
-        format!(
-            "ws://{}{}",
-            &server_url["http://".len()..],
-            build_resp.ws_url
-        )
-    };
+    let ws_url =
+        if build_resp.ws_url.starts_with("ws://") || build_resp.ws_url.starts_with("wss://") {
+            // Absolute URL from hub
+            build_resp.ws_url.clone()
+        } else if server_url.starts_with("https://") {
+            format!(
+                "wss://{}{}",
+                &server_url["https://".len()..],
+                build_resp.ws_url
+            )
+        } else {
+            format!(
+                "ws://{}{}",
+                &server_url["http://".len()..],
+                build_resp.ws_url
+            )
+        };
 
     let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
         .await
@@ -2025,248 +2289,261 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
     use futures_util::StreamExt;
     'ws_loop: loop {
-    while let Some(msg) = read.next().await {
-        let msg = match msg {
-            Ok(m) => m,
-            Err(e) => {
-                // WebSocket dropped — try to reconnect and re-subscribe
-                loop {
-                    ws_retries += 1;
-                    if ws_retries > max_ws_retries {
-                        if let Some(ref pb) = pb {
-                            pb.abandon_with_message(format!("WebSocket error after {max_ws_retries} retries: {e}"));
+        while let Some(msg) = read.next().await {
+            let msg = match msg {
+                Ok(m) => m,
+                Err(e) => {
+                    // WebSocket dropped — try to reconnect and re-subscribe
+                    loop {
+                        ws_retries += 1;
+                        if ws_retries > max_ws_retries {
+                            if let Some(ref pb) = pb {
+                                pb.abandon_with_message(format!(
+                                    "WebSocket error after {max_ws_retries} retries: {e}"
+                                ));
+                            }
+                            bail!("WebSocket error after {max_ws_retries} retries: {e}");
                         }
-                        bail!("WebSocket error after {max_ws_retries} retries: {e}");
-                    }
-                    let delay = std::cmp::min(ws_retries as u64 * 2, 30);
-                    if let OutputFormat::Text = format {
-                        if let Some(ref pb) = pb {
-                            pb.println(format!("    {} Connection lost, reconnecting in {delay}s ({ws_retries}/{max_ws_retries})...", style("!").yellow()));
+                        let delay = std::cmp::min(ws_retries as u64 * 2, 30);
+                        if let OutputFormat::Text = format {
+                            if let Some(ref pb) = pb {
+                                pb.println(format!("    {} Connection lost, reconnecting in {delay}s ({ws_retries}/{max_ws_retries})...", style("!").yellow()));
+                            }
                         }
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                    match tokio_tungstenite::connect_async(&ws_url).await {
-                        Ok((new_ws, _)) => {
-                            let (mut new_write, new_read) = new_ws.split();
-                            let _ = new_write.send(Message::Text(
-                                format!(r#"{{"type":"subscribe","job_id":"{}"}}"#, build_resp.job_id).into(),
-                            )).await;
-                            read = new_read;
-                            ws_retries = 0; // reset on successful reconnect
-                            continue 'ws_loop;
+                        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                        match tokio_tungstenite::connect_async(&ws_url).await {
+                            Ok((new_ws, _)) => {
+                                let (mut new_write, new_read) = new_ws.split();
+                                let _ = new_write
+                                    .send(Message::Text(
+                                        format!(
+                                            r#"{{"type":"subscribe","job_id":"{}"}}"#,
+                                            build_resp.job_id
+                                        )
+                                        .into(),
+                                    ))
+                                    .await;
+                                read = new_read;
+                                ws_retries = 0; // reset on successful reconnect
+                                continue 'ws_loop;
+                            }
+                            Err(_re) => {
+                                // Keep retrying — don't bail on reconnect failure
+                                continue;
+                            }
                         }
-                        Err(_re) => {
-                            // Keep retrying — don't bail on reconnect failure
-                            continue;
-                        }
-                    }
-                }
-            }
-        };
-
-        let text = match msg {
-            Message::Text(t) => t,
-            Message::Close(_) => break,
-            _ => continue,
-        };
-
-        let server_msg: ServerMessage = match serde_json::from_str(&text) {
-            Ok(m) => m,
-            Err(_e) => {
-                // Unknown message type from hub, skip it
-                continue;
-            }
-        };
-
-        match server_msg {
-            ServerMessage::JobCreated { .. } => {
-                if let Some(ref pb) = pb {
-                    pb.set_message("Build started");
-                }
-            }
-            ServerMessage::QueueUpdate { position, .. } => {
-                if let Some(ref pb) = pb {
-                    pb.set_message(format!("Queue position: {position}"));
-                }
-            }
-            ServerMessage::Stage { stage, message } => {
-                if let Some(ref pb) = pb {
-                    let icon = match stage.as_str() {
-                        "extracting" => "📦",
-                        "compiling" => "⚙️ ",
-                        "generating_assets" => "🎨",
-                        "bundling" => "📁",
-                        "signing" => "🔏",
-                        "notarizing" => "🍎",
-                        "packaging" => "💿",
-                        "uploading" => "☁️ ",
-                        "verifying" => "🔍",
-                        _ => "▶️ ",
-                    };
-                    pb.set_message(format!("{icon} {message}"));
-                }
-            }
-            ServerMessage::Log { line, stream, .. } => {
-                if let Some(ref pb) = pb {
-                    if stream == "stderr" {
-                        pb.println(format!("    {}", style(&line).dim()));
                     }
                 }
-            }
-            ServerMessage::Progress { percent, .. } => {
-                if let Some(ref pb) = pb {
-                    pb.set_position(percent as u64);
-                }
-            }
-            ServerMessage::ArtifactReady {
-                artifact_name: name,
-                artifact_size,
-                sha256,
-                download_url: url,
-                download_path: dl_path,
-                ..
-            } => {
-                if let Some(ref pb) = pb {
-                    pb.set_position(100);
-                    pb.finish_with_message(format!(
-                        "{} Artifact ready: {} ({:.1} MB)",
-                        style("✓").green().bold(),
-                        name,
-                        artifact_size as f64 / 1_048_576.0
-                    ));
-                }
-                download_url = Some(url);
-                download_path = dl_path;
-                artifact_name = Some(name);
+            };
 
-                if let OutputFormat::Text = format {
-                    println!("  SHA-256:   {}", style(&sha256).dim());
+            let text = match msg {
+                Message::Text(t) => t,
+                Message::Close(_) => break,
+                _ => continue,
+            };
+
+            let server_msg: ServerMessage = match serde_json::from_str(&text) {
+                Ok(m) => m,
+                Err(_e) => {
+                    // Unknown message type from hub, skip it
+                    continue;
                 }
-            }
-            ServerMessage::Error {
-                code,
-                message,
-                stage: _,
-            } => {
-                if let Some(ref pb) = pb {
-                    pb.abandon_with_message(format!(
-                        "{} {} ({})",
-                        style("✗").red().bold(),
-                        message,
-                        code
-                    ));
+            };
+
+            match server_msg {
+                ServerMessage::JobCreated { .. } => {
+                    if let Some(ref pb) = pb {
+                        pb.set_message("Build started");
+                    }
                 }
-                bail!("Build error [{}]: {}", code, message);
-            }
-            ServerMessage::Complete {
-                success,
-                duration_secs,
-                ..
-            } => {
-                build_success = success;
-                if let OutputFormat::Text = format {
-                    println!();
-                    if success {
-                        println!(
-                            "  {} Build completed in {:.1}s",
+                ServerMessage::QueueUpdate { position, .. } => {
+                    if let Some(ref pb) = pb {
+                        pb.set_message(format!("Queue position: {position}"));
+                    }
+                }
+                ServerMessage::Stage { stage, message } => {
+                    if let Some(ref pb) = pb {
+                        let icon = match stage.as_str() {
+                            "extracting" => "📦",
+                            "compiling" => "⚙️ ",
+                            "generating_assets" => "🎨",
+                            "bundling" => "📁",
+                            "signing" => "🔏",
+                            "notarizing" => "🍎",
+                            "packaging" => "💿",
+                            "uploading" => "☁️ ",
+                            "verifying" => "🔍",
+                            _ => "▶️ ",
+                        };
+                        pb.set_message(format!("{icon} {message}"));
+                    }
+                }
+                ServerMessage::Log { line, stream, .. } => {
+                    if let Some(ref pb) = pb {
+                        if stream == "stderr" {
+                            pb.println(format!("    {}", style(&line).dim()));
+                        }
+                    }
+                }
+                ServerMessage::Progress { percent, .. } => {
+                    if let Some(ref pb) = pb {
+                        pb.set_position(percent as u64);
+                    }
+                }
+                ServerMessage::ArtifactReady {
+                    artifact_name: name,
+                    artifact_size,
+                    sha256,
+                    download_url: url,
+                    download_path: dl_path,
+                    ..
+                } => {
+                    if let Some(ref pb) = pb {
+                        pb.set_position(100);
+                        pb.finish_with_message(format!(
+                            "{} Artifact ready: {} ({:.1} MB)",
                             style("✓").green().bold(),
-                            duration_secs
-                        );
-                    } else {
-                        println!(
-                            "  {} Build failed after {:.1}s",
+                            name,
+                            artifact_size as f64 / 1_048_576.0
+                        ));
+                    }
+                    download_url = Some(url);
+                    download_path = dl_path;
+                    artifact_name = Some(name);
+
+                    if let OutputFormat::Text = format {
+                        println!("  SHA-256:   {}", style(&sha256).dim());
+                    }
+                }
+                ServerMessage::Error {
+                    code,
+                    message,
+                    stage: _,
+                } => {
+                    if let Some(ref pb) = pb {
+                        pb.abandon_with_message(format!(
+                            "{} {} ({})",
                             style("✗").red().bold(),
-                            duration_secs
+                            message,
+                            code
+                        ));
+                    }
+                    bail!("Build error [{}]: {}", code, message);
+                }
+                ServerMessage::Complete {
+                    success,
+                    duration_secs,
+                    ..
+                } => {
+                    build_success = success;
+                    if let OutputFormat::Text = format {
+                        println!();
+                        if success {
+                            println!(
+                                "  {} Build completed in {:.1}s",
+                                style("✓").green().bold(),
+                                duration_secs
+                            );
+                        } else {
+                            println!(
+                                "  {} Build failed after {:.1}s",
+                                style("✗").red().bold(),
+                                duration_secs
+                            );
+                        }
+                    }
+                    break;
+                }
+                ServerMessage::Published {
+                    platform, message, ..
+                } => {
+                    if let OutputFormat::Text = format {
+                        println!(
+                            "  {} Published to {} — {}",
+                            style("✓").green().bold(),
+                            style(&platform).cyan(),
+                            message
                         );
                     }
                 }
-                break;
+                _ => {}
             }
-            ServerMessage::Published { platform, message, .. } => {
+        }
+
+        // Download artifact
+        if build_success && !args.no_download {
+            if let (Some(url), Some(name)) = (download_url, artifact_name) {
+                if let OutputFormat::Text = format {
+                    print!("  Downloading {name}...");
+                    std::io::stdout().flush().ok();
+                }
+
+                fs::create_dir_all(&args.output)?;
+                let dest = args.output.join(&name);
+
+                if let Some(ref src_path) = download_path {
+                    // Local path available (self-hosted hub) - copy directly
+                    fs::copy(src_path, &dest)
+                        .with_context(|| format!("Failed to copy artifact from {src_path}"))?;
+                } else {
+                    // Remote hub - download via HTTP
+                    let full_url = if url.starts_with("http://") || url.starts_with("https://") {
+                        url.clone()
+                    } else {
+                        format!("{server_url}{url}")
+                    };
+                    let resp = client
+                        .get(&full_url)
+                        .send()
+                        .await
+                        .context("Failed to download artifact")?;
+
+                    if !resp.status().is_success() {
+                        bail!("Download failed: {}", resp.status());
+                    }
+
+                    let bytes = resp.bytes().await?;
+                    // The hub may store artifacts as base64 (perry runtime doesn't
+                    // decode Buffer.from(data, 'base64')). Detect and decode.
+                    let data = if bytes.len() > 4
+                        && bytes.iter().all(|&b| {
+                            b.is_ascii_alphanumeric()
+                                || b == b'+'
+                                || b == b'/'
+                                || b == b'='
+                                || b == b'\n'
+                                || b == b'\r'
+                        }) {
+                        use base64::Engine;
+                        base64::engine::general_purpose::STANDARD
+                            .decode(&bytes)
+                            .unwrap_or_else(|_| bytes.to_vec())
+                    } else {
+                        bytes.to_vec()
+                    };
+                    fs::write(&dest, &data)?;
+                }
+
                 if let OutputFormat::Text = format {
                     println!(
-                        "  {} Published to {} — {}",
-                        style("✓").green().bold(),
-                        style(&platform).cyan(),
-                        message
+                        " {} → {}",
+                        style("done").green(),
+                        style(dest.display()).bold()
                     );
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Download artifact
-    if build_success && !args.no_download {
-        if let (Some(url), Some(name)) = (download_url, artifact_name) {
-            if let OutputFormat::Text = format {
-                print!("  Downloading {name}...");
-                std::io::stdout().flush().ok();
-            }
-
-            fs::create_dir_all(&args.output)?;
-            let dest = args.output.join(&name);
-
-            if let Some(ref src_path) = download_path {
-                // Local path available (self-hosted hub) - copy directly
-                fs::copy(src_path, &dest)
-                    .with_context(|| format!("Failed to copy artifact from {src_path}"))?;
-            } else {
-                // Remote hub - download via HTTP
-                let full_url = if url.starts_with("http://") || url.starts_with("https://") {
-                    url.clone()
-                } else {
-                    format!("{server_url}{url}")
-                };
-                let resp = client
-                    .get(&full_url)
-                    .send()
-                    .await
-                    .context("Failed to download artifact")?;
-
-                if !resp.status().is_success() {
-                    bail!(
-                        "Download failed: {}",
-                        resp.status()
-                    );
+                    println!();
                 }
 
-                let bytes = resp.bytes().await?;
-                // The hub may store artifacts as base64 (perry runtime doesn't
-                // decode Buffer.from(data, 'base64')). Detect and decode.
-                let data = if bytes.len() > 4 && bytes.iter().all(|&b| {
-                    b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=' || b == b'\n' || b == b'\r'
-                }) {
-                    use base64::Engine;
-                    base64::engine::general_purpose::STANDARD
-                        .decode(&bytes)
-                        .unwrap_or_else(|_| bytes.to_vec())
-                } else {
-                    bytes.to_vec()
-                };
-                fs::write(&dest, &data)?;
-            }
-
-            if let OutputFormat::Text = format {
-                println!(
-                    " {} → {}",
-                    style("done").green(),
-                    style(dest.display()).bold()
-                );
-                println!();
-            }
-
-            if let OutputFormat::Text = format {
-                println!(
-                    "  {} {}",
-                    style("Ready!").green().bold(),
-                    style(format!("Open with: open {}", dest.display())).dim()
-                );
-                println!();
+                if let OutputFormat::Text = format {
+                    println!(
+                        "  {} {}",
+                        style("Ready!").green().bold(),
+                        style(format!("Open with: open {}", dest.display())).dim()
+                    );
+                    println!();
+                }
             }
         }
-    }
-    break; // Normal exit from while loop means stream ended
+        break; // Normal exit from while loop means stream ended
     } // end 'ws_loop
 
     if !build_success {
@@ -2359,7 +2636,10 @@ pub(crate) fn create_project_tarball(project_dir: &Path) -> Result<Vec<u8>> {
     create_project_tarball_with_excludes(project_dir, &[])
 }
 
-pub(crate) fn create_project_tarball_with_excludes(project_dir: &Path, extra_excludes: &[String]) -> Result<Vec<u8>> {
+pub(crate) fn create_project_tarball_with_excludes(
+    project_dir: &Path,
+    extra_excludes: &[String],
+) -> Result<Vec<u8>> {
     let buf = Vec::new();
     let encoder = GzEncoder::new(buf, Compression::default());
     let mut ar = tar::Builder::new(encoder);
@@ -2375,31 +2655,29 @@ pub(crate) fn create_project_tarball_with_excludes(project_dir: &Path, extra_exc
     ];
 
     // Walk the project directory
-    for entry in WalkDir::new(project_dir)
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            if builtin_exclude_dirs.iter().any(|ex| name == *ex) {
-                return false;
+    for entry in WalkDir::new(project_dir).into_iter().filter_entry(|e| {
+        let name = e.file_name().to_string_lossy();
+        if builtin_exclude_dirs.iter().any(|ex| name == *ex) {
+            return false;
+        }
+        if extra_excludes.iter().any(|ex| {
+            if ex.contains('/') {
+                // Path-based exclude: match against relative path from project root
+                e.path()
+                    .strip_prefix(project_dir)
+                    .map(|rel| rel.starts_with(ex))
+                    .unwrap_or(false)
+            } else {
+                name == *ex
             }
-            if extra_excludes.iter().any(|ex| {
-                if ex.contains('/') {
-                    // Path-based exclude: match against relative path from project root
-                    e.path().strip_prefix(project_dir)
-                        .map(|rel| rel.starts_with(ex))
-                        .unwrap_or(false)
-                } else {
-                    name == *ex
-                }
-            }) {
-                return false;
-            }
-            if name.ends_with(".app") {
-                return false;
-            }
-            true
-        })
-    {
+        }) {
+            return false;
+        }
+        if name.ends_with(".app") {
+            return false;
+        }
+        true
+    }) {
         let entry = entry?;
         let path = entry.path();
         let relative = path.strip_prefix(project_dir)?;
@@ -2522,8 +2800,7 @@ pub(crate) struct AppleSavedConfig {
 /// Legacy struct kept for backward compatibility when reading old config files.
 /// New configs no longer save iOS-specific fields to the global config.
 #[derive(Default, Debug, Serialize, Deserialize)]
-pub(crate) struct IosSavedConfig {
-}
+pub(crate) struct IosSavedConfig {}
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub(crate) struct AndroidSavedConfig {
@@ -2592,8 +2869,7 @@ pub(crate) fn save_config(config: &PerryConfig) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let content = toml::to_string_pretty(config)
-        .context("Failed to serialize config")?;
+    let content = toml::to_string_pretty(config).context("Failed to serialize config")?;
     fs::write(&path, content)?;
     Ok(())
 }
@@ -2630,7 +2906,9 @@ pub(crate) fn check_beta_consent(command: &str) -> bool {
     eprintln!("  It should work, but if you encounter issues please let us know.");
     eprintln!(
         "  Report issues: {}",
-        style("https://github.com/PerryTS/perry/issues").cyan().underlined()
+        style("https://github.com/PerryTS/perry/issues")
+            .cyan()
+            .underlined()
     );
     eprintln!();
 
@@ -2694,10 +2972,16 @@ fn sanitize_error_for_report(error: &str) -> String {
             result.push(' ');
         }
         // Redact absolute file paths
-        if word.starts_with('/') || (word.len() >= 3 && word.as_bytes()[1] == b':' && word.as_bytes()[2] == b'\\') {
+        if word.starts_with('/')
+            || (word.len() >= 3 && word.as_bytes()[1] == b':' && word.as_bytes()[2] == b'\\')
+        {
             result.push_str("<path>");
         // Redact long alphanumeric strings (tokens, keys, base64 blobs)
-        } else if word.len() >= 32 && word.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=') {
+        } else if word.len() >= 32
+            && word
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=')
+        {
             result.push_str("<redacted>");
         } else {
             result.push_str(word);
@@ -2848,7 +3132,11 @@ fn auto_export_p12_from_keychain(
         identities
             .iter()
             .find(|(_, name)| name == configured)
-            .or_else(|| identities.iter().find(|(_, name)| name.contains(configured)))
+            .or_else(|| {
+                identities
+                    .iter()
+                    .find(|(_, name)| name.contains(configured))
+            })
             .cloned()
     } else {
         None
@@ -2868,10 +3156,7 @@ fn auto_export_p12_from_keychain(
     };
 
     println!();
-    println!(
-        "  Found identity: {}",
-        style(&selected.1).bold()
-    );
+    println!("  Found identity: {}", style(&selected.1).bold());
     let consent = Confirm::new()
         .with_prompt("  Export this certificate from Keychain? (macOS will ask for access)")
         .default(true)
@@ -2888,7 +3173,11 @@ fn auto_export_p12_from_keychain(
         .as_nanos();
     let password: String = (0..24u64)
         .map(|i| {
-            let v = ((seed.wrapping_mul(6364136223846793005).wrapping_add(i as u128 * 1442695040888963407)) >> 16) as u8 % 62;
+            let v = ((seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(i as u128 * 1442695040888963407))
+                >> 16) as u8
+                % 62;
             match v {
                 0..=9 => (b'0' + v) as char,
                 10..=35 => (b'a' + v - 10) as char,
@@ -2921,10 +3210,7 @@ fn auto_export_p12_from_keychain(
     match export_result {
         Ok(out) if out.status.success() => {}
         _ => {
-            println!(
-                "  {} Could not export from Keychain.",
-                style("!").yellow()
-            );
+            println!("  {} Could not export from Keychain.", style("!").yellow());
             return None;
         }
     }
@@ -2936,10 +3222,7 @@ fn auto_export_p12_from_keychain(
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
 
-    println!(
-        "  {} Certificate exported successfully",
-        style("✓").green()
-    );
+    println!("  {} Certificate exported successfully", style("✓").green());
     Some((b64, password))
 }
 
@@ -3015,9 +3298,15 @@ fn validate_credentials_for_distribute(
         let distribute = ios_distribute.unwrap_or("");
         if distribute == "appstore" || distribute == "testflight" {
             let mut missing = Vec::new();
-            if apple_key_id.is_none() { missing.push("Key ID (--apple-key-id / PERRY_APPLE_KEY_ID)"); }
-            if apple_issuer_id.is_none() { missing.push("Issuer ID (--apple-issuer-id / PERRY_APPLE_ISSUER_ID)"); }
-            if p8_key_content.is_none() { missing.push(".p8 key (--apple-p8-key / PERRY_APPLE_P8_KEY)"); }
+            if apple_key_id.is_none() {
+                missing.push("Key ID (--apple-key-id / PERRY_APPLE_KEY_ID)");
+            }
+            if apple_issuer_id.is_none() {
+                missing.push("Issuer ID (--apple-issuer-id / PERRY_APPLE_ISSUER_ID)");
+            }
+            if p8_key_content.is_none() {
+                missing.push(".p8 key (--apple-p8-key / PERRY_APPLE_P8_KEY)");
+            }
             if !missing.is_empty() {
                 bail!(
                     "ios.distribute = \"{distribute}\" requires App Store Connect API credentials.\n\
@@ -3034,9 +3323,15 @@ fn validate_credentials_for_distribute(
         let distribute = macos_distribute.unwrap_or("");
         if matches!(distribute, "appstore" | "testflight" | "notarize" | "both") {
             let mut missing = Vec::new();
-            if apple_key_id.is_none() { missing.push("Key ID (--apple-key-id / PERRY_APPLE_KEY_ID)"); }
-            if apple_issuer_id.is_none() { missing.push("Issuer ID (--apple-issuer-id / PERRY_APPLE_ISSUER_ID)"); }
-            if p8_key_content.is_none() { missing.push(".p8 key (--apple-p8-key / PERRY_APPLE_P8_KEY)"); }
+            if apple_key_id.is_none() {
+                missing.push("Key ID (--apple-key-id / PERRY_APPLE_KEY_ID)");
+            }
+            if apple_issuer_id.is_none() {
+                missing.push("Issuer ID (--apple-issuer-id / PERRY_APPLE_ISSUER_ID)");
+            }
+            if p8_key_content.is_none() {
+                missing.push(".p8 key (--apple-p8-key / PERRY_APPLE_P8_KEY)");
+            }
             if !missing.is_empty() {
                 let purpose = match distribute {
                     "notarize" => "notarization",
@@ -3088,8 +3383,14 @@ mod tests {
         assert_eq!(parsed.license_key, config.license_key);
         assert_eq!(parsed.server, config.server);
         assert_eq!(parsed.default_target, config.default_target);
-        assert_eq!(parsed.apple.as_ref().unwrap().team_id, config.apple.as_ref().unwrap().team_id);
-        assert_eq!(parsed.android.as_ref().unwrap().google_play_key_path, config.android.as_ref().unwrap().google_play_key_path);
+        assert_eq!(
+            parsed.apple.as_ref().unwrap().team_id,
+            config.apple.as_ref().unwrap().team_id
+        );
+        assert_eq!(
+            parsed.android.as_ref().unwrap().google_play_key_path,
+            config.android.as_ref().unwrap().google_play_key_path
+        );
     }
 
     #[test]
@@ -3100,7 +3401,10 @@ mod tests {
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         assert!(toml_str.contains("license_key"));
-        assert!(!toml_str.contains("[apple]"), "empty sections should be omitted");
+        assert!(
+            !toml_str.contains("[apple]"),
+            "empty sections should be omitted"
+        );
         assert!(!toml_str.contains("[android]"));
     }
 
@@ -3233,14 +3537,8 @@ mod tests {
 
     #[test]
     fn test_resolve_credential_none_when_missing() {
-        let result = resolve_credential(
-            None,
-            "NONEXISTENT_ENV_VAR_XYZ",
-            None,
-            "test",
-            false,
-            false,
-        );
+        let result =
+            resolve_credential(None, "NONEXISTENT_ENV_VAR_XYZ", None, "test", false, false);
         assert!(result.is_none());
     }
 
@@ -3315,9 +3613,16 @@ mod tests {
     #[test]
     fn test_validate_android_playstore_requires_json() {
         let result = validate_credentials_for_distribute(
-            true, Some("playstore"), None, // android, no key
-            false, None, None, None, None, // ios not applicable
-            false, None,                   // macos not applicable
+            true,
+            Some("playstore"),
+            None, // android, no key
+            false,
+            None,
+            None,
+            None,
+            None, // ios not applicable
+            false,
+            None, // macos not applicable
         );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -3328,12 +3633,22 @@ mod tests {
     #[test]
     fn test_validate_android_playstore_invalid_track() {
         let result = validate_credentials_for_distribute(
-            true, Some("playstore:bogus"), Some("{}"),
-            false, None, None, None, None,
-            false, None,
+            true,
+            Some("playstore:bogus"),
+            Some("{}"),
+            false,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid Play Store track"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid Play Store track"));
     }
 
     #[test]
@@ -3341,9 +3656,16 @@ mod tests {
         for track in ["internal", "alpha", "beta", "production"] {
             let distribute = format!("playstore:{track}");
             let result = validate_credentials_for_distribute(
-                true, Some(&distribute), Some("{\"ok\":1}"),
-                false, None, None, None, None,
-                false, None,
+                true,
+                Some(&distribute),
+                Some("{\"ok\":1}"),
+                false,
+                None,
+                None,
+                None,
+                None,
+                false,
+                None,
             );
             assert!(result.is_ok(), "track={track} should be valid");
         }
@@ -3352,9 +3674,16 @@ mod tests {
     #[test]
     fn test_validate_ios_appstore_requires_creds() {
         let result = validate_credentials_for_distribute(
-            false, None, None,
-            true, Some("appstore"), None, None, None, // ios, missing creds
-            false, None,
+            false,
+            None,
+            None,
+            true,
+            Some("appstore"),
+            None,
+            None,
+            None, // ios, missing creds
+            false,
+            None,
         );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -3365,9 +3694,16 @@ mod tests {
     #[test]
     fn test_validate_ios_testflight_requires_creds() {
         let result = validate_credentials_for_distribute(
-            false, None, None,
-            true, Some("testflight"), Some("kid"), None, Some("key_content"),
-            false, None,
+            false,
+            None,
+            None,
+            true,
+            Some("testflight"),
+            Some("kid"),
+            None,
+            Some("key_content"),
+            false,
+            None,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Issuer ID"));
@@ -3376,8 +3712,7 @@ mod tests {
     #[test]
     fn test_validate_ios_no_distribute_passes() {
         let result = validate_credentials_for_distribute(
-            false, None, None,
-            true, None, None, None, None, // ios but no distribute set
+            false, None, None, true, None, None, None, None, // ios but no distribute set
             false, None,
         );
         assert!(result.is_ok());
@@ -3386,9 +3721,16 @@ mod tests {
     #[test]
     fn test_validate_macos_appstore_requires_creds() {
         let result = validate_credentials_for_distribute(
-            false, None, None,
-            false, None, None, None, None,
-            true, Some("appstore"), // macos appstore, no creds
+            false,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            true,
+            Some("appstore"), // macos appstore, no creds
         );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -3399,9 +3741,16 @@ mod tests {
     #[test]
     fn test_validate_macos_testflight_requires_creds() {
         let result = validate_credentials_for_distribute(
-            false, None, None,
-            false, None, None, None, None,
-            true, Some("testflight"), // macos testflight, no creds
+            false,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            true,
+            Some("testflight"), // macos testflight, no creds
         );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -3411,9 +3760,16 @@ mod tests {
     #[test]
     fn test_validate_macos_notarize_requires_creds() {
         let result = validate_credentials_for_distribute(
-            false, None, None,
-            false, None, None, None, None,
-            true, Some("notarize"), // macos notarize, no creds
+            false,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            true,
+            Some("notarize"), // macos notarize, no creds
         );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -3423,9 +3779,16 @@ mod tests {
     #[test]
     fn test_validate_passes_when_all_present() {
         let result = validate_credentials_for_distribute(
-            false, None, None,
-            true, Some("appstore"), Some("kid"), Some("iid"), Some("p8"),
-            false, None,
+            false,
+            None,
+            None,
+            true,
+            Some("appstore"),
+            Some("kid"),
+            Some("iid"),
+            Some("p8"),
+            false,
+            None,
         );
         assert!(result.is_ok());
     }

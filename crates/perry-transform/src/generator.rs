@@ -90,16 +90,26 @@ fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
     match stmt {
         Stmt::Let { id, init, .. } => {
             *max_id = (*max_id).max(*id);
-            if let Some(e) = init { scan_expr_for_max_local(e, max_id); }
+            if let Some(e) = init {
+                scan_expr_for_max_local(e, max_id);
+            }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_for_max_local(e, max_id),
         Stmt::Return(e) => {
-            if let Some(e) = e { scan_expr_for_max_local(e, max_id); }
+            if let Some(e) = e {
+                scan_expr_for_max_local(e, max_id);
+            }
         }
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             scan_expr_for_max_local(condition, max_id);
             scan_stmts_for_max_local(then_branch, max_id);
-            if let Some(eb) = else_branch { scan_stmts_for_max_local(eb, max_id); }
+            if let Some(eb) = else_branch {
+                scan_stmts_for_max_local(eb, max_id);
+            }
         }
         Stmt::While { condition, body } => {
             scan_expr_for_max_local(condition, max_id);
@@ -109,20 +119,44 @@ fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
             scan_stmts_for_max_local(body, max_id);
             scan_expr_for_max_local(condition, max_id);
         }
-        Stmt::For { init, condition, update, body } => {
-            if let Some(i) = init { scan_stmt_for_max_local(i, max_id); }
-            if let Some(c) = condition { scan_expr_for_max_local(c, max_id); }
-            if let Some(u) = update { scan_expr_for_max_local(u, max_id); }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                scan_stmt_for_max_local(i, max_id);
+            }
+            if let Some(c) = condition {
+                scan_expr_for_max_local(c, max_id);
+            }
+            if let Some(u) = update {
+                scan_expr_for_max_local(u, max_id);
+            }
             scan_stmts_for_max_local(body, max_id);
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             scan_stmts_for_max_local(body, max_id);
-            if let Some(c) = catch { scan_stmts_for_max_local(&c.body, max_id); }
-            if let Some(f) = finally { scan_stmts_for_max_local(f, max_id); }
+            if let Some(c) = catch {
+                scan_stmts_for_max_local(&c.body, max_id);
+            }
+            if let Some(f) = finally {
+                scan_stmts_for_max_local(f, max_id);
+            }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             scan_expr_for_max_local(discriminant, max_id);
-            for case in cases { scan_stmts_for_max_local(&case.body, max_id); }
+            for case in cases {
+                scan_stmts_for_max_local(&case.body, max_id);
+            }
         }
         Stmt::Labeled { body, .. } => scan_stmt_for_max_local(body, max_id),
         _ => {}
@@ -145,18 +179,34 @@ fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
             *max_id = (*max_id).max(*id);
             scan_expr_for_max_local(value, max_id);
         }
-        Expr::Closure { params, body, captures, mutable_captures, .. } => {
-            for p in params { *max_id = (*max_id).max(p.id); }
-            for c in captures { *max_id = (*max_id).max(*c); }
-            for c in mutable_captures { *max_id = (*max_id).max(*c); }
+        Expr::Closure {
+            params,
+            body,
+            captures,
+            mutable_captures,
+            ..
+        } => {
+            for p in params {
+                *max_id = (*max_id).max(p.id);
+            }
+            for c in captures {
+                *max_id = (*max_id).max(*c);
+            }
+            for c in mutable_captures {
+                *max_id = (*max_id).max(*c);
+            }
             scan_stmts_for_max_local(body, max_id);
         }
         Expr::Call { callee, args, .. } => {
             scan_expr_for_max_local(callee, max_id);
-            for a in args { scan_expr_for_max_local(a, max_id); }
+            for a in args {
+                scan_expr_for_max_local(a, max_id);
+            }
         }
         Expr::New { args, .. } => {
-            for a in args { scan_expr_for_max_local(a, max_id); }
+            for a in args {
+                scan_expr_for_max_local(a, max_id);
+            }
         }
         Expr::Await(inner) | Expr::Unary { operand: inner, .. } => {
             scan_expr_for_max_local(inner, max_id);
@@ -167,7 +217,11 @@ fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
             scan_expr_for_max_local(left, max_id);
             scan_expr_for_max_local(right, max_id);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             scan_expr_for_max_local(condition, max_id);
             scan_expr_for_max_local(then_expr, max_id);
             scan_expr_for_max_local(else_expr, max_id);
@@ -181,19 +235,29 @@ fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
             scan_expr_for_max_local(object, max_id);
             scan_expr_for_max_local(index, max_id);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             scan_expr_for_max_local(object, max_id);
             scan_expr_for_max_local(index, max_id);
             scan_expr_for_max_local(value, max_id);
         }
         Expr::Array(items) => {
-            for item in items { scan_expr_for_max_local(item, max_id); }
+            for item in items {
+                scan_expr_for_max_local(item, max_id);
+            }
         }
         Expr::Object(fields) => {
-            for (_, v) in fields { scan_expr_for_max_local(v, max_id); }
+            for (_, v) in fields {
+                scan_expr_for_max_local(v, max_id);
+            }
         }
         Expr::Sequence(exprs) => {
-            for e in exprs { scan_expr_for_max_local(e, max_id); }
+            for e in exprs {
+                scan_expr_for_max_local(e, max_id);
+            }
         }
         Expr::Yield { value: Some(v), .. } => scan_expr_for_max_local(v, max_id),
         // Array fast-path variants — each has a closure callback whose
@@ -215,15 +279,27 @@ fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
             scan_expr_for_max_local(array, max_id);
             scan_expr_for_max_local(comparator, max_id);
         }
-        Expr::ArrayReduce { array, callback, initial }
-        | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             scan_expr_for_max_local(array, max_id);
             scan_expr_for_max_local(callback, max_id);
-            if let Some(i) = initial { scan_expr_for_max_local(i, max_id); }
+            if let Some(i) = initial {
+                scan_expr_for_max_local(i, max_id);
+            }
         }
         Expr::ArrayToSorted { array, comparator } => {
             scan_expr_for_max_local(array, max_id);
-            if let Some(c) = comparator { scan_expr_for_max_local(c, max_id); }
+            if let Some(c) = comparator {
+                scan_expr_for_max_local(c, max_id);
+            }
         }
         Expr::ObjectGroupBy { items, key_fn } => {
             scan_expr_for_max_local(items, max_id);
@@ -257,21 +333,39 @@ fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
         Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
             scan_expr_for_max_func(expr, max_id);
         }
-        Stmt::Let { init: Some(expr), .. } => scan_expr_for_max_func(expr, max_id),
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::Let {
+            init: Some(expr), ..
+        } => scan_expr_for_max_func(expr, max_id),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             scan_expr_for_max_func(condition, max_id);
             scan_stmts_for_max_func(then_branch, max_id);
-            if let Some(eb) = else_branch { scan_stmts_for_max_func(eb, max_id); }
+            if let Some(eb) = else_branch {
+                scan_stmts_for_max_func(eb, max_id);
+            }
         }
         Stmt::While { body, .. } => scan_stmts_for_max_func(body, max_id),
         Stmt::For { body, .. } => scan_stmts_for_max_func(body, max_id),
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             scan_stmts_for_max_func(body, max_id);
-            if let Some(c) = catch { scan_stmts_for_max_func(&c.body, max_id); }
-            if let Some(f) = finally { scan_stmts_for_max_func(f, max_id); }
+            if let Some(c) = catch {
+                scan_stmts_for_max_func(&c.body, max_id);
+            }
+            if let Some(f) = finally {
+                scan_stmts_for_max_func(f, max_id);
+            }
         }
         Stmt::Switch { cases, .. } => {
-            for case in cases { scan_stmts_for_max_func(&case.body, max_id); }
+            for case in cases {
+                scan_stmts_for_max_func(&case.body, max_id);
+            }
         }
         _ => {}
     }
@@ -286,10 +380,14 @@ fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
         }
         Expr::Call { callee, args, .. } => {
             scan_expr_for_max_func(callee, max_id);
-            for a in args { scan_expr_for_max_func(a, max_id); }
+            for a in args {
+                scan_expr_for_max_func(a, max_id);
+            }
         }
         Expr::New { args, .. } => {
-            for a in args { scan_expr_for_max_func(a, max_id); }
+            for a in args {
+                scan_expr_for_max_func(a, max_id);
+            }
         }
         Expr::Await(inner) | Expr::Unary { operand: inner, .. } => {
             scan_expr_for_max_func(inner, max_id);
@@ -300,7 +398,11 @@ fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
             scan_expr_for_max_func(left, max_id);
             scan_expr_for_max_func(right, max_id);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             scan_expr_for_max_func(condition, max_id);
             scan_expr_for_max_func(then_expr, max_id);
             scan_expr_for_max_func(else_expr, max_id);
@@ -314,20 +416,30 @@ fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
             scan_expr_for_max_func(object, max_id);
             scan_expr_for_max_func(value, max_id);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             scan_expr_for_max_func(object, max_id);
             scan_expr_for_max_func(index, max_id);
             scan_expr_for_max_func(value, max_id);
         }
         Expr::LocalSet(_, v) => scan_expr_for_max_func(v, max_id),
         Expr::Array(items) => {
-            for item in items { scan_expr_for_max_func(item, max_id); }
+            for item in items {
+                scan_expr_for_max_func(item, max_id);
+            }
         }
         Expr::Object(fields) => {
-            for (_, v) in fields { scan_expr_for_max_func(v, max_id); }
+            for (_, v) in fields {
+                scan_expr_for_max_func(v, max_id);
+            }
         }
         Expr::Sequence(exprs) => {
-            for e in exprs { scan_expr_for_max_func(e, max_id); }
+            for e in exprs {
+                scan_expr_for_max_func(e, max_id);
+            }
         }
         Expr::Yield { value: Some(v), .. } => scan_expr_for_max_func(v, max_id),
         // Array fast-path variants — each carries a `callback` Closure that
@@ -353,15 +465,27 @@ fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
             scan_expr_for_max_func(array, max_id);
             scan_expr_for_max_func(comparator, max_id);
         }
-        Expr::ArrayReduce { array, callback, initial }
-        | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             scan_expr_for_max_func(array, max_id);
             scan_expr_for_max_func(callback, max_id);
-            if let Some(i) = initial { scan_expr_for_max_func(i, max_id); }
+            if let Some(i) = initial {
+                scan_expr_for_max_func(i, max_id);
+            }
         }
         Expr::ArrayToSorted { array, comparator } => {
             scan_expr_for_max_func(array, max_id);
-            if let Some(c) = comparator { scan_expr_for_max_func(c, max_id); }
+            if let Some(c) = comparator {
+                scan_expr_for_max_func(c, max_id);
+            }
         }
         // ObjectGroupBy carries a key_fn closure.
         Expr::ObjectGroupBy { items, key_fn } => {
@@ -388,18 +512,24 @@ fn rewrite_hoisted_lets_in_stmts(
     }
 }
 
-fn rewrite_hoisted_lets_in_stmt(
-    stmt: &mut Stmt,
-    hoisted_ids: &std::collections::HashSet<LocalId>,
-) {
-    if let Stmt::Let { id, init: Some(init_expr), .. } = stmt {
+fn rewrite_hoisted_lets_in_stmt(stmt: &mut Stmt, hoisted_ids: &std::collections::HashSet<LocalId>) {
+    if let Stmt::Let {
+        id,
+        init: Some(init_expr),
+        ..
+    } = stmt
+    {
         if hoisted_ids.contains(id) {
             *stmt = Stmt::Expr(Expr::LocalSet(*id, Box::new(init_expr.clone())));
             return;
         }
     }
     match stmt {
-        Stmt::If { then_branch, else_branch, .. } => {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
             rewrite_hoisted_lets_in_stmts(then_branch, hoisted_ids);
             if let Some(eb) = else_branch {
                 rewrite_hoisted_lets_in_stmts(eb, hoisted_ids);
@@ -414,7 +544,11 @@ fn rewrite_hoisted_lets_in_stmt(
             }
             rewrite_hoisted_lets_in_stmts(body, hoisted_ids);
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             rewrite_hoisted_lets_in_stmts(body, hoisted_ids);
             if let Some(c) = catch {
                 rewrite_hoisted_lets_in_stmts(&mut c.body, hoisted_ids);
@@ -480,7 +614,11 @@ fn wrap_returns_in_promise(stmts: &mut Vec<Stmt>) {
                 let inner = std::mem::replace(expr, Expr::Undefined);
                 *expr = wrap_in_promise_resolve(inner);
             }
-            Stmt::If { then_branch, else_branch, .. } => {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 wrap_returns_in_promise(then_branch);
                 if let Some(eb) = else_branch {
                     wrap_returns_in_promise(eb);
@@ -495,7 +633,11 @@ fn wrap_returns_in_promise(stmts: &mut Vec<Stmt>) {
                 wrap_returns_in_promise(&mut v);
                 *body = Box::new(v.into_iter().next().unwrap());
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 wrap_returns_in_promise(body);
                 if let Some(c) = catch {
                     wrap_returns_in_promise(&mut c.body);
@@ -515,7 +657,11 @@ fn wrap_returns_in_promise(stmts: &mut Vec<Stmt>) {
 }
 
 /// Transform a single generator function into a state machine.
-fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, next_func_id: &mut u32) {
+fn transform_generator_function(
+    func: &mut Function,
+    next_local_id: &mut u32,
+    next_func_id: &mut u32,
+) {
     // Remember whether this was an async generator (`async function*`).
     // Async generators are still lowered via the same state-machine
     // transform, but:
@@ -551,7 +697,16 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
     // Catches collected during linearization: each entry is (catch_param_id, catch_body).
     // Used by the .throw() closure to re-route the exception into the catch handler.
     let mut catches: Vec<(Option<LocalId>, Vec<Stmt>)> = Vec::new();
-    linearize_body(&func.body, &mut states, &mut current, &mut state_num, state_id, next_local_id, sent_id, &mut catches);
+    linearize_body(
+        &func.body,
+        &mut states,
+        &mut current,
+        &mut state_num,
+        state_id,
+        next_local_id,
+        sent_id,
+        &mut catches,
+    );
     let extra_local_ids: Vec<LocalId> = (local_id_before..*next_local_id).collect();
 
     // Push final state (code after last yield / end of function)
@@ -563,7 +718,9 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
 
     // Collect hoisted var IDs first so we know which Lets to rewrite
     let hoisted_ids: std::collections::HashSet<LocalId> = collect_hoisted_vars(&func.body)
-        .iter().map(|(id, _, _)| *id).collect();
+        .iter()
+        .map(|(id, _, _)| *id)
+        .collect();
 
     // Rewrite `Let { id, init: Some(expr) }` → `Expr(LocalSet(id, expr))` for hoisted
     // variables inside state bodies. Without this, the Let creates a fresh local that
@@ -660,9 +817,7 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
         // if (__done) return { value: undefined, done: true };
         Stmt::If {
             condition: Expr::LocalGet(done_id),
-            then_branch: vec![
-                Stmt::Return(Some(make_iter_result(Expr::Undefined, true))),
-            ],
+            then_branch: vec![Stmt::Return(Some(make_iter_result(Expr::Undefined, true)))],
             else_branch: None,
         },
         // while (true) { if-chain }
@@ -754,7 +909,13 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
 
     let next_closure = Expr::Closure {
         func_id: next_func_id_val,
-        params: vec![perry_hir::Param { id: next_param_id, name: "__val".to_string(), ty: Type::Any, is_rest: false, default: None }],
+        params: vec![perry_hir::Param {
+            id: next_param_id,
+            name: "__val".to_string(),
+            ty: Type::Any,
+            is_rest: false,
+            default: None,
+        }],
         return_type: Type::Any,
         body: next_body,
         captures: captures.clone(),
@@ -766,17 +927,30 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
 
     // Build .return(value) closure — immediately marks done and returns {value, done: true}
     let return_param_id = alloc_local(next_local_id);
-    let return_func_id_val = { let id = *next_func_id; *next_func_id += 1; id };
+    let return_func_id_val = {
+        let id = *next_func_id;
+        *next_func_id += 1;
+        id
+    };
     let mut return_body: Vec<Stmt> = vec![
         Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
-        Stmt::Return(Some(make_iter_result(Expr::LocalGet(return_param_id), true))),
+        Stmt::Return(Some(make_iter_result(
+            Expr::LocalGet(return_param_id),
+            true,
+        ))),
     ];
     if is_async_generator {
         wrap_returns_in_promise(&mut return_body);
     }
     let return_closure = Expr::Closure {
         func_id: return_func_id_val,
-        params: vec![perry_hir::Param { id: return_param_id, name: "__ret_val".to_string(), ty: Type::Any, is_rest: false, default: None }],
+        params: vec![perry_hir::Param {
+            id: return_param_id,
+            name: "__ret_val".to_string(),
+            ty: Type::Any,
+            is_rest: false,
+            default: None,
+        }],
         return_type: Type::Any,
         body: return_body,
         captures: captures.clone(),
@@ -793,7 +967,11 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
     // the first `catch (e)` block wins. Catches must not contain `yield` themselves
     // (the transform doesn't lift them into the state machine).
     let throw_param_id = alloc_local(next_local_id);
-    let throw_func_id_val = { let id = *next_func_id; *next_func_id += 1; id };
+    let throw_func_id_val = {
+        let id = *next_func_id;
+        *next_func_id += 1;
+        id
+    };
     let mut throw_body: Vec<Stmt> = Vec::new();
     if let Some((catch_param_id, catch_body)) = catches.first().cloned() {
         // Assign catch parameter from the thrown value so the catch body can read `e`.
@@ -808,7 +986,12 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
         // shadowed (mirrors the rewrite in the next() closure above).
         let mut rewritten = catch_body;
         for stmt in &mut rewritten {
-            if let Stmt::Let { id, init: Some(init_expr), .. } = stmt {
+            if let Stmt::Let {
+                id,
+                init: Some(init_expr),
+                ..
+            } = stmt
+            {
                 if hoisted_ids.contains(id) {
                     *stmt = Stmt::Expr(Expr::LocalSet(*id, Box::new(init_expr.clone())));
                 }
@@ -816,14 +999,23 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
         }
         throw_body.extend(rewritten);
     }
-    throw_body.push(Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))));
+    throw_body.push(Stmt::Expr(Expr::LocalSet(
+        done_id,
+        Box::new(Expr::Bool(true)),
+    )));
     throw_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
     if is_async_generator {
         wrap_returns_in_promise(&mut throw_body);
     }
     let throw_closure = Expr::Closure {
         func_id: throw_func_id_val,
-        params: vec![perry_hir::Param { id: throw_param_id, name: "__throw_val".to_string(), ty: Type::Any, is_rest: false, default: None }],
+        params: vec![perry_hir::Param {
+            id: throw_param_id,
+            name: "__throw_val".to_string(),
+            ty: Type::Any,
+            is_rest: false,
+            default: None,
+        }],
         return_type: Type::Any,
         body: throw_body,
         captures: captures.clone(),
@@ -912,9 +1104,21 @@ fn build_async_step_driver(
     let then_v_param_id = alloc_local(next_local_id);
     let then_e_param_id = alloc_local(next_local_id);
 
-    let step_func_id = { let id = *next_func_id; *next_func_id += 1; id };
-    let then_v_func_id = { let id = *next_func_id; *next_func_id += 1; id };
-    let then_e_func_id = { let id = *next_func_id; *next_func_id += 1; id };
+    let step_func_id = {
+        let id = *next_func_id;
+        *next_func_id += 1;
+        id
+    };
+    let then_v_func_id = {
+        let id = *next_func_id;
+        *next_func_id += 1;
+        id
+    };
+    let then_e_func_id = {
+        let id = *next_func_id;
+        *next_func_id += 1;
+        id
+    };
 
     let any_ty = Type::Any;
     let bool_ty = Type::Boolean;
@@ -1027,7 +1231,9 @@ fn build_async_step_driver(
             body: vec![Stmt::Expr(Expr::LocalSet(r_id, Box::new(dispatch_iter)))],
             catch: Some(CatchClause {
                 param: Some((catch_e_id, "__step_catch_e".to_string())),
-                body: vec![Stmt::Return(Some(promise_reject(Expr::LocalGet(catch_e_id))))],
+                body: vec![Stmt::Return(Some(promise_reject(Expr::LocalGet(
+                    catch_e_id,
+                ))))],
             }),
             finally: None,
         },
@@ -1136,15 +1342,17 @@ fn linearize_body(
     current: &mut Vec<Stmt>,
     state_num: &mut u32,
     state_id: LocalId,
-    #[allow(unused_variables)]
-    next_local_id: &mut u32,
+    #[allow(unused_variables)] next_local_id: &mut u32,
     sent_id: LocalId,
     catches: &mut Vec<(Option<LocalId>, Vec<Stmt>)>,
 ) {
     for stmt in stmts {
         match stmt {
             // yield* delegation: iterate the inner iterator and yield each value
-            Stmt::Expr(Expr::Yield { value: Some(inner), delegate: true }) => {
+            Stmt::Expr(Expr::Yield {
+                value: Some(inner),
+                delegate: true,
+            }) => {
                 // Desugar yield* into:
                 //   let __del_iter = inner_expr;  (inner is a generator call)
                 //   let __del_result = __del_iter.next();
@@ -1167,8 +1375,14 @@ fn linearize_body(
                 };
 
                 // Add hoisted var declarations to current (they'll be emitted in the state body)
-                current.push(Stmt::Expr(Expr::LocalSet(del_iter_id, Box::new(*inner.clone()))));
-                current.push(Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call.clone()))));
+                current.push(Stmt::Expr(Expr::LocalSet(
+                    del_iter_id,
+                    Box::new(*inner.clone()),
+                )));
+                current.push(Stmt::Expr(Expr::LocalSet(
+                    del_result_id,
+                    Box::new(next_call.clone()),
+                )));
 
                 // Build the while loop with yield
                 let while_body = vec![
@@ -1194,18 +1408,37 @@ fn linearize_body(
                 };
 
                 // Now linearize the expanded while (it contains a yield, so the while handler picks it up)
-                linearize_body(&[while_stmt], states, current, state_num, state_id, next_local_id, sent_id, catches);
+                linearize_body(
+                    &[while_stmt],
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                );
             }
 
             // yield expr at statement level (non-delegate)
-            Stmt::Expr(Expr::Yield { value, delegate: false }) | Stmt::Expr(Expr::Yield { value, .. }) => {
-                let yield_val = value.as_ref().map(|v| *v.clone()).unwrap_or(Expr::Undefined);
+            Stmt::Expr(Expr::Yield {
+                value,
+                delegate: false,
+            })
+            | Stmt::Expr(Expr::Yield { value, .. }) => {
+                let yield_val = value
+                    .as_ref()
+                    .map(|v| *v.clone())
+                    .unwrap_or(Expr::Undefined);
                 let this_state = *state_num;
                 *state_num += 1;
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Yield { value: yield_val, next_state: *state_num },
+                    exit: StateExit::Yield {
+                        value: yield_val,
+                        next_state: *state_num,
+                    },
                 });
             }
 
@@ -1215,7 +1448,10 @@ fn linearize_body(
             // where __sent is the resolved value delivered back by the step driver.
             Stmt::Return(Some(yield_expr @ Expr::Yield { .. })) => {
                 let yield_val = if let Expr::Yield { value, .. } = yield_expr {
-                    value.as_ref().map(|v| *v.clone()).unwrap_or(Expr::Undefined)
+                    value
+                        .as_ref()
+                        .map(|v| *v.clone())
+                        .unwrap_or(Expr::Undefined)
                 } else {
                     unreachable!()
                 };
@@ -1225,10 +1461,16 @@ fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Yield { value: yield_val, next_state: *state_num },
+                    exit: StateExit::Yield {
+                        value: yield_val,
+                        next_state: *state_num,
+                    },
                 });
                 // Continuation state: return { value: __sent, done: true }
-                current.push(Stmt::Return(Some(make_iter_result(Expr::LocalGet(sent_id), true))));
+                current.push(Stmt::Return(Some(make_iter_result(
+                    Expr::LocalGet(sent_id),
+                    true,
+                ))));
                 let cont_state = *state_num;
                 *state_num += 1;
                 states.push(State {
@@ -1254,9 +1496,12 @@ fn linearize_body(
             }
 
             // For-loop containing yield(s)
-            Stmt::For { init, condition, update, body }
-                if body_contains_yield(body) =>
-            {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } if body_contains_yield(body) => {
                 // State N: pre-loop code + init, goto condition check
                 let init_state = *state_num;
                 *state_num += 1;
@@ -1265,11 +1510,13 @@ fn linearize_body(
                 // But we need to convert it to an assignment since the var is hoisted
                 if let Some(init_stmt) = init {
                     match init_stmt.as_ref() {
-                        Stmt::Let { id, init: Some(init_expr), .. } => {
-                            init_body.push(Stmt::Expr(Expr::LocalSet(
-                                *id,
-                                Box::new(init_expr.clone()),
-                            )));
+                        Stmt::Let {
+                            id,
+                            init: Some(init_expr),
+                            ..
+                        } => {
+                            init_body
+                                .push(Stmt::Expr(Expr::LocalSet(*id, Box::new(init_expr.clone()))));
                         }
                         other => init_body.push(other.clone()),
                     }
@@ -1314,7 +1561,16 @@ fn linearize_body(
                 });
 
                 // Process loop body (may contain yields)
-                linearize_body(body, states, current, state_num, state_id, next_local_id, sent_id, catches);
+                linearize_body(
+                    body,
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                );
 
                 // State for update: run update expression, goto condition check
                 let update_state = *state_num;
@@ -1340,9 +1596,10 @@ fn linearize_body(
             }
 
             // While-loop containing yield(s) - similar to for-loop
-            Stmt::While { condition, body: while_body }
-                if body_contains_yield(while_body) =>
-            {
+            Stmt::While {
+                condition,
+                body: while_body,
+            } if body_contains_yield(while_body) => {
                 // Pre-loop code gets its own state (if non-empty)
                 let pre_body = std::mem::take(current);
                 if !pre_body.is_empty() {
@@ -1381,7 +1638,16 @@ fn linearize_body(
                 });
 
                 // Process body
-                linearize_body(while_body, states, current, state_num, state_id, next_local_id, sent_id, catches);
+                linearize_body(
+                    while_body,
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                );
 
                 // After body, goto condition
                 let loop_back_state = *state_num;
@@ -1406,9 +1672,12 @@ fn linearize_body(
             // Limitations: no per-state exception handler tracking, so only the
             // first catch encountered will run on .throw(). Catches themselves
             // must not yield — they run to completion inside the throw closure.
-            Stmt::Try { body, catch, finally }
-                if body_contains_yield(body)
-                    || finally.as_ref().map_or(false, |f| body_contains_yield(f)) =>
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } if body_contains_yield(body)
+                || finally.as_ref().map_or(false, |f| body_contains_yield(f)) =>
             {
                 // Issue #256: widen the guard to also fire when yields live ONLY
                 // in the finally block. `await using` desugars to
@@ -1420,7 +1689,16 @@ fn linearize_body(
                 // was silently fire-and-forgotten.
                 if body_contains_yield(body) {
                     // Linearize the try body directly (yields become normal states)
-                    linearize_body(body, states, current, state_num, state_id, next_local_id, sent_id, catches);
+                    linearize_body(
+                        body,
+                        states,
+                        current,
+                        state_num,
+                        state_id,
+                        next_local_id,
+                        sent_id,
+                        catches,
+                    );
                 } else {
                     // Body has no yields: push as-is to current state.
                     for s in body {
@@ -1439,7 +1717,16 @@ fn linearize_body(
                 // otherwise push as-is.
                 if let Some(fin) = finally {
                     if body_contains_yield(fin) {
-                        linearize_body(fin, states, current, state_num, state_id, next_local_id, sent_id, catches);
+                        linearize_body(
+                            fin,
+                            states,
+                            current,
+                            state_num,
+                            state_id,
+                            next_local_id,
+                            sent_id,
+                            catches,
+                        );
                     } else {
                         for s in fin {
                             current.push(s.clone());
@@ -1449,9 +1736,14 @@ fn linearize_body(
             }
 
             // If-statement containing yield(s) — linearize both branches
-            Stmt::If { condition, then_branch, else_branch }
-                if body_contains_yield(then_branch)
-                || else_branch.as_ref().map_or(false, |e| body_contains_yield(e)) =>
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } if body_contains_yield(then_branch)
+                || else_branch
+                    .as_ref()
+                    .map_or(false, |e| body_contains_yield(e)) =>
             {
                 // Flush pre-if code as its own state
                 let pre_state = *state_num;
@@ -1470,11 +1762,17 @@ fn linearize_body(
                         b.push(Stmt::If {
                             condition: condition.clone(),
                             then_branch: vec![
-                                Stmt::Expr(Expr::LocalSet(state_id, Box::new(Expr::Number(then_state as f64)))),
+                                Stmt::Expr(Expr::LocalSet(
+                                    state_id,
+                                    Box::new(Expr::Number(then_state as f64)),
+                                )),
                                 Stmt::Continue,
                             ],
                             else_branch: Some(vec![
-                                Stmt::Expr(Expr::LocalSet(state_id, Box::new(Expr::Number(else_state_placeholder as f64)))),
+                                Stmt::Expr(Expr::LocalSet(
+                                    state_id,
+                                    Box::new(Expr::Number(else_state_placeholder as f64)),
+                                )),
                                 Stmt::Continue,
                             ]),
                         });
@@ -1484,7 +1782,16 @@ fn linearize_body(
                 });
 
                 // Linearize then-branch
-                linearize_body(then_branch, states, current, state_num, state_id, next_local_id, sent_id, catches);
+                linearize_body(
+                    then_branch,
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                );
                 // After then-branch, flush into a goto-after state
                 let then_end_state = *state_num;
                 *state_num += 1;
@@ -1497,7 +1804,16 @@ fn linearize_body(
                 // Linearize else-branch
                 let else_state = *state_num;
                 if let Some(else_stmts) = else_branch {
-                    linearize_body(else_stmts, states, current, state_num, state_id, next_local_id, sent_id, catches);
+                    linearize_body(
+                        else_stmts,
+                        states,
+                        current,
+                        state_num,
+                        state_id,
+                        next_local_id,
+                        sent_id,
+                        catches,
+                    );
                 }
                 let else_end_state = *state_num;
                 *state_num += 1;
@@ -1519,7 +1835,9 @@ fn linearize_body(
                 for state in states.iter_mut() {
                     if state.num == then_end_state || state.num == else_end_state {
                         if let StateExit::Goto(ref mut target) = state.exit {
-                            if *target == 0 { *target = after_state; }
+                            if *target == 0 {
+                                *target = after_state;
+                            }
                         }
                     }
                 }
@@ -1528,14 +1846,26 @@ fn linearize_body(
             // Let with yield initializer: `const x = yield expr` (two-way yield)
             // After resuming, `x` receives the value passed by the caller via next(val),
             // which is stored in __sent by the next() closure preamble.
-            Stmt::Let { id, init: Some(Expr::Yield { value, .. }), mutable, ty, name } => {
-                let yield_val = value.as_ref().map(|v| *v.clone()).unwrap_or(Expr::Undefined);
+            Stmt::Let {
+                id,
+                init: Some(Expr::Yield { value, .. }),
+                mutable,
+                ty,
+                name,
+            } => {
+                let yield_val = value
+                    .as_ref()
+                    .map(|v| *v.clone())
+                    .unwrap_or(Expr::Undefined);
                 let this_state = *state_num;
                 *state_num += 1;
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Yield { value: yield_val, next_state: *state_num },
+                    exit: StateExit::Yield {
+                        value: yield_val,
+                        next_state: *state_num,
+                    },
                 });
                 // Assign __sent (the value from next(val)) to the target local
                 current.push(Stmt::Let {
@@ -1571,7 +1901,12 @@ fn fix_placeholder_state(stmts: &mut [Stmt], state_id: LocalId, target_state: u3
         }
     }
     for stmt in stmts.iter_mut() {
-        if let Stmt::If { then_branch, else_branch, .. } = stmt {
+        if let Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } = stmt
+        {
             fix_branch(then_branch, state_id, target_state);
             if let Some(eb) = else_branch {
                 fix_branch(eb, state_id, target_state);
@@ -1585,32 +1920,59 @@ fn body_contains_yield(stmts: &[Stmt]) -> bool {
     for stmt in stmts {
         match stmt {
             Stmt::Expr(Expr::Yield { .. }) => return true,
-            Stmt::Let { init: Some(Expr::Yield { .. }), .. } => return true,
+            Stmt::Let {
+                init: Some(Expr::Yield { .. }),
+                ..
+            } => return true,
             Stmt::Return(Some(Expr::Yield { .. })) => return true,
-            Stmt::If { then_branch, else_branch, .. } => {
-                if body_contains_yield(then_branch) { return true; }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                if body_contains_yield(then_branch) {
+                    return true;
+                }
                 if let Some(eb) = else_branch {
-                    if body_contains_yield(eb) { return true; }
+                    if body_contains_yield(eb) {
+                        return true;
+                    }
                 }
             }
             Stmt::While { body, .. } => {
-                if body_contains_yield(body) { return true; }
+                if body_contains_yield(body) {
+                    return true;
+                }
             }
             Stmt::For { body, .. } => {
-                if body_contains_yield(body) { return true; }
+                if body_contains_yield(body) {
+                    return true;
+                }
             }
-            Stmt::Try { body, catch, finally } => {
-                if body_contains_yield(body) { return true; }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                if body_contains_yield(body) {
+                    return true;
+                }
                 if let Some(c) = catch {
-                    if body_contains_yield(&c.body) { return true; }
+                    if body_contains_yield(&c.body) {
+                        return true;
+                    }
                 }
                 if let Some(f) = finally {
-                    if body_contains_yield(f) { return true; }
+                    if body_contains_yield(f) {
+                        return true;
+                    }
                 }
             }
             Stmt::Switch { cases, .. } => {
                 for case in cases {
-                    if body_contains_yield(&case.body) { return true; }
+                    if body_contains_yield(&case.body) {
+                        return true;
+                    }
                 }
             }
             _ => {}
@@ -1632,7 +1994,11 @@ fn collect_vars_recursive(stmts: &[Stmt], vars: &mut Vec<(LocalId, String, Type)
             Stmt::Let { id, name, ty, .. } => {
                 vars.push((*id, name.clone(), ty.clone()));
             }
-            Stmt::If { then_branch, else_branch, .. } => {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 collect_vars_recursive(then_branch, vars);
                 if let Some(eb) = else_branch {
                     collect_vars_recursive(eb, vars);
@@ -1645,7 +2011,11 @@ fn collect_vars_recursive(stmts: &[Stmt], vars: &mut Vec<(LocalId, String, Type)
                 }
                 collect_vars_recursive(body, vars);
             }
-            Stmt::Try { body, catch, finally } => {
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
                 collect_vars_recursive(body, vars);
                 if let Some(c) = catch {
                     // Hoist the catch parameter so the .throw() closure can assign to it.
@@ -1654,7 +2024,9 @@ fn collect_vars_recursive(stmts: &[Stmt], vars: &mut Vec<(LocalId, String, Type)
                     }
                     collect_vars_recursive(&c.body, vars);
                 }
-                if let Some(f) = finally { collect_vars_recursive(f, vars); }
+                if let Some(f) = finally {
+                    collect_vars_recursive(f, vars);
+                }
             }
             Stmt::Switch { cases, .. } => {
                 for case in cases {

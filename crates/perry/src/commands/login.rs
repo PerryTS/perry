@@ -60,15 +60,15 @@ async fn run_async(args: LoginArgs, format: OutputFormat, _use_color: bool) -> R
 
     // Generate a random device code
     use std::time::{SystemTime, UNIX_EPOCH};
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let device_code = format!("{:012X}", ts % 0xFFFF_FFFF_FFFF);
 
     if let OutputFormat::Text = format {
         println!();
-        println!(
-            "  {} Logging in to Perry",
-            style("→").cyan().bold()
-        );
+        println!("  {} Logging in to Perry", style("→").cyan().bold());
         println!();
     }
 
@@ -96,13 +96,22 @@ async fn run_async(args: LoginArgs, format: OutputFormat, _use_color: bool) -> R
     }
 
     let open_result = if cfg!(target_os = "macos") {
-        std::process::Command::new("open").arg(&authorize_url).spawn()
+        std::process::Command::new("open")
+            .arg(&authorize_url)
+            .spawn()
     } else if cfg!(target_os = "linux") {
-        std::process::Command::new("xdg-open").arg(&authorize_url).spawn()
+        std::process::Command::new("xdg-open")
+            .arg(&authorize_url)
+            .spawn()
     } else if cfg!(target_os = "windows") {
-        std::process::Command::new("cmd").args(["/c", "start", &authorize_url]).spawn()
+        std::process::Command::new("cmd")
+            .args(["/c", "start", &authorize_url])
+            .spawn()
     } else {
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "unsupported platform"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "unsupported platform",
+        ))
     };
 
     if open_result.is_err() {

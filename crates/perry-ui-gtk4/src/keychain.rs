@@ -20,11 +20,10 @@ fn str_from_header(ptr: *const u8) -> &'static str {
 }
 
 fn keychain_path() -> PathBuf {
-    let config = std::env::var("XDG_DATA_HOME")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{}/.local/share", home)
-        });
+    let config = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        format!("{}/.local/share", home)
+    });
     PathBuf::from(config).join("perry").join("keychain")
 }
 

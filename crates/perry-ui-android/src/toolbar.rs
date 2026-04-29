@@ -1,10 +1,10 @@
 //! Toolbar — LinearLayout-based toolbar on Android
 
+use crate::callback;
+use crate::jni_bridge;
+use jni::objects::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use jni::objects::JValue;
-use crate::jni_bridge;
-use crate::callback;
 
 fn str_from_header(ptr: *const u8) -> &'static str {
     crate::app::str_from_header(ptr)
@@ -26,11 +26,13 @@ pub fn create() -> i64 {
     let activity = crate::widgets::get_activity(&mut env);
 
     // Create horizontal LinearLayout for toolbar
-    let layout = env.new_object(
-        "android/widget/LinearLayout",
-        "(Landroid/content/Context;)V",
-        &[JValue::Object(&activity)],
-    ).expect("Failed to create LinearLayout");
+    let layout = env
+        .new_object(
+            "android/widget/LinearLayout",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        )
+        .expect("Failed to create LinearLayout");
 
     // Horizontal orientation
     let _ = env.call_method(&layout, "setOrientation", "(I)V", &[JValue::Int(0)]);
@@ -41,7 +43,12 @@ pub fn create() -> i64 {
         &layout,
         "setPadding",
         "(IIII)V",
-        &[JValue::Int(pad), JValue::Int(pad), JValue::Int(pad), JValue::Int(pad)],
+        &[
+            JValue::Int(pad),
+            JValue::Int(pad),
+            JValue::Int(pad),
+            JValue::Int(pad),
+        ],
     );
 
     // Background color (light gray)
@@ -52,7 +59,9 @@ pub fn create() -> i64 {
         &[JValue::Int(0xFFE0E0E0u32 as i32)],
     );
 
-    let global = env.new_global_ref(layout).expect("Failed to create global ref");
+    let global = env
+        .new_global_ref(layout)
+        .expect("Failed to create global ref");
     let widget_handle = crate::widgets::register_widget(global);
 
     let id = NEXT_TOOLBAR_ID.with(|n| {
@@ -66,16 +75,16 @@ pub fn create() -> i64 {
         t.borrow_mut().insert(id, ToolbarState { widget_handle });
     });
 
-    unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
     id
 }
 
 pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, _icon_ptr: *const u8, on_press: f64) {
     let label = str_from_header(label_ptr);
 
-    let widget_handle = TOOLBARS.with(|t| {
-        t.borrow().get(&toolbar_handle).map(|s| s.widget_handle)
-    });
+    let widget_handle = TOOLBARS.with(|t| t.borrow().get(&toolbar_handle).map(|s| s.widget_handle));
 
     if let Some(wh) = widget_handle {
         let mut env = jni_bridge::get_env();
@@ -84,11 +93,13 @@ pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, _icon_ptr: *const u8,
         let activity = crate::widgets::get_activity(&mut env);
 
         // Create button
-        let button = env.new_object(
-            "android/widget/Button",
-            "(Landroid/content/Context;)V",
-            &[JValue::Object(&activity)],
-        ).expect("Failed to create Button");
+        let button = env
+            .new_object(
+                "android/widget/Button",
+                "(Landroid/content/Context;)V",
+                &[JValue::Object(&activity)],
+            )
+            .expect("Failed to create Button");
 
         let jstr = env.new_string(label).expect("Failed to create JNI string");
         let _ = env.call_method(
@@ -123,7 +134,9 @@ pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, _icon_ptr: *const u8,
             );
         }
 
-        unsafe { env.pop_local_frame(&jni::objects::JObject::null()); }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
     }
 }
 

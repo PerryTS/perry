@@ -1,6 +1,6 @@
+use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::msg_send;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -24,7 +24,9 @@ pub fn start() -> i64 {
             None => return 0,
         };
         let session: *mut AnyObject = msg_send![session_cls, sharedInstance];
-        if session.is_null() { return 0; }
+        if session.is_null() {
+            return 0;
+        }
 
         // Use setCategory:mode:options:error: for watchOS compatibility
         let category = objc2_foundation::NSString::from_str("AVAudioSessionCategoryPlayAndRecord");
@@ -40,7 +42,9 @@ pub fn start() -> i64 {
 
         // recordPermission returns NSUInteger (usize on this platform)
         let record_permission: usize = msg_send![session, recordPermission];
-        if record_permission == 1 { return 0; } // denied
+        if record_permission == 1 {
+            return 0;
+        } // denied
         if record_permission == 0 {
             let permission_block = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {});
             let _: () = msg_send![session, requestRecordPermission: &*permission_block];
@@ -54,19 +58,26 @@ pub fn start() -> i64 {
         let engine: Retained<AnyObject> = msg_send![engine_cls, new];
 
         let input_node: *mut AnyObject = msg_send![&*engine, inputNode];
-        if input_node.is_null() { return 0; }
+        if input_node.is_null() {
+            return 0;
+        }
 
         // outputFormatForBus: takes NSUInteger (usize)
         let bus: usize = 0;
         let format: *mut AnyObject = msg_send![input_node, outputFormatForBus: bus];
-        if format.is_null() { return 0; }
+        if format.is_null() {
+            return 0;
+        }
 
         let sample_rate: f64 = msg_send![format, sampleRate];
-        if sample_rate <= 0.0 { return 0; }
+        if sample_rate <= 0.0 {
+            return 0;
+        }
 
-        let tap_block = block2::RcBlock::new(move |buffer: *mut AnyObject, _when: *mut AnyObject| {
-            process_audio_buffer(buffer, sample_rate);
-        });
+        let tap_block =
+            block2::RcBlock::new(move |buffer: *mut AnyObject, _when: *mut AnyObject| {
+                process_audio_buffer(buffer, sample_rate);
+            });
 
         let buffer_size: u32 = 1024;
         let tap_bus: u32 = 0; // AVAudioNodeBus is UInt32
@@ -85,7 +96,9 @@ pub fn start() -> i64 {
             return 0;
         }
 
-        ENGINE.with(|e| { *e.borrow_mut() = Some(engine); });
+        ENGINE.with(|e| {
+            *e.borrow_mut() = Some(engine);
+        });
         // DEBUG: write a test value so we can tell if engine started vs tap not firing
         CURRENT_DB.store(42.0_f64.to_bits(), Ordering::Relaxed);
         1
@@ -119,16 +132,24 @@ pub fn get_peak() -> f64 {
 }
 
 unsafe fn process_audio_buffer(buffer: *mut AnyObject, sample_rate: f64) {
-    if buffer.is_null() { return; }
+    if buffer.is_null() {
+        return;
+    }
 
     let float_channel_data: *const *const f32 = msg_send![buffer, floatChannelData];
-    if float_channel_data.is_null() { return; }
+    if float_channel_data.is_null() {
+        return;
+    }
 
     let frame_length: u32 = msg_send![buffer, frameLength];
-    if frame_length == 0 { return; }
+    if frame_length == 0 {
+        return;
+    }
 
     let samples: *const f32 = *float_channel_data;
-    if samples.is_null() { return; }
+    if samples.is_null() {
+        return;
+    }
 
     let n = frame_length as usize;
     let mut sum_sq = 0.0f64;
@@ -137,7 +158,9 @@ unsafe fn process_audio_buffer(buffer: *mut AnyObject, sample_rate: f64) {
     for i in 0..n {
         let sample = *samples.add(i);
         let abs_sample = sample.abs();
-        if abs_sample > peak { peak = abs_sample; }
+        if abs_sample > peak {
+            peak = abs_sample;
+        }
         sum_sq += (sample as f64) * (sample as f64);
     }
 

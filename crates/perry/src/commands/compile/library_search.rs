@@ -48,9 +48,16 @@ pub(super) fn find_llvm_tool(tool_name: &str) -> Option<PathBuf> {
                 let vv_str = String::from_utf8_lossy(&vv.stdout);
                 if let Some(host_line) = vv_str.lines().find(|l| l.starts_with("host:")) {
                     let host_triple = host_line.trim_start_matches("host:").trim();
-                    let exe_suffix = if cfg!(target_os = "windows") { ".exe" } else { "" };
+                    let exe_suffix = if cfg!(target_os = "windows") {
+                        ".exe"
+                    } else {
+                        ""
+                    };
                     let tool_path = PathBuf::from(&sysroot)
-                        .join("lib").join("rustlib").join(host_triple).join("bin")
+                        .join("lib")
+                        .join("rustlib")
+                        .join(host_triple)
+                        .join("bin")
                         .join(format!("{}{}", tool_name, exe_suffix));
                     if tool_path.exists() {
                         return Some(tool_path);
@@ -61,7 +68,11 @@ pub(super) fn find_llvm_tool(tool_name: &str) -> Option<PathBuf> {
     }
 
     // 3. PATH lookup
-    let which_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+    let which_cmd = if cfg!(target_os = "windows") {
+        "where"
+    } else {
+        "which"
+    };
     if let Ok(output) = Command::new(which_cmd).arg(tool_name).output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -203,7 +214,11 @@ pub(super) fn find_perry_windows_sdk() -> Option<PathBuf> {
 /// flag lets the linker pick a default, which historically resolved to `WINDOWS`
 /// for Perry builds and silently discarded all `console.log` output (issue #120).
 pub(super) fn windows_pe_subsystem_flag(needs_ui: bool) -> &'static str {
-    if needs_ui { "/SUBSYSTEM:WINDOWS" } else { "/SUBSYSTEM:CONSOLE" }
+    if needs_ui {
+        "/SUBSYSTEM:WINDOWS"
+    } else {
+        "/SUBSYSTEM:CONSOLE"
+    }
 }
 
 /// Given a sysroot directory populated by `xwin splat` (or a compatible layout),
@@ -225,9 +240,15 @@ pub(super) fn xwin_sysroot_lib_paths(root: &Path) -> Vec<String> {
         let um = root.join(um_sub);
         let ucrt = root.join(ucrt_sub);
         if crt.exists() || um.exists() || ucrt.exists() {
-            if crt.exists() { paths.push(crt.to_string_lossy().to_string()); }
-            if um.exists() { paths.push(um.to_string_lossy().to_string()); }
-            if ucrt.exists() { paths.push(ucrt.to_string_lossy().to_string()); }
+            if crt.exists() {
+                paths.push(crt.to_string_lossy().to_string());
+            }
+            if um.exists() {
+                paths.push(um.to_string_lossy().to_string());
+            }
+            if ucrt.exists() {
+                paths.push(ucrt.to_string_lossy().to_string());
+            }
             return paths;
         }
     }
@@ -321,7 +342,10 @@ pub(super) fn find_msvc_lib_paths() -> Option<String> {
     let sysroot = std::env::var("PERRY_WINDOWS_SYSROOT").ok()?;
     let root = PathBuf::from(&sysroot);
     if !root.exists() {
-        eprintln!("Warning: PERRY_WINDOWS_SYSROOT={} does not exist", root.display());
+        eprintln!(
+            "Warning: PERRY_WINDOWS_SYSROOT={} does not exist",
+            root.display()
+        );
         return None;
     }
 
@@ -332,7 +356,10 @@ pub(super) fn find_msvc_lib_paths() -> Option<String> {
 ///
 /// Returns the located path, or a list of all searched candidate paths so the
 /// caller can surface them in an error message.
-pub(super) fn find_library_with_candidates(name: &str, target: Option<&str>) -> Result<PathBuf, Vec<PathBuf>> {
+pub(super) fn find_library_with_candidates(
+    name: &str,
+    target: Option<&str>,
+) -> Result<PathBuf, Vec<PathBuf>> {
     let candidates = collect_library_candidates(name, target);
     for path in &candidates {
         if path.exists() {
@@ -394,14 +421,23 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
                 }
                 // When cargo install'd, check the original source tree's target dir
                 let source_target = Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../target").join(triple).join("release").join(name);
+                    .join("../../target")
+                    .join(triple)
+                    .join("release")
+                    .join(name);
                 candidates.push(source_target);
 
                 // For iOS targets, check the exe directory for libs with _ios naming:
                 // - Libs already named with _ios (e.g. libperry_ui_ios.a) → direct lookup
                 // - Libs using _ios suffix convention (e.g. libperry_runtime.a stored as
                 //   libperry_runtime_ios.a next to the binary)
-                if matches!(target, Some("ios") | Some("ios-simulator") | Some("ios-widget") | Some("ios-widget-simulator")) {
+                if matches!(
+                    target,
+                    Some("ios")
+                        | Some("ios-simulator")
+                        | Some("ios-widget")
+                        | Some("ios-widget-simulator")
+                ) {
                     if name.contains("_ios") {
                         candidates.push(dir.join(name));
                     } else {
@@ -458,7 +494,8 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
         }
         // When cargo install'd, check the original source tree's target dir
         let source_target = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/release").join(name);
+            .join("../../target/release")
+            .join(name);
         candidates.push(source_target);
         candidates.push(PathBuf::from(format!("/usr/local/lib/{}", name)));
         // Debian/Ubuntu: libs installed in /usr/lib/perry
@@ -611,7 +648,7 @@ pub(super) fn find_harmonyos_sdk() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         candidates.push(PathBuf::from(
-            "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/native"
+            "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/native",
         ));
     }
     #[cfg(target_os = "windows")]
@@ -633,7 +670,10 @@ pub(super) fn find_harmonyos_sdk() -> Option<PathBuf> {
 ///
 /// Cargo reads both `CC_<triple>` and the underscored `CC_<TRIPLE>` form —
 /// `cc-rs` prefers the latter. We set both for robustness. Same for linker.
-pub(super) fn harmonyos_cross_env(sdk_native: &Path, target: Option<&str>) -> Vec<(String, String)> {
+pub(super) fn harmonyos_cross_env(
+    sdk_native: &Path,
+    target: Option<&str>,
+) -> Vec<(String, String)> {
     let (triple, clang_target) = match target {
         Some("harmonyos-simulator") => ("x86_64-unknown-linux-ohos", "x86_64-linux-ohos"),
         _ => ("aarch64-unknown-linux-ohos", "aarch64-linux-ohos"),
@@ -662,13 +702,22 @@ pub(super) fn harmonyos_cross_env(sdk_native: &Path, target: Option<&str>) -> Ve
         (format!("CC_{}", triple), clang.display().to_string()),
         (format!("CC_{}", triple_under), clang.display().to_string()),
         (format!("CXX_{}", triple), clangpp.display().to_string()),
-        (format!("CXX_{}", triple_under), clangpp.display().to_string()),
+        (
+            format!("CXX_{}", triple_under),
+            clangpp.display().to_string(),
+        ),
         (format!("CFLAGS_{}", triple), cflags.clone()),
         (format!("CFLAGS_{}", triple_under), cflags.clone()),
         (format!("CXXFLAGS_{}", triple), cflags.clone()),
         (format!("CXXFLAGS_{}", triple_under), cflags),
-        (format!("CARGO_TARGET_{}_LINKER", triple_upper), clang.display().to_string()),
-        (format!("CARGO_TARGET_{}_RUSTFLAGS", triple_upper), rustflags),
+        (
+            format!("CARGO_TARGET_{}_LINKER", triple_upper),
+            clang.display().to_string(),
+        ),
+        (
+            format!("CARGO_TARGET_{}_RUSTFLAGS", triple_upper),
+            rustflags,
+        ),
     ]
 }
 
@@ -690,16 +739,24 @@ pub(super) fn find_geisterhand_lib(name: &str, target: Option<&str>) -> Option<P
         if let Some(triple) = rust_target_triple(target) {
             // Separate geisterhand build dir
             let path = root.join(format!("target/geisterhand/{}/release/{}", triple, name));
-            if path.exists() { return Some(path); }
+            if path.exists() {
+                return Some(path);
+            }
             // Shared release dir (when built with --features geisterhand in normal target)
             let path = root.join(format!("target/{}/release/{}", triple, name));
-            if path.exists() { return Some(path); }
+            if path.exists() {
+                return Some(path);
+            }
         }
         // Host build dir
         let path = root.join(format!("target/geisterhand/release/{}", name));
-        if path.exists() { return Some(path); }
+        if path.exists() {
+            return Some(path);
+        }
         let path = root.join(format!("target/release/{}", name));
-        if path.exists() { return Some(path); }
+        if path.exists() {
+            return Some(path);
+        }
     }
     None
 }
@@ -710,8 +767,7 @@ pub(super) fn find_geisterhand_library(target: Option<&str>) -> Option<PathBuf> 
     } else {
         "libperry_ui_geisterhand.a"
     };
-    find_geisterhand_lib(name, target)
-        .or_else(|| find_library(name, None))
+    find_geisterhand_lib(name, target).or_else(|| find_library(name, None))
 }
 
 pub(super) fn find_geisterhand_runtime(target: Option<&str>) -> Option<PathBuf> {
@@ -744,9 +800,7 @@ pub(super) fn find_geisterhand_ui(target: Option<&str>) -> Option<PathBuf> {
 /// Uses a separate target dir (target/geisterhand/) to avoid mixing with normal builds.
 pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat) -> Result<()> {
     if matches!(target, Some("visionos") | Some("visionos-simulator")) {
-        return Err(anyhow!(
-            "Geisterhand is not supported on visionOS yet."
-        ));
+        return Err(anyhow!("Geisterhand is not supported on visionOS yet."));
     }
     // Determine which UI crate to build based on target platform
     let ui_crate = match target {
@@ -760,43 +814,62 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
     };
 
     match format {
-        OutputFormat::Text => println!("Building geisterhand libraries ({}, {})...", ui_crate,
-            rust_target_triple(target).unwrap_or("host")),
+        OutputFormat::Text => println!(
+            "Building geisterhand libraries ({}, {})...",
+            ui_crate,
+            rust_target_triple(target).unwrap_or("host")
+        ),
         OutputFormat::Json => {}
     }
 
     // Find the Perry workspace root by looking for Cargo.toml with [workspace]
     // relative to the perry executable
-    let workspace_root = find_perry_workspace_root()
-        .ok_or_else(|| anyhow!(
+    let workspace_root = find_perry_workspace_root().ok_or_else(|| {
+        anyhow!(
             "Cannot auto-build geisterhand libraries: Perry workspace not found.\n\
             Build manually from the Perry source directory:\n  \
             CARGO_TARGET_DIR=target/geisterhand cargo build --release \\\n    \
             -p perry-runtime --features geisterhand \\\n    \
             -p {} --features geisterhand \\\n    \
-            -p perry-ui-geisterhand", ui_crate
-        ))?;
+            -p perry-ui-geisterhand",
+            ui_crate
+        )
+    })?;
 
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd
         .current_dir(&workspace_root)
-        .env("CARGO_TARGET_DIR", workspace_root.join("target/geisterhand"))
+        .env(
+            "CARGO_TARGET_DIR",
+            workspace_root.join("target/geisterhand"),
+        )
         .arg("build")
         .arg("--release")
-        .arg("-p").arg("perry-runtime").arg("--features").arg("perry-runtime/geisterhand")
-        .arg("-p").arg(ui_crate).arg("--features").arg(format!("{}/geisterhand", ui_crate))
-        .arg("-p").arg("perry-ui-geisterhand");
+        .arg("-p")
+        .arg("perry-runtime")
+        .arg("--features")
+        .arg("perry-runtime/geisterhand")
+        .arg("-p")
+        .arg(ui_crate)
+        .arg("--features")
+        .arg(format!("{}/geisterhand", ui_crate))
+        .arg("-p")
+        .arg("perry-ui-geisterhand");
 
     // Add cross-compilation target if needed
     if let Some(triple) = rust_target_triple(target) {
         cargo_cmd.arg("--target").arg(triple);
     }
 
-    let status = cargo_cmd.status()
+    let status = cargo_cmd
+        .status()
         .map_err(|e| anyhow!("Failed to run cargo: {}", e))?;
 
     if !status.success() {
-        return Err(anyhow!("Failed to build geisterhand libraries (cargo exited with {})", status));
+        return Err(anyhow!(
+            "Failed to build geisterhand libraries (cargo exited with {})",
+            status
+        ));
     }
 
     match format {
@@ -809,7 +882,6 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
 /// A pair of (runtime, stdlib) static libraries built with the auto-mode
 /// chosen profile (custom feature set, optional `panic = "abort"`).
 #[derive(Debug, Clone)]
-
 #[cfg(all(test, target_os = "windows"))]
 mod windows_toolchain_tests {
     use super::msvc_vswhere_installation_path_args;

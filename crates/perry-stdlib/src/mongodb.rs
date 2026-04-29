@@ -3,14 +3,16 @@
 //! Native implementation of the 'mongodb' npm package.
 //! Provides MongoDB client functionality.
 
-use bson::{doc, Document};
-use perry_runtime::{
-    js_object_alloc, js_object_set_field, js_promise_new, js_string_from_bytes,
-    JSValue, ObjectHeader, Promise, StringHeader,
+use crate::common::{
+    get_handle, register_handle, spawn_for_promise, spawn_for_promise_deferred, Handle,
 };
-use perry_runtime::json::js_json_stringify;
+use bson::{doc, Document};
 use mongodb::{Client, Collection, Database};
-use crate::common::{get_handle, register_handle, spawn_for_promise, spawn_for_promise_deferred, Handle};
+use perry_runtime::json::js_json_stringify;
+use perry_runtime::{
+    js_object_alloc, js_object_set_field, js_promise_new, js_string_from_bytes, JSValue,
+    ObjectHeader, Promise, StringHeader,
+};
 
 /// JSON-stringify a NaN-boxed JSValue at the FFI boundary. Used by the
 /// `*_value` collection-method wrappers below to bridge codegen's
@@ -56,11 +58,17 @@ pub struct MongoClientHandle {
 
 impl MongoClientHandle {
     pub fn new(client: Client) -> Self {
-        Self { client: Some(client), pending_uri: None }
+        Self {
+            client: Some(client),
+            pending_uri: None,
+        }
     }
 
     pub fn pending(uri: String) -> Self {
-        Self { client: None, pending_uri: Some(uri) }
+        Self {
+            client: None,
+            pending_uri: Some(uri),
+        }
     }
 
     /// Borrow the connected client. Use for query paths that require a
@@ -112,7 +120,8 @@ pub unsafe extern "C" fn js_mongodb_client_connect(client_handle: Handle) -> *mu
     };
 
     spawn_for_promise(promise as *mut u8, async move {
-        let mut opts = mongodb::options::ClientOptions::parse(&uri).await
+        let mut opts = mongodb::options::ClientOptions::parse(&uri)
+            .await
             .map_err(|e| format!("Failed to parse URI: {}", e))?;
         let timeout = std::time::Duration::from_secs(5);
         if opts.connect_timeout.is_none() {
@@ -121,8 +130,7 @@ pub unsafe extern "C" fn js_mongodb_client_connect(client_handle: Handle) -> *mu
         if opts.server_selection_timeout.is_none() {
             opts.server_selection_timeout = Some(timeout);
         }
-        let client = Client::with_options(opts)
-            .map_err(|e| format!("Failed to connect: {}", e))?;
+        let client = Client::with_options(opts).map_err(|e| format!("Failed to connect: {}", e))?;
 
         if let Some(h) = get_handle_mut::<MongoClientHandle>(client_handle) {
             h.client = Some(client);
@@ -200,7 +208,8 @@ pub unsafe extern "C" fn js_mongodb_connect(uri_ptr: *const StringHeader) -> *mu
     };
 
     spawn_for_promise(promise as *mut u8, async move {
-        let mut opts = mongodb::options::ClientOptions::parse(&uri).await
+        let mut opts = mongodb::options::ClientOptions::parse(&uri)
+            .await
             .map_err(|e| format!("Failed to parse URI: {}", e))?;
         // Set reasonable timeouts so connect doesn't hang forever
         let timeout = std::time::Duration::from_secs(5);
@@ -210,8 +219,7 @@ pub unsafe extern "C" fn js_mongodb_connect(uri_ptr: *const StringHeader) -> *mu
         if opts.server_selection_timeout.is_none() {
             opts.server_selection_timeout = Some(timeout);
         }
-        let client = Client::with_options(opts)
-            .map_err(|e| format!("Failed to connect: {}", e))?;
+        let client = Client::with_options(opts).map_err(|e| format!("Failed to connect: {}", e))?;
 
         let handle = register_handle(MongoClientHandle::new(client));
         Ok(handle as u64)
@@ -284,13 +292,12 @@ pub unsafe extern "C" fn js_mongodb_collection_find_one(
         promise as *mut u8,
         async move {
             if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
-                let filter: Document = serde_json::from_str(&filter_json)
-                    .unwrap_or_else(|_| doc! {});
+                let filter: Document =
+                    serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
                 match coll_wrapper.collection.find_one(filter).await {
                     Ok(Some(doc)) => {
-                        let json = serde_json::to_string(&doc)
-                            .unwrap_or_else(|_| "{}".to_string());
+                        let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".to_string());
                         Ok(Some(json))
                     }
                     Ok(None) => Ok(None),
@@ -339,16 +346,18 @@ pub unsafe extern "C" fn js_mongodb_collection_find(
             use futures_util::TryStreamExt;
 
             if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
-                let filter: Document = serde_json::from_str(&filter_json)
-                    .unwrap_or_else(|_| doc! {});
+                let filter: Document =
+                    serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
                 match coll_wrapper.collection.find(filter).await {
                     Ok(cursor) => {
-                        let docs: Vec<Document> = cursor.try_collect().await
+                        let docs: Vec<Document> = cursor
+                            .try_collect()
+                            .await
                             .map_err(|e| format!("Cursor error: {}", e))?;
 
-                        let json = serde_json::to_string(&docs)
-                            .unwrap_or_else(|_| "[]".to_string());
+                        let json =
+                            serde_json::to_string(&docs).unwrap_or_else(|_| "[]".to_string());
                         Ok(json)
                     }
                     Err(e) => Err(format!("Find failed: {}", e)),
@@ -388,13 +397,11 @@ pub unsafe extern "C" fn js_mongodb_collection_insert_one(
         promise as *mut u8,
         async move {
             if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
-                let doc: Document = serde_json::from_str(&doc_json)
-                    .map_err(|e| format!("Invalid JSON: {}", e))?;
+                let doc: Document =
+                    serde_json::from_str(&doc_json).map_err(|e| format!("Invalid JSON: {}", e))?;
 
                 match coll_wrapper.collection.insert_one(doc).await {
-                    Ok(result) => {
-                        Ok(result.inserted_id.to_string())
-                    }
+                    Ok(result) => Ok(result.inserted_id.to_string()),
                     Err(e) => Err(format!("Insert failed: {}", e)),
                 }
             } else {
@@ -430,8 +437,8 @@ pub unsafe extern "C" fn js_mongodb_collection_insert_many(
 
     spawn_for_promise(promise as *mut u8, async move {
         if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
-            let docs: Vec<Document> = serde_json::from_str(&docs_json)
-                .map_err(|e| format!("Invalid JSON: {}", e))?;
+            let docs: Vec<Document> =
+                serde_json::from_str(&docs_json).map_err(|e| format!("Invalid JSON: {}", e))?;
 
             match coll_wrapper.collection.insert_many(docs).await {
                 Ok(result) => {
@@ -470,15 +477,12 @@ pub unsafe extern "C" fn js_mongodb_collection_update_one(
 
     spawn_for_promise(promise as *mut u8, async move {
         if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
-            let filter: Document = serde_json::from_str(&filter_json)
-                .unwrap_or_else(|_| doc! {});
+            let filter: Document = serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
             let update: Document = serde_json::from_str(&update_json)
                 .map_err(|e| format!("Invalid update JSON: {}", e))?;
 
             match coll_wrapper.collection.update_one(filter, update).await {
-                Ok(result) => {
-                    Ok(result.modified_count as u64)
-                }
+                Ok(result) => Ok(result.modified_count as u64),
                 Err(e) => Err(format!("Update failed: {}", e)),
             }
         } else {
@@ -511,15 +515,12 @@ pub unsafe extern "C" fn js_mongodb_collection_update_many(
 
     spawn_for_promise(promise as *mut u8, async move {
         if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
-            let filter: Document = serde_json::from_str(&filter_json)
-                .unwrap_or_else(|_| doc! {});
+            let filter: Document = serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
             let update: Document = serde_json::from_str(&update_json)
                 .map_err(|e| format!("Invalid update JSON: {}", e))?;
 
             match coll_wrapper.collection.update_many(filter, update).await {
-                Ok(result) => {
-                    Ok(result.modified_count as u64)
-                }
+                Ok(result) => Ok(result.modified_count as u64),
                 Err(e) => Err(format!("Update failed: {}", e)),
             }
         } else {
@@ -542,13 +543,10 @@ pub unsafe extern "C" fn js_mongodb_collection_delete_one(
 
     spawn_for_promise(promise as *mut u8, async move {
         if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
-            let filter: Document = serde_json::from_str(&filter_json)
-                .unwrap_or_else(|_| doc! {});
+            let filter: Document = serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
             match coll_wrapper.collection.delete_one(filter).await {
-                Ok(result) => {
-                    Ok(result.deleted_count as u64)
-                }
+                Ok(result) => Ok(result.deleted_count as u64),
                 Err(e) => Err(format!("Delete failed: {}", e)),
             }
         } else {
@@ -571,13 +569,10 @@ pub unsafe extern "C" fn js_mongodb_collection_delete_many(
 
     spawn_for_promise(promise as *mut u8, async move {
         if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
-            let filter: Document = serde_json::from_str(&filter_json)
-                .unwrap_or_else(|_| doc! {});
+            let filter: Document = serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
             match coll_wrapper.collection.delete_many(filter).await {
-                Ok(result) => {
-                    Ok(result.deleted_count as u64)
-                }
+                Ok(result) => Ok(result.deleted_count as u64),
                 Err(e) => Err(format!("Delete failed: {}", e)),
             }
         } else {
@@ -600,13 +595,10 @@ pub unsafe extern "C" fn js_mongodb_collection_count(
 
     spawn_for_promise(promise as *mut u8, async move {
         if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
-            let filter: Document = serde_json::from_str(&filter_json)
-                .unwrap_or_else(|_| doc! {});
+            let filter: Document = serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
             match coll_wrapper.collection.count_documents(filter).await {
-                Ok(count) => {
-                    Ok(count as u64)
-                }
+                Ok(count) => Ok(count as u64),
                 Err(e) => Err(format!("Count failed: {}", e)),
             }
         } else {
@@ -750,8 +742,8 @@ pub unsafe extern "C" fn js_mongodb_client_list_databases(client_handle: Handle)
                 let client = client_wrapper.client_ref()?;
                 match client.list_database_names().await {
                     Ok(names) => {
-                        let json = serde_json::to_string(&names)
-                            .unwrap_or_else(|_| "[]".to_string());
+                        let json =
+                            serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string());
                         Ok(json)
                     }
                     Err(e) => Err(format!("List databases failed: {}", e)),
@@ -780,8 +772,8 @@ pub unsafe extern "C" fn js_mongodb_db_list_collections(db_handle: Handle) -> *m
             if let Some(db_wrapper) = get_handle::<MongoDatabaseHandle>(db_handle) {
                 match db_wrapper.db.list_collection_names().await {
                     Ok(names) => {
-                        let json = serde_json::to_string(&names)
-                            .unwrap_or_else(|_| "[]".to_string());
+                        let json =
+                            serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string());
                         Ok(json)
                     }
                     Err(e) => Err(format!("List collections failed: {}", e)),

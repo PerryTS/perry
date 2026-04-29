@@ -1,8 +1,8 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
+use objc2_foundation::{MainThreadMarker, NSString};
 use objc2_ui_kit::UIView;
-use objc2_foundation::{NSString, MainThreadMarker};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -66,7 +66,5 @@ pub fn set_selected(handle: i64, index: i64) {
 }
 
 pub fn get_selected(handle: i64) -> i64 {
-    PICKER_SELECTED.with(|ps| {
-        ps.borrow().get(&handle).copied().unwrap_or(-1)
-    })
+    PICKER_SELECTED.with(|ps| ps.borrow().get(&handle).copied().unwrap_or(-1))
 }

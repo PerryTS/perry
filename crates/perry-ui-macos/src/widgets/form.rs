@@ -1,5 +1,5 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::MainThreadOnly;
 use objc2_app_kit::{NSBox, NSStackView, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};

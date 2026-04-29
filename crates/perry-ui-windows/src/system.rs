@@ -11,7 +11,9 @@ extern "C" {
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const perry_runtime::string::StringHeader;
         let len = (*header).byte_len as usize;
@@ -113,12 +115,19 @@ pub fn open_url(url_ptr: *const u8) {
     let url = str_from_header(url_ptr);
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::core::PCWSTR;
+        use windows::Win32::UI::Shell::ShellExecuteW;
         let url_wide: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
         let open_wide: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
         unsafe {
-            ShellExecuteW(None, PCWSTR(open_wide.as_ptr()), PCWSTR(url_wide.as_ptr()), PCWSTR::null(), PCWSTR::null(), windows::Win32::UI::WindowsAndMessaging::SW_SHOW);
+            ShellExecuteW(
+                None,
+                PCWSTR(open_wide.as_ptr()),
+                PCWSTR(url_wide.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                windows::Win32::UI::WindowsAndMessaging::SW_SHOW,
+            );
         }
     }
     #[cfg(not(target_os = "windows"))]
@@ -131,14 +140,28 @@ pub fn open_url(url_ptr: *const u8) {
 pub fn is_dark_mode() -> i64 {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::System::Registry::*;
         use windows::core::PCWSTR;
+        use windows::Win32::System::Registry::*;
         unsafe {
-            let key_wide: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
-                .encode_utf16().chain(std::iter::once(0)).collect();
-            let value_wide: Vec<u16> = "AppsUseLightTheme".encode_utf16().chain(std::iter::once(0)).collect();
+            let key_wide: Vec<u16> =
+                "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+            let value_wide: Vec<u16> = "AppsUseLightTheme"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
             let mut hkey = HKEY::default();
-            if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(key_wide.as_ptr()), 0, KEY_READ, &mut hkey).is_ok() {
+            if RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR(key_wide.as_ptr()),
+                0,
+                KEY_READ,
+                &mut hkey,
+            )
+            .is_ok()
+            {
                 let mut data: u32 = 1;
                 let mut size = std::mem::size_of::<u32>() as u32;
                 if RegQueryValueExW(
@@ -148,7 +171,9 @@ pub fn is_dark_mode() -> i64 {
                     None,
                     Some(&mut data as *mut u32 as *mut u8),
                     Some(&mut size),
-                ).is_ok() {
+                )
+                .is_ok()
+                {
                     let _ = RegCloseKey(hkey);
                     return if data == 0 { 1 } else { 0 };
                 }
@@ -172,7 +197,9 @@ pub fn preferences_set(key_ptr: *const u8, value: f64) {
     } else {
         format!("{}", value)
     };
-    PREFS.with(|p| { p.borrow_mut().insert(key.to_string(), val_str); });
+    PREFS.with(|p| {
+        p.borrow_mut().insert(key.to_string(), val_str);
+    });
     save_prefs();
 }
 
@@ -183,8 +210,9 @@ pub fn preferences_get(key_ptr: *const u8) -> f64 {
     PREFS.with(|p| {
         let prefs = p.borrow();
         if let Some(val) = prefs.get(key) {
-            if let Ok(n) = val.parse::<f64>() { n }
-            else {
+            if let Ok(n) = val.parse::<f64>() {
+                n
+            } else {
                 let bytes = val.as_bytes();
                 let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
                 unsafe { js_nanbox_string(str_ptr as i64) }
@@ -200,7 +228,9 @@ pub fn keychain_save(key_ptr: *const u8, value_ptr: *const u8) {
     ensure_keychain_loaded();
     let key = str_from_header(key_ptr);
     let value = str_from_header(value_ptr);
-    KEYCHAIN.with(|k| { k.borrow_mut().insert(key.to_string(), value.to_string()); });
+    KEYCHAIN.with(|k| {
+        k.borrow_mut().insert(key.to_string(), value.to_string());
+    });
     save_keychain();
 }
 
@@ -224,7 +254,9 @@ pub fn keychain_get(key_ptr: *const u8) -> f64 {
 pub fn keychain_delete(key_ptr: *const u8) {
     ensure_keychain_loaded();
     let key = str_from_header(key_ptr);
-    KEYCHAIN.with(|k| { k.borrow_mut().remove(key); });
+    KEYCHAIN.with(|k| {
+        k.borrow_mut().remove(key);
+    });
     save_keychain();
 }
 
@@ -237,12 +269,17 @@ pub fn notification_send(title_ptr: *const u8, body_ptr: *const u8) {
     {
         // Win32 notification via Shell_NotifyIconW is complex.
         // For now, use a simple MessageBox as fallback.
-        use windows::Win32::UI::WindowsAndMessaging::*;
         use windows::core::PCWSTR;
+        use windows::Win32::UI::WindowsAndMessaging::*;
         let title_wide: Vec<u16> = _title.encode_utf16().chain(std::iter::once(0)).collect();
         let body_wide: Vec<u16> = _body.encode_utf16().chain(std::iter::once(0)).collect();
         unsafe {
-            MessageBoxW(None, PCWSTR(body_wide.as_ptr()), PCWSTR(title_wide.as_ptr()), MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(
+                None,
+                PCWSTR(body_wide.as_ptr()),
+                PCWSTR(title_wide.as_ptr()),
+                MB_OK | MB_ICONINFORMATION,
+            );
         }
     }
 }

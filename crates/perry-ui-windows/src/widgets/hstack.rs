@@ -3,13 +3,15 @@
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::{HBRUSH, HDC, FillRect, CreateSolidBrush, SetBkMode, TRANSPARENT};
+use windows::Win32::Graphics::Gdi::{
+    CreateSolidBrush, FillRect, SetBkMode, HBRUSH, HDC, TRANSPARENT,
+};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{WidgetKind, register_widget_with_layout};
+use super::{register_widget_with_layout, WidgetKind};
 
 #[cfg(target_os = "windows")]
 static HSTACK_CLASS_REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -21,26 +23,29 @@ fn to_wide(s: &str) -> Vec<u16> {
 
 #[cfg(target_os = "windows")]
 fn ensure_class_registered() {
-    HSTACK_CLASS_REGISTERED.call_once(|| {
-        unsafe {
-            let hinstance = GetModuleHandleW(None).unwrap();
-            let class_name = to_wide("PerryHStack");
-            let wc = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(container_wnd_proc),
-                hInstance: HINSTANCE::from(hinstance),
-                hbrBackground: HBRUSH(std::ptr::null_mut()),
-                lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
-                ..Default::default()
-            };
-            RegisterClassExW(&wc);
-        }
+    HSTACK_CLASS_REGISTERED.call_once(|| unsafe {
+        let hinstance = GetModuleHandleW(None).unwrap();
+        let class_name = to_wide("PerryHStack");
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(container_wnd_proc),
+            hInstance: HINSTANCE::from(hinstance),
+            hbrBackground: HBRUSH(std::ptr::null_mut()),
+            lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
+            ..Default::default()
+        };
+        RegisterClassExW(&wc);
     });
 }
 
 #[cfg(target_os = "windows")]
-unsafe extern "system" fn container_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn container_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
             if let Ok(parent) = GetParent(hwnd) {
@@ -131,7 +136,9 @@ unsafe extern "system" fn container_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARA
 fn find_ancestor_brush(mut hwnd: HWND) -> Option<HBRUSH> {
     for _ in 0..10 {
         if let Ok(parent) = unsafe { GetParent(hwnd) } {
-            if parent.0.is_null() { break; }
+            if parent.0.is_null() {
+                break;
+            }
             let parent_handle = super::find_handle_by_hwnd(parent);
             if parent_handle > 0 {
                 if let Some(brush) = super::get_bg_brush(parent_handle) {
@@ -165,14 +172,23 @@ pub fn create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right:
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
-                0, 0, 100, 100,
+                0,
+                0,
+                100,
+                100,
                 super::get_parking_hwnd(),
                 None,
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
-            register_widget_with_layout(hwnd, WidgetKind::HStack, spacing, (top, left, bottom, right))
+            register_widget_with_layout(
+                hwnd,
+                WidgetKind::HStack,
+                spacing,
+                (top, left, bottom, right),
+            )
         }
     }
 

@@ -25,7 +25,9 @@ pub struct RegCounter {
 
 impl RegCounter {
     pub fn new() -> Self {
-        Self { value: Cell::new(0) }
+        Self {
+            value: Cell::new(0),
+        }
     }
 
     pub fn next(&self) -> u32 {
@@ -400,7 +402,10 @@ impl LlBlock {
         // Map bad pointers to a known-safe global that contains 0.
         let safe_ptr = {
             let r = self.reg();
-            self.emit(format!("{} = select i1 {}, ptr @perry_null_guard_zero, ptr {}", r, is_bad, handle_ptr));
+            self.emit(format!(
+                "{} = select i1 {}, ptr @perry_null_guard_zero, ptr {}",
+                r, is_bad, handle_ptr
+            ));
             r
         };
         // NOTE: must NOT use `!invariant.load` here. This helper is the
@@ -520,7 +525,10 @@ impl LlBlock {
     pub fn call(&mut self, ret_ty: LlvmType, func_name: &str, args: &[(LlvmType, &str)]) -> String {
         let r = self.reg();
         let arg_str = format_args(args);
-        self.emit(format!("{} = call {} @{}({})", r, ret_ty, func_name, arg_str));
+        self.emit(format!(
+            "{} = call {} @{}({})",
+            r, ret_ty, func_name, arg_str
+        ));
         r
     }
 
@@ -612,7 +620,12 @@ impl LlBlock {
     /// the pointer provenance. Critical for loop vectorization: the
     /// LoopVectorizer refuses to auto-vectorize memory accesses through
     /// bare `inttoptr` because it can't identify the array bounds.
-    pub fn gep_inbounds(&mut self, base_ty: LlvmType, ptr: &str, indices: &[(LlvmType, &str)]) -> String {
+    pub fn gep_inbounds(
+        &mut self,
+        base_ty: LlvmType,
+        ptr: &str,
+        indices: &[(LlvmType, &str)],
+    ) -> String {
         let r = self.reg();
         let idx_str = indices
             .iter()
@@ -638,7 +651,9 @@ impl LlBlock {
     }
 
     pub fn to_ir(&self) -> String {
-        let mut out = String::with_capacity(self.instructions.iter().map(|l| l.len() + 1).sum::<usize>() + self.label.len() + 2);
+        let mut out = String::with_capacity(
+            self.instructions.iter().map(|l| l.len() + 1).sum::<usize>() + self.label.len() + 2,
+        );
         out.push_str(&self.label);
         out.push_str(":\n");
         out.push_str(&self.instructions.join("\n"));
@@ -667,7 +682,10 @@ mod tests {
         let mut b = fresh();
         let r = b.fadd("1.0", "2.0");
         assert_eq!(r, "%r1");
-        assert_eq!(b.to_ir(), "entry.0:\n  %r1 = fadd reassoc contract double 1.0, 2.0");
+        assert_eq!(
+            b.to_ir(),
+            "entry.0:\n  %r1 = fadd reassoc contract double 1.0, 2.0"
+        );
     }
 
     #[test]
@@ -675,7 +693,9 @@ mod tests {
         let mut b = fresh();
         let r = b.call(DOUBLE, "js_nanbox_string", &[(I64, "%handle")]);
         assert_eq!(r, "%r1");
-        assert!(b.to_ir().contains("call double @js_nanbox_string(i64 %handle)"));
+        assert!(b
+            .to_ir()
+            .contains("call double @js_nanbox_string(i64 %handle)"));
     }
 
     #[test]

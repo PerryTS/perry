@@ -140,10 +140,10 @@
 
 use std::ptr;
 
-use crate::value::JSValue;
-use crate::gc;
-use crate::closure::{self, ClosureHeader, real_capture_count};
 use crate::bigint::{self, BigIntHeader, BIGINT_LIMBS};
+use crate::closure::{self, real_capture_count, ClosureHeader};
+use crate::gc;
+use crate::value::JSValue;
 
 // NaN-boxing tag constants (from value.rs)
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -343,7 +343,8 @@ unsafe fn serialize_array(arr: *const crate::array::ArrayHeader) -> SerializedVa
         return SerializedValue::Array(Vec::new());
     }
     let len = (*arr).length as usize;
-    let elements_ptr = (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+    let elements_ptr =
+        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
 
     let mut elements = Vec::with_capacity(len);
     for i in 0..len {
@@ -369,7 +370,8 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     let field_count = (*obj).field_count as usize;
 
     // Serialize field values
-    let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const f64;
+    let fields_ptr =
+        (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const f64;
     let mut fields = Vec::with_capacity(field_count);
     for i in 0..field_count {
         let field_bits = (*fields_ptr.add(i)).to_bits();
@@ -380,7 +382,9 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     let keys = if !(*obj).keys_array.is_null() {
         let keys_arr = (*obj).keys_array;
         let keys_len = (*keys_arr).length as usize;
-        let keys_elements = (keys_arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+        let keys_elements = (keys_arr as *const u8)
+            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+            as *const f64;
         let mut key_strings = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let key_bits = (*keys_elements.add(i)).to_bits();
@@ -389,7 +393,8 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
                 let str_ptr = (key_bits & POINTER_MASK) as *const crate::string::StringHeader;
                 if !str_ptr.is_null() && (str_ptr as usize) >= 0x1000 {
                     let len = (*str_ptr).byte_len as usize;
-                    let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+                    let data = (str_ptr as *const u8)
+                        .add(std::mem::size_of::<crate::string::StringHeader>());
                     key_strings.push(std::slice::from_raw_parts(data, len).to_vec());
                 } else {
                     key_strings.push(Vec::new());
@@ -421,7 +426,8 @@ unsafe fn serialize_closure(closure: *const ClosureHeader) -> SerializedValue {
     let capture_count_raw = (*closure).capture_count;
     let actual_count = real_capture_count(capture_count_raw) as usize;
 
-    let captures_base = (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
+    let captures_base =
+        (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
     let mut captures = Vec::with_capacity(actual_count);
     for i in 0..actual_count {
         let cap_bits = (*captures_base.add(i)).to_bits();
@@ -454,7 +460,11 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
 
         SerializedValue::String(bytes) => {
             let str_ptr = crate::string::js_string_from_bytes(
-                if bytes.is_empty() { ptr::null() } else { bytes.as_ptr() },
+                if bytes.is_empty() {
+                    ptr::null()
+                } else {
+                    bytes.as_ptr()
+                },
                 bytes.len() as u32,
             );
             JSValue::string_ptr(str_ptr).bits()
@@ -462,7 +472,8 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
 
         SerializedValue::Array(elements) => {
             let arr = crate::array::js_array_alloc(elements.len() as u32);
-            let arr_elements = (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+            let arr_elements =
+                (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
             for (i, elem) in elements.iter().enumerate() {
                 let bits = deserialize_jsvalue(elem);
                 *arr_elements.add(i) = f64::from_bits(bits);
@@ -471,7 +482,12 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
             JSValue::pointer(arr as *const u8).bits()
         }
 
-        SerializedValue::Object { class_id, parent_class_id, fields, keys } => {
+        SerializedValue::Object {
+            class_id,
+            parent_class_id,
+            fields,
+            keys,
+        } => {
             let obj = crate::object::js_object_alloc_with_parent(
                 *class_id,
                 *parent_class_id,
@@ -479,7 +495,9 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
             );
 
             // Set field values
-            let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut f64;
+            let fields_ptr = (obj as *mut u8)
+                .add(std::mem::size_of::<crate::object::ObjectHeader>())
+                as *mut f64;
             for (i, field) in fields.iter().enumerate() {
                 let bits = deserialize_jsvalue(field);
                 *fields_ptr.add(i) = f64::from_bits(bits);
@@ -488,10 +506,16 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
             // Reconstruct keys array if present
             if let Some(key_strings) = keys {
                 let keys_arr = crate::array::js_array_alloc(key_strings.len() as u32);
-                let keys_elements = (keys_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+                let keys_elements = (keys_arr as *mut u8)
+                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                    as *mut f64;
                 for (i, key_bytes) in key_strings.iter().enumerate() {
                     let str_ptr = crate::string::js_string_from_bytes(
-                        if key_bytes.is_empty() { ptr::null() } else { key_bytes.as_ptr() },
+                        if key_bytes.is_empty() {
+                            ptr::null()
+                        } else {
+                            key_bytes.as_ptr()
+                        },
                         key_bytes.len() as u32,
                     );
                     let key_val = JSValue::string_ptr(str_ptr);
@@ -504,12 +528,14 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
             JSValue::pointer(obj as *const u8).bits()
         }
 
-        SerializedValue::Closure { func_ptr, capture_count, captures } => {
-            let closure = closure::js_closure_alloc(
-                *func_ptr as *const u8,
-                *capture_count,
-            );
-            let captures_base = (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
+        SerializedValue::Closure {
+            func_ptr,
+            capture_count,
+            captures,
+        } => {
+            let closure = closure::js_closure_alloc(*func_ptr as *const u8, *capture_count);
+            let captures_base =
+                (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
             for (i, cap) in captures.iter().enumerate() {
                 let bits = deserialize_jsvalue(cap);
                 *captures_base.add(i) = f64::from_bits(bits);
@@ -518,10 +544,8 @@ unsafe fn deserialize_jsvalue(sv: &SerializedValue) -> u64 {
         }
 
         SerializedValue::BigInt(limbs) => {
-            let ptr = gc::gc_malloc(
-                std::mem::size_of::<BigIntHeader>(),
-                gc::GC_TYPE_BIGINT,
-            ) as *mut BigIntHeader;
+            let ptr = gc::gc_malloc(std::mem::size_of::<BigIntHeader>(), gc::GC_TYPE_BIGINT)
+                as *mut BigIntHeader;
             (*ptr).limbs = *limbs;
             // NaN-box with BIGINT_TAG
             BIGINT_TAG | (ptr as u64 & POINTER_MASK)
@@ -570,19 +594,13 @@ type ClosureCallFn = unsafe extern "C" fn(*const ClosureHeader, f64) -> f64;
 ///
 /// Returns a POINTER_TAG'd ArrayHeader pointer to the result array.
 #[no_mangle]
-pub extern "C" fn js_thread_parallel_map(
-    array_val: f64,
-    closure_val: f64,
-) -> f64 {
+pub extern "C" fn js_thread_parallel_map(array_val: f64, closure_val: f64) -> f64 {
     let result_ptr = unsafe { parallel_map_impl(array_val, closure_val) };
     // NaN-box the result array pointer with POINTER_TAG
     f64::from_bits(POINTER_TAG | (result_ptr as u64 & POINTER_MASK))
 }
 
-unsafe fn parallel_map_impl(
-    array_val: f64,
-    closure_val: f64,
-) -> i64 {
+unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
     // ── 1. Extract array pointer from NaN-boxed value ────────────────
     let array_bits = array_val.to_bits();
     let arr = (array_bits & POINTER_MASK) as *const crate::array::ArrayHeader;
@@ -619,7 +637,8 @@ unsafe fn parallel_map_impl(
     }
 
     // ── 4. Serialize all input elements ──────────────────────────────
-    let elements_ptr = (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+    let elements_ptr =
+        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
     let mut serialized_elements = Vec::with_capacity(len);
     for i in 0..len {
         let bits = (*elements_ptr.add(i)).to_bits();
@@ -632,7 +651,8 @@ unsafe fn parallel_map_impl(
             let fp = (*closure).func_ptr as usize;
             let cc = (*closure).capture_count;
             let actual = real_capture_count(cc) as usize;
-            let base = (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
+            let base =
+                (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
             let mut caps = Vec::with_capacity(actual);
             for i in 0..actual {
                 caps.push(serialize_jsvalue((*base.add(i)).to_bits()));
@@ -670,7 +690,8 @@ unsafe fn parallel_map_impl(
 
     // Scoped threads: all threads must complete before we return.
     // This guarantees no dangling references.
-    let mut all_results: Vec<Vec<SerializedValue>> = (0..chunks.len()).map(|_| Vec::new()).collect();
+    let mut all_results: Vec<Vec<SerializedValue>> =
+        (0..chunks.len()).map(|_| Vec::new()).collect();
 
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(chunks.len());
@@ -719,7 +740,8 @@ unsafe fn parallel_map_impl(
     // ── 7. Deserialize results into main thread's arena ──────────────
     let total_results: usize = all_results.iter().map(|r| r.len()).sum();
     let result_arr = crate::array::js_array_alloc(total_results as u32);
-    let result_elements = (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let result_elements =
+        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
 
     let mut write_idx = 0;
     for chunk_results in &all_results {
@@ -741,9 +763,11 @@ unsafe fn single_thread_map(
     func: *const u8,
     closure_ptr: i64,
 ) -> i64 {
-    let elements_ptr = (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+    let elements_ptr =
+        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
     let result_arr = crate::array::js_array_alloc(len as u32);
-    let result_elements = (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let result_elements =
+        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
 
     let closure = if closure_ptr != 0 {
         closure_ptr as *const ClosureHeader
@@ -776,18 +800,12 @@ unsafe fn single_thread_map(
 /// Returns a POINTER_TAG'd ArrayHeader pointer containing only elements where
 /// the predicate returned a truthy value.
 #[no_mangle]
-pub extern "C" fn js_thread_parallel_filter(
-    array_val: f64,
-    closure_val: f64,
-) -> f64 {
+pub extern "C" fn js_thread_parallel_filter(array_val: f64, closure_val: f64) -> f64 {
     let result_ptr = unsafe { parallel_filter_impl(array_val, closure_val) };
     f64::from_bits(POINTER_TAG | (result_ptr as u64 & POINTER_MASK))
 }
 
-unsafe fn parallel_filter_impl(
-    array_val: f64,
-    closure_val: f64,
-) -> i64 {
+unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
     let array_bits = array_val.to_bits();
     let arr = (array_bits & POINTER_MASK) as *const crate::array::ArrayHeader;
     if arr.is_null() || (arr as usize) < 0x1000 {
@@ -818,7 +836,8 @@ unsafe fn parallel_filter_impl(
     }
 
     // Serialize input elements
-    let elements_ptr = (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+    let elements_ptr =
+        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
     let mut serialized_elements = Vec::with_capacity(len);
     for i in 0..len {
         let bits = (*elements_ptr.add(i)).to_bits();
@@ -843,7 +862,9 @@ unsafe fn parallel_filter_impl(
     let mut chunks: Vec<Vec<SerializedValue>> = Vec::with_capacity(num_threads);
     let mut remaining = serialized_elements;
     for _ in 0..num_threads {
-        if remaining.is_empty() { break; }
+        if remaining.is_empty() {
+            break;
+        }
         let split_at = chunk_size.min(remaining.len());
         let rest = remaining.split_off(split_at);
         chunks.push(remaining);
@@ -859,7 +880,8 @@ unsafe fn parallel_filter_impl(
     let func_usize = func as usize;
 
     // Each thread returns (index, kept_elements) — kept elements in original order
-    let mut all_results: Vec<Vec<SerializedValue>> = (0..chunks.len()).map(|_| Vec::new()).collect();
+    let mut all_results: Vec<Vec<SerializedValue>> =
+        (0..chunks.len()).map(|_| Vec::new()).collect();
 
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(chunks.len());
@@ -908,7 +930,8 @@ unsafe fn parallel_filter_impl(
     // Deserialize kept elements into main thread's arena (preserving order)
     let total: usize = all_results.iter().map(|r| r.len()).sum();
     let result_arr = crate::array::js_array_alloc(total as u32);
-    let result_elements = (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let result_elements =
+        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
 
     let mut write_idx = 0;
     for chunk_kept in &all_results {
@@ -930,9 +953,11 @@ unsafe fn single_thread_filter(
     func: *const u8,
     closure: *const ClosureHeader,
 ) -> i64 {
-    let elements_ptr = (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+    let elements_ptr =
+        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
     let result_arr = crate::array::js_array_alloc(len as u32);
-    let result_elements = (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let result_elements =
+        (result_arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
 
     let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
     let mut count = 0u32;
@@ -964,17 +989,13 @@ type ClosureCall0Fn = unsafe extern "C" fn(*const ClosureHeader) -> f64;
 /// Argument is a NaN-boxed f64 ClosureHeader pointer (POINTER_TAG).
 /// Returns a NaN-boxed f64 Promise pointer (POINTER_TAG).
 #[no_mangle]
-pub extern "C" fn js_thread_spawn(
-    closure_val: f64,
-) -> f64 {
+pub extern "C" fn js_thread_spawn(closure_val: f64) -> f64 {
     let promise = unsafe { spawn_impl(closure_val) };
     // NaN-box the promise pointer with POINTER_TAG
     f64::from_bits(POINTER_TAG | (promise as u64 & POINTER_MASK))
 }
 
-unsafe fn spawn_impl(
-    closure_val: f64,
-) -> *mut crate::promise::Promise {
+unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     // ── 0. Extract closure pointer and func_ptr ──────────────────────
     let closure_bits = closure_val.to_bits();
     let closure = (closure_bits & POINTER_MASK) as *const ClosureHeader;
@@ -1001,7 +1022,8 @@ unsafe fn spawn_impl(
         let cc = (*closure).capture_count;
         let actual = real_capture_count(cc) as usize;
         if actual > 0 {
-            let base = (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
+            let base =
+                (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
             let mut caps = Vec::with_capacity(actual);
             for i in 0..actual {
                 caps.push(serialize_jsvalue((*base.add(i)).to_bits()));
@@ -1015,20 +1037,20 @@ unsafe fn spawn_impl(
     // ── 3. Spawn background thread ───────────────────────────────────
     std::thread::spawn(move || {
         // Reconstruct closure in this thread's arena
-        let local_closure: *const ClosureHeader = if let Some((cc, ref cap_vals)) = serialized_captures {
-            let c = closure::js_closure_alloc(func_usize as *const u8, cc);
-            let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
-            for (i, cap) in cap_vals.iter().enumerate() {
-                unsafe {
-                    *base.add(i) = f64::from_bits(deserialize_jsvalue(cap));
+        let local_closure: *const ClosureHeader =
+            if let Some((cc, ref cap_vals)) = serialized_captures {
+                let c = closure::js_closure_alloc(func_usize as *const u8, cc);
+                let base = (c as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut f64;
+                for (i, cap) in cap_vals.iter().enumerate() {
+                    unsafe {
+                        *base.add(i) = f64::from_bits(deserialize_jsvalue(cap));
+                    }
                 }
-            }
-            c as *const ClosureHeader
-        } else {
-            // No captures — create a minimal closure header
-            closure::js_closure_alloc(func_usize as *const u8, 0)
-                as *const ClosureHeader
-        };
+                c as *const ClosureHeader
+            } else {
+                // No captures — create a minimal closure header
+                closure::js_closure_alloc(func_usize as *const u8, 0) as *const ClosureHeader
+            };
 
         // Call the function — catch panics to avoid aborting across FFI boundary
         let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1134,5 +1156,9 @@ pub extern "C" fn js_thread_process_pending() -> i32 {
 #[no_mangle]
 pub extern "C" fn js_thread_has_pending() -> i32 {
     let pending = PENDING_THREAD_RESULTS.lock().unwrap();
-    if pending.is_empty() { 0 } else { 1 }
+    if pending.is_empty() {
+        0
+    } else {
+        1
+    }
 }

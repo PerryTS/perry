@@ -1,14 +1,17 @@
 //! Child Process module - provides process spawning capabilities
 
-use std::process::{Command, Stdio};
-use std::io::Read;
-use std::sync::{Mutex, atomic::{AtomicU64, Ordering}};
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Mutex,
+};
 
-use crate::string::{js_string_from_bytes, StringHeader};
 use crate::buffer::BufferHeader;
 use crate::object::ObjectHeader;
+use crate::string::{js_string_from_bytes, StringHeader};
 
 // ============================================================================
 // Background Process Registry
@@ -97,7 +100,9 @@ pub extern "C" fn js_child_process_spawn_background(
         if args_ptr != 0 {
             let arr_ptr = args_ptr as *const crate::array::ArrayHeader;
             let args_len = (*arr_ptr).length as usize;
-            let args_data = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+            let args_data = (arr_ptr as *const u8)
+                .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                as *const f64;
             for i in 0..args_len {
                 let arg_val = *args_data.add(i);
                 if let Some(arg_str) = extract_string_from_nanboxed(arg_val) {
@@ -110,7 +115,9 @@ pub extern "C" fn js_child_process_spawn_background(
         let env_bits = env_json_val.to_bits();
         if env_bits != TAG_NULL_BITS && env_bits != TAG_UNDEFINED_BITS {
             if let Some(env_json) = extract_string_from_nanboxed(env_json_val) {
-                if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&env_json) {
+                if let Ok(map) =
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&env_json)
+                {
                     for (k, v) in map {
                         if let Some(val_str) = v.as_str() {
                             command.env(k, val_str);
@@ -122,18 +129,16 @@ pub extern "C" fn js_child_process_spawn_background(
 
         // Redirect stdout+stderr to log file (try_clone for stderr)
         match File::create(&log_file_str) {
-            Ok(stdout_file) => {
-                match stdout_file.try_clone() {
-                    Ok(stderr_file) => {
-                        command.stdout(Stdio::from(stdout_file));
-                        command.stderr(Stdio::from(stderr_file));
-                    }
-                    Err(_) => {
-                        command.stdout(Stdio::from(stdout_file));
-                        command.stderr(Stdio::null());
-                    }
+            Ok(stdout_file) => match stdout_file.try_clone() {
+                Ok(stderr_file) => {
+                    command.stdout(Stdio::from(stdout_file));
+                    command.stderr(Stdio::from(stderr_file));
                 }
-            }
+                Err(_) => {
+                    command.stdout(Stdio::from(stdout_file));
+                    command.stderr(Stdio::null());
+                }
+            },
             Err(_) => {
                 command.stdout(Stdio::null());
                 command.stderr(Stdio::null());
@@ -165,11 +170,7 @@ pub extern "C" fn js_child_process_spawn_background(
 ///
 /// Returns the spawned child's PID on success, or `None` on failure (caller
 /// chooses how to surface that — `-1.0`/`-1` etc.).
-pub fn spawn_detached_command(
-    cmd: &str,
-    args: &[&str],
-    cwd: Option<&str>,
-) -> Option<u32> {
+pub fn spawn_detached_command(cmd: &str, args: &[&str], cwd: Option<&str>) -> Option<u32> {
     let mut command = Command::new(cmd);
     for a in args {
         command.arg(a);
@@ -239,7 +240,8 @@ pub extern "C" fn js_child_process_spawn_detached(
             let arr_ptr = args_ptr as *const crate::array::ArrayHeader;
             let args_len = (*arr_ptr).length as usize;
             let args_data = (arr_ptr as *const u8)
-                .add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+                .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                as *const f64;
             for i in 0..args_len {
                 let arg_val = *args_data.add(i);
                 if let Some(arg_str) = extract_string_from_nanboxed(arg_val) {
@@ -267,9 +269,7 @@ pub extern "C" fn js_child_process_spawn_detached(
 /// Get the status of a background process (non-blocking).
 /// Returns: object {alive: boolean, exitCode: number | null}
 #[no_mangle]
-pub extern "C" fn js_child_process_get_process_status(
-    handle_id_val: f64,
-) -> *mut ObjectHeader {
+pub extern "C" fn js_child_process_get_process_status(handle_id_val: f64) -> *mut ObjectHeader {
     let handle_id = handle_id_val as u64;
 
     unsafe {
@@ -278,32 +278,18 @@ pub extern "C" fn js_child_process_get_process_status(
                 match child.try_wait() {
                     Ok(None) => {
                         // Still running
-                        make_two_field_object(
-                            "alive", TAG_TRUE_F64,
-                            "exitCode", TAG_NULL_F64,
-                        )
+                        make_two_field_object("alive", TAG_TRUE_F64, "exitCode", TAG_NULL_F64)
                     }
                     Ok(Some(status)) => {
                         let exit_code = status.code().unwrap_or(-1) as f64;
                         registry.remove(&handle_id);
-                        make_two_field_object(
-                            "alive", TAG_FALSE_F64,
-                            "exitCode", exit_code,
-                        )
+                        make_two_field_object("alive", TAG_FALSE_F64, "exitCode", exit_code)
                     }
-                    Err(_) => {
-                        make_two_field_object(
-                            "alive", TAG_FALSE_F64,
-                            "exitCode", -1.0f64,
-                        )
-                    }
+                    Err(_) => make_two_field_object("alive", TAG_FALSE_F64, "exitCode", -1.0f64),
                 }
             } else {
                 // Handle not found — process already exited/cleaned up
-                make_two_field_object(
-                    "alive", TAG_FALSE_F64,
-                    "exitCode", TAG_NULL_F64,
-                )
+                make_two_field_object("alive", TAG_FALSE_F64, "exitCode", TAG_NULL_F64)
             }
         } else {
             std::ptr::null_mut()
@@ -348,16 +334,10 @@ pub extern "C" fn js_child_process_exec_sync(
 
         // Execute the command using shell
         #[cfg(unix)]
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(cmd_str)
-            .output();
+        let output = Command::new("sh").arg("-c").arg(cmd_str).output();
 
         #[cfg(windows)]
-        let output = Command::new("cmd")
-            .arg("/C")
-            .arg(cmd_str)
-            .output();
+        let output = Command::new("cmd").arg("/C").arg(cmd_str).output();
 
         match output {
             Ok(output) => {
@@ -399,7 +379,9 @@ pub extern "C" fn js_child_process_spawn_sync(
         // Add arguments if provided
         if !args_ptr.is_null() {
             let args_len = (*args_ptr).length as usize;
-            let args_data = (args_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
+            let args_data = (args_ptr as *const u8)
+                .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                as *const f64;
 
             for i in 0..args_len {
                 let arg_val = *args_data.add(i);
@@ -419,12 +401,14 @@ pub extern "C" fn js_child_process_spawn_sync(
                 let result = crate::object::js_object_alloc(0, 3);
 
                 // Set stdout as string (field 0)
-                let stdout_str = js_string_from_bytes(output.stdout.as_ptr(), output.stdout.len() as u32);
+                let stdout_str =
+                    js_string_from_bytes(output.stdout.as_ptr(), output.stdout.len() as u32);
                 let stdout_boxed = js_nanbox_string(stdout_str as i64);
                 crate::object::js_object_set_field_f64(result, 0, stdout_boxed);
 
                 // Set stderr as string (field 1)
-                let stderr_str = js_string_from_bytes(output.stderr.as_ptr(), output.stderr.len() as u32);
+                let stderr_str =
+                    js_string_from_bytes(output.stderr.as_ptr(), output.stderr.len() as u32);
                 let stderr_boxed = js_nanbox_string(stderr_str as i64);
                 crate::object::js_object_set_field_f64(result, 1, stderr_boxed);
 

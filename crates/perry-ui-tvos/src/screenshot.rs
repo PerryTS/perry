@@ -1,7 +1,7 @@
 //! Screenshot capture for iOS (behind geisterhand feature).
 
-use objc2::runtime::{AnyClass, AnyObject};
 use objc2::msg_send;
+use objc2::runtime::{AnyClass, AnyObject};
 use objc2_core_foundation::{CGRect, CGSize};
 
 #[no_mangle]
@@ -44,7 +44,8 @@ pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
         UIGraphicsBeginImageContextWithOptions(size, false, 0.0);
 
         // drawViewHierarchyInRect:afterScreenUpdates:
-        let _: bool = msg_send![key_window, drawViewHierarchyInRect: bounds afterScreenUpdates: true];
+        let _: bool =
+            msg_send![key_window, drawViewHierarchyInRect: bounds afterScreenUpdates: true];
 
         let image = UIGraphicsGetImageFromCurrentImageContext();
         UIGraphicsEndImageContext();

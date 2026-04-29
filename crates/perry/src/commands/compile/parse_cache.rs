@@ -136,7 +136,8 @@ mod tests {
     use super::*;
 
     const SRC_V1: &str = "export function greet(name: string): string { return `hi ${name}`; }\n";
-    const SRC_V2: &str = "export function greet(name: string): string { return `hello ${name}`; }\n";
+    const SRC_V2: &str =
+        "export function greet(name: string): string { return `hello ${name}`; }\n";
 
     #[test]
     fn first_call_is_a_miss() {
@@ -250,10 +251,18 @@ mod tests {
         }
         assert_eq!(cache.entries.len(), 3, "cap must hold");
         // Files 0-2 (oldest) should have been evicted; 3-5 should remain.
-        assert!(!cache.entries.contains_key(&PathBuf::from("/virtual/file0.ts")));
-        assert!(!cache.entries.contains_key(&PathBuf::from("/virtual/file2.ts")));
-        assert!(cache.entries.contains_key(&PathBuf::from("/virtual/file3.ts")));
-        assert!(cache.entries.contains_key(&PathBuf::from("/virtual/file5.ts")));
+        assert!(!cache
+            .entries
+            .contains_key(&PathBuf::from("/virtual/file0.ts")));
+        assert!(!cache
+            .entries
+            .contains_key(&PathBuf::from("/virtual/file2.ts")));
+        assert!(cache
+            .entries
+            .contains_key(&PathBuf::from("/virtual/file3.ts")));
+        assert!(cache
+            .entries
+            .contains_key(&PathBuf::from("/virtual/file5.ts")));
     }
 
     #[test]

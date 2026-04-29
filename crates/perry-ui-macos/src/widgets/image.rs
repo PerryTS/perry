@@ -1,5 +1,5 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2::{AnyThread, MainThreadOnly};
 use objc2_app_kit::{NSImage, NSImageView, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
@@ -59,9 +59,11 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
         // 1. Try NSBundle.mainBundle.resourcePath (Contents/Resources/)
         if found.is_none() {
             let bundle_class = objc2::runtime::AnyClass::get(c"NSBundle").unwrap();
-            let bundle: *mut objc2::runtime::AnyObject = unsafe { msg_send![bundle_class, mainBundle] };
+            let bundle: *mut objc2::runtime::AnyObject =
+                unsafe { msg_send![bundle_class, mainBundle] };
             if !bundle.is_null() {
-                let res_path: Option<Retained<NSString>> = unsafe { msg_send![bundle, resourcePath] };
+                let res_path: Option<Retained<NSString>> =
+                    unsafe { msg_send![bundle, resourcePath] };
                 if let Some(rp) = res_path {
                     let rp_str = rp.to_string();
                     let candidate = std::path::PathBuf::from(&rp_str).join(path);
@@ -103,9 +105,7 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
                     msg_send![img, initWithData: ns_data]
                 }
             }
-            _ => {
-                std::ptr::null_mut()
-            }
+            _ => std::ptr::null_mut(),
         };
 
         let image_view: Retained<NSImageView> = msg_send![

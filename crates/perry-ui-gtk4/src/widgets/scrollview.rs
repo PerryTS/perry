@@ -14,7 +14,10 @@ pub fn create() -> i64 {
 
 /// Set the content child of a scroll view.
 pub fn set_child(scroll_handle: i64, child_handle: i64) {
-    if let (Some(scroll_widget), Some(child)) = (super::get_widget(scroll_handle), super::get_widget(child_handle)) {
+    if let (Some(scroll_widget), Some(child)) = (
+        super::get_widget(scroll_handle),
+        super::get_widget(child_handle),
+    ) {
         if let Some(scrolled) = scroll_widget.downcast_ref::<ScrolledWindow>() {
             // Ensure child fills the viewport width (matches macOS ScrollView behavior)
             child.set_hexpand(true);
@@ -27,7 +30,10 @@ pub fn set_child(scroll_handle: i64, child_handle: i64) {
 /// Scroll so that the given child widget is visible.
 /// In GTK4, we compute the child's allocation and scroll to it.
 pub fn scroll_to(scroll_handle: i64, child_handle: i64) {
-    if let (Some(scroll_widget), Some(child)) = (super::get_widget(scroll_handle), super::get_widget(child_handle)) {
+    if let (Some(scroll_widget), Some(child)) = (
+        super::get_widget(scroll_handle),
+        super::get_widget(child_handle),
+    ) {
         if let Some(scrolled) = scroll_widget.downcast_ref::<ScrolledWindow>() {
             // Get the child's allocation relative to the scrolled window content
             let alloc = child.allocation();

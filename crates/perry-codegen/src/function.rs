@@ -84,7 +84,11 @@ pub struct LlFunction {
 }
 
 impl LlFunction {
-    pub fn new(name: impl Into<String>, return_type: LlvmType, params: Vec<(LlvmType, String)>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        return_type: LlvmType,
+        params: Vec<(LlvmType, String)>,
+    ) -> Self {
         Self {
             name: name.into(),
             return_type,
@@ -121,17 +125,17 @@ impl LlFunction {
     /// slot-store site.
     pub fn enable_shadow_frame(&mut self, slot_count: u32) {
         use crate::types::I64;
-        if self.shadow_frame_slot.is_some() { return; }
+        if self.shadow_frame_slot.is_some() {
+            return;
+        }
         let handle_slot = self.alloca_entry(I64);
         let handle_reg = format!("%r{}", self.reg_counter.next());
         self.entry_allocas.push(format!(
             "  {} = call i64 @js_shadow_frame_push(i32 {})",
             handle_reg, slot_count
         ));
-        self.entry_allocas.push(format!(
-            "  store i64 {}, ptr {}",
-            handle_reg, handle_slot
-        ));
+        self.entry_allocas
+            .push(format!("  store i64 {}, ptr {}", handle_reg, handle_slot));
         self.shadow_frame_slot = Some(handle_slot);
     }
 
@@ -185,7 +189,8 @@ impl LlFunction {
     /// Used to initialize allocas to a safe default (e.g. TAG_UNDEFINED)
     /// at the top of the function, before any user code runs.
     pub fn entry_allocas_push_store(&mut self, ty: crate::types::LlvmType, val: &str, ptr: &str) {
-        self.entry_allocas.push(format!("  store {} {}, ptr {}", ty, val, ptr));
+        self.entry_allocas
+            .push(format!("  store {} {}, ptr {}", ty, val, ptr));
     }
 
     /// Emit a one-time function-entry init sequence: allocate a `ptr`
@@ -220,7 +225,11 @@ impl LlFunction {
     /// external function (like `js_inline_arena_slow_alloc`) that
     /// LLVM can't prove won't modify the global. Hoisting manually
     /// at the codegen layer sidesteps the alias-analysis question.
-    pub fn entry_init_load_global(&mut self, global_name: &str, ty: crate::types::LlvmType) -> String {
+    pub fn entry_init_load_global(
+        &mut self,
+        global_name: &str,
+        ty: crate::types::LlvmType,
+    ) -> String {
         let slot = self.alloca_entry(ty);
         let result_reg = format!("%r{}", self.reg_counter.next());
         // The alloca dominates everything, but the load+store of the
@@ -319,7 +328,8 @@ impl LlFunction {
             // Both splices are textual: we re-render the block label,
             // the prefix instructions (up to the boundary), the
             // post-init setup, and then the rest of the block body.
-            if i == 0 && (!self.entry_allocas.is_empty() || !self.entry_post_init_setup.is_empty()) {
+            if i == 0 && (!self.entry_allocas.is_empty() || !self.entry_post_init_setup.is_empty())
+            {
                 ir.push_str(&blk.label);
                 ir.push_str(":\n");
                 // 1. Allocas + simple inits at the very top.
@@ -380,14 +390,12 @@ impl LlFunction {
             for line in ir.lines() {
                 let trimmed = line.trim_start();
                 if (trimmed.starts_with("ret ") || trimmed == "ret void")
-                    && !trimmed.starts_with("ret ptr ")  // skip rare ptr rets
+                    && !trimmed.starts_with("ret ptr ")
+                // skip rare ptr rets
                 {
                     let load_reg = format!("%shadow_pop_l_{}", seq);
                     seq += 1;
-                    out.push_str(&format!(
-                        "  {} = load i64, ptr {}\n",
-                        load_reg, handle_slot
-                    ));
+                    out.push_str(&format!("  {} = load i64, ptr {}\n", load_reg, handle_slot));
                     out.push_str(&format!(
                         "  call void @js_shadow_frame_pop(i64 {})\n",
                         load_reg

@@ -130,26 +130,53 @@ fn stmt_has_capturing_closure(stmt: &Stmt) -> bool {
         Stmt::Let { init: Some(e), .. } => expr_has_capturing_closure(e),
         Stmt::Expr(e) | Stmt::Throw(e) => expr_has_capturing_closure(e),
         Stmt::Return(Some(e)) => expr_has_capturing_closure(e),
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             expr_has_capturing_closure(condition)
                 || body_has_capturing_closure(then_branch)
-                || else_branch.as_ref().map_or(false, |eb| body_has_capturing_closure(eb))
+                || else_branch
+                    .as_ref()
+                    .map_or(false, |eb| body_has_capturing_closure(eb))
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
             expr_has_capturing_closure(condition) || body_has_capturing_closure(body)
         }
-        Stmt::For { init, condition, update, body } => {
-            init.as_ref().map_or(false, |i| stmt_has_capturing_closure(i))
-                || condition.as_ref().map_or(false, |c| expr_has_capturing_closure(c))
-                || update.as_ref().map_or(false, |u| expr_has_capturing_closure(u))
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref()
+                .map_or(false, |i| stmt_has_capturing_closure(i))
+                || condition
+                    .as_ref()
+                    .map_or(false, |c| expr_has_capturing_closure(c))
+                || update
+                    .as_ref()
+                    .map_or(false, |u| expr_has_capturing_closure(u))
                 || body_has_capturing_closure(body)
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             body_has_capturing_closure(body)
-                || catch.as_ref().map_or(false, |c| body_has_capturing_closure(&c.body))
-                || finally.as_ref().map_or(false, |f| body_has_capturing_closure(f))
+                || catch
+                    .as_ref()
+                    .map_or(false, |c| body_has_capturing_closure(&c.body))
+                || finally
+                    .as_ref()
+                    .map_or(false, |f| body_has_capturing_closure(f))
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             expr_has_capturing_closure(discriminant)
                 || cases.iter().any(|c| body_has_capturing_closure(&c.body))
         }
@@ -241,43 +268,81 @@ fn compute_max_local_id(module: &Module) -> LocalId {
 }
 
 fn scan_stmts(stmts: &[Stmt], m: &mut LocalId) {
-    for s in stmts { scan_stmt(s, m); }
+    for s in stmts {
+        scan_stmt(s, m);
+    }
 }
 
 fn scan_stmt(stmt: &Stmt, m: &mut LocalId) {
     match stmt {
         Stmt::Let { id, init, .. } => {
             *m = (*m).max(*id);
-            if let Some(e) = init { scan_expr(e, m); }
+            if let Some(e) = init {
+                scan_expr(e, m);
+            }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr(e, m),
-        Stmt::Return(e) => { if let Some(e) = e { scan_expr(e, m); } }
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::Return(e) => {
+            if let Some(e) = e {
+                scan_expr(e, m);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             scan_expr(condition, m);
             scan_stmts(then_branch, m);
-            if let Some(eb) = else_branch { scan_stmts(eb, m); }
+            if let Some(eb) = else_branch {
+                scan_stmts(eb, m);
+            }
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
             scan_expr(condition, m);
             scan_stmts(body, m);
         }
-        Stmt::For { init, condition, update, body } => {
-            if let Some(i) = init { scan_stmt(i, m); }
-            if let Some(c) = condition { scan_expr(c, m); }
-            if let Some(u) = update { scan_expr(u, m); }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                scan_stmt(i, m);
+            }
+            if let Some(c) = condition {
+                scan_expr(c, m);
+            }
+            if let Some(u) = update {
+                scan_expr(u, m);
+            }
             scan_stmts(body, m);
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             scan_stmts(body, m);
             if let Some(c) = catch {
-                if let Some((id, _)) = c.param { *m = (*m).max(id); }
+                if let Some((id, _)) = c.param {
+                    *m = (*m).max(id);
+                }
                 scan_stmts(&c.body, m);
             }
-            if let Some(f) = finally { scan_stmts(f, m); }
+            if let Some(f) = finally {
+                scan_stmts(f, m);
+            }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             scan_expr(discriminant, m);
-            for case in cases { scan_stmts(&case.body, m); }
+            for case in cases {
+                scan_stmts(&case.body, m);
+            }
         }
         Stmt::Labeled { body, .. } => scan_stmt(body, m),
         _ => {}
@@ -288,10 +353,23 @@ fn scan_expr(expr: &Expr, m: &mut LocalId) {
     if let Expr::LocalGet(id) | Expr::LocalSet(id, _) = expr {
         *m = (*m).max(*id);
     }
-    if let Expr::Closure { params, captures, mutable_captures, body, .. } = expr {
-        for p in params { *m = (*m).max(p.id); }
-        for c in captures { *m = (*m).max(*c); }
-        for c in mutable_captures { *m = (*m).max(*c); }
+    if let Expr::Closure {
+        params,
+        captures,
+        mutable_captures,
+        body,
+        ..
+    } = expr
+    {
+        for p in params {
+            *m = (*m).max(p.id);
+        }
+        for c in captures {
+            *m = (*m).max(*c);
+        }
+        for c in mutable_captures {
+            *m = (*m).max(*c);
+        }
         scan_stmts(body, m);
         return;
     }
@@ -327,17 +405,15 @@ fn hoist_awaits_in_stmts(stmts: &mut Vec<Stmt>, next_id: &mut LocalId) {
     for stmt in std::mem::take(stmts) {
         let mut hoisted: Vec<Stmt> = Vec::new();
         let new_stmt = hoist_awaits_in_stmt(stmt, next_id, &mut hoisted);
-        for h in hoisted { out.push(h); }
+        for h in hoisted {
+            out.push(h);
+        }
         out.push(new_stmt);
     }
     *stmts = out;
 }
 
-fn hoist_awaits_in_stmt(
-    mut stmt: Stmt,
-    next_id: &mut LocalId,
-    hoisted: &mut Vec<Stmt>,
-) -> Stmt {
+fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec<Stmt>) -> Stmt {
     match &mut stmt {
         // Top-level positions: don't hoist the *outer* await but do
         // hoist any nested awaits inside the operand.
@@ -355,7 +431,11 @@ fn hoist_awaits_in_stmt(
             // await stays in place, inner awaits hoisted.
             hoist_awaits_avoiding_top_level(e, next_id, hoisted);
         }
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             // The condition is NOT a top-level await position (it's
             // nested in If) — fully hoist all awaits in it.
             hoist_awaits_in_expr_full(condition, next_id, hoisted);
@@ -379,22 +459,33 @@ fn hoist_awaits_in_stmt(
             hoist_awaits_in_stmts(body, next_id);
             hoist_awaits_in_expr_full(condition, next_id, hoisted);
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(i) = init {
                 let mut inner_hoisted = Vec::new();
-                let i_replaced = hoist_awaits_in_stmt(
-                    (**i).clone(),
-                    next_id,
-                    &mut inner_hoisted,
-                );
-                for h in inner_hoisted { hoisted.push(h); }
+                let i_replaced = hoist_awaits_in_stmt((**i).clone(), next_id, &mut inner_hoisted);
+                for h in inner_hoisted {
+                    hoisted.push(h);
+                }
                 *i = Box::new(i_replaced);
             }
-            if let Some(c) = condition { hoist_awaits_in_expr_full(c, next_id, hoisted); }
-            if let Some(u) = update { hoist_awaits_in_expr_full(u, next_id, hoisted); }
+            if let Some(c) = condition {
+                hoist_awaits_in_expr_full(c, next_id, hoisted);
+            }
+            if let Some(u) = update {
+                hoist_awaits_in_expr_full(u, next_id, hoisted);
+            }
             hoist_awaits_in_stmts(body, next_id);
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             hoist_awaits_in_stmts(body, next_id);
             if let Some(c) = catch {
                 hoist_awaits_in_stmts(&mut c.body, next_id);
@@ -403,7 +494,10 @@ fn hoist_awaits_in_stmt(
                 hoist_awaits_in_stmts(f, next_id);
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             hoist_awaits_in_expr_full(discriminant, next_id, hoisted);
             for case in cases.iter_mut() {
                 if let Some(t) = &mut case.test {
@@ -416,7 +510,9 @@ fn hoist_awaits_in_stmt(
             let mut inner = Vec::new();
             let body_taken = std::mem::replace(body.as_mut(), Stmt::Break);
             let new_body = hoist_awaits_in_stmt(body_taken, next_id, &mut inner);
-            for h in inner { hoisted.push(h); }
+            for h in inner {
+                hoisted.push(h);
+            }
             **body = new_body;
         }
         _ => {}
@@ -491,7 +587,11 @@ fn rewrite_stmt(stmt: &mut Stmt, had_await: &mut bool) {
         Stmt::Expr(e) => rewrite_expr(e, had_await),
         Stmt::Return(Some(e)) => rewrite_expr(e, had_await),
         Stmt::Throw(e) => rewrite_expr(e, had_await),
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             rewrite_expr(condition, had_await);
             rewrite_stmts(then_branch, had_await);
             if let Some(eb) = else_branch {
@@ -506,13 +606,28 @@ fn rewrite_stmt(stmt: &mut Stmt, had_await: &mut bool) {
             rewrite_stmts(body, had_await);
             rewrite_expr(condition, had_await);
         }
-        Stmt::For { init, condition, update, body } => {
-            if let Some(i) = init { rewrite_stmt(i, had_await); }
-            if let Some(c) = condition { rewrite_expr(c, had_await); }
-            if let Some(u) = update { rewrite_expr(u, had_await); }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                rewrite_stmt(i, had_await);
+            }
+            if let Some(c) = condition {
+                rewrite_expr(c, had_await);
+            }
+            if let Some(u) = update {
+                rewrite_expr(u, had_await);
+            }
             rewrite_stmts(body, had_await);
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             rewrite_stmts(body, had_await);
             if let Some(c) = catch {
                 rewrite_stmts(&mut c.body, had_await);
@@ -521,7 +636,10 @@ fn rewrite_stmt(stmt: &mut Stmt, had_await: &mut bool) {
                 rewrite_stmts(f, had_await);
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             rewrite_expr(discriminant, had_await);
             for case in cases.iter_mut() {
                 rewrite_stmts(&mut case.body, had_await);

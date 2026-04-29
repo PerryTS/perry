@@ -124,7 +124,22 @@ fn is_legacy_invocation(args: &[String]) -> bool {
         // If it's a known subcommand, not legacy
         if matches!(
             arg.as_str(),
-            "compile" | "check" | "init" | "doctor" | "explain" | "publish" | "update" | "setup" | "audit" | "verify" | "run" | "dev" | "appstore" | "types" | "cache" | "help"
+            "compile"
+                | "check"
+                | "init"
+                | "doctor"
+                | "explain"
+                | "publish"
+                | "update"
+                | "setup"
+                | "audit"
+                | "verify"
+                | "run"
+                | "dev"
+                | "appstore"
+                | "types"
+                | "cache"
+                | "help"
         ) {
             return false;
         }
@@ -211,73 +226,47 @@ fn main_inner() -> Result<()> {
             let r = commands::compile::run(args, cli.format, use_color, cli.verbose);
             if telemetry_active {
                 let status = if r.is_ok() { "success" } else { "error" };
-                telemetry::send_event("compile", &[
-                    ("platform", std::env::consts::OS),
-                    ("target", &target),
-                    ("version", env!("CARGO_PKG_VERSION")),
-                    ("status", status),
-                ]);
+                telemetry::send_event(
+                    "compile",
+                    &[
+                        ("platform", std::env::consts::OS),
+                        ("target", &target),
+                        ("version", env!("CARGO_PKG_VERSION")),
+                        ("status", status),
+                    ],
+                );
             }
             r.map(|_| ())
         }
-        Commands::Run(args) => {
-            commands::run::run(args, cli.format, use_color, cli.verbose)
-        }
-        Commands::Dev(args) => {
-            commands::dev::run(args, cli.format, use_color, cli.verbose)
-        }
-        Commands::Check(args) => {
-            commands::check::run(args, cli.format, use_color, cli.verbose)
-        }
-        Commands::Init(args) => {
-            commands::init::run(args, cli.format, use_color)
-        }
-        Commands::Doctor(args) => {
-            commands::doctor::run(args, cli.format, use_color)
-        }
-        Commands::Explain(args) => {
-            commands::explain::run(args, cli.format, use_color)
-        }
-        Commands::Publish(args) => {
-            commands::publish::run(args, cli.format, use_color, cli.verbose)
-        }
-        Commands::Setup(args) => {
-            commands::setup::run(args)
-        }
-        Commands::Update(args) => {
-            commands::update::run(args, cli.format, use_color, cli.verbose)
-        }
-        Commands::Audit(args) => {
-            commands::audit::run(args, cli.format, use_color)
-        }
-        Commands::Verify(args) => {
-            commands::verify::run(args, cli.format, use_color)
-        }
-        Commands::I18n(args) => {
-            commands::i18n::run(args, cli.format)
-        }
-        Commands::Login(args) => {
-            commands::login::run(args, cli.format, use_color)
-        }
-        Commands::Appstore(args) => {
-            commands::appstore::run(args)
-        }
-        Commands::Types(args) => {
-            commands::types::run(args, cli.format, use_color)
-        }
-        Commands::Cache(args) => {
-            commands::cache::run(args, cli.format)
-        }
+        Commands::Run(args) => commands::run::run(args, cli.format, use_color, cli.verbose),
+        Commands::Dev(args) => commands::dev::run(args, cli.format, use_color, cli.verbose),
+        Commands::Check(args) => commands::check::run(args, cli.format, use_color, cli.verbose),
+        Commands::Init(args) => commands::init::run(args, cli.format, use_color),
+        Commands::Doctor(args) => commands::doctor::run(args, cli.format, use_color),
+        Commands::Explain(args) => commands::explain::run(args, cli.format, use_color),
+        Commands::Publish(args) => commands::publish::run(args, cli.format, use_color, cli.verbose),
+        Commands::Setup(args) => commands::setup::run(args),
+        Commands::Update(args) => commands::update::run(args, cli.format, use_color, cli.verbose),
+        Commands::Audit(args) => commands::audit::run(args, cli.format, use_color),
+        Commands::Verify(args) => commands::verify::run(args, cli.format, use_color),
+        Commands::I18n(args) => commands::i18n::run(args, cli.format),
+        Commands::Login(args) => commands::login::run(args, cli.format, use_color),
+        Commands::Appstore(args) => commands::appstore::run(args),
+        Commands::Types(args) => commands::types::run(args, cli.format, use_color),
+        Commands::Cache(args) => commands::cache::run(args, cli.format),
     };
 
     // Send telemetry for non-compile commands (compile is handled above for target/status)
     if telemetry_active {
         if let Some(name) = command_name {
             if name != "compile" {
-                telemetry::send_event(name, &[
-                    ("platform", std::env::consts::OS),
-                    ("version", env!("CARGO_PKG_VERSION")),
-                ]);
+                telemetry::send_event(
+                    name,
+                    &[
+                        ("platform", std::env::consts::OS),
+                        ("version", env!("CARGO_PKG_VERSION")),
+                    ],
+                );
             }
         }
     }
@@ -293,7 +282,12 @@ fn main_inner() -> Result<()> {
             None
         };
 
-        if let Some(update_checker::UpdateStatus::UpdateAvailable { current, latest, release_url }) = status {
+        if let Some(update_checker::UpdateStatus::UpdateAvailable {
+            current,
+            latest,
+            release_url,
+        }) = status
+        {
             update_checker::print_update_notice(&current, &latest, &release_url, use_stderr_color);
         }
     }

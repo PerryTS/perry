@@ -19,8 +19,7 @@ use perry_ui::styling_matrix::{drift, Platform, Status, MATRIX};
 
 fn workspace_root() -> PathBuf {
     // CARGO_MANIFEST_DIR points at crates/perry-ui; go up two levels.
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR")
-        .unwrap_or_else(|_| ".".to_string());
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(manifest_dir)
         .parent()
         .and_then(|p| p.parent())
@@ -152,7 +151,10 @@ fn cmd_gen(root: &PathBuf) -> ExitCode {
         md.push_str(&format!(
             "| {} | {} | {} | {} | {} |\n",
             plat.name(),
-            counts[0], counts[1], counts[2], counts[3]
+            counts[0],
+            counts[1],
+            counts[2],
+            counts[3]
         ));
     }
     md.push('\n');
@@ -206,7 +208,9 @@ fn main() -> ExitCode {
             eprintln!("usage: styling-matrix [--check | --gen | --diff]");
             eprintln!("  --check  verify MATRIX matches lib.rs exports across all platforms");
             eprintln!("  --gen    write docs/src/ui/styling-matrix.md");
-            eprintln!("  --diff   regenerate and report whether docs/src/ui/styling-matrix.md changed");
+            eprintln!(
+                "  --diff   regenerate and report whether docs/src/ui/styling-matrix.md changed"
+            );
             ExitCode::from(2)
         }
     }

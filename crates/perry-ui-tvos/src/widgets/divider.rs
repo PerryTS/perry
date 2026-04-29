@@ -1,14 +1,12 @@
-use objc2::rc::Retained;
 use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2_ui_kit::UIView;
 
 /// Create a horizontal separator (1px UIView with separator color).
 pub fn create() -> i64 {
     unsafe {
-        let view: Retained<UIView> = msg_send![
-            objc2::runtime::AnyClass::get(c"UIView").unwrap(),
-            new
-        ];
+        let view: Retained<UIView> =
+            msg_send![objc2::runtime::AnyClass::get(c"UIView").unwrap(), new];
         let _: () = msg_send![&*view, setTranslatesAutoresizingMaskIntoConstraints: false];
 
         // Set separator color

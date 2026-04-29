@@ -7,7 +7,10 @@ use anyhow::{anyhow, bail, Result};
 use perry_hir::Expr;
 use perry_types::Type as HirType;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle, i32_bool_to_nanbox, FnCtx};
+use crate::expr::{
+    i32_bool_to_nanbox, lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
+    FnCtx,
+};
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64};
 
@@ -32,7 +35,10 @@ pub(crate) fn lower_string_method(
     match property {
         "indexOf" => {
             if args.is_empty() || args.len() > 2 {
-                bail!("perry-codegen: String.indexOf expects 1 or 2 args, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.indexOf expects 1 or 2 args, got {}",
+                    args.len()
+                );
             }
             let needle_box = lower_expr(ctx, &args[0])?;
             // Optional fromIndex.
@@ -103,7 +109,10 @@ pub(crate) fn lower_string_method(
         }
         "split" => {
             if args.len() != 1 {
-                bail!("perry-codegen: String.split expects 1 arg (delimiter), got {}", args.len());
+                bail!(
+                    "perry-codegen: String.split expects 1 arg (delimiter), got {}",
+                    args.len()
+                );
             }
             // NOTE: we always call js_string_split here, even for regex
             // delimiters — the runtime will detect regex pointers via
@@ -145,7 +154,10 @@ pub(crate) fn lower_string_method(
         }
         "charAt" => {
             if args.len() != 1 {
-                bail!("perry-codegen: String.charAt expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.charAt expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let idx_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
@@ -160,7 +172,10 @@ pub(crate) fn lower_string_method(
         }
         "repeat" => {
             if args.len() != 1 {
-                bail!("perry-codegen: String.repeat expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.repeat expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let count_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
@@ -192,10 +207,8 @@ pub(crate) fn lower_string_method(
                 ));
             // Detect a function replacer: a Closure literal, a FuncRef,
             // or a LocalGet of a function-typed local.
-            let repl_is_function = matches!(
-                &args[1],
-                Expr::Closure { .. } | Expr::FuncRef(_)
-            ) || matches!(&args[1], Expr::LocalGet(id) if ctx.local_closure_func_ids.contains_key(id));
+            let repl_is_function = matches!(&args[1], Expr::Closure { .. } | Expr::FuncRef(_))
+                || matches!(&args[1], Expr::LocalGet(id) if ctx.local_closure_func_ids.contains_key(id));
             // Detect a string literal that includes $<name> back-refs
             // so we route to the named-group-aware runtime variant.
             let repl_has_named = matches!(&args[1], Expr::String(s) if s.contains("$<"));
@@ -210,7 +223,11 @@ pub(crate) fn lower_string_method(
                 let result = blk.call(
                     I64,
                     "js_string_replace_regex_fn",
-                    &[(I64, &recv_handle), (I64, &needle_handle), (DOUBLE, &repl_box)],
+                    &[
+                        (I64, &recv_handle),
+                        (I64, &needle_handle),
+                        (DOUBLE, &repl_box),
+                    ],
                 );
                 return Ok(nanbox_string_inline(blk, &result));
             }
@@ -230,7 +247,11 @@ pub(crate) fn lower_string_method(
             let result = blk.call(
                 I64,
                 runtime_fn,
-                &[(I64, &recv_handle), (I64, &needle_handle), (I64, &repl_handle)],
+                &[
+                    (I64, &recv_handle),
+                    (I64, &needle_handle),
+                    (I64, &repl_handle),
+                ],
             );
             Ok(nanbox_string_inline(blk, &result))
         }
@@ -244,33 +265,54 @@ pub(crate) fn lower_string_method(
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
             // js_string_at returns a NaN-boxed string or undefined directly.
-            Ok(blk.call(DOUBLE, "js_string_at", &[(I64, &recv_handle), (I32, &idx_i32)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_string_at",
+                &[(I64, &recv_handle), (I32, &idx_i32)],
+            ))
         }
         "codePointAt" => {
             if args.is_empty() || args.len() > 1 {
-                bail!("perry-codegen: String.codePointAt expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.codePointAt expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let idx_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
             // Returns NaN-boxed number or undefined directly.
-            Ok(blk.call(DOUBLE, "js_string_code_point_at", &[(I64, &recv_handle), (I32, &idx_i32)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_string_code_point_at",
+                &[(I64, &recv_handle), (I32, &idx_i32)],
+            ))
         }
         "charCodeAt" => {
             if args.is_empty() || args.len() > 1 {
-                bail!("perry-codegen: String.charCodeAt expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.charCodeAt expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let idx_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
             let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
             // js_string_char_code_at returns a plain f64 (NaN for OOB).
-            Ok(blk.call(DOUBLE, "js_string_char_code_at", &[(I64, &recv_handle), (I32, &idx_i32)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_string_char_code_at",
+                &[(I64, &recv_handle), (I32, &idx_i32)],
+            ))
         }
         "lastIndexOf" => {
             if args.len() != 1 {
-                bail!("perry-codegen: String.lastIndexOf expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.lastIndexOf expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let needle_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
@@ -285,7 +327,11 @@ pub(crate) fn lower_string_method(
         }
         "padStart" | "padEnd" => {
             if args.is_empty() || args.len() > 2 {
-                bail!("perry-codegen: String.{} expects 1 or 2 args, got {}", property, args.len());
+                bail!(
+                    "perry-codegen: String.{} expects 1 or 2 args, got {}",
+                    property,
+                    args.len()
+                );
             }
             let len_d = lower_expr(ctx, &args[0])?;
             // Optional pad string; defaults to " " when missing.
@@ -319,7 +365,10 @@ pub(crate) fn lower_string_method(
             // 0 or 1 string arg. Empty arg → default ("NFC" handled by
             // the runtime when form is null).
             if args.len() > 1 {
-                bail!("perry-codegen: String.normalize expects 0 or 1 args, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.normalize expects 0 or 1 args, got {}",
+                    args.len()
+                );
             }
             let form_handle = if args.is_empty() {
                 "0".to_string()
@@ -339,7 +388,10 @@ pub(crate) fn lower_string_method(
         }
         "localeCompare" => {
             if args.is_empty() || args.len() > 3 {
-                bail!("perry-codegen: String.localeCompare expects 1-3 args, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.localeCompare expects 1-3 args, got {}",
+                    args.len()
+                );
             }
             let other_box = lower_expr(ctx, &args[0])?;
             // Ignore optional locale/options args.
@@ -358,7 +410,10 @@ pub(crate) fn lower_string_method(
         }
         "search" => {
             if args.len() != 1 {
-                bail!("perry-codegen: String.search expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.search expects 1 arg, got {}",
+                    args.len()
+                );
             }
             // The arg is a regex (literal or local).
             let re_box = lower_expr(ctx, &args[0])?;
@@ -374,7 +429,10 @@ pub(crate) fn lower_string_method(
         }
         "match" => {
             if args.len() != 1 {
-                bail!("perry-codegen: String.match expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.match expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let re_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
@@ -390,18 +448,17 @@ pub(crate) fn lower_string_method(
             let is_null = blk.icmp_eq(I64, &result, "0");
             let ptr_boxed = nanbox_pointer_inline(ctx.block(), &result);
             let ptr_bits = ctx.block().bitcast_double_to_i64(&ptr_boxed);
-            let selected = ctx.block().select(
-                I1,
-                &is_null,
-                I64,
-                crate::nanbox::TAG_NULL_I64,
-                &ptr_bits,
-            );
+            let selected =
+                ctx.block()
+                    .select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &ptr_bits);
             Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
         "matchAll" => {
             if args.len() != 1 {
-                bail!("perry-codegen: String.matchAll expects 1 arg, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.matchAll expects 1 arg, got {}",
+                    args.len()
+                );
             }
             let re_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
@@ -417,7 +474,10 @@ pub(crate) fn lower_string_method(
         }
         "isWellFormed" => {
             if !args.is_empty() {
-                bail!("perry-codegen: String.isWellFormed takes no args, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.isWellFormed takes no args, got {}",
+                    args.len()
+                );
             }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -426,7 +486,10 @@ pub(crate) fn lower_string_method(
         }
         "toWellFormed" => {
             if !args.is_empty() {
-                bail!("perry-codegen: String.toWellFormed takes no args, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.toWellFormed takes no args, got {}",
+                    args.len()
+                );
             }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -454,7 +517,10 @@ pub(crate) fn lower_string_method(
             // Legacy substr(start, length) — map to slice(start, start+length).
             // Without a dedicated runtime helper we approximate with substring.
             if args.is_empty() || args.len() > 2 {
-                bail!("perry-codegen: String.substr expects 1 or 2 args, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.substr expects 1 or 2 args, got {}",
+                    args.len()
+                );
             }
             let start_d = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
@@ -507,7 +573,10 @@ pub(crate) fn lower_string_method(
             // str.includes(sub) -> boolean. Implemented as
             // js_string_index_of(str, sub) != -1, then NaN-tagged.
             if args.is_empty() || args.len() > 2 {
-                bail!("perry-codegen: String.includes expects 1 or 2 args, got {}", args.len());
+                bail!(
+                    "perry-codegen: String.includes expects 1 or 2 args, got {}",
+                    args.len()
+                );
             }
             let needle_box = lower_expr(ctx, &args[0])?;
             // Optional fromIndex param is ignored for the boolean form.
@@ -592,7 +661,11 @@ pub(crate) fn lower_string_self_append(
         let l_handle = unbox_str_handle(blk, &lhs_val);
         // Coerce non-string RHS to a string handle.
         let r_handle = blk.call(I64, "js_jsvalue_to_string", &[(DOUBLE, &rhs_val)]);
-        let result = blk.call(I64, "js_string_append", &[(I64, &l_handle), (I64, &r_handle)]);
+        let result = blk.call(
+            I64,
+            "js_string_append",
+            &[(I64, &l_handle), (I64, &r_handle)],
+        );
         let new_box = nanbox_string_inline(blk, &result);
         blk.store(DOUBLE, &new_box, &slot);
         return Ok(new_box);
@@ -692,7 +765,11 @@ pub(crate) fn lower_string_coerce_concat(
 /// The bitcast+and is the inline-fast unboxing pattern. We avoid calling
 /// the slower `js_nanbox_get_pointer` (which does the same thing in Rust)
 /// to keep concat hot-path overhead minimal.
-pub(crate) fn lower_string_concat(ctx: &mut FnCtx<'_>, left: &Expr, right: &Expr) -> Result<String> {
+pub(crate) fn lower_string_concat(
+    ctx: &mut FnCtx<'_>,
+    left: &Expr,
+    right: &Expr,
+) -> Result<String> {
     let l_box = lower_expr(ctx, left)?;
     let r_box = lower_expr(ctx, right)?;
     let blk = ctx.block();

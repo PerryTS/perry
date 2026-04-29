@@ -69,7 +69,11 @@ pub extern "C" fn js_lru_cache_has(handle: Handle, key: f64) -> f64 {
     let key_bits = key.to_bits() as i64;
 
     if let Some(cache) = get_handle_mut::<LruCacheHandle>(handle) {
-        return if cache.cache.contains(&key_bits) { 1.0 } else { 0.0 };
+        return if cache.cache.contains(&key_bits) {
+            1.0
+        } else {
+            0.0
+        };
     }
 
     0.0
@@ -82,7 +86,11 @@ pub extern "C" fn js_lru_cache_delete(handle: Handle, key: f64) -> f64 {
     let key_bits = key.to_bits() as i64;
 
     if let Some(cache) = get_handle_mut::<LruCacheHandle>(handle) {
-        return if cache.cache.pop(&key_bits).is_some() { 1.0 } else { 0.0 };
+        return if cache.cache.pop(&key_bits).is_some() {
+            1.0
+        } else {
+            0.0
+        };
     }
 
     0.0

@@ -8,8 +8,8 @@
 //! - Sweep phase: free malloc objects; arena objects added to free list for reuse
 //! - Trigger: only checked on new arena block allocation or explicit gc() call
 
-use std::cell::{Cell, RefCell};
 use std::alloc::{alloc, dealloc, realloc, Layout};
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
 /// GC header prepended to every heap allocation.
@@ -107,8 +107,10 @@ pub const GC_FLAG_FORWARDED: u8 = 0x80;
 /// have at least the StringHeader, arrays have ArrayHeader, etc.).
 #[inline]
 pub unsafe fn forwarding_address(header: *const GcHeader) -> *mut u8 {
-    debug_assert!((*header).gc_flags & GC_FLAG_FORWARDED != 0,
-        "forwarding_address called on non-forwarded header");
+    debug_assert!(
+        (*header).gc_flags & GC_FLAG_FORWARDED != 0,
+        "forwarding_address called on non-forwarded header"
+    );
     let user_ptr = (header as *const u8).add(GC_HEADER_SIZE) as *const *mut u8;
     *user_ptr
 }
@@ -429,8 +431,10 @@ pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
     SHADOW_STACK.with(|s| {
         let mut stack = s.borrow_mut();
         let base = frame_handle as usize;
-        debug_assert!(base + SHADOW_STACK_HEADER_SLOTS <= stack.len(),
-            "shadow-stack pop past end (corrupted frame handle)");
+        debug_assert!(
+            base + SHADOW_STACK_HEADER_SLOTS <= stack.len(),
+            "shadow-stack pop past end (corrupted frame handle)"
+        );
         let prev_top = stack[base] as usize;
         stack.truncate(base);
         SHADOW_STACK_FRAME_TOP.with(|c| c.set(prev_top));
@@ -445,7 +449,9 @@ pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
 #[no_mangle]
 pub extern "C" fn js_shadow_slot_set(idx: u32, value: u64) {
     let top = SHADOW_STACK_FRAME_TOP.with(|c| c.get());
-    if top == usize::MAX { return; }  // no frame active — no-op
+    if top == usize::MAX {
+        return;
+    } // no frame active — no-op
     SHADOW_STACK.with(|s| {
         let mut stack = s.borrow_mut();
         let slot = top + idx as usize;
@@ -461,11 +467,17 @@ pub extern "C" fn js_shadow_slot_set(idx: u32, value: u64) {
 #[no_mangle]
 pub extern "C" fn js_shadow_slot_get(idx: u32) -> u64 {
     let top = SHADOW_STACK_FRAME_TOP.with(|c| c.get());
-    if top == usize::MAX { return 0; }
+    if top == usize::MAX {
+        return 0;
+    }
     SHADOW_STACK.with(|s| {
         let stack = s.borrow();
         let slot = top + idx as usize;
-        if slot < stack.len() { stack[slot] } else { 0 }
+        if slot < stack.len() {
+            stack[slot]
+        } else {
+            0
+        }
     })
 }
 
@@ -481,7 +493,9 @@ pub fn shadow_stack_depth() -> usize {
         while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
             depth += 1;
             let header_base = top - SHADOW_STACK_HEADER_SLOTS;
-            if header_base >= stack.len() { break; }
+            if header_base >= stack.len() {
+                break;
+            }
             top = stack[header_base] as usize;
         }
         depth
@@ -599,22 +613,25 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
     // Validate the pointer is in our tracked set before dereferencing the header.
     // This prevents SIGABRT when gc_realloc is called on a pointer that was
     // freed by GC (use-after-free) or was never allocated by gc_malloc.
-    let is_tracked = MALLOC_STATE.with(|s| {
-        s.borrow().set.contains(&(old_header as usize))
-    });
+    let is_tracked = MALLOC_STATE.with(|s| s.borrow().set.contains(&(old_header as usize)));
 
     if !is_tracked {
         // Pointer is not tracked — it was freed by GC, is arena-allocated,
         // or was never allocated by gc_malloc. Allocate fresh.
-        eprintln!("[perry] gc_realloc: untracked pointer {:p}, allocating fresh ({} bytes)",
-            old_user_ptr, new_payload_size);
+        eprintln!(
+            "[perry] gc_realloc: untracked pointer {:p}, allocating fresh ({} bytes)",
+            old_user_ptr, new_payload_size
+        );
         return gc_malloc(new_payload_size, GC_TYPE_STRING);
     }
 
     // Also check arena flag — arena objects must not be passed to system realloc
     unsafe {
         if (*old_header).gc_flags & GC_FLAG_ARENA != 0 {
-            eprintln!("[perry] gc_realloc: arena pointer {:p}, allocating fresh", old_user_ptr);
+            eprintln!(
+                "[perry] gc_realloc: arena pointer {:p}, allocating fresh",
+                old_user_ptr
+            );
             let new_ptr = gc_malloc(new_payload_size, (*old_header).obj_type);
             let old_payload_size = (*old_header).size as usize - GC_HEADER_SIZE;
             let copy_size = old_payload_size.min(new_payload_size);
@@ -1078,7 +1095,8 @@ pub fn gc_collect_minor() -> u64 {
         if std::env::var_os("PERRY_GC_DIAG").is_some() {
             eprintln!(
                 "[gc-evac] evacuated={} cons_pinned={}",
-                n_evac, cons_pinned_count()
+                n_evac,
+                cons_pinned_count()
             );
         }
     }
@@ -1093,7 +1111,9 @@ pub fn gc_collect_minor() -> u64 {
     CONS_PINNED.with(|s| s.borrow_mut().clear());
 
     #[cfg(target_env = "gnu")]
-    unsafe { libc::malloc_trim(0); }
+    unsafe {
+        libc::malloc_trim(0);
+    }
 
     let elapsed_us = start.elapsed().as_micros() as u64;
     GC_STATS.with(|stats| {
@@ -1125,10 +1145,12 @@ pub fn gc_collect_minor() -> u64 {
 pub fn gen_gc_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| !matches!(
-        std::env::var("PERRY_GEN_GC").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    ))
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_GEN_GC").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
 }
 
 /// Gen-GC Phase C4b: `PERRY_GEN_GC_EVACUATE=1` enables the
@@ -1143,10 +1165,12 @@ pub fn gen_gc_enabled() -> bool {
 pub fn gen_gc_evacuate_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| matches!(
-        std::env::var("PERRY_GEN_GC_EVACUATE").as_deref(),
-        Ok("1") | Ok("on") | Ok("true")
-    ))
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GEN_GC_EVACUATE").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
 }
 
 fn gc_collect_inner() -> u64 {
@@ -1243,7 +1267,9 @@ pub(crate) struct ValidPointerSet {
 
 impl ValidPointerSet {
     fn new(capacity: usize) -> Self {
-        Self { sorted: Vec::with_capacity(capacity) }
+        Self {
+            sorted: Vec::with_capacity(capacity),
+        }
     }
     fn insert(&mut self, ptr: usize) {
         self.sorted.push(ptr);
@@ -1266,11 +1292,15 @@ impl ValidPointerSet {
     /// user pointer `<= query`, then consults that object's GcHeader
     /// size to decide whether `query` lies within `[start, start+size)`.
     pub(crate) fn enclosing_object(&self, ptr: usize) -> Option<usize> {
-        if self.sorted.is_empty() { return None; }
+        if self.sorted.is_empty() {
+            return None;
+        }
         // Find insertion point: `idx` is the first entry > ptr; the
         // candidate enclosing start is at idx-1.
         let idx = self.sorted.partition_point(|&p| p <= ptr);
-        if idx == 0 { return None; }
+        if idx == 0 {
+            return None;
+        }
         let candidate = self.sorted[idx - 1];
         // User pointer. The GcHeader lives at candidate - GC_HEADER_SIZE
         // and holds the total allocation size (including the 8-byte
@@ -1541,7 +1571,11 @@ fn get_stack_bottom() -> usize {
         fn pthread_self() -> usize;
         fn pthread_attr_init(attr: *mut [u64; 8]) -> i32;
         fn pthread_getattr_np(thread: usize, attr: *mut [u64; 8]) -> i32;
-        fn pthread_attr_getstack(attr: *const [u64; 8], stackaddr: *mut *mut u8, stacksize: *mut usize) -> i32;
+        fn pthread_attr_getstack(
+            attr: *const [u64; 8],
+            stackaddr: *mut *mut u8,
+            stacksize: *mut usize,
+        ) -> i32;
         fn pthread_attr_destroy(attr: *mut [u64; 8]) -> i32;
     }
     unsafe {
@@ -1630,7 +1664,9 @@ fn mark_remembered_set_roots(valid_ptrs: &ValidPointerSet) {
         // `try_mark_value` machinery which traces transitively —
         // correct but not yet generationally optimal.
         let user_ptr = header_addr + GC_HEADER_SIZE;
-        if !valid_ptrs.contains(&user_ptr) { continue; }
+        if !valid_ptrs.contains(&user_ptr) {
+            continue;
+        }
         // Treat as a NaN-boxed POINTER value; try_mark_value
         // dispatches through the standard mark + worklist path.
         let nanbox = POINTER_TAG | (user_ptr as u64);
@@ -1873,7 +1909,11 @@ fn mark_block_persisting_arena_objects(valid_ptrs: &ValidPointerSet) {
 /// Trace Map entries — scan all key-value pairs in the Map's entries array.
 /// Maps store NaN-boxed JSValues (strings, arrays, objects) as keys and values.
 /// Values may also be raw I64 pointers (for typed arrays/maps stored in maps).
-unsafe fn trace_map(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklist: &mut Vec<*mut GcHeader>) {
+unsafe fn trace_map(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    worklist: &mut Vec<*mut GcHeader>,
+) {
     let map = user_ptr as *const crate::map::MapHeader;
     let size = (*map).size;
     let capacity = (*map).capacity;
@@ -1920,7 +1960,11 @@ fn extract_ptr_from_bits(bits: u64) -> usize {
         }
         _ => {
             // Raw pointer (no NaN-boxing tag)
-            if bits >= 0x1000 && bits <= 0x0000_FFFF_FFFF_FFFF { bits as usize } else { 0 }
+            if bits >= 0x1000 && bits <= 0x0000_FFFF_FFFF_FFFF {
+                bits as usize
+            } else {
+                0
+            }
         }
     }
 }
@@ -1928,7 +1972,11 @@ fn extract_ptr_from_bits(bits: u64) -> usize {
 /// Trace array elements.
 /// Elements may be NaN-boxed JSValues OR raw I64 pointers (codegen stores raw I64 for
 /// is_pointer/is_array/is_string typed arrays via js_array_set_jsvalue).
-unsafe fn trace_array(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklist: &mut Vec<*mut GcHeader>) {
+unsafe fn trace_array(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    worklist: &mut Vec<*mut GcHeader>,
+) {
     // Issue #233: a runtime-installed FORWARDED flag (from
     // js_array_grow) means this user_ptr's first 8 bytes hold the
     // forwarding pointer instead of length+capacity. Tracing it as
@@ -1956,7 +2004,8 @@ unsafe fn trace_array(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklist:
         return;
     }
 
-    let elements = (user_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+    let elements =
+        (user_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
 
     for i in 0..length as usize {
         let val_bits = *elements.add(i);
@@ -1976,7 +2025,11 @@ unsafe fn trace_array(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklist:
 /// Trace object fields and keys array.
 /// Fields may be NaN-boxed JSValues OR raw I64 pointers (codegen stores some fields as raw I64).
 /// keys_array may be a raw pointer (*mut ArrayHeader) OR NaN-boxed (codegen may NaN-box it).
-unsafe fn trace_object(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklist: &mut Vec<*mut GcHeader>) {
+unsafe fn trace_object(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    worklist: &mut Vec<*mut GcHeader>,
+) {
     let obj = user_ptr as *const crate::object::ObjectHeader;
     let field_count = (*obj).field_count;
 
@@ -1986,7 +2039,8 @@ unsafe fn trace_object(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklist
         return;
     }
 
-    let fields = (user_ptr as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64;
+    let fields = (user_ptr as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+        as *const u64;
 
     // Trace each field — use try_mark_value_or_raw since codegen may store raw I64 pointers
     // (e.g., for is_pointer variables) alongside NaN-boxed JSValues.
@@ -2098,12 +2152,18 @@ unsafe fn trace_lazy_array(
         let bitmap_words = (cached_length + 63) / 64;
         for w in 0..bitmap_words {
             let word = *bitmap.add(w);
-            if word == 0 { continue; }
+            if word == 0 {
+                continue;
+            }
             let base_idx = w * 64;
             for b in 0..64usize {
-                if word & (1u64 << b) == 0 { continue; }
+                if word & (1u64 << b) == 0 {
+                    continue;
+                }
                 let i = base_idx + b;
-                if i >= cached_length { break; }
+                if i >= cached_length {
+                    break;
+                }
                 let val_bits = (*cache.add(i)).bits();
                 if try_mark_value(val_bits, valid_ptrs) {
                     let tag = val_bits & TAG_MASK;
@@ -2125,10 +2185,15 @@ unsafe fn trace_lazy_array(
 /// Trace closure captures
 /// Captures may be NaN-boxed JSValues OR raw I64 pointers bitcast to F64.
 /// Perry's codegen stores `is_string`/`is_array`/`is_closure` captures as raw I64 in some paths.
-unsafe fn trace_closure(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklist: &mut Vec<*mut GcHeader>) {
+unsafe fn trace_closure(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    worklist: &mut Vec<*mut GcHeader>,
+) {
     let closure = user_ptr as *const crate::closure::ClosureHeader;
     let capture_count = crate::closure::real_capture_count((*closure).capture_count);
-    let captures = (user_ptr as *const u8).add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *const u64;
+    let captures = (user_ptr as *const u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
+        as *const u64;
 
     for i in 0..capture_count as usize {
         let val_bits = *captures.add(i);
@@ -2147,7 +2212,11 @@ unsafe fn trace_closure(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklis
 }
 
 /// Trace promise fields
-unsafe fn trace_promise(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklist: &mut Vec<*mut GcHeader>) {
+unsafe fn trace_promise(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    worklist: &mut Vec<*mut GcHeader>,
+) {
     let promise = user_ptr as *const crate::promise::Promise;
 
     // Trace value and reason — may be NaN-boxed JSValues or raw I64 pointers
@@ -2204,7 +2273,11 @@ unsafe fn trace_promise(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklis
 }
 
 /// Trace error fields (message, name, stack are StringHeader pointers; cause is f64; errors is array)
-unsafe fn trace_error(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, worklist: &mut Vec<*mut GcHeader>) {
+unsafe fn trace_error(
+    user_ptr: *mut u8,
+    valid_ptrs: &ValidPointerSet,
+    worklist: &mut Vec<*mut GcHeader>,
+) {
     let error = user_ptr as *const crate::error::ErrorHeader;
 
     for &str_ptr in &[(*error).message, (*error).name, (*error).stack] {
@@ -2597,21 +2670,25 @@ fn evacuate_tenured_nursery_objects() -> usize {
             let flags = (*header).gc_flags;
             // Already evacuated (shouldn't happen — caller's filter
             // should prevent — but defend against duplicate calls).
-            if flags & GC_FLAG_FORWARDED != 0 { return; }
+            if flags & GC_FLAG_FORWARDED != 0 {
+                return;
+            }
             // Must be alive AND tenured.
-            if flags & GC_FLAG_MARKED == 0 { return; }
-            if flags & GC_FLAG_TENURED == 0 { return; }
+            if flags & GC_FLAG_MARKED == 0 {
+                return;
+            }
+            if flags & GC_FLAG_TENURED == 0 {
+                return;
+            }
             // Conservative-pinning blocks evacuation.
-            if is_conservatively_pinned(header) { return; }
+            if is_conservatively_pinned(header) {
+                return;
+            }
             // Allocate the new home in OLD_ARENA. Same size +
             // alignment as the original; same obj_type.
             let total = (*header).size as usize;
             let payload = total - GC_HEADER_SIZE;
-            let new_user = crate::arena::arena_alloc_gc_old(
-                payload,
-                8,
-                (*header).obj_type,
-            );
+            let new_user = crate::arena::arena_alloc_gc_old(payload, 8, (*header).obj_type);
             // Copy the user payload bytes verbatim. The new
             // GcHeader was set up by arena_alloc_gc_old; we don't
             // copy the OLD header (its flags / size match the
@@ -2659,9 +2736,13 @@ fn try_rewrite_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
         _ => {
             // Reject NaN-tagged non-pointer values (numbers,
             // booleans, undefined, null, SSO, INT32, handles).
-            if tag >= 0x7FF8_0000_0000_0000 { return None; }
+            if tag >= 0x7FF8_0000_0000_0000 {
+                return None;
+            }
             // Raw pointer fallback: lower 48 bits valid range.
-            if bits < 0x1000 || bits > 0x0000_FFFF_FFFF_FFFF { return None; }
+            if bits < 0x1000 || bits > 0x0000_FFFF_FFFF_FFFF {
+                return None;
+            }
             (bits as usize, false)
         }
     };
@@ -2674,7 +2755,11 @@ fn try_rewrite_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
             return None;
         }
         let new_user = forwarding_address(header) as usize;
-        Some(if is_nanbox { tag | (new_user as u64) } else { new_user as u64 })
+        Some(if is_nanbox {
+            tag | (new_user as u64)
+        } else {
+            new_user as u64
+        })
     }
 }
 
@@ -2700,9 +2785,11 @@ unsafe fn rewrite_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) 
     let arr = user_ptr as *const crate::array::ArrayHeader;
     let length = (*arr).length;
     let capacity = (*arr).capacity;
-    if length > capacity || length > 16_000_000 { return; }
-    let elements = (user_ptr as *mut u8)
-        .add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+    if length > capacity || length > 16_000_000 {
+        return;
+    }
+    let elements =
+        (user_ptr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
     for i in 0..length as usize {
         rewrite_slot(elements.add(i), valid_ptrs);
     }
@@ -2711,9 +2798,11 @@ unsafe fn rewrite_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) 
 unsafe fn rewrite_object_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
     let obj = user_ptr as *const crate::object::ObjectHeader;
     let field_count = (*obj).field_count;
-    if field_count > 1_000_000 { return; }
-    let fields = (user_ptr as *mut u8)
-        .add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+    if field_count > 1_000_000 {
+        return;
+    }
+    let fields =
+        (user_ptr as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
     for i in 0..field_count as usize {
         rewrite_slot(fields.add(i), valid_ptrs);
     }
@@ -2727,9 +2816,13 @@ unsafe fn rewrite_map_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
     let map = user_ptr as *const crate::map::MapHeader;
     let size = (*map).size;
     let capacity = (*map).capacity;
-    if size > capacity || size > 100_000 { return; }
+    if size > capacity || size > 100_000 {
+        return;
+    }
     let entries = (*map).entries as *mut u64;
-    if entries.is_null() { return; }
+    if entries.is_null() {
+        return;
+    }
     for i in 0..(size as usize) {
         rewrite_slot(entries.add(i * 2), valid_ptrs);
         rewrite_slot(entries.add(i * 2 + 1), valid_ptrs);
@@ -2739,8 +2832,8 @@ unsafe fn rewrite_map_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
 unsafe fn rewrite_closure_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
     let closure = user_ptr as *const crate::closure::ClosureHeader;
     let capture_count = crate::closure::real_capture_count((*closure).capture_count);
-    let captures = (user_ptr as *mut u8)
-        .add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
+    let captures =
+        (user_ptr as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
     for i in 0..capture_count as usize {
         rewrite_slot(captures.add(i), valid_ptrs);
     }
@@ -2766,11 +2859,19 @@ unsafe fn rewrite_error_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) 
 
 unsafe fn rewrite_lazy_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {
     let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
-    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC { return; }
+    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
+        return;
+    }
     rewrite_slot(&(*lazy).blob_str as *const _ as *mut u64, valid_ptrs);
     rewrite_slot(&(*lazy).materialized as *const _ as *mut u64, valid_ptrs);
-    rewrite_slot(&(*lazy).materialized_elements as *const _ as *mut u64, valid_ptrs);
-    rewrite_slot(&(*lazy).materialized_bitmap as *const _ as *mut u64, valid_ptrs);
+    rewrite_slot(
+        &(*lazy).materialized_elements as *const _ as *mut u64,
+        valid_ptrs,
+    );
+    rewrite_slot(
+        &(*lazy).materialized_bitmap as *const _ as *mut u64,
+        valid_ptrs,
+    );
     // Walk cached materialized JSValues — each holds a NaN-boxed
     // pointer to a backing object that may itself be forwarded.
     let cached_length = (*lazy).cached_length as usize;
@@ -2780,12 +2881,18 @@ unsafe fn rewrite_lazy_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointer
         let bitmap_words = (cached_length + 63) / 64;
         for w in 0..bitmap_words {
             let word = *bitmap.add(w);
-            if word == 0 { continue; }
+            if word == 0 {
+                continue;
+            }
             let base_idx = w * 64;
             for b in 0..64usize {
-                if word & (1u64 << b) == 0 { continue; }
+                if word & (1u64 << b) == 0 {
+                    continue;
+                }
                 let i = base_idx + b;
-                if i >= cached_length { break; }
+                if i >= cached_length {
+                    break;
+                }
                 let slot = cache.add(i) as *mut u64;
                 rewrite_slot(slot, valid_ptrs);
             }
@@ -2804,9 +2911,13 @@ fn rewrite_heap_objects(valid_ptrs: &ValidPointerSet) {
             // FORWARDED originals are stale — first 8 bytes of
             // payload now holds the forwarding address, not real
             // field data. Skip them entirely.
-            if flags & GC_FLAG_FORWARDED != 0 { return; }
+            if flags & GC_FLAG_FORWARDED != 0 {
+                return;
+            }
             // Skip dead objects — sweep is about to free them.
-            if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 { return; }
+            if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+                return;
+            }
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
             match (*header).obj_type {
                 GC_TYPE_ARRAY => rewrite_array_fields(user_ptr, valid_ptrs),
@@ -2837,17 +2948,25 @@ fn rewrite_heap_objects(valid_ptrs: &ValidPointerSet) {
 fn rewrite_shadow_stack_slots(valid_ptrs: &ValidPointerSet) {
     SHADOW_STACK.with(|s| {
         let mut stack = s.borrow_mut();
-        if stack.is_empty() { return; }
+        if stack.is_empty() {
+            return;
+        }
         let mut top = SHADOW_STACK_FRAME_TOP.with(|c| c.get());
         while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
             let header_base = top - SHADOW_STACK_HEADER_SLOTS;
-            if header_base + 1 >= stack.len() { break; }
+            if header_base + 1 >= stack.len() {
+                break;
+            }
             let slot_count = stack[header_base + 1] as usize;
             let slots_end = top + slot_count;
-            if slots_end > stack.len() { break; }
+            if slots_end > stack.len() {
+                break;
+            }
             for i in 0..slot_count {
                 let bits = stack[top + i];
-                if bits == 0 { continue; }
+                if bits == 0 {
+                    continue;
+                }
                 if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
                     stack[top + i] = new_bits;
                 }
@@ -2865,7 +2984,9 @@ fn rewrite_global_roots(valid_ptrs: &ValidPointerSet) {
     GLOBAL_ROOTS.with(|roots| {
         let roots = roots.borrow();
         for &root_ptr in roots.iter() {
-            if root_ptr.is_null() { continue; }
+            if root_ptr.is_null() {
+                continue;
+            }
             unsafe {
                 let bits = *root_ptr;
                 if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
@@ -2923,13 +3044,21 @@ pub extern "C" fn js_write_barrier(parent: u64, child: u64) {
     // Decode the parent — must be a NaN-boxed pointer (POINTER /
     // STRING / BIGINT / SHORT_STRING) or a raw heap address.
     let parent_addr = decode_heap_addr(parent);
-    if parent_addr == 0 { return; }
+    if parent_addr == 0 {
+        return;
+    }
     // Decode child similarly.
     let child_addr = decode_heap_addr(child);
-    if child_addr == 0 { return; }
+    if child_addr == 0 {
+        return;
+    }
     // Old → young check.
-    if !crate::arena::pointer_in_old_gen(parent_addr) { return; }
-    if !crate::arena::pointer_in_nursery(child_addr) { return; }
+    if !crate::arena::pointer_in_old_gen(parent_addr) {
+        return;
+    }
+    if !crate::arena::pointer_in_nursery(child_addr) {
+        return;
+    }
     // Parent's GcHeader sits at parent_addr - GC_HEADER_SIZE.
     let header = parent_addr.saturating_sub(GC_HEADER_SIZE);
     REMEMBERED_SET.with(|s| {
@@ -3001,7 +3130,9 @@ pub fn remembered_set_clear() {
 pub fn shadow_stack_root_scanner(mark: &mut dyn FnMut(f64)) {
     SHADOW_STACK.with(|s| {
         let stack = s.borrow();
-        if stack.is_empty() { return; }
+        if stack.is_empty() {
+            return;
+        }
         // Walk every frame by chasing prev_frame_top pointers from
         // the current top. Each frame's layout:
         //   [slot_0 .. slot_{n-1}]  with header at prev
@@ -3009,10 +3140,14 @@ pub fn shadow_stack_root_scanner(mark: &mut dyn FnMut(f64)) {
         let mut top = SHADOW_STACK_FRAME_TOP.with(|c| c.get());
         while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
             let header_base = top - SHADOW_STACK_HEADER_SLOTS;
-            if header_base + 1 >= stack.len() { break; }
+            if header_base + 1 >= stack.len() {
+                break;
+            }
             let slot_count = stack[header_base + 1] as usize;
             let slots_end = top + slot_count;
-            if slots_end > stack.len() { break; }
+            if slots_end > stack.len() {
+                break;
+            }
             for i in 0..slot_count {
                 let bits = stack[top + i];
                 if bits != 0 {
@@ -3051,7 +3186,11 @@ pub extern "C" fn js_gc_init() {
 
 /// FFI: get GC stats
 #[no_mangle]
-pub extern "C" fn js_gc_stats(out_collections: *mut u64, out_freed: *mut u64, out_pause_us: *mut u64) {
+pub extern "C" fn js_gc_stats(
+    out_collections: *mut u64,
+    out_freed: *mut u64,
+    out_pause_us: *mut u64,
+) {
     GC_STATS.with(|stats| {
         let stats = stats.borrow();
         unsafe {
@@ -3102,7 +3241,10 @@ mod tests {
 
         unsafe {
             assert_eq!((*header_from_user_ptr(string_ptr)).obj_type, GC_TYPE_STRING);
-            assert_eq!((*header_from_user_ptr(closure_ptr)).obj_type, GC_TYPE_CLOSURE);
+            assert_eq!(
+                (*header_from_user_ptr(closure_ptr)).obj_type,
+                GC_TYPE_CLOSURE
+            );
             assert_eq!((*header_from_user_ptr(bigint_ptr)).obj_type, GC_TYPE_BIGINT);
         }
     }
@@ -3117,7 +3259,11 @@ mod tests {
 
         // Stats should have incremented
         let new_count = GC_STATS.with(|s| s.borrow().collection_count);
-        assert_eq!(new_count, initial_count + 1, "collection count should increment");
+        assert_eq!(
+            new_count,
+            initial_count + 1,
+            "collection count should increment"
+        );
     }
 
     #[test]
@@ -3180,8 +3326,12 @@ mod tests {
         // Verify old data preserved (first 32 bytes should still be 0xAB)
         unsafe {
             for i in 0..32 {
-                assert_eq!(*new_ptr.add(i), 0xAB,
-                    "byte {} should be preserved after realloc", i);
+                assert_eq!(
+                    *new_ptr.add(i),
+                    0xAB,
+                    "byte {} should be preserved after realloc",
+                    i
+                );
             }
         }
 
@@ -3231,9 +3381,7 @@ mod tests {
             gc_collect_inner();
 
             // Verify still tracked
-            let tracked = MALLOC_STATE.with(|s| {
-                s.borrow().set.contains(&(header as usize))
-            });
+            let tracked = MALLOC_STATE.with(|s| s.borrow().set.contains(&(header as usize)));
             assert!(tracked, "pinned object should survive GC");
 
             // Unpin
@@ -3250,8 +3398,14 @@ mod tests {
         let valid_set = build_valid_pointer_set();
 
         // Our malloc objects should be in the valid set
-        assert!(valid_set.contains(&(ptr1 as usize)), "ptr1 should be in valid set");
-        assert!(valid_set.contains(&(ptr2 as usize)), "ptr2 should be in valid set");
+        assert!(
+            valid_set.contains(&(ptr1 as usize)),
+            "ptr1 should be in valid set"
+        );
+        assert!(
+            valid_set.contains(&(ptr2 as usize)),
+            "ptr2 should be in valid set"
+        );
     }
 
     /// Helper: reset the shadow stack to a known-empty state
@@ -3283,10 +3437,10 @@ mod tests {
         reset_shadow_stack();
         let h = js_shadow_frame_push(4);
         // Store some pointer bit patterns.
-        js_shadow_slot_set(0, 0x7FFD_0000_1234_5678);  // POINTER_TAG
-        js_shadow_slot_set(1, 0x7FFF_0000_9ABC_DEF0);  // STRING_TAG
-        js_shadow_slot_set(2, 0);                       // hole
-        js_shadow_slot_set(3, 0x7FF9_0200_0000_6B6F);  // SSO "ok"
+        js_shadow_slot_set(0, 0x7FFD_0000_1234_5678); // POINTER_TAG
+        js_shadow_slot_set(1, 0x7FFF_0000_9ABC_DEF0); // STRING_TAG
+        js_shadow_slot_set(2, 0); // hole
+        js_shadow_slot_set(3, 0x7FF9_0200_0000_6B6F); // SSO "ok"
         assert_eq!(js_shadow_slot_get(0), 0x7FFD_0000_1234_5678);
         assert_eq!(js_shadow_slot_get(1), 0x7FFF_0000_9ABC_DEF0);
         assert_eq!(js_shadow_slot_get(2), 0);
@@ -3448,10 +3602,18 @@ mod tests {
         let child_nanbox = POINTER_TAG | (young as u64);
         assert_eq!(remembered_set_size(), 0);
         js_write_barrier(parent_nanbox, child_nanbox);
-        assert_eq!(remembered_set_size(), 1, "old→young write must record parent");
+        assert_eq!(
+            remembered_set_size(),
+            1,
+            "old→young write must record parent"
+        );
         // Same write again should NOT double-count (HashSet dedups).
         js_write_barrier(parent_nanbox, child_nanbox);
-        assert_eq!(remembered_set_size(), 1, "duplicate barrier call must dedup");
+        assert_eq!(
+            remembered_set_size(),
+            1,
+            "duplicate barrier call must dedup"
+        );
     }
 
     #[test]
@@ -3460,8 +3622,11 @@ mod tests {
         let parent = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
         let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
         js_write_barrier(POINTER_TAG | (parent as u64), POINTER_TAG | (child as u64));
-        assert_eq!(remembered_set_size(), 0,
-            "young→young write must not enter remembered set");
+        assert_eq!(
+            remembered_set_size(),
+            0,
+            "young→young write must not enter remembered set"
+        );
     }
 
     #[test]
@@ -3470,8 +3635,11 @@ mod tests {
         let parent = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
         let child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
         js_write_barrier(POINTER_TAG | (parent as u64), POINTER_TAG | (child as u64));
-        assert_eq!(remembered_set_size(), 0,
-            "old→old write must not enter remembered set (no inter-gen edge)");
+        assert_eq!(
+            remembered_set_size(),
+            0,
+            "old→old write must not enter remembered set (no inter-gen edge)"
+        );
     }
 
     #[test]
@@ -3491,17 +3659,26 @@ mod tests {
         // INT32_TAG in child position.
         let int32_val = 0x7FFE_0000_0000_002A_u64;
         js_write_barrier(POINTER_TAG | (old as u64), int32_val);
-        assert_eq!(remembered_set_size(), 0,
-            "non-pointer child must not enter remembered set");
+        assert_eq!(
+            remembered_set_size(),
+            0,
+            "non-pointer child must not enter remembered set"
+        );
         // SHORT_STRING_TAG (SSO inline) — also not a heap pointer.
         let sso = 0x7FF9_0500_0000_0000_u64;
         js_write_barrier(POINTER_TAG | (old as u64), sso);
-        assert_eq!(remembered_set_size(), 0,
-            "SSO child is inline data, not a heap pointer");
+        assert_eq!(
+            remembered_set_size(),
+            0,
+            "SSO child is inline data, not a heap pointer"
+        );
         // Plain double in child position.
         js_write_barrier(POINTER_TAG | (old as u64), 3.14_f64.to_bits());
-        assert_eq!(remembered_set_size(), 0,
-            "number child must not enter remembered set");
+        assert_eq!(
+            remembered_set_size(),
+            0,
+            "number child must not enter remembered set"
+        );
     }
 
     #[test]
@@ -3523,8 +3700,11 @@ mod tests {
         js_write_barrier(POINTER_TAG | (old as u64), POINTER_TAG | (young as u64));
         assert_eq!(remembered_set_size(), 1);
         let _freed = gc_collect_minor();
-        assert_eq!(remembered_set_size(), 0,
-            "minor GC must clear RS just like full GC does");
+        assert_eq!(
+            remembered_set_size(),
+            0,
+            "minor GC must clear RS just like full GC does"
+        );
     }
 
     #[test]
@@ -3543,26 +3723,41 @@ mod tests {
         let _ = gc_collect_minor();
         unsafe {
             let header = header_from_user_ptr(user_ptr);
-            assert_ne!((*header).gc_flags & GC_FLAG_HAS_SURVIVED, 0,
-                "first survival should set HAS_SURVIVED");
-            assert_eq!((*header).gc_flags & GC_FLAG_TENURED, 0,
-                "first survival should not yet tenure");
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_HAS_SURVIVED,
+                0,
+                "first survival should set HAS_SURVIVED"
+            );
+            assert_eq!(
+                (*header).gc_flags & GC_FLAG_TENURED,
+                0,
+                "first survival should not yet tenure"
+            );
         }
         // Second minor GC: HAS_SURVIVED + survives → TENURED, clear HAS_SURVIVED.
         let _ = gc_collect_minor();
         unsafe {
             let header = header_from_user_ptr(user_ptr);
-            assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0,
-                "second survival should tenure");
-            assert_eq!((*header).gc_flags & GC_FLAG_HAS_SURVIVED, 0,
-                "tenuring should clear HAS_SURVIVED");
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_TENURED,
+                0,
+                "second survival should tenure"
+            );
+            assert_eq!(
+                (*header).gc_flags & GC_FLAG_HAS_SURVIVED,
+                0,
+                "tenuring should clear HAS_SURVIVED"
+            );
         }
         // Third minor GC: stays tenured idempotently.
         let _ = gc_collect_minor();
         unsafe {
             let header = header_from_user_ptr(user_ptr);
-            assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0,
-                "tenured stays tenured across subsequent collections");
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_TENURED,
+                0,
+                "tenured stays tenured across subsequent collections"
+            );
         }
     }
 
@@ -3600,7 +3795,11 @@ mod tests {
             let after = (*hdr).gc_flags;
             assert_eq!(after & GC_FLAG_FORWARDED, GC_FLAG_FORWARDED);
             // Every bit that was set before stays set.
-            assert_eq!(after & before, before, "forwarding installation cleared an existing flag");
+            assert_eq!(
+                after & before,
+                before,
+                "forwarding installation cleared an existing flag"
+            );
         }
     }
 
@@ -3632,8 +3831,11 @@ mod tests {
         });
         assert!(cons_pinned_count() >= 1);
         let _ = gc_collect_minor();
-        assert_eq!(cons_pinned_count(), 0,
-            "minor GC must clear CONS_PINNED after collection");
+        assert_eq!(
+            cons_pinned_count(),
+            0,
+            "minor GC must clear CONS_PINNED after collection"
+        );
     }
 
     #[test]
@@ -3647,10 +3849,14 @@ mod tests {
             (*header).gc_flags |= GC_FLAG_MARKED;
         }
         pin_currently_marked_as_conservative();
-        assert!(is_conservatively_pinned(header),
-            "marked header should land in CONS_PINNED");
+        assert!(
+            is_conservatively_pinned(header),
+            "marked header should land in CONS_PINNED"
+        );
         // Cleanup for test isolation.
-        unsafe { (*header).gc_flags &= !GC_FLAG_MARKED; }
+        unsafe {
+            (*header).gc_flags &= !GC_FLAG_MARKED;
+        }
         CONS_PINNED.with(|s| s.borrow_mut().clear());
     }
 
@@ -3664,8 +3870,10 @@ mod tests {
             assert_eq!((*(header as *mut GcHeader)).gc_flags & GC_FLAG_MARKED, 0);
         }
         pin_currently_marked_as_conservative();
-        assert!(!is_conservatively_pinned(header),
-            "unmarked header should NOT land in CONS_PINNED");
+        assert!(
+            !is_conservatively_pinned(header),
+            "unmarked header should NOT land in CONS_PINNED"
+        );
     }
 
     #[test]
@@ -3683,11 +3891,16 @@ mod tests {
         let n = evacuate_tenured_nursery_objects();
         assert_eq!(n, 0, "pinned tenured object must not be evacuated");
         unsafe {
-            assert_eq!((*header).gc_flags & GC_FLAG_FORWARDED, 0,
-                "FORWARDED flag must not be set on pinned object");
+            assert_eq!(
+                (*header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "FORWARDED flag must not be set on pinned object"
+            );
         }
         // Cleanup
-        unsafe { (*header).gc_flags &= !(GC_FLAG_MARKED | GC_FLAG_TENURED); }
+        unsafe {
+            (*header).gc_flags &= !(GC_FLAG_MARKED | GC_FLAG_TENURED);
+        }
         CONS_PINNED.with(|s| s.borrow_mut().clear());
     }
 
@@ -3703,10 +3916,15 @@ mod tests {
         }
         let _n = evacuate_tenured_nursery_objects();
         unsafe {
-            assert_eq!((*header).gc_flags & GC_FLAG_FORWARDED, 0,
-                "unmarked object must not be evacuated");
+            assert_eq!(
+                (*header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "unmarked object must not be evacuated"
+            );
         }
-        unsafe { (*header).gc_flags &= !GC_FLAG_TENURED; }
+        unsafe {
+            (*header).gc_flags &= !GC_FLAG_TENURED;
+        }
     }
 
     #[test]
@@ -3732,10 +3950,14 @@ mod tests {
             assert_ne!((*header).gc_flags & GC_FLAG_FORWARDED, 0);
             let new_user = forwarding_address(header);
             // Verify old_user points into nursery, new_user points into OLD.
-            assert!(crate::arena::pointer_in_old_gen(new_user as usize),
-                "forwarding address should point into OLD_ARENA");
-            assert!(!crate::arena::pointer_in_old_gen(user as usize),
-                "old (nursery) location should NOT be in OLD_ARENA");
+            assert!(
+                crate::arena::pointer_in_old_gen(new_user as usize),
+                "forwarding address should point into OLD_ARENA"
+            );
+            assert!(
+                !crate::arena::pointer_in_old_gen(user as usize),
+                "old (nursery) location should NOT be in OLD_ARENA"
+            );
             // Verify payload was copied.
             let new_p = new_user as *const u64;
             // Note: payload starts at user_ptr offset 0, but the
@@ -3746,7 +3968,9 @@ mod tests {
             assert_eq!(*new_p, 0xCAFE_BABE_DEAD_BEEF);
             assert_eq!(*new_p.add(1), 0x1234_5678_9ABC_DEF0);
         }
-        unsafe { (*header).gc_flags &= !(GC_FLAG_MARKED | GC_FLAG_TENURED); }
+        unsafe {
+            (*header).gc_flags &= !(GC_FLAG_MARKED | GC_FLAG_TENURED);
+        }
     }
 
     #[test]
@@ -3776,8 +4000,11 @@ mod tests {
         // Run a full collection.
         let _freed = gc_collect_inner();
         // RS must be empty after collection — coherence invariant.
-        assert_eq!(remembered_set_size(), 0,
-            "remembered set must be cleared after gc_collect_inner");
+        assert_eq!(
+            remembered_set_size(),
+            0,
+            "remembered set must be cleared after gc_collect_inner"
+        );
     }
 
     #[test]
@@ -3794,10 +4021,16 @@ mod tests {
         clear_marks();
 
         unsafe {
-            assert_eq!((*header_from_user_ptr(ptr1)).gc_flags & GC_FLAG_MARKED, 0,
-                "mark should be cleared on ptr1");
-            assert_eq!((*header_from_user_ptr(ptr2)).gc_flags & GC_FLAG_MARKED, 0,
-                "mark should be cleared on ptr2");
+            assert_eq!(
+                (*header_from_user_ptr(ptr1)).gc_flags & GC_FLAG_MARKED,
+                0,
+                "mark should be cleared on ptr1"
+            );
+            assert_eq!(
+                (*header_from_user_ptr(ptr2)).gc_flags & GC_FLAG_MARKED,
+                0,
+                "mark should be cleared on ptr2"
+            );
         }
     }
 }

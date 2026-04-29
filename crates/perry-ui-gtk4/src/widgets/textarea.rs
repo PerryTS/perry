@@ -62,9 +62,7 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
 
     // Connect to the buffer's "changed" signal
     text_view.buffer().connect_changed(move |buffer| {
-        let closure_f64 = TEXTAREA_CALLBACKS.with(|cbs| {
-            cbs.borrow().get(&callback_id).copied()
-        });
+        let closure_f64 = TEXTAREA_CALLBACKS.with(|cbs| cbs.borrow().get(&callback_id).copied());
         if let Some(closure_f64) = closure_f64 {
             let (start, end) = buffer.bounds();
             let text = buffer.text(&start, &end, false).to_string();

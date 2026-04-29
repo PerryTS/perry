@@ -67,12 +67,12 @@ pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, icon_ptr: *const u8, 
             });
 
             button.connect_clicked(move |_| {
-                let closure_f64 = TOOLBAR_CALLBACKS.with(|cbs| {
-                    cbs.borrow().get(&cb_id).copied()
-                });
+                let closure_f64 = TOOLBAR_CALLBACKS.with(|cbs| cbs.borrow().get(&cb_id).copied());
                 if let Some(closure_f64) = closure_f64 {
                     let ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
-                    unsafe { js_closure_call0(ptr); }
+                    unsafe {
+                        js_closure_call0(ptr);
+                    }
                 }
             });
 

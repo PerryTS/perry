@@ -109,11 +109,7 @@ impl<W: Write> DiagnosticEmitter for TerminalEmitter<W> {
                     let padding = " ".repeat(line_str.len());
 
                     writeln!(self.writer, "{} {}|{}", padding, cyan, reset)?;
-                    writeln!(
-                        self.writer,
-                        "{}{} |{} {}",
-                        cyan, line_str, reset, line_text
-                    )?;
+                    writeln!(self.writer, "{}{} |{} {}", cyan, line_str, reset, line_text)?;
 
                     // Underline
                     let underline_padding = " ".repeat((start_col - 1) as usize);

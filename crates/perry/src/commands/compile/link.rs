@@ -22,10 +22,9 @@ use std::process::Command;
 use crate::OutputFormat;
 
 use super::{
-    apple_sdk_version, build_geisterhand_libs, find_geisterhand_library,
-    find_geisterhand_runtime, find_geisterhand_ui, find_lld_link, find_llvm_tool,
-    find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
-    find_stdlib_library, find_ui_library, find_visionos_swift_runtime,
+    apple_sdk_version, build_geisterhand_libs, find_geisterhand_library, find_geisterhand_runtime,
+    find_geisterhand_ui, find_lld_link, find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe,
+    find_perry_windows_sdk, find_stdlib_library, find_ui_library, find_visionos_swift_runtime,
     find_watchos_swift_runtime, rust_target_triple, strip_duplicate_objects_from_lib,
     windows_pe_subsystem_flag, CompilationContext,
 };
@@ -54,10 +53,10 @@ pub(super) fn build_and_run_link(
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
     let is_android = matches!(target, Some("android"));
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
-    let is_linux = matches!(target, Some("linux"))
-        || (target.is_none() && cfg!(target_os = "linux"));
-    let is_windows = matches!(target, Some("windows"))
-        || (target.is_none() && cfg!(target_os = "windows"));
+    let is_linux =
+        matches!(target, Some("linux")) || (target.is_none() && cfg!(target_os = "linux"));
+    let is_windows =
+        matches!(target, Some("windows")) || (target.is_none() && cfg!(target_os = "windows"));
     let is_cross_windows = is_windows && !cfg!(target_os = "windows");
     let is_cross_ios = is_ios && !cfg!(target_os = "macos");
     let is_cross_visionos = is_visionos && !cfg!(target_os = "macos");
@@ -70,10 +69,19 @@ pub(super) fn build_and_run_link(
     let mut cmd = if is_watchos {
         let is_watchos_game_loop = compiled_features.iter().any(|f| f == "watchos-game-loop");
         let is_watchos_swift_app = compiled_features.iter().any(|f| f == "watchos-swift-app");
-        let sdk = if target == Some("watchos-simulator") { "watchsimulator" } else { "watchos" };
+        let sdk = if target == Some("watchos-simulator") {
+            "watchsimulator"
+        } else {
+            "watchos"
+        };
         let sysroot = String::from_utf8(
-            Command::new("xcrun").args(["--sdk", sdk, "--show-sdk-path"]).output()?.stdout
-        )?.trim().to_string();
+            Command::new("xcrun")
+                .args(["--sdk", sdk, "--show-sdk-path"])
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_string();
         let triple = if target == Some("watchos-simulator") {
             "arm64-apple-watchos10.0-simulator"
         } else {
@@ -91,12 +99,14 @@ pub(super) fn build_and_run_link(
         //   - `--features watchos-swift-app`: `_main → _perry_user_main`, so the
         //     native lib's own `@main struct App: App` is the process entry.
         //     It spawns TS on a background thread from its `init()`/`.task {}`.
-        let input_stem = args_input.file_stem()
+        let input_stem = args_input
+            .file_stem()
             .and_then(|s| s.to_str())
             .map(|s| format!("{}_ts", s))
             .unwrap_or_else(|| "main_ts".to_string());
         if let Some(entry_obj) = obj_paths.iter().find(|f| {
-            f.file_stem().and_then(|s| s.to_str())
+            f.file_stem()
+                .and_then(|s| s.to_str())
                 .map(|s| s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem)))
                 .unwrap_or(false)
         }) {
@@ -123,11 +133,15 @@ pub(super) fn build_and_run_link(
             // CAMetalLayer-backed view and `perry-runtime/watchos-game-loop`
             // provides the C `main()`. Link with clang, not swiftc.
             let clang = String::from_utf8(
-                Command::new("xcrun").args(["--sdk", sdk, "--find", "clang"]).output()?.stdout
-            )?.trim().to_string();
+                Command::new("xcrun")
+                    .args(["--sdk", sdk, "--find", "clang"])
+                    .output()?
+                    .stdout,
+            )?
+            .trim()
+            .to_string();
             let mut c = Command::new(clang);
-            c.arg("-target").arg(triple)
-             .arg("-isysroot").arg(&sysroot);
+            c.arg("-target").arg(triple).arg("-isysroot").arg(&sysroot);
             c
         } else if is_watchos_swift_app {
             // Swift-app: the native lib ships its own `@main struct App: App`
@@ -135,31 +149,46 @@ pub(super) fn build_and_run_link(
             // not emit PerryWatchApp.swift and does not provide a C main.
             // Use swiftc as the linker so Swift stdlib auto-links.
             let swiftc = String::from_utf8(
-                Command::new("xcrun").args(["--sdk", sdk, "--find", "swiftc"]).output()?.stdout
-            )?.trim().to_string();
+                Command::new("xcrun")
+                    .args(["--sdk", sdk, "--find", "swiftc"])
+                    .output()?
+                    .stdout,
+            )?
+            .trim()
+            .to_string();
             let mut c = Command::new(swiftc);
-            c.arg("-target").arg(triple)
-             .arg("-sdk").arg(&sysroot)
-             .arg("-parse-as-library")
-             // perry-runtime and the native lib each pull in their own std
-             // rlibs (Cargo's metadata hashing differs across workspaces even
-             // when -Zbuild-std flags match). Tell ld to take first-wins on
-             // duplicates rather than fail the link.
-             .arg("-Xlinker").arg("-ld_classic");
+            c.arg("-target")
+                .arg(triple)
+                .arg("-sdk")
+                .arg(&sysroot)
+                .arg("-parse-as-library")
+                // perry-runtime and the native lib each pull in their own std
+                // rlibs (Cargo's metadata hashing differs across workspaces even
+                // when -Zbuild-std flags match). Tell ld to take first-wins on
+                // duplicates rather than fail the link.
+                .arg("-Xlinker")
+                .arg("-ld_classic");
             c
         } else {
             let swiftc = String::from_utf8(
-                Command::new("xcrun").args(["--sdk", sdk, "--find", "swiftc"]).output()?.stdout
-            )?.trim().to_string();
+                Command::new("xcrun")
+                    .args(["--sdk", sdk, "--find", "swiftc"])
+                    .output()?
+                    .stdout,
+            )?
+            .trim()
+            .to_string();
             let swift_runtime = find_watchos_swift_runtime()
                 .ok_or_else(|| anyhow!(
                     "PerryWatchApp.swift not found. Expected next to perry binary or in source tree."
                 ))?;
             let mut c = Command::new(swiftc);
-            c.arg("-target").arg(triple)
-             .arg("-sdk").arg(&sysroot)
-             .arg("-parse-as-library")
-             .arg(&swift_runtime);
+            c.arg("-target")
+                .arg(triple)
+                .arg("-sdk")
+                .arg(&sysroot)
+                .arg("-parse-as-library")
+                .arg(&swift_runtime);
             c
         }
     } else if is_visionos && is_cross_visionos {
@@ -167,30 +196,47 @@ pub(super) fn build_and_run_link(
             "Local visionOS compilation requires Xcode on macOS. Use a macOS host or Perry Hub remote build."
         ));
     } else if is_visionos {
-        let sdk = if target == Some("visionos-simulator") { "xrsimulator" } else { "xros" };
+        let sdk = if target == Some("visionos-simulator") {
+            "xrsimulator"
+        } else {
+            "xros"
+        };
         let swiftc = String::from_utf8(
-            Command::new("xcrun").args(["--sdk", sdk, "--find", "swiftc"]).output()?.stdout
-        )?.trim().to_string();
+            Command::new("xcrun")
+                .args(["--sdk", sdk, "--find", "swiftc"])
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_string();
         let sysroot = String::from_utf8(
-            Command::new("xcrun").args(["--sdk", sdk, "--show-sdk-path"]).output()?.stdout
-        )?.trim().to_string();
+            Command::new("xcrun")
+                .args(["--sdk", sdk, "--show-sdk-path"])
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_string();
         let sdk_version = apple_sdk_version(sdk).unwrap_or_else(|| "1.0".to_string());
         let triple = if target == Some("visionos-simulator") {
             format!("arm64-apple-xros{}-simulator", sdk_version)
         } else {
             format!("arm64-apple-xros{}", sdk_version)
         };
-        let swift_runtime = find_visionos_swift_runtime()
-            .ok_or_else(|| anyhow!(
+        let swift_runtime = find_visionos_swift_runtime().ok_or_else(|| {
+            anyhow!(
                 "PerryVisionApp.swift not found. Expected next to perry binary or in source tree."
-            ))?;
+            )
+        })?;
 
-        let input_stem = args_input.file_stem()
+        let input_stem = args_input
+            .file_stem()
             .and_then(|s| s.to_str())
             .map(|s| format!("{}_ts", s))
             .unwrap_or_else(|| "main_ts".to_string());
         if let Some(entry_obj) = obj_paths.iter().find(|f| {
-            f.file_stem().and_then(|s| s.to_str())
+            f.file_stem()
+                .and_then(|s| s.to_str())
                 .map(|s| s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem)))
                 .unwrap_or(false)
         }) {
@@ -208,18 +254,26 @@ pub(super) fn build_and_run_link(
         }
 
         let mut c = Command::new(swiftc);
-        c.arg("-target").arg(&triple)
-         .arg("-sdk").arg(&sysroot)
-         .arg("-parse-as-library")
-         .arg(&swift_runtime);
+        c.arg("-target")
+            .arg(&triple)
+            .arg("-sdk")
+            .arg(&sysroot)
+            .arg("-parse-as-library")
+            .arg(&swift_runtime);
         c
     } else if is_ios && is_cross_ios {
         // Cross-compile iOS from Linux using ld64.lld + Apple SDK sysroot
         let ld64 = find_llvm_tool("ld64.lld")
             .or_else(|| {
                 // Check common paths
-                for p in &["/usr/local/bin/ld64.lld", "/usr/bin/ld64.lld-18", "/usr/bin/ld64.lld"] {
-                    if std::path::Path::new(p).exists() { return Some(PathBuf::from(p)); }
+                for p in &[
+                    "/usr/local/bin/ld64.lld",
+                    "/usr/bin/ld64.lld-18",
+                    "/usr/bin/ld64.lld",
+                ] {
+                    if std::path::Path::new(p).exists() {
+                        return Some(PathBuf::from(p));
+                    }
                 }
                 None
             })
@@ -233,23 +287,45 @@ pub(super) fn build_and_run_link(
         eprintln!("[cross-ios] Sysroot: {sysroot}");
 
         let mut c = Command::new(&ld64);
-        c.arg("-arch").arg("arm64")
-         .arg("-platform_version").arg("ios").arg("17.0.0").arg("26.0.0")
-         .arg("-syslibroot").arg(&sysroot)
-         .arg("-L").arg(format!("{}/usr/lib", sysroot))
-         .arg("-L").arg(format!("{}/usr/lib/swift", sysroot))
-         .arg("-F").arg(format!("{}/System/Library/Frameworks", sysroot))
-         .arg("-lSystem")
-         .arg("-dead_strip");
+        c.arg("-arch")
+            .arg("arm64")
+            .arg("-platform_version")
+            .arg("ios")
+            .arg("17.0.0")
+            .arg("26.0.0")
+            .arg("-syslibroot")
+            .arg(&sysroot)
+            .arg("-L")
+            .arg(format!("{}/usr/lib", sysroot))
+            .arg("-L")
+            .arg(format!("{}/usr/lib/swift", sysroot))
+            .arg("-F")
+            .arg(format!("{}/System/Library/Frameworks", sysroot))
+            .arg("-lSystem")
+            .arg("-dead_strip");
         c
     } else if is_ios {
-        let sdk = if target == Some("ios-simulator") { "iphonesimulator" } else { "iphoneos" };
+        let sdk = if target == Some("ios-simulator") {
+            "iphonesimulator"
+        } else {
+            "iphoneos"
+        };
         let clang = String::from_utf8(
-            Command::new("xcrun").args(["--sdk", sdk, "--find", "clang"]).output()?.stdout
-        )?.trim().to_string();
+            Command::new("xcrun")
+                .args(["--sdk", sdk, "--find", "clang"])
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_string();
         let sysroot = String::from_utf8(
-            Command::new("xcrun").args(["--sdk", sdk, "--show-sdk-path"]).output()?.stdout
-        )?.trim().to_string();
+            Command::new("xcrun")
+                .args(["--sdk", sdk, "--show-sdk-path"])
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_string();
         let triple = if target == Some("ios-simulator") {
             "arm64-apple-ios17.0-simulator"
         } else {
@@ -259,17 +335,25 @@ pub(super) fn build_and_run_link(
         // Discover Xcode developer directory for Swift standard library paths.
         // Swift libs live in the toolchain, not the SDK sysroot, so the linker
         // needs explicit -L flags to resolve auto-linked libs like swiftCore.
-        let developer_dir = String::from_utf8(
-            Command::new("xcode-select").arg("-p").output()?.stdout
-        )?.trim().to_string();
+        let developer_dir =
+            String::from_utf8(Command::new("xcode-select").arg("-p").output()?.stdout)?
+                .trim()
+                .to_string();
 
         let mut c = Command::new(clang);
-        c.arg("-target").arg(triple)
-         .arg("-isysroot").arg(&sysroot)
-         // Swift standard library .tbd stubs in the SDK (swiftCore, swift_Concurrency, etc.)
-         .arg("-L").arg(format!("{}/usr/lib/swift", sysroot))
-         // Swift compatibility static archives in the toolchain
-         .arg("-L").arg(format!("{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/{}", developer_dir, sdk));
+        c.arg("-target")
+            .arg(triple)
+            .arg("-isysroot")
+            .arg(&sysroot)
+            // Swift standard library .tbd stubs in the SDK (swiftCore, swift_Concurrency, etc.)
+            .arg("-L")
+            .arg(format!("{}/usr/lib/swift", sysroot))
+            // Swift compatibility static archives in the toolchain
+            .arg("-L")
+            .arg(format!(
+                "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/{}",
+                developer_dir, sdk
+            ));
         c
     } else if is_tvos && is_cross_tvos {
         // Cross-compile tvOS from Linux using ld64.lld + Apple SDK sysroot.
@@ -279,8 +363,14 @@ pub(super) fn build_and_run_link(
         let ld64 = find_llvm_tool("ld64.lld")
             .or_else(|| {
                 // Check common paths
-                for p in &["/usr/local/bin/ld64.lld", "/usr/bin/ld64.lld-18", "/usr/bin/ld64.lld"] {
-                    if std::path::Path::new(p).exists() { return Some(PathBuf::from(p)); }
+                for p in &[
+                    "/usr/local/bin/ld64.lld",
+                    "/usr/bin/ld64.lld-18",
+                    "/usr/bin/ld64.lld",
+                ] {
+                    if std::path::Path::new(p).exists() {
+                        return Some(PathBuf::from(p));
+                    }
                 }
                 None
             })
@@ -298,45 +388,79 @@ pub(super) fn build_and_run_link(
         // Simulator (tvos-simulator) is not supported in the cross-compile path —
         // ld64.lld on Linux targets the device (arm64) only, matching is_cross_ios.
         let mut c = Command::new(&ld64);
-        c.arg("-arch").arg("arm64")
-         .arg("-platform_version").arg("tvos").arg("17.0.0").arg("26.0.0")
-         .arg("-syslibroot").arg(&sysroot)
-         .arg("-L").arg(format!("{}/usr/lib", sysroot))
-         .arg("-L").arg(format!("{}/usr/lib/swift", sysroot))
-         .arg("-F").arg(format!("{}/System/Library/Frameworks", sysroot))
-         .arg("-lSystem")
-         .arg("-dead_strip");
+        c.arg("-arch")
+            .arg("arm64")
+            .arg("-platform_version")
+            .arg("tvos")
+            .arg("17.0.0")
+            .arg("26.0.0")
+            .arg("-syslibroot")
+            .arg(&sysroot)
+            .arg("-L")
+            .arg(format!("{}/usr/lib", sysroot))
+            .arg("-L")
+            .arg(format!("{}/usr/lib/swift", sysroot))
+            .arg("-F")
+            .arg(format!("{}/System/Library/Frameworks", sysroot))
+            .arg("-lSystem")
+            .arg("-dead_strip");
         c
     } else if is_tvos {
-        let sdk = if target == Some("tvos-simulator") { "appletvsimulator" } else { "appletvos" };
+        let sdk = if target == Some("tvos-simulator") {
+            "appletvsimulator"
+        } else {
+            "appletvos"
+        };
         let clang = String::from_utf8(
-            Command::new("xcrun").args(["--sdk", sdk, "--find", "clang"]).output()?.stdout
-        )?.trim().to_string();
+            Command::new("xcrun")
+                .args(["--sdk", sdk, "--find", "clang"])
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_string();
         let sysroot = String::from_utf8(
-            Command::new("xcrun").args(["--sdk", sdk, "--show-sdk-path"]).output()?.stdout
-        )?.trim().to_string();
+            Command::new("xcrun")
+                .args(["--sdk", sdk, "--show-sdk-path"])
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_string();
         let triple = if target == Some("tvos-simulator") {
             "arm64-apple-tvos17.0-simulator"
         } else {
             "arm64-apple-tvos17.0"
         };
 
-        let developer_dir = String::from_utf8(
-            Command::new("xcode-select").arg("-p").output()?.stdout
-        )?.trim().to_string();
+        let developer_dir =
+            String::from_utf8(Command::new("xcode-select").arg("-p").output()?.stdout)?
+                .trim()
+                .to_string();
 
         let mut c = Command::new(clang);
-        c.arg("-target").arg(triple)
-         .arg("-isysroot").arg(&sysroot)
-         .arg("-L").arg(format!("{}/usr/lib/swift", sysroot))
-         .arg("-L").arg(format!("{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/{}", developer_dir, sdk));
+        c.arg("-target")
+            .arg(triple)
+            .arg("-isysroot")
+            .arg(&sysroot)
+            .arg("-L")
+            .arg(format!("{}/usr/lib/swift", sysroot))
+            .arg("-L")
+            .arg(format!(
+                "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/{}",
+                developer_dir, sdk
+            ));
         c
     } else if is_android {
         // Use Android NDK clang to produce a shared library (.so)
         let ndk_home = std::env::var("ANDROID_NDK_HOME").map_err(|_| {
             anyhow!("ANDROID_NDK_HOME not set. Set it to your NDK path, e.g. $HOME/Library/Android/sdk/ndk/28.0.12433566")
         })?;
-        let host_tag = if cfg!(target_os = "macos") { "darwin-x86_64" } else { "linux-x86_64" };
+        let host_tag = if cfg!(target_os = "macos") {
+            "darwin-x86_64"
+        } else {
+            "linux-x86_64"
+        };
         let clang = format!(
             "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang",
             ndk_home, host_tag
@@ -346,32 +470,35 @@ pub(super) fn build_and_run_link(
         }
         let mut c = Command::new(clang);
         c.arg("-shared")
-         .arg("-fPIC")
-         .arg("-target").arg("aarch64-linux-android24")
-         .arg("-Wl,-z,max-page-size=16384")
-         .arg("-Wl,-z,separate-loadable-segments")
-         // Prevent ELF symbol interposition: bind all symbols within the .so
-         // to the .so's own definitions. Without this, PLT calls (e.g. to "main")
-         // can resolve to symbols from the host process (app_process/zygote),
-         // bypassing perry's module initialization chain.
-         .arg("-Wl,-Bsymbolic")
-         // Allow unresolved symbols from namespace imports (import * as X).
-         // The codegen emits short-name extern refs (__export_X) for namespace
-         // imports that may not have a corresponding definition when the module
-         // only exports individually-scoped symbols.
-         .arg("-Wl,--warn-unresolved-symbols");
+            .arg("-fPIC")
+            .arg("-target")
+            .arg("aarch64-linux-android24")
+            .arg("-Wl,-z,max-page-size=16384")
+            .arg("-Wl,-z,separate-loadable-segments")
+            // Prevent ELF symbol interposition: bind all symbols within the .so
+            // to the .so's own definitions. Without this, PLT calls (e.g. to "main")
+            // can resolve to symbols from the host process (app_process/zygote),
+            // bypassing perry's module initialization chain.
+            .arg("-Wl,-Bsymbolic")
+            // Allow unresolved symbols from namespace imports (import * as X).
+            // The codegen emits short-name extern refs (__export_X) for namespace
+            // imports that may not have a corresponding definition when the module
+            // only exports individually-scoped symbols.
+            .arg("-Wl,--warn-unresolved-symbols");
         c
     } else if is_harmonyos {
         // HarmonyOS NEXT: produce a musl-based ELF .so loaded by ArkTS via
         // napi_module_register (the NAPI wrapper lands in PR B.2). Uses the
         // OHOS SDK's clang from DevEco Studio; `--sysroot` + `-D__MUSL__`
         // match Huawei's hvigor-cc-invocation conventions.
-        let sdk = super::library_search::find_harmonyos_sdk().ok_or_else(|| anyhow!(
-            "OHOS SDK not found. Install DevEco Studio or the standalone \
+        let sdk = super::library_search::find_harmonyos_sdk().ok_or_else(|| {
+            anyhow!(
+                "OHOS SDK not found. Install DevEco Studio or the standalone \
              OpenHarmony SDK from https://developer.huawei.com/consumer/en/develop \
              and set OHOS_SDK_HOME to the SDK root (the dir that contains \
              native/llvm/bin/clang and native/sysroot/)."
-        ))?;
+            )
+        })?;
         let clang = sdk.join("llvm").join("bin").join("clang");
         if !clang.exists() {
             return Err(anyhow!("OHOS SDK clang not found at: {}", clang.display()));
@@ -383,14 +510,14 @@ pub(super) fn build_and_run_link(
         };
         let mut c = Command::new(clang);
         c.arg("-shared")
-         .arg("-fPIC")
-         .arg(format!("--target={}", clang_target))
-         .arg(format!("--sysroot={}", sdk.join("sysroot").display()))
-         .arg("-D__MUSL__")
-         // Same interposition rationale as the Android branch — ArkTS loads
-         // the .so into a host process that may expose its own `main`/malloc.
-         .arg("-Wl,-Bsymbolic")
-         .arg("-Wl,--warn-unresolved-symbols");
+            .arg("-fPIC")
+            .arg(format!("--target={}", clang_target))
+            .arg(format!("--sysroot={}", sdk.join("sysroot").display()))
+            .arg("-D__MUSL__")
+            // Same interposition rationale as the Android branch — ArkTS loads
+            // the .so into a host process that may expose its own `main`/malloc.
+            .arg("-Wl,-Bsymbolic")
+            .arg("-Wl,--warn-unresolved-symbols");
         c
     } else if is_linux {
         // Linux target: when running on Linux natively, just use "cc".
@@ -466,15 +593,15 @@ pub(super) fn build_and_run_link(
         // `int main()` and the MSVC CRT invokes it regardless of subsystem.
         // See windows_pe_subsystem_flag() for subsystem selection rationale.
         c.arg(windows_pe_subsystem_flag(ctx.needs_ui))
-         .arg("/ENTRY:mainCRTStartup")
-         .arg("/NOLOGO")
-         // Perry generates large init functions for TS modules (one function
-         // per module). Large codebases (100+ modules) can overflow the
-         // default 1MB stack. Reserve 8MB.
-         .arg("/STACK:67108864")
-         // Native libs (hone_editor_windows etc) bundle perry_runtime objects
-         // that can't be fully stripped. Identical symbols are safe to merge.
-         .arg("/FORCE:MULTIPLE");
+            .arg("/ENTRY:mainCRTStartup")
+            .arg("/NOLOGO")
+            // Perry generates large init functions for TS modules (one function
+            // per module). Large codebases (100+ modules) can overflow the
+            // default 1MB stack. Reserve 8MB.
+            .arg("/STACK:67108864")
+            // Native libs (hone_editor_windows etc) bundle perry_runtime objects
+            // that can't be fully stripped. Identical symbols are safe to merge.
+            .arg("/FORCE:MULTIPLE");
         // Set up MSVC library search paths if LIB env isn't already configured
         if std::env::var("LIB").is_err() {
             if let Some(lib_paths) = find_msvc_lib_paths() {
@@ -488,8 +615,14 @@ pub(super) fn build_and_run_link(
         // Cross-compile macOS from Linux using ld64.lld + Apple SDK sysroot
         let ld64 = find_llvm_tool("ld64.lld")
             .or_else(|| {
-                for p in &["/usr/local/bin/ld64.lld", "/usr/bin/ld64.lld-18", "/usr/bin/ld64.lld"] {
-                    if std::path::Path::new(p).exists() { return Some(PathBuf::from(p)); }
+                for p in &[
+                    "/usr/local/bin/ld64.lld",
+                    "/usr/bin/ld64.lld-18",
+                    "/usr/bin/ld64.lld",
+                ] {
+                    if std::path::Path::new(p).exists() {
+                        return Some(PathBuf::from(p));
+                    }
                 }
                 None
             })
@@ -503,14 +636,22 @@ pub(super) fn build_and_run_link(
         eprintln!("[cross-macos] Sysroot: {sysroot}");
 
         let mut c = Command::new(&ld64);
-        c.arg("-arch").arg("arm64")
-         .arg("-platform_version").arg("macos").arg("13.0.0").arg("26.0.0")
-         .arg("-syslibroot").arg(&sysroot)
-         .arg("-L").arg(format!("{}/usr/lib", sysroot))
-         .arg("-L").arg(format!("{}/usr/lib/swift", sysroot))
-         .arg("-F").arg(format!("{}/System/Library/Frameworks", sysroot))
-         .arg("-lSystem")
-         .arg("-dead_strip");
+        c.arg("-arch")
+            .arg("arm64")
+            .arg("-platform_version")
+            .arg("macos")
+            .arg("13.0.0")
+            .arg("26.0.0")
+            .arg("-syslibroot")
+            .arg(&sysroot)
+            .arg("-L")
+            .arg(format!("{}/usr/lib", sysroot))
+            .arg("-L")
+            .arg(format!("{}/usr/lib/swift", sysroot))
+            .arg("-F")
+            .arg(format!("{}/System/Library/Frameworks", sysroot))
+            .arg("-lSystem")
+            .arg("-dead_strip");
         c
     } else {
         Command::new("cc")
@@ -520,7 +661,10 @@ pub(super) fn build_and_run_link(
     // entry object file so the perry runtime's main() (from ios_game_loop.rs)
     // becomes the process entry point. It spawns _perry_user_main on a game thread.
     if (is_ios || is_tvos) && compiled_features.iter().any(|f| f == "ios-game-loop") {
-        if let Some(entry_obj) = obj_paths.iter().find(|f| f.to_string_lossy().contains("main_ts")) {
+        if let Some(entry_obj) = obj_paths
+            .iter()
+            .find(|f| f.to_string_lossy().contains("main_ts"))
+        {
             // Try rust-objcopy first (newer Rust), then llvm-objcopy (older Rust)
             let objcopy = std::env::var("HOME").ok()
                 .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
@@ -599,7 +743,10 @@ pub(super) fn build_and_run_link(
                 let out_dir = crate_build.path().join("out");
                 // Walk the out/ dir recursively (cc-rs can nest into source-
                 // mirror subdirs like c_src/mimalloc/v2/src/).
-                if let Ok(walker) = walkdir::WalkDir::new(&out_dir).into_iter().collect::<Result<Vec<_>, _>>() {
+                if let Ok(walker) = walkdir::WalkDir::new(&out_dir)
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()
+                {
                     for entry in walker {
                         if entry.file_type().is_file()
                             && entry.path().extension().and_then(|e| e.to_str()) == Some("o")
@@ -611,7 +758,10 @@ pub(super) fn build_and_run_link(
             }
         }
         if !native_objs.is_empty() && matches!(format, crate::OutputFormat::Text) {
-            println!("  harmonyos: linking {} build.rs native object(s)", native_objs.len());
+            println!(
+                "  harmonyos: linking {} build.rs native object(s)",
+                native_objs.len()
+            );
         }
         for obj in native_objs {
             cmd.arg(obj);
@@ -704,8 +854,14 @@ pub(super) fn build_and_run_link(
                 }
             } else {
                 if ctx.needs_stdlib {
-                    eprintln!("Warning: stdlib required but {} not found, using runtime-only",
-                        if is_windows { "perry_stdlib.lib" } else { "libperry_stdlib.a" });
+                    eprintln!(
+                        "Warning: stdlib required but {} not found, using runtime-only",
+                        if is_windows {
+                            "perry_stdlib.lib"
+                        } else {
+                            "libperry_stdlib.a"
+                        }
+                    );
                 }
                 cmd.arg(runtime_lib);
             }
@@ -732,9 +888,7 @@ pub(super) fn build_and_run_link(
             cmd.arg("msvcprt.lib"); // C++ runtime for exception_ptr
         }
     } else {
-        cmd.arg("-o")
-            .arg(exe_path)
-            .arg("-lc");
+        cmd.arg("-o").arg(exe_path).arg("-lc");
     }
 
     // For plugin hosts, export symbols so dlopen'd plugins can resolve them.
@@ -758,7 +912,8 @@ pub(super) fn build_and_run_link(
             // Using -u tells the linker "treat as referenced" so dead_strip keeps them.
             let runtime_syms = [
                 "js_array_alloc",
-                "js_array_from_f64", "js_array_push_f64",
+                "js_array_from_f64",
+                "js_array_push_f64",
                 "js_bigint_is_zero",
                 "js_closure_alloc",
                 "js_console_log_spread",
@@ -766,13 +921,20 @@ pub(super) fn build_and_run_link(
                 "js_dynamic_string_equals",
                 "js_gc_register_global_root",
                 "js_is_truthy",
-                "js_jsvalue_compare", "js_jsvalue_equals",
-                "js_nanbox_get_pointer", "js_nanbox_pointer", "js_nanbox_string",
+                "js_jsvalue_compare",
+                "js_jsvalue_equals",
+                "js_nanbox_get_pointer",
+                "js_nanbox_pointer",
+                "js_nanbox_string",
                 "js_native_call_method",
-                "js_object_alloc_class_with_keys", "js_object_alloc_with_shape",
+                "js_object_alloc_class_with_keys",
+                "js_object_alloc_with_shape",
                 "js_register_class_method",
-                "js_string_char_code_at", "js_string_from_bytes", "js_string_length",
-                "perry_debug_trace_init", "perry_debug_trace_init_done",
+                "js_string_char_code_at",
+                "js_string_from_bytes",
+                "js_string_length",
+                "perry_debug_trace_init",
+                "perry_debug_trace_init_done",
                 "perry_init_guard_check_and_set",
             ];
             for sym in &runtime_syms {
@@ -792,19 +954,22 @@ pub(super) fn build_and_run_link(
         if !is_watchos_game_loop {
             cmd.arg("-framework").arg("SwiftUI");
         }
-        cmd.arg("-framework").arg("WatchKit")
-           .arg("-framework").arg("Foundation")
-           .arg("-framework").arg("CoreFoundation")
-           .arg("-framework").arg("Security")
-           .arg("-lSystem")
-           .arg("-lresolv");
+        cmd.arg("-framework")
+            .arg("WatchKit")
+            .arg("-framework")
+            .arg("Foundation")
+            .arg("-framework")
+            .arg("CoreFoundation")
+            .arg("-framework")
+            .arg("Security")
+            .arg("-lSystem")
+            .arg("-lresolv");
         if is_watchos_game_loop {
             // QuartzCore for CAMetalLayer-backed rendering (Metal.framework is NOT
             // in the watchOS SDK — the native lib must dlopen it or supply its own
             // path to the device's Metal dylib). -lobjc for the dynamic
             // WKApplicationDelegate class registered from watchos_game_loop.rs.
-            cmd.arg("-framework").arg("QuartzCore")
-               .arg("-lobjc");
+            cmd.arg("-framework").arg("QuartzCore").arg("-lobjc");
         }
         if is_watchos_swift_app {
             // SceneKit for SceneView-backed 3D rendering from the native lib's
@@ -815,65 +980,100 @@ pub(super) fn build_and_run_link(
         }
     } else if is_ios {
         // iOS frameworks
-        cmd.arg("-framework").arg("UIKit")
-           .arg("-framework").arg("Foundation")
-           .arg("-framework").arg("CoreGraphics")
-           .arg("-framework").arg("Security")
-           .arg("-framework").arg("CoreFoundation")
-           .arg("-framework").arg("SystemConfiguration")
-           .arg("-framework").arg("QuartzCore")
-           .arg("-framework").arg("AVFAudio") // AVAudioEngine for audio capture
-           .arg("-framework").arg("AVFoundation") // Camera capture (AVCaptureSession)
-           .arg("-framework").arg("CoreMedia") // CMSampleBuffer
-           .arg("-framework").arg("CoreVideo") // CVPixelBuffer
-           .arg("-framework").arg("UserNotifications") // UNUserNotificationCenter (perry/system notificationSend)
-           .arg("-framework").arg("CoreLocation") // CLCircularRegion for UNLocationNotificationTrigger (#96)
-           .arg("-liconv")
-           .arg("-lresolv")
-           .arg("-lobjc")
-           .arg("-lSystem");
+        cmd.arg("-framework")
+            .arg("UIKit")
+            .arg("-framework")
+            .arg("Foundation")
+            .arg("-framework")
+            .arg("CoreGraphics")
+            .arg("-framework")
+            .arg("Security")
+            .arg("-framework")
+            .arg("CoreFoundation")
+            .arg("-framework")
+            .arg("SystemConfiguration")
+            .arg("-framework")
+            .arg("QuartzCore")
+            .arg("-framework")
+            .arg("AVFAudio") // AVAudioEngine for audio capture
+            .arg("-framework")
+            .arg("AVFoundation") // Camera capture (AVCaptureSession)
+            .arg("-framework")
+            .arg("CoreMedia") // CMSampleBuffer
+            .arg("-framework")
+            .arg("CoreVideo") // CVPixelBuffer
+            .arg("-framework")
+            .arg("UserNotifications") // UNUserNotificationCenter (perry/system notificationSend)
+            .arg("-framework")
+            .arg("CoreLocation") // CLCircularRegion for UNLocationNotificationTrigger (#96)
+            .arg("-liconv")
+            .arg("-lresolv")
+            .arg("-lobjc")
+            .arg("-lSystem");
     } else if is_visionos {
-        cmd.arg("-framework").arg("SwiftUI")
-           .arg("-framework").arg("UIKit")
-           .arg("-framework").arg("Foundation")
-           .arg("-framework").arg("CoreGraphics")
-           .arg("-framework").arg("Security")
-           .arg("-framework").arg("CoreFoundation")
-           .arg("-framework").arg("SystemConfiguration")
-           .arg("-framework").arg("QuartzCore")
-           .arg("-framework").arg("AVFAudio")
-           .arg("-framework").arg("AVFoundation")
-           .arg("-framework").arg("CoreMedia")
-           .arg("-framework").arg("CoreVideo")
-           .arg("-liconv")
-           .arg("-lresolv")
-           .arg("-lobjc")
-           .arg("-lSystem");
+        cmd.arg("-framework")
+            .arg("SwiftUI")
+            .arg("-framework")
+            .arg("UIKit")
+            .arg("-framework")
+            .arg("Foundation")
+            .arg("-framework")
+            .arg("CoreGraphics")
+            .arg("-framework")
+            .arg("Security")
+            .arg("-framework")
+            .arg("CoreFoundation")
+            .arg("-framework")
+            .arg("SystemConfiguration")
+            .arg("-framework")
+            .arg("QuartzCore")
+            .arg("-framework")
+            .arg("AVFAudio")
+            .arg("-framework")
+            .arg("AVFoundation")
+            .arg("-framework")
+            .arg("CoreMedia")
+            .arg("-framework")
+            .arg("CoreVideo")
+            .arg("-liconv")
+            .arg("-lresolv")
+            .arg("-lobjc")
+            .arg("-lSystem");
     } else if is_tvos {
         // tvOS frameworks (UIKit-based, like iOS)
-        cmd.arg("-framework").arg("UIKit")
-           .arg("-framework").arg("Foundation")
-           .arg("-framework").arg("CoreGraphics")
-           .arg("-framework").arg("Security")
-           .arg("-framework").arg("CoreFoundation")
-           .arg("-framework").arg("SystemConfiguration")
-           .arg("-framework").arg("QuartzCore")
-           .arg("-framework").arg("AVFoundation")
-           .arg("-framework").arg("GameController")
-           .arg("-framework").arg("Metal")
-           .arg("-liconv")
-           .arg("-lresolv")
-           .arg("-lobjc")
-           .arg("-lSystem");
+        cmd.arg("-framework")
+            .arg("UIKit")
+            .arg("-framework")
+            .arg("Foundation")
+            .arg("-framework")
+            .arg("CoreGraphics")
+            .arg("-framework")
+            .arg("Security")
+            .arg("-framework")
+            .arg("CoreFoundation")
+            .arg("-framework")
+            .arg("SystemConfiguration")
+            .arg("-framework")
+            .arg("QuartzCore")
+            .arg("-framework")
+            .arg("AVFoundation")
+            .arg("-framework")
+            .arg("GameController")
+            .arg("-framework")
+            .arg("Metal")
+            .arg("-liconv")
+            .arg("-lresolv")
+            .arg("-lobjc")
+            .arg("-lSystem");
     } else if is_harmonyos {
         // OpenHarmony system libraries. musl folds m/pthread/dl into libc.a so
         // the -l flags are no-ops on the toolchain side; we emit them anyway
         // because cargo's static archives reference them and the OHOS dynamic
         // linker resolves them at load time.
         cmd.arg("-Wl,--allow-multiple-definition")
-           .arg("-lm")
-           .arg("-lpthread")
-           .arg("-ldl");
+            .arg("-lm")
+            .arg("-lpthread")
+            .arg("-ldl");
         // `libace_napi.z.so` provides napi_module_register + napi_create_*
         // (consumed by perry-runtime/src/ohos_napi.rs). OHOS naming convention
         // is `<name>.z.so` — the `-l` flag strips `lib` and `.so` but NOT the
@@ -882,9 +1082,9 @@ pub(super) fn build_and_run_link(
     } else if is_android {
         // Android system libraries
         cmd.arg("-Wl,--allow-multiple-definition")
-           .arg("-lm")
-           .arg("-ldl")
-           .arg("-llog");
+            .arg("-lm")
+            .arg("-ldl")
+            .arg("-llog");
 
         // Stub for JNI_GetCreatedJavaVMs: the jni-sys crate declares this extern
         // symbol, but Android has no libjvm.so and libnativehelper.so is only
@@ -894,23 +1094,32 @@ pub(super) fn build_and_run_link(
         std::fs::create_dir_all(&stub_dir).ok();
         let stub_c = stub_dir.join("jni_stub.c");
         let stub_o = stub_dir.join("jni_stub.o");
-        std::fs::write(&stub_c, concat!(
-            "typedef int jint;\n",
-            "typedef jint jsize;\n",
-            "jint JNI_GetCreatedJavaVMs(void **vm_buf, jsize buf_len, jsize *n_vms) {\n",
-            "    if (n_vms) *n_vms = 0;\n",
-            "    return 0;\n",
-            "}\n",
-        )).ok();
+        std::fs::write(
+            &stub_c,
+            concat!(
+                "typedef int jint;\n",
+                "typedef jint jsize;\n",
+                "jint JNI_GetCreatedJavaVMs(void **vm_buf, jsize buf_len, jsize *n_vms) {\n",
+                "    if (n_vms) *n_vms = 0;\n",
+                "    return 0;\n",
+                "}\n",
+            ),
+        )
+        .ok();
         let ndk_home = std::env::var("ANDROID_NDK_HOME").unwrap_or_default();
-        let host_tag = if cfg!(target_os = "macos") { "darwin-x86_64" } else { "linux-x86_64" };
+        let host_tag = if cfg!(target_os = "macos") {
+            "darwin-x86_64"
+        } else {
+            "linux-x86_64"
+        };
         let ndk_clang = format!(
             "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang",
             ndk_home, host_tag
         );
         let stub_ok = Command::new(&ndk_clang)
             .args(["-c", "-fPIC", "-target", "aarch64-linux-android24"])
-            .arg("-o").arg(&stub_o)
+            .arg("-o")
+            .arg(&stub_o)
             .arg(&stub_c)
             .output()
             .map(|o| o.status.success())
@@ -924,13 +1133,12 @@ pub(super) fn build_and_run_link(
         // and we also link perry-runtime directly for symbols DCE'd from jsruntime.
         // macOS Mach-O uses first-definition-wins natively; ELF linkers need this flag.
         cmd.arg("-Wl,--allow-multiple-definition")
-           .arg("-lm")
-           .arg("-lpthread")
-           .arg("-ldl");
+            .arg("-lm")
+            .arg("-lpthread")
+            .arg("-ldl");
 
         if ctx.needs_stdlib || jsruntime_lib.is_some() {
-            cmd.arg("-lssl")
-               .arg("-lcrypto");
+            cmd.arg("-lssl").arg("-lcrypto");
         }
 
         if jsruntime_lib.is_some() {
@@ -939,35 +1147,35 @@ pub(super) fn build_and_run_link(
     } else if is_windows {
         // Windows system libraries
         cmd.arg("user32.lib")
-           .arg("gdi32.lib")
-           .arg("gdiplus.lib")
-           .arg("msimg32.lib")
-           .arg("kernel32.lib")
-           .arg("shell32.lib")
-           .arg("ole32.lib")
-           .arg("comctl32.lib")
-           .arg("advapi32.lib")
-           .arg("comdlg32.lib")
-           .arg("ws2_32.lib")
-           .arg("dwmapi.lib");
+            .arg("gdi32.lib")
+            .arg("gdiplus.lib")
+            .arg("msimg32.lib")
+            .arg("kernel32.lib")
+            .arg("shell32.lib")
+            .arg("ole32.lib")
+            .arg("comctl32.lib")
+            .arg("advapi32.lib")
+            .arg("comdlg32.lib")
+            .arg("ws2_32.lib")
+            .arg("dwmapi.lib");
         // MSVC CRT (dynamic) and additional Windows API libraries needed by the Rust runtime
         cmd.arg("msvcrt.lib")
-           .arg("vcruntime.lib")
-           .arg("ucrt.lib")
-           .arg("bcrypt.lib")
-           .arg("ntdll.lib")
-           .arg("userenv.lib")
-           // secur32.lib exports `GetUserNameExW`, called by the `whoami`
-           // crate (transitively pulled in via `sqlx-mysql`/`sqlx-postgres`
-           // through `perry-stdlib`). Without it, every doc-test that
-           // touches stdlib fails on the Windows runner with
-           // `LNK2019: unresolved external symbol __imp_GetUserNameExW`.
-           // Closes #220.
-           .arg("secur32.lib")
-           .arg("oleaut32.lib")
-           .arg("propsys.lib")
-           .arg("runtimeobject.lib")
-           .arg("iphlpapi.lib");
+            .arg("vcruntime.lib")
+            .arg("ucrt.lib")
+            .arg("bcrypt.lib")
+            .arg("ntdll.lib")
+            .arg("userenv.lib")
+            // secur32.lib exports `GetUserNameExW`, called by the `whoami`
+            // crate (transitively pulled in via `sqlx-mysql`/`sqlx-postgres`
+            // through `perry-stdlib`). Without it, every doc-test that
+            // touches stdlib fails on the Windows runner with
+            // `LNK2019: unresolved external symbol __imp_GetUserNameExW`.
+            // Closes #220.
+            .arg("secur32.lib")
+            .arg("oleaut32.lib")
+            .arg("propsys.lib")
+            .arg("runtimeobject.lib")
+            .arg("iphlpapi.lib");
     } else {
         // macOS frameworks for runtime (sysinfo, etc.) and V8.
         // Gate on `!is_harmonyos` so the macOS host doesn't leak its
@@ -975,12 +1183,15 @@ pub(super) fn build_and_run_link(
         // `else` branch — `cfg!(target_os = "macos")` is true whenever we're
         // running ON macOS, regardless of the actual target.
         if (cfg!(target_os = "macos") || is_cross_macos) && !is_harmonyos {
-            cmd.arg("-framework").arg("Security")
-               .arg("-framework").arg("CoreFoundation")
-               .arg("-framework").arg("SystemConfiguration")
-               .arg("-liconv")
-               .arg("-lresolv")
-               .arg("-lobjc");
+            cmd.arg("-framework")
+                .arg("Security")
+                .arg("-framework")
+                .arg("CoreFoundation")
+                .arg("-framework")
+                .arg("SystemConfiguration")
+                .arg("-liconv")
+                .arg("-lresolv")
+                .arg("-lobjc");
 
             if jsruntime_lib.is_some() {
                 cmd.arg("-lc++");
@@ -989,13 +1200,10 @@ pub(super) fn build_and_run_link(
 
         // On Linux (native, not cross-compiling to macOS), link against system libraries
         if cfg!(target_os = "linux") && !is_cross_macos {
-            cmd.arg("-lm")
-               .arg("-lpthread")
-               .arg("-ldl");
+            cmd.arg("-lm").arg("-lpthread").arg("-ldl");
 
             if ctx.needs_stdlib || jsruntime_lib.is_some() {
-                cmd.arg("-lssl")
-                   .arg("-lcrypto");
+                cmd.arg("-lssl").arg("-lcrypto");
             }
 
             if jsruntime_lib.is_some() {
@@ -1064,12 +1272,12 @@ pub(super) fn build_and_run_link(
                 // feature is force-enabled for UI builds (see
                 // build_optimized_libs), so the real js_stdlib_process_pending
                 // is guaranteed present in libperry_stdlib.a.
-                let linux_stdlib_for_ui = stdlib_lib.clone()
-                    .or_else(|| find_stdlib_library(target));
+                let linux_stdlib_for_ui =
+                    stdlib_lib.clone().or_else(|| find_stdlib_library(target));
                 if let Some(ref stdlib) = linux_stdlib_for_ui {
                     cmd.arg("-Wl,--whole-archive")
-                       .arg(stdlib)
-                       .arg("-Wl,--no-whole-archive");
+                        .arg(stdlib)
+                        .arg("-Wl,--no-whole-archive");
                 }
                 // GTK4 libraries via pkg-config. The fallback fires in two
                 // distinct cases: pkg-config not installed (spawn fails), OR
@@ -1112,17 +1320,23 @@ pub(super) fn build_and_run_link(
                         }
                     );
                     for lib in [
-                        "-lgtk-4", "-lgio-2.0", "-lgobject-2.0", "-lglib-2.0",
-                        "-lpangocairo-1.0", "-lpango-1.0", "-lharfbuzz",
-                        "-lgdk_pixbuf-2.0", "-lcairo-gobject", "-lcairo",
+                        "-lgtk-4",
+                        "-lgio-2.0",
+                        "-lgobject-2.0",
+                        "-lglib-2.0",
+                        "-lpangocairo-1.0",
+                        "-lpango-1.0",
+                        "-lharfbuzz",
+                        "-lgdk_pixbuf-2.0",
+                        "-lcairo-gobject",
+                        "-lcairo",
                         "-lgraphene-1.0",
                     ] {
                         cmd.arg(lib);
                     }
                 }
                 // PulseAudio for audio capture (only needed with UI)
-                cmd.arg("-lpulse-simple")
-                   .arg("-lpulse");
+                cmd.arg("-lpulse-simple").arg("-lpulse");
             } else if is_windows {
                 // Win32 system libs already linked above
             } else {
@@ -1138,29 +1352,54 @@ pub(super) fn build_and_run_link(
             }
 
             match format {
-                OutputFormat::Text => println!("Linking perry/ui (native UI) from {}", ui_lib.display()),
+                OutputFormat::Text => {
+                    println!("Linking perry/ui (native UI) from {}", ui_lib.display())
+                }
                 OutputFormat::Json => {}
             }
         } else {
             let (lib_name, build_cmd) = if is_watchos {
-                ("libperry_ui_watchos.a", "cargo build --release -p perry-ui-watchos --target arm64_32-apple-watchos")
+                (
+                    "libperry_ui_watchos.a",
+                    "cargo build --release -p perry-ui-watchos --target arm64_32-apple-watchos",
+                )
             } else if is_tvos {
-                ("libperry_ui_tvos.a", "cargo build --release -p perry-ui-tvos --target aarch64-apple-tvos")
+                (
+                    "libperry_ui_tvos.a",
+                    "cargo build --release -p perry-ui-tvos --target aarch64-apple-tvos",
+                )
             } else if is_visionos {
                 ("libperry_ui_visionos.a", "cargo build --release -p perry-ui-visionos --target aarch64-apple-visionos-sim")
             } else if is_ios {
-                ("libperry_ui_ios.a", "cargo build --release -p perry-ui-ios --target aarch64-apple-ios-sim")
+                (
+                    "libperry_ui_ios.a",
+                    "cargo build --release -p perry-ui-ios --target aarch64-apple-ios-sim",
+                )
             } else if is_android {
-                ("libperry_ui_android.a", "cargo build --release -p perry-ui-android --target aarch64-linux-android")
+                (
+                    "libperry_ui_android.a",
+                    "cargo build --release -p perry-ui-android --target aarch64-linux-android",
+                )
             } else if is_linux {
-                ("libperry_ui_gtk4.a", "cargo build --release -p perry-ui-gtk4 --target x86_64-unknown-linux-gnu")
+                (
+                    "libperry_ui_gtk4.a",
+                    "cargo build --release -p perry-ui-gtk4 --target x86_64-unknown-linux-gnu",
+                )
             } else if is_windows {
-                ("perry_ui_windows.lib", "cargo build --release -p perry-ui-windows --target x86_64-pc-windows-msvc")
+                (
+                    "perry_ui_windows.lib",
+                    "cargo build --release -p perry-ui-windows --target x86_64-pc-windows-msvc",
+                )
             } else {
-                ("libperry_ui_macos.a", "cargo build --release -p perry-ui-macos")
+                (
+                    "libperry_ui_macos.a",
+                    "cargo build --release -p perry-ui-macos",
+                )
             };
             return Err(anyhow!(
-                "perry/ui imported but {} not found. Build with: {}", lib_name, build_cmd
+                "perry/ui imported but {} not found. Build with: {}",
+                lib_name,
+                build_cmd
             ));
         }
     }
@@ -1223,11 +1462,14 @@ pub(super) fn build_and_run_link(
     // package.json all see the same swift_sources entries, but each file should
     // be compiled + linked once. Without this, swift's mangled symbols for
     // structs/classes duplicate N times.
-    let mut seen_swift_sources: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut seen_swift_sources: std::collections::HashSet<PathBuf> =
+        std::collections::HashSet::new();
     for native_lib in &ctx.native_libraries {
         if let Some(ref target_config) = native_lib.target_config {
             match format {
-                OutputFormat::Text => println!("Building native library: {} ...", native_lib.module),
+                OutputFormat::Text => {
+                    println!("Building native library: {} ...", native_lib.module)
+                }
                 OutputFormat::Json => {}
             }
 
@@ -1235,16 +1477,23 @@ pub(super) fn build_and_run_link(
             let cargo_toml = target_config.crate_path.join("Cargo.toml");
             if cargo_toml.exists() {
                 // Tier 3 targets (tvOS, watchOS) need nightly + build-std
-                let is_tier3 = matches!(target,
-                    Some("tvos") | Some("tvos-simulator") |
-                    Some("watchos") | Some("watchos-simulator"));
+                let is_tier3 = matches!(
+                    target,
+                    Some("tvos")
+                        | Some("tvos-simulator")
+                        | Some("watchos")
+                        | Some("watchos-simulator")
+                );
 
                 let mut cargo_cmd = Command::new("cargo");
                 if is_tier3 {
                     cargo_cmd.arg("+nightly");
                 }
-                cargo_cmd.arg("build").arg("--release")
-                    .arg("--manifest-path").arg(&cargo_toml);
+                cargo_cmd
+                    .arg("build")
+                    .arg("--release")
+                    .arg("--manifest-path")
+                    .arg(&cargo_toml);
 
                 if let Some(triple) = rust_target_triple(target) {
                     cargo_cmd.arg("--target").arg(triple);
@@ -1261,8 +1510,10 @@ pub(super) fn build_and_run_link(
 
                 // For Android, ensure 16 KB page size alignment (required by Google Play)
                 if is_android {
-                    cargo_cmd.env("CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS",
-                        "-C link-arg=-Wl,-z,max-page-size=16384");
+                    cargo_cmd.env(
+                        "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS",
+                        "-C link-arg=-Wl,-z,max-page-size=16384",
+                    );
                 }
 
                 let cargo_status = cargo_cmd.status()?;
@@ -1327,7 +1578,8 @@ pub(super) fn build_and_run_link(
                 } else {
                     return Err(anyhow!(
                         "Native library {} not found after building {} crate",
-                        lib_name, native_lib.module
+                        lib_name,
+                        native_lib.module
                     ));
                 }
             }
@@ -1394,8 +1646,8 @@ pub(super) fn build_and_run_link(
                 .trim()
                 .to_string();
 
-                let swift_obj_dir = std::env::temp_dir()
-                    .join(format!("perry_swift_{}", std::process::id()));
+                let swift_obj_dir =
+                    std::env::temp_dir().join(format!("perry_swift_{}", std::process::id()));
                 std::fs::create_dir_all(&swift_obj_dir).ok();
 
                 for swift_src in &target_config.swift_sources {
@@ -1406,7 +1658,9 @@ pub(super) fn build_and_run_link(
                             native_lib.module
                         ));
                     }
-                    let canonical = swift_src.canonicalize().unwrap_or_else(|_| swift_src.clone());
+                    let canonical = swift_src
+                        .canonicalize()
+                        .unwrap_or_else(|_| swift_src.clone());
                     if !seen_swift_sources.insert(canonical) {
                         continue;
                     }
@@ -1416,12 +1670,15 @@ pub(super) fn build_and_run_link(
                         .unwrap_or("swift_src");
                     let obj_out = swift_obj_dir.join(format!("{}.o", stem));
                     let status = Command::new(&swiftc)
-                        .arg("-target").arg(swift_triple)
-                        .arg("-sdk").arg(&swift_sysroot)
+                        .arg("-target")
+                        .arg(swift_triple)
+                        .arg("-sdk")
+                        .arg(&swift_sysroot)
                         .arg("-parse-as-library")
                         .arg("-emit-object")
                         .arg("-O")
-                        .arg("-o").arg(&obj_out)
+                        .arg("-o")
+                        .arg(&obj_out)
                         .arg(swift_src)
                         .status()?;
                     if !status.success() {
@@ -1432,7 +1689,9 @@ pub(super) fn build_and_run_link(
                     }
                     cmd.arg(&obj_out);
                     match format {
-                        OutputFormat::Text => println!("Linking Swift object: {}", obj_out.display()),
+                        OutputFormat::Text => {
+                            println!("Linking Swift object: {}", obj_out.display())
+                        }
                         OutputFormat::Json => {}
                     }
                 }
@@ -1443,10 +1702,15 @@ pub(super) fn build_and_run_link(
             // here so we fail early with a clear message instead of silently
             // dropping shaders on non-Apple-bundle targets.
             if !target_config.metal_sources.is_empty()
-                && !matches!(target,
-                    Some("ios") | Some("ios-simulator") |
-                    Some("tvos") | Some("tvos-simulator") |
-                    Some("watchos") | Some("watchos-simulator"))
+                && !matches!(
+                    target,
+                    Some("ios")
+                        | Some("ios-simulator")
+                        | Some("tvos")
+                        | Some("tvos-simulator")
+                        | Some("watchos")
+                        | Some("watchos-simulator")
+                )
             {
                 return Err(anyhow!(
                     "perry.nativeLibrary.targets.<target>.metal_sources is only supported on ios / ios-simulator / tvos / tvos-simulator / watchos / watchos-simulator"

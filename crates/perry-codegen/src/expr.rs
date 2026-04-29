@@ -8,7 +8,6 @@
 //! error so a user running `--backend llvm` on richer TypeScript gets a
 //! one-line explanation instead of a silent broken binary.
 
-
 use anyhow::{anyhow, bail, Result};
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 use perry_types::Type as HirType;
@@ -17,14 +16,18 @@ use crate::block::LlBlock;
 use crate::function::LlFunction;
 use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
 use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
-use crate::lower_string_method::{lower_string_coerce_concat, lower_string_concat, lower_string_self_append};
-use crate::nanbox::{double_literal, BIGINT_TAG_I64, POINTER_MASK_I64, POINTER_TAG_I64, STRING_TAG_I64};
+use crate::lower_string_method::{
+    lower_string_coerce_concat, lower_string_concat, lower_string_self_append,
+};
+use crate::nanbox::{
+    double_literal, BIGINT_TAG_I64, POINTER_MASK_I64, POINTER_TAG_I64, STRING_TAG_I64,
+};
 use crate::strings::StringPool;
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
     is_numeric_expr, is_set_expr, is_string_expr, receiver_class_name,
 };
-use crate::types::{DOUBLE, I1, I8, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 /// Inline NaN-box of a raw heap pointer with `POINTER_TAG`.
 pub(crate) fn nanbox_pointer_inline(blk: &mut LlBlock, ptr_i64: &str) -> String {
@@ -217,8 +220,7 @@ pub(crate) struct FnCtx<'a> {
     /// Static class fields: `(class_name, field_name) → llvm global
     /// symbol`. Built once in `compile_module`. Used by
     /// `Expr::StaticFieldGet/Set` to load/store the global.
-    pub static_field_globals:
-        &'a std::collections::HashMap<(String, String), String>,
+    pub static_field_globals: &'a std::collections::HashMap<(String, String), String>,
     /// Per-class id for object headers. Each user class gets a
     /// unique non-zero id (anonymous objects use 0). Used by
     /// `lower_new` and the virtual method dispatch helper.
@@ -270,7 +272,6 @@ pub(crate) struct FnCtx<'a> {
     pub local_closure_func_ids: std::collections::HashMap<u32, u32>,
 
     // ── Cross-module import plumbing (Phase F) ──────────────────────
-
     /// Locals that are namespace imports (`import * as X from "./mod"`).
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
@@ -632,7 +633,6 @@ impl<'a> FnCtx<'a> {
             .map(|b| b.label.clone())
             .expect("valid block index")
     }
-
 }
 
 /// Lower an expression to a raw LLVM `double` value. Returns the string form
@@ -648,11 +648,11 @@ impl<'a> FnCtx<'a> {
 /// object key), class field set fast path, closure capture set
 /// (boxed + non-boxed), array push, etc.
 fn emit_write_barrier(ctx: &mut FnCtx<'_>, parent_bits: &str, child_bits: &str) {
-    if !crate::codegen::write_barriers_enabled() { return; }
-    ctx.block().call_void(
-        "js_write_barrier",
-        &[(I64, parent_bits), (I64, child_bits)],
-    );
+    if !crate::codegen::write_barriers_enabled() {
+        return;
+    }
+    ctx.block()
+        .call_void("js_write_barrier", &[(I64, parent_bits), (I64, child_bits)]);
 }
 
 pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -808,8 +808,14 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Skip for module globals — they use global variable loads,
             // not alloca slots, and the self-append helper requires a slot.
             if matches!(ctx.local_types.get(id), Some(HirType::String))
-                && !ctx.module_globals.contains_key(id) {
-                if let Expr::Binary { op: BinaryOp::Add, left, right } = value.as_ref() {
+                && !ctx.module_globals.contains_key(id)
+            {
+                if let Expr::Binary {
+                    op: BinaryOp::Add,
+                    left,
+                    right,
+                } = value.as_ref()
+                {
                     if let Expr::LocalGet(left_id) = left.as_ref() {
                         if left_id == id {
                             return lower_string_self_append(ctx, *id, right);
@@ -829,7 +835,15 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
                 if !ctx.closure_captures.contains_key(id)
                     && !(ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id))
-                    && can_lower_expr_as_i32(value, &ctx.i32_counter_slots, ctx.flat_const_arrays, &ctx.array_row_aliases, ctx.integer_locals, ctx.clamp3_functions, ctx.clamp_u8_functions)
+                    && can_lower_expr_as_i32(
+                        value,
+                        &ctx.i32_counter_slots,
+                        ctx.flat_const_arrays,
+                        &ctx.array_row_aliases,
+                        ctx.integer_locals,
+                        ctx.clamp3_functions,
+                        ctx.clamp_u8_functions,
+                    )
                 {
                     let v_i32 = lower_expr_as_i32(ctx, value)?;
                     let blk = ctx.block();
@@ -1083,11 +1097,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(fname) = helper {
                     let l = lower_expr(ctx, left)?;
                     let r = lower_expr(ctx, right)?;
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        fname,
-                        &[(DOUBLE, &l), (DOUBLE, &r)],
-                    ));
+                    return Ok(ctx
+                        .block()
+                        .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
                 }
             }
             // Fast path: `<integer-valued> % <integer literal>` (the
@@ -1123,17 +1135,34 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // integer-valued — emit `sdiv i32` instead of
             // `scvtf → fdiv → fcvtzs`.  LLVM replaces constant divisors
             // with a `smulh + asr` sequence (1 cycle vs ~10 for fdiv).
-            if matches!(op, BinaryOp::BitOr)
-                && matches!(right.as_ref(), Expr::Integer(0))
-            {
-                if let Expr::Binary { op: BinaryOp::Div, left: div_l, right: div_r } = left.as_ref() {
+            if matches!(op, BinaryOp::BitOr) && matches!(right.as_ref(), Expr::Integer(0)) {
+                if let Expr::Binary {
+                    op: BinaryOp::Div,
+                    left: div_l,
+                    right: div_r,
+                } = left.as_ref()
+                {
                     let i32_slots = &ctx.i32_counter_slots;
                     let flat_ca = &ctx.flat_const_arrays;
                     let ara = &ctx.array_row_aliases;
                     let int_locals = &ctx.integer_locals;
-                    if can_lower_expr_as_i32(div_l, i32_slots, flat_ca, ara, int_locals, &ctx.clamp3_functions, &ctx.clamp_u8_functions)
-                        && can_lower_expr_as_i32(div_r, i32_slots, flat_ca, ara, int_locals, &ctx.clamp3_functions, &ctx.clamp_u8_functions)
-                    {
+                    if can_lower_expr_as_i32(
+                        div_l,
+                        i32_slots,
+                        flat_ca,
+                        ara,
+                        int_locals,
+                        &ctx.clamp3_functions,
+                        &ctx.clamp_u8_functions,
+                    ) && can_lower_expr_as_i32(
+                        div_r,
+                        i32_slots,
+                        flat_ca,
+                        ara,
+                        int_locals,
+                        &ctx.clamp3_functions,
+                        &ctx.clamp_u8_functions,
+                    ) {
                         let a = lower_expr_as_i32(ctx, div_l)?;
                         let b = lower_expr_as_i32(ctx, div_r)?;
                         let blk = ctx.block();
@@ -1151,20 +1180,42 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // payload instead of computing 1.0 + 1.0 = 2.0.
             let l_numeric = is_numeric_expr(ctx, left);
             let r_numeric = is_numeric_expr(ctx, right);
-            let l = if l_numeric { l_raw } else {
-                ctx.block().call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_raw)])
+            let l = if l_numeric {
+                l_raw
+            } else {
+                ctx.block()
+                    .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_raw)])
             };
-            let r = if r_numeric { r_raw } else {
-                ctx.block().call(DOUBLE, "js_number_coerce", &[(DOUBLE, &r_raw)])
+            let r = if r_numeric {
+                r_raw
+            } else {
+                ctx.block()
+                    .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &r_raw)])
             };
             let v = match op {
-                BinaryOp::Add => { let blk = ctx.block(); blk.fadd(&l, &r) }
-                BinaryOp::Sub => { let blk = ctx.block(); blk.fsub(&l, &r) }
-                BinaryOp::Mul => { let blk = ctx.block(); blk.fmul(&l, &r) }
-                BinaryOp::Div => { let blk = ctx.block(); blk.fdiv(&l, &r) }
-                BinaryOp::Mod => { let blk = ctx.block(); blk.frem(&l, &r) }
+                BinaryOp::Add => {
+                    let blk = ctx.block();
+                    blk.fadd(&l, &r)
+                }
+                BinaryOp::Sub => {
+                    let blk = ctx.block();
+                    blk.fsub(&l, &r)
+                }
+                BinaryOp::Mul => {
+                    let blk = ctx.block();
+                    blk.fmul(&l, &r)
+                }
+                BinaryOp::Div => {
+                    let blk = ctx.block();
+                    blk.fdiv(&l, &r)
+                }
+                BinaryOp::Mod => {
+                    let blk = ctx.block();
+                    blk.frem(&l, &r)
+                }
                 BinaryOp::Pow => {
-                    ctx.block().call(DOUBLE, "js_math_pow", &[(DOUBLE, &l), (DOUBLE, &r)])
+                    ctx.block()
+                        .call(DOUBLE, "js_math_pow", &[(DOUBLE, &l), (DOUBLE, &r)])
                 }
                 // Bitwise ops: use toint32_fast (skip NaN/Inf guard) when
                 // operands are known-finite from integer analysis.
@@ -1175,20 +1226,30 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // entirely — just fptosi + sitofp (identity for in-range
                 // values, LLVM eliminates via instcombine).
                 BinaryOp::BitOr
-                    if matches!(right.as_ref(), Expr::Integer(0))
-                        && is_known_finite(ctx, left) =>
+                    if matches!(right.as_ref(), Expr::Integer(0)) && is_known_finite(ctx, left) =>
                 {
                     let blk = ctx.block();
                     let li = blk.toint32_fast(&l);
                     blk.sitofp(I32, &li, DOUBLE)
                 }
-                BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
-                | BinaryOp::Shl | BinaryOp::Shr => {
+                BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr => {
                     let l_safe = is_known_finite(ctx, left);
                     let r_safe = is_known_finite(ctx, right);
                     let blk = ctx.block();
-                    let li = if l_safe { blk.toint32_fast(&l) } else { blk.toint32(&l) };
-                    let ri = if r_safe { blk.toint32_fast(&r) } else { blk.toint32(&r) };
+                    let li = if l_safe {
+                        blk.toint32_fast(&l)
+                    } else {
+                        blk.toint32(&l)
+                    };
+                    let ri = if r_safe {
+                        blk.toint32_fast(&r)
+                    } else {
+                        blk.toint32(&r)
+                    };
                     let v = match op {
                         BinaryOp::BitAnd => blk.and(I32, &li, &ri),
                         BinaryOp::BitOr => blk.or(I32, &li, &ri),
@@ -1200,8 +1261,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.sitofp(I32, &v, DOUBLE)
                 }
                 BinaryOp::UShr
-                    if matches!(right.as_ref(), Expr::Integer(0))
-                        && is_known_finite(ctx, left) =>
+                    if matches!(right.as_ref(), Expr::Integer(0)) && is_known_finite(ctx, left) =>
                 {
                     let blk = ctx.block();
                     let li = blk.toint32_fast(&l);
@@ -1211,8 +1271,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let l_safe = is_known_finite(ctx, left);
                     let r_safe = is_known_finite(ctx, right);
                     let blk = ctx.block();
-                    let li = if l_safe { blk.toint32_fast(&l) } else { blk.toint32(&l) };
-                    let ri = if r_safe { blk.toint32_fast(&r) } else { blk.toint32(&r) };
+                    let li = if l_safe {
+                        blk.toint32_fast(&l)
+                    } else {
+                        blk.toint32(&l)
+                    };
+                    let ri = if r_safe {
+                        blk.toint32_fast(&r)
+                    } else {
+                        blk.toint32(&r)
+                    };
                     let v = blk.lshr(I32, &li, &ri);
                     blk.uitofp(I32, &v, DOUBLE)
                 }
@@ -1288,11 +1356,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 let l_handle = unbox_to_i64(blk, &l);
                 let r_handle = unbox_to_i64(blk, &r);
-                let cmp = blk.call(
-                    I32,
-                    "js_bigint_cmp",
-                    &[(I64, &l_handle), (I64, &r_handle)],
-                );
+                let cmp = blk.call(I32, "js_bigint_cmp", &[(I64, &l_handle), (I64, &r_handle)]);
                 let bit = match op {
                     CompareOp::Lt => blk.icmp_slt(I32, &cmp, "0"),
                     CompareOp::Le => blk.icmp_sle(I32, &cmp, "0"),
@@ -1353,9 +1417,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let left_is_undef = matches!(left.as_ref(), Expr::Undefined);
             let right_is_null = matches!(right.as_ref(), Expr::Null);
             let right_is_undef = matches!(right.as_ref(), Expr::Undefined);
-            let either_nullish_lit = left_is_null || left_is_undef || right_is_null || right_is_undef;
+            let either_nullish_lit =
+                left_is_null || left_is_undef || right_is_null || right_is_undef;
             if either_nullish_lit
-                && matches!(op, CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe)
+                && matches!(
+                    op,
+                    CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe
+                )
             {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
@@ -1405,24 +1473,23 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // string at runtime.
             let both_strings_check = is_string_expr(ctx, left) && is_string_expr(ctx, right);
             let one_side_string = !both_strings_check
-                && ((is_string_expr(ctx, left) && !is_numeric_expr(ctx, right) && !is_bool_expr(ctx, right))
-                    || (is_string_expr(ctx, right) && !is_numeric_expr(ctx, left) && !is_bool_expr(ctx, left)));
+                && ((is_string_expr(ctx, left)
+                    && !is_numeric_expr(ctx, right)
+                    && !is_bool_expr(ctx, right))
+                    || (is_string_expr(ctx, right)
+                        && !is_numeric_expr(ctx, left)
+                        && !is_bool_expr(ctx, left)));
             if one_side_string
-                && matches!(op, CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe)
+                && matches!(
+                    op,
+                    CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe
+                )
             {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
                 let blk = ctx.block();
-                let l_handle = blk.call(
-                    I64,
-                    "js_get_string_pointer_unified",
-                    &[(DOUBLE, &l)],
-                );
-                let r_handle = blk.call(
-                    I64,
-                    "js_get_string_pointer_unified",
-                    &[(DOUBLE, &r)],
-                );
+                let l_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &l)]);
+                let r_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &r)]);
                 let i32_eq = blk.call(
                     I32,
                     "js_string_equals",
@@ -1449,7 +1516,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // via NaN-tag inspection. Used by `eq` helpers in tests
             // that take `any` and pass NaN-tagged values.
             let either_non_numeric = !is_numeric_expr(ctx, left) && !is_numeric_expr(ctx, right);
-            let only_eq = matches!(op, CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe);
+            let only_eq = matches!(
+                op,
+                CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe
+            );
             // We still let the more specific paths below win for
             // statically-typed string/bool operands; this fallback
             // only handles the truly-Any case.
@@ -1494,7 +1564,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // unordered → always false). When both operands are
             // statically strings, dispatch through js_string_equals.
             let both_strings = is_string_expr(ctx, left) && is_string_expr(ctx, right);
-            if both_strings && matches!(op, CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe) {
+            if both_strings
+                && matches!(
+                    op,
+                    CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe
+                )
+            {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
                 let blk = ctx.block();
@@ -1504,7 +1579,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `js_string_equals` to deref the inline payload bytes.
                 let l_handle = unbox_str_handle(blk, &l);
                 let r_handle = unbox_str_handle(blk, &r);
-                let i32_eq = blk.call(I32, "js_string_equals", &[(I64, &l_handle), (I64, &r_handle)]);
+                let i32_eq = blk.call(
+                    I32,
+                    "js_string_equals",
+                    &[(I64, &l_handle), (I64, &r_handle)],
+                );
                 let bit = blk.icmp_ne(I32, &i32_eq, "0");
                 let bit_final = if matches!(op, CompareOp::Ne | CompareOp::LooseNe) {
                     blk.xor(crate::types::I1, &bit, "true")
@@ -1525,7 +1604,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // so dispatch through js_string_compare which returns
             // -1/0/1 like memcmp. Then test the result against 0 with
             // the right icmp predicate.
-            if both_strings && matches!(op, CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge) {
+            if both_strings
+                && matches!(
+                    op,
+                    CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
+                )
+            {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
                 let blk = ctx.block();
@@ -1600,7 +1684,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let bit = blk.fcmp(pred, &l, &r);
             let tag_true_i64 = crate::nanbox::TAG_TRUE_I64;
             let tag_false_i64 = crate::nanbox::TAG_FALSE_I64;
-            let tagged_i64 = blk.select(crate::types::I1, &bit, crate::types::I64, tag_true_i64, tag_false_i64);
+            let tagged_i64 = blk.select(
+                crate::types::I1,
+                &bit,
+                crate::types::I64,
+                tag_true_i64,
+                tag_false_i64,
+            );
             Ok(blk.bitcast_i64_to_double(&tagged_i64))
         }
 
@@ -1625,9 +1715,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ArraySpread(elements) => {
             use perry_hir::ArrayElement;
             let cap_str = (elements.len() as u32).to_string();
-            let mut current_arr = ctx
-                .block()
-                .call(I64, "js_array_alloc", &[(I32, &cap_str)]);
+            let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_str)]);
             for elem in elements {
                 match elem {
                     ArrayElement::Expr(e) => {
@@ -1645,11 +1733,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let src_box = lower_expr(ctx, e)?;
                             let blk = ctx.block();
                             let src_handle = unbox_to_i64(blk, &src_box);
-                            let char_arr = blk.call(
-                                I64,
-                                "js_string_to_char_array",
-                                &[(I64, &src_handle)],
-                            );
+                            let char_arr =
+                                blk.call(I64, "js_string_to_char_array", &[(I64, &src_handle)]);
                             current_arr = blk.call(
                                 I64,
                                 "js_array_concat",
@@ -1846,10 +1931,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.current_block = merge_idx;
                         return Ok(ctx.block().phi(
                             DOUBLE,
-                            &[
-                                (&fast_val, &fast_end_label),
-                                (&lazy_val, &lazy_end_label),
-                            ],
+                            &[(&fast_val, &fast_end_label), (&lazy_val, &lazy_end_label)],
                         ));
                     }
                 }
@@ -1881,11 +1963,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
                 let gc_type = blk.load(I8, &gc_type_ptr);
                 let is_lazy = blk.icmp_eq(I8, &gc_type, "9"); // GC_TYPE_LAZY_ARRAY
-                // Issue #233: also detect FORWARDED arrays (post-grow
-                // stale pointers from async-fn parameter handoff). The
-                // slow path's `clean_arr_ptr` follows forwarding
-                // chains. Same lazy_idx branch (slow path) handles
-                // both shapes correctly.
+                                                              // Issue #233: also detect FORWARDED arrays (post-grow
+                                                              // stale pointers from async-fn parameter handoff). The
+                                                              // slow path's `clean_arr_ptr` follows forwarding
+                                                              // chains. Same lazy_idx branch (slow path) handles
+                                                              // both shapes correctly.
                 let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
                 let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
                 let gc_flags = blk.load(I8, &gc_flags_ptr);
@@ -1959,8 +2041,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // so we get the same handle as obj["foo"].
                 let obj_box = lower_expr(ctx, object)?;
                 let key_idx = ctx.strings.intern(literal);
-                let key_handle_global =
-                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
                 let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
@@ -2064,8 +2145,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let lazy_gc_type_ptr = ctx.block().inttoptr(I64, &lazy_gc_type_addr);
             let lazy_gc_type = ctx.block().load(I8, &lazy_gc_type_ptr);
             let is_lazy = ctx.block().icmp_eq(I8, &lazy_gc_type, "9"); // GC_TYPE_LAZY_ARRAY
-            // Issue #233: also detect FORWARDED arrays (post-grow
-            // stale pointers from async-fn parameter handoff).
+                                                                       // Issue #233: also detect FORWARDED arrays (post-grow
+                                                                       // stale pointers from async-fn parameter handoff).
             let lazy_gc_flags_addr = ctx.block().sub(I64, &obj_handle, "7");
             let lazy_gc_flags_ptr = ctx.block().inttoptr(I64, &lazy_gc_flags_addr);
             let lazy_gc_flags = ctx.block().load(I8, &lazy_gc_flags_ptr);
@@ -2078,7 +2159,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let num_lazy_lbl = ctx.block_label(num_lazy_idx);
             let num_fast_lbl = ctx.block_label(num_fast_idx);
             let num_inner_merge_lbl = ctx.block_label(num_inner_merge_idx);
-            ctx.block().cond_br(&lazy_needs_slow, &num_lazy_lbl, &num_fast_lbl);
+            ctx.block()
+                .cond_br(&lazy_needs_slow, &num_lazy_lbl, &num_fast_lbl);
 
             ctx.current_block = num_lazy_idx;
             let v_num_lazy = ctx.block().call(
@@ -2151,11 +2233,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let recv_box = lower_expr(ctx, object)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let arr_handle = blk.call(
-                I64,
-                "js_error_get_errors",
-                &[(I64, &recv_handle)],
-            );
+            let arr_handle = blk.call(I64, "js_error_get_errors", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
 
@@ -2168,7 +2246,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // wrap strings or arrays at runtime, where length is at offset 0.
         Expr::PropertyGet { object, property }
             if property == "length"
-                && (is_array_expr(ctx, object) || is_string_expr(ctx, object)
+                && (is_array_expr(ctx, object)
+                    || is_string_expr(ctx, object)
                     || matches!(
                         crate::type_analysis::static_type_of(ctx, object),
                         Some(HirType::Named(_)) | Some(HirType::Tuple(_))
@@ -2241,15 +2320,15 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let recv_tag = blk.lshr(I64, &recv_bits, "48");
             let recv_tag_masked = blk.and(I64, &recv_tag, "65533"); // 0xFFFD
             let handle_ok = blk.icmp_eq(I64, &recv_tag_masked, "32765"); // 0x7FFD
-            // SSO receivers fail this guard → route to slow path
-            // `js_value_length_f64` which has an SSO branch (reads
-            // length from the tag byte, no heap access). Accepting
-            // SSO here is safe because the fast path's
-            // `safe_load_i32_from_ptr(&recv_handle)` would read
-            // arbitrary bytes at the SSO "pointer" address, but
-            // the subsequent phi feeds the slow-path result when
-            // handle_ok is false — so SSO flow is correct via the
-            // slow path already, no widening needed.
+                                                                         // SSO receivers fail this guard → route to slow path
+                                                                         // `js_value_length_f64` which has an SSO branch (reads
+                                                                         // length from the tag byte, no heap access). Accepting
+                                                                         // SSO here is safe because the fast path's
+                                                                         // `safe_load_i32_from_ptr(&recv_handle)` would read
+                                                                         // arbitrary bytes at the SSO "pointer" address, but
+                                                                         // the subsequent phi feeds the slow-path result when
+                                                                         // handle_ok is false — so SSO flow is correct via the
+                                                                         // slow path already, no widening needed.
 
             let check_gc_idx = ctx.new_block("plen.check_gc");
             let fast_idx = ctx.new_block("plen.fast");
@@ -2259,7 +2338,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let fast_label = ctx.block_label(fast_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
-            ctx.block().cond_br(&handle_ok, &check_gc_label, &slow_label);
+            ctx.block()
+                .cond_br(&handle_ok, &check_gc_label, &slow_label);
 
             ctx.current_block = check_gc_idx;
             let gc_type_addr = ctx.block().sub(I64, &recv_handle, "8");
@@ -2294,21 +2374,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // receivers (Closure / BigInt / Promise / Error / plain
             // Object) and for non-pointer NaN-boxes.
             ctx.current_block = slow_idx;
-            let slow_len = ctx.block().call(
-                DOUBLE,
-                "js_value_length_f64",
-                &[(DOUBLE, &recv_box)],
-            );
+            let slow_len = ctx
+                .block()
+                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]);
             let slow_pred_label = ctx.block().label.clone();
             ctx.block().br(&merge_label);
 
             ctx.current_block = merge_idx;
             Ok(ctx.block().phi(
                 DOUBLE,
-                &[
-                    (&fast_len, &fast_pred_label),
-                    (&slow_len, &slow_pred_label),
-                ],
+                &[(&fast_len, &fast_pred_label), (&slow_len, &slow_pred_label)],
             ))
         }
 
@@ -2349,7 +2424,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // For non-LocalGet receivers we still use bounds-checked
         // `js_array_set_f64` (no return value, no realloc) since there's
         // no local to write a possibly-realloc'd pointer back to.
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             // Uint8ClampedArray writes must apply ToUint8Clamp (NaN → 0,
             // v ≤ 0 → 0, v ≥ 255 → 255, otherwise round-half-to-even).
             // Route to the runtime helper which already implements the
@@ -2490,8 +2569,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let obj_box = lower_expr(ctx, object)?;
                 let val_double = lower_expr(ctx, value)?;
                 let key_idx = ctx.strings.intern(literal);
-                let key_handle_global =
-                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
                 let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
@@ -2518,7 +2596,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let key_handle = unbox_str_handle(blk, &key_box);
                 blk.call_void(
                     "js_object_set_field_by_name",
-                    &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &val_double)],
+                    &[
+                        (I64, &obj_handle),
+                        (I64, &key_handle),
+                        (DOUBLE, &val_double),
+                    ],
                 );
                 // Gen-GC Phase C2: write barrier on string-keyed obj write.
                 let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
@@ -2554,7 +2636,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ctx.block().call(
                 DOUBLE,
                 "js_object_set_symbol_property",
-                &[(DOUBLE, &obj_box), (DOUBLE, &idx_box), (DOUBLE, &val_double)],
+                &[
+                    (DOUBLE, &obj_box),
+                    (DOUBLE, &idx_box),
+                    (DOUBLE, &val_double),
+                ],
             );
             ctx.block().br(&merge_lbl);
             // Not a symbol — recompute idx_bits in this block (LLVM SSA, no
@@ -2575,7 +2661,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_handle = blk.and(I64, &idx_bits2, POINTER_MASK_I64);
             ctx.block().call_void(
                 "js_object_set_field_by_name",
-                &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &val_double)],
+                &[
+                    (I64, &obj_handle),
+                    (I64, &key_handle),
+                    (DOUBLE, &val_double),
+                ],
             );
             ctx.block().br(&merge_lbl);
             // Numeric key → inline array-style write (offset 8+idx*8).
@@ -2601,10 +2691,19 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // `obj.field = v` — generic object field write.
-        Expr::PropertySet { object, property, value } => {
+        Expr::PropertySet {
+            object,
+            property,
+            value,
+        } => {
             // Scalar replacement fast path: store to the field's alloca.
             if let Expr::LocalGet(id) = object.as_ref() {
-                if let Some(slot) = ctx.scalar_replaced.get(id).and_then(|fs| fs.get(property.as_str())).cloned() {
+                if let Some(slot) = ctx
+                    .scalar_replaced
+                    .get(id)
+                    .and_then(|fs| fs.get(property.as_str()))
+                    .cloned()
+                {
                     let val_double = lower_expr(ctx, value)?;
                     ctx.block().store(DOUBLE, &val_double, &slot);
                     return Ok(val_double);
@@ -2612,7 +2711,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // Handle `this` during scalar-replaced constructor inlining:
             if let Expr::This = object.as_ref() {
-                if let Some(slot) = ctx.scalar_ctor_target.last().and_then(|tid| ctx.scalar_replaced.get(tid)).and_then(|fs| fs.get(property.as_str())).cloned() {
+                if let Some(slot) = ctx
+                    .scalar_ctor_target
+                    .last()
+                    .and_then(|tid| ctx.scalar_replaced.get(tid))
+                    .and_then(|fs| fs.get(property.as_str()))
+                    .cloned()
+                {
                     let val_double = lower_expr(ctx, value)?;
                     ctx.block().store(DOUBLE, &val_double, &slot);
                     return Ok(val_double);
@@ -2659,8 +2764,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
                     let obj_ptr = blk.inttoptr(I64, &obj_handle);
                     let header_skip = "24".to_string();
-                    let fields_base =
-                        blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
                     let idx_str = field_index.to_string();
                     let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &idx_str)]);
                     blk.store(DOUBLE, &val_double, &field_ptr);
@@ -2701,7 +2805,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Scalar replacement fast path: if the receiver is a scalar-replaced
             // local, load directly from the field's alloca — no heap access.
             if let Expr::LocalGet(id) = object.as_ref() {
-                if let Some(slot) = ctx.scalar_replaced.get(id).and_then(|fs| fs.get(property.as_str())).cloned() {
+                if let Some(slot) = ctx
+                    .scalar_replaced
+                    .get(id)
+                    .and_then(|fs| fs.get(property.as_str()))
+                    .cloned()
+                {
                     return Ok(ctx.block().load(DOUBLE, &slot));
                 }
                 // Scalar-replaced array literal: `.length` folds to a
@@ -2714,7 +2823,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // Also handle `this` during scalar-replaced ctor inlining
             if let Expr::This = object.as_ref() {
-                if let Some(slot) = ctx.scalar_ctor_target.last().and_then(|tid| ctx.scalar_replaced.get(tid)).and_then(|fs| fs.get(property.as_str())).cloned() {
+                if let Some(slot) = ctx
+                    .scalar_ctor_target
+                    .last()
+                    .and_then(|tid| ctx.scalar_replaced.get(tid))
+                    .and_then(|fs| fs.get(property.as_str()))
+                    .cloned()
+                {
                     return Ok(ctx.block().load(DOUBLE, &slot));
                 }
             }
@@ -2769,7 +2884,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (the registry duplication bug was the first).
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
                 if ctx.namespace_imports.contains(name) {
-                    if let Some(source_prefix) = ctx.import_function_prefixes.get(property).cloned() {
+                    if let Some(source_prefix) = ctx.import_function_prefixes.get(property).cloned()
+                    {
                         let getter = format!("perry_fn_{}__{}", source_prefix, property);
                         ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
                         return Ok(ctx.block().call(DOUBLE, &getter, &[]));
@@ -2786,12 +2902,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
                 if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
                     let getter = format!("perry_fn_{}__{}", source_prefix, name);
-                    ctx.pending_declares
-                        .push((getter.clone(), DOUBLE, vec![]));
+                    ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
                     let obj_val = ctx.block().call(DOUBLE, &getter, &[]);
                     // Now do property access on the actual object.
                     let key_idx = ctx.strings.intern(property);
-                    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
                     let blk = ctx.block();
                     let obj_bits = blk.bitcast_double_to_i64(&obj_val);
                     let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
@@ -2813,11 +2929,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let getter_key = (class_name.clone(), format!("__get_{}", property));
                 if let Some(fn_name) = ctx.methods.get(&getter_key).cloned() {
                     let recv_box = lower_expr(ctx, object)?;
-                    return Ok(ctx.block().call(
-                        DOUBLE,
-                        &fn_name,
-                        &[(DOUBLE, &recv_box)],
-                    ));
+                    return Ok(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv_box)]));
                 }
                 // Fast path: known class instance + plain instance field
                 // (no getter/setter shadowing). Inline a direct GEP+load
@@ -2849,8 +2961,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let obj_ptr = blk.inttoptr(I64, &obj_handle);
                     // Skip the 24-byte ObjectHeader.
                     let header_skip = "24".to_string();
-                    let fields_base =
-                        blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
                     let idx_str = field_index.to_string();
                     let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &idx_str)]);
                     return Ok(blk.load(DOUBLE, &field_ptr));
@@ -2911,7 +3022,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `invalid_idx` except when we dispatch through SSO.
             let pic_or_invalid_idx = ctx.new_block("pget.check_ptr");
             let pic_or_invalid_label = ctx.block_label(pic_or_invalid_idx);
-            ctx.block().cond_br(&is_sso, &sso_label, &pic_or_invalid_label);
+            ctx.block()
+                .cond_br(&is_sso, &sso_label, &pic_or_invalid_label);
             ctx.current_block = pic_or_invalid_idx;
             ctx.block().cond_br(&is_valid, &pic_label, &invalid_label);
 
@@ -2926,10 +3038,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let site_id = ctx.ic_site_counter;
             ctx.ic_site_counter += 1;
             let cache_name = format!("perry_ic_{}", site_id);
-            ctx.pending_declares.push((
-                format!("__ic_decl_{}", site_id),
-                DOUBLE, vec![],
-            ));
+            ctx.pending_declares
+                .push((format!("__ic_decl_{}", site_id), DOUBLE, vec![]));
             ctx.ic_globals.push(cache_name.clone());
 
             // Issue #72: validate the receiver is actually a GC_TYPE_OBJECT
@@ -3049,9 +3159,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Lowered like if-expression with phi merge — same shape as the
         // logical operator path but with both branches always evaluated
         // conditionally on the truthiness test.
-        Expr::Conditional { condition, then_expr, else_expr } => {
-            lower_conditional(ctx, condition, then_expr, else_expr)
-        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => lower_conditional(ctx, condition, then_expr, else_expr),
 
         // `arr.push(x)` (Phase B.7) — special HIR variant that already
         // tells us the array LocalId and the value. We load the array
@@ -3079,10 +3191,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if ctx.boxed_vars.contains(array_id) {
                 // Captured-through-closure boxed var.
                 if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                    let closure_ptr = ctx
-                        .current_closure_ptr
-                        .clone()
-                        .ok_or_else(|| anyhow!("ArrayPush boxed captured but no current_closure_ptr"))?;
+                    let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
+                        anyhow!("ArrayPush boxed captured but no current_closure_ptr")
+                    })?;
                     let idx_str = capture_idx.to_string();
                     let blk = ctx.block();
                     let cap_dbl = blk.call(
@@ -3091,18 +3202,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &closure_ptr), (I32, &idx_str)],
                     );
                     let box_ptr = blk.bitcast_double_to_i64(&cap_dbl);
-                    blk.call_void(
-                        "js_box_set",
-                        &[(I64, &box_ptr), (DOUBLE, &new_box)],
-                    );
+                    blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
                     let box_dbl = blk.load(DOUBLE, &slot);
                     let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
-                    blk.call_void(
-                        "js_box_set",
-                        &[(I64, &box_ptr), (DOUBLE, &new_box)],
-                    );
+                    blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
                 }
                 return Ok(new_box);
             }
@@ -3150,10 +3255,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let new_box = nanbox_pointer_inline(blk, &new_handle);
             if ctx.boxed_vars.contains(array_id) {
                 if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                    let closure_ptr = ctx
-                        .current_closure_ptr
-                        .clone()
-                        .ok_or_else(|| anyhow!("ArrayPushSpread boxed captured but no current_closure_ptr"))?;
+                    let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
+                        anyhow!("ArrayPushSpread boxed captured but no current_closure_ptr")
+                    })?;
                     let idx_str = capture_idx.to_string();
                     let blk = ctx.block();
                     let cap_dbl = blk.call(
@@ -3162,26 +3266,19 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &closure_ptr), (I32, &idx_str)],
                     );
                     let box_ptr = blk.bitcast_double_to_i64(&cap_dbl);
-                    blk.call_void(
-                        "js_box_set",
-                        &[(I64, &box_ptr), (DOUBLE, &new_box)],
-                    );
+                    blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
                     let box_dbl = blk.load(DOUBLE, &slot);
                     let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
-                    blk.call_void(
-                        "js_box_set",
-                        &[(I64, &box_ptr), (DOUBLE, &new_box)],
-                    );
+                    blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
                 }
                 return Ok(new_box);
             }
             if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
-                let closure_ptr = ctx
-                    .current_closure_ptr
-                    .clone()
-                    .ok_or_else(|| anyhow!("ArrayPushSpread captured but no current_closure_ptr"))?;
+                let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
+                    anyhow!("ArrayPushSpread captured but no current_closure_ptr")
+                })?;
                 let idx_str = capture_idx.to_string();
                 ctx.block().call_void(
                     "js_closure_set_capture_f64",
@@ -3267,10 +3364,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // transitively-captured box. Read the
                         // capture slot RAW (it holds the box ptr
                         // as a double) and propagate directly.
-                        let closure_ptr = ctx
-                            .current_closure_ptr
-                            .clone()
-                            .ok_or_else(|| anyhow!("nested boxed capture but no current_closure_ptr"))?;
+                        let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
+                            anyhow!("nested boxed capture but no current_closure_ptr")
+                        })?;
                         let idx_str = _capture_idx.to_string();
                         let v = ctx.block().call(
                             DOUBLE,
@@ -3283,9 +3379,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // holds the box pointer as a double.
                         let v = ctx.block().load(DOUBLE, &slot);
                         captured_values.push(v);
-                    } else if let Some(global_name) =
-                        ctx.module_globals.get(cap_id).cloned()
-                    {
+                    } else if let Some(global_name) = ctx.module_globals.get(cap_id).cloned() {
                         // Global boxed var (rare).
                         let g_ref = format!("@{}", global_name);
                         let v = ctx.block().load(DOUBLE, &g_ref);
@@ -3301,11 +3395,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
             // Compute the closure function name BEFORE taking the
             // mutable block borrow.
-            let func_name = format!(
-                "perry_closure_{}__{}",
-                ctx.strings.module_prefix(),
-                func_id
-            );
+            let func_name = format!("perry_closure_{}__{}", ctx.strings.module_prefix(), func_id);
 
             // Closures with `captures_this` reserve one extra capture
             // slot (at index `auto_captures.len()`) for the receiver.
@@ -3375,7 +3465,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // new object, return the NaN-boxed object. No method tables yet,
         // no inheritance — just data classes with constructor field
         // assignments.
-        Expr::New { class_name, args, .. } => lower_new(ctx, class_name, args),
+        Expr::New {
+            class_name, args, ..
+        } => lower_new(ctx, class_name, args),
 
         // `new <expr>(args…)` where the callee isn't a bare identifier.
         // Several shapes get static rerouting; the rest fall back to a
@@ -3432,7 +3524,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // statically resolvable they reroute to lower_new; otherwise
             // they fall back to the empty-object placeholder. Either way
             // each branch produces a valid double for the phi to merge.
-            if let Expr::Conditional { condition, then_expr, else_expr } = callee.as_ref() {
+            if let Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } = callee.as_ref()
+            {
                 let then_synth = Expr::NewDynamic {
                     callee: then_expr.clone(),
                     args: args.clone(),
@@ -3452,9 +3549,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             let class_id = "0".to_string();
             let count = "0".to_string();
-            let handle = ctx
-                .block()
-                .call(I64, "js_object_alloc", &[(I32, &class_id), (I32, &count)]);
+            let handle =
+                ctx.block()
+                    .call(I64, "js_object_alloc", &[(I32, &class_id), (I32, &count)]);
             Ok(nanbox_pointer_inline(ctx.block(), &handle))
         }
 
@@ -3500,7 +3597,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(double_literal(0.0));
                 }
             };
-            let Some(parent_name) = current_class.extends_name.as_deref().map(|s| s.to_string()) else {
+            let Some(parent_name) = current_class.extends_name.as_deref().map(|s| s.to_string())
+            else {
                 for a in super_args {
                     let _ = lower_expr(ctx, a)?;
                 }
@@ -3637,7 +3735,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::MathPow(base, exp) => {
             let b = lower_expr(ctx, base)?;
             let e = lower_expr(ctx, exp)?;
-            Ok(ctx.block().call(DOUBLE, "js_math_pow", &[(DOUBLE, &b), (DOUBLE, &e)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_math_pow", &[(DOUBLE, &b), (DOUBLE, &e)]))
         }
 
         // -------- Math.imul — 32-bit wrapping integer multiply --------
@@ -3705,7 +3805,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            let result = blk.call(I64, "js_array_map", &[(I64, &arr_handle), (I64, &cb_handle)]);
+            let result = blk.call(
+                I64,
+                "js_array_map",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            );
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
@@ -3780,7 +3884,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let half = blk.fadd(&v, "0.5");
             let floored = blk.call(DOUBLE, "llvm.floor.f64", &[(DOUBLE, &half)]);
-            Ok(blk.call(DOUBLE, "llvm.copysign.f64", &[(DOUBLE, &floored), (DOUBLE, &v)]))
+            Ok(blk.call(
+                DOUBLE,
+                "llvm.copysign.f64",
+                &[(DOUBLE, &floored), (DOUBLE, &v)],
+            ))
         }
         Expr::MathAbs(operand) => {
             let v = lower_expr(ctx, operand)?;
@@ -3853,7 +3961,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            let result = blk.call(I64, "js_array_filter", &[(I64, &arr_handle), (I64, &cb_handle)]);
+            let result = blk.call(
+                I64,
+                "js_array_filter",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            );
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
@@ -3863,7 +3975,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `js_fetch_with_options(url, method, body, headers_json)` which
         // returns a `*mut Promise`. The result is NaN-boxed with POINTER_TAG
         // so the rest of the await/then machinery sees a normal Promise.
-        Expr::FetchWithOptions { url, method, body, headers } => {
+        Expr::FetchWithOptions {
+            url,
+            method,
+            body,
+            headers,
+        } => {
             let url_box = lower_expr(ctx, url)?;
             let method_box = lower_expr(ctx, method)?;
             let body_box = lower_expr(ctx, body)?;
@@ -3872,13 +3989,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // js_object_set_field_by_name for each (interned key, value).
             let n_str = (headers.len() as u32).to_string();
             let zero_str = "0".to_string();
-            let headers_handle = ctx
-                .block()
-                .call(I64, "js_object_alloc", &[(I32, &zero_str), (I32, &n_str)]);
+            let headers_handle =
+                ctx.block()
+                    .call(I64, "js_object_alloc", &[(I32, &zero_str), (I32, &n_str)]);
             for (key, val_expr) in headers {
                 let key_idx = ctx.strings.intern(key);
-                let key_handle_global =
-                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let v_box = lower_expr(ctx, val_expr)?;
                 let blk = ctx.block();
                 let key_box = blk.load(DOUBLE, &key_handle_global);
@@ -3928,7 +4044,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            Ok(blk.call(DOUBLE, "js_array_some", &[(I64, &arr_handle), (I64, &cb_handle)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_array_some",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            ))
         }
 
         // -------- arr.every(callback) -> boolean --------
@@ -3938,7 +4058,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            Ok(blk.call(DOUBLE, "js_array_every", &[(I64, &arr_handle), (I64, &cb_handle)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_array_every",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            ))
         }
 
         // -------- arr.join(separator?) -> string --------
@@ -3951,8 +4075,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 lower_expr(ctx, sep_expr)?
             } else {
                 let key_idx = ctx.strings.intern(",");
-                let handle_global =
-                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 ctx.block().load(DOUBLE, &handle_global)
             };
             let blk = ctx.block();
@@ -3961,7 +4084,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // from the StringHeader, which segfaults on SSO inline bits.
             // Same #214 bug class.
             let sep_handle = unbox_str_handle(blk, &sep_box);
-            let result = blk.call(I64, "js_array_join", &[(I64, &arr_handle), (I64, &sep_handle)]);
+            let result = blk.call(
+                I64,
+                "js_array_join",
+                &[(I64, &arr_handle), (I64, &sep_handle)],
+            );
             Ok(nanbox_string_inline(blk, &result))
         }
 
@@ -4173,17 +4300,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::RegExp { pattern, flags } => {
             let pattern_idx = ctx.strings.intern(pattern);
             let flags_idx = ctx.strings.intern(flags);
-            let pattern_global =
-                format!("@{}", ctx.strings.entry(pattern_idx).handle_global);
-            let flags_global =
-                format!("@{}", ctx.strings.entry(flags_idx).handle_global);
+            let pattern_global = format!("@{}", ctx.strings.entry(pattern_idx).handle_global);
+            let flags_global = format!("@{}", ctx.strings.entry(flags_idx).handle_global);
             let blk = ctx.block();
             let pattern_box = blk.load(DOUBLE, &pattern_global);
             let flags_box = blk.load(DOUBLE, &flags_global);
             let pattern_handle = unbox_to_i64(blk, &pattern_box);
             let flags_handle = unbox_to_i64(blk, &flags_box);
-            let result =
-                blk.call(I64, "js_regexp_new", &[(I64, &pattern_handle), (I64, &flags_handle)]);
+            let result = blk.call(
+                I64,
+                "js_regexp_new",
+                &[(I64, &pattern_handle), (I64, &flags_handle)],
+            );
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
@@ -4203,10 +4331,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // source's `keys_array` and copies each field via the same
             // setter (so later parts override earlier ones, matching JS
             // semantics).
-            let static_count = parts
-                .iter()
-                .filter(|(k, _)| k.is_some())
-                .count() as u32;
+            let static_count = parts.iter().filter(|(k, _)| k.is_some()).count() as u32;
             let class_id = "0".to_string();
             let count_str = static_count.to_string();
             let obj_handle = ctx.block().call(
@@ -4256,7 +4381,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `perry_method_<modprefix>__<class>__<method>` in the methods
         // registry and emit a direct call. Static methods don't take
         // a `this` parameter (unlike instance methods).
-        Expr::StaticMethodCall { class_name, method_name, args } => {
+        Expr::StaticMethodCall {
+            class_name,
+            method_name,
+            args,
+        } => {
             // Built-in static methods that the runtime provides directly.
             if class_name == "AbortSignal" && method_name == "timeout" {
                 let ms = if !args.is_empty() {
@@ -4345,11 +4474,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::FsReadFileBinary(path) => {
             let path_box = lower_expr(ctx, path)?;
             let blk = ctx.block();
-            let buf_handle = blk.call(
-                I64,
-                "js_fs_read_file_binary",
-                &[(DOUBLE, &path_box)],
-            );
+            let buf_handle = blk.call(I64, "js_fs_read_file_binary", &[(DOUBLE, &path_box)]);
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
 
@@ -4389,11 +4514,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 _ => ctx.class_ids.get(ty).copied().unwrap_or(0),
             };
             let cid_str = cid.to_string();
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_instanceof",
-                &[(DOUBLE, &v), (I32, &cid_str)],
-            ))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_instanceof", &[(DOUBLE, &v), (I32, &cid_str)]))
         }
 
         // -------- delete obj.prop / delete obj["prop"] --------
@@ -4568,8 +4691,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // String pointer extraction goes through the unified
             // helper because the receiver may be a literal, a local,
             // or a concat result.
-            let str_handle =
-                blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &str_box)]);
+            let str_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &str_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_regexp_test",
@@ -4587,8 +4709,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let str_box = lower_expr(ctx, string)?;
             let blk = ctx.block();
             let regex_handle = unbox_to_i64(blk, &regex_box);
-            let str_handle =
-                blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &str_box)]);
+            let str_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &str_box)]);
             let result = blk.call(
                 I64,
                 "js_regexp_exec",
@@ -4598,13 +4719,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let is_null = blk.icmp_eq(I64, &result, "0");
             let ptr_boxed = nanbox_pointer_inline(ctx.block(), &result);
             let ptr_bits = ctx.block().bitcast_double_to_i64(&ptr_boxed);
-            let selected = ctx.block().select(
-                I1,
-                &is_null,
-                I64,
-                crate::nanbox::TAG_NULL_I64,
-                &ptr_bits,
-            );
+            let selected =
+                ctx.block()
+                    .select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &ptr_bits);
             Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
 
@@ -4628,8 +4745,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let f_handle = unbox_to_i64(blk, &f_box);
             let t_handle = unbox_to_i64(blk, &t_box);
-            let result =
-                blk.call(I64, "js_path_relative", &[(I64, &f_handle), (I64, &t_handle)]);
+            let result = blk.call(
+                I64,
+                "js_path_relative",
+                &[(I64, &f_handle), (I64, &t_handle)],
+            );
             Ok(nanbox_string_inline(blk, &result))
         }
 
@@ -4665,7 +4785,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Real call to js_array_splice. The runtime returns the
         // deleted elements; the modified array is written to an
         // out-parameter pointer.
-        Expr::ArraySplice { array_id, start, delete_count, items } => {
+        Expr::ArraySplice {
+            array_id,
+            start,
+            delete_count,
+            items,
+        } => {
             let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
             let start_d = lower_expr(ctx, start)?;
             let count_d = if let Some(d) = delete_count {
@@ -4697,10 +4822,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let n = item_vals.len();
                 let items_count_str = format!("{}", n);
                 let buf_reg = blk.next_reg();
-                blk.emit_raw(format!(
-                    "{} = alloca [{} x double]",
-                    buf_reg, n
-                ));
+                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
                 for (i, val) in item_vals.iter().enumerate() {
                     let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
                     blk.store(DOUBLE, val, &slot);
@@ -4740,7 +4862,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- ObjectFromEntries (passes through to runtime) --------
         Expr::ObjectFromEntries(arr) => {
             let v = lower_expr(ctx, arr)?;
-            Ok(ctx.block().call(DOUBLE, "js_object_from_entries", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_object_from_entries", &[(DOUBLE, &v)]))
         }
 
         // -------- Object.groupBy(items, keyFn) --------
@@ -4769,19 +4893,32 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `JSON.parse('"abc"').match(/b/)`. #214 SSO bug class.
             let s_handle = unbox_str_handle(blk, &s_box);
             let r_handle = unbox_to_i64(blk, &r_box);
-            let result =
-                blk.call(I64, "js_string_match", &[(I64, &s_handle), (I64, &r_handle)]);
+            let result = blk.call(
+                I64,
+                "js_string_match",
+                &[(I64, &s_handle), (I64, &r_handle)],
+            );
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
         // -------- obj.field++ / obj.field-- (PropertyUpdate) --------
         // Lowered as: load → fadd/fsub 1.0 → store. Same as the
         // Update variant but for a property instead of a local.
-        Expr::PropertyUpdate { object, property, op, prefix } => {
+        Expr::PropertyUpdate {
+            object,
+            property,
+            op,
+            prefix,
+        } => {
             // Scalar replacement fast path: load → fadd/fsub 1.0 → store
             // on the field's alloca, no heap traffic.
             if let Expr::LocalGet(id) = object.as_ref() {
-                if let Some(slot) = ctx.scalar_replaced.get(id).and_then(|fs| fs.get(property.as_str())).cloned() {
+                if let Some(slot) = ctx
+                    .scalar_replaced
+                    .get(id)
+                    .and_then(|fs| fs.get(property.as_str()))
+                    .cloned()
+                {
                     let blk = ctx.block();
                     let old = blk.load(DOUBLE, &slot);
                     let new = match op {
@@ -4793,9 +4930,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
             if let Expr::This = object.as_ref() {
-                if let Some(slot) = ctx.scalar_ctor_target.last()
+                if let Some(slot) = ctx
+                    .scalar_ctor_target
+                    .last()
                     .and_then(|tid| ctx.scalar_replaced.get(tid))
-                    .and_then(|fs| fs.get(property.as_str())).cloned()
+                    .and_then(|fs| fs.get(property.as_str()))
+                    .cloned()
                 {
                     let blk = ctx.block();
                     let old = blk.load(DOUBLE, &slot);
@@ -4880,7 +5020,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // shape (or unresolved Named type) falls through to the
         // generic `js_json_parse`. Runtime semantics identical either
         // way — the typed variant is a pure perf specialization.
-        Expr::JsonParseTyped { text, ty, ordered_keys } => {
+        Expr::JsonParseTyped {
+            text,
+            ty,
+            ordered_keys,
+        } => {
             let packed = extract_array_of_object_shape(ty, ordered_keys.as_deref());
             let s_box = lower_expr(ctx, text)?;
             let blk = ctx.block();
@@ -4916,10 +5060,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // runtime calls).
                     let blk = ctx.block();
                     let ptr_reg = blk.fresh_reg();
-                    blk.emit_raw(format!(
-                        "{} = ptrtoint ptr @{} to i64",
-                        ptr_reg, gname
-                    ));
+                    blk.emit_raw(format!("{} = ptrtoint ptr @{} to i64", ptr_reg, gname));
                     let len_lit = format!("{}", bytes_len);
                     let fc_lit = format!("{}", field_count);
                     blk.call(
@@ -4972,7 +5113,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::DateNew(arg) => {
             if let Some(ts_expr) = arg {
                 let ts = lower_expr(ctx, ts_expr)?;
-                Ok(ctx.block().call(DOUBLE, "js_date_new_from_value", &[(DOUBLE, &ts)]))
+                Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_date_new_from_value", &[(DOUBLE, &ts)]))
             } else {
                 Ok(ctx.block().call(DOUBLE, "js_date_new", &[]))
             }
@@ -4985,7 +5128,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            Ok(blk.call(DOUBLE, "js_array_find", &[(I64, &arr_handle), (I64, &cb_handle)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_array_find",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            ))
         }
         Expr::ArrayFindIndex { array, callback } => {
             let arr_box = lower_expr(ctx, array)?;
@@ -4993,7 +5140,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            let i32_v = blk.call(I32, "js_array_findIndex", &[(I64, &arr_handle), (I64, &cb_handle)]);
+            let i32_v = blk.call(
+                I32,
+                "js_array_findIndex",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            );
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         Expr::ArrayFindLast { array, callback } => {
@@ -5002,7 +5153,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            Ok(blk.call(DOUBLE, "js_array_find_last", &[(I64, &arr_handle), (I64, &cb_handle)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_array_find_last",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            ))
         }
         Expr::ArrayFindLastIndex { array, callback } => {
             let arr_box = lower_expr(ctx, array)?;
@@ -5010,7 +5165,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            let i32_v = blk.call(I32, "js_array_find_last_index", &[(I64, &arr_handle), (I64, &cb_handle)]);
+            let i32_v = blk.call(
+                I32,
+                "js_array_find_last_index",
+                &[(I64, &arr_handle), (I64, &cb_handle)],
+            );
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
 
@@ -5018,12 +5177,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ObjectIs(a, b) => {
             let av = lower_expr(ctx, a)?;
             let bv = lower_expr(ctx, b)?;
-            Ok(ctx.block().call(DOUBLE, "js_object_is", &[(DOUBLE, &av), (DOUBLE, &bv)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_object_is", &[(DOUBLE, &av), (DOUBLE, &bv)]))
         }
         Expr::NumberIsInteger(operand) => {
             // Runtime already returns NaN-tagged TAG_TRUE/TAG_FALSE.
             let v = lower_expr(ctx, operand)?;
-            Ok(ctx.block().call(DOUBLE, "js_number_is_integer", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_number_is_integer", &[(DOUBLE, &v)]))
         }
 
         // -------- Map.clear --------
@@ -5065,15 +5228,21 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Runtime returns f64 already NaN-boxed as TAG_TRUE/TAG_FALSE.
         Expr::ObjectIsFrozen(o) => {
             let v = lower_expr(ctx, o)?;
-            Ok(ctx.block().call(DOUBLE, "js_object_is_frozen", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_object_is_frozen", &[(DOUBLE, &v)]))
         }
         Expr::ObjectIsSealed(o) => {
             let v = lower_expr(ctx, o)?;
-            Ok(ctx.block().call(DOUBLE, "js_object_is_sealed", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_object_is_sealed", &[(DOUBLE, &v)]))
         }
         Expr::ObjectIsExtensible(o) => {
             let v = lower_expr(ctx, o)?;
-            Ok(ctx.block().call(DOUBLE, "js_object_is_extensible", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_object_is_extensible", &[(DOUBLE, &v)]))
         }
 
         // -------- FuncRef as expression value (function reference) --------
@@ -5097,11 +5266,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // The first arg is a `ptr` in LLVM IR (since the runtime
             // takes `*const u8`). Pass `@wrap_name` directly — LLVM
             // handles the implicit function-to-pointer cast.
-            let closure_handle = blk.call(
-                I64,
-                "js_closure_alloc",
-                &[(PTR, &wrap_ptr), (I32, "0")],
-            );
+            let closure_handle = blk.call(I64, "js_closure_alloc", &[(PTR, &wrap_ptr), (I32, "0")]);
             Ok(nanbox_pointer_inline(blk, &closure_handle))
         }
 
@@ -5151,7 +5316,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // NaN-tagged value. Use the runtime which checks
             // is_number() first.
             let v = lower_expr(ctx, operand)?;
-            return Ok(ctx.block().call(DOUBLE, "js_number_is_nan", &[(DOUBLE, &v)]));
+            return Ok(ctx
+                .block()
+                .call(DOUBLE, "js_number_is_nan", &[(DOUBLE, &v)]));
             // Dead code — kept as documentation of the inline pattern:
             let blk = ctx.block();
             let bit = blk.fcmp("uno", &v, &v);
@@ -5168,11 +5335,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Phase H fs: call js_fs_mkdir_sync. Node's fs.mkdirSync
             // is void so we discard the i32 status.
             let path_box = lower_expr(ctx, p)?;
-            let _ = ctx.block().call(
-                I32,
-                "js_fs_mkdir_sync",
-                &[(DOUBLE, &path_box)],
-            );
+            let _ = ctx
+                .block()
+                .call(I32, "js_fs_mkdir_sync", &[(DOUBLE, &path_box)]);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
         Expr::IteratorToArray(o) => {
@@ -5192,7 +5357,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // downstream paths (`.length`, method dispatch) see the real
             // tagged pointer again.
             let v = lower_expr(ctx, o)?;
-            Ok(ctx.block().call(DOUBLE, "js_weakref_deref", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_weakref_deref", &[(DOUBLE, &v)]))
         }
         // `new Uint8Array([1, 2, 3])` — materialize an Array<number>
         // and convert to a BufferHeader via js_buffer_from_array so
@@ -5219,7 +5386,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let h = blk.call(I64, "js_buffer_alloc", &[(I32, &size_str), (I32, "0")]);
                     Ok(nanbox_pointer_inline(blk, &h))
                 }
-                Some(Expr::Number(n)) if n.fract() == 0.0 && *n >= 0.0 && *n < (i32::MAX as f64) => {
+                Some(Expr::Number(n))
+                    if n.fract() == 0.0 && *n >= 0.0 && *n < (i32::MAX as f64) =>
+                {
                     let size_str = (*n as i32).to_string();
                     let blk = ctx.block();
                     let h = blk.call(I64, "js_buffer_alloc", &[(I32, &size_str), (I32, "0")]);
@@ -5236,8 +5405,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // silently returned a zero-length buffer (closes #38).
                     let val_box = lower_expr(ctx, e)?;
                     let blk = ctx.block();
-                    let buf_handle =
-                        blk.call(I64, "js_uint8array_new", &[(DOUBLE, &val_box)]);
+                    let buf_handle = blk.call(I64, "js_uint8array_new", &[(DOUBLE, &val_box)]);
                     Ok(nanbox_pointer_inline(blk, &buf_handle))
                 }
             }
@@ -5276,7 +5444,15 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             // Check upfront whether index is i32-lowerable (no clones —
             // borrows released before lower_expr_as_i32 borrows mutably).
-            let idx_is_i32 = can_lower_expr_as_i32(index, &ctx.i32_counter_slots, ctx.flat_const_arrays, &ctx.array_row_aliases, ctx.integer_locals, ctx.clamp3_functions, ctx.clamp_u8_functions);
+            let idx_is_i32 = can_lower_expr_as_i32(
+                index,
+                &ctx.i32_counter_slots,
+                ctx.flat_const_arrays,
+                &ctx.array_row_aliases,
+                ctx.integer_locals,
+                ctx.clamp3_functions,
+                ctx.clamp_u8_functions,
+            );
             let idx_i32 = if idx_is_i32 {
                 lower_expr_as_i32(ctx, index)?
             } else {
@@ -5304,9 +5480,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = unbox_to_i64(blk, &a);
             let len_i32 = blk.safe_load_i32_from_ptr(&handle);
             let in_bounds = blk.icmp_ult(I32, &idx_i32, &len_i32);
-            blk.emit_raw(format!(
-                "call void @llvm.assume(i1 {})", in_bounds
-            ));
+            blk.emit_raw(format!("call void @llvm.assume(i1 {})", in_bounds));
             let idx_i64 = blk.zext(I32, &idx_i32, I64);
             let data_offset = blk.add(I64, &idx_i64, "8");
             let byte_addr = blk.add(I64, &handle, &data_offset);
@@ -5315,7 +5489,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let result_i32 = blk.zext(I8, &byte_val, I32);
             Ok(ctx.block().sitofp(I32, &result_i32, DOUBLE))
         }
-        Expr::Uint8ArraySet { array, index, value } => {
+        Expr::Uint8ArraySet {
+            array,
+            index,
+            value,
+        } => {
             // Inline `buf[idx] = v` — branchless via @llvm.assume.
             // Uses i32 fast path for both index and value when possible,
             // eliminating double↔int conversions in tight byte-write loops.
@@ -5324,8 +5502,24 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 None
             };
-            let idx_is_i32 = can_lower_expr_as_i32(index, &ctx.i32_counter_slots, ctx.flat_const_arrays, &ctx.array_row_aliases, ctx.integer_locals, ctx.clamp3_functions, ctx.clamp_u8_functions);
-            let val_is_i32 = can_lower_expr_as_i32(value, &ctx.i32_counter_slots, ctx.flat_const_arrays, &ctx.array_row_aliases, ctx.integer_locals, ctx.clamp3_functions, ctx.clamp_u8_functions);
+            let idx_is_i32 = can_lower_expr_as_i32(
+                index,
+                &ctx.i32_counter_slots,
+                ctx.flat_const_arrays,
+                &ctx.array_row_aliases,
+                ctx.integer_locals,
+                ctx.clamp3_functions,
+                ctx.clamp_u8_functions,
+            );
+            let val_is_i32 = can_lower_expr_as_i32(
+                value,
+                &ctx.i32_counter_slots,
+                ctx.flat_const_arrays,
+                &ctx.array_row_aliases,
+                ctx.integer_locals,
+                ctx.clamp3_functions,
+                ctx.clamp_u8_functions,
+            );
             let idx_i32 = if idx_is_i32 {
                 lower_expr_as_i32(ctx, index)?
             } else {
@@ -5398,9 +5592,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         Ok(ctx.block().bitcast_i64_to_double(&p))
                     }
                     // Literal float that is a non-negative integer: `new Int32Array(3.0)`.
-                    Expr::Number(f)
-                        if f.fract() == 0.0 && *f >= 0.0 && *f < (i32::MAX as f64) =>
-                    {
+                    Expr::Number(f) if f.fract() == 0.0 && *f >= 0.0 && *f < (i32::MAX as f64) => {
                         let len_str = (*f as i32).to_string();
                         let p = ctx.block().call(
                             I64,
@@ -5497,8 +5689,14 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // least compiles. Those cases need their own follow-up.
         Expr::CallSpread { callee, args, .. } => {
             use perry_hir::CallArg;
-            let spread_count = args.iter().filter(|a| matches!(a, CallArg::Spread(_))).count();
-            let regular_count = args.iter().filter(|a| matches!(a, CallArg::Expr(_))).count();
+            let spread_count = args
+                .iter()
+                .filter(|a| matches!(a, CallArg::Spread(_)))
+                .count();
+            let regular_count = args
+                .iter()
+                .filter(|a| matches!(a, CallArg::Expr(_)))
+                .count();
 
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 if spread_count == 1 && regular_count == 0 {
@@ -5509,10 +5707,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let (declared_count, _has_rest, _) = sig;
 
                         // Find the spread source expression.
-                        let spread_expr = args.iter().find_map(|a| match a {
-                            CallArg::Spread(e) => Some(e),
-                            _ => None,
-                        }).expect("spread_count == 1 guarantees one Spread");
+                        let spread_expr = args
+                            .iter()
+                            .find_map(|a| match a {
+                                CallArg::Spread(e) => Some(e),
+                                _ => None,
+                            })
+                            .expect("spread_count == 1 guarantees one Spread");
 
                         // Lower the spread source as an array.
                         let arr_box = lower_expr(ctx, spread_expr)?;
@@ -5572,11 +5773,15 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- DateGetTime / DateGetTimezoneOffset --------
         Expr::DateGetTime(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_time", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_time", &[(DOUBLE, &v)]))
         }
         Expr::DateGetTimezoneOffset(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_timezone_offset", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_timezone_offset", &[(DOUBLE, &v)]))
         }
         // -------- Date.UTC(year, month, day?, hour?, minute?, second?, ms?) --------
         Expr::DateUtc(args) => {
@@ -5589,10 +5794,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 vals.push(double_literal(0.0));
             }
             let blk = ctx.block();
-            let call_args: Vec<(crate::types::LlvmType, &str)> = vals
-                .iter()
-                .map(|v| (DOUBLE, v.as_str()))
-                .collect();
+            let call_args: Vec<(crate::types::LlvmType, &str)> =
+                vals.iter().map(|v| (DOUBLE, v.as_str())).collect();
             Ok(blk.call(DOUBLE, "js_date_utc", &call_args))
         }
 
@@ -5602,8 +5805,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let k = lower_expr(ctx, key)?;
             let v = lower_expr(ctx, value)?;
             let blk = ctx.block();
-            blk.call(DOUBLE, "js_object_define_property",
-                &[(DOUBLE, &o), (DOUBLE, &k), (DOUBLE, &v)]);
+            blk.call(
+                DOUBLE,
+                "js_object_define_property",
+                &[(DOUBLE, &o), (DOUBLE, &k), (DOUBLE, &v)],
+            );
             Ok(o)
         }
 
@@ -5617,14 +5823,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- process.hrtime.bigint() — returns already NaN-boxed BigInt --------
-        Expr::ProcessHrtimeBigint => {
-            Ok(ctx.block().call(DOUBLE, "js_process_hrtime_bigint", &[]))
-        }
+        Expr::ProcessHrtimeBigint => Ok(ctx.block().call(DOUBLE, "js_process_hrtime_bigint", &[])),
 
         // -------- RegExpExecIndex — reads thread-local from the last exec() call --------
-        Expr::RegExpExecIndex => {
-            Ok(ctx.block().call(DOUBLE, "js_regexp_exec_get_index", &[]))
-        }
+        Expr::RegExpExecIndex => Ok(ctx.block().call(DOUBLE, "js_regexp_exec_get_index", &[])),
 
         // -------- Crypto.* wired to real runtime helpers --------
         Expr::CryptoRandomUUID => {
@@ -5638,33 +5840,21 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (format_jsvalue, .length, etc.) see a real buffer.
             let size_box = lower_expr(ctx, operand)?;
             let blk = ctx.block();
-            let buf_handle = blk.call(
-                I64,
-                "js_crypto_random_bytes_buffer",
-                &[(DOUBLE, &size_box)],
-            );
+            let buf_handle = blk.call(I64, "js_crypto_random_bytes_buffer", &[(DOUBLE, &size_box)]);
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
         Expr::CryptoSha256(operand) => {
             let data_box = lower_expr(ctx, operand)?;
             let blk = ctx.block();
             let data_handle = unbox_to_i64(blk, &data_box);
-            let result = blk.call(
-                I64,
-                "js_crypto_sha256",
-                &[(I64, &data_handle)],
-            );
+            let result = blk.call(I64, "js_crypto_sha256", &[(I64, &data_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
         Expr::CryptoMd5(operand) => {
             let data_box = lower_expr(ctx, operand)?;
             let blk = ctx.block();
             let data_handle = unbox_to_i64(blk, &data_box);
-            let result = blk.call(
-                I64,
-                "js_crypto_md5",
-                &[(I64, &data_handle)],
-            );
+            let result = blk.call(I64, "js_crypto_md5", &[(I64, &data_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
 
@@ -5721,9 +5911,17 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // body: callback(arr[i], i)
             ctx.current_block = body_idx;
             let i_cur = ctx.block().load(I32, &i_slot);
-            let elem = ctx.block().call(DOUBLE, "js_array_get_f64", &[(I64, &arr_handle), (I32, &i_cur)]);
+            let elem = ctx.block().call(
+                DOUBLE,
+                "js_array_get_f64",
+                &[(I64, &arr_handle), (I32, &i_cur)],
+            );
             let i_f64 = ctx.block().sitofp(I32, &i_cur, DOUBLE);
-            ctx.block().call(DOUBLE, "js_closure_call2", &[(I64, &cb_handle), (DOUBLE, &elem), (DOUBLE, &i_f64)]);
+            ctx.block().call(
+                DOUBLE,
+                "js_closure_call2",
+                &[(I64, &cb_handle), (DOUBLE, &elem), (DOUBLE, &i_f64)],
+            );
             // i++
             let i_next = ctx.block().add(I32, &i_cur, "1");
             ctx.block().store(I32, &i_next, &i_slot);
@@ -5753,19 +5951,27 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- Date.* getters: real runtime calls --------
         Expr::DateGetFullYear(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_full_year", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_full_year", &[(DOUBLE, &v)]))
         }
         Expr::DateGetMonth(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_month", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_month", &[(DOUBLE, &v)]))
         }
         Expr::DateGetUtcDay(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_utc_day", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_utc_day", &[(DOUBLE, &v)]))
         }
         Expr::DateValueOf(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_value_of", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_value_of", &[(DOUBLE, &v)]))
         }
 
         // -------- process.on(event, handler) — register a handler so its
@@ -5785,9 +5991,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- performance.now() — sub-millisecond resolution --------
-        Expr::PerformanceNow => {
-            Ok(ctx.block().call(DOUBLE, "js_performance_now", &[]))
-        }
+        Expr::PerformanceNow => Ok(ctx.block().call(DOUBLE, "js_performance_now", &[])),
 
         // -------- Object.getOwnPropertyNames(obj) --------
         // Returns ALL own keys (including non-enumerable ones from
@@ -5795,7 +5999,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ObjectGetOwnPropertyNames(obj) => {
             let obj_box = lower_expr(ctx, obj)?;
             let blk = ctx.block();
-            let arr_box = blk.call(DOUBLE, "js_object_get_own_property_names", &[(DOUBLE, &obj_box)]);
+            let arr_box = blk.call(
+                DOUBLE,
+                "js_object_get_own_property_names",
+                &[(DOUBLE, &obj_box)],
+            );
             Ok(arr_box)
         }
 
@@ -5877,7 +6085,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let s_handle = unbox_to_i64(blk, &s_box);
             let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
-            Ok(blk.call(DOUBLE, "js_string_code_point_at", &[(I64, &s_handle), (I32, &idx_i32)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_string_code_point_at",
+                &[(I64, &s_handle), (I32, &idx_i32)],
+            ))
         }
         Expr::RegExpSource(o) => {
             let r_box = lower_expr(ctx, o)?;
@@ -5913,7 +6125,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 "0.0".to_string()
             };
-            ctx.block().call_void("js_process_exit", &[(DOUBLE, &code_val)]);
+            ctx.block()
+                .call_void("js_process_exit", &[(DOUBLE, &code_val)]);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
         Expr::ObjectGetPrototypeOf(o) => lower_expr(ctx, o),
@@ -5932,55 +6145,83 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::DateSetUtcFullYear { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_set_utc_full_year", &[(DOUBLE, &d), (DOUBLE, &v)]))
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_date_set_utc_full_year",
+                &[(DOUBLE, &d), (DOUBLE, &v)],
+            ))
         }
         Expr::DateGetDate(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_date", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_date", &[(DOUBLE, &v)]))
         }
         Expr::DateGetUtcDate(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_utc_date", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_utc_date", &[(DOUBLE, &v)]))
         }
         Expr::DateGetUtcFullYear(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_utc_full_year", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_utc_full_year", &[(DOUBLE, &v)]))
         }
         Expr::DateGetUtcMonth(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_utc_month", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_utc_month", &[(DOUBLE, &v)]))
         }
         Expr::DateGetHours(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_hours", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_hours", &[(DOUBLE, &v)]))
         }
         Expr::DateGetMinutes(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_minutes", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_minutes", &[(DOUBLE, &v)]))
         }
         Expr::DateGetSeconds(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_seconds", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_seconds", &[(DOUBLE, &v)]))
         }
         Expr::DateGetMilliseconds(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_milliseconds", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_milliseconds", &[(DOUBLE, &v)]))
         }
         Expr::DateGetUtcHours(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_utc_hours", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_utc_hours", &[(DOUBLE, &v)]))
         }
         Expr::DateGetUtcMinutes(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_utc_minutes", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_utc_minutes", &[(DOUBLE, &v)]))
         }
         Expr::DateGetUtcSeconds(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_utc_seconds", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_utc_seconds", &[(DOUBLE, &v)]))
         }
         Expr::DateGetUtcMilliseconds(d) => {
             let v = lower_expr(ctx, d)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_get_utc_milliseconds", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_get_utc_milliseconds", &[(DOUBLE, &v)]))
         }
         Expr::Atob(inner) => {
             // atob(base64) — decode to a binary string. Runtime takes a
@@ -6060,11 +6301,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::MathAtan2(y, x) => {
             let y_v = lower_expr(ctx, y)?;
             let x_v = lower_expr(ctx, x)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_math_atan2",
-                &[(DOUBLE, &y_v), (DOUBLE, &x_v)],
-            ))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_math_atan2", &[(DOUBLE, &y_v), (DOUBLE, &x_v)]))
         }
 
         // -------- String.fromCharCode(code) --------
@@ -6086,15 +6325,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(v)
         }
-        Expr::ProcessStdin => {
-            Ok(ctx.block().call(DOUBLE, "js_process_stdin", &[]))
-        }
-        Expr::ProcessStdout => {
-            Ok(ctx.block().call(DOUBLE, "js_process_stdout", &[]))
-        }
-        Expr::ProcessStderr => {
-            Ok(ctx.block().call(DOUBLE, "js_process_stderr", &[]))
-        }
+        Expr::ProcessStdin => Ok(ctx.block().call(DOUBLE, "js_process_stdin", &[])),
+        Expr::ProcessStdout => Ok(ctx.block().call(DOUBLE, "js_process_stdout", &[])),
+        Expr::ProcessStderr => Ok(ctx.block().call(DOUBLE, "js_process_stderr", &[])),
         Expr::MathAsinh(o) => {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_asinh", &[(DOUBLE, &v)]))
@@ -6110,12 +6343,20 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::DateSetUtcDate { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_set_utc_date", &[(DOUBLE, &d), (DOUBLE, &v)]))
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_date_set_utc_date",
+                &[(DOUBLE, &d), (DOUBLE, &v)],
+            ))
         }
         Expr::DateSetUtcHours { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_set_utc_hours", &[(DOUBLE, &d), (DOUBLE, &v)]))
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_date_set_utc_hours",
+                &[(DOUBLE, &d), (DOUBLE, &v)],
+            ))
         }
         Expr::ProcessKill { pid, signal } => {
             let pid_d = lower_expr(ctx, pid)?;
@@ -6130,30 +6371,34 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- Symbol() / Symbol.for / ObjectGetOwnPropertySymbols --------
         // Runtime functions in perry-runtime/src/symbol.rs take and return
         // NaN-boxed f64 values directly, so no unbox/box dance needed.
-        Expr::SymbolNew(desc) => {
-            match desc {
-                Some(d) => {
-                    let d_box = lower_expr(ctx, d)?;
-                    let blk = ctx.block();
-                    Ok(blk.call(DOUBLE, "js_symbol_new", &[(DOUBLE, &d_box)]))
-                }
-                None => {
-                    let blk = ctx.block();
-                    Ok(blk.call(DOUBLE, "js_symbol_new_empty", &[]))
-                }
+        Expr::SymbolNew(desc) => match desc {
+            Some(d) => {
+                let d_box = lower_expr(ctx, d)?;
+                let blk = ctx.block();
+                Ok(blk.call(DOUBLE, "js_symbol_new", &[(DOUBLE, &d_box)]))
             }
-        }
+            None => {
+                let blk = ctx.block();
+                Ok(blk.call(DOUBLE, "js_symbol_new_empty", &[]))
+            }
+        },
         Expr::SymbolFor(key) => {
             let k_box = lower_expr(ctx, key)?;
-            Ok(ctx.block().call(DOUBLE, "js_symbol_for", &[(DOUBLE, &k_box)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_symbol_for", &[(DOUBLE, &k_box)]))
         }
         Expr::SymbolKeyFor(sym) => {
             let s_box = lower_expr(ctx, sym)?;
-            Ok(ctx.block().call(DOUBLE, "js_symbol_key_for", &[(DOUBLE, &s_box)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_symbol_key_for", &[(DOUBLE, &s_box)]))
         }
         Expr::SymbolDescription(sym) => {
             let s_box = lower_expr(ctx, sym)?;
-            Ok(ctx.block().call(DOUBLE, "js_symbol_description", &[(DOUBLE, &s_box)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_symbol_description", &[(DOUBLE, &s_box)]))
         }
         Expr::SymbolToString(sym) => {
             // Returns i64 string pointer (not NaN-boxed).
@@ -6170,7 +6415,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // register.
             let o_box = lower_expr(ctx, obj)?;
             let blk = ctx.block();
-            let arr = blk.call(I64, "js_object_get_own_property_symbols", &[(DOUBLE, &o_box)]);
+            let arr = blk.call(
+                I64,
+                "js_object_get_own_property_symbols",
+                &[(DOUBLE, &o_box)],
+            );
             Ok(nanbox_pointer_inline(blk, &arr))
         }
         Expr::TextEncoderNew => {
@@ -6290,7 +6539,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = blk.call(I64, "js_date_to_json", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             let arr_box = lower_expr(ctx, array)?;
             let idx_d = lower_expr(ctx, index)?;
             let val_d = lower_expr(ctx, value)?;
@@ -6303,7 +6556,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }
-        Expr::ArrayCopyWithin { array_id, target, start, end } => {
+        Expr::ArrayCopyWithin {
+            array_id,
+            target,
+            start,
+            end,
+        } => {
             let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
             let target_d = lower_expr(ctx, target)?;
             let start_d = lower_expr(ctx, start)?;
@@ -6354,7 +6612,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             Ok(nanbox_pointer_inline(ctx.block(), &result))
         }
-        Expr::ArrayToSpliced { array, start, delete_count, items } => {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => {
             let arr_box = lower_expr(ctx, array)?;
             let start_d = lower_expr(ctx, start)?;
             let count_d = lower_expr(ctx, delete_count)?;
@@ -6374,10 +6637,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let n = item_vals.len();
                 let items_count_str = format!("{}", n);
                 let buf_reg = blk.next_reg();
-                blk.emit_raw(format!(
-                    "{} = alloca [{} x double]",
-                    buf_reg, n
-                ));
+                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
                 for (i, val) in item_vals.iter().enumerate() {
                     let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
                     blk.store(DOUBLE, val, &slot);
@@ -6406,22 +6666,38 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let idx_d = lower_expr(ctx, index)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            Ok(blk.call(DOUBLE, "js_array_at", &[(I64, &arr_handle), (DOUBLE, &idx_d)]))
+            Ok(blk.call(
+                DOUBLE,
+                "js_array_at",
+                &[(I64, &arr_handle), (DOUBLE, &idx_d)],
+            ))
         }
         Expr::DateSetUtcMinutes { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_set_utc_minutes", &[(DOUBLE, &d), (DOUBLE, &v)]))
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_date_set_utc_minutes",
+                &[(DOUBLE, &d), (DOUBLE, &v)],
+            ))
         }
         Expr::DateSetUtcSeconds { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_set_utc_seconds", &[(DOUBLE, &d), (DOUBLE, &v)]))
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_date_set_utc_seconds",
+                &[(DOUBLE, &d), (DOUBLE, &v)],
+            ))
         }
         Expr::DateSetUtcMilliseconds { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_set_utc_milliseconds", &[(DOUBLE, &d), (DOUBLE, &v)]))
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_date_set_utc_milliseconds",
+                &[(DOUBLE, &d), (DOUBLE, &v)],
+            ))
         }
         Expr::Yield { value, .. } => {
             // Generators not implemented; lower the yielded value for
@@ -6465,11 +6741,15 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::NumberIsSafeInteger(operand) => {
             let v = lower_expr(ctx, operand)?;
-            Ok(ctx.block().call(DOUBLE, "js_number_is_safe_integer", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_number_is_safe_integer", &[(DOUBLE, &v)]))
         }
         Expr::ObjectFreeze(o) => {
             let v = lower_expr(ctx, o)?;
-            Ok(ctx.block().call(DOUBLE, "js_object_freeze", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_object_freeze", &[(DOUBLE, &v)]))
         }
         Expr::ObjectSeal(o) => {
             let v = lower_expr(ctx, o)?;
@@ -6477,12 +6757,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::ObjectPreventExtensions(o) => {
             let v = lower_expr(ctx, o)?;
-            Ok(ctx.block().call(DOUBLE, "js_object_prevent_extensions", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_object_prevent_extensions", &[(DOUBLE, &v)]))
         }
         Expr::DateSetUtcMonth { date, value } => {
             let d = lower_expr(ctx, date)?;
             let v = lower_expr(ctx, value)?;
-            Ok(ctx.block().call(DOUBLE, "js_date_set_utc_month", &[(DOUBLE, &d), (DOUBLE, &v)]))
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_date_set_utc_month",
+                &[(DOUBLE, &d), (DOUBLE, &v)],
+            ))
         }
         Expr::ArrayIsArray(o) => {
             // Fast path: static type is definitively array → emit
@@ -6520,7 +6806,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
             // Indeterminate — dispatch to runtime.
-            Ok(ctx.block().call(DOUBLE, "js_array_is_array", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_array_is_array", &[(DOUBLE, &v)]))
         }
 
         // -------- new AggregateError(errors, message) --------
@@ -6587,7 +6875,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PathResolve(p) => lower_expr(ctx, p),
         Expr::ObjectCreate(p) => {
             let v = lower_expr(ctx, p)?;
-            Ok(ctx.block().call(DOUBLE, "js_object_create", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_object_create", &[(DOUBLE, &v)]))
         }
         Expr::MathClz32(o) => {
             let v = lower_expr(ctx, o)?;
@@ -6599,11 +6889,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // downstream `.length` / `===` paths can use it as a string.
             let path_box = lower_expr(ctx, p)?;
             let blk = ctx.block();
-            let str_handle = blk.call(
-                I64,
-                "js_fs_read_file_sync",
-                &[(DOUBLE, &path_box)],
-            );
+            let str_handle = blk.call(I64, "js_fs_read_file_sync", &[(DOUBLE, &path_box)]);
             Ok(nanbox_string_inline(blk, &str_handle))
         }
         Expr::FinalizationRegistryNew(callback) => {
@@ -6617,7 +6903,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let obj = blk.call(I64, "js_finreg_new", &[(DOUBLE, &cb)]);
             Ok(nanbox_pointer_inline(blk, &obj))
         }
-        Expr::FinalizationRegistryRegister { registry, target, held, token } => {
+        Expr::FinalizationRegistryRegister {
+            registry,
+            target,
+            held,
+            token,
+        } => {
             // `reg.register(target, held, token?)` — always returns undefined.
             let reg = lower_expr(ctx, registry)?;
             let tgt = lower_expr(ctx, target)?;
@@ -6703,9 +6994,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Runtime returns already NaN-boxed pointer.
             Ok(ctx.block().call(DOUBLE, "js_process_versions", &[]))
         }
-        Expr::ProcessUptime => {
-            Ok(ctx.block().call(DOUBLE, "js_process_uptime", &[]))
-        }
+        Expr::ProcessUptime => Ok(ctx.block().call(DOUBLE, "js_process_uptime", &[])),
         Expr::ProcessCwd => {
             let blk = ctx.block();
             let h = blk.call(I64, "js_process_cwd", &[]);
@@ -6796,7 +7085,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- structuredClone(v) — real deep copy --------
         Expr::StructuredClone(operand) => {
             let v = lower_expr(ctx, operand)?;
-            Ok(ctx.block().call(DOUBLE, "js_structured_clone", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_structured_clone", &[(DOUBLE, &v)]))
         }
 
         // -------- `new WeakRef(target)` — allocate a wrapper object --------
@@ -6872,9 +7163,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // branch just needs to jump to merge.
             ctx.block().store(DOUBLE, &promise_box, &result_slot);
 
-            let is_promise_i32 = ctx
-                .block()
-                .call(I32, "js_value_is_promise", &[(DOUBLE, &promise_box)]);
+            let is_promise_i32 =
+                ctx.block()
+                    .call(I32, "js_value_is_promise", &[(DOUBLE, &promise_box)]);
             let is_promise_bool = ctx.block().icmp_ne(I32, &is_promise_i32, "0");
 
             let drain_once_idx = ctx.new_block("await.drain_once");
@@ -6893,7 +7184,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let done_label = ctx.block_label(done_idx);
             let merge_label = ctx.block_label(merge_idx);
 
-            ctx.block().cond_br(&is_promise_bool, &drain_once_label, &merge_label);
+            ctx.block()
+                .cond_br(&is_promise_bool, &drain_once_label, &merge_label);
 
             // === drain_once ===
             // Flush queueMicrotask callbacks before the first state check.
@@ -6917,7 +7209,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(I32, "js_promise_state", &[(I64, &promise_handle)]);
             let is_pending = ctx.block().icmp_eq(I32, &state, "0");
-            ctx.block().cond_br(&is_pending, &wait_label, &settled_label);
+            ctx.block()
+                .cond_br(&is_pending, &wait_label, &settled_label);
 
             // === wait ===
             // Drive microtasks AND pending timers on each tick so that
@@ -6948,7 +7241,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(I32, "js_promise_state", &[(I64, &promise_handle2)]);
             let is_rejected = ctx.block().icmp_eq(I32, &state2, "2");
-            ctx.block().cond_br(&is_rejected, &reject_label, &done_label);
+            ctx.block()
+                .cond_br(&is_rejected, &reject_label, &done_label);
 
             // === reject ===
             ctx.current_block = reject_idx;
@@ -6977,7 +7271,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Look up the (class, field) → global symbol in the static
         // field registry built at compile_module time. Load/store
         // from the global directly. NativeModuleRef stays a stub.
-        Expr::StaticFieldGet { class_name, field_name } => {
+        Expr::StaticFieldGet {
+            class_name,
+            field_name,
+        } => {
             let key = (class_name.clone(), field_name.clone());
             if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
                 let g_ref = format!("@{}", global_name);
@@ -6986,7 +7283,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Ok(double_literal(0.0))
             }
         }
-        Expr::StaticFieldSet { class_name, field_name, value } => {
+        Expr::StaticFieldSet {
+            class_name,
+            field_name,
+            value,
+        } => {
             let v = lower_expr(ctx, value)?;
             let key = (class_name.clone(), field_name.clone());
             if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
@@ -7002,7 +7303,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `obj` with keys `a`/`b` stripped. We build an exclude-keys
         // array of NaN-boxed strings and call `js_object_rest`, which
         // returns a fresh object pointer that we re-NaN-box.
-        Expr::ObjectRest { object, exclude_keys } => {
+        Expr::ObjectRest {
+            object,
+            exclude_keys,
+        } => {
             let obj_box = lower_expr(ctx, object)?;
             let key_handle_globals: Vec<String> = exclude_keys
                 .iter()
@@ -7017,11 +7321,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.and(I64, &bits, POINTER_MASK_I64)
             };
             let n_str = (exclude_keys.len() as u32).to_string();
-            let keys_arr = blk.call(
-                I64,
-                "js_array_alloc_with_length",
-                &[(I32, &n_str)],
-            );
+            let keys_arr = blk.call(I64, "js_array_alloc_with_length", &[(I32, &n_str)]);
             for (i, handle_global) in key_handle_globals.iter().enumerate() {
                 let idx_str = i.to_string();
                 let key_box = blk.load(DOUBLE, handle_global);
@@ -7051,8 +7351,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // why arithmetic used to collapse to `NaN`. Closes GH #33.
         Expr::BigInt(s) => {
             let bytes_idx = ctx.strings.intern(s);
-            let bytes_global =
-                format!("@{}", ctx.strings.entry(bytes_idx).bytes_global);
+            let bytes_global = format!("@{}", ctx.strings.entry(bytes_idx).bytes_global);
             let len_str = (s.len() as u32).to_string();
             let blk = ctx.block();
             let result = blk.call(
@@ -7097,8 +7396,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- arr.reduce(callback, initial?) -> value --------
-        Expr::ArrayReduce { array, callback, initial }
-        | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             let arr_box = lower_expr(ctx, array)?;
             let cb_box = lower_expr(ctx, callback)?;
             let (has_init, init_d) = if let Some(init_expr) = initial {
@@ -7129,12 +7436,20 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.call(
                 DOUBLE,
                 runtime_fn,
-                &[(I64, &arr_handle), (I64, &cb_handle), (I32, &has_init), (DOUBLE, &init_use)],
+                &[
+                    (I64, &arr_handle),
+                    (I64, &cb_handle),
+                    (I32, &has_init),
+                    (DOUBLE, &init_use),
+                ],
             ))
         }
 
         // -------- enum members lower to constants --------
-        Expr::EnumMember { enum_name, member_name } => {
+        Expr::EnumMember {
+            enum_name,
+            member_name,
+        } => {
             let key = (enum_name.clone(), member_name.clone());
             let val = ctx.enums.get(&key).ok_or_else(|| {
                 anyhow!(
@@ -7149,8 +7464,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // Intern the string and load the handle global at the
                     // use site, just like a regular string literal.
                     let key_idx = ctx.strings.intern(s);
-                    let handle_global =
-                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                     Ok(ctx.block().load(DOUBLE, &handle_global))
                 }
             }
@@ -7167,7 +7481,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- Number(value) coercion --------
         Expr::NumberCoerce(operand) => {
             let v = lower_expr(ctx, operand)?;
-            Ok(ctx.block().call(DOUBLE, "js_number_coerce", &[(DOUBLE, &v)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &v)]))
         }
 
         // -------- set.add(value) — updates the local in place --------
@@ -7249,11 +7565,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let c = lower_expr(ctx, content)?;
             // js_fs_write_file_sync returns i32 (1=success). Discard the
             // result; fs.writeFileSync is void in JS.
-            let _ = ctx.block().call(
-                I32,
-                "js_fs_write_file_sync",
-                &[(DOUBLE, &p), (DOUBLE, &c)],
-            );
+            let _ = ctx
+                .block()
+                .call(I32, "js_fs_write_file_sync", &[(DOUBLE, &p), (DOUBLE, &c)]);
             Ok(double_literal(0.0))
         }
 
@@ -7270,11 +7584,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (1=success) which we discard; appendFileSync is void in JS.
             let p = lower_expr(ctx, path)?;
             let c = lower_expr(ctx, content)?;
-            let _ = ctx.block().call(
-                I32,
-                "js_fs_append_file_sync",
-                &[(DOUBLE, &p), (DOUBLE, &c)],
-            );
+            let _ = ctx
+                .block()
+                .call(I32, "js_fs_append_file_sync", &[(DOUBLE, &p), (DOUBLE, &c)]);
             Ok(double_literal(0.0))
         }
 
@@ -7290,9 +7602,21 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // a PropertyGet on a class instance (`this.items`) or a LocalGet.
         // We chain a get + push + set so reallocations are reflected
         // back in the source.
-        Expr::NativeMethodCall { module, class_name, method, object, args, .. } => {
-            lower_native_method_call(ctx, module, class_name.as_deref(), method, object.as_deref(), args)
-        }
+        Expr::NativeMethodCall {
+            module,
+            class_name,
+            method,
+            object,
+            args,
+            ..
+        } => lower_native_method_call(
+            ctx,
+            module,
+            class_name.as_deref(),
+            method,
+            object.as_deref(),
+            args,
+        ),
 
         // Phase H crypto: collapse `crypto.createHash(alg).update(data).digest(enc)`
         // into a single runtime call. The HIR shape is a triple-nested
@@ -7300,26 +7624,29 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Only "sha256" and "md5" algorithms have direct runtime
         // helpers (`js_crypto_sha256` / `js_crypto_md5`); other
         // algorithms fall through to the generic dispatch path.
-        Expr::Call { callee: outer_callee, args: outer_args, .. }
-            if matches!(
-                outer_callee.as_ref(),
-                Expr::PropertyGet { property: p, object } if p == "digest" && matches!(
-                    object.as_ref(),
-                    Expr::Call { callee: c2, .. } if matches!(
-                        c2.as_ref(),
-                        Expr::PropertyGet { property: p2, object: obj2 } if p2 == "update" && matches!(
-                            obj2.as_ref(),
-                            Expr::Call { callee: c3, .. } if matches!(
-                                c3.as_ref(),
-                                Expr::PropertyGet { property: p3, object: obj3 } if (p3 == "createHash" || p3 == "createHmac") && matches!(
-                                    obj3.as_ref(),
-                                    Expr::NativeModuleRef(n) if n == "crypto"
-                                )
+        Expr::Call {
+            callee: outer_callee,
+            args: outer_args,
+            ..
+        } if matches!(
+            outer_callee.as_ref(),
+            Expr::PropertyGet { property: p, object } if p == "digest" && matches!(
+                object.as_ref(),
+                Expr::Call { callee: c2, .. } if matches!(
+                    c2.as_ref(),
+                    Expr::PropertyGet { property: p2, object: obj2 } if p2 == "update" && matches!(
+                        obj2.as_ref(),
+                        Expr::Call { callee: c3, .. } if matches!(
+                            c3.as_ref(),
+                            Expr::PropertyGet { property: p3, object: obj3 } if (p3 == "createHash" || p3 == "createHmac") && matches!(
+                                obj3.as_ref(),
+                                Expr::NativeModuleRef(n) if n == "crypto"
                             )
                         )
                     )
                 )
-            ) =>
+            )
+        ) =>
         {
             // Walk the chain to extract: alg (from createHash/createHmac args),
             // key (from createHmac's second arg, if present),
@@ -7330,7 +7657,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 unreachable!()
             };
-            let (update_args, create_call) = if let Expr::Call { callee: uc, args: ua, .. } = update_call {
+            let (update_args, create_call) = if let Expr::Call {
+                callee: uc,
+                args: ua,
+                ..
+            } = update_call
+            {
                 let inner = if let Expr::PropertyGet { object, .. } = uc.as_ref() {
                     object.as_ref()
                 } else {
@@ -7340,7 +7672,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 unreachable!()
             };
-            let (create_method, create_args) = if let Expr::Call { callee: cc, args: ca, .. } = create_call {
+            let (create_method, create_args) = if let Expr::Call {
+                callee: cc,
+                args: ca,
+                ..
+            } = create_call
+            {
                 let m = if let Expr::PropertyGet { property, .. } = cc.as_ref() {
                     property.as_str()
                 } else {
@@ -7374,18 +7711,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // `_bytes` variant deref as `*StringHeader`. #214 class.
                     let data_handle = unbox_str_handle(blk, &data_box);
                     if want_buffer {
-                        let result = blk.call(
-                            I64,
-                            "js_crypto_sha256_bytes",
-                            &[(I64, &data_handle)],
-                        );
+                        let result =
+                            blk.call(I64, "js_crypto_sha256_bytes", &[(I64, &data_handle)]);
                         Ok(nanbox_pointer_inline(blk, &result))
                     } else {
-                        let result = blk.call(
-                            I64,
-                            "js_crypto_sha256",
-                            &[(I64, &data_handle)],
-                        );
+                        let result = blk.call(I64, "js_crypto_sha256", &[(I64, &data_handle)]);
                         Ok(nanbox_string_inline(blk, &result))
                     }
                 }
@@ -7394,11 +7724,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let blk = ctx.block();
                     // SSO-safe — see sha256 arm above.
                     let data_handle = unbox_str_handle(blk, &data_box);
-                    let result = blk.call(
-                        I64,
-                        "js_crypto_md5",
-                        &[(I64, &data_handle)],
-                    );
+                    let result = blk.call(I64, "js_crypto_md5", &[(I64, &data_handle)]);
                     Ok(nanbox_string_inline(blk, &result))
                 }
                 ("createHmac", "sha256") if create_args.len() >= 2 && update_args.len() >= 1 => {
@@ -7437,11 +7763,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let _ = lower_expr(ctx, a)?;
                     }
                     let blk = ctx.block();
-                    let empty = blk.call(
-                        I64,
-                        "js_string_from_bytes",
-                        &[(I64, "0"), (I32, "0")],
-                    );
+                    let empty = blk.call(I64, "js_string_from_bytes", &[(I64, "0"), (I32, "0")]);
                     Ok(nanbox_string_inline(blk, &empty))
                 }
             }
@@ -7465,19 +7787,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ) =>
         {
             if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(
-                    crate::nanbox::TAG_UNDEFINED,
-                )));
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             let alg_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let alg_handle = unbox_to_i64(blk, &alg_box);
             // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_create_hash",
-                &[(I64, &alg_handle)],
-            ))
+            Ok(blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)]))
         }
 
         // Phase H crypto: `crypto.randomBytes(n)` as a Buffer.
@@ -7495,23 +7811,20 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             let size_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
-            let buf_handle = blk.call(
-                I64,
-                "js_crypto_random_bytes_buffer",
-                &[(DOUBLE, &size_box)],
-            );
+            let buf_handle = blk.call(I64, "js_crypto_random_bytes_buffer", &[(DOUBLE, &size_box)]);
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
 
         // Phase H crypto: `crypto.randomUUID()`.
-        Expr::Call { callee, args: _, .. }
-            if matches!(
-                callee.as_ref(),
-                Expr::PropertyGet { object, property } if property == "randomUUID" && matches!(
-                    object.as_ref(),
-                    Expr::NativeModuleRef(n) if n == "crypto"
-                )
-            ) =>
+        Expr::Call {
+            callee, args: _, ..
+        } if matches!(
+            callee.as_ref(),
+            Expr::PropertyGet { object, property } if property == "randomUUID" && matches!(
+                object.as_ref(),
+                Expr::NativeModuleRef(n) if n == "crypto"
+            )
+        ) =>
         {
             let blk = ctx.block();
             let handle = blk.call(I64, "js_crypto_random_uuid", &[]);
@@ -7549,7 +7862,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let buf_handle = blk.call(
                 I64,
                 "js_crypto_pbkdf2_bytes",
-                &[(I64, &pwd_handle), (I64, &salt_handle), (DOUBLE, &iter_box), (DOUBLE, &keylen_box)],
+                &[
+                    (I64, &pwd_handle),
+                    (I64, &salt_handle),
+                    (DOUBLE, &iter_box),
+                    (DOUBLE, &keylen_box),
+                ],
             );
             Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
@@ -7582,17 +7900,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "readFile" if args.len() >= 1 => {
                     let p = lower_expr(ctx, &args[0])?;
                     let blk = ctx.block();
-                    let str_handle = blk.call(
-                        I64,
-                        "js_fs_read_file_sync",
-                        &[(DOUBLE, &p)],
-                    );
+                    let str_handle = blk.call(I64, "js_fs_read_file_sync", &[(DOUBLE, &p)]);
                     let str_box = nanbox_string_inline(blk, &str_handle);
-                    let promise_handle = blk.call(
-                        I64,
-                        "js_promise_resolved",
-                        &[(DOUBLE, &str_box)],
-                    );
+                    let promise_handle =
+                        blk.call(I64, "js_promise_resolved", &[(DOUBLE, &str_box)]);
                     Ok(nanbox_pointer_inline(blk, &promise_handle))
                 }
                 "writeFile" if args.len() >= 2 => {
@@ -7605,27 +7916,15 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     let blk = ctx.block();
                     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let promise_handle = blk.call(
-                        I64,
-                        "js_promise_resolved",
-                        &[(DOUBLE, &undef)],
-                    );
+                    let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
                     Ok(nanbox_pointer_inline(blk, &promise_handle))
                 }
                 "mkdir" if args.len() >= 1 => {
                     let p = lower_expr(ctx, &args[0])?;
-                    let _ = ctx.block().call(
-                        I32,
-                        "js_fs_mkdir_sync",
-                        &[(DOUBLE, &p)],
-                    );
+                    let _ = ctx.block().call(I32, "js_fs_mkdir_sync", &[(DOUBLE, &p)]);
                     let blk = ctx.block();
                     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let promise_handle = blk.call(
-                        I64,
-                        "js_promise_resolved",
-                        &[(DOUBLE, &undef)],
-                    );
+                    let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
                     Ok(nanbox_pointer_inline(blk, &promise_handle))
                 }
                 _ => {
@@ -7637,11 +7936,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     let blk = ctx.block();
                     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let promise_handle = blk.call(
-                        I64,
-                        "js_promise_resolved",
-                        &[(DOUBLE, &undef)],
-                    );
+                    let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
                     Ok(nanbox_pointer_inline(blk, &promise_handle))
                 }
             }
@@ -7712,39 +8007,25 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // nearest enclosing try/catch. Returns NaN-boxed
                     // undefined on success.
                     let p = lower_expr(ctx, &args[0])?;
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_access_sync_throw",
-                        &[(DOUBLE, &p)],
-                    ))
+                    Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_fs_access_sync_throw", &[(DOUBLE, &p)]))
                 }
                 "realpathSync" if args.len() >= 1 => {
                     let p = lower_expr(ctx, &args[0])?;
                     let blk = ctx.block();
-                    let str_handle = blk.call(
-                        I64,
-                        "js_fs_realpath_sync",
-                        &[(DOUBLE, &p)],
-                    );
+                    let str_handle = blk.call(I64, "js_fs_realpath_sync", &[(DOUBLE, &p)]);
                     Ok(nanbox_string_inline(blk, &str_handle))
                 }
                 "mkdtempSync" if args.len() >= 1 => {
                     let p = lower_expr(ctx, &args[0])?;
                     let blk = ctx.block();
-                    let str_handle = blk.call(
-                        I64,
-                        "js_fs_mkdtemp_sync",
-                        &[(DOUBLE, &p)],
-                    );
+                    let str_handle = blk.call(I64, "js_fs_mkdtemp_sync", &[(DOUBLE, &p)]);
                     Ok(nanbox_string_inline(blk, &str_handle))
                 }
                 "rmdirSync" if args.len() >= 1 => {
                     let p = lower_expr(ctx, &args[0])?;
-                    let _ = ctx.block().call(
-                        I32,
-                        "js_fs_rmdir_sync",
-                        &[(DOUBLE, &p)],
-                    );
+                    let _ = ctx.block().call(I32, "js_fs_rmdir_sync", &[(DOUBLE, &p)]);
                     Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
                 }
                 "createWriteStream" if args.len() >= 1 => {
@@ -7754,22 +8035,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if args.len() >= 2 {
                         let _ = lower_expr(ctx, &args[1])?;
                     }
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_create_write_stream",
-                        &[(DOUBLE, &p)],
-                    ))
+                    Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_fs_create_write_stream", &[(DOUBLE, &p)]))
                 }
                 "createReadStream" if args.len() >= 1 => {
                     let p = lower_expr(ctx, &args[0])?;
                     if args.len() >= 2 {
                         let _ = lower_expr(ctx, &args[1])?;
                     }
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_create_read_stream",
-                        &[(DOUBLE, &p)],
-                    ))
+                    Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_fs_create_read_stream", &[(DOUBLE, &p)]))
                 }
                 "readFile" if args.len() >= 3 => {
                     // Node `fs.readFile(path, encoding, callback)` —
@@ -7805,12 +8082,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ProxyNew { target, handler } => {
             let t = lower_expr(ctx, target)?;
             let h = lower_expr(ctx, handler)?;
-            Ok(ctx.block().call(DOUBLE, "js_proxy_new", &[(DOUBLE, &t), (DOUBLE, &h)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_proxy_new", &[(DOUBLE, &t), (DOUBLE, &h)]))
         }
         Expr::ProxyGet { proxy, key } => {
             let p = lower_expr(ctx, proxy)?;
             let k = lower_expr(ctx, key)?;
-            Ok(ctx.block().call(DOUBLE, "js_proxy_get", &[(DOUBLE, &p), (DOUBLE, &k)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_proxy_get", &[(DOUBLE, &p), (DOUBLE, &k)]))
         }
         Expr::ProxySet { proxy, key, value } => {
             let p = lower_expr(ctx, proxy)?;
@@ -7826,12 +8107,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ProxyHas { proxy, key } => {
             let p = lower_expr(ctx, proxy)?;
             let k = lower_expr(ctx, key)?;
-            Ok(ctx.block().call(DOUBLE, "js_proxy_has", &[(DOUBLE, &p), (DOUBLE, &k)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_proxy_has", &[(DOUBLE, &p), (DOUBLE, &k)]))
         }
         Expr::ProxyDelete { proxy, key } => {
             let p = lower_expr(ctx, proxy)?;
             let k = lower_expr(ctx, key)?;
-            Ok(ctx.block().call(DOUBLE, "js_proxy_delete", &[(DOUBLE, &p), (DOUBLE, &k)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_proxy_delete", &[(DOUBLE, &p), (DOUBLE, &k)]))
         }
         Expr::ProxyApply { proxy, args } => {
             let p = lower_expr(ctx, proxy)?;
@@ -7860,7 +8145,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ProxyRevocable { target, handler } => {
             let t = lower_expr(ctx, target)?;
             let h = lower_expr(ctx, handler)?;
-            Ok(ctx.block().call(DOUBLE, "js_proxy_new", &[(DOUBLE, &t), (DOUBLE, &h)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_proxy_new", &[(DOUBLE, &t), (DOUBLE, &h)]))
         }
         Expr::ProxyRevoke(proxy) => {
             let p = lower_expr(ctx, proxy)?;
@@ -7870,7 +8157,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ReflectGet { target, key } => {
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;
-            Ok(ctx.block().call(DOUBLE, "js_reflect_get", &[(DOUBLE, &t), (DOUBLE, &k)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_reflect_get", &[(DOUBLE, &t), (DOUBLE, &k)]))
         }
         Expr::ReflectSet { target, key, value } => {
             let t = lower_expr(ctx, target)?;
@@ -7885,18 +8174,28 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ReflectHas { target, key } => {
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;
-            Ok(ctx.block().call(DOUBLE, "js_reflect_has", &[(DOUBLE, &t), (DOUBLE, &k)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_reflect_has", &[(DOUBLE, &t), (DOUBLE, &k)]))
         }
         Expr::ReflectDelete { target, key } => {
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;
-            Ok(ctx.block().call(DOUBLE, "js_reflect_delete", &[(DOUBLE, &t), (DOUBLE, &k)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_reflect_delete", &[(DOUBLE, &t), (DOUBLE, &k)]))
         }
         Expr::ReflectOwnKeys(target) => {
             let t = lower_expr(ctx, target)?;
-            Ok(ctx.block().call(DOUBLE, "js_reflect_own_keys", &[(DOUBLE, &t)]))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_reflect_own_keys", &[(DOUBLE, &t)]))
         }
-        Expr::ReflectApply { func, this_arg, args } => {
+        Expr::ReflectApply {
+            func,
+            this_arg,
+            args,
+        } => {
             let f = lower_expr(ctx, func)?;
             let ta = lower_expr(ctx, this_arg)?;
             let a = lower_expr(ctx, args)?;
@@ -7916,7 +8215,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &t), (DOUBLE, &a), (DOUBLE, &undef)],
             ))
         }
-        Expr::ReflectDefineProperty { target, key, descriptor } => {
+        Expr::ReflectDefineProperty {
+            target,
+            key,
+            descriptor,
+        } => {
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;
             let d = lower_expr(ctx, descriptor)?;
@@ -7960,14 +8263,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // creates a closure wrapper instead of the actual string.
                 if ctx.imported_vars.contains(name) {
                     let fname = format!("perry_fn_{}__{}", source_prefix, name);
-                    ctx.pending_declares
-                        .push((fname.clone(), DOUBLE, vec![]));
+                    ctx.pending_declares.push((fname.clone(), DOUBLE, vec![]));
                     return Ok(ctx.block().call(DOUBLE, &fname, &[]));
                 }
-                let global_name = format!(
-                    "__perry_extern_closure_{}__{}",
-                    source_prefix, name
-                );
+                let global_name = format!("__perry_extern_closure_{}__{}", source_prefix, name);
                 let global_ref = format!("@{}", global_name);
                 let blk = ctx.block();
                 let addr_i64 = blk.ptrtoint(&global_ref, I64);
@@ -8004,7 +8303,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // points at). CLDR plural rule selection at runtime is a
         // followup; in the meantime plural-tagged keys still produce a
         // working translation, just not the count-aware variant.
-        Expr::I18nString { key, string_idx, params, .. } => {
+        Expr::I18nString {
+            key,
+            string_idx,
+            params,
+            ..
+        } => {
             let resolved: Option<String> = ctx.i18n.as_ref().and_then(|t| {
                 let idx = t.default_locale_idx * t.key_count + (*string_idx as usize);
                 t.translations.get(idx).cloned()
@@ -8045,7 +8349,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             continue;
                         }
                         // Find the matching `}`.
-                        let end = bytes[i + 1..].iter().position(|&c| c == b'}').map(|p| i + 1 + p);
+                        let end = bytes[i + 1..]
+                            .iter()
+                            .position(|&c| c == b'}')
+                            .map(|p| i + 1 + p);
                         match end {
                             Some(close) => {
                                 if !buf.is_empty() {
@@ -8091,8 +8398,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let _ = lower_expr(ctx, v)?;
                 }
                 let key_idx = ctx.strings.intern(&template);
-                let handle_global =
-                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 return Ok(ctx.block().load(DOUBLE, &handle_global));
             }
 
@@ -8144,10 +8450,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             None => {
                                 let placeholder = format!("{{{}}}", name);
                                 let key_idx = ctx.strings.intern(&placeholder);
-                                let handle_global = format!(
-                                    "@{}",
-                                    ctx.strings.entry(key_idx).handle_global
-                                );
+                                let handle_global =
+                                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
                                 ctx.block().load(DOUBLE, &handle_global)
                             }
                         };
@@ -8194,17 +8498,19 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(I64, &cmd_str), (I64, &opts_str)],
             );
             let is_null = ctx.block().icmp_eq(I64, &raw, "0");
-            let empty = ctx.block().call(
-                I64,
-                "js_string_from_bytes",
-                &[(PTR, "null"), (I32, "0")],
-            );
+            let empty = ctx
+                .block()
+                .call(I64, "js_string_from_bytes", &[(PTR, "null"), (I32, "0")]);
             let blk = ctx.block();
             let result = blk.select(crate::types::I1, &is_null, I64, &empty, &raw);
             Ok(nanbox_string_inline(ctx.block(), &result))
         }
 
-        Expr::ChildProcessSpawnSync { command, args, options } => {
+        Expr::ChildProcessSpawnSync {
+            command,
+            args,
+            options,
+        } => {
             let cmd_box = lower_expr(ctx, command)?;
             let blk = ctx.block();
             let cmd_str = unbox_to_i64(blk, &cmd_box);
@@ -8229,7 +8535,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(ctx.block(), &result))
         }
 
-        Expr::ChildProcessSpawnBackground { command, args, log_file, env_json } => {
+        Expr::ChildProcessSpawnBackground {
+            command,
+            args,
+            log_file,
+            env_json,
+        } => {
             let cmd_box = lower_expr(ctx, command)?;
             let _args_box = if let Some(a) = args {
                 lower_expr(ctx, a)?
@@ -8251,12 +8562,21 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let result = ctx.block().call(
                 I64,
                 "js_child_process_spawn_background",
-                &[(DOUBLE, &cmd_box), (I64, &cmd_str), (DOUBLE, &log_nanbox), (DOUBLE, &env_box)],
+                &[
+                    (DOUBLE, &cmd_box),
+                    (I64, &cmd_str),
+                    (DOUBLE, &log_nanbox),
+                    (DOUBLE, &env_box),
+                ],
             );
             Ok(nanbox_pointer_inline(ctx.block(), &result))
         }
 
-        Expr::ChildProcessSpawn { command, args, options } => {
+        Expr::ChildProcessSpawn {
+            command,
+            args,
+            options,
+        } => {
             let cmd_box = lower_expr(ctx, command)?;
             let blk = ctx.block();
             let cmd_str = unbox_to_i64(blk, &cmd_box);
@@ -8280,7 +8600,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(ctx.block(), &result))
         }
 
-        Expr::ChildProcessExec { command, options, callback } => {
+        Expr::ChildProcessExec {
+            command,
+            options,
+            callback,
+        } => {
             let cmd_box = lower_expr(ctx, command)?;
             let blk = ctx.block();
             let cmd_str = unbox_to_i64(blk, &cmd_box);
@@ -8303,21 +8627,17 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         Expr::ChildProcessGetProcessStatus(handle) => {
             let h = lower_expr(ctx, handle)?;
-            let result = ctx.block().call(
-                I64,
-                "js_child_process_get_process_status",
-                &[(DOUBLE, &h)],
-            );
+            let result =
+                ctx.block()
+                    .call(I64, "js_child_process_get_process_status", &[(DOUBLE, &h)]);
             Ok(nanbox_pointer_inline(ctx.block(), &result))
         }
 
         Expr::ChildProcessKillProcess(handle) => {
             let h = lower_expr(ctx, handle)?;
-            let _ = ctx.block().call(
-                I32,
-                "js_child_process_kill_process",
-                &[(DOUBLE, &h)],
-            );
+            let _ = ctx
+                .block()
+                .call(I32, "js_child_process_kill_process", &[(DOUBLE, &h)]);
             Ok(double_literal(0.0))
         }
 
@@ -8330,21 +8650,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // only when the local is typed `URL` / `URLSearchParams` (see
         // `crates/perry-hir/src/lower.rs`), so here we assume the receiver
         // NaN-box holds a POINTER_TAG value we can unbox.
-
         Expr::UrlNew { url, base } => {
             let url_v = lower_expr(ctx, url)?;
-            let url_ptr = ctx.block().call(
-                I64,
-                "js_get_string_pointer_unified",
-                &[(DOUBLE, &url_v)],
-            );
+            let url_ptr =
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &url_v)]);
             let obj = if let Some(base) = base {
                 let base_v = lower_expr(ctx, base)?;
-                let base_ptr = ctx.block().call(
-                    I64,
-                    "js_get_string_pointer_unified",
-                    &[(DOUBLE, &base_v)],
-                );
+                let base_ptr =
+                    ctx.block()
+                        .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &base_v)]);
                 ctx.block().call(
                     I64,
                     "js_url_new_with_base",
@@ -8378,16 +8693,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::UrlSearchParamsNew(init) => {
             let params_obj = if let Some(init) = init {
                 let v = lower_expr(ctx, init)?;
-                let str_ptr = ctx.block().call(
-                    I64,
-                    "js_get_string_pointer_unified",
-                    &[(DOUBLE, &v)],
-                );
-                ctx.block().call(
-                    I64,
-                    "js_url_search_params_new",
-                    &[(I64, &str_ptr)],
-                )
+                let str_ptr =
+                    ctx.block()
+                        .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v)]);
+                ctx.block()
+                    .call(I64, "js_url_search_params_new", &[(I64, &str_ptr)])
             } else {
                 ctx.block().call(I64, "js_url_search_params_new_empty", &[])
             };
@@ -8398,11 +8708,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx.block().call(
-                I64,
-                "js_get_string_pointer_unified",
-                &[(DOUBLE, &n_v)],
-            );
+            let n_ptr = ctx
+                .block()
+                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
             let str_ptr = ctx.block().call(
                 I64,
                 "js_url_search_params_get",
@@ -8414,13 +8722,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let is_null = blk.icmp_eq(I64, &str_ptr, "0");
             let as_string = nanbox_string_inline(blk, &str_ptr);
             let str_bits = ctx.block().bitcast_double_to_i64(&as_string);
-            let selected = ctx.block().select(
-                I1,
-                &is_null,
-                I64,
-                crate::nanbox::TAG_NULL_I64,
-                &str_bits,
-            );
+            let selected =
+                ctx.block()
+                    .select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &str_bits);
             Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
 
@@ -8428,11 +8732,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx.block().call(
-                I64,
-                "js_get_string_pointer_unified",
-                &[(DOUBLE, &n_v)],
-            );
+            let n_ptr = ctx
+                .block()
+                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
             // Runtime returns 0.0 / 1.0 as a plain f64 — not NaN-boxed.
             // Translate to TAG_TRUE / TAG_FALSE so `typeof` and strict-eq
             // behave correctly.
@@ -8453,74 +8755,76 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx.block().bitcast_i64_to_double(&tagged))
         }
 
-        Expr::UrlSearchParamsSet { params, name, value } => {
+        Expr::UrlSearchParamsSet {
+            params,
+            name,
+            value,
+        } => {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx.block().call(
-                I64,
-                "js_get_string_pointer_unified",
-                &[(DOUBLE, &n_v)],
-            );
+            let n_ptr = ctx
+                .block()
+                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
             let val_v = lower_expr(ctx, value)?;
-            let val_ptr = ctx.block().call(
-                I64,
-                "js_get_string_pointer_unified",
-                &[(DOUBLE, &val_v)],
-            );
+            let val_ptr =
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val_v)]);
             ctx.block().call_void(
                 "js_url_search_params_set",
                 &[(I64, &p_ptr), (I64, &n_ptr), (I64, &val_ptr)],
             );
-            Ok(ctx.block().bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
+            Ok(ctx
+                .block()
+                .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
         }
 
-        Expr::UrlSearchParamsAppend { params, name, value } => {
+        Expr::UrlSearchParamsAppend {
+            params,
+            name,
+            value,
+        } => {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx.block().call(
-                I64,
-                "js_get_string_pointer_unified",
-                &[(DOUBLE, &n_v)],
-            );
+            let n_ptr = ctx
+                .block()
+                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
             let val_v = lower_expr(ctx, value)?;
-            let val_ptr = ctx.block().call(
-                I64,
-                "js_get_string_pointer_unified",
-                &[(DOUBLE, &val_v)],
-            );
+            let val_ptr =
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val_v)]);
             ctx.block().call_void(
                 "js_url_search_params_append",
                 &[(I64, &p_ptr), (I64, &n_ptr), (I64, &val_ptr)],
             );
-            Ok(ctx.block().bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
+            Ok(ctx
+                .block()
+                .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
         }
 
         Expr::UrlSearchParamsDelete { params, name } => {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx.block().call(
-                I64,
-                "js_get_string_pointer_unified",
-                &[(DOUBLE, &n_v)],
-            );
+            let n_ptr = ctx
+                .block()
+                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
             ctx.block().call_void(
                 "js_url_search_params_delete",
                 &[(I64, &p_ptr), (I64, &n_ptr)],
             );
-            Ok(ctx.block().bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
+            Ok(ctx
+                .block()
+                .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64))
         }
 
         Expr::UrlSearchParamsToString(params) => {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
-            let str_ptr = ctx.block().call(
-                I64,
-                "js_url_search_params_to_string",
-                &[(I64, &p_ptr)],
-            );
+            let str_ptr = ctx
+                .block()
+                .call(I64, "js_url_search_params_to_string", &[(I64, &p_ptr)]);
             Ok(nanbox_string_inline(ctx.block(), &str_ptr))
         }
 
@@ -8528,11 +8832,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let p_v = lower_expr(ctx, params)?;
             let p_ptr = unbox_to_i64(ctx.block(), &p_v);
             let n_v = lower_expr(ctx, name)?;
-            let n_ptr = ctx.block().call(
-                I64,
-                "js_get_string_pointer_unified",
-                &[(DOUBLE, &n_v)],
-            );
+            let n_ptr = ctx
+                .block()
+                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &n_v)]);
             // Returns f64 with the raw array pointer bit-cast in; the runtime
             // does not NaN-box it, so tag it here with POINTER_TAG.
             let raw_f64 = ctx.block().call(
@@ -8564,7 +8866,6 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         //
         // `JsCreateCallback` is intentionally not implemented here —
         // see the bail comment near the catch-all below for the reason.
-
         Expr::JsLoadModule { path } => {
             let (bytes_global, byte_len) = {
                 let idx = ctx.strings.intern(path);
@@ -8584,7 +8885,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.bitcast_i64_to_double(&handle_i64))
         }
 
-        Expr::JsGetExport { module_handle, export_name } => {
+        Expr::JsGetExport {
+            module_handle,
+            export_name,
+        } => {
             let handle_dbl = lower_expr(ctx, module_handle)?;
             let (bytes_global, byte_len) = {
                 let idx = ctx.strings.intern(export_name);
@@ -8597,15 +8901,15 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.call(
                 DOUBLE,
                 "js_get_export",
-                &[
-                    (I64, &handle_i64),
-                    (PTR, &bytes_global),
-                    (I64, &len_str),
-                ],
+                &[(I64, &handle_i64), (PTR, &bytes_global), (I64, &len_str)],
             ))
         }
 
-        Expr::JsCallFunction { module_handle, func_name, args } => {
+        Expr::JsCallFunction {
+            module_handle,
+            func_name,
+            args,
+        } => {
             let handle_dbl = lower_expr(ctx, module_handle)?;
             let (bytes_global, byte_len) = {
                 let idx = ctx.strings.intern(func_name);
@@ -8632,7 +8936,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
-        Expr::JsCallMethod { object, method_name, args } => {
+        Expr::JsCallMethod {
+            object,
+            method_name,
+            args,
+        } => {
             let obj_dbl = lower_expr(ctx, object)?;
             let (bytes_global, byte_len) = {
                 let idx = ctx.strings.intern(method_name);
@@ -8658,7 +8966,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
-        Expr::JsGetProperty { object, property_name } => {
+        Expr::JsGetProperty {
+            object,
+            property_name,
+        } => {
             let obj_dbl = lower_expr(ctx, object)?;
             let (bytes_global, byte_len) = {
                 let idx = ctx.strings.intern(property_name);
@@ -8669,15 +8980,15 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx.block().call(
                 DOUBLE,
                 "js_get_property",
-                &[
-                    (DOUBLE, &obj_dbl),
-                    (PTR, &bytes_global),
-                    (I64, &len_str),
-                ],
+                &[(DOUBLE, &obj_dbl), (PTR, &bytes_global), (I64, &len_str)],
             ))
         }
 
-        Expr::JsSetProperty { object, property_name, value } => {
+        Expr::JsSetProperty {
+            object,
+            property_name,
+            value,
+        } => {
             let obj_dbl = lower_expr(ctx, object)?;
             let val_dbl = lower_expr(ctx, value)?;
             let (bytes_global, byte_len) = {
@@ -8698,7 +9009,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(val_dbl)
         }
 
-        Expr::JsNew { module_handle, class_name, args } => {
+        Expr::JsNew {
+            module_handle,
+            class_name,
+            args,
+        } => {
             let handle_dbl = lower_expr(ctx, module_handle)?;
             let (bytes_global, byte_len) = {
                 let idx = ctx.strings.intern(class_name);
@@ -8735,11 +9050,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx.block().call(
                 DOUBLE,
                 "js_new_from_handle",
-                &[
-                    (DOUBLE, &ctor_dbl),
-                    (PTR, &args_ptr),
-                    (I64, &args_len_str),
-                ],
+                &[(DOUBLE, &ctor_dbl), (PTR, &args_ptr), (I64, &args_len_str)],
             ))
         }
 
@@ -8759,7 +9070,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         //   param_count  = static usize from HIR
         // Result is a NaN-boxed JS handle (V8-handle tag 0x7FFB) that JS
         // code can call like any other JS function.
-        Expr::JsCreateCallback { closure, param_count } => {
+        Expr::JsCreateCallback {
+            closure,
+            param_count,
+        } => {
             let closure_dbl = lower_expr(ctx, closure)?;
             let blk = ctx.block();
             let closure_i64 = unbox_to_i64(blk, &closure_dbl);
@@ -8776,11 +9090,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.call(
                 DOUBLE,
                 "js_create_callback",
-                &[
-                    (I64, &func_addr),
-                    (I64, &closure_i64),
-                    (I64, &pcount),
-                ],
+                &[(I64, &func_addr), (I64, &closure_i64), (I64, &pcount)],
             ))
         }
 
@@ -8814,8 +9124,12 @@ fn is_known_finite(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
                 is_known_finite(ctx, left) && is_known_finite(ctx, right)
             }
-            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
-            | BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr => true,
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::UShr => true,
             _ => false,
         },
         _ => false,
@@ -8833,7 +9147,10 @@ fn try_lower_flat_const_index_get(
 ) -> Result<Option<String>> {
     let (info, row_expr, col_expr): (FlatConstInfo, Box<Expr>, Box<Expr>) = match object {
         // Inline: IndexGet(IndexGet(LocalGet(X), i), j)
-        Expr::IndexGet { object: outer_obj, index: outer_idx } => {
+        Expr::IndexGet {
+            object: outer_obj,
+            index: outer_idx,
+        } => {
             if let Expr::LocalGet(id) = outer_obj.as_ref() {
                 if let Some(info) = ctx.flat_const_arrays.get(id).cloned() {
                     (info, outer_idx.clone(), Box::new(index.clone()))
@@ -8868,13 +9185,29 @@ fn try_lower_flat_const_index_get(
     let flat_ca = ctx.flat_const_arrays.clone();
     let ara = ctx.array_row_aliases.clone();
     let int_locals = ctx.integer_locals.clone();
-    let row_i32 = if can_lower_expr_as_i32(&row_expr, &i32_slots, &flat_ca, &ara, &int_locals, ctx.clamp3_functions, ctx.clamp_u8_functions) {
+    let row_i32 = if can_lower_expr_as_i32(
+        &row_expr,
+        &i32_slots,
+        &flat_ca,
+        &ara,
+        &int_locals,
+        ctx.clamp3_functions,
+        ctx.clamp_u8_functions,
+    ) {
         lower_expr_as_i32(ctx, &row_expr)?
     } else {
         let d = lower_expr(ctx, &row_expr)?;
         ctx.block().fptosi(DOUBLE, &d, I32)
     };
-    let col_i32 = if can_lower_expr_as_i32(&col_expr, &i32_slots, &flat_ca, &ara, &int_locals, ctx.clamp3_functions, ctx.clamp_u8_functions) {
+    let col_i32 = if can_lower_expr_as_i32(
+        &col_expr,
+        &i32_slots,
+        &flat_ca,
+        &ara,
+        &int_locals,
+        ctx.clamp3_functions,
+        ctx.clamp_u8_functions,
+    ) {
         lower_expr_as_i32(ctx, &col_expr)?
     } else {
         let d = lower_expr(ctx, &col_expr)?;
@@ -8962,23 +9295,72 @@ pub(crate) fn can_lower_expr_as_i32(
         Expr::LocalGet(id) => i32_slots.contains_key(id) || integer_locals.contains(id),
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(a, b) => {
-            can_lower_expr_as_i32(a, i32_slots, flat_const_arrays, array_row_aliases, integer_locals, clamp3_fns, clamp_u8_fns)
-                && can_lower_expr_as_i32(b, i32_slots, flat_const_arrays, array_row_aliases, integer_locals, clamp3_fns, clamp_u8_fns)
+            can_lower_expr_as_i32(
+                a,
+                i32_slots,
+                flat_const_arrays,
+                array_row_aliases,
+                integer_locals,
+                clamp3_fns,
+                clamp_u8_fns,
+            ) && can_lower_expr_as_i32(
+                b,
+                i32_slots,
+                flat_const_arrays,
+                array_row_aliases,
+                integer_locals,
+                clamp3_fns,
+                clamp_u8_fns,
+            )
         }
         Expr::Binary { op, left, right }
-            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul
-                | BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
-                | BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr) =>
+            if matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+                    | BinaryOp::UShr
+            ) =>
         {
-            can_lower_expr_as_i32(left, i32_slots, flat_const_arrays, array_row_aliases, integer_locals, clamp3_fns, clamp_u8_fns)
-                && can_lower_expr_as_i32(right, i32_slots, flat_const_arrays, array_row_aliases, integer_locals, clamp3_fns, clamp_u8_fns)
+            can_lower_expr_as_i32(
+                left,
+                i32_slots,
+                flat_const_arrays,
+                array_row_aliases,
+                integer_locals,
+                clamp3_fns,
+                clamp_u8_fns,
+            ) && can_lower_expr_as_i32(
+                right,
+                i32_slots,
+                flat_const_arrays,
+                array_row_aliases,
+                integer_locals,
+                clamp3_fns,
+                clamp_u8_fns,
+            )
         }
         Expr::Call { callee, args, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 if (clamp3_fns.contains(fid) && args.len() == 3)
                     || (clamp_u8_fns.contains(fid) && args.len() == 1)
                 {
-                    return args.iter().all(|a| can_lower_expr_as_i32(a, i32_slots, flat_const_arrays, array_row_aliases, integer_locals, clamp3_fns, clamp_u8_fns));
+                    return args.iter().all(|a| {
+                        can_lower_expr_as_i32(
+                            a,
+                            i32_slots,
+                            flat_const_arrays,
+                            array_row_aliases,
+                            integer_locals,
+                            clamp3_fns,
+                            clamp_u8_fns,
+                        )
+                    });
                 }
             }
             false
@@ -8988,7 +9370,9 @@ pub(crate) fn can_lower_expr_as_i32(
             Expr::IndexGet { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_arrays.contains_key(id))
             }
-            Expr::LocalGet(id) => array_row_aliases.get(id).map_or(false, |(cid, _)| flat_const_arrays.contains_key(cid)),
+            Expr::LocalGet(id) => array_row_aliases
+                .get(id)
+                .map_or(false, |(cid, _)| flat_const_arrays.contains_key(cid)),
             _ => false,
         },
         _ => false,
@@ -9015,9 +9399,18 @@ pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String>
             Ok(ctx.block().mul(I32, &l, &r))
         }
         Expr::Binary { op, left, right }
-            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul
-                | BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
-                | BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr) =>
+            if matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+                    | BinaryOp::UShr
+            ) =>
         {
             let l = lower_expr_as_i32(ctx, left)?;
             let r = lower_expr_as_i32(ctx, right)?;
@@ -9038,25 +9431,41 @@ pub(crate) fn lower_expr_as_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String>
         // Clamp-pattern calls: emit @llvm.smax.i32 / @llvm.smin.i32 directly
         // in i32, no double round-trip. Produces vectorizable IR.
         Expr::Call { callee, args, .. } => {
-            let fid = if let Expr::FuncRef(id) = callee.as_ref() { *id } else { 0 };
+            let fid = if let Expr::FuncRef(id) = callee.as_ref() {
+                *id
+            } else {
+                0
+            };
             if ctx.clamp3_functions.contains(&fid) && args.len() == 3 {
                 let v = lower_expr_as_i32(ctx, &args[0])?;
                 let lo = lower_expr_as_i32(ctx, &args[1])?;
                 let hi = lower_expr_as_i32(ctx, &args[2])?;
                 let blk = ctx.block();
                 let r1 = blk.fresh_reg();
-                blk.emit_raw(format!("{} = call i32 @llvm.smax.i32(i32 {}, i32 {})", r1, v, lo));
+                blk.emit_raw(format!(
+                    "{} = call i32 @llvm.smax.i32(i32 {}, i32 {})",
+                    r1, v, lo
+                ));
                 let r2 = blk.fresh_reg();
-                blk.emit_raw(format!("{} = call i32 @llvm.smin.i32(i32 {}, i32 {})", r2, r1, hi));
+                blk.emit_raw(format!(
+                    "{} = call i32 @llvm.smin.i32(i32 {}, i32 {})",
+                    r2, r1, hi
+                ));
                 return Ok(r2);
             }
             if ctx.clamp_u8_functions.contains(&fid) && args.len() == 1 {
                 let v = lower_expr_as_i32(ctx, &args[0])?;
                 let blk = ctx.block();
                 let r1 = blk.fresh_reg();
-                blk.emit_raw(format!("{} = call i32 @llvm.smax.i32(i32 {}, i32 0)", r1, v));
+                blk.emit_raw(format!(
+                    "{} = call i32 @llvm.smax.i32(i32 {}, i32 0)",
+                    r1, v
+                ));
                 let r2 = blk.fresh_reg();
-                blk.emit_raw(format!("{} = call i32 @llvm.smin.i32(i32 {}, i32 255)", r2, r1));
+                blk.emit_raw(format!(
+                    "{} = call i32 @llvm.smin.i32(i32 {}, i32 255)",
+                    r2, r1
+                ));
                 return Ok(r2);
             }
             // Non-clamp Call: fall through to default.
@@ -9079,11 +9488,9 @@ fn proxy_build_args_array(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Result<String> 
     let mut current = arr;
     for a in args {
         let v = lower_expr(ctx, a)?;
-        current = ctx.block().call(
-            I64,
-            "js_array_push_f64",
-            &[(I64, &current), (DOUBLE, &v)],
-        );
+        current = ctx
+            .block()
+            .call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
     }
     Ok(current)
 }
@@ -9183,11 +9590,7 @@ pub(crate) fn unbox_str_handle(blk: &mut LlBlock, boxed: &str) -> String {
 /// Each runtime entry takes a raw `*mut ObjectHeader` and returns an
 /// already NaN-boxed f64 string, so the caller only has to unbox the
 /// URL handle.
-fn lower_url_string_getter(
-    ctx: &mut FnCtx<'_>,
-    url: &Expr,
-    runtime_fn: &str,
-) -> Result<String> {
+fn lower_url_string_getter(ctx: &mut FnCtx<'_>, url: &Expr, runtime_fn: &str) -> Result<String> {
     let v = lower_expr(ctx, url)?;
     let obj_ptr = unbox_to_i64(ctx.block(), &v);
     Ok(ctx.block().call(DOUBLE, runtime_fn, &[(I64, &obj_ptr)]))
@@ -9323,9 +9726,7 @@ fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String>
 
     // Empty literal: no elements to worry about, keep the simple path.
     if n == 0 {
-        let arr = ctx
-            .block()
-            .call(I64, "js_array_alloc", &[(I32, "0")]);
+        let arr = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
         return Ok(nanbox_pointer_inline(ctx.block(), &arr));
     }
 
@@ -9403,11 +9804,7 @@ fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String>
         let raw_slow = ctx.block().call(
             PTR,
             "js_inline_arena_slow_alloc",
-            &[
-                (PTR, &state_ptr),
-                (I64, &total_size_str),
-                (I64, "8"),
-            ],
+            &[(PTR, &state_ptr), (I64, &total_size_str), (I64, "8")],
         );
         let slow_pred_label = ctx.block().label.clone();
         ctx.block().br(&merge_label);
@@ -9417,17 +9814,12 @@ fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String>
         let blk = ctx.block();
         let raw = blk.phi(
             PTR,
-            &[
-                (&raw_fast, &fast_pred_label),
-                (&raw_slow, &slow_pred_label),
-            ],
+            &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
         );
 
         // Packed GcHeader (bits 0..7 obj_type, 8..15 gc_flags, 16..31
         // _reserved, 32..63 size).
-        let gc_packed: u64 = GC_TYPE_ARRAY
-            | (GC_FLAG_ARENA << 8)
-            | (total_size << 32);
+        let gc_packed: u64 = GC_TYPE_ARRAY | (GC_FLAG_ARENA << 8) | (total_size << 32);
         blk.store(I64, &gc_packed.to_string(), &raw);
 
         // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
@@ -9461,9 +9853,7 @@ fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String>
     let arr_ptr = ctx.block().inttoptr(I64, &arr);
     for (i, v) in vals.iter().enumerate() {
         let offset = (8 + i * 8).to_string();
-        let elem_ptr = ctx
-            .block()
-            .gep_inbounds(I8, &arr_ptr, &[(I64, &offset)]);
+        let elem_ptr = ctx.block().gep_inbounds(I8, &arr_ptr, &[(I64, &offset)]);
         ctx.block().store(DOUBLE, v, &elem_ptr);
     }
 
@@ -9581,15 +9971,11 @@ fn lower_index_set_fast(
     // Load length from offset 0 (null-guarded).
     let length = ctx.block().safe_load_i32_from_ptr(&arr_handle);
     let in_bounds = ctx.block().icmp_ult(I32, &idx_i32, &length);
-    ctx.block().cond_br(&in_bounds, &inbounds_label, &check_cap_label);
+    ctx.block()
+        .cond_br(&in_bounds, &inbounds_label, &check_cap_label);
 
     // Helper: compute element_ptr = arr_ptr + 8 + idx*8 and emit a store.
-    fn store_element(
-        blk: &mut LlBlock,
-        arr_handle: &str,
-        idx_i32: &str,
-        val_double: &str,
-    ) {
+    fn store_element(blk: &mut LlBlock, arr_handle: &str, idx_i32: &str, val_double: &str) {
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3"); // *8
         let with_header = blk.add(I64, &byte_offset, "8"); // +8 for header
@@ -9617,7 +10003,8 @@ fn lower_index_set_fast(
         blk.load(I32, &cap_ptr)
     };
     let within_cap = ctx.block().icmp_ult(I32, &idx_i32, &capacity);
-    ctx.block().cond_br(&within_cap, &extend_inline_label, &realloc_label);
+    ctx.block()
+        .cond_br(&within_cap, &extend_inline_label, &realloc_label);
 
     ctx.current_block = extend_inline_idx;
     {

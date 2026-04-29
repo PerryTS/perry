@@ -22,15 +22,15 @@
 //! noted "we'd invoke js_callback_invoke(callback_id) here" — callbacks
 //! never fired in user code.
 
-use perry_runtime::{js_string_from_bytes, StringHeader};
+use crate::common::{get_handle, register_handle, Handle, RUNTIME};
+use cron::Schedule;
 use perry_runtime::closure::{js_closure_call0, ClosureHeader};
 use perry_runtime::gc::gc_register_root_scanner;
-use cron::Schedule;
+use perry_runtime::{js_string_from_bytes, StringHeader};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Once};
 use std::time::Instant;
-use crate::common::{get_handle, register_handle, Handle, RUNTIME};
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -124,8 +124,7 @@ fn scan_cron_roots(mark: &mut dyn FnMut(f64)) {
                 // Re-NaN-box with POINTER_TAG so the conservative scanner
                 // recognises it as a pointer (matches the timer.rs pattern).
                 let boxed = f64::from_bits(
-                    0x7FFD_0000_0000_0000
-                        | (timer.callback as u64 & 0x0000_FFFF_FFFF_FFFF),
+                    0x7FFD_0000_0000_0000 | (timer.callback as u64 & 0x0000_FFFF_FFFF_FFFF),
                 );
                 mark(boxed);
             }
@@ -202,7 +201,9 @@ pub extern "C" fn js_cron_timer_tick() -> i32 {
 #[no_mangle]
 pub extern "C" fn js_cron_timer_has_pending() -> i32 {
     if let Ok(q) = CRON_TIMERS.lock() {
-        if q.iter().any(|t| !t.cleared && t.running.load(Ordering::SeqCst)) {
+        if q.iter()
+            .any(|t| !t.cleared && t.running.load(Ordering::SeqCst))
+        {
             return 1;
         }
     }
@@ -247,10 +248,7 @@ pub unsafe extern "C" fn js_cron_validate(expr_ptr: *const StringHeader) -> f64 
 /// branch in `expr.rs` ensures the second argument is passed as an `i64`
 /// closure pointer rather than a NaN-boxed `f64`.
 #[no_mangle]
-pub unsafe extern "C" fn js_cron_schedule(
-    expr_ptr: *const StringHeader,
-    callback: i64,
-) -> Handle {
+pub unsafe extern "C" fn js_cron_schedule(expr_ptr: *const StringHeader, callback: i64) -> Handle {
     ensure_gc_scanner_registered();
 
     let expr = match string_from_header(expr_ptr) {

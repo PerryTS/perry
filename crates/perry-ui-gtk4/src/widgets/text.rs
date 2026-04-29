@@ -1,6 +1,6 @@
+use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::Label;
-use gtk4::pango;
 use perry_runtime::string::StringHeader;
 
 use super::register_widget;
@@ -119,9 +119,11 @@ pub fn set_decoration(handle: i64, decoration: i64) {
         if let Some(label) = widget.downcast_ref::<Label>() {
             let attrs = label.attributes().unwrap_or_else(pango::AttrList::new);
             // Reset any prior underline/strikethrough so calls compose correctly.
-            let underline = pango::AttrInt::new_underline(
-                if decoration == 1 { pango::Underline::Single } else { pango::Underline::None }
-            );
+            let underline = pango::AttrInt::new_underline(if decoration == 1 {
+                pango::Underline::Single
+            } else {
+                pango::Underline::None
+            });
             let strikethrough = pango::AttrInt::new_strikethrough(decoration == 2);
             attrs.insert(underline);
             attrs.insert(strikethrough);

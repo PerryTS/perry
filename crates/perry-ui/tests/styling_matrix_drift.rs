@@ -34,7 +34,10 @@ fn matrix_matches_lib_rs_exports_on_every_native_platform() {
         let plat = d.platform.map(|p| p.name()).unwrap_or("?");
         failures.push_str(&format!("\n  {} drift:\n", plat));
         for s in &d.wired_but_missing {
-            failures.push_str(&format!("    matrix Wired/Stub but missing in lib.rs: {}\n", s));
+            failures.push_str(&format!(
+                "    matrix Wired/Stub but missing in lib.rs: {}\n",
+                s
+            ));
         }
         for s in &d.present_but_marked_missing {
             failures.push_str(&format!("    in lib.rs but matrix Missing/NA: {}\n", s));
@@ -64,7 +67,9 @@ fn every_native_platform_has_at_least_one_styling_export() {
         if d.wired_but_missing.is_empty() {
             continue;
         }
-        let plat = d.platform.expect("native drift entries always carry a platform");
+        let plat = d
+            .platform
+            .expect("native drift entries always carry a platform");
         let path = plat
             .lib_rs_path()
             .expect("native platforms always have a lib.rs path");

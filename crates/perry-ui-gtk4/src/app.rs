@@ -1,8 +1,8 @@
 use gtk4::gdk;
+use gtk4::gio;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, EventControllerKey};
-use gtk4::gio;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -149,7 +149,7 @@ pub fn app_run(_app_handle: i64) {
              .perry-small button, button.perry-small { padding: 2px 6px; font-size: 12px; }\n\
              .perry-regular button, button.perry-regular { padding: 2px 8px; }\n\
              .perry-large button, button.perry-large { padding: 6px 12px; font-size: 15px; }\n\
-             entry { min-height: 0; padding: 2px 6px; }\n"
+             entry { min-height: 0; padding: 2px 6px; }\n",
         );
         if let Some(display) = gdk::Display::default() {
             gtk4::style_context_add_provider_for_display(
@@ -211,9 +211,7 @@ pub fn app_run(_app_handle: i64) {
                 // Apply transparency via CSS
                 if entry.transparent {
                     let css_provider = gtk4::CssProvider::new();
-                    css_provider.load_from_data(
-                        "window { background-color: transparent; }"
-                    );
+                    css_provider.load_from_data("window { background-color: transparent; }");
                     gtk4::style_context_add_provider_for_display(
                         &gdk::Display::default().expect("display"),
                         &css_provider,
@@ -225,7 +223,7 @@ pub fn app_run(_app_handle: i64) {
                 if let Some(ref _vibrancy) = entry.vibrancy {
                     let css_provider = gtk4::CssProvider::new();
                     css_provider.load_from_data(
-                        "window { background-color: alpha(@window_bg_color, 0.85); }"
+                        "window { background-color: alpha(@window_bg_color, 0.85); }",
                     );
                     gtk4::style_context_add_provider_for_display(
                         &gdk::Display::default().expect("display"),
@@ -278,11 +276,17 @@ pub fn app_run(_app_handle: i64) {
                         js_promise_run_microtasks();
                     }
                     let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
-                    unsafe { js_closure_call0(ptr); }
+                    unsafe {
+                        js_closure_call0(ptr);
+                    }
                     #[cfg(feature = "geisterhand")]
                     {
-                        extern "C" { fn perry_geisterhand_pump(); }
-                        unsafe { perry_geisterhand_pump(); }
+                        extern "C" {
+                            fn perry_geisterhand_pump();
+                        }
+                        unsafe {
+                            perry_geisterhand_pump();
+                        }
                     }
                     glib::ControlFlow::Continue
                 });
@@ -293,24 +297,27 @@ pub fn app_run(_app_handle: i64) {
         ON_ACTIVATE_CALLBACK.with(|cb| {
             if let Some(callback) = *cb.borrow() {
                 let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
-                unsafe { js_closure_call0(ptr); }
+                unsafe {
+                    js_closure_call0(ptr);
+                }
             }
         });
 
         // If PERRY_UI_TEST_MODE is set, schedule an automatic exit so doc-example
         // programs can be verified in CI without a human.
         if perry_ui_testkit::is_test_mode() {
-            let delay = std::time::Duration::from_millis(
-                perry_ui_testkit::exit_delay_ms() as u64,
-            );
+            let delay = std::time::Duration::from_millis(perry_ui_testkit::exit_delay_ms() as u64);
             let app_clone = app.clone();
             glib::timeout_add_local_once(delay, move || {
                 if let Some(path) = perry_ui_testkit::screenshot_path() {
                     let mut len: usize = 0;
-                    let ptr = crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
+                    let ptr =
+                        crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
                     if !ptr.is_null() && len > 0 {
                         perry_ui_testkit::write_screenshot_bytes(&path, ptr, len);
-                        unsafe { libc::free(ptr as *mut libc::c_void); }
+                        unsafe {
+                            libc::free(ptr as *mut libc::c_void);
+                        }
                     }
                 }
                 app_clone.quit();
@@ -323,7 +330,9 @@ pub fn app_run(_app_handle: i64) {
         ON_TERMINATE_CALLBACK.with(|cb| {
             if let Some(callback) = *cb.borrow() {
                 let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
-                unsafe { js_closure_call0(ptr); }
+                unsafe {
+                    js_closure_call0(ptr);
+                }
             }
         });
     });
@@ -343,7 +352,9 @@ pub fn app_run(_app_handle: i64) {
         }
         unsafe {
             perry_geisterhand_register_state_set(crate::perry_ui_state_set);
-            perry_geisterhand_register_screenshot_capture(crate::screenshot::perry_ui_screenshot_capture);
+            perry_geisterhand_register_screenshot_capture(
+                crate::screenshot::perry_ui_screenshot_capture,
+            );
             perry_geisterhand_register_textfield_set_string(crate::perry_ui_textfield_set_string);
             perry_geisterhand_register_apply_style(crate::geisterhand_style::apply_style);
         }
@@ -498,10 +509,18 @@ fn install_shortcuts_on_window(window: &ApplicationWindow) {
                 // Perry: 1=Cmd, 2=Shift, 4=Option, 8=Control
                 // On Linux: Cmd maps to Ctrl
                 let mut expected = gdk::ModifierType::empty();
-                if mod_bits & 1 != 0 { expected |= gdk::ModifierType::CONTROL_MASK; } // Cmd -> Ctrl
-                if mod_bits & 2 != 0 { expected |= gdk::ModifierType::SHIFT_MASK; }
-                if mod_bits & 4 != 0 { expected |= gdk::ModifierType::ALT_MASK; } // Option -> Alt
-                if mod_bits & 8 != 0 { expected |= gdk::ModifierType::CONTROL_MASK; }
+                if mod_bits & 1 != 0 {
+                    expected |= gdk::ModifierType::CONTROL_MASK;
+                } // Cmd -> Ctrl
+                if mod_bits & 2 != 0 {
+                    expected |= gdk::ModifierType::SHIFT_MASK;
+                }
+                if mod_bits & 4 != 0 {
+                    expected |= gdk::ModifierType::ALT_MASK;
+                } // Option -> Alt
+                if mod_bits & 8 != 0 {
+                    expected |= gdk::ModifierType::CONTROL_MASK;
+                }
 
                 // Check key match (case-insensitive single char)
                 let key_matches = key_name.eq_ignore_ascii_case(shortcut_key);
@@ -541,7 +560,11 @@ fn install_shortcuts_on_window(window: &ApplicationWindow) {
 /// On Linux, Cmd (modifier 1) is transparently remapped to Ctrl.
 pub fn add_keyboard_shortcut(key_ptr: *const u8, modifiers: f64, callback: f64) {
     PENDING_SHORTCUTS.with(|ps| {
-        ps.borrow_mut().push(PendingShortcut { key_ptr, modifiers, callback });
+        ps.borrow_mut().push(PendingShortcut {
+            key_ptr,
+            modifiers,
+            callback,
+        });
     });
 }
 
@@ -577,7 +600,9 @@ pub fn register_global_hotkey(key_ptr: *const u8, _modifiers: f64, _callback: f6
 /// Supports .desktop files (Icon= field lookup via GTK icon theme) and direct image paths.
 pub fn get_app_icon(path_ptr: *const u8) -> i64 {
     let path = str_from_header(path_ptr);
-    if path.is_empty() { return 0; }
+    if path.is_empty() {
+        return 0;
+    }
 
     // .desktop file: parse for Icon= field
     if path.ends_with(".desktop") {

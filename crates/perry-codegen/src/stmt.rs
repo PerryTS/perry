@@ -10,7 +10,7 @@ use perry_hir::Stmt;
 use crate::expr::{lower_expr, FnCtx};
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
-use crate::types::{DOUBLE, I8, I32, I64, PTR};
+use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
 /// Lower a sequence of statements into the current block of `ctx`. If any
 /// statement splits control flow, `ctx.current_block` is updated to the
@@ -84,7 +84,14 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             Ok(())
         }
 
-        Stmt::Let { id, name, init, ty, mutable, .. } => {
+        Stmt::Let {
+            id,
+            name,
+            init,
+            ty,
+            mutable,
+            ..
+        } => {
             // `let C = SomeClass` aliases the local `C` to the class
             // `SomeClass` for `new C()` site rerouting. The HIR lowers
             // class identifiers referenced as values to `Expr::ClassRef`,
@@ -140,10 +147,8 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 if let Some(perry_hir::Expr::IndexGet { object, index }) = init.as_ref() {
                     if let perry_hir::Expr::LocalGet(const_id) = object.as_ref() {
                         if ctx.flat_const_arrays.contains_key(const_id) {
-                            ctx.array_row_aliases.insert(
-                                *id,
-                                (*const_id, Box::new((**index).clone())),
-                            );
+                            ctx.array_row_aliases
+                                .insert(*id, (*const_id, Box::new((**index).clone())));
                         }
                     }
                 }
@@ -162,7 +167,8 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 init.as_ref()
                     .and_then(|e| crate::type_analysis::refine_type_from_init(ctx, e))
                     .unwrap_or_else(|| ty.clone())
-            } else if matches!(ty, perry_types::Type::Array(ref elem) if matches!(**elem, perry_types::Type::Any)) {
+            } else if matches!(ty, perry_types::Type::Array(ref elem) if matches!(**elem, perry_types::Type::Any))
+            {
                 // Also refine Array<Any> when the init provides more
                 // specific element type info. Object.keys() returns
                 // Array<string> but the HIR often declares Array<Any>.
@@ -221,9 +227,8 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // See `collect_non_escaping_object_literals` in collectors.rs.
             if let Some(perry_hir::Expr::Object(props)) = init.as_ref() {
                 if let Some(field_order) = ctx.non_escaping_object_literals.get(id).cloned() {
-                    let undef = crate::nanbox::double_literal(f64::from_bits(
-                        crate::nanbox::TAG_UNDEFINED,
-                    ));
+                    let undef =
+                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                     let mut field_slots: std::collections::HashMap<String, String> =
                         std::collections::HashMap::with_capacity(field_order.len());
                     for fname in &field_order {
@@ -266,7 +271,10 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // no fields populated. The call must go through the standard
             // heap-allocation path so `lower_new` emits the cross-module
             // `<prefix>__<class>_constructor` call.
-            if let Some(perry_hir::Expr::New { class_name, args, .. }) = init.as_ref() {
+            if let Some(perry_hir::Expr::New {
+                class_name, args, ..
+            }) = init.as_ref()
+            {
                 let is_imported = ctx.imported_class_ctors.contains_key(class_name);
                 if ctx.non_escaping_news.contains_key(id) && !is_imported {
                     // Extract all class data we need (field names + ctor) before
@@ -365,7 +373,8 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                             let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, "8")]);
                             let slot = ctx.func.alloca_entry(PTR);
                             ctx.block().store(PTR, &data_ptr, &slot);
-                            let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
+                            let scope_idx =
+                                ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
                             ctx.buffer_data_slots.insert(*id, (slot, scope_idx));
                         }
                     }
@@ -385,12 +394,10 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // instead of the box pointer.
             if ctx.boxed_vars.contains(id) {
                 // Step 1: allocate box with undefined sentinel.
-                let undef = crate::nanbox::double_literal(f64::from_bits(
-                    crate::nanbox::TAG_UNDEFINED,
-                ));
+                let undef =
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 let blk = ctx.block();
-                let box_ptr =
-                    blk.call(crate::types::I64, "js_box_alloc", &[(DOUBLE, &undef)]);
+                let box_ptr = blk.call(crate::types::I64, "js_box_alloc", &[(DOUBLE, &undef)]);
                 // Slot must live in the entry block — closures from sibling
                 // branches may capture this id later, and an alloca placed
                 // here would not dominate those branches' loads.
@@ -409,7 +416,10 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                     let blk = ctx.block();
                     let box_dbl = blk.load(DOUBLE, &slot_clone);
                     let bptr = blk.bitcast_double_to_i64(&box_dbl);
-                    blk.call_void("js_box_set", &[(crate::types::I64, &bptr), (DOUBLE, &init_val)]);
+                    blk.call_void(
+                        "js_box_set",
+                        &[(crate::types::I64, &bptr), (DOUBLE, &init_val)],
+                    );
                 }
                 return Ok(());
             }
@@ -424,9 +434,8 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // (which runtime functions handle safely) rather than 0.0
             // (which looks like a null pointer when NaN-unboxed).
             {
-                let undef = crate::nanbox::double_literal(f64::from_bits(
-                    crate::nanbox::TAG_UNDEFINED,
-                ));
+                let undef =
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
             }
             ctx.locals.insert(*id, slot.clone());
@@ -542,7 +551,13 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             condition,
             update,
             body,
-        } => lower_for(ctx, init.as_deref(), condition.as_ref(), update.as_ref(), body),
+        } => lower_for(
+            ctx,
+            init.as_deref(),
+            condition.as_ref(),
+            update.as_ref(),
+            body,
+        ),
 
         // `while (cond) { body }` — same CFG as for-loop without init/update.
         Stmt::While { condition, body } => lower_while(ctx, condition, body),
@@ -608,7 +623,10 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // Default position is preserved (it goes wherever it appears in
         // source order) — falling-through into the default case from the
         // preceding case is valid JS.
-        Stmt::Switch { discriminant, cases } => lower_switch(ctx, discriminant, cases),
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => lower_switch(ctx, discriminant, cases),
 
         // Labeled statement: set the pending label so the next loop
         // lowered (for/while/do-while) can register itself in
@@ -695,9 +713,11 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // not SSA registers, so they survive longjmp without explicit
         // save/restore. This is the key advantage of the alloca+mem2reg
         // strategy used by our LLVM backend.
-        Stmt::Try { body, catch, finally } => {
-            lower_try(ctx, body, catch.as_ref(), finally.as_deref())
-        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => lower_try(ctx, body, catch.as_ref(), finally.as_deref()),
 
         other => bail!(
             "perry-codegen Phase B.12: Stmt {} not yet supported",
@@ -757,10 +777,7 @@ fn lower_try(
             sjr_reg, jmpbuf
         ));
     } else {
-        blk.emit_raw(format!(
-            "{} = call i32 @setjmp(ptr {}) #0",
-            sjr_reg, jmpbuf
-        ));
+        blk.emit_raw(format!("{} = call i32 @setjmp(ptr {}) #0", sjr_reg, jmpbuf));
     }
     let sjr = sjr_reg;
     let is_exc = blk.icmp_ne(I32, &sjr, "0");
@@ -869,67 +886,65 @@ fn lower_for(
     let hoist_classification: Option<(u32, u32)> =
         condition.and_then(|cond| classify_for_length_hoist(cond, body));
     let hoisted_length_arr_id: Option<u32> = hoist_classification.map(|(arr, _)| arr);
-    let hoisted_length_slot: Option<String> = if let Some((arr_id, counter_id)) =
-        hoist_classification
-    {
-        let arr_box_loaded = lower_expr(
-            ctx,
-            &perry_hir::Expr::PropertyGet {
-                object: Box::new(perry_hir::Expr::LocalGet(arr_id)),
-                property: "length".to_string(),
-            },
-        )?;
-        let slot = ctx.func.alloca_entry(DOUBLE);
-        ctx.block().store(DOUBLE, &arr_box_loaded, &slot);
-        ctx.cached_lengths.insert(arr_id, slot.clone());
-        // Also tell `lower_index_set_fast` (and similar sites) that
-        // `arr[counter_id]` is statically inbounds for this body, so
-        // it can skip the runtime length-load + bound check.
-        ctx.bounded_index_pairs.push((counter_id, arr_id));
+    let hoisted_length_slot: Option<String> =
+        if let Some((arr_id, counter_id)) = hoist_classification {
+            let arr_box_loaded = lower_expr(
+                ctx,
+                &perry_hir::Expr::PropertyGet {
+                    object: Box::new(perry_hir::Expr::LocalGet(arr_id)),
+                    property: "length".to_string(),
+                },
+            )?;
+            let slot = ctx.func.alloca_entry(DOUBLE);
+            ctx.block().store(DOUBLE, &arr_box_loaded, &slot);
+            ctx.cached_lengths.insert(arr_id, slot.clone());
+            // Also tell `lower_index_set_fast` (and similar sites) that
+            // `arr[counter_id]` is statically inbounds for this body, so
+            // it can skip the runtime length-load + bound check.
+            ctx.bounded_index_pairs.push((counter_id, arr_id));
 
-        // If the counter is provably integer-valued (initialized from
-        // an Integer literal, only mutated via Update ++/--), allocate
-        // a parallel i32 slot. The Update lowering will keep it in sync,
-        // and IndexGet/IndexSet will load the i32 directly instead of
-        // emitting a `fptosi double → i32` on every iteration.
-        if ctx.integer_locals.contains(&counter_id) {
-            if let Some(counter_slot) = ctx.locals.get(&counter_id).cloned() {
-                let i32_slot = ctx.func.alloca_entry(I32);
-                // Initialize from the current double value.
-                let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
-                let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
-                ctx.block().store(I32, &cur_i32, &i32_slot);
-                ctx.i32_counter_slots.insert(counter_id, i32_slot);
+            // If the counter is provably integer-valued (initialized from
+            // an Integer literal, only mutated via Update ++/--), allocate
+            // a parallel i32 slot. The Update lowering will keep it in sync,
+            // and IndexGet/IndexSet will load the i32 directly instead of
+            // emitting a `fptosi double → i32` on every iteration.
+            if ctx.integer_locals.contains(&counter_id) {
+                if let Some(counter_slot) = ctx.locals.get(&counter_id).cloned() {
+                    let i32_slot = ctx.func.alloca_entry(I32);
+                    // Initialize from the current double value.
+                    let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
+                    let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
+                    ctx.block().store(I32, &cur_i32, &i32_slot);
+                    ctx.i32_counter_slots.insert(counter_id, i32_slot);
+                }
             }
-        }
 
-        Some(slot)
-    } else {
-        None
-    };
+            Some(slot)
+        } else {
+            None
+        };
 
     // If we have an i32 counter AND a hoisted length, pre-compute the
     // length as i32 so the loop condition can use `icmp slt i32` instead
     // of `fcmp olt double`. This eliminates the float counter fadd +
     // fcmp per iteration — saves ~2 instructions on the inner loop of
     // nested_loops and similar patterns.
-    let i32_length_slot: Option<String> =
-        if let Some((_, counter_id)) = hoist_classification {
-            if let (Some(_), Some(len_dbl_slot)) =
-                (ctx.i32_counter_slots.get(&counter_id).cloned(),
-                 hoisted_length_slot.as_ref())
-            {
-                let len_dbl = ctx.block().load(DOUBLE, len_dbl_slot);
-                let len_i32 = ctx.block().fptosi(DOUBLE, &len_dbl, I32);
-                let slot = ctx.func.alloca_entry(I32);
-                ctx.block().store(I32, &len_i32, &slot);
-                Some(slot)
-            } else {
-                None
-            }
+    let i32_length_slot: Option<String> = if let Some((_, counter_id)) = hoist_classification {
+        if let (Some(_), Some(len_dbl_slot)) = (
+            ctx.i32_counter_slots.get(&counter_id).cloned(),
+            hoisted_length_slot.as_ref(),
+        ) {
+            let len_dbl = ctx.block().load(DOUBLE, len_dbl_slot);
+            let len_i32 = ctx.block().fptosi(DOUBLE, &len_dbl, I32);
+            let slot = ctx.func.alloca_entry(I32);
+            ctx.block().store(I32, &len_i32, &slot);
+            Some(slot)
         } else {
             None
-        };
+        }
+    } else {
+        None
+    };
 
     // Issue #168: when the `i < arr.length` peephole didn't fire, also
     // detect the simpler `i < n` shape where `n` is a number-typed local
@@ -1048,13 +1063,15 @@ fn lower_for(
 
     // Push break/continue targets so nested `break`/`continue` know where
     // to jump. For for-loops, continue runs the update step.
-    ctx.loop_targets.push((update_label.clone(), exit_label.clone()));
+    ctx.loop_targets
+        .push((update_label.clone(), exit_label.clone()));
 
     // If this for-loop has a pending label (from an enclosing Stmt::Labeled),
     // register it so `break label;` / `continue label;` resolve here.
     let consumed_label = ctx.pending_label.take();
     if let Some(ref lbl) = consumed_label {
-        ctx.label_targets.insert(lbl.clone(), (update_label.clone(), exit_label.clone()));
+        ctx.label_targets
+            .insert(lbl.clone(), (update_label.clone(), exit_label.clone()));
     }
 
     // Body block.
@@ -1135,12 +1152,10 @@ fn classify_for_length_hoist(
         return None;
     }
     let arr_id = match right {
-        Expr::PropertyGet { object, property } if property == "length" => {
-            match object.as_ref() {
-                Expr::LocalGet(id) => *id,
-                _ => return None,
-            }
-        }
+        Expr::PropertyGet { object, property } if property == "length" => match object.as_ref() {
+            Expr::LocalGet(id) => *id,
+            _ => return None,
+        },
         _ => return None,
     };
     let bounded_idx_id = match left {
@@ -1216,23 +1231,21 @@ fn classify_for_local_bound(
     Some((counter_id, bound_id, op))
 }
 
-fn stmt_preserves_array_length(
-    s: &perry_hir::Stmt,
-    arr_id: u32,
-    bounded_idx_id: u32,
-) -> bool {
+fn stmt_preserves_array_length(s: &perry_hir::Stmt, arr_id: u32, bounded_idx_id: u32) -> bool {
     use perry_hir::Stmt;
     match s {
-        Stmt::Expr(e) | Stmt::Throw(e) => {
+        Stmt::Expr(e) | Stmt::Throw(e) => expr_preserves_array_length(e, arr_id, bounded_idx_id),
+        Stmt::Return(opt) => opt.as_ref().map_or(true, |e| {
             expr_preserves_array_length(e, arr_id, bounded_idx_id)
-        }
-        Stmt::Return(opt) => opt
-            .as_ref()
-            .map_or(true, |e| expr_preserves_array_length(e, arr_id, bounded_idx_id)),
-        Stmt::Let { init, .. } => init
-            .as_ref()
-            .map_or(true, |e| expr_preserves_array_length(e, arr_id, bounded_idx_id)),
-        Stmt::If { condition, then_branch, else_branch } => {
+        }),
+        Stmt::Let { init, .. } => init.as_ref().map_or(true, |e| {
+            expr_preserves_array_length(e, arr_id, bounded_idx_id)
+        }),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             expr_preserves_array_length(condition, arr_id, bounded_idx_id)
                 && then_branch
                     .iter()
@@ -1248,20 +1261,27 @@ fn stmt_preserves_array_length(
                     .iter()
                     .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
         }
-        Stmt::For { init, condition, update, body } => {
-            init.as_ref()
-                .map_or(true, |s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
-                && condition.as_ref().map_or(true, |e| {
-                    expr_preserves_array_length(e, arr_id, bounded_idx_id)
-                })
-                && update.as_ref().map_or(true, |e| {
-                    expr_preserves_array_length(e, arr_id, bounded_idx_id)
-                })
-                && body
-                    .iter()
-                    .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref().map_or(true, |s| {
+                stmt_preserves_array_length(s, arr_id, bounded_idx_id)
+            }) && condition.as_ref().map_or(true, |e| {
+                expr_preserves_array_length(e, arr_id, bounded_idx_id)
+            }) && update.as_ref().map_or(true, |e| {
+                expr_preserves_array_length(e, arr_id, bounded_idx_id)
+            }) && body
+                .iter()
+                .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             body.iter()
                 .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
                 && catch.as_ref().map_or(true, |c| {
@@ -1274,12 +1294,16 @@ fn stmt_preserves_array_length(
                         .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
                 })
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             expr_preserves_array_length(discriminant, arr_id, bounded_idx_id)
                 && cases.iter().all(|c| {
                     c.test.as_ref().map_or(true, |e| {
                         expr_preserves_array_length(e, arr_id, bounded_idx_id)
-                    }) && c.body
+                    }) && c
+                        .body
                         .iter()
                         .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id))
                 })
@@ -1287,18 +1311,11 @@ fn stmt_preserves_array_length(
         Stmt::Labeled { body, .. } => {
             stmt_preserves_array_length(body.as_ref(), arr_id, bounded_idx_id)
         }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_) => true,
+        Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
     }
 }
 
-fn expr_preserves_array_length(
-    e: &perry_hir::Expr,
-    arr_id: u32,
-    bounded_idx_id: u32,
-) -> bool {
+fn expr_preserves_array_length(e: &perry_hir::Expr, arr_id: u32, bounded_idx_id: u32) -> bool {
     use perry_hir::{ArrayElement, CallArg, Expr};
     let walk = |sub: &Expr| expr_preserves_array_length(sub, arr_id, bounded_idx_id);
     match e {
@@ -1315,7 +1332,11 @@ fn expr_preserves_array_length(
                 && delete_count.as_ref().map_or(true, |e| walk(e))
                 && items.iter().all(|e| walk(e))
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             // `arr[bounded_i] = expr` is the only IndexSet on `arr`
             // we accept — it's guaranteed inbounds because the loop
             // condition `i < arr.length` is invariant in this body,
@@ -1335,9 +1356,7 @@ fn expr_preserves_array_length(
         // Reassigning the bounded index would invalidate the bound.
         // Reassigning the array variable would also invalidate (we'd
         // be tracking the wrong array).
-        Expr::LocalSet(id, value) => {
-            *id != arr_id && *id != bounded_idx_id && walk(value)
-        }
+        Expr::LocalSet(id, value) => *id != arr_id && *id != bounded_idx_id && walk(value),
         // `i++` / `i--` are fine — `i` stays integer-valued and the
         // for-loop's standard counter pattern depends on this. (We
         // don't try to verify the update direction; if `i--` ever
@@ -1467,12 +1486,14 @@ fn lower_while(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[Stmt]) 
     ctx.block().cond_br(&i1, &body_label, &exit_label);
 
     // For while-loops, continue jumps back to the cond block.
-    ctx.loop_targets.push((cond_label.clone(), exit_label.clone()));
+    ctx.loop_targets
+        .push((cond_label.clone(), exit_label.clone()));
 
     // Consume pending label (from enclosing Stmt::Labeled).
     let consumed_label = ctx.pending_label.take();
     if let Some(ref lbl) = consumed_label {
-        ctx.label_targets.insert(lbl.clone(), (cond_label.clone(), exit_label.clone()));
+        ctx.label_targets
+            .insert(lbl.clone(), (cond_label.clone(), exit_label.clone()));
     }
 
     ctx.current_block = body_idx;
@@ -1493,11 +1514,7 @@ fn lower_while(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[Stmt]) 
 
 /// `do { body } while (cond)` — body runs at least once. Same blocks as
 /// `while`, but the initial branch goes to body, not cond.
-fn lower_do_while(
-    ctx: &mut FnCtx<'_>,
-    body: &[Stmt],
-    condition: &perry_hir::Expr,
-) -> Result<()> {
+fn lower_do_while(ctx: &mut FnCtx<'_>, body: &[Stmt], condition: &perry_hir::Expr) -> Result<()> {
     let body_idx = ctx.new_block("dowhile.body");
     let cond_idx = ctx.new_block("dowhile.cond");
     let exit_idx = ctx.new_block("dowhile.exit");
@@ -1510,12 +1527,14 @@ fn lower_do_while(
 
     // Push break/continue targets BEFORE compiling the body so nested
     // break/continue see them.
-    ctx.loop_targets.push((cond_label.clone(), exit_label.clone()));
+    ctx.loop_targets
+        .push((cond_label.clone(), exit_label.clone()));
 
     // Consume pending label (from enclosing Stmt::Labeled).
     let consumed_label = ctx.pending_label.take();
     if let Some(ref lbl) = consumed_label {
-        ctx.label_targets.insert(lbl.clone(), (cond_label.clone(), exit_label.clone()));
+        ctx.label_targets
+            .insert(lbl.clone(), (cond_label.clone(), exit_label.clone()));
     }
 
     ctx.current_block = body_idx;
@@ -1595,7 +1614,8 @@ fn lower_switch(
     };
 
     // Push break target. Switch has no continue, so we use exit for both.
-    ctx.loop_targets.push((exit_label.clone(), exit_label.clone()));
+    ctx.loop_targets
+        .push((exit_label.clone(), exit_label.clone()));
 
     // Compile each test block. Each test compares dv against the case
     // expression with fcmp oeq, jumps to the body on match, otherwise
@@ -1636,7 +1656,10 @@ fn lower_switch(
                 let i32_eq = blk.call(
                     crate::types::I32,
                     "js_string_equals",
-                    &[(crate::types::I64, &l_handle), (crate::types::I64, &r_handle)],
+                    &[
+                        (crate::types::I64, &l_handle),
+                        (crate::types::I64, &r_handle),
+                    ],
                 );
                 let cmp = blk.icmp_ne(crate::types::I32, &i32_eq, "0");
                 blk.cond_br(&cmp, &body_label, &next_label);
@@ -1688,11 +1711,8 @@ fn lower_switch(
 /// Try to evaluate a condition at compile time using known constants.
 /// Returns `Some(true)` or `Some(false)` if the condition can be folded,
 /// `None` if it depends on runtime values.
-fn try_const_fold_condition(
-    ctx: &FnCtx<'_>,
-    condition: &perry_hir::Expr,
-) -> Option<bool> {
-    use perry_hir::{Expr, CompareOp, LogicalOp};
+fn try_const_fold_condition(ctx: &FnCtx<'_>, condition: &perry_hir::Expr) -> Option<bool> {
+    use perry_hir::{CompareOp, Expr, LogicalOp};
     match condition {
         Expr::Compare { op, left, right } => {
             // Try to extract a known constant from one side and a literal
@@ -1704,12 +1724,8 @@ fn try_const_fold_condition(
                 (Expr::Integer(n), Expr::LocalGet(id)) => {
                     (ctx.compile_time_constants.get(id)?, *n as f64)
                 }
-                (Expr::LocalGet(id), Expr::Number(n)) => {
-                    (ctx.compile_time_constants.get(id)?, *n)
-                }
-                (Expr::Number(n), Expr::LocalGet(id)) => {
-                    (ctx.compile_time_constants.get(id)?, *n)
-                }
+                (Expr::LocalGet(id), Expr::Number(n)) => (ctx.compile_time_constants.get(id)?, *n),
+                (Expr::Number(n), Expr::LocalGet(id)) => (ctx.compile_time_constants.get(id)?, *n),
                 _ => return None,
             };
             let c = *const_val;
@@ -1726,10 +1742,18 @@ fn try_const_fold_condition(
             let l = try_const_fold_condition(ctx, left)?;
             match op {
                 LogicalOp::And => {
-                    if !l { Some(false) } else { try_const_fold_condition(ctx, right) }
+                    if !l {
+                        Some(false)
+                    } else {
+                        try_const_fold_condition(ctx, right)
+                    }
                 }
                 LogicalOp::Or => {
-                    if l { Some(true) } else { try_const_fold_condition(ctx, right) }
+                    if l {
+                        Some(true)
+                    } else {
+                        try_const_fold_condition(ctx, right)
+                    }
                 }
                 LogicalOp::Coalesce => None,
             }

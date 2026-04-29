@@ -1,24 +1,24 @@
-pub mod text;
 pub mod button;
-pub mod vstack;
-pub mod hstack;
-pub mod spacer;
+pub mod canvas;
 pub mod divider;
+pub mod form;
+pub mod hstack;
+pub mod image;
+pub mod lazyvstack;
+pub mod navstack;
+pub mod picker;
+pub mod progressview;
+pub mod scrollview;
+pub mod securefield;
+pub mod slider;
+pub mod spacer;
+pub mod splitview;
+pub mod text;
 pub mod textarea;
 pub mod textfield;
 pub mod toggle;
-pub mod slider;
-pub mod scrollview;
-pub mod securefield;
-pub mod progressview;
-pub mod form;
+pub mod vstack;
 pub mod zstack;
-pub mod picker;
-pub mod canvas;
-pub mod navstack;
-pub mod lazyvstack;
-pub mod image;
-pub mod splitview;
 
 use gtk4::prelude::*;
 use gtk4::Widget;
@@ -162,7 +162,9 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
 pub fn apply_css(widget: &Widget, css: &str) {
     let provider = gtk4::CssProvider::new();
     provider.load_from_data(css);
-    widget.style_context().add_provider(&provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+    widget
+        .style_context()
+        .add_provider(&provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
 }
 
 /// Set enabled/disabled state of a widget.
@@ -194,10 +196,11 @@ thread_local! {
 /// Helper: regenerate the per-handle border CSS provider from current
 /// state. Called from both `set_border_color` and `set_border_width`.
 fn apply_border_css(handle: i64) {
-    let Some(widget) = get_widget(handle) else { return };
-    let (color, width) = BORDER_STATE.with(|s| {
-        s.borrow().get(&handle).copied().unwrap_or((None, None))
-    });
+    let Some(widget) = get_widget(handle) else {
+        return;
+    };
+    let (color, width) =
+        BORDER_STATE.with(|s| s.borrow().get(&handle).copied().unwrap_or((None, None)));
     // Defaults match CALayer-ish behavior: width 1.0 if unset,
     // color black if unset. The cross-platform shape lets users
     // call either setter alone and still get a visible border.
@@ -205,7 +208,13 @@ fn apply_border_css(handle: i64) {
     let w = width.unwrap_or(1.0);
     let class_name = format!("perry-bd-{}", handle);
     widget.remove_css_class(&class_name);
-    let rgba = format!("rgba({},{},{},{})", (r * 255.0) as i32, (g * 255.0) as i32, (b * 255.0) as i32, a);
+    let rgba = format!(
+        "rgba({},{},{},{})",
+        (r * 255.0) as i32,
+        (g * 255.0) as i32,
+        (b * 255.0) as i32,
+        a
+    );
     let decl = format!("border: {}px solid {};", w as i32, rgba);
     let is_button = widget.downcast_ref::<gtk4::Button>().is_some();
     if is_button {
@@ -282,8 +291,7 @@ pub fn set_corner_radius(handle: i64, radius: f64) {
             let css = format!(
                 "button.flat.{} {{ border-radius: {}px; }}\n\
                  button.{} {{ border-radius: {}px; }}",
-                class_name, radius as i32,
-                class_name, radius as i32
+                class_name, radius as i32, class_name, radius as i32
             );
             let provider = gtk4::CssProvider::new();
             provider.load_from_data(&css);
@@ -315,8 +323,13 @@ pub fn set_corner_radius(handle: i64, radius: f64) {
 /// before re-adding so repeat calls don't pile up stale providers.
 pub fn set_shadow(
     handle: i64,
-    r: f64, g: f64, b: f64, a: f64,
-    blur: f64, offset_x: f64, offset_y: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+    blur: f64,
+    offset_x: f64,
+    offset_y: f64,
 ) {
     if let Some(widget) = get_widget(handle) {
         let class_name = format!("perry-sh-{}", handle);
@@ -335,8 +348,7 @@ pub fn set_shadow(
             let css = format!(
                 "button.flat.{} {{ {} }}\n\
                  button.{} {{ {} }}",
-                class_name, shadow_decl,
-                class_name, shadow_decl
+                class_name, shadow_decl, class_name, shadow_decl
             );
             let provider = gtk4::CssProvider::new();
             provider.load_from_data(&css);
@@ -384,24 +396,40 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
                 gtk4::STYLE_PROVIDER_PRIORITY_USER,
             );
         } else {
-            let css = format!(
-                "* {{ background: {}; background-color: {}; }}",
-                rgba, rgba
-            );
+            let css = format!("* {{ background: {}; background-color: {}; }}", rgba, rgba);
             apply_css(&widget, &css);
         }
     }
 }
 
 /// Set a linear gradient background on a widget via CSS.
-pub fn set_background_gradient(handle: i64, r1: f64, g1: f64, b1: f64, _a1: f64, r2: f64, g2: f64, b2: f64, _a2: f64, direction: f64) {
+pub fn set_background_gradient(
+    handle: i64,
+    r1: f64,
+    g1: f64,
+    b1: f64,
+    _a1: f64,
+    r2: f64,
+    g2: f64,
+    b2: f64,
+    _a2: f64,
+    direction: f64,
+) {
     if let Some(widget) = get_widget(handle) {
-        let angle = if direction < 0.5 { "to bottom" } else { "to right" };
+        let angle = if direction < 0.5 {
+            "to bottom"
+        } else {
+            "to right"
+        };
         let css = format!(
             "* {{ background: linear-gradient({}, rgb({},{},{}), rgb({},{},{})); }}",
             angle,
-            (r1 * 255.0) as u8, (g1 * 255.0) as u8, (b1 * 255.0) as u8,
-            (r2 * 255.0) as u8, (g2 * 255.0) as u8, (b2 * 255.0) as u8,
+            (r1 * 255.0) as u8,
+            (g1 * 255.0) as u8,
+            (b1 * 255.0) as u8,
+            (r2 * 255.0) as u8,
+            (g2 * 255.0) as u8,
+            (b2 * 255.0) as u8,
         );
         apply_css(&widget, &css);
     }
@@ -418,12 +446,16 @@ pub fn set_on_hover(handle: i64, callback: f64) {
         let cb = callback;
         motion.connect_enter(move |_ctrl, _x, _y| {
             let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
-            unsafe { js_closure_call1(ptr, 1.0); }
+            unsafe {
+                js_closure_call1(ptr, 1.0);
+            }
         });
         let cb2 = callback;
         motion.connect_leave(move |_ctrl| {
             let ptr = unsafe { js_nanbox_get_pointer(cb2) } as *const u8;
-            unsafe { js_closure_call1(ptr, 0.0); }
+            unsafe {
+                js_closure_call1(ptr, 0.0);
+            }
         });
         widget.add_controller(motion);
     }
@@ -442,7 +474,9 @@ pub fn set_on_double_click(handle: i64, callback: f64) {
         gesture.connect_pressed(move |_gesture, n_press, _x, _y| {
             if n_press == 2 {
                 let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
-                unsafe { js_closure_call0(ptr); }
+                unsafe {
+                    js_closure_call0(ptr);
+                }
             }
         });
         widget.add_controller(gesture);
@@ -462,7 +496,9 @@ pub fn set_on_click(handle: i64, callback: f64) {
         gesture.connect_pressed(move |_gesture, n_press, _x, _y| {
             if n_press == 1 {
                 let ptr = unsafe { js_nanbox_get_pointer(cb) } as *const u8;
-                unsafe { js_closure_call0(ptr); }
+                unsafe {
+                    js_closure_call0(ptr);
+                }
             }
         });
         widget.add_controller(gesture);
@@ -571,9 +607,9 @@ pub fn set_alignment(handle: i64, alignment: i64) {
             if is_vertical {
                 // Vertical stack: alignment controls children's horizontal alignment
                 let align = match alignment {
-                    5 => gtk4::Align::Start,   // Leading
-                    9 => gtk4::Align::Center,  // CenterX
-                    7 => gtk4::Align::Fill,    // Width
+                    5 => gtk4::Align::Start,  // Leading
+                    9 => gtk4::Align::Center, // CenterX
+                    7 => gtk4::Align::Fill,   // Width
                     _ => gtk4::Align::Fill,
                 };
                 // Set halign on all existing children
@@ -645,8 +681,12 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
 /// and call `Box::reorder_child_after(&child, anchor)`. Out-of-range
 /// indices are clamped: from > N-1 → no-op; to >= N → moves to the end.
 pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
-    let Some(parent) = get_widget(parent_handle) else { return };
-    let Some(container) = parent.downcast_ref::<gtk4::Box>() else { return };
+    let Some(parent) = get_widget(parent_handle) else {
+        return;
+    };
+    let Some(container) = parent.downcast_ref::<gtk4::Box>() else {
+        return;
+    };
 
     // Snapshot the sibling list (positional, before mutation).
     let mut siblings: Vec<Widget> = Vec::new();
@@ -671,7 +711,11 @@ pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
         // The anchor is the sibling that should end up immediately *before* child.
         // After removal of child from position `from`, the sibling currently at
         // `to` (when moving forward) or `to-1` (when moving back) is the right anchor.
-        let anchor_idx = if to > from_index { to as usize } else { (to - 1).max(0) as usize };
+        let anchor_idx = if to > from_index {
+            to as usize
+        } else {
+            (to - 1).max(0) as usize
+        };
         let anchor = siblings[anchor_idx].clone();
         container.reorder_child_after(&child, Some(&anchor));
     }

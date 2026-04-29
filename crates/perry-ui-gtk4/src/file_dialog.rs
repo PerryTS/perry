@@ -11,12 +11,7 @@ extern "C" {
 /// Open a file dialog. Calls callback with the selected file path (NaN-boxed string).
 /// If user cancels, callback is called with TAG_UNDEFINED.
 pub fn open_dialog(callback: f64) {
-    open_dialog_with_action(
-        callback,
-        "Open File",
-        FileChooserAction::Open,
-        "Open",
-    );
+    open_dialog_with_action(callback, "Open File", FileChooserAction::Open, "Open");
 }
 
 /// Open a folder picker. Calls callback with the selected directory path
@@ -63,7 +58,8 @@ fn open_dialog_with_action(
                 if let Some(path) = file.path() {
                     let path_str = path.to_string_lossy().to_string();
                     let bytes = path_str.as_bytes();
-                    let str_ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
+                    let str_ptr =
+                        unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64) };
                     let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
                     unsafe {
                         js_closure_call1(closure_ptr, nanboxed);

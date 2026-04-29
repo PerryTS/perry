@@ -8,12 +8,12 @@ use anyhow::{anyhow, bail, Result};
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
-use crate::ir::*;
-use crate::lower::{LoweringContext, lower_expr};
-use crate::lower_types::*;
-use crate::lower_patterns::*;
-use crate::destructuring::*;
 use crate::analysis::*;
+use crate::destructuring::*;
+use crate::ir::*;
+use crate::lower::{lower_expr, LoweringContext};
+use crate::lower_patterns::*;
+use crate::lower_types::*;
 
 /// Build `if (param === undefined) { param = default; }` stmts for every
 /// param with a default value. Prepended to function/constructor bodies so
@@ -51,7 +51,9 @@ fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
 /// as emitted by SWC for user code.
 pub(crate) fn is_symbol_iterator_key(expr: &ast::Expr) -> bool {
     if let ast::Expr::Member(member) = expr {
-        if let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) = (member.obj.as_ref(), &member.prop) {
+        if let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
+            (member.obj.as_ref(), &member.prop)
+        {
             return obj.sym.as_ref() == "Symbol" && prop.sym.as_ref() == "iterator";
         }
     }
@@ -65,7 +67,9 @@ pub(crate) fn is_symbol_iterator_key(expr: &ast::Expr) -> bool {
 /// supported well-known.
 pub(crate) fn symbol_well_known_key(expr: &ast::Expr) -> Option<&'static str> {
     if let ast::Expr::Member(member) = expr {
-        if let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) = (member.obj.as_ref(), &member.prop) {
+        if let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
+            (member.obj.as_ref(), &member.prop)
+        {
             if obj.sym.as_ref() != "Symbol" {
                 return None;
             }
@@ -113,23 +117,33 @@ fn stmt_uses_arguments(stmt: &ast::Stmt) -> bool {
         ast::Stmt::DoWhile(w) => expr_uses_arguments(&w.test) || stmt_uses_arguments(&w.body),
         ast::Stmt::For(f) => {
             f.test.as_deref().map(expr_uses_arguments).unwrap_or(false)
-                || f.update.as_deref().map(expr_uses_arguments).unwrap_or(false)
+                || f.update
+                    .as_deref()
+                    .map(expr_uses_arguments)
+                    .unwrap_or(false)
                 || stmt_uses_arguments(&f.body)
         }
         ast::Stmt::ForIn(f) => expr_uses_arguments(&f.right) || stmt_uses_arguments(&f.body),
         ast::Stmt::ForOf(f) => expr_uses_arguments(&f.right) || stmt_uses_arguments(&f.body),
         ast::Stmt::Try(t) => {
             body_uses_arguments(&t.block.stmts)
-                || t.handler.as_ref().map(|h| body_uses_arguments(&h.body.stmts)).unwrap_or(false)
-                || t.finalizer.as_ref().map(|f| body_uses_arguments(&f.stmts)).unwrap_or(false)
+                || t.handler
+                    .as_ref()
+                    .map(|h| body_uses_arguments(&h.body.stmts))
+                    .unwrap_or(false)
+                || t.finalizer
+                    .as_ref()
+                    .map(|f| body_uses_arguments(&f.stmts))
+                    .unwrap_or(false)
         }
         ast::Stmt::Switch(s) => {
             expr_uses_arguments(&s.discriminant)
                 || s.cases.iter().any(|c| body_uses_arguments(&c.cons))
         }
-        ast::Stmt::Decl(ast::Decl::Var(v)) => {
-            v.decls.iter().any(|d| d.init.as_deref().map(expr_uses_arguments).unwrap_or(false))
-        }
+        ast::Stmt::Decl(ast::Decl::Var(v)) => v
+            .decls
+            .iter()
+            .any(|d| d.init.as_deref().map(expr_uses_arguments).unwrap_or(false)),
         ast::Stmt::Throw(t) => expr_uses_arguments(&t.arg),
         ast::Stmt::Labeled(l) => stmt_uses_arguments(&l.body),
         _ => false,
@@ -165,7 +179,9 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
         ast::Expr::TsTypeAssertion(t) => expr_uses_arguments(&t.expr),
         ast::Expr::Tpl(t) => t.exprs.iter().any(|e| expr_uses_arguments(e)),
         ast::Expr::Array(a) => a.elems.iter().any(|el| {
-            el.as_ref().map(|e| expr_uses_arguments(&e.expr)).unwrap_or(false)
+            el.as_ref()
+                .map(|e| expr_uses_arguments(&e.expr))
+                .unwrap_or(false)
         }),
         ast::Expr::Object(o) => o.props.iter().any(|p| match p {
             ast::PropOrSpread::Spread(s) => expr_uses_arguments(&s.expr),
@@ -177,9 +193,11 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
                 }
             }
         }),
-        ast::Expr::New(n) => {
-            n.args.as_ref().map(|args| args.iter().any(|a| expr_uses_arguments(&a.expr))).unwrap_or(false)
-        }
+        ast::Expr::New(n) => n
+            .args
+            .as_ref()
+            .map(|args| args.iter().any(|a| expr_uses_arguments(&a.expr)))
+            .unwrap_or(false),
         // Don't descend into nested function declarations or arrow function
         // bodies — those have their own (or shadowed) `arguments` binding.
         _ => false,
@@ -191,7 +209,9 @@ pub(crate) fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) ->
     let func_id = ctx.lookup_func(&name).unwrap_or_else(|| ctx.fresh_func());
 
     // Extract type parameters from generic function declaration (e.g., function foo<T, U>(...))
-    let type_params = fn_decl.function.type_params
+    let type_params = fn_decl
+        .function
+        .type_params
         .as_ref()
         .map(|tp| extract_type_params(tp))
         .unwrap_or_default();
@@ -207,13 +227,22 @@ pub(crate) fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) ->
     // `Expr::Ident("arguments")` resolves to a LocalGet at lowering time.
     // Skipped if the user already declared a parameter named `arguments` or
     // already has a rest param (which would conflict with the synthetic one).
-    let user_has_arguments_param = fn_decl.function.params.iter().any(|p| {
-        get_pat_name(&p.pat).ok().as_deref() == Some("arguments")
-    });
-    let user_has_rest = fn_decl.function.params.iter().any(|p| is_rest_param(&p.pat));
+    let user_has_arguments_param = fn_decl
+        .function
+        .params
+        .iter()
+        .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
+    let user_has_rest = fn_decl
+        .function
+        .params
+        .iter()
+        .any(|p| is_rest_param(&p.pat));
     let needs_arguments_synth = !user_has_arguments_param
         && !user_has_rest
-        && fn_decl.function.body.as_ref()
+        && fn_decl
+            .function
+            .body
+            .as_ref()
             .map(|b| body_uses_arguments(&b.stmts))
             .unwrap_or(false);
 
@@ -274,7 +303,11 @@ pub(crate) fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) ->
                 _ => None,
             };
             if let Some((module, class)) = native_info {
-                ctx.register_native_instance(param.name.clone(), module.to_string(), class.to_string());
+                ctx.register_native_instance(
+                    param.name.clone(),
+                    module.to_string(),
+                    class.to_string(),
+                );
             }
         }
     }
@@ -285,7 +318,10 @@ pub(crate) fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) ->
     // `infer_type_from_expr`. Track whether the user wrote an explicit
     // annotation so we don't "override" an explicit `: any` with inference.
     let has_explicit_return_annotation = fn_decl.function.return_type.is_some();
-    let mut return_type = fn_decl.function.return_type.as_ref()
+    let mut return_type = fn_decl
+        .function
+        .return_type
+        .as_ref()
         .map(|rt| extract_ts_type_with_ctx(&rt.type_ann, Some(ctx)))
         .unwrap_or(Type::Any);
 
@@ -321,7 +357,9 @@ pub(crate) fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) ->
             };
             if let Some((module, class)) = module_info {
                 ctx.func_return_native_instances.push((
-                    name.clone(), module.to_string(), class.to_string()
+                    name.clone(),
+                    module.to_string(),
+                    class.to_string(),
                 ));
             }
         }
@@ -528,7 +566,11 @@ fn method_key_hint(key: &ast::PropName) -> String {
     }
 }
 
-pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::ClassDecl, is_exported: bool) -> Result<Class> {
+pub(crate) fn lower_class_decl(
+    ctx: &mut LoweringContext,
+    class_decl: &ast::ClassDecl,
+    is_exported: bool,
+) -> Result<Class> {
     let name = class_decl.ident.sym.to_string();
     reject_decorators(&class_decl.class, &name)?;
     let class_id = match ctx.lookup_class(&name) {
@@ -545,7 +587,9 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
     ctx.current_class = Some(name.clone());
 
     // Extract type parameters from generic class declaration (e.g., class Box<T>)
-    let type_params = class_decl.class.type_params
+    let type_params = class_decl
+        .class
+        .type_params
         .as_ref()
         .map(|tp| extract_type_params(tp))
         .unwrap_or_default();
@@ -554,33 +598,36 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
     ctx.enter_type_param_scope(&type_params);
 
     // Handle extends clause
-    let (extends, extends_name, native_extends) = if let Some(ref super_class) = class_decl.class.super_class {
-        if let ast::Expr::Ident(ident) = super_class.as_ref() {
-            let parent_name = ident.sym.to_string();
-            // First check if it's a native module class
-            let native_parent = match parent_name.as_str() {
-                "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
-                "AsyncLocalStorage" => Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string())),
-                "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
-                _ => None,
-            };
-            if native_parent.is_some() {
-                (None, None, native_parent)
+    let (extends, extends_name, native_extends) =
+        if let Some(ref super_class) = class_decl.class.super_class {
+            if let ast::Expr::Ident(ident) = super_class.as_ref() {
+                let parent_name = ident.sym.to_string();
+                // First check if it's a native module class
+                let native_parent = match parent_name.as_str() {
+                    "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
+                    "AsyncLocalStorage" => {
+                        Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
+                    }
+                    "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
+                    _ => None,
+                };
+                if native_parent.is_some() {
+                    (None, None, native_parent)
+                } else {
+                    // Always capture the parent name for imported classes that may not have a ClassId
+                    (ctx.lookup_class(&parent_name), Some(parent_name), None)
+                }
+            } else if let ast::Expr::Member(member) = super_class.as_ref() {
+                // Handle member expression like ethers.JsonRpcProvider or module.ClassName
+                let parent_name = extract_member_class_name(member);
+                // For member expressions, we don't have ClassId - just store the name
+                (None, Some(parent_name), None)
             } else {
-                // Always capture the parent name for imported classes that may not have a ClassId
-                (ctx.lookup_class(&parent_name), Some(parent_name), None)
+                (None, None, None)
             }
-        } else if let ast::Expr::Member(member) = super_class.as_ref() {
-            // Handle member expression like ethers.JsonRpcProvider or module.ClassName
-            let parent_name = extract_member_class_name(member);
-            // For member expressions, we don't have ClassId - just store the name
-            (None, Some(parent_name), None)
         } else {
             (None, None, None)
-        }
-    } else {
-        (None, None, None)
-    };
+        };
 
     // First pass: collect static field/method names for early registration
     // This allows static method bodies to reference static fields
@@ -806,7 +853,7 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
             ast::ClassMember::ClassProp(prop) => {
                 // Skip computed/Symbol property keys
                 match &prop.key {
-                    ast::PropName::Ident(_) | ast::PropName::Str(_) => {},
+                    ast::PropName::Ident(_) | ast::PropName::Str(_) => {}
                     _ => continue,
                 }
                 let field = lower_class_prop(ctx, prop)?;
@@ -892,7 +939,8 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
     // SWC represents these as TsParamProp in the AST. They must be registered as class fields
     // so that `this.name` access in methods can find them by field index.
     {
-        let declared_field_names: std::collections::HashSet<String> = fields.iter().map(|f| f.name.clone()).collect();
+        let declared_field_names: std::collections::HashSet<String> =
+            fields.iter().map(|f| f.name.clone()).collect();
         for member in &class_decl.class.body {
             if let ast::ClassMember::Constructor(ctor) = member {
                 for param in &ctor.params {
@@ -900,7 +948,9 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
                         let (param_name, param_type) = match &ts_prop.param {
                             ast::TsParamPropParam::Ident(ident) => {
                                 let pname = ident.id.sym.to_string();
-                                let ty = ident.type_ann.as_ref()
+                                let ty = ident
+                                    .type_ann
+                                    .as_ref()
                                     .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
                                     .unwrap_or(Type::Any);
                                 (pname, ty)
@@ -939,7 +989,8 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
         // Collect inherited field names by walking the parent chain via the extends_name.
         // Previous lower_class_decl calls have registered each class's full (own+inherited)
         // field set, so a single lookup on the direct parent yields the complete chain.
-        let mut inherited_field_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut inherited_field_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         if let Some(ref parent_name) = extends_name {
             if let Some(parent_fields) = ctx.lookup_class_field_names(parent_name) {
                 for f in parent_fields {
@@ -948,14 +999,18 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
             }
         }
 
-        let declared_field_names: std::collections::HashSet<String> = fields.iter().map(|f| f.name.clone()).collect();
+        let declared_field_names: std::collections::HashSet<String> =
+            fields.iter().map(|f| f.name.clone()).collect();
         for member in &class_decl.class.body {
             if let ast::ClassMember::Constructor(ctor) = member {
                 if let Some(ref body) = ctor.body {
                     for stmt in &body.stmts {
                         if let ast::Stmt::Expr(expr_stmt) = stmt {
                             if let ast::Expr::Assign(assign) = &*expr_stmt.expr {
-                                if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(mem)) = &assign.left {
+                                if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(
+                                    mem,
+                                )) = &assign.left
+                                {
                                     if let ast::Expr::This(_) = &*mem.obj {
                                         if let ast::MemberProp::Ident(prop_ident) = &mem.prop {
                                             let fname = prop_ident.sym.to_string();
@@ -1044,9 +1099,8 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
     // (`array.push`, `obj.x = ...`) — works because both the
     // method-local copy and the outer binding hold the same reference.
     let module_level_ids = ctx.module_level_ids.clone();
-    let outer_scope_ids: std::collections::HashSet<LocalId> = ctx.locals.iter()
-        .map(|(_, id, _)| *id)
-        .collect();
+    let outer_scope_ids: std::collections::HashSet<LocalId> =
+        ctx.locals.iter().map(|(_, id, _)| *id).collect();
     let mut union_captures: std::collections::BTreeSet<LocalId> = std::collections::BTreeSet::new();
     for m in &methods {
         for id in collect_method_captures(m, &outer_scope_ids, &module_level_ids) {
@@ -1101,7 +1155,8 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
         // capture as a param, so the child's constructor needs to
         // forward inherited capture args to `super(...)` rather than
         // store them itself.
-        let mut inherited_cap_field_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut inherited_cap_field_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         if let Some(ref pname) = extends_name {
             if let Some(parent_fields) = ctx.lookup_class_field_names(pname) {
                 for f in parent_fields {
@@ -1111,7 +1166,8 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
                 }
             }
         }
-        let inherited_cap_ids: std::collections::HashSet<LocalId> = captures_vec.iter()
+        let inherited_cap_ids: std::collections::HashSet<LocalId> = captures_vec
+            .iter()
             .copied()
             .filter(|cid| inherited_cap_field_names.contains(&format!("__perry_cap_{}", cid)))
             .collect();
@@ -1147,9 +1203,12 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
         // as Any, and `out.length` on a `string[]` capture falls off the
         // typed-array fast path into generic object-field-by-name dispatch
         // — which on an array silently returns undefined or crashes.
-        let captured_outer_types: std::collections::HashMap<LocalId, Type> = captures_vec.iter()
+        let captured_outer_types: std::collections::HashMap<LocalId, Type> = captures_vec
+            .iter()
             .map(|&cid| {
-                let ty = ctx.locals.iter()
+                let ty = ctx
+                    .locals
+                    .iter()
                     .rev()
                     .find(|(_, id, _)| *id == cid)
                     .map(|(_, _, t)| t.clone())
@@ -1169,21 +1228,25 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
         // expression, return value, condition); nested captured writes
         // like `(stored = v).toString()` only update the local — rare
         // enough to defer to a follow-up.
-        let field_propagation: std::collections::HashMap<LocalId, String> = captures_vec.iter()
+        let field_propagation: std::collections::HashMap<LocalId, String> = captures_vec
+            .iter()
             .map(|&cid| (cid, format!("__perry_cap_{}", cid)))
             .collect();
 
         // Helper closure: build a fresh-id map for one function's body,
         // rewrite the body refs (with field-write propagation), and
         // prepend the rebinding lets.
-        let rewrite_method_body = |ctx: &mut LoweringContext,
-                                   body: &mut Vec<Stmt>| {
-            let mut id_map: std::collections::HashMap<LocalId, LocalId> = std::collections::HashMap::new();
+        let rewrite_method_body = |ctx: &mut LoweringContext, body: &mut Vec<Stmt>| {
+            let mut id_map: std::collections::HashMap<LocalId, LocalId> =
+                std::collections::HashMap::new();
             let mut prologue: Vec<Stmt> = Vec::new();
             for &outer_id in &captures_vec {
                 let new_id = ctx.fresh_local();
                 id_map.insert(outer_id, new_id);
-                let ty = captured_outer_types.get(&outer_id).cloned().unwrap_or(Type::Any);
+                let ty = captured_outer_types
+                    .get(&outer_id)
+                    .cloned()
+                    .unwrap_or(Type::Any);
                 prologue.push(Stmt::Let {
                     id: new_id,
                     name: format!("__perry_cap_{}", outer_id),
@@ -1198,7 +1261,9 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
             // Rewrite first (so closure captures lists pick up the new ids
             // at the same time as the body's refs), then prepend the let.
             crate::analysis::remap_local_ids_in_stmts_with_field_propagation(
-                body, &id_map, &field_propagation,
+                body,
+                &id_map,
+                &field_propagation,
             );
             prologue.append(body);
             *body = prologue;
@@ -1230,12 +1295,16 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
             captures: Vec::new(),
             decorators: Vec::new(),
         });
-        let mut ctor_id_map: std::collections::HashMap<LocalId, LocalId> = std::collections::HashMap::new();
+        let mut ctor_id_map: std::collections::HashMap<LocalId, LocalId> =
+            std::collections::HashMap::new();
         let mut assignment_stmts: Vec<Stmt> = Vec::with_capacity(captures_vec.len());
         for &outer_id in &captures_vec {
             let fresh_param_id = ctx.fresh_local();
             ctor_id_map.insert(outer_id, fresh_param_id);
-            let ty = captured_outer_types.get(&outer_id).cloned().unwrap_or(Type::Any);
+            let ty = captured_outer_types
+                .get(&outer_id)
+                .cloned()
+                .unwrap_or(Type::Any);
             ctor.params.push(Param {
                 id: fresh_param_id,
                 name: format!("__perry_cap_{}", outer_id),
@@ -1252,9 +1321,10 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
         // Rewrite user-written ctor body BEFORE inserting the assignment
         // stmts (which already reference the fresh ids directly).
         crate::analysis::remap_local_ids_in_stmts(&mut ctor.body, &ctor_id_map);
-        let super_pos = ctor.body.iter().position(|s| {
-            matches!(s, Stmt::Expr(Expr::SuperCall(_)))
-        });
+        let super_pos = ctor
+            .body
+            .iter()
+            .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_))));
         let insert_at = super_pos.map(|p| p + 1).unwrap_or(0);
         for (i, stmt) in assignment_stmts.into_iter().enumerate() {
             ctor.body.insert(insert_at + i, stmt);
@@ -1274,12 +1344,20 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
     // explicit annotation whose body returned a known type lands here too.
     for m in &methods {
         if !matches!(m.return_type, Type::Any) {
-            ctx.register_class_method_return_type(name.clone(), m.name.clone(), m.return_type.clone());
+            ctx.register_class_method_return_type(
+                name.clone(),
+                m.name.clone(),
+                m.return_type.clone(),
+            );
         }
     }
     for (prop_name, g) in &getters {
         if !matches!(g.return_type, Type::Any) {
-            ctx.register_class_method_return_type(name.clone(), prop_name.clone(), g.return_type.clone());
+            ctx.register_class_method_return_type(
+                name.clone(),
+                prop_name.clone(),
+                g.return_type.clone(),
+            );
         }
     }
 
@@ -1303,7 +1381,12 @@ pub(crate) fn lower_class_decl(ctx: &mut LoweringContext, class_decl: &ast::Clas
 
 /// Lower a class expression (ast::Class) to HIR.
 /// Used for anonymous class expressions like `new (class extends Command { ... })()`.
-pub(crate) fn lower_class_from_ast(ctx: &mut LoweringContext, class: &ast::Class, name: &str, is_exported: bool) -> Result<Class> {
+pub(crate) fn lower_class_from_ast(
+    ctx: &mut LoweringContext,
+    class: &ast::Class,
+    name: &str,
+    is_exported: bool,
+) -> Result<Class> {
     reject_decorators(class, name)?;
     let class_id = match ctx.lookup_class(name) {
         Some(id) => id,
@@ -1317,7 +1400,8 @@ pub(crate) fn lower_class_from_ast(ctx: &mut LoweringContext, class: &ast::Class
     let old_class = ctx.current_class.take();
     ctx.current_class = Some(name.to_string());
 
-    let type_params = class.type_params
+    let type_params = class
+        .type_params
         .as_ref()
         .map(|tp| extract_type_params(tp))
         .unwrap_or_default();
@@ -1329,7 +1413,9 @@ pub(crate) fn lower_class_from_ast(ctx: &mut LoweringContext, class: &ast::Class
             let parent_name = ident.sym.to_string();
             let native_parent = match parent_name.as_str() {
                 "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
-                "AsyncLocalStorage" => Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string())),
+                "AsyncLocalStorage" => {
+                    Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
+                }
                 "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
                 _ => None,
             };
@@ -1418,7 +1504,7 @@ pub(crate) fn lower_class_from_ast(ctx: &mut LoweringContext, class: &ast::Class
             ast::ClassMember::ClassProp(prop) => {
                 // Skip computed/Symbol property keys
                 match &prop.key {
-                    ast::PropName::Ident(_) | ast::PropName::Str(_) => {},
+                    ast::PropName::Ident(_) | ast::PropName::Str(_) => {}
                     _ => continue,
                 }
                 let field = lower_class_prop(ctx, prop)?;
@@ -1497,12 +1583,20 @@ pub(crate) fn lower_class_from_ast(ctx: &mut LoweringContext, class: &ast::Class
     // site in lower_class_decl.
     for m in &methods {
         if !matches!(m.return_type, Type::Any) {
-            ctx.register_class_method_return_type(name.to_string(), m.name.clone(), m.return_type.clone());
+            ctx.register_class_method_return_type(
+                name.to_string(),
+                m.name.clone(),
+                m.return_type.clone(),
+            );
         }
     }
     for (prop_name, g) in &getters {
         if !matches!(g.return_type, Type::Any) {
-            ctx.register_class_method_return_type(name.to_string(), prop_name.clone(), g.return_type.clone());
+            ctx.register_class_method_return_type(
+                name.to_string(),
+                prop_name.clone(),
+                g.return_type.clone(),
+            );
         }
     }
 
@@ -1524,7 +1618,11 @@ pub(crate) fn lower_class_from_ast(ctx: &mut LoweringContext, class: &ast::Class
     })
 }
 
-pub(crate) fn lower_enum_decl(ctx: &mut LoweringContext, enum_decl: &ast::TsEnumDecl, is_exported: bool) -> Result<Enum> {
+pub(crate) fn lower_enum_decl(
+    ctx: &mut LoweringContext,
+    enum_decl: &ast::TsEnumDecl,
+    is_exported: bool,
+) -> Result<Enum> {
     let name = enum_decl.id.sym.to_string();
     let enum_id = ctx.fresh_enum();
 
@@ -1583,7 +1681,8 @@ pub(crate) fn lower_enum_decl(ctx: &mut LoweringContext, enum_decl: &ast::TsEnum
     }
 
     // Register the enum in the context for later lookups
-    let member_values: Vec<(String, EnumValue)> = members.iter()
+    let member_values: Vec<(String, EnumValue)> = members
+        .iter()
         .map(|m| (m.name.clone(), m.value.clone()))
         .collect();
     ctx.define_enum(name.clone(), enum_id, member_values);
@@ -1596,12 +1695,18 @@ pub(crate) fn lower_enum_decl(ctx: &mut LoweringContext, enum_decl: &ast::TsEnum
     })
 }
 
-pub(crate) fn lower_interface_decl(ctx: &mut LoweringContext, iface_decl: &ast::TsInterfaceDecl, is_exported: bool) -> Result<Interface> {
+pub(crate) fn lower_interface_decl(
+    ctx: &mut LoweringContext,
+    iface_decl: &ast::TsInterfaceDecl,
+    is_exported: bool,
+) -> Result<Interface> {
     let name = iface_decl.id.sym.to_string();
     let iface_id = ctx.fresh_interface();
 
     // Extract type parameters
-    let type_params = iface_decl.type_params.as_ref()
+    let type_params = iface_decl
+        .type_params
+        .as_ref()
         .map(|tp| extract_type_params(tp))
         .unwrap_or_default();
 
@@ -1609,7 +1714,9 @@ pub(crate) fn lower_interface_decl(ctx: &mut LoweringContext, iface_decl: &ast::
     ctx.enter_type_param_scope(&type_params);
 
     // Extract extended interfaces
-    let extends: Vec<Type> = iface_decl.extends.iter()
+    let extends: Vec<Type> = iface_decl
+        .extends
+        .iter()
         .map(|ext| {
             let base_name = match &*ext.expr {
                 ast::Expr::Ident(id) => id.sym.to_string(),
@@ -1617,7 +1724,9 @@ pub(crate) fn lower_interface_decl(ctx: &mut LoweringContext, iface_decl: &ast::
             };
             // Handle type arguments if present
             if let Some(ref type_args) = ext.type_args {
-                let args: Vec<Type> = type_args.params.iter()
+                let args: Vec<Type> = type_args
+                    .params
+                    .iter()
                     .map(|t| extract_ts_type_with_ctx(t, Some(ctx)))
                     .collect();
                 if args.is_empty() {
@@ -1646,7 +1755,9 @@ pub(crate) fn lower_interface_decl(ctx: &mut LoweringContext, iface_decl: &ast::
                     ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().unwrap_or("").to_string(),
                     _ => continue,
                 };
-                let prop_type = prop.type_ann.as_ref()
+                let prop_type = prop
+                    .type_ann
+                    .as_ref()
                     .map(|ta| extract_ts_type_with_ctx(&ta.type_ann, Some(ctx)))
                     .unwrap_or(Type::Any);
                 properties.push(InterfaceProperty {
@@ -1664,7 +1775,9 @@ pub(crate) fn lower_interface_decl(ctx: &mut LoweringContext, iface_decl: &ast::
                 };
 
                 // Method's own type parameters
-                let method_type_params = method.type_params.as_ref()
+                let method_type_params = method
+                    .type_params
+                    .as_ref()
                     .map(|tp| extract_type_params(tp))
                     .unwrap_or_default();
 
@@ -1672,7 +1785,9 @@ pub(crate) fn lower_interface_decl(ctx: &mut LoweringContext, iface_decl: &ast::
                 ctx.enter_type_param_scope(&method_type_params);
 
                 // Extract parameters
-                let params: Vec<(String, Type, bool)> = method.params.iter()
+                let params: Vec<(String, Type, bool)> = method
+                    .params
+                    .iter()
                     .map(|p| {
                         let (name, ty) = get_fn_param_name_and_type_with_ctx(p, Some(ctx));
                         let optional = matches!(p, ast::TsFnParam::Ident(id) if id.optional);
@@ -1681,7 +1796,9 @@ pub(crate) fn lower_interface_decl(ctx: &mut LoweringContext, iface_decl: &ast::
                     .collect();
 
                 // Extract return type
-                let return_type = method.type_ann.as_ref()
+                let return_type = method
+                    .type_ann
+                    .as_ref()
                     .map(|ta| extract_ts_type_with_ctx(&ta.type_ann, Some(ctx)))
                     .unwrap_or(Type::Void);
 
@@ -1712,14 +1829,17 @@ pub(crate) fn lower_interface_decl(ctx: &mut LoweringContext, iface_decl: &ast::
     }
     // Also materialize an ObjectType so `resolve_typed_parse_ty` can
     // expand `Named("Item")` → `Object{fields}` for codegen.
-    let mut obj_props: std::collections::HashMap<String, perry_types::PropertyInfo>
-        = std::collections::HashMap::new();
+    let mut obj_props: std::collections::HashMap<String, perry_types::PropertyInfo> =
+        std::collections::HashMap::new();
     for p in &properties {
-        obj_props.insert(p.name.clone(), perry_types::PropertyInfo {
-            ty: p.ty.clone(),
-            optional: p.optional,
-            readonly: p.readonly,
-        });
+        obj_props.insert(
+            p.name.clone(),
+            perry_types::PropertyInfo {
+                ty: p.ty.clone(),
+                optional: p.optional,
+                readonly: p.readonly,
+            },
+        );
     }
     if !obj_props.is_empty() {
         ctx.interface_object_types.insert(
@@ -1743,12 +1863,18 @@ pub(crate) fn lower_interface_decl(ctx: &mut LoweringContext, iface_decl: &ast::
     })
 }
 
-pub(crate) fn lower_type_alias_decl(ctx: &mut LoweringContext, alias_decl: &ast::TsTypeAliasDecl, is_exported: bool) -> Result<TypeAlias> {
+pub(crate) fn lower_type_alias_decl(
+    ctx: &mut LoweringContext,
+    alias_decl: &ast::TsTypeAliasDecl,
+    is_exported: bool,
+) -> Result<TypeAlias> {
     let name = alias_decl.id.sym.to_string();
     let alias_id = ctx.fresh_type_alias();
 
     // Extract type parameters
-    let type_params = alias_decl.type_params.as_ref()
+    let type_params = alias_decl
+        .type_params
+        .as_ref()
         .map(|tp| extract_type_params(tp))
         .unwrap_or_default();
 
@@ -1761,7 +1887,8 @@ pub(crate) fn lower_type_alias_decl(ctx: &mut LoweringContext, alias_decl: &ast:
     ctx.exit_type_param_scope();
 
     // Register type alias in context
-    ctx.type_aliases.push((name.clone(), alias_id, type_params.clone(), ty.clone()));
+    ctx.type_aliases
+        .push((name.clone(), alias_id, type_params.clone(), ty.clone()));
 
     Ok(TypeAlias {
         id: alias_id,
@@ -1772,7 +1899,11 @@ pub(crate) fn lower_type_alias_decl(ctx: &mut LoweringContext, alias_decl: &ast:
     })
 }
 
-pub(crate) fn lower_constructor(ctx: &mut LoweringContext, class_name: &str, ctor: &ast::Constructor) -> Result<Function> {
+pub(crate) fn lower_constructor(
+    ctx: &mut LoweringContext,
+    class_name: &str,
+    ctor: &ast::Constructor,
+) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
 
     // Track that we're inside a constructor body so `new.target` can resolve
@@ -1809,7 +1940,9 @@ pub(crate) fn lower_constructor(ctx: &mut LoweringContext, class_name: &str, cto
                 let (param_name, param_type) = match &ts_prop.param {
                     ast::TsParamPropParam::Ident(ident) => {
                         let name = ident.id.sym.to_string();
-                        let ty = ident.type_ann.as_ref()
+                        let ty = ident
+                            .type_ann
+                            .as_ref()
                             .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
                             .unwrap_or(Type::Any);
                         (name, ty)
@@ -1915,28 +2048,49 @@ fn collect_method_captures(
     fn collect_let_ids(stmts: &[Stmt], out: &mut std::collections::HashSet<LocalId>) {
         for s in stmts {
             match s {
-                Stmt::Let { id, .. } => { out.insert(*id); }
-                Stmt::If { then_branch, else_branch, .. } => {
-                    collect_let_ids(then_branch, out);
-                    if let Some(e) = else_branch { collect_let_ids(e, out); }
+                Stmt::Let { id, .. } => {
+                    out.insert(*id);
                 }
-                Stmt::While { body, .. }
-                | Stmt::DoWhile { body, .. } => collect_let_ids(body, out),
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    collect_let_ids(then_branch, out);
+                    if let Some(e) = else_branch {
+                        collect_let_ids(e, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => collect_let_ids(body, out),
                 Stmt::For { init, body, .. } => {
                     if let Some(init_stmt) = init {
-                        if let Stmt::Let { id, .. } = init_stmt.as_ref() { out.insert(*id); }
+                        if let Stmt::Let { id, .. } = init_stmt.as_ref() {
+                            out.insert(*id);
+                        }
                     }
                     collect_let_ids(body, out);
                 }
-                Stmt::Try { body, catch, finally } => {
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
                     collect_let_ids(body, out);
-                    if let Some(c) = catch { collect_let_ids(&c.body, out); }
-                    if let Some(f) = finally { collect_let_ids(f, out); }
+                    if let Some(c) = catch {
+                        collect_let_ids(&c.body, out);
+                    }
+                    if let Some(f) = finally {
+                        collect_let_ids(f, out);
+                    }
                 }
                 Stmt::Switch { cases, .. } => {
-                    for case in cases { collect_let_ids(&case.body, out); }
+                    for case in cases {
+                        collect_let_ids(&case.body, out);
+                    }
                 }
-                Stmt::Labeled { body, .. } => collect_let_ids(std::slice::from_ref(body.as_ref()), out),
+                Stmt::Labeled { body, .. } => {
+                    collect_let_ids(std::slice::from_ref(body.as_ref()), out)
+                }
                 _ => {}
             }
         }
@@ -1948,7 +2102,8 @@ fn collect_method_captures(
     for stmt in &func.body {
         crate::analysis::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
     }
-    let mut captures: Vec<LocalId> = refs.into_iter()
+    let mut captures: Vec<LocalId> = refs
+        .into_iter()
         .filter(|id| {
             outer_scope_ids.contains(id)
                 && !own_locals.contains(id)
@@ -1972,7 +2127,8 @@ fn method_body_captures_outer(func: &Function, ctx: &LoweringContext) -> bool {
     let mut own_locals: std::collections::HashSet<LocalId> =
         func.params.iter().map(|p| p.id).collect();
     // Also include `this` if it was registered (instance methods).
-    if let Some(this_id) = ctx.locals
+    if let Some(this_id) = ctx
+        .locals
         .iter()
         .rev()
         .find(|(name, _, _)| name == "this")
@@ -1986,28 +2142,49 @@ fn method_body_captures_outer(func: &Function, ctx: &LoweringContext) -> bool {
     fn collect_let_ids(stmts: &[Stmt], out: &mut std::collections::HashSet<LocalId>) {
         for s in stmts {
             match s {
-                Stmt::Let { id, .. } => { out.insert(*id); }
-                Stmt::If { then_branch, else_branch, .. } => {
-                    collect_let_ids(then_branch, out);
-                    if let Some(e) = else_branch { collect_let_ids(e, out); }
+                Stmt::Let { id, .. } => {
+                    out.insert(*id);
                 }
-                Stmt::While { body, .. }
-                | Stmt::DoWhile { body, .. } => collect_let_ids(body, out),
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    collect_let_ids(then_branch, out);
+                    if let Some(e) = else_branch {
+                        collect_let_ids(e, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => collect_let_ids(body, out),
                 Stmt::For { init, body, .. } => {
                     if let Some(init_stmt) = init {
-                        if let Stmt::Let { id, .. } = init_stmt.as_ref() { out.insert(*id); }
+                        if let Stmt::Let { id, .. } = init_stmt.as_ref() {
+                            out.insert(*id);
+                        }
                     }
                     collect_let_ids(body, out);
                 }
-                Stmt::Try { body, catch, finally } => {
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
                     collect_let_ids(body, out);
-                    if let Some(c) = catch { collect_let_ids(&c.body, out); }
-                    if let Some(f) = finally { collect_let_ids(f, out); }
+                    if let Some(c) = catch {
+                        collect_let_ids(&c.body, out);
+                    }
+                    if let Some(f) = finally {
+                        collect_let_ids(f, out);
+                    }
                 }
                 Stmt::Switch { cases, .. } => {
-                    for case in cases { collect_let_ids(&case.body, out); }
+                    for case in cases {
+                        collect_let_ids(&case.body, out);
+                    }
                 }
-                Stmt::Labeled { body, .. } => collect_let_ids(std::slice::from_ref(body.as_ref()), out),
+                Stmt::Labeled { body, .. } => {
+                    collect_let_ids(std::slice::from_ref(body.as_ref()), out)
+                }
                 _ => {}
             }
         }
@@ -2022,7 +2199,10 @@ fn method_body_captures_outer(func: &Function, ctx: &LoweringContext) -> bool {
     refs.iter().any(|id| !own_locals.contains(id))
 }
 
-pub(crate) fn lower_class_method(ctx: &mut LoweringContext, method: &ast::ClassMethod) -> Result<Function> {
+pub(crate) fn lower_class_method(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+) -> Result<Function> {
     let name = match &method.key {
         ast::PropName::Ident(ident) => ident.sym.to_string(),
         ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
@@ -2054,7 +2234,9 @@ pub(crate) fn lower_class_method(ctx: &mut LoweringContext, method: &ast::ClassM
 
     // Extract method-level type parameters (e.g., method<U>(x: U): T)
     // Note: Class-level type params are already in scope from lower_class_decl
-    let type_params = method.function.type_params
+    let type_params = method
+        .function
+        .type_params
         .as_ref()
         .map(|tp| extract_type_params(tp))
         .unwrap_or_default();
@@ -2090,7 +2272,10 @@ pub(crate) fn lower_class_method(ctx: &mut LoweringContext, method: &ast::ClassM
     // explicit annotation, fall back to body-based inference after body
     // lowering so parameters and locals are visible to `infer_type_from_expr`.
     let has_explicit_return_annotation = method.function.return_type.is_some();
-    let mut return_type = method.function.return_type.as_ref()
+    let mut return_type = method
+        .function
+        .return_type
+        .as_ref()
         .map(|rt| extract_ts_type_with_ctx(&rt.type_ann, Some(ctx)))
         .unwrap_or(Type::Any);
 
@@ -2163,7 +2348,10 @@ pub(crate) fn lower_class_method(ctx: &mut LoweringContext, method: &ast::ClassM
 }
 
 /// Lower a getter method (get propertyName(): Type { ... })
-pub(crate) fn lower_getter_method(ctx: &mut LoweringContext, method: &ast::ClassMethod) -> Result<Function> {
+pub(crate) fn lower_getter_method(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+) -> Result<Function> {
     let name = match &method.key {
         ast::PropName::Ident(ident) => format!("get_{}", ident.sym),
         ast::PropName::Str(s) => format!("get_{}", s.value.as_str().unwrap_or("")),
@@ -2189,7 +2377,10 @@ pub(crate) fn lower_getter_method(ctx: &mut LoweringContext, method: &ast::Class
 
     // Extract return type. Phase 4: body-based inference when no annotation.
     let has_explicit_return_annotation = method.function.return_type.is_some();
-    let mut return_type = method.function.return_type.as_ref()
+    let mut return_type = method
+        .function
+        .return_type
+        .as_ref()
         .map(|rt| extract_ts_type_with_ctx(&rt.type_ann, Some(ctx)))
         .unwrap_or(Type::Any);
 
@@ -2231,7 +2422,10 @@ pub(crate) fn lower_getter_method(ctx: &mut LoweringContext, method: &ast::Class
 }
 
 /// Lower a setter method (set propertyName(value: Type) { ... })
-pub(crate) fn lower_setter_method(ctx: &mut LoweringContext, method: &ast::ClassMethod) -> Result<Function> {
+pub(crate) fn lower_setter_method(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+) -> Result<Function> {
     let name = match &method.key {
         ast::PropName::Ident(ident) => format!("set_{}", ident.sym),
         ast::PropName::Str(s) => format!("set_{}", s.value.as_str().unwrap_or("")),
@@ -2283,7 +2477,10 @@ pub(crate) fn lower_setter_method(ctx: &mut LoweringContext, method: &ast::Class
     })
 }
 
-pub(crate) fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Result<ClassField> {
+pub(crate) fn lower_class_prop(
+    ctx: &mut LoweringContext,
+    prop: &ast::ClassProp,
+) -> Result<ClassField> {
     let name = match &prop.key {
         ast::PropName::Ident(ident) => ident.sym.to_string(),
         ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
@@ -2291,12 +2488,16 @@ pub(crate) fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp)
     };
 
     // Extract type from type annotation (using context for class type param resolution)
-    let ty = prop.type_ann.as_ref()
+    let ty = prop
+        .type_ann
+        .as_ref()
         .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
         .unwrap_or(Type::Any);
 
     // Lower initializer expression if present
-    let init = prop.value.as_ref()
+    let init = prop
+        .value
+        .as_ref()
         .map(|e| lower_expr(ctx, e))
         .transpose()?;
 
@@ -2313,11 +2514,16 @@ pub(crate) fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp)
 /// `lower_class_method` but for `ast::PrivateMethod`. The resulting function
 /// is stored with the name prefixed by `#` so method dispatch (which keys on
 /// `(class_name, "#secret")`) can find it.
-pub(crate) fn lower_private_method(ctx: &mut LoweringContext, method: &ast::PrivateMethod) -> Result<Function> {
+pub(crate) fn lower_private_method(
+    ctx: &mut LoweringContext,
+    method: &ast::PrivateMethod,
+) -> Result<Function> {
     let name = format!("#{}", method.key.name.to_string());
 
     // Extract method-level type parameters (e.g., #helper<U>(x: U): T)
-    let type_params = method.function.type_params
+    let type_params = method
+        .function
+        .type_params
         .as_ref()
         .map(|tp| extract_type_params(tp))
         .unwrap_or_default();
@@ -2349,7 +2555,10 @@ pub(crate) fn lower_private_method(ctx: &mut LoweringContext, method: &ast::Priv
     }
 
     // Extract return type
-    let return_type = method.function.return_type.as_ref()
+    let return_type = method
+        .function
+        .return_type
+        .as_ref()
         .map(|rt| extract_ts_type_with_ctx(&rt.type_ann, Some(ctx)))
         .unwrap_or(Type::Any);
 
@@ -2383,12 +2592,18 @@ pub(crate) fn lower_private_method(ctx: &mut LoweringContext, method: &ast::Priv
 /// Returned function has `name` set to `get_#value` so that the codegen's
 /// getter-mangling convention (`__get_<name>`) stays consistent with the
 /// dispatch registry.
-pub(crate) fn lower_private_getter(ctx: &mut LoweringContext, method: &ast::PrivateMethod) -> Result<Function> {
+pub(crate) fn lower_private_getter(
+    ctx: &mut LoweringContext,
+    method: &ast::PrivateMethod,
+) -> Result<Function> {
     let name = format!("get_#{}", method.key.name.to_string());
     let scope_mark = ctx.enter_scope();
     ctx.define_local("this".to_string(), Type::Any);
 
-    let return_type = method.function.return_type.as_ref()
+    let return_type = method
+        .function
+        .return_type
+        .as_ref()
         .map(|rt| extract_ts_type_with_ctx(&rt.type_ann, Some(ctx)))
         .unwrap_or(Type::Any);
 
@@ -2417,7 +2632,10 @@ pub(crate) fn lower_private_getter(ctx: &mut LoweringContext, method: &ast::Priv
 }
 
 /// Lower a private setter method (e.g. `set #value(v: number) { ... }`).
-pub(crate) fn lower_private_setter(ctx: &mut LoweringContext, method: &ast::PrivateMethod) -> Result<Function> {
+pub(crate) fn lower_private_setter(
+    ctx: &mut LoweringContext,
+    method: &ast::PrivateMethod,
+) -> Result<Function> {
     let name = format!("set_#{}", method.key.name.to_string());
     let scope_mark = ctx.enter_scope();
     ctx.define_local("this".to_string(), Type::Any);
@@ -2460,18 +2678,25 @@ pub(crate) fn lower_private_setter(ctx: &mut LoweringContext, method: &ast::Priv
     })
 }
 
-pub(crate) fn lower_private_prop(ctx: &mut LoweringContext, prop: &ast::PrivateProp) -> Result<ClassField> {
+pub(crate) fn lower_private_prop(
+    ctx: &mut LoweringContext,
+    prop: &ast::PrivateProp,
+) -> Result<ClassField> {
     // Private fields use PrivateName which has a `name` field (without the # prefix in SWC)
     // We store the name with the # prefix to distinguish private fields
     let name = format!("#{}", prop.key.name.to_string());
 
     // Extract type from type annotation (using context for class type param resolution)
-    let ty = prop.type_ann.as_ref()
+    let ty = prop
+        .type_ann
+        .as_ref()
         .map(|ann| extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)))
         .unwrap_or(Type::Any);
 
     // Lower initializer expression if present
-    let init = prop.value.as_ref()
+    let init = prop
+        .value
+        .as_ref()
         .map(|e| lower_expr(ctx, e))
         .transpose()?;
 
@@ -2484,14 +2709,20 @@ pub(crate) fn lower_private_prop(ctx: &mut LoweringContext, prop: &ast::PrivateP
     })
 }
 
-pub(crate) fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Result<Vec<Stmt>> {
+pub(crate) fn lower_block_stmt(
+    ctx: &mut LoweringContext,
+    block: &ast::BlockStmt,
+) -> Result<Vec<Stmt>> {
     lower_stmts_using_aware(ctx, &block.stmts)
 }
 
 /// Lower a block statement that introduces its own lexical scope for
 /// `let`/`const`. Inner bindings shadow outer ones and are removed on exit.
 /// `var` declarations remain visible (function-scoped).
-pub(crate) fn lower_block_stmt_scoped(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Result<Vec<Stmt>> {
+pub(crate) fn lower_block_stmt_scoped(
+    ctx: &mut LoweringContext,
+    block: &ast::BlockStmt,
+) -> Result<Vec<Stmt>> {
     let mark = ctx.push_block_scope();
     let stmts = lower_stmts_using_aware(ctx, &block.stmts)?;
     ctx.pop_block_scope(mark);
@@ -2618,7 +2849,9 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 ctx.pop_block_scope(mark);
                 stmts
             };
-            let else_branch = if_stmt.alt.as_ref()
+            let else_branch = if_stmt
+                .alt
+                .as_ref()
                 .map(|s| {
                     if matches!(**s, ast::Stmt::Block(_)) || matches!(**s, ast::Stmt::If(_)) {
                         lower_body_stmt(ctx, s)
@@ -2655,12 +2888,18 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                             if method_ident.sym.as_ref() == "splice" {
                                 if let ast::Expr::Member(inner_member) = member.obj.as_ref() {
                                     if let ast::Expr::This(_) = inner_member.obj.as_ref() {
-                                        if let ast::MemberProp::Ident(field_ident) = &inner_member.prop {
+                                        if let ast::MemberProp::Ident(field_ident) =
+                                            &inner_member.prop
+                                        {
                                             let field_name = field_ident.sym.to_string();
                                             // Create temp local
                                             let temp_id = ctx.fresh_local();
                                             let temp_name = format!("__splice_temp_{}", field_name);
-                                            ctx.locals.push((temp_name.clone(), temp_id, Type::Array(Box::new(Type::Any))));
+                                            ctx.locals.push((
+                                                temp_name.clone(),
+                                                temp_id,
+                                                Type::Array(Box::new(Type::Any)),
+                                            ));
 
                                             // Stmt 1: let __temp = this.field;
                                             result.push(Stmt::Let {
@@ -2675,7 +2914,9 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                                             });
 
                                             // Stmt 2: __temp.splice(args...)
-                                            let mut args_iter = call.args.iter()
+                                            let mut args_iter = call
+                                                .args
+                                                .iter()
                                                 .map(|a| lower_expr(ctx, &a.expr))
                                                 .collect::<Result<Vec<Expr>>>()?
                                                 .into_iter();
@@ -2778,7 +3019,8 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 // resolves to the FuncRef. We use a Let with `init: Some(FuncRef)`
                 // so existing code that does `let it = gen()` lowers via
                 // the LocalGet path → FuncRef → known generator name.
-                let local_id = ctx.lookup_local(&func_name)
+                let local_id = ctx
+                    .lookup_local(&func_name)
                     .unwrap_or_else(|| ctx.define_local(func_name.clone(), Type::Any));
                 result.push(Stmt::Let {
                     id: local_id,
@@ -2802,13 +3044,16 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 // LocalGet(local_id) rather than FuncRef(func_id). This ensures
                 // the LLVM backend's boxed-var analysis sees the same LocalId at
                 // both the declaration and self-reference sites.
-                let local_id = ctx.lookup_local(&func_name)
+                let local_id = ctx
+                    .lookup_local(&func_name)
                     .unwrap_or_else(|| ctx.define_local(func_name.clone(), Type::Any));
 
                 let scope_mark = ctx.enter_scope();
 
                 // Track outer locals for capture detection
-                let outer_locals: Vec<(String, LocalId)> = ctx.locals.iter()
+                let outer_locals: Vec<(String, LocalId)> = ctx
+                    .locals
+                    .iter()
                     .map(|(name, id, _)| (name.clone(), *id))
                     .collect();
 
@@ -2861,14 +3106,13 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                     collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
                 }
 
-                let outer_local_ids: std::collections::HashSet<LocalId> = outer_locals.iter()
-                    .map(|(_, id)| *id)
-                    .collect();
-                let param_ids: std::collections::HashSet<LocalId> = params.iter()
-                    .map(|p| p.id)
-                    .collect();
+                let outer_local_ids: std::collections::HashSet<LocalId> =
+                    outer_locals.iter().map(|(_, id)| *id).collect();
+                let param_ids: std::collections::HashSet<LocalId> =
+                    params.iter().map(|p| p.id).collect();
 
-                let mut captures: Vec<LocalId> = all_refs.into_iter()
+                let mut captures: Vec<LocalId> = all_refs
+                    .into_iter()
                     .filter(|id| outer_local_ids.contains(id) && !param_ids.contains(id))
                     .collect();
                 captures.sort();
@@ -2880,8 +3124,10 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 for stmt in &body {
                     collect_assigned_locals_stmt(stmt, &mut all_assigned);
                 }
-                let assigned_set: std::collections::HashSet<LocalId> = all_assigned.into_iter().collect();
-                let mutable_captures: Vec<LocalId> = captures.iter()
+                let assigned_set: std::collections::HashSet<LocalId> =
+                    all_assigned.into_iter().collect();
+                let mutable_captures: Vec<LocalId> = captures
+                    .iter()
                     .filter(|id| assigned_set.contains(id) || ctx.var_hoisted_ids.contains(id))
                     .copied()
                     .collect();
@@ -2931,7 +3177,10 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             // Otherwise wrap the first statement (preserving any hoisted lets before it).
             if inner.len() == 1 {
                 let body = inner.into_iter().next().unwrap();
-                result.push(Stmt::Labeled { label, body: Box::new(body) });
+                result.push(Stmt::Labeled {
+                    label,
+                    body: Box::new(body),
+                });
             } else {
                 // Multiple statements — take the last "real" loop/block as the labeled target,
                 // and emit any preceding statements (e.g., hoisted lets from for-of/for-in desugar) first.
@@ -2940,7 +3189,10 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 for s in inner {
                     result.push(s);
                 }
-                result.push(Stmt::Labeled { label, body: Box::new(last) });
+                result.push(Stmt::Labeled {
+                    label,
+                    body: Box::new(last),
+                });
             }
         }
         ast::Stmt::Break(break_stmt) => {
@@ -2968,35 +3220,75 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                         if is_var {
                             for decl in var_decl.decls.iter() {
                                 let name = get_binding_name(&decl.name)?;
-                                let init_expr = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+                                let init_expr =
+                                    decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
                                 ctx.var_hoisted_ids.insert(id);
-                                result.push(Stmt::Let { id, name, ty: Type::Any, mutable: true, init: init_expr });
+                                result.push(Stmt::Let {
+                                    id,
+                                    name,
+                                    ty: Type::Any,
+                                    mutable: true,
+                                    init: init_expr,
+                                });
                             }
                             None
                         } else {
                             for decl in var_decl.decls.iter().skip(1) {
                                 let name = get_binding_name(&decl.name)?;
-                                let init_expr = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+                                let init_expr =
+                                    decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
-                                result.push(Stmt::Let { id, name, ty: Type::Any, mutable: true, init: init_expr });
+                                result.push(Stmt::Let {
+                                    id,
+                                    name,
+                                    ty: Type::Any,
+                                    mutable: true,
+                                    init: init_expr,
+                                });
                             }
                             if let Some(decl) = var_decl.decls.first() {
                                 let name = get_binding_name(&decl.name)?;
-                                let init_expr = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+                                let init_expr =
+                                    decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
-                                Some(Box::new(Stmt::Let { id, name, ty: Type::Any, mutable: true, init: init_expr }))
-                            } else { None }
+                                Some(Box::new(Stmt::Let {
+                                    id,
+                                    name,
+                                    ty: Type::Any,
+                                    mutable: true,
+                                    init: init_expr,
+                                }))
+                            } else {
+                                None
+                            }
                         }
                     }
-                    ast::VarDeclOrExpr::Expr(expr) => { Some(Box::new(Stmt::Expr(lower_expr(ctx, expr)?))) }
+                    ast::VarDeclOrExpr::Expr(expr) => {
+                        Some(Box::new(Stmt::Expr(lower_expr(ctx, expr)?)))
+                    }
                 }
-            } else { None };
-            let condition = for_stmt.test.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-            let update = for_stmt.update.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+            } else {
+                None
+            };
+            let condition = for_stmt
+                .test
+                .as_ref()
+                .map(|e| lower_expr(ctx, e))
+                .transpose()?;
+            let update = for_stmt
+                .update
+                .as_ref()
+                .map(|e| lower_expr(ctx, e))
+                .transpose()?;
             let body = lower_body_stmt(ctx, &for_stmt.body)?;
             ctx.pop_block_scope(for_scope_mark);
-            result.push(Stmt::For { init, condition, update, body });
+            result.push(Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            });
         }
         ast::Stmt::Try(try_stmt) => {
             // try body is its own lexical scope
@@ -3020,7 +3312,10 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
 
                 ctx.exit_scope(scope_mark);
 
-                Some(CatchClause { param, body: catch_body })
+                Some(CatchClause {
+                    param,
+                    body: catch_body,
+                })
             } else {
                 None
             };
@@ -3032,7 +3327,11 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 None
             };
 
-            result.push(Stmt::Try { body, catch, finally });
+            result.push(Stmt::Try {
+                body,
+                catch,
+                finally,
+            });
         }
         ast::Stmt::Throw(throw_stmt) => {
             let expr = lower_expr(ctx, &throw_stmt.arg)?;
@@ -3043,9 +3342,7 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             let mut cases = Vec::new();
 
             for case in &switch_stmt.cases {
-                let test = case.test.as_ref()
-                    .map(|e| lower_expr(ctx, e))
-                    .transpose()?;
+                let test = case.test.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
 
                 let mut body = Vec::new();
                 for stmt in &case.cons {
@@ -3055,7 +3352,10 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 cases.push(SwitchCase { test, body });
             }
 
-            result.push(Stmt::Switch { discriminant, cases });
+            result.push(Stmt::Switch {
+                discriminant,
+                cases,
+            });
         }
         ast::Stmt::ForOf(for_of_stmt) => {
             // --- Iterator-protocol path for generator function calls ---
@@ -3067,24 +3367,41 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 if let ast::Callee::Expr(callee_expr) = &call.callee {
                     if let ast::Expr::Ident(ident) = &**callee_expr {
                         ctx.generator_func_names.contains(ident.sym.as_ref())
-                    } else { false }
-                } else { false }
-            } else { false };
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
             let callee_is_async_gen = if let ast::Expr::Call(call) = &*for_of_stmt.right {
                 if let ast::Callee::Expr(callee_expr) = &call.callee {
                     if let ast::Expr::Ident(ident) = &**callee_expr {
                         ctx.async_generator_func_names.contains(ident.sym.as_ref())
-                    } else { false }
-                } else { false }
-            } else { false };
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
             let needs_await = for_of_stmt.is_await || callee_is_async_gen;
 
-            let iter_from_class: Option<perry_types::FuncId> = if let ast::Expr::New(new_expr) = &*for_of_stmt.right {
-                if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
-                    let class_name = ident.sym.to_string();
-                    ctx.iterator_func_for_class.get(&class_name).copied()
-                } else { None }
-            } else { None };
+            let iter_from_class: Option<perry_types::FuncId> =
+                if let ast::Expr::New(new_expr) = &*for_of_stmt.right {
+                    if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+                        let class_name = ident.sym.to_string();
+                        ctx.iterator_func_for_class.get(&class_name).copied()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
             if is_generator_call || iter_from_class.is_some() {
                 let scope_mark = ctx.push_block_scope();
@@ -3095,9 +3412,12 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                         args: vec![iter_expr_raw],
                         type_args: vec![],
                     }
-                } else { iter_expr_raw };
+                } else {
+                    iter_expr_raw
+                };
                 let iter_id = ctx.fresh_local();
-                ctx.locals.push((format!("__iter_{}", iter_id), iter_id, Type::Any));
+                ctx.locals
+                    .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
                 result.push(Stmt::Let {
                     id: iter_id,
                     name: format!("__iter_{}", iter_id),
@@ -3107,7 +3427,8 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 });
 
                 let result_id = ctx.fresh_local();
-                ctx.locals.push((format!("__result_{}", result_id), result_id, Type::Any));
+                ctx.locals
+                    .push((format!("__result_{}", result_id), result_id, Type::Any));
                 let raw_next_call = Expr::Call {
                     callee: Box::new(Expr::PropertyGet {
                         object: Box::new(Expr::LocalGet(iter_id)),
@@ -3118,7 +3439,9 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 };
                 let next_call = if needs_await {
                     Expr::Await(Box::new(raw_next_call))
-                } else { raw_next_call };
+                } else {
+                    raw_next_call
+                };
                 result.push(Stmt::Let {
                     id: result_id,
                     name: format!("__result_{}", result_id),
@@ -3131,9 +3454,15 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                     if let Some(decl) = var_decl.decls.first() {
                         if let ast::Pat::Ident(ident) = &decl.name {
                             ident.id.sym.to_string()
-                        } else { "__gen_item".to_string() }
-                    } else { "__gen_item".to_string() }
-                } else { "__gen_item".to_string() };
+                        } else {
+                            "__gen_item".to_string()
+                        }
+                    } else {
+                        "__gen_item".to_string()
+                    }
+                } else {
+                    "__gen_item".to_string()
+                };
                 let item_id = ctx.define_local(item_name.clone(), Type::Any);
 
                 let mut body_stmts: Vec<Stmt> = Vec::new();
@@ -3149,10 +3478,7 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 });
                 let user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
                 body_stmts.extend(user_body);
-                body_stmts.push(Stmt::Expr(Expr::LocalSet(
-                    result_id,
-                    Box::new(next_call),
-                )));
+                body_stmts.push(Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))));
 
                 result.push(Stmt::While {
                     condition: Expr::Unary {
@@ -3182,7 +3508,8 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             // If the iterable is a Map, wrap in MapEntries to convert to array
             let arr_expr = if let ast::Expr::Ident(ident) = &*for_of_stmt.right {
                 let name = ident.sym.to_string();
-                let is_map = ctx.lookup_local_type(&name)
+                let is_map = ctx
+                    .lookup_local_type(&name)
                     .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Map"))
                     .unwrap_or(false);
                 if is_map {
@@ -3199,18 +3526,21 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             // For an identifier iterable like `for (const word of words)` where
             // `words: string[]`, extract the element type from the local's
             // declared Array<T> so the loop variable gets the right type.
-            let inferred_elem_type: Option<Type> = if let ast::Expr::Ident(ident) = &*for_of_stmt.right {
-                let name = ident.sym.to_string();
-                match ctx.lookup_local_type(&name) {
-                    Some(Type::Array(elem)) => Some((**elem).clone()),
-                    Some(Type::Generic { base, type_args }) if base == "Array" && type_args.len() == 1 => {
-                        Some(type_args[0].clone())
+            let inferred_elem_type: Option<Type> =
+                if let ast::Expr::Ident(ident) = &*for_of_stmt.right {
+                    let name = ident.sym.to_string();
+                    match ctx.lookup_local_type(&name) {
+                        Some(Type::Array(elem)) => Some((**elem).clone()),
+                        Some(Type::Generic { base, type_args })
+                            if base == "Array" && type_args.len() == 1 =>
+                        {
+                            Some(type_args[0].clone())
+                        }
+                        _ => None,
                     }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+                } else {
+                    None
+                };
             let holder_type = if is_string_iter {
                 Type::String
             } else if let Some(ref elem) = inferred_elem_type {
@@ -3228,8 +3558,10 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
 
             let arr_id = ctx.fresh_local();
             let idx_id = ctx.fresh_local();
-            ctx.locals.push((format!("__arr_{}", arr_id), arr_id, holder_type.clone()));
-            ctx.locals.push((format!("__idx_{}", idx_id), idx_id, Type::Number));
+            ctx.locals
+                .push((format!("__arr_{}", arr_id), arr_id, holder_type.clone()));
+            ctx.locals
+                .push((format!("__idx_{}", idx_id), idx_id, Type::Number));
 
             // Store array reference
             result.push(Stmt::Let {
@@ -3242,7 +3574,11 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
 
             // IMPORTANT: Define iteration variables BEFORE lowering the body
             let item_id = ctx.fresh_local();
-            ctx.locals.push((format!("__item_{}", item_id), item_id, item_hir_type.clone()));
+            ctx.locals.push((
+                format!("__item_{}", item_id),
+                item_id,
+                item_hir_type.clone(),
+            ));
 
             // Pre-define all variables from the pattern
             let var_ids: Vec<(String, u32)> = match &for_of_stmt.left {
@@ -3373,7 +3709,9 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                                             let prop_name = assign.key.sym.to_string();
                                             let (name, id) = var_ids[var_idx].clone();
                                             var_idx += 1;
-                                            let init_value = if let Some(default_expr) = &assign.value {
+                                            let init_value = if let Some(default_expr) =
+                                                &assign.value
+                                            {
                                                 let prop_access = Expr::PropertyGet {
                                                     object: Box::new(Expr::LocalGet(item_id)),
                                                     property: prop_name,
@@ -3405,7 +3743,9 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                                         }
                                         ast::ObjectPatProp::KeyValue(kv) => {
                                             let key = match &kv.key {
-                                                ast::PropName::Ident(ident) => ident.sym.to_string(),
+                                                ast::PropName::Ident(ident) => {
+                                                    ident.sym.to_string()
+                                                }
                                                 _ => continue,
                                             };
                                             if let ast::Pat::Ident(_) = &*kv.value {
@@ -3526,16 +3866,19 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
 
             // Lower the body and prepend key assignment
             let mut loop_body = lower_body_stmt(ctx, &for_in_stmt.body)?;
-            loop_body.insert(0, Stmt::Let {
-                id: key_id,
-                name: key_name,
-                ty: Type::String,
-                mutable: false,
-                init: Some(Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(keys_id)),
-                    index: Box::new(Expr::LocalGet(idx_id)),
-                }),
-            });
+            loop_body.insert(
+                0,
+                Stmt::Let {
+                    id: key_id,
+                    name: key_name,
+                    ty: Type::String,
+                    mutable: false,
+                    init: Some(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(keys_id)),
+                        index: Box::new(Expr::LocalGet(idx_id)),
+                    }),
+                },
+            );
 
             // Create the for loop
             result.push(Stmt::For {
@@ -3568,8 +3911,8 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
         // `debugger;` is a no-op in AOT compilation.
         ast::Stmt::Debugger(_) => {}
         // Type-only declarations are fully erased at compile time.
-        ast::Stmt::Decl(ast::Decl::TsInterface(_))
-        | ast::Stmt::Decl(ast::Decl::TsTypeAlias(_)) => {}
+        ast::Stmt::Decl(ast::Decl::TsInterface(_)) | ast::Stmt::Decl(ast::Decl::TsTypeAlias(_)) => {
+        }
         // Body-local enum / namespace are valid TS but Perry only registers them
         // at module scope (see lower.rs::lower_module). Silently dropping them
         // here produced runtime ReferenceErrors at the use site instead of a
@@ -3660,9 +4003,12 @@ fn find_native_return_in_stmts(
         }
         // Stop once registered (early return in Return arm handles the direct case;
         // check here for nested finds)
-        if ctx.func_return_native_instances.iter().any(|(n, _, _)| n == func_name) {
+        if ctx
+            .func_return_native_instances
+            .iter()
+            .any(|(n, _, _)| n == func_name)
+        {
             return;
         }
     }
 }
-

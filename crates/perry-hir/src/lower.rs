@@ -4,8 +4,8 @@
 
 use anyhow::{anyhow, Result};
 use perry_types::{FuncId, GlobalId, LocalId, Type, TypeParam};
-use swc_ecma_ast as ast;
 use std::collections::{HashMap, HashSet};
+use swc_ecma_ast as ast;
 
 use crate::ir::*;
 
@@ -21,13 +21,13 @@ use crate::ir::*;
 //   the largest single arm extracted so far).
 // - `expr_member.rs` / `expr_assign.rs` / `expr_new.rs` (v0.5.339):
 //   property access, assignment, and `new C()` constructor calls.
-mod expr_misc;
-mod expr_function;
-mod expr_object;
-mod expr_member;
 mod expr_assign;
-mod expr_new;
 mod expr_call;
+mod expr_function;
+mod expr_member;
+mod expr_misc;
+mod expr_new;
+mod expr_object;
 
 /// Context for lowering, tracks variable bindings
 pub struct LoweringContext {
@@ -242,7 +242,10 @@ impl LoweringContext {
         Self::with_class_id_start(source_file_path, 1)
     }
 
-    pub fn with_class_id_start(source_file_path: impl Into<String>, start_class_id: ClassId) -> Self {
+    pub fn with_class_id_start(
+        source_file_path: impl Into<String>,
+        start_class_id: ClassId,
+    ) -> Self {
         Self {
             next_local_id: 0,
             next_global_id: 0,
@@ -336,7 +339,9 @@ impl LoweringContext {
 
     /// Check if a name is a type parameter in the current scope
     pub(crate) fn is_type_param(&self, name: &str) -> bool {
-        self.type_param_scopes.iter().any(|scope| scope.contains(name))
+        self.type_param_scopes
+            .iter()
+            .any(|scope| scope.contains(name))
     }
 
     /// Look up a type alias by name and return its resolved type (if found).
@@ -344,7 +349,8 @@ impl LoweringContext {
     /// `type BlockTag = 'latest' | number | string` so the compiler sees
     /// the underlying Union type instead of Named("BlockTag").
     pub(crate) fn resolve_type_alias(&self, name: &str) -> Option<perry_types::Type> {
-        self.type_aliases.iter()
+        self.type_aliases
+            .iter()
             .find(|(alias_name, _, type_params, _)| alias_name == name && type_params.is_empty())
             .map(|(_, _, _, ty)| ty.clone())
     }
@@ -366,9 +372,7 @@ pub(super) fn extract_typed_parse_source_order(
 ) -> Option<Vec<String>> {
     use swc_ecma_ast as ast;
     match ts_type {
-        ast::TsType::TsArrayType(arr) => {
-            extract_typed_parse_source_order(&arr.elem_type, ctx)
-        }
+        ast::TsType::TsArrayType(arr) => extract_typed_parse_source_order(&arr.elem_type, ctx),
         ast::TsType::TsTypeLit(lit) => {
             let mut keys = Vec::with_capacity(lit.members.len());
             for member in &lit.members {
@@ -380,7 +384,11 @@ pub(super) fn extract_typed_parse_source_order(
                     }
                 }
             }
-            if keys.is_empty() { None } else { Some(keys) }
+            if keys.is_empty() {
+                None
+            } else {
+                Some(keys)
+            }
         }
         ast::TsType::TsTypeRef(tref) => {
             // `Array<T>` — recurse on the element type argument.
@@ -438,7 +446,6 @@ pub(super) fn resolve_typed_parse_ty(ctx: &LoweringContext, ty: Type) -> Type {
 }
 
 impl LoweringContext {
-
     pub(crate) fn fresh_local(&mut self) -> LocalId {
         let id = self.next_local_id;
         self.next_local_id += 1;
@@ -461,7 +468,11 @@ impl LoweringContext {
     /// already-lowered callback `cb` in a synthetic closure that calls the corresponding
     /// coerce expression.  Otherwise return `cb` unchanged.  This is needed because
     /// built-in constructors aren't first-class closure objects in Perry's runtime.
-    pub(crate) fn maybe_wrap_builtin_callback(&mut self, cb: Expr, ast_arg: &swc_ecma_ast::ExprOrSpread) -> Expr {
+    pub(crate) fn maybe_wrap_builtin_callback(
+        &mut self,
+        cb: Expr,
+        ast_arg: &swc_ecma_ast::ExprOrSpread,
+    ) -> Expr {
         if let swc_ecma_ast::Expr::Ident(ident) = ast_arg.expr.as_ref() {
             let builtin = ident.sym.as_ref();
             if matches!(builtin, "Boolean" | "Number" | "String") {
@@ -513,9 +524,17 @@ impl LoweringContext {
 
     /// Register declared instance field names for a class. Used by subclasses to skip
     /// re-declaring inherited fields when inferring from ctor body `this.x = ...` assignments.
-    pub(crate) fn register_class_field_names(&mut self, class_name: String, field_names: Vec<String>) {
+    pub(crate) fn register_class_field_names(
+        &mut self,
+        class_name: String,
+        field_names: Vec<String>,
+    ) {
         // Replace existing entry if present; otherwise append.
-        if let Some(entry) = self.class_field_names.iter_mut().find(|(n, _)| *n == class_name) {
+        if let Some(entry) = self
+            .class_field_names
+            .iter_mut()
+            .find(|(n, _)| *n == class_name)
+        {
             entry.1 = field_names;
         } else {
             self.class_field_names.push((class_name, field_names));
@@ -524,7 +543,10 @@ impl LoweringContext {
 
     /// Look up the list of instance field names declared on a class (NOT including inherited).
     pub(crate) fn lookup_class_field_names(&self, class_name: &str) -> Option<&[String]> {
-        self.class_field_names.iter().find(|(n, _)| n == class_name).map(|(_, f)| f.as_slice())
+        self.class_field_names
+            .iter()
+            .find(|(n, _)| n == class_name)
+            .map(|(_, f)| f.as_slice())
     }
 
     /// Issue #212: register the outer-scope LocalIds that a nested class
@@ -532,7 +554,11 @@ impl LoweringContext {
     /// constructor; `Expr::New { class_name }` lowering looks it up and
     /// appends `LocalGet(id)` per captured id at every construction site.
     pub(crate) fn register_class_captures(&mut self, class_name: String, captures: Vec<LocalId>) {
-        if let Some(entry) = self.class_captures.iter_mut().find(|(n, _)| *n == class_name) {
+        if let Some(entry) = self
+            .class_captures
+            .iter_mut()
+            .find(|(n, _)| *n == class_name)
+        {
             entry.1 = captures;
         } else {
             self.class_captures.push((class_name, captures));
@@ -542,48 +568,72 @@ impl LoweringContext {
     /// Look up the captured outer-scope LocalIds for a class. Returns `None`
     /// for plain (non-capturing) classes.
     pub(crate) fn lookup_class_captures(&self, class_name: &str) -> Option<&[LocalId]> {
-        self.class_captures.iter().find(|(n, _)| n == class_name).map(|(_, c)| c.as_slice())
+        self.class_captures
+            .iter()
+            .find(|(n, _)| n == class_name)
+            .map(|(_, c)| c.as_slice())
     }
 
-    pub(crate) fn register_class_statics(&mut self, class_name: String, static_fields: Vec<String>, static_methods: Vec<String>) {
-        self.class_statics.push((class_name, static_fields, static_methods));
+    pub(crate) fn register_class_statics(
+        &mut self,
+        class_name: String,
+        static_fields: Vec<String>,
+        static_methods: Vec<String>,
+    ) {
+        self.class_statics
+            .push((class_name, static_fields, static_methods));
     }
 
     pub(crate) fn has_static_field(&self, class_name: &str, field_name: &str) -> bool {
-        self.class_statics.iter()
+        self.class_statics
+            .iter()
             .find(|(cn, _, _)| cn == class_name)
             .map(|(_, fields, _)| fields.contains(&field_name.to_string()))
             .unwrap_or(false)
     }
 
     pub(crate) fn has_static_method(&self, class_name: &str, method_name: &str) -> bool {
-        self.class_statics.iter()
+        self.class_statics
+            .iter()
             .find(|(cn, _, _)| cn == class_name)
             .map(|(_, _, methods)| methods.contains(&method_name.to_string()))
             .unwrap_or(false)
     }
 
     pub(crate) fn lookup_namespace_var(&self, ns_name: &str, member_name: &str) -> Option<LocalId> {
-        self.namespace_vars.iter()
+        self.namespace_vars
+            .iter()
             .find(|(ns, member, _)| ns == ns_name && member == member_name)
             .map(|(_, _, id)| *id)
     }
 
-    pub(crate) fn define_enum(&mut self, name: String, id: EnumId, members: Vec<(String, EnumValue)>) {
+    pub(crate) fn define_enum(
+        &mut self,
+        name: String,
+        id: EnumId,
+        members: Vec<(String, EnumValue)>,
+    ) {
         self.enums.push((name, id, members));
     }
 
     pub(crate) fn lookup_enum(&self, name: &str) -> Option<(EnumId, &[(String, EnumValue)])> {
-        self.enums.iter()
+        self.enums
+            .iter()
             .find(|(n, _, _)| n == name)
             .map(|(_, id, members)| (*id, members.as_slice()))
     }
 
-    pub(crate) fn lookup_enum_member(&self, enum_name: &str, member_name: &str) -> Option<&EnumValue> {
-        self.enums.iter()
+    pub(crate) fn lookup_enum_member(
+        &self,
+        enum_name: &str,
+        member_name: &str,
+    ) -> Option<&EnumValue> {
+        self.enums
+            .iter()
             .find(|(n, _, _)| n == enum_name)
             .and_then(|(_, _, members)| {
-                members.iter()
+                members
+                    .iter()
                     .find(|(m, _)| m == member_name)
                     .map(|(_, v)| v)
             })
@@ -609,21 +659,32 @@ impl LoweringContext {
     /// binding for `const f = () => f(...)` and stomps on state shared between
     /// sibling closures.
     pub(crate) fn filter_module_level_captures(&self, captures: Vec<LocalId>) -> Vec<LocalId> {
-        captures.into_iter()
+        captures
+            .into_iter()
             .filter(|id| !self.module_level_ids.contains(id))
             .collect()
     }
 
     pub(crate) fn lookup_local(&self, name: &str) -> Option<LocalId> {
-        self.locals.iter().rev().find(|(n, _, _)| n == name).map(|(_, id, _)| *id)
+        self.locals
+            .iter()
+            .rev()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, id, _)| *id)
     }
 
     pub(crate) fn lookup_local_type(&self, name: &str) -> Option<&Type> {
-        self.locals.iter().rev().find(|(n, _, _)| n == name).map(|(_, _, ty)| ty)
+        self.locals
+            .iter()
+            .rev()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, _, ty)| ty)
     }
 
     pub(crate) fn lookup_func(&self, name: &str) -> Option<FuncId> {
-        self.functions_index.get(name).map(|&idx| self.functions[idx].1)
+        self.functions_index
+            .get(name)
+            .map(|&idx| self.functions[idx].1)
     }
 
     pub(crate) fn register_func(&mut self, name: String, id: FuncId) {
@@ -770,23 +831,34 @@ impl LoweringContext {
             is_exported: false,
         });
 
-        self.anon_shape_classes.insert(shape_key, class_name.clone());
+        self.anon_shape_classes
+            .insert(shape_key, class_name.clone());
         class_name
     }
 
     pub(crate) fn lookup_func_name(&self, func_id: FuncId) -> Option<&str> {
-        self.functions.iter().find(|(_, id)| *id == func_id).map(|(name, _)| name.as_str())
+        self.functions
+            .iter()
+            .find(|(_, id)| *id == func_id)
+            .map(|(name, _)| name.as_str())
     }
 
-    pub(crate) fn lookup_func_defaults(&self, func_id: FuncId) -> Option<(&[Option<Expr>], &[LocalId])> {
-        self.func_defaults.iter()
+    pub(crate) fn lookup_func_defaults(
+        &self,
+        func_id: FuncId,
+    ) -> Option<(&[Option<Expr>], &[LocalId])> {
+        self.func_defaults
+            .iter()
             .find(|(id, _, _)| *id == func_id)
             .map(|(_, defaults, param_ids)| (defaults.as_slice(), param_ids.as_slice()))
     }
 
     /// Substitute parameter references in a default expression.
     /// Replaces LocalGet(callee_param_id) with the corresponding caller argument expression.
-    pub(crate) fn substitute_param_refs_in_default(expr: &Expr, param_map: &[(LocalId, Expr)]) -> Expr {
+    pub(crate) fn substitute_param_refs_in_default(
+        expr: &Expr,
+        param_map: &[(LocalId, Expr)],
+    ) -> Expr {
         match expr {
             Expr::LocalGet(id) => {
                 // Check if this LocalGet references one of the callee's parameters
@@ -798,89 +870,109 @@ impl LoweringContext {
                 // Not a parameter reference - keep as-is
                 expr.clone()
             }
-            Expr::Array(elements) => {
-                Expr::Array(elements.iter().map(|e| Self::substitute_param_refs_in_default(e, param_map)).collect())
-            }
-            Expr::Object(fields) => {
-                Expr::Object(fields.iter().map(|(k, v)| (k.clone(), Self::substitute_param_refs_in_default(v, param_map))).collect())
-            }
-            Expr::Binary { op, left, right } => {
-                Expr::Binary {
-                    op: *op,
-                    left: Box::new(Self::substitute_param_refs_in_default(left, param_map)),
-                    right: Box::new(Self::substitute_param_refs_in_default(right, param_map)),
-                }
-            }
-            Expr::Compare { op, left, right } => {
-                Expr::Compare {
-                    op: *op,
-                    left: Box::new(Self::substitute_param_refs_in_default(left, param_map)),
-                    right: Box::new(Self::substitute_param_refs_in_default(right, param_map)),
-                }
-            }
-            Expr::Logical { op, left, right } => {
-                Expr::Logical {
-                    op: *op,
-                    left: Box::new(Self::substitute_param_refs_in_default(left, param_map)),
-                    right: Box::new(Self::substitute_param_refs_in_default(right, param_map)),
-                }
-            }
-            Expr::Unary { op, operand } => {
-                Expr::Unary {
-                    op: *op,
-                    operand: Box::new(Self::substitute_param_refs_in_default(operand, param_map)),
-                }
-            }
-            Expr::Call { callee, args, type_args } => {
-                Expr::Call {
-                    callee: Box::new(Self::substitute_param_refs_in_default(callee, param_map)),
-                    args: args.iter().map(|a| Self::substitute_param_refs_in_default(a, param_map)).collect(),
-                    type_args: type_args.clone(),
-                }
-            }
-            Expr::Conditional { condition, then_expr, else_expr } => {
-                Expr::Conditional {
-                    condition: Box::new(Self::substitute_param_refs_in_default(condition, param_map)),
-                    then_expr: Box::new(Self::substitute_param_refs_in_default(then_expr, param_map)),
-                    else_expr: Box::new(Self::substitute_param_refs_in_default(else_expr, param_map)),
-                }
-            }
-            Expr::PropertyGet { object, property } => {
-                Expr::PropertyGet {
-                    object: Box::new(Self::substitute_param_refs_in_default(object, param_map)),
-                    property: property.clone(),
-                }
-            }
-            Expr::IndexGet { object, index } => {
-                Expr::IndexGet {
-                    object: Box::new(Self::substitute_param_refs_in_default(object, param_map)),
-                    index: Box::new(Self::substitute_param_refs_in_default(index, param_map)),
-                }
-            }
-            Expr::New { class_name, args, type_args } => {
-                Expr::New {
-                    class_name: class_name.clone(),
-                    args: args.iter().map(|a| Self::substitute_param_refs_in_default(a, param_map)).collect(),
-                    type_args: type_args.clone(),
-                }
-            }
+            Expr::Array(elements) => Expr::Array(
+                elements
+                    .iter()
+                    .map(|e| Self::substitute_param_refs_in_default(e, param_map))
+                    .collect(),
+            ),
+            Expr::Object(fields) => Expr::Object(
+                fields
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            Self::substitute_param_refs_in_default(v, param_map),
+                        )
+                    })
+                    .collect(),
+            ),
+            Expr::Binary { op, left, right } => Expr::Binary {
+                op: *op,
+                left: Box::new(Self::substitute_param_refs_in_default(left, param_map)),
+                right: Box::new(Self::substitute_param_refs_in_default(right, param_map)),
+            },
+            Expr::Compare { op, left, right } => Expr::Compare {
+                op: *op,
+                left: Box::new(Self::substitute_param_refs_in_default(left, param_map)),
+                right: Box::new(Self::substitute_param_refs_in_default(right, param_map)),
+            },
+            Expr::Logical { op, left, right } => Expr::Logical {
+                op: *op,
+                left: Box::new(Self::substitute_param_refs_in_default(left, param_map)),
+                right: Box::new(Self::substitute_param_refs_in_default(right, param_map)),
+            },
+            Expr::Unary { op, operand } => Expr::Unary {
+                op: *op,
+                operand: Box::new(Self::substitute_param_refs_in_default(operand, param_map)),
+            },
+            Expr::Call {
+                callee,
+                args,
+                type_args,
+            } => Expr::Call {
+                callee: Box::new(Self::substitute_param_refs_in_default(callee, param_map)),
+                args: args
+                    .iter()
+                    .map(|a| Self::substitute_param_refs_in_default(a, param_map))
+                    .collect(),
+                type_args: type_args.clone(),
+            },
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => Expr::Conditional {
+                condition: Box::new(Self::substitute_param_refs_in_default(condition, param_map)),
+                then_expr: Box::new(Self::substitute_param_refs_in_default(then_expr, param_map)),
+                else_expr: Box::new(Self::substitute_param_refs_in_default(else_expr, param_map)),
+            },
+            Expr::PropertyGet { object, property } => Expr::PropertyGet {
+                object: Box::new(Self::substitute_param_refs_in_default(object, param_map)),
+                property: property.clone(),
+            },
+            Expr::IndexGet { object, index } => Expr::IndexGet {
+                object: Box::new(Self::substitute_param_refs_in_default(object, param_map)),
+                index: Box::new(Self::substitute_param_refs_in_default(index, param_map)),
+            },
+            Expr::New {
+                class_name,
+                args,
+                type_args,
+            } => Expr::New {
+                class_name: class_name.clone(),
+                args: args
+                    .iter()
+                    .map(|a| Self::substitute_param_refs_in_default(a, param_map))
+                    .collect(),
+                type_args: type_args.clone(),
+            },
             // Leaf expressions that don't contain LocalGet - return as-is
             _ => expr.clone(),
         }
     }
 
     pub(crate) fn lookup_imported_func(&self, name: &str) -> Option<&str> {
-        self.imported_functions_index.get(name).map(|&idx| self.imported_functions[idx].1.as_str())
+        self.imported_functions_index
+            .get(name)
+            .map(|&idx| self.imported_functions[idx].1.as_str())
     }
 
     pub(crate) fn register_imported_func(&mut self, local_name: String, original_name: String) {
         let idx = self.imported_functions.len();
-        self.imported_functions_index.insert(local_name.clone(), idx);
+        self.imported_functions_index
+            .insert(local_name.clone(), idx);
         self.imported_functions.push((local_name, original_name));
     }
 
-    pub(crate) fn register_extern_func_types(&mut self, name: String, param_types: Vec<Type>, return_type: Type) {
-        self.extern_func_types.push((name, param_types, return_type));
+    pub(crate) fn register_extern_func_types(
+        &mut self,
+        name: String,
+        param_types: Vec<Type>,
+        return_type: Type,
+    ) {
+        self.extern_func_types
+            .push((name, param_types, return_type));
     }
 
     pub(crate) fn lookup_extern_func_types(&self, name: &str) -> Option<(&Vec<Type>, &Type)> {
@@ -890,45 +982,71 @@ impl LoweringContext {
             .map(|(_, params, ret)| (params, ret))
     }
 
-    pub(crate) fn register_native_module(&mut self, local_name: String, module_name: String, method_name: Option<String>) {
-        self.native_modules.push((local_name, module_name, method_name));
+    pub(crate) fn register_native_module(
+        &mut self,
+        local_name: String,
+        module_name: String,
+        method_name: Option<String>,
+    ) {
+        self.native_modules
+            .push((local_name, module_name, method_name));
     }
 
     pub(crate) fn lookup_native_module(&self, name: &str) -> Option<(&str, Option<&str>)> {
-        self.native_modules.iter()
+        self.native_modules
+            .iter()
             .find(|(n, _, _)| n == name)
             .map(|(_, m, method)| (m.as_str(), method.as_ref().map(|s| s.as_str())))
     }
 
-    pub(crate) fn register_builtin_module_alias(&mut self, local_name: String, module_name: String) {
+    pub(crate) fn register_builtin_module_alias(
+        &mut self,
+        local_name: String,
+        module_name: String,
+    ) {
         let idx = self.builtin_module_aliases.len();
-        self.builtin_module_aliases_index.insert(local_name.clone(), idx);
+        self.builtin_module_aliases_index
+            .insert(local_name.clone(), idx);
         self.builtin_module_aliases.push((local_name, module_name));
     }
 
     pub(crate) fn lookup_builtin_module_alias(&self, name: &str) -> Option<&str> {
-        self.builtin_module_aliases_index.get(name).map(|&idx| self.builtin_module_aliases[idx].1.as_str())
+        self.builtin_module_aliases_index
+            .get(name)
+            .map(|&idx| self.builtin_module_aliases[idx].1.as_str())
     }
 
-    pub(crate) fn register_native_instance(&mut self, local_name: String, module_name: String, class_name: String) {
-        self.native_instances.push((local_name, module_name, class_name));
+    pub(crate) fn register_native_instance(
+        &mut self,
+        local_name: String,
+        module_name: String,
+        class_name: String,
+    ) {
+        self.native_instances
+            .push((local_name, module_name, class_name));
     }
 
     pub(crate) fn lookup_native_instance(&self, name: &str) -> Option<(&str, &str)> {
         // Check scoped instances first (function-local variables)
-        self.native_instances.iter()
+        self.native_instances
+            .iter()
             .find(|(n, _, _)| n == name)
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
             .or_else(|| {
                 // Check module-level instances (survive scope exits)
-                self.module_native_instances.iter()
+                self.module_native_instances
+                    .iter()
                     .find(|(n, _, _)| n == name)
                     .map(|(_, module, class)| (module.as_str(), class.as_str()))
             })
     }
 
-    pub(crate) fn lookup_func_return_native_instance(&self, func_name: &str) -> Option<(&str, &str)> {
-        self.func_return_native_instances.iter()
+    pub(crate) fn lookup_func_return_native_instance(
+        &self,
+        func_name: &str,
+    ) -> Option<(&str, &str)> {
+        self.func_return_native_instances
+            .iter()
             .find(|(n, _, _)| n == func_name)
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
     }
@@ -946,9 +1064,7 @@ impl LoweringContext {
 /// work without ceremony.
 fn native_instance_from_return_type(ty: &Type) -> Option<(&'static str, &'static str)> {
     let inner = match ty {
-        Type::Generic { base, type_args } if base == "Promise" => {
-            type_args.first().unwrap_or(ty)
-        }
+        Type::Generic { base, type_args } if base == "Promise" => type_args.first().unwrap_or(ty),
         Type::Promise(inner) => inner.as_ref(),
         other => other,
     };
@@ -980,7 +1096,9 @@ impl LoweringContext {
     }
 
     pub(crate) fn lookup_func_return_type(&self, name: &str) -> Option<&Type> {
-        self.func_return_types.iter().rev()
+        self.func_return_types
+            .iter()
+            .rev()
             .find(|(n, _)| n == name)
             .map(|(_, ty)| ty)
     }
@@ -997,7 +1115,8 @@ impl LoweringContext {
         method_name: String,
         ty: Type,
     ) {
-        self.class_method_return_types.push((class_name, method_name, ty));
+        self.class_method_return_types
+            .push((class_name, method_name, ty));
     }
 
     /// Phase 4.1: lookup the return type of `class_name.method_name`.
@@ -1011,7 +1130,9 @@ impl LoweringContext {
         class_name: &str,
         method_name: &str,
     ) -> Option<&Type> {
-        self.class_method_return_types.iter().rev()
+        self.class_method_return_types
+            .iter()
+            .rev()
             .find(|(c, m, _)| c == class_name && m == method_name)
             .map(|(_, _, ty)| ty)
     }
@@ -1019,7 +1140,11 @@ impl LoweringContext {
     pub(crate) fn enter_scope(&mut self) -> (usize, usize, usize) {
         // Function/closure boundary: new locals are no longer module-level.
         self.scope_depth += 1;
-        (self.locals.len(), self.native_instances.len(), self.functions.len())
+        (
+            self.locals.len(),
+            self.native_instances.len(),
+            self.functions.len(),
+        )
     }
 
     pub(crate) fn exit_scope(&mut self, mark: (usize, usize, usize)) {
@@ -1063,7 +1188,10 @@ impl LoweringContext {
     /// (tracked via `var_hoisted_ids`) are retained, since `var` is
     /// function-scoped in JS.
     pub(crate) fn pop_block_scope(&mut self, mark: (usize, usize)) {
-        debug_assert!(self.inside_block_scope > 0, "pop_block_scope without matching push");
+        debug_assert!(
+            self.inside_block_scope > 0,
+            "pop_block_scope without matching push"
+        );
         self.inside_block_scope = self.inside_block_scope.saturating_sub(1);
         let (locals_mark, functions_mark) = mark;
 
@@ -1098,18 +1226,21 @@ impl LoweringContext {
         }
         self.functions.truncate(functions_mark);
     }
-
 }
 
 // Re-export extracted module functions
-pub(crate) use crate::lower_types::*;
-pub(crate) use crate::lower_patterns::*;
-pub(crate) use crate::destructuring::*;
-pub(crate) use crate::lower_decl::*;
 pub(crate) use crate::analysis::*;
+pub(crate) use crate::destructuring::*;
 pub(crate) use crate::jsx::*;
+pub(crate) use crate::lower_decl::*;
+pub(crate) use crate::lower_patterns::*;
+pub(crate) use crate::lower_types::*;
 
-pub fn lower_module(ast_module: &ast::Module, name: &str, source_file_path: &str) -> Result<Module> {
+pub fn lower_module(
+    ast_module: &ast::Module,
+    name: &str,
+    source_file_path: &str,
+) -> Result<Module> {
     lower_module_with_class_id(ast_module, name, source_file_path, 1).map(|(module, _)| module)
 }
 
@@ -1139,46 +1270,76 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
     };
     // Helper to rebuild the original Call if we don't want to fold.
     let rebuild = |obj: Box<Expr>, prop: String, args: Vec<Expr>| Expr::Call {
-        callee: Box::new(Expr::PropertyGet { object: obj, property: prop }),
+        callee: Box::new(Expr::PropertyGet {
+            object: obj,
+            property: prop,
+        }),
         args,
         type_args: Vec::new(),
     };
     match property.as_str() {
         "map" if args.len() >= 1 => {
             let cb = args.into_iter().next().unwrap();
-            Expr::ArrayMap { array: object, callback: Box::new(cb) }
+            Expr::ArrayMap {
+                array: object,
+                callback: Box::new(cb),
+            }
         }
         "filter" if args.len() >= 1 => {
             let cb = args.into_iter().next().unwrap();
-            Expr::ArrayFilter { array: object, callback: Box::new(cb) }
+            Expr::ArrayFilter {
+                array: object,
+                callback: Box::new(cb),
+            }
         }
         "forEach" if args.len() >= 1 => {
             let cb = args.into_iter().next().unwrap();
-            Expr::ArrayForEach { array: object, callback: Box::new(cb) }
+            Expr::ArrayForEach {
+                array: object,
+                callback: Box::new(cb),
+            }
         }
         "find" if args.len() >= 1 => {
             let cb = args.into_iter().next().unwrap();
-            Expr::ArrayFind { array: object, callback: Box::new(cb) }
+            Expr::ArrayFind {
+                array: object,
+                callback: Box::new(cb),
+            }
         }
         "findIndex" if args.len() >= 1 => {
             let cb = args.into_iter().next().unwrap();
-            Expr::ArrayFindIndex { array: object, callback: Box::new(cb) }
+            Expr::ArrayFindIndex {
+                array: object,
+                callback: Box::new(cb),
+            }
         }
         "findLast" if args.len() >= 1 => {
             let cb = args.into_iter().next().unwrap();
-            Expr::ArrayFindLast { array: object, callback: Box::new(cb) }
+            Expr::ArrayFindLast {
+                array: object,
+                callback: Box::new(cb),
+            }
         }
         "findLastIndex" if args.len() >= 1 => {
             let cb = args.into_iter().next().unwrap();
-            Expr::ArrayFindLastIndex { array: object, callback: Box::new(cb) }
+            Expr::ArrayFindLastIndex {
+                array: object,
+                callback: Box::new(cb),
+            }
         }
         "some" if args.len() >= 1 => {
             let cb = args.into_iter().next().unwrap();
-            Expr::ArraySome { array: object, callback: Box::new(cb) }
+            Expr::ArraySome {
+                array: object,
+                callback: Box::new(cb),
+            }
         }
         "every" if args.len() >= 1 => {
             let cb = args.into_iter().next().unwrap();
-            Expr::ArrayEvery { array: object, callback: Box::new(cb) }
+            Expr::ArrayEvery {
+                array: object,
+                callback: Box::new(cb),
+            }
         }
         _ => rebuild(object, property, args),
     }
@@ -1190,12 +1351,29 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
 pub(crate) fn is_known_object_static_method(name: &str) -> bool {
     matches!(
         name,
-        "keys" | "values" | "entries" | "fromEntries" | "assign" | "is"
-        | "hasOwn" | "freeze" | "seal" | "preventExtensions" | "create"
-        | "isFrozen" | "isSealed" | "isExtensible" | "getPrototypeOf"
-        | "setPrototypeOf" | "defineProperty" | "defineProperties"
-        | "getOwnPropertyDescriptor" | "getOwnPropertyDescriptors"
-        | "getOwnPropertyNames" | "getOwnPropertySymbols" | "groupBy"
+        "keys"
+            | "values"
+            | "entries"
+            | "fromEntries"
+            | "assign"
+            | "is"
+            | "hasOwn"
+            | "freeze"
+            | "seal"
+            | "preventExtensions"
+            | "create"
+            | "isFrozen"
+            | "isSealed"
+            | "isExtensible"
+            | "getPrototypeOf"
+            | "setPrototypeOf"
+            | "defineProperty"
+            | "defineProperties"
+            | "getOwnPropertyDescriptor"
+            | "getOwnPropertyDescriptors"
+            | "getOwnPropertyNames"
+            | "getOwnPropertySymbols"
+            | "groupBy"
     )
 }
 
@@ -1262,10 +1440,18 @@ fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut LoweringContext) 
             if let ast::Expr::New(new_expr) = init_unwrapped {
                 let name = ident.id.sym.to_string();
                 match classify_new(new_expr) {
-                    Some("WeakRef") => { ctx.weakref_locals.insert(name); }
-                    Some("FinalizationRegistry") => { ctx.finreg_locals.insert(name); }
-                    Some("WeakMap") => { ctx.weakmap_locals.insert(name); }
-                    Some("WeakSet") => { ctx.weakset_locals.insert(name); }
+                    Some("WeakRef") => {
+                        ctx.weakref_locals.insert(name);
+                    }
+                    Some("FinalizationRegistry") => {
+                        ctx.finreg_locals.insert(name);
+                    }
+                    Some("WeakMap") => {
+                        ctx.weakmap_locals.insert(name);
+                    }
+                    Some("WeakSet") => {
+                        ctx.weakset_locals.insert(name);
+                    }
                     Some("Proxy") => {
                         ctx.proxy_locals.insert(name.clone());
                         // Track proxy target class for `new p(args)` fold.
@@ -1428,10 +1614,8 @@ fn pre_scan_mixin_functions(ast_module: &ast::Module, ctx: &mut LoweringContext)
             return;
         }
         let fn_name = fn_decl.ident.sym.to_string();
-        ctx.mixin_funcs.insert(
-            fn_name,
-            (param_name, Box::new((*class_expr.class).clone())),
-        );
+        ctx.mixin_funcs
+            .insert(fn_name, (param_name, Box::new((*class_expr.class).clone())));
     }
     for item in &ast_module.body {
         match item {
@@ -1448,11 +1632,22 @@ fn pre_scan_mixin_functions(ast_module: &ast::Module, ctx: &mut LoweringContext)
     }
 }
 
-pub fn lower_module_with_class_id(ast_module: &ast::Module, name: &str, source_file_path: &str, start_class_id: ClassId) -> Result<(Module, ClassId)> {
+pub fn lower_module_with_class_id(
+    ast_module: &ast::Module,
+    name: &str,
+    source_file_path: &str,
+    start_class_id: ClassId,
+) -> Result<(Module, ClassId)> {
     lower_module_with_class_id_and_types(ast_module, name, source_file_path, start_class_id, None)
 }
 
-pub fn lower_module_with_class_id_and_types(ast_module: &ast::Module, name: &str, source_file_path: &str, start_class_id: ClassId, resolved_types: Option<std::collections::HashMap<u32, Type>>) -> Result<(Module, ClassId)> {
+pub fn lower_module_with_class_id_and_types(
+    ast_module: &ast::Module,
+    name: &str,
+    source_file_path: &str,
+    start_class_id: ClassId,
+    resolved_types: Option<std::collections::HashMap<u32, Type>>,
+) -> Result<(Module, ClassId)> {
     let mut ctx = LoweringContext::with_class_id_start(source_file_path, start_class_id);
     ctx.resolved_types = resolved_types;
     let mut module = Module::new(name);
@@ -1477,8 +1672,14 @@ pub fn lower_module_with_class_id_and_types(ast_module: &ast::Module, name: &str
         module.imports.push(Import {
             source: "react/jsx-runtime".to_string(),
             specifiers: vec![
-                ImportSpecifier::Named { local: "__jsx".to_string(), imported: "jsx".to_string() },
-                ImportSpecifier::Named { local: "__jsxs".to_string(), imported: "jsxs".to_string() },
+                ImportSpecifier::Named {
+                    local: "__jsx".to_string(),
+                    imported: "jsx".to_string(),
+                },
+                ImportSpecifier::Named {
+                    local: "__jsxs".to_string(),
+                    imported: "jsxs".to_string(),
+                },
             ],
             is_native: false,
             module_kind: ModuleKind::NativeCompiled,
@@ -1489,7 +1690,8 @@ pub fn lower_module_with_class_id_and_types(ast_module: &ast::Module, name: &str
     // Pre-scan: Find all function names that have implementations (bodies)
     // This is needed to properly handle TypeScript function overloads where
     // multiple signature-only declarations precede a single implementation
-    let mut functions_with_bodies: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut functions_with_bodies: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for item in &ast_module.body {
         let fn_decl = match item {
             ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(fn_decl))) => Some(fn_decl),
@@ -1539,12 +1741,18 @@ pub fn lower_module_with_class_id_and_types(ast_module: &ast::Module, name: &str
 
                 // No implementation exists - treat as external FFI declaration
                 // Extract parameter types for FFI signature
-                let param_types: Vec<Type> = fn_decl.function.params.iter()
+                let param_types: Vec<Type> = fn_decl
+                    .function
+                    .params
+                    .iter()
                     .map(|param| extract_param_type_with_ctx(&param.pat, None))
                     .collect();
 
                 // Extract return type
-                let return_type = fn_decl.function.return_type.as_ref()
+                let return_type = fn_decl
+                    .function
+                    .return_type
+                    .as_ref()
                     .map(|rt| extract_ts_type(&rt.type_ann))
                     .unwrap_or(Type::Void);
 
@@ -1590,7 +1798,9 @@ pub fn lower_module_with_class_id_and_types(ast_module: &ast::Module, name: &str
                 if let ast::Pat::Ident(ident) = &decl.name {
                     let name = ident.id.sym.to_string();
                     if ctx.lookup_local(&name).is_none() {
-                        let ty = ident.type_ann.as_ref()
+                        let ty = ident
+                            .type_ann
+                            .as_ref()
                             .map(|ann| extract_ts_type(&ann.type_ann))
                             .unwrap_or(Type::Any);
                         ctx.define_local(name.clone(), ty);
@@ -1697,7 +1907,10 @@ pub fn lower_module_with_class_id_and_types(ast_module: &ast::Module, name: &str
     // Populate exported_func_return_native_instances for functions that return native instances
     for (func_name, native_module, native_class) in &ctx.func_return_native_instances {
         // Check if this function is directly exported
-        let is_exported = module.functions.iter().any(|f| f.name == *func_name && f.is_exported);
+        let is_exported = module
+            .functions
+            .iter()
+            .any(|f| f.name == *func_name && f.is_exported);
         if is_exported {
             module.exported_func_return_native_instances.push((
                 func_name.clone(),
@@ -1796,13 +2009,22 @@ fn widen_mutable_captures_stmts(stmts: &mut [Stmt]) {
     }
 }
 
-fn widen_mutable_captures_stmt(stmt: &mut Stmt, scope_mutable: &std::collections::HashSet<LocalId>) {
+fn widen_mutable_captures_stmt(
+    stmt: &mut Stmt,
+    scope_mutable: &std::collections::HashSet<LocalId>,
+) {
     match stmt {
-        Stmt::Let { init: Some(expr), .. } => widen_mutable_captures_expr(expr, scope_mutable),
+        Stmt::Let {
+            init: Some(expr), ..
+        } => widen_mutable_captures_expr(expr, scope_mutable),
         Stmt::Expr(expr) => widen_mutable_captures_expr(expr, scope_mutable),
         Stmt::Return(Some(expr)) => widen_mutable_captures_expr(expr, scope_mutable),
         Stmt::Throw(expr) => widen_mutable_captures_expr(expr, scope_mutable),
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             widen_mutable_captures_expr(condition, scope_mutable);
             widen_mutable_captures_stmts(then_branch);
             if let Some(else_stmts) = else_branch {
@@ -1817,7 +2039,12 @@ fn widen_mutable_captures_stmt(stmt: &mut Stmt, scope_mutable: &std::collections
             widen_mutable_captures_stmts(body);
             widen_mutable_captures_expr(condition, scope_mutable);
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
                 widen_mutable_captures_stmt(init_stmt, scope_mutable);
             }
@@ -1829,7 +2056,11 @@ fn widen_mutable_captures_stmt(stmt: &mut Stmt, scope_mutable: &std::collections
             }
             widen_mutable_captures_stmts(body);
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             widen_mutable_captures_stmts(body);
             if let Some(catch_clause) = catch {
                 widen_mutable_captures_stmts(&mut catch_clause.body);
@@ -1838,7 +2069,10 @@ fn widen_mutable_captures_stmt(stmt: &mut Stmt, scope_mutable: &std::collections
                 widen_mutable_captures_stmts(finally_stmts);
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             widen_mutable_captures_expr(discriminant, scope_mutable);
             for case in cases {
                 if let Some(test) = &mut case.test {
@@ -1854,10 +2088,19 @@ fn widen_mutable_captures_stmt(stmt: &mut Stmt, scope_mutable: &std::collections
     }
 }
 
-fn widen_mutable_captures_expr(expr: &mut Expr, scope_mutable: &std::collections::HashSet<LocalId>) {
+fn widen_mutable_captures_expr(
+    expr: &mut Expr,
+    scope_mutable: &std::collections::HashSet<LocalId>,
+) {
     match expr {
-        Expr::Closure { captures, mutable_captures, body, .. } => {
-            let mut mset: std::collections::HashSet<LocalId> = mutable_captures.iter().copied().collect();
+        Expr::Closure {
+            captures,
+            mutable_captures,
+            body,
+            ..
+        } => {
+            let mut mset: std::collections::HashSet<LocalId> =
+                mutable_captures.iter().copied().collect();
             for id in captures.iter() {
                 if scope_mutable.contains(id) {
                     mset.insert(*id);
@@ -1888,7 +2131,9 @@ fn widen_mutable_captures_expr(expr: &mut Expr, scope_mutable: &std::collections
             widen_mutable_captures_expr(callee, scope_mutable);
             for arg in args {
                 match arg {
-                    CallArg::Expr(e) | CallArg::Spread(e) => widen_mutable_captures_expr(e, scope_mutable),
+                    CallArg::Expr(e) | CallArg::Spread(e) => {
+                        widen_mutable_captures_expr(e, scope_mutable)
+                    }
                 }
             }
         }
@@ -1900,7 +2145,9 @@ fn widen_mutable_captures_expr(expr: &mut Expr, scope_mutable: &std::collections
         Expr::ArraySpread(elements) => {
             for e in elements {
                 match e {
-                    ArrayElement::Expr(x) | ArrayElement::Spread(x) => widen_mutable_captures_expr(x, scope_mutable),
+                    ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
+                        widen_mutable_captures_expr(x, scope_mutable)
+                    }
                 }
             }
         }
@@ -1914,7 +2161,11 @@ fn widen_mutable_captures_expr(expr: &mut Expr, scope_mutable: &std::collections
                 widen_mutable_captures_expr(v, scope_mutable);
             }
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             widen_mutable_captures_expr(condition, scope_mutable);
             widen_mutable_captures_expr(then_expr, scope_mutable);
             widen_mutable_captures_expr(else_expr, scope_mutable);
@@ -1929,7 +2180,11 @@ fn widen_mutable_captures_expr(expr: &mut Expr, scope_mutable: &std::collections
             widen_mutable_captures_expr(object, scope_mutable);
             widen_mutable_captures_expr(index, scope_mutable);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             widen_mutable_captures_expr(object, scope_mutable);
             widen_mutable_captures_expr(index, scope_mutable);
             widen_mutable_captures_expr(value, scope_mutable);
@@ -1980,7 +2235,16 @@ fn widen_mutable_captures_expr(expr: &mut Expr, scope_mutable: &std::collections
             widen_mutable_captures_expr(array, scope_mutable);
             widen_mutable_captures_expr(comparator, scope_mutable);
         }
-        Expr::ArrayReduce { array, callback, initial } | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             widen_mutable_captures_expr(array, scope_mutable);
             widen_mutable_captures_expr(callback, scope_mutable);
             if let Some(init) = initial {
@@ -1996,7 +2260,12 @@ fn widen_mutable_captures_expr(expr: &mut Expr, scope_mutable: &std::collections
                 widen_mutable_captures_expr(cmp, scope_mutable);
             }
         }
-        Expr::ArrayToSpliced { array, start, delete_count, items } => {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => {
             widen_mutable_captures_expr(array, scope_mutable);
             widen_mutable_captures_expr(start, scope_mutable);
             widen_mutable_captures_expr(delete_count, scope_mutable);
@@ -2004,12 +2273,18 @@ fn widen_mutable_captures_expr(expr: &mut Expr, scope_mutable: &std::collections
                 widen_mutable_captures_expr(item, scope_mutable);
             }
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             widen_mutable_captures_expr(array, scope_mutable);
             widen_mutable_captures_expr(index, scope_mutable);
             widen_mutable_captures_expr(value, scope_mutable);
         }
-        Expr::ArrayCopyWithin { target, start, end, .. } => {
+        Expr::ArrayCopyWithin {
+            target, start, end, ..
+        } => {
             widen_mutable_captures_expr(target, scope_mutable);
             widen_mutable_captures_expr(start, scope_mutable);
             if let Some(e) = end {
@@ -2027,7 +2302,9 @@ fn widen_mutable_captures_expr(expr: &mut Expr, scope_mutable: &std::collections
                 widen_mutable_captures_expr(arg, scope_mutable);
             }
         }
-        Expr::JsCreateCallback { closure, .. } => widen_mutable_captures_expr(closure, scope_mutable),
+        Expr::JsCreateCallback { closure, .. } => {
+            widen_mutable_captures_expr(closure, scope_mutable)
+        }
         Expr::ArrayPush { value, .. } | Expr::ArrayPushSpread { source: value, .. } => {
             widen_mutable_captures_expr(value, scope_mutable);
         }
@@ -2040,11 +2317,17 @@ fn widen_mutable_captures_expr(expr: &mut Expr, scope_mutable: &std::collections
 /// This is the "mutably shared" set at the enclosing lexical scope.
 fn collect_closure_assigned_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
     match stmt {
-        Stmt::Let { init: Some(expr), .. } => collect_closure_assigned_expr(expr, out),
+        Stmt::Let {
+            init: Some(expr), ..
+        } => collect_closure_assigned_expr(expr, out),
         Stmt::Expr(expr) => collect_closure_assigned_expr(expr, out),
         Stmt::Return(Some(expr)) => collect_closure_assigned_expr(expr, out),
         Stmt::Throw(expr) => collect_closure_assigned_expr(expr, out),
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             collect_closure_assigned_expr(condition, out);
             for s in then_branch {
                 collect_closure_assigned_stmt(s, out);
@@ -2061,7 +2344,12 @@ fn collect_closure_assigned_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
                 collect_closure_assigned_stmt(s, out);
             }
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
                 collect_closure_assigned_stmt(init_stmt, out);
             }
@@ -2075,7 +2363,11 @@ fn collect_closure_assigned_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
                 collect_closure_assigned_stmt(s, out);
             }
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             for s in body {
                 collect_closure_assigned_stmt(s, out);
             }
@@ -2090,7 +2382,10 @@ fn collect_closure_assigned_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
                 }
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             collect_closure_assigned_expr(discriminant, out);
             for case in cases {
                 if let Some(ref test) = case.test {
@@ -2144,7 +2439,9 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
         Expr::ArraySpread(elements) => {
             for e in elements {
                 match e {
-                    ArrayElement::Expr(x) | ArrayElement::Spread(x) => collect_closure_assigned_expr(x, out),
+                    ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
+                        collect_closure_assigned_expr(x, out)
+                    }
                 }
             }
         }
@@ -2158,7 +2455,11 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_assigned_expr(v, out);
             }
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             collect_closure_assigned_expr(condition, out);
             collect_closure_assigned_expr(then_expr, out);
             collect_closure_assigned_expr(else_expr, out);
@@ -2173,7 +2474,11 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
             collect_closure_assigned_expr(object, out);
             collect_closure_assigned_expr(index, out);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             collect_closure_assigned_expr(object, out);
             collect_closure_assigned_expr(index, out);
             collect_closure_assigned_expr(value, out);
@@ -2224,7 +2529,16 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
             collect_closure_assigned_expr(array, out);
             collect_closure_assigned_expr(comparator, out);
         }
-        Expr::ArrayReduce { array, callback, initial } | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             collect_closure_assigned_expr(array, out);
             collect_closure_assigned_expr(callback, out);
             if let Some(init) = initial {
@@ -2240,7 +2554,12 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_assigned_expr(cmp, out);
             }
         }
-        Expr::ArrayToSpliced { array, start, delete_count, items } => {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => {
             collect_closure_assigned_expr(array, out);
             collect_closure_assigned_expr(start, out);
             collect_closure_assigned_expr(delete_count, out);
@@ -2248,12 +2567,18 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_assigned_expr(item, out);
             }
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             collect_closure_assigned_expr(array, out);
             collect_closure_assigned_expr(index, out);
             collect_closure_assigned_expr(value, out);
         }
-        Expr::ArrayCopyWithin { target, start, end, .. } => {
+        Expr::ArrayCopyWithin {
+            target, start, end, ..
+        } => {
             collect_closure_assigned_expr(target, out);
             collect_closure_assigned_expr(start, out);
             if let Some(e) = end {
@@ -2279,37 +2604,83 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
 /// Collect all LocalIds that appear in the `captures` list of any closure in the scope.
 fn collect_closure_captures_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
     match stmt {
-        Stmt::Let { init: Some(expr), .. } => collect_closure_captures_expr(expr, out),
+        Stmt::Let {
+            init: Some(expr), ..
+        } => collect_closure_captures_expr(expr, out),
         Stmt::Expr(expr) => collect_closure_captures_expr(expr, out),
         Stmt::Return(Some(expr)) => collect_closure_captures_expr(expr, out),
         Stmt::Throw(expr) => collect_closure_captures_expr(expr, out),
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             collect_closure_captures_expr(condition, out);
-            for s in then_branch { collect_closure_captures_stmt(s, out); }
+            for s in then_branch {
+                collect_closure_captures_stmt(s, out);
+            }
             if let Some(else_stmts) = else_branch {
-                for s in else_stmts { collect_closure_captures_stmt(s, out); }
+                for s in else_stmts {
+                    collect_closure_captures_stmt(s, out);
+                }
             }
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
             collect_closure_captures_expr(condition, out);
-            for s in body { collect_closure_captures_stmt(s, out); }
+            for s in body {
+                collect_closure_captures_stmt(s, out);
+            }
         }
-        Stmt::For { init, condition, update, body } => {
-            if let Some(init_stmt) = init { collect_closure_captures_stmt(init_stmt, out); }
-            if let Some(cond) = condition { collect_closure_captures_expr(cond, out); }
-            if let Some(upd) = update { collect_closure_captures_expr(upd, out); }
-            for s in body { collect_closure_captures_stmt(s, out); }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(init_stmt) = init {
+                collect_closure_captures_stmt(init_stmt, out);
+            }
+            if let Some(cond) = condition {
+                collect_closure_captures_expr(cond, out);
+            }
+            if let Some(upd) = update {
+                collect_closure_captures_expr(upd, out);
+            }
+            for s in body {
+                collect_closure_captures_stmt(s, out);
+            }
         }
-        Stmt::Try { body, catch, finally } => {
-            for s in body { collect_closure_captures_stmt(s, out); }
-            if let Some(cc) = catch { for s in &cc.body { collect_closure_captures_stmt(s, out); } }
-            if let Some(fs) = finally { for s in fs { collect_closure_captures_stmt(s, out); } }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                collect_closure_captures_stmt(s, out);
+            }
+            if let Some(cc) = catch {
+                for s in &cc.body {
+                    collect_closure_captures_stmt(s, out);
+                }
+            }
+            if let Some(fs) = finally {
+                for s in fs {
+                    collect_closure_captures_stmt(s, out);
+                }
+            }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             collect_closure_captures_expr(discriminant, out);
             for case in cases {
-                if let Some(ref test) = case.test { collect_closure_captures_expr(test, out); }
-                for s in &case.body { collect_closure_captures_stmt(s, out); }
+                if let Some(ref test) = case.test {
+                    collect_closure_captures_expr(test, out);
+                }
+                for s in &case.body {
+                    collect_closure_captures_stmt(s, out);
+                }
             }
         }
         Stmt::Labeled { body, .. } => collect_closure_captures_stmt(body, out),
@@ -2320,9 +2691,13 @@ fn collect_closure_captures_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
 fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSet<LocalId>) {
     match expr {
         Expr::Closure { captures, body, .. } => {
-            for id in captures { out.insert(*id); }
+            for id in captures {
+                out.insert(*id);
+            }
             // Also recurse into nested closures
-            for stmt in body { collect_closure_captures_stmt(stmt, out); }
+            for stmt in body {
+                collect_closure_captures_stmt(stmt, out);
+            }
         }
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
@@ -2333,7 +2708,9 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
         Expr::Unary { operand, .. } => collect_closure_captures_expr(operand, out),
         Expr::Call { callee, args, .. } => {
             collect_closure_captures_expr(callee, out);
-            for arg in args { collect_closure_captures_expr(arg, out); }
+            for arg in args {
+                collect_closure_captures_expr(arg, out);
+            }
         }
         Expr::CallSpread { callee, args, .. } => {
             collect_closure_captures_expr(callee, out);
@@ -2344,22 +2721,34 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
             }
         }
         Expr::Array(elements) => {
-            for e in elements { collect_closure_captures_expr(e, out); }
+            for e in elements {
+                collect_closure_captures_expr(e, out);
+            }
         }
         Expr::ArraySpread(elements) => {
             for e in elements {
                 match e {
-                    ArrayElement::Expr(x) | ArrayElement::Spread(x) => collect_closure_captures_expr(x, out),
+                    ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
+                        collect_closure_captures_expr(x, out)
+                    }
                 }
             }
         }
         Expr::Object(fields) => {
-            for (_, v) in fields { collect_closure_captures_expr(v, out); }
+            for (_, v) in fields {
+                collect_closure_captures_expr(v, out);
+            }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts { collect_closure_captures_expr(v, out); }
+            for (_, v) in parts {
+                collect_closure_captures_expr(v, out);
+            }
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             collect_closure_captures_expr(condition, out);
             collect_closure_captures_expr(then_expr, out);
             collect_closure_captures_expr(else_expr, out);
@@ -2376,16 +2765,25 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
             collect_closure_captures_expr(object, out);
             collect_closure_captures_expr(index, out);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             collect_closure_captures_expr(object, out);
             collect_closure_captures_expr(index, out);
             collect_closure_captures_expr(value, out);
         }
         Expr::New { args, .. } | Expr::NewDynamic { args, .. } => {
-            for arg in args { collect_closure_captures_expr(arg, out); }
+            for arg in args {
+                collect_closure_captures_expr(arg, out);
+            }
         }
-        Expr::ArrayPush { value, .. } | Expr::Await(value) | Expr::TypeOf(value)
-        | Expr::Void(value) | Expr::Delete(value) => {
+        Expr::ArrayPush { value, .. }
+        | Expr::Await(value)
+        | Expr::TypeOf(value)
+        | Expr::Void(value)
+        | Expr::Delete(value) => {
             collect_closure_captures_expr(value, out);
         }
         Expr::ArrayForEach { array, callback }
@@ -2399,44 +2797,78 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
             collect_closure_captures_expr(array, out);
             collect_closure_captures_expr(callback, out);
         }
-        Expr::ArrayReduce { array, callback, initial } | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             collect_closure_captures_expr(array, out);
             collect_closure_captures_expr(callback, out);
-            if let Some(init) = initial { collect_closure_captures_expr(init, out); }
+            if let Some(init) = initial {
+                collect_closure_captures_expr(init, out);
+            }
         }
         Expr::ArrayToReversed { array } => {
             collect_closure_captures_expr(array, out);
         }
         Expr::ArrayToSorted { array, comparator } => {
             collect_closure_captures_expr(array, out);
-            if let Some(cmp) = comparator { collect_closure_captures_expr(cmp, out); }
+            if let Some(cmp) = comparator {
+                collect_closure_captures_expr(cmp, out);
+            }
         }
-        Expr::ArrayToSpliced { array, start, delete_count, items } => {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => {
             collect_closure_captures_expr(array, out);
             collect_closure_captures_expr(start, out);
             collect_closure_captures_expr(delete_count, out);
-            for item in items { collect_closure_captures_expr(item, out); }
+            for item in items {
+                collect_closure_captures_expr(item, out);
+            }
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             collect_closure_captures_expr(array, out);
             collect_closure_captures_expr(index, out);
             collect_closure_captures_expr(value, out);
         }
-        Expr::ArrayCopyWithin { target, start, end, .. } => {
+        Expr::ArrayCopyWithin {
+            target, start, end, ..
+        } => {
             collect_closure_captures_expr(target, out);
             collect_closure_captures_expr(start, out);
-            if let Some(e) = end { collect_closure_captures_expr(e, out); }
+            if let Some(e) = end {
+                collect_closure_captures_expr(e, out);
+            }
         }
         Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
             collect_closure_captures_expr(array, out);
         }
         Expr::NativeMethodCall { object, args, .. } => {
-            if let Some(obj) = object { collect_closure_captures_expr(obj, out); }
-            for arg in args { collect_closure_captures_expr(arg, out); }
+            if let Some(obj) = object {
+                collect_closure_captures_expr(obj, out);
+            }
+            for arg in args {
+                collect_closure_captures_expr(arg, out);
+            }
         }
         Expr::JsCreateCallback { closure, .. } => collect_closure_captures_expr(closure, out),
         Expr::Sequence(exprs) => {
-            for e in exprs { collect_closure_captures_expr(e, out); }
+            for e in exprs {
+                collect_closure_captures_expr(e, out);
+            }
         }
         _ => {}
     }
@@ -2446,37 +2878,83 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
 /// (via LocalSet or Update), but NOT inside closure bodies.
 fn collect_scope_level_assigns_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
     match stmt {
-        Stmt::Let { init: Some(expr), .. } => collect_scope_level_assigns_expr(expr, out),
+        Stmt::Let {
+            init: Some(expr), ..
+        } => collect_scope_level_assigns_expr(expr, out),
         Stmt::Expr(expr) => collect_scope_level_assigns_expr(expr, out),
         Stmt::Return(Some(expr)) => collect_scope_level_assigns_expr(expr, out),
         Stmt::Throw(expr) => collect_scope_level_assigns_expr(expr, out),
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             collect_scope_level_assigns_expr(condition, out);
-            for s in then_branch { collect_scope_level_assigns_stmt(s, out); }
+            for s in then_branch {
+                collect_scope_level_assigns_stmt(s, out);
+            }
             if let Some(else_stmts) = else_branch {
-                for s in else_stmts { collect_scope_level_assigns_stmt(s, out); }
+                for s in else_stmts {
+                    collect_scope_level_assigns_stmt(s, out);
+                }
             }
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
             collect_scope_level_assigns_expr(condition, out);
-            for s in body { collect_scope_level_assigns_stmt(s, out); }
+            for s in body {
+                collect_scope_level_assigns_stmt(s, out);
+            }
         }
-        Stmt::For { init, condition, update, body } => {
-            if let Some(init_stmt) = init { collect_scope_level_assigns_stmt(init_stmt, out); }
-            if let Some(cond) = condition { collect_scope_level_assigns_expr(cond, out); }
-            if let Some(upd) = update { collect_scope_level_assigns_expr(upd, out); }
-            for s in body { collect_scope_level_assigns_stmt(s, out); }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(init_stmt) = init {
+                collect_scope_level_assigns_stmt(init_stmt, out);
+            }
+            if let Some(cond) = condition {
+                collect_scope_level_assigns_expr(cond, out);
+            }
+            if let Some(upd) = update {
+                collect_scope_level_assigns_expr(upd, out);
+            }
+            for s in body {
+                collect_scope_level_assigns_stmt(s, out);
+            }
         }
-        Stmt::Try { body, catch, finally } => {
-            for s in body { collect_scope_level_assigns_stmt(s, out); }
-            if let Some(cc) = catch { for s in &cc.body { collect_scope_level_assigns_stmt(s, out); } }
-            if let Some(fs) = finally { for s in fs { collect_scope_level_assigns_stmt(s, out); } }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                collect_scope_level_assigns_stmt(s, out);
+            }
+            if let Some(cc) = catch {
+                for s in &cc.body {
+                    collect_scope_level_assigns_stmt(s, out);
+                }
+            }
+            if let Some(fs) = finally {
+                for s in fs {
+                    collect_scope_level_assigns_stmt(s, out);
+                }
+            }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             collect_scope_level_assigns_expr(discriminant, out);
             for case in cases {
-                if let Some(ref test) = case.test { collect_scope_level_assigns_expr(test, out); }
-                for s in &case.body { collect_scope_level_assigns_stmt(s, out); }
+                if let Some(ref test) = case.test {
+                    collect_scope_level_assigns_expr(test, out);
+                }
+                for s in &case.body {
+                    collect_scope_level_assigns_stmt(s, out);
+                }
             }
         }
         Stmt::Labeled { body, .. } => collect_scope_level_assigns_stmt(body, out),
@@ -2504,9 +2982,15 @@ fn collect_scope_level_assigns_expr(expr: &Expr, out: &mut std::collections::Has
         Expr::Unary { operand, .. } => collect_scope_level_assigns_expr(operand, out),
         Expr::Call { callee, args, .. } => {
             collect_scope_level_assigns_expr(callee, out);
-            for arg in args { collect_scope_level_assigns_expr(arg, out); }
+            for arg in args {
+                collect_scope_level_assigns_expr(arg, out);
+            }
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             collect_scope_level_assigns_expr(condition, out);
             collect_scope_level_assigns_expr(then_expr, out);
             collect_scope_level_assigns_expr(else_expr, out);
@@ -2517,13 +3001,22 @@ fn collect_scope_level_assigns_expr(expr: &Expr, out: &mut std::collections::Has
 
 /// Walk a closure body collecting every LocalSet/Update target AND any
 /// assigns inside nested closures within this body.
-fn collect_closure_assigned_in_closure_body_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
+fn collect_closure_assigned_in_closure_body_stmt(
+    stmt: &Stmt,
+    out: &mut std::collections::HashSet<LocalId>,
+) {
     match stmt {
-        Stmt::Let { init: Some(expr), .. } => collect_closure_assigned_in_body_expr(expr, out),
+        Stmt::Let {
+            init: Some(expr), ..
+        } => collect_closure_assigned_in_body_expr(expr, out),
         Stmt::Expr(expr) => collect_closure_assigned_in_body_expr(expr, out),
         Stmt::Return(Some(expr)) => collect_closure_assigned_in_body_expr(expr, out),
         Stmt::Throw(expr) => collect_closure_assigned_in_body_expr(expr, out),
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             collect_closure_assigned_in_body_expr(condition, out);
             for s in then_branch {
                 collect_closure_assigned_in_closure_body_stmt(s, out);
@@ -2540,7 +3033,12 @@ fn collect_closure_assigned_in_closure_body_stmt(stmt: &Stmt, out: &mut std::col
                 collect_closure_assigned_in_closure_body_stmt(s, out);
             }
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
                 collect_closure_assigned_in_closure_body_stmt(init_stmt, out);
             }
@@ -2554,7 +3052,11 @@ fn collect_closure_assigned_in_closure_body_stmt(stmt: &Stmt, out: &mut std::col
                 collect_closure_assigned_in_closure_body_stmt(s, out);
             }
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             for s in body {
                 collect_closure_assigned_in_closure_body_stmt(s, out);
             }
@@ -2569,7 +3071,10 @@ fn collect_closure_assigned_in_closure_body_stmt(stmt: &Stmt, out: &mut std::col
                 }
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             collect_closure_assigned_in_body_expr(discriminant, out);
             for case in cases {
                 if let Some(ref test) = case.test {
@@ -2585,7 +3090,10 @@ fn collect_closure_assigned_in_closure_body_stmt(stmt: &Stmt, out: &mut std::col
     }
 }
 
-fn collect_closure_assigned_in_body_expr(expr: &Expr, out: &mut std::collections::HashSet<LocalId>) {
+fn collect_closure_assigned_in_body_expr(
+    expr: &Expr,
+    out: &mut std::collections::HashSet<LocalId>,
+) {
     match expr {
         Expr::LocalSet(id, value) => {
             out.insert(*id);
@@ -2616,7 +3124,9 @@ fn collect_closure_assigned_in_body_expr(expr: &Expr, out: &mut std::collections
             collect_closure_assigned_in_body_expr(callee, out);
             for arg in args {
                 match arg {
-                    CallArg::Expr(e) | CallArg::Spread(e) => collect_closure_assigned_in_body_expr(e, out),
+                    CallArg::Expr(e) | CallArg::Spread(e) => {
+                        collect_closure_assigned_in_body_expr(e, out)
+                    }
                 }
             }
         }
@@ -2628,7 +3138,9 @@ fn collect_closure_assigned_in_body_expr(expr: &Expr, out: &mut std::collections
         Expr::ArraySpread(elements) => {
             for e in elements {
                 match e {
-                    ArrayElement::Expr(x) | ArrayElement::Spread(x) => collect_closure_assigned_in_body_expr(x, out),
+                    ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
+                        collect_closure_assigned_in_body_expr(x, out)
+                    }
                 }
             }
         }
@@ -2642,7 +3154,11 @@ fn collect_closure_assigned_in_body_expr(expr: &Expr, out: &mut std::collections
                 collect_closure_assigned_in_body_expr(v, out);
             }
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             collect_closure_assigned_in_body_expr(condition, out);
             collect_closure_assigned_in_body_expr(then_expr, out);
             collect_closure_assigned_in_body_expr(else_expr, out);
@@ -2657,7 +3173,11 @@ fn collect_closure_assigned_in_body_expr(expr: &Expr, out: &mut std::collections
             collect_closure_assigned_in_body_expr(object, out);
             collect_closure_assigned_in_body_expr(index, out);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             collect_closure_assigned_in_body_expr(object, out);
             collect_closure_assigned_in_body_expr(index, out);
             collect_closure_assigned_in_body_expr(value, out);
@@ -2706,7 +3226,16 @@ fn collect_closure_assigned_in_body_expr(expr: &Expr, out: &mut std::collections
             collect_closure_assigned_in_body_expr(array, out);
             collect_closure_assigned_in_body_expr(comparator, out);
         }
-        Expr::ArrayReduce { array, callback, initial } | Expr::ArrayReduceRight { array, callback, initial } => {
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        }
+        | Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => {
             collect_closure_assigned_in_body_expr(array, out);
             collect_closure_assigned_in_body_expr(callback, out);
             if let Some(init) = initial {
@@ -2718,23 +3247,40 @@ fn collect_closure_assigned_in_body_expr(expr: &Expr, out: &mut std::collections
         }
         Expr::ArrayToSorted { array, comparator } => {
             collect_closure_assigned_in_body_expr(array, out);
-            if let Some(cmp) = comparator { collect_closure_assigned_in_body_expr(cmp, out); }
+            if let Some(cmp) = comparator {
+                collect_closure_assigned_in_body_expr(cmp, out);
+            }
         }
-        Expr::ArrayToSpliced { array, start, delete_count, items } => {
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => {
             collect_closure_assigned_in_body_expr(array, out);
             collect_closure_assigned_in_body_expr(start, out);
             collect_closure_assigned_in_body_expr(delete_count, out);
-            for item in items { collect_closure_assigned_in_body_expr(item, out); }
+            for item in items {
+                collect_closure_assigned_in_body_expr(item, out);
+            }
         }
-        Expr::ArrayWith { array, index, value } => {
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => {
             collect_closure_assigned_in_body_expr(array, out);
             collect_closure_assigned_in_body_expr(index, out);
             collect_closure_assigned_in_body_expr(value, out);
         }
-        Expr::ArrayCopyWithin { target, start, end, .. } => {
+        Expr::ArrayCopyWithin {
+            target, start, end, ..
+        } => {
             collect_closure_assigned_in_body_expr(target, out);
             collect_closure_assigned_in_body_expr(start, out);
-            if let Some(e) = end { collect_closure_assigned_in_body_expr(e, out); }
+            if let Some(e) = end {
+                collect_closure_assigned_in_body_expr(e, out);
+            }
         }
         Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
             collect_closure_assigned_in_body_expr(array, out);
@@ -2747,21 +3293,37 @@ fn collect_closure_assigned_in_body_expr(expr: &Expr, out: &mut std::collections
                 collect_closure_assigned_in_body_expr(arg, out);
             }
         }
-        Expr::JsCreateCallback { closure, .. } => collect_closure_assigned_in_body_expr(closure, out),
+        Expr::JsCreateCallback { closure, .. } => {
+            collect_closure_assigned_in_body_expr(closure, out)
+        }
         // Array mutation methods may reallocate the array pointer, so they
         // count as assignments to the array_id for mutable-capture widening.
-        Expr::ArrayPush { array_id, value } | Expr::ArrayUnshift { array_id, value } | Expr::ArrayPushSpread { array_id, source: value } => {
+        Expr::ArrayPush { array_id, value }
+        | Expr::ArrayUnshift { array_id, value }
+        | Expr::ArrayPushSpread {
+            array_id,
+            source: value,
+        } => {
             out.insert(*array_id);
             collect_closure_assigned_in_body_expr(value, out);
         }
         Expr::ArrayPop(array_id) | Expr::ArrayShift(array_id) => {
             out.insert(*array_id);
         }
-        Expr::ArraySplice { array_id, start, delete_count, items } => {
+        Expr::ArraySplice {
+            array_id,
+            start,
+            delete_count,
+            items,
+        } => {
             out.insert(*array_id);
             collect_closure_assigned_in_body_expr(start, out);
-            if let Some(dc) = delete_count { collect_closure_assigned_in_body_expr(dc, out); }
-            for item in items { collect_closure_assigned_in_body_expr(item, out); }
+            if let Some(dc) = delete_count {
+                collect_closure_assigned_in_body_expr(dc, out);
+            }
+            for item in items {
+                collect_closure_assigned_in_body_expr(item, out);
+            }
         }
         _ => {}
     }
@@ -2782,7 +3344,10 @@ fn lower_module_decl(
             // Get the source module path
             let raw_source = import_decl.src.value.as_str().unwrap_or("").to_string();
             // Normalize "node:" prefix (e.g., "node:async_hooks" -> "async_hooks")
-            let source = raw_source.strip_prefix("node:").unwrap_or(&raw_source).to_string();
+            let source = raw_source
+                .strip_prefix("node:")
+                .unwrap_or(&raw_source)
+                .to_string();
 
             // Check if this is a native module import
             let is_native = is_native_module(&source);
@@ -2793,23 +3358,36 @@ fn lower_module_decl(
                 match spec {
                     ast::ImportSpecifier::Named(named) => {
                         // Skip individual type-only specifiers (import { type Foo, Bar })
-                        if named.is_type_only { continue; }
+                        if named.is_type_only {
+                            continue;
+                        }
                         let local = named.local.sym.to_string();
-                        let imported = named.imported
+                        let imported = named
+                            .imported
                             .as_ref()
                             .map(|i| match i {
                                 ast::ModuleExportName::Ident(id) => id.sym.to_string(),
-                                ast::ModuleExportName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                                ast::ModuleExportName::Str(s) => {
+                                    s.value.as_str().unwrap_or("").to_string()
+                                }
                             })
                             .unwrap_or_else(|| local.clone());
                         if is_native {
                             // Register as native module function with the original method name
                             // e.g., import { v4 as uuid } from 'uuid' -> uuid maps to uuid.v4
-                            ctx.register_native_module(local.clone(), source.clone(), Some(imported.clone()));
+                            ctx.register_native_module(
+                                local.clone(),
+                                source.clone(),
+                                Some(imported.clone()),
+                            );
                             // Auto-register parentPort from worker_threads as a native instance
                             // (it's a singleton, not created via `new`)
                             if source == "worker_threads" && imported == "parentPort" {
-                                ctx.register_native_instance(local.clone(), "worker_threads".to_string(), "MessagePort".to_string());
+                                ctx.register_native_instance(
+                                    local.clone(),
+                                    "worker_threads".to_string(),
+                                    "MessagePort".to_string(),
+                                );
                             }
                         } else {
                             // Register as imported function (we assume all imports are functions for now)
@@ -2886,13 +3464,18 @@ fn lower_module_decl(
                     // (e.g. `function openSocket(): Socket { ... }`), register
                     // the function as a factory so call sites can pick up
                     // the instance class — see lookup_func_return_native_instance.
-                    if let Some((module, class)) = native_instance_from_return_type(&func.return_type) {
+                    if let Some((module, class)) =
+                        native_instance_from_return_type(&func.return_type)
+                    {
                         ctx.func_return_native_instances.push((
-                            func_name.clone(), module.to_string(), class.to_string()
+                            func_name.clone(),
+                            module.to_string(),
+                            class.to_string(),
                         ));
                     }
                     // Store parameter defaults for call-site resolution
-                    let defaults: Vec<Option<Expr>> = func.params.iter().map(|p| p.default.clone()).collect();
+                    let defaults: Vec<Option<Expr>> =
+                        func.params.iter().map(|p| p.default.clone()).collect();
                     let param_ids: Vec<LocalId> = func.params.iter().map(|p| p.id).collect();
                     ctx.func_defaults.push((func.id, defaults, param_ids));
                     module.functions.push(func);
@@ -2932,7 +3515,11 @@ fn lower_module_decl(
                                         _ => None,
                                     };
                                     if let Some(native_module) = module_name {
-                                        ctx.register_native_instance(name.clone(), native_module.to_string(), class_name.to_string());
+                                        ctx.register_native_instance(
+                                            name.clone(),
+                                            native_module.to_string(),
+                                            class_name.to_string(),
+                                        );
                                     }
                                 }
                             }
@@ -2940,7 +3527,8 @@ fn lower_module_decl(
                             // Check if this is an awaited native class instantiation (e.g., await new Redis())
                             if let ast::Expr::Await(await_expr) = init.as_ref() {
                                 if let ast::Expr::New(new_expr) = await_expr.arg.as_ref() {
-                                    if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
+                                    if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref()
+                                    {
                                         let class_name = class_ident.sym.as_ref();
                                         // Map class names to their modules
                                         let module_name = match class_name {
@@ -2960,7 +3548,11 @@ fn lower_module_decl(
                                             _ => None,
                                         };
                                         if let Some(native_module) = module_name {
-                                            ctx.register_native_instance(name.clone(), native_module.to_string(), class_name.to_string());
+                                            ctx.register_native_instance(
+                                                name.clone(),
+                                                native_module.to_string(),
+                                                class_name.to_string(),
+                                            );
                                         }
                                     }
                                 }
@@ -2974,22 +3566,38 @@ fn lower_module_decl(
                                             let obj_name = obj_ident.sym.as_ref();
                                             // Check if it's a known native module
                                             // Clone module_name to avoid borrow conflict with ctx mutation below
-                                            let native_mod = ctx.lookup_native_module(obj_name)
+                                            let native_mod = ctx
+                                                .lookup_native_module(obj_name)
                                                 .map(|(m, _)| m.to_string());
                                             if let Some(module_name_owned) = native_mod {
-                                                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                                                if let ast::MemberProp::Ident(method_ident) =
+                                                    &member.prop
+                                                {
                                                     let method_name = method_ident.sym.as_ref();
                                                     // Map factory functions to their class names
-                                                    let class_name = match (module_name_owned.as_str(), method_name) {
-                                                        ("mysql2" | "mysql2/promise", "createPool") => Some("Pool"),
-                                                        ("mysql2" | "mysql2/promise", "createConnection") => Some("Connection"),
+                                                    let class_name = match (
+                                                        module_name_owned.as_str(),
+                                                        method_name,
+                                                    ) {
+                                                        (
+                                                            "mysql2" | "mysql2/promise",
+                                                            "createPool",
+                                                        ) => Some("Pool"),
+                                                        (
+                                                            "mysql2" | "mysql2/promise",
+                                                            "createConnection",
+                                                        ) => Some("Connection"),
                                                         ("pg", "connect") => Some("Client"),
-                                                        ("http" | "https", "request" | "get") => Some("ClientRequest"),
+                                                        ("http" | "https", "request" | "get") => {
+                                                            Some("ClientRequest")
+                                                        }
                                                         // net.createConnection(host, port) returns a Socket handle.
                                                         // Without registering this, subsequent `sock.write/on/end/destroy`
                                                         // calls fall through to dynamic dispatch and never reach
                                                         // the `js_net_socket_*` FFI functions.
-                                                        ("net", "createConnection") => Some("Socket"),
+                                                        ("net", "createConnection") => {
+                                                            Some("Socket")
+                                                        }
                                                         // node-cron's `cron.schedule(expr, cb)` returns a job
                                                         // handle whose `start()`/`stop()`/`isRunning()` etc.
                                                         // dispatch via the ("node-cron", true, METHOD) entries
@@ -2997,16 +3605,26 @@ fn lower_module_decl(
                                                         // registering the handle as a "CronJob" native instance,
                                                         // `job.stop()` falls through to dynamic dispatch and the
                                                         // stop never reaches js_cron_job_stop.
-                                                        ("node-cron", "schedule") => Some("CronJob"),
+                                                        ("node-cron", "schedule") => {
+                                                            Some("CronJob")
+                                                        }
                                                         _ => None,
                                                     };
                                                     if let Some(class_name) = class_name {
-                                                        ctx.register_native_instance(name.clone(), module_name_owned.clone(), class_name.to_string());
+                                                        ctx.register_native_instance(
+                                                            name.clone(),
+                                                            module_name_owned.clone(),
+                                                            class_name.to_string(),
+                                                        );
                                                         // Also register as module-level native instance so it survives scope exits.
                                                         // Without this, pool = mysql.createPool() at module top level loses
                                                         // its native tracking when function scopes are entered/exited,
                                                         // causing pool.query() inside functions to miss the Pool dispatch.
-                                                        ctx.module_native_instances.push((name.clone(), module_name_owned, class_name.to_string()));
+                                                        ctx.module_native_instances.push((
+                                                            name.clone(),
+                                                            module_name_owned,
+                                                            class_name.to_string(),
+                                                        ));
                                                     }
                                                 }
                                             }
@@ -3018,17 +3636,31 @@ fn lower_module_decl(
                                     if let ast::Expr::Ident(func_ident) = callee.as_ref() {
                                         let func_name = func_ident.sym.as_ref();
                                         // Check if this is a default import from a native module
-                                        if let Some((module_name, None)) = ctx.lookup_native_module(func_name) {
+                                        if let Some((module_name, None)) =
+                                            ctx.lookup_native_module(func_name)
+                                        {
                                             // Register as native instance - the "class" is the module name for default exports
-                                            ctx.register_native_instance(name.clone(), module_name.to_string(), "App".to_string());
+                                            ctx.register_native_instance(
+                                                name.clone(),
+                                                module_name.to_string(),
+                                                "App".to_string(),
+                                            );
                                         }
                                         // Check if this is a named import that returns a handle (e.g., State from perry/ui)
-                                        if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name) {
+                                        if let Some((module_name, Some(method_name))) =
+                                            ctx.lookup_native_module(func_name)
+                                        {
                                             if module_name == "perry/ui" {
                                                 match method_name {
-                                                    "Canvas" | "State" | "Sheet" | "Toolbar" | "Window" | "LazyVStack"
-                                                    | "NavigationStack" | "Picker" | "Table" | "TabBar" => {
-                                                        ctx.register_native_instance(name.clone(), module_name.to_string(), method_name.to_string());
+                                                    "Canvas" | "State" | "Sheet" | "Toolbar"
+                                                    | "Window" | "LazyVStack"
+                                                    | "NavigationStack" | "Picker" | "Table"
+                                                    | "TabBar" => {
+                                                        ctx.register_native_instance(
+                                                            name.clone(),
+                                                            module_name.to_string(),
+                                                            method_name.to_string(),
+                                                        );
                                                     }
                                                     _ => {}
                                                 }
@@ -3043,21 +3675,48 @@ fn lower_module_decl(
                                 if let ast::Expr::Call(call_expr) = await_expr.arg.as_ref() {
                                     if let ast::Callee::Expr(callee) = &call_expr.callee {
                                         if let ast::Expr::Member(member) = callee.as_ref() {
-                                            if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                                            if let ast::Expr::Ident(obj_ident) = member.obj.as_ref()
+                                            {
                                                 let obj_name = obj_ident.sym.as_ref();
-                                                if let Some((module_name, _)) = ctx.lookup_native_module(obj_name) {
-                                                    if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                                                        let class_name = match (module_name, method_ident.sym.as_ref()) {
-                                                            ("mongodb", "connect") => Some("MongoClient"),
-                                                            ("mysql2" | "mysql2/promise", "createPool") => Some("Pool"),
-                                                            ("mysql2" | "mysql2/promise", "createConnection") => Some("Connection"),
+                                                if let Some((module_name, _)) =
+                                                    ctx.lookup_native_module(obj_name)
+                                                {
+                                                    if let ast::MemberProp::Ident(method_ident) =
+                                                        &member.prop
+                                                    {
+                                                        let class_name = match (
+                                                            module_name,
+                                                            method_ident.sym.as_ref(),
+                                                        ) {
+                                                            ("mongodb", "connect") => {
+                                                                Some("MongoClient")
+                                                            }
+                                                            (
+                                                                "mysql2" | "mysql2/promise",
+                                                                "createPool",
+                                                            ) => Some("Pool"),
+                                                            (
+                                                                "mysql2" | "mysql2/promise",
+                                                                "createConnection",
+                                                            ) => Some("Connection"),
                                                             ("pg", "connect") => Some("Client"),
-                                                            ("http" | "https", "request" | "get") => Some("ClientRequest"),
-                                                            ("axios", "get" | "post" | "put" | "delete" | "patch" | "request") => Some("Response"),
+                                                            (
+                                                                "http" | "https",
+                                                                "request" | "get",
+                                                            ) => Some("ClientRequest"),
+                                                            (
+                                                                "axios",
+                                                                "get" | "post" | "put" | "delete"
+                                                                | "patch" | "request",
+                                                            ) => Some("Response"),
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = class_name {
-                                                            ctx.register_native_instance(name.clone(), module_name.to_string(), class_name.to_string());
+                                                            ctx.register_native_instance(
+                                                                name.clone(),
+                                                                module_name.to_string(),
+                                                                class_name.to_string(),
+                                                            );
                                                         }
                                                     }
                                                 }
@@ -3073,11 +3732,20 @@ fn lower_module_decl(
                                 if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
                                     let class_name_str = class_ident.sym.as_ref();
                                     // Check if this class comes from a native module import
-                                    let native_info = ctx.lookup_native_module(class_name_str)
+                                    let native_info = ctx
+                                        .lookup_native_module(class_name_str)
                                         .map(|(m, _)| m.to_string());
                                     if let Some(module_name) = native_info {
-                                        ctx.register_native_instance(name.clone(), module_name.clone(), class_name_str.to_string());
-                                        ctx.module_native_instances.push((name.clone(), module_name, class_name_str.to_string()));
+                                        ctx.register_native_instance(
+                                            name.clone(),
+                                            module_name.clone(),
+                                            class_name_str.to_string(),
+                                        );
+                                        ctx.module_native_instances.push((
+                                            name.clone(),
+                                            module_name,
+                                            class_name_str.to_string(),
+                                        ));
                                     }
                                 }
                             }
@@ -3086,31 +3754,50 @@ fn lower_module_decl(
                             // e.g., const db = client.db(name) where client is a mongodb native instance.
                             {
                                 // Unwrap await if present
-                                let actual_init = if let ast::Expr::Await(await_expr) = init.as_ref() {
-                                    await_expr.arg.as_ref()
-                                } else {
-                                    init.as_ref()
-                                };
+                                let actual_init =
+                                    if let ast::Expr::Await(await_expr) = init.as_ref() {
+                                        await_expr.arg.as_ref()
+                                    } else {
+                                        init.as_ref()
+                                    };
                                 if let ast::Expr::Call(call_expr) = actual_init {
                                     if let ast::Callee::Expr(callee) = &call_expr.callee {
                                         if let ast::Expr::Member(member) = callee.as_ref() {
-                                            if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                                            if let ast::Expr::Ident(obj_ident) = member.obj.as_ref()
+                                            {
                                                 let obj_name = obj_ident.sym.to_string();
-                                                if let Some((module_name, _class)) = ctx.lookup_native_instance(&obj_name)
+                                                if let Some((module_name, _class)) = ctx
+                                                    .lookup_native_instance(&obj_name)
                                                     .map(|(m, c)| (m.to_string(), c.to_string()))
                                                 {
-                                                    if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                                                    if let ast::MemberProp::Ident(method_ident) =
+                                                        &member.prop
+                                                    {
                                                         let method_name = method_ident.sym.as_ref();
                                                         // Determine if the method returns a handle (another native instance)
-                                                        let returns_handle = match (module_name.as_str(), method_name) {
+                                                        let returns_handle = match (
+                                                            module_name.as_str(),
+                                                            method_name,
+                                                        ) {
                                                             ("mongodb", "db") => Some("Database"),
-                                                            ("mongodb", "collection") => Some("Collection"),
-                                                            ("mysql2" | "mysql2/promise", "getConnection") => Some("PoolConnection"),
-                                                            ("better-sqlite3", "prepare") => Some("Statement"),
+                                                            ("mongodb", "collection") => {
+                                                                Some("Collection")
+                                                            }
+                                                            (
+                                                                "mysql2" | "mysql2/promise",
+                                                                "getConnection",
+                                                            ) => Some("PoolConnection"),
+                                                            ("better-sqlite3", "prepare") => {
+                                                                Some("Statement")
+                                                            }
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = returns_handle {
-                                                            ctx.register_native_instance(name.clone(), module_name, class_name.to_string());
+                                                            ctx.register_native_instance(
+                                                                name.clone(),
+                                                                module_name,
+                                                                class_name.to_string(),
+                                                            );
                                                         }
                                                     }
                                                 }
@@ -3124,7 +3811,8 @@ fn lower_module_decl(
                             // e.g., export const getRedis = async (): Promise<Redis> => { ... }
                             if let ast::Expr::Arrow(arrow) = init.as_ref() {
                                 if let Some(ref rt) = arrow.return_type {
-                                    let return_type = extract_ts_type_with_ctx(&rt.type_ann, Some(ctx));
+                                    let return_type =
+                                        extract_ts_type_with_ctx(&rt.type_ann, Some(ctx));
                                     // Unwrap Promise<T> for async functions
                                     let check_type = match &return_type {
                                         Type::Generic { base, type_args } if base == "Promise" => {
@@ -3138,8 +3826,12 @@ fn lower_module_decl(
                                             "Redis" => Some(("ioredis", "Redis")),
                                             "EventEmitter" => Some(("events", "EventEmitter")),
                                             "Pool" => Some(("mysql2/promise", "Pool")),
-                                            "PoolConnection" => Some(("mysql2/promise", "PoolConnection")),
-                                            "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
+                                            "PoolConnection" => {
+                                                Some(("mysql2/promise", "PoolConnection"))
+                                            }
+                                            "WebSocket" | "WebSocketServer" => {
+                                                Some(("ws", type_name.as_str()))
+                                            }
                                             // perry-stdlib net.Socket: lets library wrappers like
                                             //   export function openSocket(host, port): Socket { ... }
                                             // propagate native-instance tagging to callers, so
@@ -3152,7 +3844,9 @@ fn lower_module_decl(
                                                 if let Some(dot_pos) = type_name.find('.') {
                                                     let module_alias = &type_name[..dot_pos];
                                                     let class_name = &type_name[dot_pos + 1..];
-                                                    if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
+                                                    if let Some((module_name, _)) =
+                                                        ctx.lookup_native_module(module_alias)
+                                                    {
                                                         Some((module_name, class_name))
                                                     } else {
                                                         None
@@ -3164,7 +3858,9 @@ fn lower_module_decl(
                                         };
                                         if let Some((module, class)) = module_info {
                                             ctx.func_return_native_instances.push((
-                                                name.clone(), module.to_string(), class.to_string()
+                                                name.clone(),
+                                                module.to_string(),
+                                                class.to_string(),
                                             ));
                                         }
                                     }
@@ -3190,7 +3886,9 @@ fn lower_module_decl(
                             let expr = lower_expr(ctx, init)?;
                             let id = if ctx.pre_registered_module_vars.remove(&name) {
                                 let id = ctx.lookup_local(&name).unwrap();
-                                if let Some((_, _, existing_ty)) = ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name) {
+                                if let Some((_, _, existing_ty)) =
+                                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
+                                {
                                     *existing_ty = ty.clone();
                                 }
                                 id
@@ -3201,7 +3899,10 @@ fn lower_module_decl(
                                 id,
                                 name: name.clone(),
                                 ty,
-                                mutable: matches!(var_decl.kind, ast::VarDeclKind::Let | ast::VarDeclKind::Var),
+                                mutable: matches!(
+                                    var_decl.kind,
+                                    ast::VarDeclKind::Let | ast::VarDeclKind::Var
+                                ),
                                 init: Some(expr),
                             });
                             module.exports.push(Export::Named {
@@ -3272,9 +3973,12 @@ fn lower_module_decl(
                         if let Some(ref body) = ts_module.body {
                             let ns_name = match &ts_module.id {
                                 ast::TsModuleName::Ident(ident) => ident.sym.to_string(),
-                                ast::TsModuleName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                                ast::TsModuleName::Str(s) => {
+                                    s.value.as_str().unwrap_or("").to_string()
+                                }
                             };
-                            let class = lower_namespace_as_class(ctx, module, &ns_name, body, true)?;
+                            let class =
+                                lower_namespace_as_class(ctx, module, &ns_name, body, true)?;
                             let class_name = class.name.clone();
                             module.classes.push(class);
                             module.exports.push(Export::Named {
@@ -3300,16 +4004,23 @@ fn lower_module_decl(
                 for spec in &export_named.specifiers {
                     if let ast::ExportSpecifier::Named(named) = spec {
                         // Skip individual type-only specifiers (export { type Foo, Bar })
-                        if named.is_type_only { continue; }
+                        if named.is_type_only {
+                            continue;
+                        }
                         let local = match &named.orig {
                             ast::ModuleExportName::Ident(id) => id.sym.to_string(),
-                            ast::ModuleExportName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                            ast::ModuleExportName::Str(s) => {
+                                s.value.as_str().unwrap_or("").to_string()
+                            }
                         };
-                        let exported = named.exported
+                        let exported = named
+                            .exported
                             .as_ref()
                             .map(|e| match e {
                                 ast::ModuleExportName::Ident(id) => id.sym.to_string(),
-                                ast::ModuleExportName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                                ast::ModuleExportName::Str(s) => {
+                                    s.value.as_str().unwrap_or("").to_string()
+                                }
                             })
                             .unwrap_or_else(|| local.clone());
                         module.exports.push(Export::ReExport {
@@ -3324,19 +4035,29 @@ fn lower_module_decl(
                 for spec in &export_named.specifiers {
                     if let ast::ExportSpecifier::Named(named) = spec {
                         // Skip individual type-only specifiers (export { type Foo, Bar })
-                        if named.is_type_only { continue; }
+                        if named.is_type_only {
+                            continue;
+                        }
                         let local = match &named.orig {
                             ast::ModuleExportName::Ident(id) => id.sym.to_string(),
-                            ast::ModuleExportName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                            ast::ModuleExportName::Str(s) => {
+                                s.value.as_str().unwrap_or("").to_string()
+                            }
                         };
-                        let exported = named.exported
+                        let exported = named
+                            .exported
                             .as_ref()
                             .map(|e| match e {
                                 ast::ModuleExportName::Ident(id) => id.sym.to_string(),
-                                ast::ModuleExportName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                                ast::ModuleExportName::Str(s) => {
+                                    s.value.as_str().unwrap_or("").to_string()
+                                }
                             })
                             .unwrap_or_else(|| local.clone());
-                        module.exports.push(Export::Named { local: local.clone(), exported: exported.clone() });
+                        module.exports.push(Export::Named {
+                            local: local.clone(),
+                            exported: exported.clone(),
+                        });
 
                         // If the local name refers to a function, add it to exported_functions
                         // so that a wrapper function is generated for cross-module calls
@@ -3347,15 +4068,21 @@ fn lower_module_decl(
                         // Check if the variable is a closure or other exportable object
                         // by looking through init statements
                         for stmt in &module.init {
-                            if let Stmt::Let { name, init: Some(init_expr), .. } = stmt {
+                            if let Stmt::Let {
+                                name,
+                                init: Some(init_expr),
+                                ..
+                            } = stmt
+                            {
                                 if name == &local {
-                                    let is_exportable = matches!(init_expr,
-                                        Expr::Closure { .. } |
-                                        Expr::Object(_) |
-                                        Expr::Array(_) |
-                                        Expr::Call { .. } |
-                                        Expr::New { .. } |
-                                        Expr::JsNew { .. }
+                                    let is_exportable = matches!(
+                                        init_expr,
+                                        Expr::Closure { .. }
+                                            | Expr::Object(_)
+                                            | Expr::Array(_)
+                                            | Expr::Call { .. }
+                                            | Expr::New { .. }
+                                            | Expr::JsNew { .. }
                                     );
                                     if is_exportable {
                                         module.exported_objects.push(exported.clone());
@@ -3408,7 +4135,9 @@ fn lower_module_decl(
             if let Expr::FuncRef(func_id) = &lowered {
                 // Find the function and add as exported with name "default"
                 let func_id = *func_id;
-                module.exported_functions.push(("default".to_string(), func_id));
+                module
+                    .exported_functions
+                    .push(("default".to_string(), func_id));
                 // Also mark the function as exported
                 for func in &mut module.functions {
                     if func.id == func_id {
@@ -3539,7 +4268,9 @@ fn lower_namespace_as_class(
                     if let ast::Pat::Ident(ident) = &decl.name {
                         let name = ident.id.sym.to_string();
                         if ctx.lookup_local(&name).is_none() {
-                            let ty = ident.type_ann.as_ref()
+                            let ty = ident
+                                .type_ann
+                                .as_ref()
                                 .map(|ann| extract_ts_type(&ann.type_ann))
                                 .unwrap_or(Type::Any);
                             ctx.define_local(name.clone(), ty);
@@ -3576,11 +4307,18 @@ fn lower_namespace_as_class(
                         let func = lower_fn_decl(ctx, fn_decl)?;
                         // Register return type for call-site inference
                         if !matches!(func.return_type, Type::Any) {
-                            ctx.register_func_return_type(func.name.clone(), func.return_type.clone());
+                            ctx.register_func_return_type(
+                                func.name.clone(),
+                                func.return_type.clone(),
+                            );
                         }
-                        if let Some((module, class)) = native_instance_from_return_type(&func.return_type) {
+                        if let Some((module, class)) =
+                            native_instance_from_return_type(&func.return_type)
+                        {
                             ctx.func_return_native_instances.push((
-                                func.name.clone(), module.to_string(), class.to_string()
+                                func.name.clone(),
+                                module.to_string(),
+                                class.to_string(),
                             ));
                         }
                         static_methods.push(func);
@@ -3595,7 +4333,9 @@ fn lower_namespace_as_class(
                                 let expr = lower_expr(ctx, init)?;
                                 let id = if ctx.pre_registered_module_vars.remove(&name) {
                                     let id = ctx.lookup_local(&name).unwrap();
-                                    if let Some((_, _, existing_ty)) = ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name) {
+                                    if let Some((_, _, existing_ty)) =
+                                        ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
+                                    {
                                         *existing_ty = ty.clone();
                                     }
                                     id
@@ -3610,7 +4350,8 @@ fn lower_namespace_as_class(
                                     init: Some(expr),
                                 });
                                 // Track as namespace variable for Ns.member access resolution
-                                ctx.namespace_vars.push((ns_name.to_string(), name.clone(), id));
+                                ctx.namespace_vars
+                                    .push((ns_name.to_string(), name.clone(), id));
                                 // Export the variable for cross-module access
                                 if is_exported {
                                     module.exported_objects.push(name.clone());
@@ -3654,11 +4395,7 @@ fn lower_namespace_as_class(
     })
 }
 
-fn lower_stmt(
-    ctx: &mut LoweringContext,
-    module: &mut Module,
-    stmt: &ast::Stmt,
-) -> Result<()> {
+fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) -> Result<()> {
     match stmt {
         ast::Stmt::Decl(decl) => {
             match decl {
@@ -3669,16 +4406,21 @@ fn lower_stmt(
                     }
                     let func = lower_fn_decl(ctx, fn_decl)?;
                     // Register return type for call-site inference
-                    if let Some((module, class)) = native_instance_from_return_type(&func.return_type) {
+                    if let Some((module, class)) =
+                        native_instance_from_return_type(&func.return_type)
+                    {
                         ctx.func_return_native_instances.push((
-                            func.name.clone(), module.to_string(), class.to_string()
+                            func.name.clone(),
+                            module.to_string(),
+                            class.to_string(),
                         ));
                     }
                     if !matches!(func.return_type, Type::Any) {
                         ctx.register_func_return_type(func.name.clone(), func.return_type.clone());
                     }
                     // Store parameter defaults for call-site resolution
-                    let defaults: Vec<Option<Expr>> = func.params.iter().map(|p| p.default.clone()).collect();
+                    let defaults: Vec<Option<Expr>> =
+                        func.params.iter().map(|p| p.default.clone()).collect();
                     let param_ids: Vec<LocalId> = func.params.iter().map(|p| p.id).collect();
                     ctx.func_defaults.push((func.id, defaults, param_ids));
                     module.functions.push(func);
@@ -3706,12 +4448,18 @@ fn lower_stmt(
                                 if let ast::Expr::Call(call) = init.as_ref() {
                                     if let ast::Callee::Expr(callee) = &call.callee {
                                         if let ast::Expr::Ident(ident) = callee.as_ref() {
-                                            if ctx.generator_func_names.contains(ident.sym.as_ref()) {
+                                            if ctx.generator_func_names.contains(ident.sym.as_ref())
+                                            {
                                                 // Lower the generator call, wrap in IteratorToArray, assign to temp
                                                 let gen_expr = lower_expr(ctx, init)?;
-                                                let arr_expr = Expr::IteratorToArray(Box::new(gen_expr));
+                                                let arr_expr =
+                                                    Expr::IteratorToArray(Box::new(gen_expr));
                                                 let temp_id = ctx.fresh_local();
-                                                ctx.locals.push((format!("__gen_arr_{}", temp_id), temp_id, Type::Array(Box::new(Type::Any))));
+                                                ctx.locals.push((
+                                                    format!("__gen_arr_{}", temp_id),
+                                                    temp_id,
+                                                    Type::Array(Box::new(Type::Any)),
+                                                ));
                                                 module.init.push(Stmt::Let {
                                                     id: temp_id,
                                                     name: format!("__gen_arr_{}", temp_id),
@@ -3728,24 +4476,49 @@ fn lower_stmt(
                                                         if let Some(elem_pat) = elem {
                                                             match elem_pat {
                                                                 ast::Pat::Ident(ident) => {
-                                                                    let name = ident.id.sym.to_string();
-                                                                    let id = ctx.define_local(name.clone(), Type::Any);
+                                                                    let name =
+                                                                        ident.id.sym.to_string();
+                                                                    let id = ctx.define_local(
+                                                                        name.clone(),
+                                                                        Type::Any,
+                                                                    );
                                                                     module.init.push(Stmt::Let {
                                                                         id,
                                                                         name,
                                                                         ty: Type::Any,
                                                                         mutable,
-                                                                        init: Some(Expr::IndexGet {
-                                                                            object: Box::new(Expr::LocalGet(temp_id)),
-                                                                            index: Box::new(Expr::Number(idx as f64)),
-                                                                        }),
+                                                                        init: Some(
+                                                                            Expr::IndexGet {
+                                                                                object: Box::new(
+                                                                                    Expr::LocalGet(
+                                                                                        temp_id,
+                                                                                    ),
+                                                                                ),
+                                                                                index: Box::new(
+                                                                                    Expr::Number(
+                                                                                        idx as f64,
+                                                                                    ),
+                                                                                ),
+                                                                            },
+                                                                        ),
                                                                     });
                                                                     idx += 1;
                                                                 }
                                                                 ast::Pat::Rest(rest) => {
-                                                                    if let ast::Pat::Ident(rest_ident) = &*rest.arg {
-                                                                        let name = rest_ident.id.sym.to_string();
-                                                                        let id = ctx.define_local(name.clone(), Type::Array(Box::new(Type::Any)));
+                                                                    if let ast::Pat::Ident(
+                                                                        rest_ident,
+                                                                    ) = &*rest.arg
+                                                                    {
+                                                                        let name = rest_ident
+                                                                            .id
+                                                                            .sym
+                                                                            .to_string();
+                                                                        let id = ctx.define_local(
+                                                                            name.clone(),
+                                                                            Type::Array(Box::new(
+                                                                                Type::Any,
+                                                                            )),
+                                                                        );
                                                                         module.init.push(Stmt::Let {
                                                                             id,
                                                                             name,
@@ -3759,7 +4532,9 @@ fn lower_stmt(
                                                                         });
                                                                     }
                                                                 }
-                                                                _ => { idx += 1; }
+                                                                _ => {
+                                                                    idx += 1;
+                                                                }
                                                             }
                                                         } else {
                                                             idx += 1; // skip holes
@@ -3817,8 +4592,16 @@ fn lower_stmt(
                                 if let ast::Expr::Call(call) = inner {
                                     let target_ast = call.args.get(0).map(|a| a.expr.clone());
                                     let handler_ast = call.args.get(1).map(|a| a.expr.clone());
-                                    let target = if let Some(t) = target_ast { lower_expr(ctx, &t)? } else { Expr::Undefined };
-                                    let handler = if let Some(h) = handler_ast { lower_expr(ctx, &h)? } else { Expr::Object(vec![]) };
+                                    let target = if let Some(t) = target_ast {
+                                        lower_expr(ctx, &t)?
+                                    } else {
+                                        Expr::Undefined
+                                    };
+                                    let handler = if let Some(h) = handler_ast {
+                                        lower_expr(ctx, &h)?
+                                    } else {
+                                        Expr::Object(vec![])
+                                    };
                                     let mut proxy_alias: Option<String> = None;
                                     let mut revoke_alias: Option<String> = None;
                                     for prop in &obj_pat.props {
@@ -3826,19 +4609,27 @@ fn lower_stmt(
                                             ast::ObjectPatProp::KeyValue(kv) => {
                                                 let key_name = match &kv.key {
                                                     ast::PropName::Ident(i) => i.sym.to_string(),
-                                                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                                                    ast::PropName::Str(s) => {
+                                                        s.value.as_str().unwrap_or("").to_string()
+                                                    }
                                                     _ => continue,
                                                 };
                                                 if let ast::Pat::Ident(alias) = &*kv.value {
                                                     let alias_name = alias.id.sym.to_string();
-                                                    if key_name == "proxy" { proxy_alias = Some(alias_name); }
-                                                    else if key_name == "revoke" { revoke_alias = Some(alias_name); }
+                                                    if key_name == "proxy" {
+                                                        proxy_alias = Some(alias_name);
+                                                    } else if key_name == "revoke" {
+                                                        revoke_alias = Some(alias_name);
+                                                    }
                                                 }
                                             }
                                             ast::ObjectPatProp::Assign(a) => {
                                                 let name = a.key.sym.to_string();
-                                                if name == "proxy" { proxy_alias = Some(name); }
-                                                else if name == "revoke" { revoke_alias = Some(name); }
+                                                if name == "proxy" {
+                                                    proxy_alias = Some(name);
+                                                } else if name == "revoke" {
+                                                    revoke_alias = Some(name);
+                                                }
                                             }
                                             _ => {}
                                         }
@@ -3850,12 +4641,16 @@ fn lower_stmt(
                                             name: p_name.clone(),
                                             ty: Type::Any,
                                             mutable,
-                                            init: Some(Expr::ProxyNew { target: Box::new(target), handler: Box::new(handler) }),
+                                            init: Some(Expr::ProxyNew {
+                                                target: Box::new(target),
+                                                handler: Box::new(handler),
+                                            }),
                                         });
                                         ctx.proxy_locals.insert(p_name.clone());
                                         if let Some(r_name) = revoke_alias {
                                             ctx.proxy_revoke_locals.insert(r_name.clone(), p_name);
-                                            let rev_id = ctx.define_local(r_name.clone(), Type::Any);
+                                            let rev_id =
+                                                ctx.define_local(r_name.clone(), Type::Any);
                                             module.init.push(Stmt::Let {
                                                 id: rev_id,
                                                 name: r_name,
@@ -3905,7 +4700,8 @@ fn lower_stmt(
                                     module.classes.push(lowered_class);
                                     // Register the alias so `new X()` → `new X()`
                                     // (no-op lookup, but marks the binding as a class).
-                                    ctx.class_expr_aliases.insert(bind_name.clone(), bind_name.clone());
+                                    ctx.class_expr_aliases
+                                        .insert(bind_name.clone(), bind_name.clone());
                                     // We intentionally DO NOT push a Stmt::Let for
                                     // this binding — the class itself takes the
                                     // role of a "static value" referenced by name.
@@ -3922,20 +4718,29 @@ fn lower_stmt(
                                 if let ast::Callee::Expr(callee_expr) = &call.callee {
                                     if let ast::Expr::Ident(fn_ident) = callee_expr.as_ref() {
                                         let fn_name = fn_ident.sym.to_string();
-                                        if let Some((_param_name, mixin_class_box)) = ctx.mixin_funcs.get(&fn_name).cloned() {
+                                        if let Some((_param_name, mixin_class_box)) =
+                                            ctx.mixin_funcs.get(&fn_name).cloned()
+                                        {
                                             if call.args.len() == 1 {
-                                                if let ast::Expr::Ident(base_ident) = call.args[0].expr.as_ref() {
-                                                    let base_class_name = base_ident.sym.to_string();
-                                                    if ctx.lookup_class(&base_class_name).is_some() {
+                                                if let ast::Expr::Ident(base_ident) =
+                                                    call.args[0].expr.as_ref()
+                                                {
+                                                    let base_class_name =
+                                                        base_ident.sym.to_string();
+                                                    if ctx.lookup_class(&base_class_name).is_some()
+                                                    {
                                                         let bind_name = ident.id.sym.to_string();
                                                         if ctx.lookup_class(&bind_name).is_none() {
-                                                            let mut new_class = (*mixin_class_box).clone();
+                                                            let mut new_class =
+                                                                (*mixin_class_box).clone();
                                                             let base_id = ast::Ident::new(
                                                                 base_class_name.clone().into(),
                                                                 base_ident.span,
                                                                 base_ident.ctxt,
                                                             );
-                                                            new_class.super_class = Some(Box::new(ast::Expr::Ident(base_id)));
+                                                            new_class.super_class = Some(Box::new(
+                                                                ast::Expr::Ident(base_id),
+                                                            ));
                                                             let lowered_class = crate::lower_decl::lower_class_from_ast(
                                                                 ctx,
                                                                 &new_class,
@@ -3943,7 +4748,10 @@ fn lower_stmt(
                                                                 false,
                                                             )?;
                                                             module.classes.push(lowered_class);
-                                                            ctx.class_expr_aliases.insert(bind_name.clone(), bind_name.clone());
+                                                            ctx.class_expr_aliases.insert(
+                                                                bind_name.clone(),
+                                                                bind_name.clone(),
+                                                            );
                                                             continue;
                                                         }
                                                     }
@@ -3968,16 +4776,33 @@ fn lower_stmt(
                         // so property accesses (response.status, response.data) route
                         // through NativeMethodCall dispatch instead of generic PropertyGet.
                         for s in &stmts {
-                            if let Stmt::Let { name, init: Some(Expr::Await(inner)), .. } = s {
-                                if let Expr::NativeMethodCall { module: mod_name, method, .. } = inner.as_ref() {
+                            if let Stmt::Let {
+                                name,
+                                init: Some(Expr::Await(inner)),
+                                ..
+                            } = s
+                            {
+                                if let Expr::NativeMethodCall {
+                                    module: mod_name,
+                                    method,
+                                    ..
+                                } = inner.as_ref()
+                                {
                                     let class_name = match (mod_name.as_str(), method.as_str()) {
-                                        ("axios", "get" | "post" | "put" | "delete" | "patch" | "request") => Some("Response"),
+                                        (
+                                            "axios",
+                                            "get" | "post" | "put" | "delete" | "patch" | "request",
+                                        ) => Some("Response"),
                                         ("mongodb", "connect") => Some("MongoClient"),
                                         ("pg", "connect") => Some("Client"),
                                         _ => None,
                                     };
                                     if let Some(cn) = class_name {
-                                        ctx.register_native_instance(name.clone(), mod_name.clone(), cn.to_string());
+                                        ctx.register_native_instance(
+                                            name.clone(),
+                                            mod_name.clone(),
+                                            cn.to_string(),
+                                        );
                                     }
                                 }
                             }
@@ -3986,7 +4811,18 @@ fn lower_stmt(
                             // registers `sock` as a Socket instance; without this, subsequent
                             // `sock.write/on/end/destroy` miss the NATIVE_MODULE_TABLE dispatch
                             // and never reach the `js_net_socket_*` FFI in perry-stdlib.
-                            if let Stmt::Let { name, init: Some(Expr::NativeMethodCall { module: mod_name, method, object: None, .. }), .. } = s {
+                            if let Stmt::Let {
+                                name,
+                                init:
+                                    Some(Expr::NativeMethodCall {
+                                        module: mod_name,
+                                        method,
+                                        object: None,
+                                        ..
+                                    }),
+                                ..
+                            } = s
+                            {
                                 let class_name = match (mod_name.as_str(), method.as_str()) {
                                     ("net", "createConnection" | "connect") => Some("Socket"),
                                     // tls.connect returns the same Socket class — reuses
@@ -3998,7 +4834,11 @@ fn lower_stmt(
                                     // Register under `"net"` (the module the Socket class belongs to)
                                     // regardless of which module the factory lived in, so method
                                     // dispatch resolves correctly.
-                                    ctx.register_native_instance(name.clone(), "net".to_string(), cn.to_string());
+                                    ctx.register_native_instance(
+                                        name.clone(),
+                                        "net".to_string(),
+                                        cn.to_string(),
+                                    );
                                     let _ = mod_name; // suppress unused on tls branch
                                 }
                             }
@@ -4010,11 +4850,18 @@ fn lower_stmt(
                             // Example: `function openSocket(): Socket { ... }`
                             // followed by `const sock = openSocket(...)` registers
                             // sock as ("net", "Socket").
-                            if let Stmt::Let { name, init: Some(Expr::Call { callee, .. }), .. } = s {
+                            if let Stmt::Let {
+                                name,
+                                init: Some(Expr::Call { callee, .. }),
+                                ..
+                            } = s
+                            {
                                 if let Expr::FuncRef(func_id) = callee.as_ref() {
-                                    let func_name_owned = ctx.lookup_func_name(*func_id).map(|s| s.to_string());
+                                    let func_name_owned =
+                                        ctx.lookup_func_name(*func_id).map(|s| s.to_string());
                                     if let Some(func_name) = func_name_owned {
-                                        let lookup = ctx.lookup_func_return_native_instance(&func_name)
+                                        let lookup = ctx
+                                            .lookup_func_return_native_instance(&func_name)
                                             .map(|(m, c)| (m.to_string(), c.to_string()));
                                         if let Some((m, c)) = lookup {
                                             ctx.register_native_instance(name.clone(), m, c);
@@ -4085,9 +4932,12 @@ fn lower_stmt(
                         if let Some(ref body) = ts_module.body {
                             let ns_name = match &ts_module.id {
                                 ast::TsModuleName::Ident(ident) => ident.sym.to_string(),
-                                ast::TsModuleName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                                ast::TsModuleName::Str(s) => {
+                                    s.value.as_str().unwrap_or("").to_string()
+                                }
                             };
-                            let class = lower_namespace_as_class(ctx, module, &ns_name, body, false)?;
+                            let class =
+                                lower_namespace_as_class(ctx, module, &ns_name, body, false)?;
                             module.classes.push(class);
                         }
                     }
@@ -4121,7 +4971,9 @@ fn lower_stmt(
                 ctx.pop_block_scope(mark);
                 stmts
             };
-            let else_branch = if_stmt.alt.as_ref()
+            let else_branch = if_stmt
+                .alt
+                .as_ref()
                 .map(|s| {
                     if matches!(**s, ast::Stmt::Block(_)) || matches!(**s, ast::Stmt::If(_)) {
                         lower_body_stmt(ctx, s)
@@ -4161,14 +5013,20 @@ fn lower_stmt(
             let inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
             if inner.len() == 1 {
                 let body = inner.into_iter().next().unwrap();
-                module.init.push(Stmt::Labeled { label, body: Box::new(body) });
+                module.init.push(Stmt::Labeled {
+                    label,
+                    body: Box::new(body),
+                });
             } else {
                 let mut inner = inner;
                 let last = inner.pop().unwrap();
                 for s in inner {
                     module.init.push(s);
                 }
-                module.init.push(Stmt::Labeled { label, body: Box::new(last) });
+                module.init.push(Stmt::Labeled {
+                    label,
+                    body: Box::new(last),
+                });
             }
         }
         ast::Stmt::For(for_stmt) => {
@@ -4182,35 +5040,75 @@ fn lower_stmt(
                         if is_var {
                             for decl in var_decl.decls.iter() {
                                 let name = get_binding_name(&decl.name)?;
-                                let init_expr = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+                                let init_expr =
+                                    decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
                                 ctx.var_hoisted_ids.insert(id);
-                                module.init.push(Stmt::Let { id, name, ty: Type::Any, mutable: true, init: init_expr });
+                                module.init.push(Stmt::Let {
+                                    id,
+                                    name,
+                                    ty: Type::Any,
+                                    mutable: true,
+                                    init: init_expr,
+                                });
                             }
                             None
                         } else {
                             for decl in var_decl.decls.iter().skip(1) {
                                 let name = get_binding_name(&decl.name)?;
-                                let init_expr = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+                                let init_expr =
+                                    decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
-                                module.init.push(Stmt::Let { id, name, ty: Type::Any, mutable: true, init: init_expr });
+                                module.init.push(Stmt::Let {
+                                    id,
+                                    name,
+                                    ty: Type::Any,
+                                    mutable: true,
+                                    init: init_expr,
+                                });
                             }
                             if let Some(decl) = var_decl.decls.first() {
                                 let name = get_binding_name(&decl.name)?;
-                                let init_expr = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+                                let init_expr =
+                                    decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
                                 let id = ctx.define_local(name.clone(), Type::Any);
-                                Some(Box::new(Stmt::Let { id, name, ty: Type::Any, mutable: true, init: init_expr }))
-                            } else { None }
+                                Some(Box::new(Stmt::Let {
+                                    id,
+                                    name,
+                                    ty: Type::Any,
+                                    mutable: true,
+                                    init: init_expr,
+                                }))
+                            } else {
+                                None
+                            }
                         }
                     }
-                    ast::VarDeclOrExpr::Expr(expr) => { Some(Box::new(Stmt::Expr(lower_expr(ctx, expr)?))) }
+                    ast::VarDeclOrExpr::Expr(expr) => {
+                        Some(Box::new(Stmt::Expr(lower_expr(ctx, expr)?)))
+                    }
                 }
-            } else { None };
-            let condition = for_stmt.test.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-            let update = for_stmt.update.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+            } else {
+                None
+            };
+            let condition = for_stmt
+                .test
+                .as_ref()
+                .map(|e| lower_expr(ctx, e))
+                .transpose()?;
+            let update = for_stmt
+                .update
+                .as_ref()
+                .map(|e| lower_expr(ctx, e))
+                .transpose()?;
             let body = lower_body_stmt(ctx, &for_stmt.body)?;
             ctx.pop_block_scope(for_scope_mark);
-            module.init.push(Stmt::For { init, condition, update, body });
+            module.init.push(Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            });
         }
         ast::Stmt::Block(block) => {
             // Bare block: introduce a lexical scope so inner let/const shadow
@@ -4239,7 +5137,10 @@ fn lower_stmt(
                 let catch_body = lower_block_stmt(ctx, &catch_clause.body)?;
                 ctx.exit_scope(scope_mark);
 
-                Some(CatchClause { param, body: catch_body })
+                Some(CatchClause {
+                    param,
+                    body: catch_body,
+                })
             } else {
                 None
             };
@@ -4251,7 +5152,11 @@ fn lower_stmt(
                 None
             };
 
-            module.init.push(Stmt::Try { body, catch, finally });
+            module.init.push(Stmt::Try {
+                body,
+                catch,
+                finally,
+            });
         }
         ast::Stmt::Throw(throw_stmt) => {
             let expr = lower_expr(ctx, &throw_stmt.arg)?;
@@ -4262,9 +5167,7 @@ fn lower_stmt(
             let mut cases = Vec::new();
 
             for case in &switch_stmt.cases {
-                let test = case.test.as_ref()
-                    .map(|e| lower_expr(ctx, e))
-                    .transpose()?;
+                let test = case.test.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
 
                 let mut body = Vec::new();
                 for stmt in &case.cons {
@@ -4274,7 +5177,10 @@ fn lower_stmt(
                 cases.push(SwitchCase { test, body });
             }
 
-            module.init.push(Stmt::Switch { discriminant, cases });
+            module.init.push(Stmt::Switch {
+                discriminant,
+                cases,
+            });
         }
         ast::Stmt::ForOf(for_of_stmt) => {
             // --- Iterator protocol path for generators ---
@@ -4283,9 +5189,15 @@ fn lower_stmt(
                 if let ast::Callee::Expr(callee_expr) = &call.callee {
                     if let ast::Expr::Ident(ident) = &**callee_expr {
                         ctx.generator_func_names.contains(ident.sym.as_ref())
-                    } else { false }
-                } else { false }
-            } else { false };
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
 
             // Detect whether the called generator was an `async function*`.
             // Async generators always return `Promise<{value, done}>` from
@@ -4297,9 +5209,15 @@ fn lower_stmt(
                 if let ast::Callee::Expr(callee_expr) = &call.callee {
                     if let ast::Expr::Ident(ident) = &**callee_expr {
                         ctx.async_generator_func_names.contains(ident.sym.as_ref())
-                    } else { false }
-                } else { false }
-            } else { false };
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
             let needs_await = for_of_stmt.is_await || callee_is_async_gen;
 
             // Also detect: for (const x of new Range(...)) where Range
@@ -4307,16 +5225,17 @@ fn lower_stmt(
             // a synthesized top-level generator function taking `this`
             // as its first parameter; the for-of here dispatches by
             // calling that function with the lowered receiver.
-            let iter_from_class: Option<perry_types::FuncId> = if let ast::Expr::New(new_expr) = &*for_of_stmt.right {
-                if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
-                    let class_name = ident.sym.to_string();
-                    ctx.iterator_func_for_class.get(&class_name).copied()
+            let iter_from_class: Option<perry_types::FuncId> =
+                if let ast::Expr::New(new_expr) = &*for_of_stmt.right {
+                    if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+                        let class_name = ident.sym.to_string();
+                        ctx.iterator_func_for_class.get(&class_name).copied()
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
             if is_generator_call || iter_from_class.is_some() {
                 // Lower to iterator protocol:
@@ -4339,7 +5258,8 @@ fn lower_stmt(
                     iter_expr
                 };
                 let iter_id = ctx.fresh_local();
-                ctx.locals.push((format!("__iter_{}", iter_id), iter_id, Type::Any));
+                ctx.locals
+                    .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
                 module.init.push(Stmt::Let {
                     id: iter_id,
                     name: format!("__iter_{}", iter_id),
@@ -4349,7 +5269,8 @@ fn lower_stmt(
                 });
 
                 let result_id = ctx.fresh_local();
-                ctx.locals.push((format!("__result_{}", result_id), result_id, Type::Any));
+                ctx.locals
+                    .push((format!("__result_{}", result_id), result_id, Type::Any));
                 // __result = __iter.next()
                 // For async generators / `for await ... of`, wrap the
                 // call in `Expr::Await` so the resolved iter-result
@@ -4380,9 +5301,15 @@ fn lower_stmt(
                     if let Some(decl) = var_decl.decls.first() {
                         if let ast::Pat::Ident(ident) = &decl.name {
                             ident.id.sym.to_string()
-                        } else { format!("__gen_item") }
-                    } else { format!("__gen_item") }
-                } else { format!("__gen_item") };
+                        } else {
+                            format!("__gen_item")
+                        }
+                    } else {
+                        format!("__gen_item")
+                    }
+                } else {
+                    format!("__gen_item")
+                };
                 let item_id = ctx.define_local(item_name.clone(), Type::Any);
 
                 // Lower loop body
@@ -4409,10 +5336,7 @@ fn lower_stmt(
                 let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
                 body_stmts.append(&mut user_body);
                 // __result = __iter.next()
-                body_stmts.push(Stmt::Expr(Expr::LocalSet(
-                    result_id,
-                    Box::new(next_call),
-                )));
+                body_stmts.push(Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))));
 
                 // while (!__result.done) { body }
                 module.init.push(Stmt::While {
@@ -4453,15 +5377,19 @@ fn lower_stmt(
             let arr_expr = if let ast::Expr::Ident(ident) = &*for_of_stmt.right {
                 let name = ident.sym.to_string();
                 let local_type = ctx.lookup_local_type(&name);
-                let map_type_args = local_type.as_ref()
-                    .and_then(|ty| {
-                        if let Type::Generic { base, type_args } = ty {
-                            if base == "Map" { Some(type_args.clone()) } else { None }
+                let map_type_args = local_type.as_ref().and_then(|ty| {
+                    if let Type::Generic { base, type_args } = ty {
+                        if base == "Map" {
+                            Some(type_args.clone())
                         } else {
                             None
                         }
-                    });
-                let is_set = local_type.as_ref()
+                    } else {
+                        None
+                    }
+                });
+                let is_set = local_type
+                    .as_ref()
                     .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Set"))
                     .unwrap_or(false);
                 if let Some(type_args) = map_type_args {
@@ -4493,7 +5421,9 @@ fn lower_stmt(
                 let name = ident.sym.to_string();
                 match ctx.lookup_local_type(&name) {
                     Some(Type::Array(elem)) => (**elem).clone(),
-                    Some(Type::Generic { base, type_args }) if base == "Array" && type_args.len() == 1 => {
+                    Some(Type::Generic { base, type_args })
+                        if base == "Array" && type_args.len() == 1 =>
+                    {
                         type_args[0].clone()
                     }
                     _ => Type::Any,
@@ -4513,8 +5443,10 @@ fn lower_stmt(
             let arr_id = ctx.fresh_local();
             let idx_id = ctx.fresh_local();
             // Register these in the context so they can be looked up
-            ctx.locals.push((format!("__arr_{}", arr_id), arr_id, arr_type.clone()));
-            ctx.locals.push((format!("__idx_{}", idx_id), idx_id, Type::Number));
+            ctx.locals
+                .push((format!("__arr_{}", arr_id), arr_id, arr_type.clone()));
+            ctx.locals
+                .push((format!("__idx_{}", idx_id), idx_id, Type::Number));
 
             // Store array reference: let __arr = arr
             module.init.push(Stmt::Let {
@@ -4528,7 +5460,8 @@ fn lower_stmt(
             // IMPORTANT: Define iteration variables BEFORE lowering the body
             // so the body can reference them
             let item_id = ctx.fresh_local();
-            ctx.locals.push((format!("__item_{}", item_id), item_id, elem_type.clone()));
+            ctx.locals
+                .push((format!("__item_{}", item_id), item_id, elem_type.clone()));
 
             // Pre-define all variables from the pattern so body can reference them
             let var_ids: Vec<(String, u32)> = match &for_of_stmt.left {
@@ -4547,7 +5480,8 @@ fn lower_stmt(
                                         if let ast::Pat::Ident(ident) = elem_pat {
                                             let name = ident.id.sym.to_string();
                                             // For Map destructuring [k, v], use key type for idx 0, value type for idx 1
-                                            let var_type = if let Type::Tuple(ref types) = elem_type {
+                                            let var_type = if let Type::Tuple(ref types) = elem_type
+                                            {
                                                 types.get(idx).cloned().unwrap_or(Type::Any)
                                             } else {
                                                 Type::Any
@@ -4640,7 +5574,8 @@ fn lower_stmt(
                                             let (name, id) = var_ids[var_idx].clone();
                                             var_idx += 1;
                                             // For Map destructuring, use the Tuple element type
-                                            let var_type = if let Type::Tuple(ref types) = elem_type {
+                                            let var_type = if let Type::Tuple(ref types) = elem_type
+                                            {
                                                 types.get(idx).cloned().unwrap_or(Type::Any)
                                             } else {
                                                 Type::Any
@@ -4678,7 +5613,9 @@ fn lower_stmt(
                                             let prop_name = assign.key.sym.to_string();
                                             let (name, id) = var_ids[var_idx].clone();
                                             var_idx += 1;
-                                            let init_value = if let Some(default_expr) = &assign.value {
+                                            let init_value = if let Some(default_expr) =
+                                                &assign.value
+                                            {
                                                 let prop_access = Expr::PropertyGet {
                                                     object: Box::new(Expr::LocalGet(item_id)),
                                                     property: prop_name,
@@ -4710,7 +5647,9 @@ fn lower_stmt(
                                         }
                                         ast::ObjectPatProp::KeyValue(kv) => {
                                             let key = match &kv.key {
-                                                ast::PropName::Ident(ident) => ident.sym.to_string(),
+                                                ast::PropName::Ident(ident) => {
+                                                    ident.sym.to_string()
+                                                }
                                                 _ => continue,
                                             };
                                             if let ast::Pat::Ident(_) = &*kv.value {
@@ -4844,16 +5783,19 @@ fn lower_stmt(
             let mut loop_body = lower_body_stmt(ctx, &for_in_stmt.body)?;
 
             // Prepend: const key = __keys[__i]
-            loop_body.insert(0, Stmt::Let {
-                id: key_id,
-                name: key_name,
-                ty: Type::String,
-                mutable: false,
-                init: Some(Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(keys_id)),
-                    index: Box::new(Expr::LocalGet(idx_id)),
-                }),
-            });
+            loop_body.insert(
+                0,
+                Stmt::Let {
+                    id: key_id,
+                    name: key_name,
+                    ty: Type::String,
+                    mutable: false,
+                    init: Some(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(keys_id)),
+                        index: Box::new(Expr::LocalGet(idx_id)),
+                    }),
+                },
+            );
 
             // Create the for loop:
             // for (let __i = 0; __i < __keys.length; __i++) { ... }
@@ -4889,14 +5831,21 @@ fn lower_stmt(
 
 /// Assign a value to an expression target (used for unwrapped paren/type-assertion targets).
 /// Converts an Expr (which should be an ident or member access) into an assignment.
-pub(super) fn lower_expr_assignment(ctx: &mut LoweringContext, expr: &ast::Expr, value: Box<Expr>) -> Result<Expr> {
+pub(super) fn lower_expr_assignment(
+    ctx: &mut LoweringContext,
+    expr: &ast::Expr,
+    value: Box<Expr>,
+) -> Result<Expr> {
     match expr {
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
             if let Some(id) = ctx.lookup_local(&name) {
                 Ok(Expr::LocalSet(id, value))
             } else {
-                eprintln!("  Warning: Assignment to undeclared variable '{}', creating implicit local", name);
+                eprintln!(
+                    "  Warning: Assignment to undeclared variable '{}', creating implicit local",
+                    name
+                );
                 let id = ctx.define_local(name, Type::Any);
                 Ok(Expr::LocalSet(id, value))
             }
@@ -4921,15 +5870,27 @@ pub(super) fn lower_expr_assignment(ctx: &mut LoweringContext, expr: &ast::Expr,
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
-                    Ok(Expr::PropertySet { object, property, value })
+                    Ok(Expr::PropertySet {
+                        object,
+                        property,
+                        value,
+                    })
                 }
                 ast::MemberProp::Computed(computed) => {
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
-                    Ok(Expr::IndexSet { object, index, value })
+                    Ok(Expr::IndexSet {
+                        object,
+                        index,
+                        value,
+                    })
                 }
                 ast::MemberProp::PrivateName(private) => {
                     let property = format!("#{}", private.name.to_string());
-                    Ok(Expr::PropertySet { object, property, value })
+                    Ok(Expr::PropertySet {
+                        object,
+                        property,
+                        value,
+                    })
                 }
             }
         }
@@ -4939,7 +5900,10 @@ pub(super) fn lower_expr_assignment(ctx: &mut LoweringContext, expr: &ast::Expr,
         ast::Expr::TsNonNull(ts_nn) => lower_expr_assignment(ctx, &ts_nn.expr, value),
         ast::Expr::TsTypeAssertion(ts_ta) => lower_expr_assignment(ctx, &ts_ta.expr, value),
         ast::Expr::TsSatisfies(ts_sat) => lower_expr_assignment(ctx, &ts_sat.expr, value),
-        _ => Err(anyhow!("Unsupported expression as assignment target: {:?}", expr)),
+        _ => Err(anyhow!(
+            "Unsupported expression as assignment target: {:?}",
+            expr
+        )),
     }
 }
 
@@ -4983,7 +5947,8 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
                 // Imported function - reference by its original exported name
                 // Look up type information if available
-                let (param_types, return_type) = ctx.lookup_extern_func_types(orig_name)
+                let (param_types, return_type) = ctx
+                    .lookup_extern_func_types(orig_name)
                     .map(|(p, r)| (p.clone(), r.clone()))
                     .unwrap_or_else(|| (Vec::new(), Type::Any));
                 Ok(Expr::ExternFuncRef {
@@ -5017,19 +5982,56 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // GlobalGet(0) is a sentinel: codegen routes by name from the
                 // parent PropertyGet/Call/Member context. Bare uses lower to
                 // 0.0 (perry-codegen/src/expr.rs Expr::GlobalGet arm).
-                if name != "console" && name != "process" && name != "globalThis" && name != "Buffer"
-                    && name != "Date" && name != "JSON" && name != "Math" && name != "Object"
-                    && name != "Array" && name != "String" && name != "Number" && name != "Boolean"
-                    && name != "Error" && name != "TypeError" && name != "RangeError" && name != "Promise"
-                    && name != "Map" && name != "Set" && name != "RegExp" && name != "Symbol"
-                    && name != "WeakMap" && name != "WeakSet" && name != "WeakRef" && name != "FinalizationRegistry" && name != "Proxy" && name != "Reflect"
-                    && name != "Uint8Array" && name != "Int8Array" && name != "Int16Array" && name != "Uint16Array"
-                    && name != "Int32Array" && name != "Uint32Array" && name != "Float32Array" && name != "Float64Array"
-                    && name != "TextEncoder" && name != "TextDecoder"
-                    && name != "URL" && name != "URLSearchParams" && name != "AbortController" && name != "FormData"
-                    && name != "Headers" && name != "fetch" && name != "crypto" && name != "performance"
-                    && name != "queueMicrotask" && name != "structuredClone" && name != "atob" && name != "btoa"
-                    && name != "BigInt" {
+                if name != "console"
+                    && name != "process"
+                    && name != "globalThis"
+                    && name != "Buffer"
+                    && name != "Date"
+                    && name != "JSON"
+                    && name != "Math"
+                    && name != "Object"
+                    && name != "Array"
+                    && name != "String"
+                    && name != "Number"
+                    && name != "Boolean"
+                    && name != "Error"
+                    && name != "TypeError"
+                    && name != "RangeError"
+                    && name != "Promise"
+                    && name != "Map"
+                    && name != "Set"
+                    && name != "RegExp"
+                    && name != "Symbol"
+                    && name != "WeakMap"
+                    && name != "WeakSet"
+                    && name != "WeakRef"
+                    && name != "FinalizationRegistry"
+                    && name != "Proxy"
+                    && name != "Reflect"
+                    && name != "Uint8Array"
+                    && name != "Int8Array"
+                    && name != "Int16Array"
+                    && name != "Uint16Array"
+                    && name != "Int32Array"
+                    && name != "Uint32Array"
+                    && name != "Float32Array"
+                    && name != "Float64Array"
+                    && name != "TextEncoder"
+                    && name != "TextDecoder"
+                    && name != "URL"
+                    && name != "URLSearchParams"
+                    && name != "AbortController"
+                    && name != "FormData"
+                    && name != "Headers"
+                    && name != "fetch"
+                    && name != "crypto"
+                    && name != "performance"
+                    && name != "queueMicrotask"
+                    && name != "structuredClone"
+                    && name != "atob"
+                    && name != "btoa"
+                    && name != "BigInt"
+                {
                     eprintln!(
                         "  Warning: unknown identifier '{}' — assuming global; member access will dispatch by name at runtime, bare reads lower to 0",
                         name
@@ -5066,8 +6068,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     if class_name == "WeakRef" || class_name == "FinalizationRegistry" {
                         if let ast::Expr::Ident(left_ident) = bin.left.as_ref() {
                             let local_name = left_ident.sym.to_string();
-                            let is_match = (class_name == "WeakRef" && ctx.weakref_locals.contains(&local_name))
-                                || (class_name == "FinalizationRegistry" && ctx.finreg_locals.contains(&local_name));
+                            let is_match = (class_name == "WeakRef"
+                                && ctx.weakref_locals.contains(&local_name))
+                                || (class_name == "FinalizationRegistry"
+                                    && ctx.finreg_locals.contains(&local_name));
                             return Ok(Expr::Bool(is_match));
                         }
                     }
@@ -5102,52 +6106,152 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
 
             match bin.op {
                 // Arithmetic
-                ast::BinaryOp::Add => Ok(Expr::Binary { op: BinaryOp::Add, left, right }),
-                ast::BinaryOp::Sub => Ok(Expr::Binary { op: BinaryOp::Sub, left, right }),
-                ast::BinaryOp::Mul => Ok(Expr::Binary { op: BinaryOp::Mul, left, right }),
-                ast::BinaryOp::Div => Ok(Expr::Binary { op: BinaryOp::Div, left, right }),
-                ast::BinaryOp::Mod => Ok(Expr::Binary { op: BinaryOp::Mod, left, right }),
-                ast::BinaryOp::Exp => Ok(Expr::Binary { op: BinaryOp::Pow, left, right }),
+                ast::BinaryOp::Add => Ok(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::Sub => Ok(Expr::Binary {
+                    op: BinaryOp::Sub,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::Mul => Ok(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::Div => Ok(Expr::Binary {
+                    op: BinaryOp::Div,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::Mod => Ok(Expr::Binary {
+                    op: BinaryOp::Mod,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::Exp => Ok(Expr::Binary {
+                    op: BinaryOp::Pow,
+                    left,
+                    right,
+                }),
 
                 // Comparison (treat == same as === for typed code)
                 ast::BinaryOp::EqEq => {
                     // Proxy/Reflect fold: `Reflect.getPrototypeOf(x) === <Class>.prototype`
                     // always true in our model (we don't maintain real prototypes).
                     // Same fold for `Object.getPrototypeOf(x) === <Class>.prototype`.
-                    if matches!(&*left, Expr::ReflectGetPrototypeOf(_) | Expr::ObjectGetPrototypeOf(_)) {
-                        if matches!(&*right, Expr::PropertyGet { property, .. } if property == "prototype") {
+                    if matches!(
+                        &*left,
+                        Expr::ReflectGetPrototypeOf(_) | Expr::ObjectGetPrototypeOf(_)
+                    ) {
+                        if matches!(&*right, Expr::PropertyGet { property, .. } if property == "prototype")
+                        {
                             return Ok(Expr::Bool(true));
                         }
                     }
-                    Ok(Expr::Compare { op: CompareOp::LooseEq, left, right })
+                    Ok(Expr::Compare {
+                        op: CompareOp::LooseEq,
+                        left,
+                        right,
+                    })
                 }
                 ast::BinaryOp::EqEqEq => {
-                    if matches!(&*left, Expr::ReflectGetPrototypeOf(_) | Expr::ObjectGetPrototypeOf(_)) {
-                        if matches!(&*right, Expr::PropertyGet { property, .. } if property == "prototype") {
+                    if matches!(
+                        &*left,
+                        Expr::ReflectGetPrototypeOf(_) | Expr::ObjectGetPrototypeOf(_)
+                    ) {
+                        if matches!(&*right, Expr::PropertyGet { property, .. } if property == "prototype")
+                        {
                             return Ok(Expr::Bool(true));
                         }
                     }
-                    Ok(Expr::Compare { op: CompareOp::Eq, left, right })
+                    Ok(Expr::Compare {
+                        op: CompareOp::Eq,
+                        left,
+                        right,
+                    })
                 }
-                ast::BinaryOp::NotEq => Ok(Expr::Compare { op: CompareOp::LooseNe, left, right }),
-                ast::BinaryOp::NotEqEq => Ok(Expr::Compare { op: CompareOp::Ne, left, right }),
-                ast::BinaryOp::Lt => Ok(Expr::Compare { op: CompareOp::Lt, left, right }),
-                ast::BinaryOp::LtEq => Ok(Expr::Compare { op: CompareOp::Le, left, right }),
-                ast::BinaryOp::Gt => Ok(Expr::Compare { op: CompareOp::Gt, left, right }),
-                ast::BinaryOp::GtEq => Ok(Expr::Compare { op: CompareOp::Ge, left, right }),
+                ast::BinaryOp::NotEq => Ok(Expr::Compare {
+                    op: CompareOp::LooseNe,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::NotEqEq => Ok(Expr::Compare {
+                    op: CompareOp::Ne,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::Lt => Ok(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::LtEq => Ok(Expr::Compare {
+                    op: CompareOp::Le,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::Gt => Ok(Expr::Compare {
+                    op: CompareOp::Gt,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::GtEq => Ok(Expr::Compare {
+                    op: CompareOp::Ge,
+                    left,
+                    right,
+                }),
 
                 // Logical
-                ast::BinaryOp::LogicalAnd => Ok(Expr::Logical { op: LogicalOp::And, left, right }),
-                ast::BinaryOp::LogicalOr => Ok(Expr::Logical { op: LogicalOp::Or, left, right }),
-                ast::BinaryOp::NullishCoalescing => Ok(Expr::Logical { op: LogicalOp::Coalesce, left, right }),
+                ast::BinaryOp::LogicalAnd => Ok(Expr::Logical {
+                    op: LogicalOp::And,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::LogicalOr => Ok(Expr::Logical {
+                    op: LogicalOp::Or,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::NullishCoalescing => Ok(Expr::Logical {
+                    op: LogicalOp::Coalesce,
+                    left,
+                    right,
+                }),
 
                 // Bitwise
-                ast::BinaryOp::BitAnd => Ok(Expr::Binary { op: BinaryOp::BitAnd, left, right }),
-                ast::BinaryOp::BitOr => Ok(Expr::Binary { op: BinaryOp::BitOr, left, right }),
-                ast::BinaryOp::BitXor => Ok(Expr::Binary { op: BinaryOp::BitXor, left, right }),
-                ast::BinaryOp::LShift => Ok(Expr::Binary { op: BinaryOp::Shl, left, right }),
-                ast::BinaryOp::RShift => Ok(Expr::Binary { op: BinaryOp::Shr, left, right }),
-                ast::BinaryOp::ZeroFillRShift => Ok(Expr::Binary { op: BinaryOp::UShr, left, right }),
+                ast::BinaryOp::BitAnd => Ok(Expr::Binary {
+                    op: BinaryOp::BitAnd,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::BitOr => Ok(Expr::Binary {
+                    op: BinaryOp::BitOr,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::BitXor => Ok(Expr::Binary {
+                    op: BinaryOp::BitXor,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::LShift => Ok(Expr::Binary {
+                    op: BinaryOp::Shl,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::RShift => Ok(Expr::Binary {
+                    op: BinaryOp::Shr,
+                    left,
+                    right,
+                }),
+                ast::BinaryOp::ZeroFillRShift => Ok(Expr::Binary {
+                    op: BinaryOp::UShr,
+                    left,
+                    right,
+                }),
 
                 _ => Err(anyhow!("Unsupported binary operator: {:?}", bin.op)),
             }
@@ -5207,12 +6311,24 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             Ok(Expr::Integer(-val))
                         }
                     } else {
-                        Ok(Expr::Unary { op: UnaryOp::Neg, operand })
+                        Ok(Expr::Unary {
+                            op: UnaryOp::Neg,
+                            operand,
+                        })
                     }
                 }
-                ast::UnaryOp::Plus => Ok(Expr::Unary { op: UnaryOp::Pos, operand }),
-                ast::UnaryOp::Bang => Ok(Expr::Unary { op: UnaryOp::Not, operand }),
-                ast::UnaryOp::Tilde => Ok(Expr::Unary { op: UnaryOp::BitNot, operand }),
+                ast::UnaryOp::Plus => Ok(Expr::Unary {
+                    op: UnaryOp::Pos,
+                    operand,
+                }),
+                ast::UnaryOp::Bang => Ok(Expr::Unary {
+                    op: UnaryOp::Not,
+                    operand,
+                }),
+                ast::UnaryOp::Tilde => Ok(Expr::Unary {
+                    op: UnaryOp::BitNot,
+                    operand,
+                }),
                 ast::UnaryOp::TypeOf => {
                     // Fast path: known Symbol-producing expressions resolve to "symbol"
                     // at compile time (avoids needing runtime js_value_typeof to
@@ -5225,7 +6341,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 ast::UnaryOp::Delete => {
                     // Proxy delete: rewrite `delete proxy.key` as ProxyDelete.
                     if let Expr::ProxyGet { proxy, key } = &*operand {
-                        return Ok(Expr::ProxyDelete { proxy: proxy.clone(), key: key.clone() });
+                        return Ok(Expr::ProxyDelete {
+                            proxy: proxy.clone(),
+                            key: key.clone(),
+                        });
                     }
                     Ok(Expr::Delete(operand))
                 }
@@ -5235,14 +6354,14 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         }
         ast::Expr::Call(call) => expr_call::lower_call(ctx, call),
         ast::Expr::Member(member) => expr_member::lower_member(ctx, member),
-        ast::Expr::Paren(paren) => {
-            lower_expr(ctx, &paren.expr)
-        }
+        ast::Expr::Paren(paren) => lower_expr(ctx, &paren.expr),
         ast::Expr::Assign(assign) => expr_assign::lower_assign(ctx, assign),
         ast::Expr::Cond(cond) => expr_misc::lower_cond(ctx, cond),
         ast::Expr::Array(array) => {
             // Check if any elements are spread elements
-            let has_spread = array.elems.iter()
+            let has_spread = array
+                .elems
+                .iter()
                 .filter_map(|elem| elem.as_ref())
                 .any(|elem| elem.spread.is_some());
 
@@ -5250,7 +6369,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // Use ArraySpread for arrays with spread elements.
                 // If a spread source is a generator call, wrap it in IteratorToArray
                 // so the codegen gets a real array to iterate.
-                let elements = array.elems.iter()
+                let elements = array
+                    .elems
+                    .iter()
                     .filter_map(|elem| elem.as_ref())
                     .map(|elem| {
                         let expr = lower_expr(ctx, &elem.expr)?;
@@ -5269,7 +6390,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 Ok(Expr::ArraySpread(elements))
             } else {
                 // No spread elements, use regular Array
-                let elements = array.elems.iter()
+                let elements = array
+                    .elems
+                    .iter()
                     .filter_map(|elem| elem.as_ref())
                     .map(|elem| lower_expr(ctx, &elem.expr))
                     .collect::<Result<Vec<_>>>()?;
@@ -5333,7 +6456,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     // Check for spread arguments
                     let has_spread = call.args.iter().any(|arg| arg.spread.is_some());
 
-                    let args = call.args.iter()
+                    let args = call
+                        .args
+                        .iter()
                         .map(|arg| lower_expr(ctx, &arg.expr))
                         .collect::<Result<Vec<_>>>()?;
 
@@ -5341,33 +6466,60 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     // SWC may wrap the callee member access in an OptChain too.
                     // We must NOT re-lower via lower_expr which would nest Conditionals.
                     let (check_expr, callee_expr) = {
-                        let mut lower_member_flat = |member: &ast::MemberExpr| -> Result<(Expr, Expr)> {
-                            let obj = lower_expr(ctx, &member.obj)?;
-                            let prop = match &member.prop {
-                                ast::MemberProp::Ident(id) => Expr::PropertyGet { object: Box::new(obj.clone()), property: id.sym.to_string() },
-                                ast::MemberProp::Computed(c) => { let idx = lower_expr(ctx, &c.expr)?; Expr::IndexGet { object: Box::new(obj.clone()), index: Box::new(idx) } },
-                                _ => return Err(anyhow!("Unsupported optional chain member")),
+                        let mut lower_member_flat =
+                            |member: &ast::MemberExpr| -> Result<(Expr, Expr)> {
+                                let obj = lower_expr(ctx, &member.obj)?;
+                                let prop = match &member.prop {
+                                    ast::MemberProp::Ident(id) => Expr::PropertyGet {
+                                        object: Box::new(obj.clone()),
+                                        property: id.sym.to_string(),
+                                    },
+                                    ast::MemberProp::Computed(c) => {
+                                        let idx = lower_expr(ctx, &c.expr)?;
+                                        Expr::IndexGet {
+                                            object: Box::new(obj.clone()),
+                                            index: Box::new(idx),
+                                        }
+                                    }
+                                    _ => return Err(anyhow!("Unsupported optional chain member")),
+                                };
+                                Ok((obj, prop))
                             };
-                            Ok((obj, prop))
-                        };
                         match &**callee {
                             ast::Expr::Member(m) => lower_member_flat(m)?,
                             ast::Expr::OptChain(inner) => match &*inner.base {
                                 ast::OptChainBase::Member(m) => lower_member_flat(m)?,
-                                _ => { let ce = lower_expr(ctx, callee)?; (ce.clone(), ce) }
+                                _ => {
+                                    let ce = lower_expr(ctx, callee)?;
+                                    (ce.clone(), ce)
+                                }
                             },
-                            _ => { let ce = lower_expr(ctx, callee)?; (ce.clone(), ce) }
+                            _ => {
+                                let ce = lower_expr(ctx, callee)?;
+                                (ce.clone(), ce)
+                            }
                         }
                     };
 
                     // If check_expr is already a Conditional from an inner optional chain,
                     // nest the outer call inside its else branch instead of creating another Conditional.
                     // This avoids duplicating side-effecting expressions (like ArrayShift/ArrayPop).
-                    if let Expr::Conditional { condition: inner_cond, then_expr: inner_then, else_expr: inner_else } = check_expr {
+                    if let Expr::Conditional {
+                        condition: inner_cond,
+                        then_expr: inner_then,
+                        else_expr: inner_else,
+                    } = check_expr
+                    {
                         // Build the callee with inner_else as the object (not the full Conditional)
                         let fixed_callee = match callee_expr {
-                            Expr::PropertyGet { property, .. } => Expr::PropertyGet { object: inner_else, property },
-                            Expr::IndexGet { index, .. } => Expr::IndexGet { object: inner_else, index },
+                            Expr::PropertyGet { property, .. } => Expr::PropertyGet {
+                                object: inner_else,
+                                property,
+                            },
+                            Expr::IndexGet { index, .. } => Expr::IndexGet {
+                                object: inner_else,
+                                index,
+                            },
                             other => other,
                         };
                         let outer_call = Expr::Call {
@@ -5384,7 +6536,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
 
                     // Build the call expression
                     let call_expr = if has_spread {
-                        let spread_args: Vec<CallArg> = call.args.iter().zip(args.iter())
+                        let spread_args: Vec<CallArg> = call
+                            .args
+                            .iter()
+                            .zip(args.iter())
                             .map(|(ast_arg, lowered)| {
                                 if ast_arg.spread.is_some() {
                                     CallArg::Spread(lowered.clone())
@@ -5485,9 +6640,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
 
             if is_string_raw {
                 // Fast path: build string via direct concatenation using `raw` text
-                let first_raw = tpl.quasis.first()
-                    .map(|q| q.raw.as_ref())
-                    .unwrap_or("");
+                let first_raw = tpl.quasis.first().map(|q| q.raw.as_ref()).unwrap_or("");
                 let mut result = Expr::String(first_raw.to_string());
 
                 for (i, expr) in tpl.exprs.iter().enumerate() {
@@ -5552,18 +6705,19 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         // Class expression used as a value (not in `new` context)
         ast::Expr::Class(class_expr) => {
             let ident_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
-            let synthetic_name = ident_name.unwrap_or_else(|| format!("__anon_class_{}", ctx.fresh_class()));
+            let synthetic_name =
+                ident_name.unwrap_or_else(|| format!("__anon_class_{}", ctx.fresh_class()));
             let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
             ctx.pending_classes.push(class);
             // Return as a New expression with no args (creates the class object reference)
-            Ok(Expr::New { class_name: synthetic_name, args: vec![], type_args: vec![] })
+            Ok(Expr::New {
+                class_name: synthetic_name,
+                args: vec![],
+                type_args: vec![],
+            })
         }
-        ast::Expr::JSXElement(jsx) => {
-            lower_jsx_element(ctx, jsx)
-        }
-        ast::Expr::JSXFragment(jsx) => {
-            lower_jsx_fragment(ctx, jsx)
-        }
+        ast::Expr::JSXElement(jsx) => lower_jsx_element(ctx, jsx),
+        ast::Expr::JSXFragment(jsx) => lower_jsx_fragment(ctx, jsx),
         _ => Err(anyhow!("Unsupported expression type: {:?}", expr)),
     }
 }
@@ -5665,10 +6819,18 @@ pub(super) fn try_desugar_reactive_text(
     // only register one subscriber.
     let mut state_names: Vec<String> = Vec::new();
     for expr in tpl.exprs.iter() {
-        let ast::Expr::Member(member) = expr.as_ref() else { continue };
-        let ast::MemberProp::Ident(prop) = &member.prop else { continue };
-        if prop.sym.as_ref() != "value" { continue }
-        let ast::Expr::Ident(obj_ident) = member.obj.as_ref() else { continue };
+        let ast::Expr::Member(member) = expr.as_ref() else {
+            continue;
+        };
+        let ast::MemberProp::Ident(prop) = &member.prop else {
+            continue;
+        };
+        if prop.sym.as_ref() != "value" {
+            continue;
+        }
+        let ast::Expr::Ident(obj_ident) = member.obj.as_ref() else {
+            continue;
+        };
         let name = obj_ident.sym.to_string();
         let is_state = matches!(
             ctx.lookup_native_instance(&name),
@@ -5718,7 +6880,8 @@ pub(super) fn try_desugar_reactive_text(
     });
 
     for state_name in &state_names {
-        let state_local = ctx.lookup_local(state_name)
+        let state_local = ctx
+            .lookup_local(state_name)
             .ok_or_else(|| anyhow!("reactive Text: state '{}' not in scope", state_name))?;
 
         // Inner rebuild closure: (__v) => textSetString(__h, <fresh concat>).
@@ -5740,10 +6903,7 @@ pub(super) fn try_desugar_reactive_text(
             module: "perry/ui".to_string(),
             method: "textSetString".to_string(),
             object: None,
-            args: vec![
-                Expr::LocalGet(widget_id),
-                fresh_concat,
-            ],
+            args: vec![Expr::LocalGet(widget_id), fresh_concat],
             class_name: None,
         };
         let inner_body = vec![Stmt::Expr(set_text_call)];
@@ -5754,7 +6914,8 @@ pub(super) fn try_desugar_reactive_text(
         for stmt in &inner_body {
             collect_local_refs_stmt(stmt, &mut inner_refs, &mut inner_visited);
         }
-        let mut inner_captures: Vec<LocalId> = inner_refs.into_iter()
+        let mut inner_captures: Vec<LocalId> = inner_refs
+            .into_iter()
             .filter(|id| *id != v_param_id)
             .collect();
         inner_captures.sort();
@@ -5790,7 +6951,8 @@ pub(super) fn try_desugar_reactive_text(
     for stmt in &outer_body {
         collect_local_refs_stmt(stmt, &mut outer_refs, &mut outer_visited);
     }
-    let mut outer_captures: Vec<LocalId> = outer_refs.into_iter()
+    let mut outer_captures: Vec<LocalId> = outer_refs
+        .into_iter()
         .filter(|id| *id != widget_id)
         .collect();
     outer_captures.sort();
@@ -5972,7 +7134,8 @@ pub(super) fn try_desugar_reactive_animate(
     }));
 
     for state_name in &state_names {
-        let state_local = ctx.lookup_local(state_name)
+        let state_local = ctx
+            .lookup_local(state_name)
             .ok_or_else(|| anyhow!("reactive animate: state '{}' not in scope", state_name))?;
 
         let inner_func_id = ctx.fresh_func();
@@ -6006,7 +7169,8 @@ pub(super) fn try_desugar_reactive_animate(
         for stmt in &inner_body {
             collect_local_refs_stmt(stmt, &mut inner_refs, &mut inner_visited);
         }
-        let mut inner_captures: Vec<LocalId> = inner_refs.into_iter()
+        let mut inner_captures: Vec<LocalId> = inner_refs
+            .into_iter()
             .filter(|id| *id != v_param_id)
             .collect();
         inner_captures.sort();
@@ -6042,7 +7206,8 @@ pub(super) fn try_desugar_reactive_animate(
     for stmt in &outer_body {
         collect_local_refs_stmt(stmt, &mut outer_refs, &mut outer_visited);
     }
-    let mut outer_captures: Vec<LocalId> = outer_refs.into_iter()
+    let mut outer_captures: Vec<LocalId> = outer_refs
+        .into_iter()
         .filter(|id| *id != widget_id)
         .collect();
     outer_captures.sort();
@@ -6070,10 +7235,7 @@ pub(super) fn try_desugar_reactive_animate(
 
 /// Try to lower a Widget({...}) call from perry/widget into a WidgetDecl.
 /// Returns Some(WidgetDecl) if this is a widget declaration, None otherwise.
-fn try_lower_widget_decl(
-    ctx: &LoweringContext,
-    call_expr: &ast::CallExpr,
-) -> Option<WidgetDecl> {
+fn try_lower_widget_decl(ctx: &LoweringContext, call_expr: &ast::CallExpr) -> Option<WidgetDecl> {
     // Check callee is a function imported from perry/widget named "Widget"
     let callee = match &call_expr.callee {
         ast::Callee::Expr(expr) => expr,
@@ -6197,7 +7359,9 @@ fn try_lower_widget_decl(
                         if let ast::PropOrSpread::Prop(p) = field_prop {
                             if let ast::Prop::KeyValue(field_kv) = p.as_ref() {
                                 let param_name = prop_name_to_string(&field_kv.key);
-                                if let Some(param) = parse_widget_config_param(&param_name, &field_kv.value) {
+                                if let Some(param) =
+                                    parse_widget_config_param(&param_name, &field_kv.value)
+                                {
                                     config_params.push(param);
                                 }
                             }
@@ -6288,7 +7452,8 @@ fn try_lower_widget_decl(
                                 }
                             }
                             ast::BlockStmtOrExpr::BlockStmt(block) => {
-                                let nodes = parse_render_body_stmts(&block.stmts, &family_param_name);
+                                let nodes =
+                                    parse_render_body_stmts(&block.stmts, &family_param_name);
                                 render_body = nodes;
                             }
                         }
@@ -6401,15 +7566,21 @@ fn parse_widget_field_type(ts_type: &ast::TsType) -> WidgetFieldType {
             }
             WidgetFieldType::Object(obj_fields)
         }
-        ast::TsType::TsUnionOrIntersectionType(ast::TsUnionOrIntersectionType::TsUnionType(union)) => {
+        ast::TsType::TsUnionOrIntersectionType(ast::TsUnionOrIntersectionType::TsUnionType(
+            union,
+        )) => {
             // Check for T | null or T | undefined → Optional(T)
             let mut non_null_types: Vec<&ast::TsType> = Vec::new();
             let mut has_null = false;
             for member in &union.types {
                 match member.as_ref() {
-                    ast::TsType::TsKeywordType(kw) if matches!(kw.kind,
-                        ast::TsKeywordTypeKind::TsNullKeyword | ast::TsKeywordTypeKind::TsUndefinedKeyword
-                    ) => {
+                    ast::TsType::TsKeywordType(kw)
+                        if matches!(
+                            kw.kind,
+                            ast::TsKeywordTypeKind::TsNullKeyword
+                                | ast::TsKeywordTypeKind::TsUndefinedKeyword
+                        ) =>
+                    {
                         has_null = true;
                     }
                     other => non_null_types.push(other),
@@ -6442,7 +7613,9 @@ fn parse_widget_node(expr: &ast::Expr) -> Option<WidgetNode> {
 
             match func_name.as_str() {
                 "Text" => {
-                    let content = call.args.first()
+                    let content = call
+                        .args
+                        .first()
                         .map(|arg| parse_text_content(&arg.expr))
                         .unwrap_or(WidgetTextContent::Literal(String::new()));
                     let modifiers = parse_modifiers_from_args(&call.args, 1);
@@ -6457,24 +7630,12 @@ fn parse_widget_node(expr: &ast::Expr) -> Option<WidgetNode> {
                     };
                     parse_stack_node(kind, &call.args)
                 }
-                "Image" => {
-                    parse_image_node(&call.args)
-                }
-                "Spacer" => {
-                    Some(WidgetNode::Spacer)
-                }
-                "Divider" => {
-                    Some(WidgetNode::Divider)
-                }
-                "ForEach" => {
-                    parse_foreach_node(&call.args)
-                }
-                "Label" => {
-                    parse_label_node(&call.args)
-                }
-                "Gauge" => {
-                    parse_gauge_node(&call.args)
-                }
+                "Image" => parse_image_node(&call.args),
+                "Spacer" => Some(WidgetNode::Spacer),
+                "Divider" => Some(WidgetNode::Divider),
+                "ForEach" => parse_foreach_node(&call.args),
+                "Label" => parse_label_node(&call.args),
+                "Gauge" => parse_gauge_node(&call.args),
                 _ => None,
             }
         }
@@ -6576,7 +7737,12 @@ fn parse_stack_node(kind: WidgetStackKind, args: &[ast::ExprOrSpread]) -> Option
     let modifier_start = children_arg_idx + 1;
     modifiers = parse_modifiers_from_args(args, modifier_start);
 
-    Some(WidgetNode::Stack { kind, spacing, children, modifiers })
+    Some(WidgetNode::Stack {
+        kind,
+        spacing,
+        children,
+        modifiers,
+    })
 }
 
 /// Parse an Image node from call arguments.
@@ -6605,7 +7771,10 @@ fn parse_image_node(args: &[ast::ExprOrSpread]) -> Option<WidgetNode> {
     };
 
     let modifiers = parse_modifiers_from_args(args, 1);
-    Some(WidgetNode::Image { system_name, modifiers })
+    Some(WidgetNode::Image {
+        system_name,
+        modifiers,
+    })
 }
 
 /// Parse a conditional node from a ternary expression
@@ -6689,53 +7858,74 @@ fn parse_modifiers_from_args(args: &[ast::ExprOrSpread], start_idx: usize) -> Ve
 /// Returns true if `name` is a known widget modifier key (used to detect
 /// unsupported method-chain modifier calls, e.g. `Text("hi").font("title")`).
 pub(super) fn is_widget_modifier_name(name: &str) -> bool {
-    matches!(name,
-        "font" | "fontWeight" | "weight" | "foregroundColor" | "color" | "foreground" |
-        "padding" | "cornerRadius" | "background" | "backgroundColor" |
-        "opacity" | "lineLimit" | "frame" | "minimumScaleFactor" |
-        "containerBackground" | "maxWidth" | "url" |
-        "bold" | "italic" | "underline" | "fontSize" |
-        "strikethrough" | "multilineTextAlignment" | "lineSpacing"
+    matches!(
+        name,
+        "font"
+            | "fontWeight"
+            | "weight"
+            | "foregroundColor"
+            | "color"
+            | "foreground"
+            | "padding"
+            | "cornerRadius"
+            | "background"
+            | "backgroundColor"
+            | "opacity"
+            | "lineLimit"
+            | "frame"
+            | "minimumScaleFactor"
+            | "containerBackground"
+            | "maxWidth"
+            | "url"
+            | "bold"
+            | "italic"
+            | "underline"
+            | "fontSize"
+            | "strikethrough"
+            | "multilineTextAlignment"
+            | "lineSpacing"
     )
 }
 
 /// Parse a single modifier from key/value
 fn parse_single_modifier(key: &str, value: &ast::Expr) -> Option<WidgetModifier> {
     match key {
-        "font" => {
-            match value {
-                ast::Expr::Lit(ast::Lit::Str(s)) => {
-                    let font = match s.value.as_str().unwrap_or("") {
-                        "headline" => WidgetFont::Headline,
-                        "title" => WidgetFont::Title,
-                        "title2" => WidgetFont::Title2,
-                        "title3" => WidgetFont::Title3,
-                        "body" => WidgetFont::Body,
-                        "caption" => WidgetFont::Caption,
-                        "caption2" => WidgetFont::Caption2,
-                        "footnote" => WidgetFont::Footnote,
-                        "subheadline" => WidgetFont::Subheadline,
-                        "largeTitle" => WidgetFont::LargeTitle,
-                        name => WidgetFont::Named(name.to_string()),
-                    };
-                    Some(WidgetModifier::Font(font))
-                }
-                ast::Expr::Lit(ast::Lit::Num(n)) => {
-                    Some(WidgetModifier::Font(WidgetFont::System(n.value)))
-                }
-                _ => None,
+        "font" => match value {
+            ast::Expr::Lit(ast::Lit::Str(s)) => {
+                let font = match s.value.as_str().unwrap_or("") {
+                    "headline" => WidgetFont::Headline,
+                    "title" => WidgetFont::Title,
+                    "title2" => WidgetFont::Title2,
+                    "title3" => WidgetFont::Title3,
+                    "body" => WidgetFont::Body,
+                    "caption" => WidgetFont::Caption,
+                    "caption2" => WidgetFont::Caption2,
+                    "footnote" => WidgetFont::Footnote,
+                    "subheadline" => WidgetFont::Subheadline,
+                    "largeTitle" => WidgetFont::LargeTitle,
+                    name => WidgetFont::Named(name.to_string()),
+                };
+                Some(WidgetModifier::Font(font))
             }
-        }
+            ast::Expr::Lit(ast::Lit::Num(n)) => {
+                Some(WidgetModifier::Font(WidgetFont::System(n.value)))
+            }
+            _ => None,
+        },
         "fontWeight" | "weight" => {
             if let ast::Expr::Lit(ast::Lit::Str(s)) = value {
-                Some(WidgetModifier::FontWeight(s.value.as_str().unwrap_or("").to_string()))
+                Some(WidgetModifier::FontWeight(
+                    s.value.as_str().unwrap_or("").to_string(),
+                ))
             } else {
                 None
             }
         }
         "foregroundColor" | "color" => {
             if let ast::Expr::Lit(ast::Lit::Str(s)) = value {
-                Some(WidgetModifier::ForegroundColor(s.value.as_str().unwrap_or("").to_string()))
+                Some(WidgetModifier::ForegroundColor(
+                    s.value.as_str().unwrap_or("").to_string(),
+                ))
             } else {
                 None
             }
@@ -6756,7 +7946,9 @@ fn parse_single_modifier(key: &str, value: &ast::Expr) -> Option<WidgetModifier>
         }
         "background" | "backgroundColor" => {
             if let ast::Expr::Lit(ast::Lit::Str(s)) = value {
-                Some(WidgetModifier::Background(s.value.as_str().unwrap_or("").to_string()))
+                Some(WidgetModifier::Background(
+                    s.value.as_str().unwrap_or("").to_string(),
+                ))
             } else {
                 None
             }
@@ -6807,7 +7999,9 @@ fn parse_single_modifier(key: &str, value: &ast::Expr) -> Option<WidgetModifier>
         }
         "containerBackground" => {
             if let ast::Expr::Lit(ast::Lit::Str(s)) = value {
-                Some(WidgetModifier::ContainerBackground(s.value.as_str().unwrap_or("").to_string()))
+                Some(WidgetModifier::ContainerBackground(
+                    s.value.as_str().unwrap_or("").to_string(),
+                ))
             } else {
                 None
             }
@@ -6818,7 +8012,9 @@ fn parse_single_modifier(key: &str, value: &ast::Expr) -> Option<WidgetModifier>
         }
         "url" => {
             if let ast::Expr::Lit(ast::Lit::Str(s)) = value {
-                Some(WidgetModifier::WidgetURL(s.value.as_str().unwrap_or("").to_string()))
+                Some(WidgetModifier::WidgetURL(
+                    s.value.as_str().unwrap_or("").to_string(),
+                ))
             } else {
                 None
             }
@@ -6886,7 +8082,8 @@ fn parse_foreach_node(args: &[ast::ExprOrSpread]) -> Option<WidgetNode> {
 
 /// Parse a Label node: Label("text", { systemImage: "star.fill" })
 fn parse_label_node(args: &[ast::ExprOrSpread]) -> Option<WidgetNode> {
-    let text = args.first()
+    let text = args
+        .first()
         .map(|arg| parse_text_content(&arg.expr))
         .unwrap_or(WidgetTextContent::Literal(String::new()));
 
@@ -6913,7 +8110,11 @@ fn parse_label_node(args: &[ast::ExprOrSpread]) -> Option<WidgetNode> {
         }
     }
 
-    Some(WidgetNode::Label { text, system_image, modifiers })
+    Some(WidgetNode::Label {
+        text,
+        system_image,
+        modifiers,
+    })
 }
 
 /// Parse a Gauge node: Gauge(value, { label: "Clicks", style: "circular" })
@@ -6933,7 +8134,9 @@ fn parse_gauge_node(args: &[ast::ExprOrSpread]) -> Option<WidgetNode> {
                 ast::Expr::Member(m) => {
                     if let ast::MemberProp::Ident(p) = &m.prop {
                         p.sym.to_string()
-                    } else { return None; }
+                    } else {
+                        return None;
+                    }
                 }
                 _ => return None,
             };
@@ -6941,7 +8144,9 @@ fn parse_gauge_node(args: &[ast::ExprOrSpread]) -> Option<WidgetNode> {
                 ast::Expr::Member(m) => {
                     if let ast::MemberProp::Ident(p) = &m.prop {
                         p.sym.to_string()
-                    } else { return None; }
+                    } else {
+                        return None;
+                    }
                 }
                 ast::Expr::Lit(ast::Lit::Num(n)) => format!("{}", n.value),
                 _ => return None,
@@ -6995,7 +8200,12 @@ fn parse_gauge_node(args: &[ast::ExprOrSpread]) -> Option<WidgetNode> {
         }
     }
 
-    Some(WidgetNode::Gauge { value_expr, label, style, modifiers })
+    Some(WidgetNode::Gauge {
+        value_expr,
+        label,
+        style,
+        modifiers,
+    })
 }
 
 /// Parse render body statements, detecting family-switch patterns (if/else on family param)
@@ -7032,7 +8242,9 @@ fn try_parse_family_switch(stmts: &[ast::Stmt], family_name: &str) -> Option<Wid
         match stmt {
             ast::Stmt::If(if_stmt) => {
                 // Check: if (family === "systemSmall") { return VStack([...]) }
-                if let Some((family_value, node)) = try_parse_family_case(&if_stmt.test, &if_stmt.cons, family_name) {
+                if let Some((family_value, node)) =
+                    try_parse_family_case(&if_stmt.test, &if_stmt.cons, family_name)
+                {
                     cases.push((family_value, node));
                 }
                 // Check else branch for more cases or default
@@ -7052,7 +8264,9 @@ fn try_parse_family_switch(stmts: &[ast::Stmt], family_name: &str) -> Option<Wid
                         }
                         ast::Stmt::If(nested_if) => {
                             // else if — extract more cases
-                            if let Some((family_value, node)) = try_parse_family_case(&nested_if.test, &nested_if.cons, family_name) {
+                            if let Some((family_value, node)) =
+                                try_parse_family_case(&nested_if.test, &nested_if.cons, family_name)
+                            {
                                 cases.push((family_value, node));
                             }
                         }
@@ -7087,11 +8301,18 @@ fn try_parse_family_switch(stmts: &[ast::Stmt], family_name: &str) -> Option<Wid
         return None;
     }
 
-    Some(WidgetNode::FamilySwitch { cases, default: default_node })
+    Some(WidgetNode::FamilySwitch {
+        cases,
+        default: default_node,
+    })
 }
 
 /// Try to parse a single if (family === "value") { return node } case
-fn try_parse_family_case(test: &ast::Expr, cons: &ast::Stmt, family_name: &str) -> Option<(String, WidgetNode)> {
+fn try_parse_family_case(
+    test: &ast::Expr,
+    cons: &ast::Stmt,
+    family_name: &str,
+) -> Option<(String, WidgetNode)> {
     // Check: family === "systemSmall"
     let family_value = match test {
         ast::Expr::Bin(bin) if matches!(bin.op, ast::BinaryOp::EqEqEq | ast::BinaryOp::EqEq) => {
@@ -7160,17 +8381,15 @@ fn parse_widget_config_param(name: &str, value: &ast::Expr) -> Option<WidgetConf
                                 title = s.value.as_str().unwrap_or("").to_string();
                             }
                         }
-                        "default" => {
-                            match kv.value.as_ref() {
-                                ast::Expr::Lit(ast::Lit::Str(s)) => {
-                                    default_str = s.value.as_str().unwrap_or("").to_string();
-                                }
-                                ast::Expr::Lit(ast::Lit::Bool(b)) => {
-                                    default_bool = b.value;
-                                }
-                                _ => {}
+                        "default" => match kv.value.as_ref() {
+                            ast::Expr::Lit(ast::Lit::Str(s)) => {
+                                default_str = s.value.as_str().unwrap_or("").to_string();
                             }
-                        }
+                            ast::Expr::Lit(ast::Lit::Bool(b)) => {
+                                default_bool = b.value;
+                            }
+                            _ => {}
+                        },
                         "values" => {
                             if let ast::Expr::Array(arr) = kv.value.as_ref() {
                                 for elem in &arr.elems {
@@ -7191,11 +8410,21 @@ fn parse_widget_config_param(name: &str, value: &ast::Expr) -> Option<WidgetConf
         let param_type = match param_type_str.as_str() {
             "enum" => WidgetConfigParamType::Enum {
                 values,
-                default: if default_str.is_empty() { "".to_string() } else { default_str },
+                default: if default_str.is_empty() {
+                    "".to_string()
+                } else {
+                    default_str
+                },
             },
-            "bool" | "boolean" => WidgetConfigParamType::Bool { default: default_bool },
-            "string" => WidgetConfigParamType::String { default: default_str },
-            _ => WidgetConfigParamType::String { default: default_str },
+            "bool" | "boolean" => WidgetConfigParamType::Bool {
+                default: default_bool,
+            },
+            "string" => WidgetConfigParamType::String {
+                default: default_str,
+            },
+            _ => WidgetConfigParamType::String {
+                default: default_str,
+            },
         };
 
         Some(WidgetConfigParam {
@@ -7214,17 +8443,13 @@ fn parse_placeholder_value(expr: &ast::Expr) -> WidgetPlaceholderValue {
         ast::Expr::Lit(ast::Lit::Str(s)) => {
             WidgetPlaceholderValue::String(s.value.as_str().unwrap_or("").to_string())
         }
-        ast::Expr::Lit(ast::Lit::Num(n)) => {
-            WidgetPlaceholderValue::Number(n.value)
-        }
-        ast::Expr::Lit(ast::Lit::Bool(b)) => {
-            WidgetPlaceholderValue::Bool(b.value)
-        }
-        ast::Expr::Lit(ast::Lit::Null(_)) => {
-            WidgetPlaceholderValue::Null
-        }
+        ast::Expr::Lit(ast::Lit::Num(n)) => WidgetPlaceholderValue::Number(n.value),
+        ast::Expr::Lit(ast::Lit::Bool(b)) => WidgetPlaceholderValue::Bool(b.value),
+        ast::Expr::Lit(ast::Lit::Null(_)) => WidgetPlaceholderValue::Null,
         ast::Expr::Array(arr) => {
-            let items: Vec<WidgetPlaceholderValue> = arr.elems.iter()
+            let items: Vec<WidgetPlaceholderValue> = arr
+                .elems
+                .iter()
                 .filter_map(|e| e.as_ref())
                 .map(|e| parse_placeholder_value(&e.expr))
                 .collect();
@@ -7308,12 +8533,27 @@ pub(crate) fn is_ast_string_expr(ctx: &LoweringContext, expr: &ast::Expr) -> boo
                 if let ast::Expr::Member(member) = callee_expr.as_ref() {
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         let prop = prop_ident.sym.as_ref();
-                        if matches!(prop,
-                            "charAt" | "slice" | "substring" | "substr" | "trim" |
-                            "trimStart" | "trimEnd" | "toLowerCase" | "toUpperCase" |
-                            "replace" | "replaceAll" | "padStart" | "padEnd" |
-                            "repeat" | "normalize" | "concat" | "toString" |
-                            "toLocaleLowerCase" | "toLocaleUpperCase"
+                        if matches!(
+                            prop,
+                            "charAt"
+                                | "slice"
+                                | "substring"
+                                | "substr"
+                                | "trim"
+                                | "trimStart"
+                                | "trimEnd"
+                                | "toLowerCase"
+                                | "toUpperCase"
+                                | "replace"
+                                | "replaceAll"
+                                | "padStart"
+                                | "padEnd"
+                                | "repeat"
+                                | "normalize"
+                                | "concat"
+                                | "toString"
+                                | "toLocaleLowerCase"
+                                | "toLocaleUpperCase"
                         ) {
                             return is_ast_string_expr(ctx, &member.obj);
                         }
@@ -7465,7 +8705,10 @@ mod tests {
         assert_eq!(looked_up_id, enum_id);
         assert_eq!(members.len(), 3);
 
-        assert!(matches!(ctx.lookup_enum_member("Color", "Red"), Some(EnumValue::Number(0))));
+        assert!(matches!(
+            ctx.lookup_enum_member("Color", "Red"),
+            Some(EnumValue::Number(0))
+        ));
         assert!(ctx.lookup_enum_member("Color", "Yellow").is_none());
         assert!(ctx.lookup_enum("Missing").is_none());
     }
@@ -7492,7 +8735,11 @@ mod tests {
         // Namespace import: import * as fs from "fs"
         ctx.register_native_module("fs".to_string(), "fs".to_string(), None);
         // Named import: import { v4 as uuid } from "uuid"
-        ctx.register_native_module("uuid".to_string(), "uuid".to_string(), Some("v4".to_string()));
+        ctx.register_native_module(
+            "uuid".to_string(),
+            "uuid".to_string(),
+            Some("v4".to_string()),
+        );
 
         let (module, method) = ctx.lookup_native_module("fs").unwrap();
         assert_eq!(module, "fs");
@@ -7510,12 +8757,20 @@ mod tests {
         let mut ctx = make_ctx();
         assert!(!ctx.is_type_param("T"));
 
-        ctx.enter_type_param_scope(&[TypeParam { name: "T".to_string(), constraint: None, default: None }]);
+        ctx.enter_type_param_scope(&[TypeParam {
+            name: "T".to_string(),
+            constraint: None,
+            default: None,
+        }]);
         assert!(ctx.is_type_param("T"));
         assert!(!ctx.is_type_param("U"));
 
         // Nested scope
-        ctx.enter_type_param_scope(&[TypeParam { name: "U".to_string(), constraint: None, default: None }]);
+        ctx.enter_type_param_scope(&[TypeParam {
+            name: "U".to_string(),
+            constraint: None,
+            default: None,
+        }]);
         assert!(ctx.is_type_param("T")); // outer scope still visible
         assert!(ctx.is_type_param("U"));
 
@@ -7546,7 +8801,8 @@ mod tests {
     fn test_lower_namespace_var_lookup() {
         let mut ctx = make_ctx();
         let local_id = ctx.define_local("Utils_helper".to_string(), Type::Number);
-        ctx.namespace_vars.push(("Utils".to_string(), "helper".to_string(), local_id));
+        ctx.namespace_vars
+            .push(("Utils".to_string(), "helper".to_string(), local_id));
 
         assert_eq!(ctx.lookup_namespace_var("Utils", "helper"), Some(local_id));
         assert_eq!(ctx.lookup_namespace_var("Utils", "missing"), None);

@@ -105,7 +105,9 @@ pub extern "C" fn perry_updater_get_sentinel_path() -> *mut StringHeader {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        dir = std::path::PathBuf::from(home).join("Library/Application Support").join(&app);
+        dir = std::path::PathBuf::from(home)
+            .join("Library/Application Support")
+            .join(&app);
     }
     #[cfg(target_os = "windows")]
     {
@@ -318,7 +320,8 @@ mod tests {
 
     #[test]
     fn install_and_rollback_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("perry-updater-install-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("perry-updater-install-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let target = dir.join("app.bin");
@@ -329,7 +332,10 @@ mod tests {
 
         let target_s = target.to_string_lossy().to_string();
         let staged_s = staged.to_string_lossy().to_string();
-        assert_eq!(perry_updater_install(make_str(&staged_s), make_str(&target_s)), 1);
+        assert_eq!(
+            perry_updater_install(make_str(&staged_s), make_str(&target_s)),
+            1
+        );
 
         assert_eq!(std::fs::read(&target).unwrap(), b"v2");
         let prev = format!("{}.prev", target_s);

@@ -3,15 +3,23 @@
 //! These functions are called from compiled native code to interact with
 //! JavaScript modules loaded in the V8 runtime.
 
-use crate::bridge::{native_to_v8, v8_to_native, get_js_handle, store_js_handle, make_js_handle_value, is_js_handle, get_handle_id, fixup_native_for_v8};
-use crate::{ensure_runtime_initialized, get_tokio_runtime, with_runtime, JsRuntimeState, JS_RUNTIME};
+use crate::bridge::{
+    fixup_native_for_v8, get_handle_id, get_js_handle, is_js_handle, make_js_handle_value,
+    native_to_v8, store_js_handle, v8_to_native,
+};
+use crate::{
+    ensure_runtime_initialized, get_tokio_runtime, with_runtime, JsRuntimeState, JS_RUNTIME,
+};
 use deno_core::v8;
 use std::ffi::{c_char, CStr};
 use std::path::PathBuf;
 
 /// Convert a NaN-boxed f64 to a V8 value, returning None if the conversion fails
 /// This is specifically for cases where we need to handle the error explicitly
-fn nanbox_to_v8<'s>(scope: &mut v8::HandleScope<'s>, value: f64) -> Option<v8::Local<'s, v8::Value>> {
+fn nanbox_to_v8<'s>(
+    scope: &mut v8::HandleScope<'s>,
+    value: f64,
+) -> Option<v8::Local<'s, v8::Value>> {
     // Check if it's a JS handle first
     if is_js_handle(value) {
         if let Some(handle_id) = get_handle_id(value) {
@@ -50,7 +58,11 @@ unsafe extern "C" fn js_handle_typeof(value: f64) -> i32 {
     with_runtime(|state| {
         let scope = &mut state.runtime.handle_scope();
         let v = native_to_v8(scope, value);
-        if v.is_function() { 1 } else { 0 }
+        if v.is_function() {
+            1
+        } else {
+            0
+        }
     })
 }
 
@@ -107,18 +119,15 @@ unsafe extern "C" fn native_module_js_property_loader(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
-    let module_name = std::str::from_utf8_unchecked(
-        std::slice::from_raw_parts(module_name_ptr, module_name_len),
-    );
-    let property_name = std::str::from_utf8_unchecked(
-        std::slice::from_raw_parts(property_name_ptr, property_name_len),
-    );
+    let module_name =
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(module_name_ptr, module_name_len));
+    let property_name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+        property_name_ptr,
+        property_name_len,
+    ));
 
     // Load the module via V8
-    let module_handle = js_load_module(
-        module_name.as_ptr() as *const i8,
-        module_name.len(),
-    );
+    let module_handle = js_load_module(module_name.as_ptr() as *const i8, module_name.len());
     if module_handle == 0 {
         return f64::from_bits(0x7FFC_0000_0000_0001); // undefined
     }
@@ -161,10 +170,7 @@ pub extern "C" fn js_runtime_shutdown() {
 /// Returns a module handle (u64) that can be used with js_get_export and js_call_function
 /// Returns 0 on failure
 #[no_mangle]
-pub unsafe extern "C" fn js_load_module(
-    path_ptr: *const i8,
-    path_len: usize,
-) -> u64 {
+pub unsafe extern "C" fn js_load_module(path_ptr: *const i8, path_len: usize) -> u64 {
     let path_slice = if path_ptr.is_null() {
         return 0;
     } else if path_len > 0 {
@@ -185,30 +191,34 @@ pub unsafe extern "C" fn js_load_module(
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // Try to resolve the module path
-    let resolved_path: PathBuf = if path_str.starts_with("./") || path_str.starts_with("../") || path_str.starts_with('/') {
-        // Relative or absolute path - resolve directly
-        let path = PathBuf::from(path_str);
-        std::fs::canonicalize(&path).unwrap_or(path)
-    } else {
-        // Bare module specifier (like "ethers") - use node_modules resolution
-        let referrer = format!("file://{}/index.js", cwd.display());
-        match loader.resolve(path_str, &referrer, deno_core::ResolutionKind::Import) {
-            Ok(specifier) => {
-                specifier.to_file_path().unwrap_or_else(|_| PathBuf::from(path_str))
+    let resolved_path: PathBuf =
+        if path_str.starts_with("./") || path_str.starts_with("../") || path_str.starts_with('/') {
+            // Relative or absolute path - resolve directly
+            let path = PathBuf::from(path_str);
+            std::fs::canonicalize(&path).unwrap_or(path)
+        } else {
+            // Bare module specifier (like "ethers") - use node_modules resolution
+            let referrer = format!("file://{}/index.js", cwd.display());
+            match loader.resolve(path_str, &referrer, deno_core::ResolutionKind::Import) {
+                Ok(specifier) => specifier
+                    .to_file_path()
+                    .unwrap_or_else(|_| PathBuf::from(path_str)),
+                Err(e) => {
+                    log::error!("Failed to resolve module '{}': {}", path_str, e);
+                    return 0;
+                }
             }
-            Err(e) => {
-                log::error!("Failed to resolve module '{}': {}", path_str, e);
-                return 0;
-            }
-        }
-    };
+        };
 
     let canonical = resolved_path.clone();
 
     let specifier = match deno_core::ModuleSpecifier::from_file_path(&canonical) {
         Ok(s) => s,
         Err(_) => {
-            log::error!("Failed to create module specifier from path: {:?}", canonical);
+            log::error!(
+                "Failed to create module specifier from path: {:?}",
+                canonical
+            );
             return 0;
         }
     };
@@ -250,11 +260,17 @@ pub unsafe extern "C" fn js_load_module(
                     // Evaluate the module
                     let result = state.runtime.mod_evaluate(module_id);
                     if let Err(e) = state.runtime.run_event_loop(Default::default()).await {
-                        eprintln!("[js_load_module] event loop error for '{}': {}", path_str, e);
+                        eprintln!(
+                            "[js_load_module] event loop error for '{}': {}",
+                            path_str, e
+                        );
                         return Err(());
                     }
                     if let Err(e) = result.await {
-                        eprintln!("[js_load_module] evaluation error for '{}': {}", path_str, e);
+                        eprintln!(
+                            "[js_load_module] evaluation error for '{}': {}",
+                            path_str, e
+                        );
                         return Err(());
                     }
 
@@ -418,10 +434,14 @@ fn call_function_impl(
                     if let Some(msg_obj) = tc_scope.message() {
                         let msg_str = msg_obj.get(tc_scope).to_rust_string_lossy(tc_scope);
                         let line = msg_obj.get_line_number(tc_scope).unwrap_or(0);
-                        let script = msg_obj.get_script_resource_name(tc_scope)
+                        let script = msg_obj
+                            .get_script_resource_name(tc_scope)
                             .map(|s| s.to_rust_string_lossy(tc_scope))
                             .unwrap_or_default();
-                        eprintln!("[JS-INTEROP] Function '{}' threw: {} ({}:{})", func_name, msg_str, script, line);
+                        eprintln!(
+                            "[JS-INTEROP] Function '{}' threw: {} ({}:{})",
+                            func_name, msg_str, script, line
+                        );
                     } else {
                         let msg = exception.to_rust_string_lossy(tc_scope);
                         eprintln!("[JS-INTEROP] Function '{}' threw: {}", func_name, msg);
@@ -431,12 +451,18 @@ fn call_function_impl(
                     for (i, &arg) in args.iter().enumerate() {
                         let bits = arg.to_bits();
                         let tag = bits >> 48;
-                        eprintln!("[JS-INTEROP]   arg[{}]: bits=0x{:016x} tag=0x{:04x}", i, bits, tag);
+                        eprintln!(
+                            "[JS-INTEROP]   arg[{}]: bits=0x{:016x} tag=0x{:04x}",
+                            i, bits, tag
+                        );
                     }
                 }
                 // Exception is automatically cleared when TryCatch scope drops
             } else {
-                eprintln!("[JS-INTEROP] Function '{}' call returned None (no exception)", func_name);
+                eprintln!(
+                    "[JS-INTEROP] Function '{}' call returned None (no exception)",
+                    func_name
+                );
             }
             return f64::from_bits(0x7FFC_0000_0000_0001);
         }
@@ -766,7 +792,12 @@ pub extern "C" fn js_handle_to_string(handle: f64) -> *mut perry_runtime::string
         // Get the UTF-8 bytes
         let len = str_val.utf8_length(scope);
         let mut buffer = vec![0u8; len];
-        str_val.write_utf8(scope, &mut buffer, None, v8::WriteOptions::NO_NULL_TERMINATION);
+        str_val.write_utf8(
+            scope,
+            &mut buffer,
+            None,
+            v8::WriteOptions::NO_NULL_TERMINATION,
+        );
 
         // Create a native string
         perry_runtime::string::js_string_from_bytes(buffer.as_ptr(), buffer.len() as u32)
@@ -989,7 +1020,9 @@ pub unsafe extern "C" fn js_create_callback(
     });
 
     NATIVE_CALLBACKS.with(|callbacks| {
-        callbacks.borrow_mut().insert(callback_id, (func_ptr, closure_env));
+        callbacks
+            .borrow_mut()
+            .insert(callback_id, (func_ptr, closure_env));
     });
 
     with_runtime(|state| {
@@ -1034,16 +1067,22 @@ fn native_callback_trampoline(
     }
 
     let data_array = v8::Local::<v8::Array>::try_from(data).unwrap();
-    let callback_id = data_array.get_index(scope, 0)
+    let callback_id = data_array
+        .get_index(scope, 0)
         .and_then(|v| v.number_value(scope))
         .unwrap_or(0.0) as u64;
-    let _param_count = data_array.get_index(scope, 1)
+    let _param_count = data_array
+        .get_index(scope, 1)
         .and_then(|v| v.number_value(scope))
         .unwrap_or(0.0) as i64;
 
     // Get the function pointer and closure environment
     let (func_ptr, closure_env) = NATIVE_CALLBACKS.with(|callbacks| {
-        callbacks.borrow().get(&callback_id).copied().unwrap_or((0, 0))
+        callbacks
+            .borrow()
+            .get(&callback_id)
+            .copied()
+            .unwrap_or((0, 0))
     });
 
     if func_ptr == 0 {
@@ -1083,10 +1122,7 @@ fn native_callback_trampoline(
 /// Check if a module path should be loaded via the JS runtime
 /// Returns 1 if it should use JS runtime, 0 if it should be compiled natively
 #[no_mangle]
-pub unsafe extern "C" fn js_should_use_runtime(
-    path_ptr: *const i8,
-    path_len: usize,
-) -> i32 {
+pub unsafe extern "C" fn js_should_use_runtime(path_ptr: *const i8, path_len: usize) -> i32 {
     let path_slice = if path_ptr.is_null() {
         return 0;
     } else if path_len > 0 {

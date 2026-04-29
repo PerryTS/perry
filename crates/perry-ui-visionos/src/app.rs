@@ -7,8 +7,8 @@ use objc2_ui_kit::UIView;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::widgets;
 use crate::menu;
+use crate::widgets;
 
 thread_local! {
     static PENDING_CONFIG: RefCell<Option<AppConfig>> = RefCell::new(None);
@@ -119,11 +119,13 @@ fn make_fallback_root_view() -> Retained<UIView> {
 pub extern "C" fn perry_visionos_root_view() -> i64 {
     ensure_runtime_services_started();
 
-    let view = PENDING_BODY.with(|b| {
-        b.borrow()
-            .as_ref()
-            .and_then(|root_handle| widgets::get_widget(*root_handle))
-    }).unwrap_or_else(make_fallback_root_view);
+    let view = PENDING_BODY
+        .with(|b| {
+            b.borrow()
+                .as_ref()
+                .and_then(|root_handle| widgets::get_widget(*root_handle))
+        })
+        .unwrap_or_else(make_fallback_root_view);
 
     KEYBOARD_VIEW.with(|kv| {
         *kv.borrow_mut() = Some(Retained::as_ptr(&view) as usize);
@@ -136,9 +138,18 @@ pub extern "C" fn perry_visionos_root_view() -> i64 {
 
 // Raw ObjC runtime FFI for dynamic class registration
 extern "C" {
-    fn objc_allocateClassPair(superclass: *const std::ffi::c_void, name: *const i8, extra_bytes: usize) -> *mut std::ffi::c_void;
+    fn objc_allocateClassPair(
+        superclass: *const std::ffi::c_void,
+        name: *const i8,
+        extra_bytes: usize,
+    ) -> *mut std::ffi::c_void;
     fn objc_registerClassPair(cls: *mut std::ffi::c_void);
-    fn class_addMethod(cls: *mut std::ffi::c_void, sel: *const std::ffi::c_void, imp: *const std::ffi::c_void, types: *const i8) -> bool;
+    fn class_addMethod(
+        cls: *mut std::ffi::c_void,
+        sel: *const std::ffi::c_void,
+        imp: *const std::ffi::c_void,
+        types: *const i8,
+    ) -> bool;
     fn sel_registerName(name: *const i8) -> *const std::ffi::c_void;
     fn objc_getClass(name: *const i8) -> *const std::ffi::c_void;
 }
@@ -481,25 +492,31 @@ impl PerryKeyboardObserver {
 /// Find the currently focused UITextField/UISecureTextField and scroll its
 /// parent UIScrollView so the field is visible above the keyboard.
 unsafe fn scroll_focused_field_into_view(keyboard_height: f64) {
-    if keyboard_height <= 0.0 { return; }
+    if keyboard_height <= 0.0 {
+        return;
+    }
 
     // Find the first responder
-    let app: *const AnyObject = msg_send![
-        AnyClass::get(c"UIApplication").unwrap(),
-        sharedApplication
-    ];
+    let app: *const AnyObject =
+        msg_send![AnyClass::get(c"UIApplication").unwrap(), sharedApplication];
     let key_window: *const AnyObject = msg_send![app, keyWindow];
-    if key_window.is_null() { return; }
+    if key_window.is_null() {
+        return;
+    }
 
     // Use a private but widely-used method to find first responder
     // Alternatively, walk the view hierarchy
     let first_responder: *const AnyObject = find_first_responder(key_window as *const AnyObject);
-    if first_responder.is_null() { return; }
+    if first_responder.is_null() {
+        return;
+    }
 
     // Check if it's a text field
     let tf_cls = AnyClass::get(c"UITextField").unwrap();
     let is_tf: bool = msg_send![first_responder, isKindOfClass: tf_cls];
-    if !is_tf { return; }
+    if !is_tf {
+        return;
+    }
 
     // Find parent UIScrollView
     let mut parent: *const AnyObject = msg_send![first_responder, superview];
@@ -539,14 +556,18 @@ unsafe fn scroll_focused_field_into_view(keyboard_height: f64) {
 /// Recursively find the first responder in the view hierarchy.
 unsafe fn find_first_responder(view: *const AnyObject) -> *const AnyObject {
     let is_first: bool = msg_send![view, isFirstResponder];
-    if is_first { return view; }
+    if is_first {
+        return view;
+    }
 
     let subviews: *const AnyObject = msg_send![view, subviews];
     let count: usize = msg_send![subviews, count];
     for i in 0..count {
         let subview: *const AnyObject = msg_send![subviews, objectAtIndex: i];
         let result = find_first_responder(subview);
-        if !result.is_null() { return result; }
+        if !result.is_null() {
+            return result;
+        }
     }
 
     std::ptr::null()

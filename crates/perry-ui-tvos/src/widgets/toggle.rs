@@ -1,8 +1,8 @@
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_ui_kit::{UILabel, UIStackView, UISwitch, UIView};
 use objc2_foundation::{NSObject, NSString};
+use objc2_ui_kit::{UILabel, UIStackView, UISwitch, UIView};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -94,17 +94,13 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
     unsafe {
         // Create label
         let ns_label = NSString::from_str(label);
-        let text_label: Retained<UILabel> = msg_send![
-            objc2::runtime::AnyClass::get(c"UILabel").unwrap(),
-            new
-        ];
+        let text_label: Retained<UILabel> =
+            msg_send![objc2::runtime::AnyClass::get(c"UILabel").unwrap(), new];
         let _: () = msg_send![&*text_label, setText: &*ns_label];
 
         // Create UISwitch
-        let switch: Retained<UISwitch> = msg_send![
-            objc2::runtime::AnyClass::get(c"UISwitch").unwrap(),
-            new
-        ];
+        let switch: Retained<UISwitch> =
+            msg_send![objc2::runtime::AnyClass::get(c"UISwitch").unwrap(), new];
 
         let target = PerryToggleTarget::new();
         let target_addr = Retained::as_ptr(&target) as usize;
@@ -116,15 +112,14 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
 
         let sel = Sel::register(c"toggleChanged:");
         // UIControlEventValueChanged = 1 << 12 = 4096
-        let _: () = msg_send![&*switch, addTarget: &*target, action: sel, forControlEvents: 4096u64];
+        let _: () =
+            msg_send![&*switch, addTarget: &*target, action: sel, forControlEvents: 4096u64];
 
         std::mem::forget(target);
 
         // Create horizontal UIStackView container
-        let stack: Retained<UIStackView> = msg_send![
-            objc2::runtime::AnyClass::get(c"UIStackView").unwrap(),
-            new
-        ];
+        let stack: Retained<UIStackView> =
+            msg_send![objc2::runtime::AnyClass::get(c"UIStackView").unwrap(), new];
         let _: () = msg_send![&*stack, setAxis: 0i64]; // Horizontal
         let _: () = msg_send![&*stack, setSpacing: 8.0f64];
         let _: () = msg_send![&*stack, setAlignment: 3i64]; // Center

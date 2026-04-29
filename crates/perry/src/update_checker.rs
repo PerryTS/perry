@@ -133,7 +133,10 @@ fn chrono_parse_rfc3339(s: &str) -> Option<u64> {
 
     let hour: u64 = time_parts[0].parse().ok()?;
     let min: u64 = time_parts[1].parse().ok()?;
-    let sec: u64 = time_parts.get(2).and_then(|s| s.split('.').next()?.parse().ok()).unwrap_or(0);
+    let sec: u64 = time_parts
+        .get(2)
+        .and_then(|s| s.split('.').next()?.parse().ok())
+        .unwrap_or(0);
 
     // Approximate unix timestamp (good enough for 24h cache comparison)
     let days = days_from_civil(year, month, day)?;
@@ -187,16 +190,17 @@ fn now_rfc3339() -> String {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if month <= 2 { y + 1 } else { y };
 
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, d, h, m, s)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, d, h, m, s
+    )
 }
 
 pub fn compare_versions(a: &str, b: &str) -> Ordering {
     let a = a.strip_prefix('v').unwrap_or(a);
     let b = b.strip_prefix('v').unwrap_or(b);
 
-    let parse = |s: &str| -> Vec<u32> {
-        s.split('.').filter_map(|p| p.parse().ok()).collect()
-    };
+    let parse = |s: &str| -> Vec<u32> { s.split('.').filter_map(|p| p.parse().ok()).collect() };
 
     let va = parse(a);
     let vb = parse(b);
@@ -259,25 +263,25 @@ fn fetch_latest_version() -> Result<UpdateCache> {
 
     for url in &servers {
         match client.get(url).send() {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<ReleaseInfo>() {
-                    Ok(info) => {
-                        let version = info.tag_name.strip_prefix('v')
-                            .unwrap_or(&info.tag_name)
-                            .to_string();
-                        let cache = UpdateCache {
-                            last_check: now_rfc3339(),
-                            latest_version: version,
-                            release_url: info.html_url,
-                        };
-                        save_cache(&cache);
-                        return Ok(cache);
-                    }
-                    Err(e) => {
-                        last_err = Some(format!("{}: JSON parse error: {}", url, e));
-                    }
+            Ok(resp) if resp.status().is_success() => match resp.json::<ReleaseInfo>() {
+                Ok(info) => {
+                    let version = info
+                        .tag_name
+                        .strip_prefix('v')
+                        .unwrap_or(&info.tag_name)
+                        .to_string();
+                    let cache = UpdateCache {
+                        last_check: now_rfc3339(),
+                        latest_version: version,
+                        release_url: info.html_url,
+                    };
+                    save_cache(&cache);
+                    return Ok(cache);
                 }
-            }
+                Err(e) => {
+                    last_err = Some(format!("{}: JSON parse error: {}", url, e));
+                }
+            },
             Ok(resp) => {
                 last_err = Some(format!("{}: HTTP {}", url, resp.status()));
             }
@@ -287,7 +291,10 @@ fn fetch_latest_version() -> Result<UpdateCache> {
         }
     }
 
-    bail!("All update servers failed. Last error: {}", last_err.unwrap_or_default())
+    bail!(
+        "All update servers failed. Last error: {}",
+        last_err.unwrap_or_default()
+    )
 }
 
 pub fn spawn_background_check() -> (JoinHandle<()>, mpsc::Receiver<UpdateStatus>) {
@@ -352,15 +359,25 @@ pub fn print_update_notice(current: &str, latest: &str, url: &str, use_color: bo
 
 pub fn platform_artifact_name() -> Option<&'static str> {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    { return Some("perry-macos-aarch64.tar.gz"); }
+    {
+        return Some("perry-macos-aarch64.tar.gz");
+    }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    { return Some("perry-macos-x86_64.tar.gz"); }
+    {
+        return Some("perry-macos-x86_64.tar.gz");
+    }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    { return Some("perry-linux-x86_64.tar.gz"); }
+    {
+        return Some("perry-linux-x86_64.tar.gz");
+    }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    { return Some("perry-linux-aarch64.tar.gz"); }
+    {
+        return Some("perry-linux-aarch64.tar.gz");
+    }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    { return Some("perry-windows-x86_64.zip"); }
+    {
+        return Some("perry-windows-x86_64.zip");
+    }
     #[allow(unreachable_code)]
     None
 }
@@ -379,8 +396,7 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
         return Ok(());
     }
 
-    let artifact_name = platform_artifact_name()
-        .context("Unsupported platform for self-update")?;
+    let artifact_name = platform_artifact_name().context("Unsupported platform for self-update")?;
 
     if verbose {
         eprintln!("Looking for artifact: {}", artifact_name);
@@ -409,23 +425,25 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
 
     let info = release_info.context("Failed to fetch release info")?;
 
-    let asset = info.assets.iter()
+    let asset = info
+        .assets
+        .iter()
         .find(|a| a.name == artifact_name)
         .with_context(|| format!("No binary found for this platform ({})", artifact_name))?;
 
     println!("Downloading {} v{}...", artifact_name, cache.latest_version);
 
-    let current_exe = std::env::current_exe()
-        .context("Cannot determine current executable path")?;
-    let current_exe = current_exe.canonicalize()
-        .unwrap_or(current_exe);
+    let current_exe =
+        std::env::current_exe().context("Cannot determine current executable path")?;
+    let current_exe = current_exe.canonicalize().unwrap_or(current_exe);
 
     let tmp_dir = std::env::temp_dir().join(format!("perry-update-{}", std::process::id()));
-    fs::create_dir_all(&tmp_dir)
-        .context("Failed to create temp directory")?;
+    fs::create_dir_all(&tmp_dir).context("Failed to create temp directory")?;
 
     // Download
-    let resp = client.get(&asset.browser_download_url).send()
+    let resp = client
+        .get(&asset.browser_download_url)
+        .send()
         .context("Failed to download update")?;
 
     if !resp.status().is_success() {
@@ -441,12 +459,13 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
     // Extract
     let decoder = flate2::read::GzDecoder::new(&bytes[..]);
     let mut archive = tar::Archive::new(decoder);
-    archive.unpack(&tmp_dir)
+    archive
+        .unpack(&tmp_dir)
         .context("Failed to extract archive")?;
 
     // Find the perry binary in extracted files
-    let new_binary = find_binary_in_dir(&tmp_dir, "perry")
-        .context("Perry binary not found in archive")?;
+    let new_binary =
+        find_binary_in_dir(&tmp_dir, "perry").context("Perry binary not found in archive")?;
 
     // Atomic swap
     let backup_path = current_exe.with_extension("old");
@@ -507,10 +526,7 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
     let _ = fs::remove_file(&backup_path);
     let _ = fs::remove_dir_all(&tmp_dir);
 
-    println!(
-        "Updated perry: v{} -> v{}",
-        current, cache.latest_version
-    );
+    println!("Updated perry: v{} -> v{}", current, cache.latest_version);
 
     Ok(())
 }
@@ -550,7 +566,10 @@ mod tests {
     #[test]
     fn test_platform_artifact_name() {
         let name = platform_artifact_name();
-        assert!(name.is_some(), "Should return artifact name for current platform");
+        assert!(
+            name.is_some(),
+            "Should return artifact name for current platform"
+        );
         let name = name.unwrap();
         assert!(name.starts_with("perry-"), "Should start with perry-");
         assert!(

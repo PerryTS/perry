@@ -79,42 +79,68 @@ pub fn transform_js_imports(module: &mut Module) {
 
     for import in &module.imports {
         if import.module_kind == ModuleKind::Interpreted {
-            let path = import.resolved_path.clone().unwrap_or(import.source.clone());
+            let path = import
+                .resolved_path
+                .clone()
+                .unwrap_or(import.source.clone());
             let mut exports = HashMap::new();
 
             for spec in &import.specifiers {
                 match spec {
                     crate::ir::ImportSpecifier::Named { imported, local } => {
                         exports.insert(imported.clone(), local.clone());
-                        extern_func_to_js.insert(imported.clone(), (import.source.clone(), imported.clone()));
-                        local_name_to_js.insert(local.clone(), (import.source.clone(), imported.clone()));
+                        extern_func_to_js
+                            .insert(imported.clone(), (import.source.clone(), imported.clone()));
+                        local_name_to_js
+                            .insert(local.clone(), (import.source.clone(), imported.clone()));
                         // If this looks like a class name (starts with uppercase), mark it
-                        if local.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        if local
+                            .chars()
+                            .next()
+                            .map(|c| c.is_uppercase())
+                            .unwrap_or(false)
+                        {
                             tracker.mark_js_class(local);
                         }
                     }
                     crate::ir::ImportSpecifier::Default { local } => {
                         exports.insert("default".to_string(), local.clone());
-                        extern_func_to_js.insert(local.clone(), (import.source.clone(), "default".to_string()));
-                        local_name_to_js.insert(local.clone(), (import.source.clone(), "default".to_string()));
+                        extern_func_to_js.insert(
+                            local.clone(),
+                            (import.source.clone(), "default".to_string()),
+                        );
+                        local_name_to_js.insert(
+                            local.clone(),
+                            (import.source.clone(), "default".to_string()),
+                        );
                         // Default exports with uppercase names are likely classes
-                        if local.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        if local
+                            .chars()
+                            .next()
+                            .map(|c| c.is_uppercase())
+                            .unwrap_or(false)
+                        {
                             tracker.mark_js_class(local);
                         }
                     }
                     crate::ir::ImportSpecifier::Namespace { local } => {
                         exports.insert("*".to_string(), local.clone());
-                        extern_func_to_js.insert(local.clone(), (import.source.clone(), "*".to_string()));
-                        local_name_to_js.insert(local.clone(), (import.source.clone(), "*".to_string()));
+                        extern_func_to_js
+                            .insert(local.clone(), (import.source.clone(), "*".to_string()));
+                        local_name_to_js
+                            .insert(local.clone(), (import.source.clone(), "*".to_string()));
                     }
                 }
             }
 
-            js_imports.insert(import.source.clone(), JsImportInfo {
-                handle_var_id: next_handle_id.into(),
-                path,
-                exports,
-            });
+            js_imports.insert(
+                import.source.clone(),
+                JsImportInfo {
+                    handle_var_id: next_handle_id.into(),
+                    path,
+                    exports,
+                },
+            );
             next_handle_id += 1;
         }
     }
@@ -128,33 +154,75 @@ pub fn transform_js_imports(module: &mut Module) {
     // V8 caches loaded modules internally, so this is efficient.
 
     // Transform all statements
-    transform_stmts(&mut module.init, &js_imports, &extern_func_to_js, &local_name_to_js, &mut tracker);
+    transform_stmts(
+        &mut module.init,
+        &js_imports,
+        &extern_func_to_js,
+        &local_name_to_js,
+        &mut tracker,
+    );
 
     for func in &mut module.functions {
         let mut func_tracker = tracker.clone();
-        transform_stmts(&mut func.body, &js_imports, &extern_func_to_js, &local_name_to_js, &mut func_tracker);
+        transform_stmts(
+            &mut func.body,
+            &js_imports,
+            &extern_func_to_js,
+            &local_name_to_js,
+            &mut func_tracker,
+        );
     }
 
     for class in &mut module.classes {
         for method in &mut class.methods {
             let mut method_tracker = tracker.clone();
-            transform_stmts(&mut method.body, &js_imports, &extern_func_to_js, &local_name_to_js, &mut method_tracker);
+            transform_stmts(
+                &mut method.body,
+                &js_imports,
+                &extern_func_to_js,
+                &local_name_to_js,
+                &mut method_tracker,
+            );
         }
         for (_, getter) in &mut class.getters {
             let mut getter_tracker = tracker.clone();
-            transform_stmts(&mut getter.body, &js_imports, &extern_func_to_js, &local_name_to_js, &mut getter_tracker);
+            transform_stmts(
+                &mut getter.body,
+                &js_imports,
+                &extern_func_to_js,
+                &local_name_to_js,
+                &mut getter_tracker,
+            );
         }
         for (_, setter) in &mut class.setters {
             let mut setter_tracker = tracker.clone();
-            transform_stmts(&mut setter.body, &js_imports, &extern_func_to_js, &local_name_to_js, &mut setter_tracker);
+            transform_stmts(
+                &mut setter.body,
+                &js_imports,
+                &extern_func_to_js,
+                &local_name_to_js,
+                &mut setter_tracker,
+            );
         }
         for method in &mut class.static_methods {
             let mut method_tracker = tracker.clone();
-            transform_stmts(&mut method.body, &js_imports, &extern_func_to_js, &local_name_to_js, &mut method_tracker);
+            transform_stmts(
+                &mut method.body,
+                &js_imports,
+                &extern_func_to_js,
+                &local_name_to_js,
+                &mut method_tracker,
+            );
         }
         if let Some(ctor) = &mut class.constructor {
             let mut ctor_tracker = tracker.clone();
-            transform_stmts(&mut ctor.body, &js_imports, &extern_func_to_js, &local_name_to_js, &mut ctor_tracker);
+            transform_stmts(
+                &mut ctor.body,
+                &js_imports,
+                &extern_func_to_js,
+                &local_name_to_js,
+                &mut ctor_tracker,
+            );
         }
     }
 }
@@ -167,7 +235,13 @@ fn transform_stmts(
     tracker: &mut JsValueTracker,
 ) {
     for stmt in stmts.iter_mut() {
-        transform_stmt(stmt, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        transform_stmt(
+            stmt,
+            js_imports,
+            extern_func_to_js,
+            local_name_to_js,
+            tracker,
+        );
     }
 }
 
@@ -180,10 +254,26 @@ fn transform_stmt(
 ) {
     match stmt {
         Stmt::Expr(expr) => {
-            transform_expr(expr, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(
+                expr,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
         }
-        Stmt::Let { id, init: Some(expr), .. } => {
-            transform_expr(expr, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        Stmt::Let {
+            id,
+            init: Some(expr),
+            ..
+        } => {
+            transform_expr(
+                expr,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
             // If the init expression produces a JS value, mark this local as JS
             if is_js_value_expr(expr, tracker) {
                 tracker.mark_js_local(*id);
@@ -191,58 +281,194 @@ fn transform_stmt(
         }
         Stmt::Let { init: None, .. } => {}
         Stmt::Return(Some(expr)) => {
-            transform_expr(expr, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(
+                expr,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
         }
         Stmt::Return(None) => {}
-        Stmt::If { condition, then_branch, else_branch } => {
-            transform_expr(condition, js_imports, extern_func_to_js, local_name_to_js, tracker);
-            transform_stmts(then_branch, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            transform_expr(
+                condition,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
+            transform_stmts(
+                then_branch,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
             if let Some(else_b) = else_branch {
-                transform_stmts(else_b, js_imports, extern_func_to_js, local_name_to_js, tracker);
+                transform_stmts(
+                    else_b,
+                    js_imports,
+                    extern_func_to_js,
+                    local_name_to_js,
+                    tracker,
+                );
             }
         }
         Stmt::While { condition, body } => {
-            transform_expr(condition, js_imports, extern_func_to_js, local_name_to_js, tracker);
-            transform_stmts(body, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(
+                condition,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
+            transform_stmts(
+                body,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
         }
         Stmt::DoWhile { body, condition } => {
-            transform_stmts(body, js_imports, extern_func_to_js, local_name_to_js, tracker);
-            transform_expr(condition, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_stmts(
+                body,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
+            transform_expr(
+                condition,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
-                transform_stmt(init_stmt, js_imports, extern_func_to_js, local_name_to_js, tracker);
+                transform_stmt(
+                    init_stmt,
+                    js_imports,
+                    extern_func_to_js,
+                    local_name_to_js,
+                    tracker,
+                );
             }
             if let Some(cond) = condition {
-                transform_expr(cond, js_imports, extern_func_to_js, local_name_to_js, tracker);
+                transform_expr(
+                    cond,
+                    js_imports,
+                    extern_func_to_js,
+                    local_name_to_js,
+                    tracker,
+                );
             }
             if let Some(upd) = update {
-                transform_expr(upd, js_imports, extern_func_to_js, local_name_to_js, tracker);
+                transform_expr(
+                    upd,
+                    js_imports,
+                    extern_func_to_js,
+                    local_name_to_js,
+                    tracker,
+                );
             }
-            transform_stmts(body, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_stmts(
+                body,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
         }
         Stmt::Labeled { body, .. } => {
-            transform_stmt(body, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_stmt(
+                body,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
         }
-        Stmt::Switch { discriminant, cases } => {
-            transform_expr(discriminant, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            transform_expr(
+                discriminant,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
             for case in cases {
                 if let Some(test) = &mut case.test {
-                    transform_expr(test, js_imports, extern_func_to_js, local_name_to_js, tracker);
+                    transform_expr(
+                        test,
+                        js_imports,
+                        extern_func_to_js,
+                        local_name_to_js,
+                        tracker,
+                    );
                 }
-                transform_stmts(&mut case.body, js_imports, extern_func_to_js, local_name_to_js, tracker);
+                transform_stmts(
+                    &mut case.body,
+                    js_imports,
+                    extern_func_to_js,
+                    local_name_to_js,
+                    tracker,
+                );
             }
         }
         Stmt::Throw(expr) => {
-            transform_expr(expr, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(
+                expr,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
         }
-        Stmt::Try { body, catch, finally } => {
-            transform_stmts(body, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            transform_stmts(
+                body,
+                js_imports,
+                extern_func_to_js,
+                local_name_to_js,
+                tracker,
+            );
             if let Some(catch_clause) = catch {
-                transform_stmts(&mut catch_clause.body, js_imports, extern_func_to_js, local_name_to_js, tracker);
+                transform_stmts(
+                    &mut catch_clause.body,
+                    js_imports,
+                    extern_func_to_js,
+                    local_name_to_js,
+                    tracker,
+                );
             }
             if let Some(finally_body) = finally {
-                transform_stmts(finally_body, js_imports, extern_func_to_js, local_name_to_js, tracker);
+                transform_stmts(
+                    finally_body,
+                    js_imports,
+                    extern_func_to_js,
+                    local_name_to_js,
+                    tracker,
+                );
             }
         }
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
@@ -280,7 +506,11 @@ fn is_js_value_expr(expr: &Expr, tracker: &JsValueTracker) -> bool {
 }
 
 /// Check if an expression is a JS object (for method calls)
-fn is_js_object_expr(expr: &Expr, tracker: &JsValueTracker, extern_func_to_js: &HashMap<String, (String, String)>) -> bool {
+fn is_js_object_expr(
+    expr: &Expr,
+    tracker: &JsValueTracker,
+    extern_func_to_js: &HashMap<String, (String, String)>,
+) -> bool {
     match expr {
         // Direct JS interop results
         Expr::JsLoadModule { .. } => true,
@@ -303,7 +533,9 @@ fn is_js_object_expr(expr: &Expr, tracker: &JsValueTracker, extern_func_to_js: &
                 // require() call - GlobalGet(0) is typically require
                 Expr::GlobalGet(0) => true,
                 // Method call on a JS object returns JS value
-                Expr::PropertyGet { object, .. } => is_js_object_expr(object, tracker, extern_func_to_js),
+                Expr::PropertyGet { object, .. } => {
+                    is_js_object_expr(object, tracker, extern_func_to_js)
+                }
                 _ => false,
             }
         }
@@ -922,7 +1154,9 @@ pub fn fix_cross_module_native_instances(
 
         for spec in &import.specifiers {
             let (local_name, exported_name) = match spec {
-                crate::ir::ImportSpecifier::Named { imported, local } => (local.clone(), imported.clone()),
+                crate::ir::ImportSpecifier::Named { imported, local } => {
+                    (local.clone(), imported.clone())
+                }
                 crate::ir::ImportSpecifier::Default { local } => (local.clone(), local.clone()),
                 crate::ir::ImportSpecifier::Namespace { .. } => continue,
             };
@@ -930,47 +1164,79 @@ pub fn fix_cross_module_native_instances(
             // Check if this import is a native instance
             let key = (resolved_path.clone(), exported_name.clone());
             if let Some(info) = exported_instances.get(&key) {
-                local_native_instances.insert(local_name.clone(), (info.native_module.clone(), info.native_class.clone()));
+                local_native_instances.insert(
+                    local_name.clone(),
+                    (info.native_module.clone(), info.native_class.clone()),
+                );
             }
 
             // Check if this import is a function that returns a native instance
             let func_key = (resolved_path.clone(), exported_name);
             if let Some(info) = exported_func_return_instances.get(&func_key) {
-                func_return_instances.insert(local_name, (info.native_module.clone(), info.native_class.clone()));
+                func_return_instances.insert(
+                    local_name,
+                    (info.native_module.clone(), info.native_class.clone()),
+                );
             }
         }
     }
 
     // Scan for variables assigned from calls to native-returning functions
     // Maps LocalId -> (module_name, class_name)
-    let mut local_id_native_instances: HashMap<perry_types::LocalId, (String, String)> = HashMap::new();
+    let mut local_id_native_instances: HashMap<perry_types::LocalId, (String, String)> =
+        HashMap::new();
 
     if !func_return_instances.is_empty() {
         // Scan init statements
         for stmt in &module.init {
-            scan_for_native_func_returns(stmt, &func_return_instances, &mut local_native_instances, &mut local_id_native_instances);
+            scan_for_native_func_returns(
+                stmt,
+                &func_return_instances,
+                &mut local_native_instances,
+                &mut local_id_native_instances,
+            );
         }
         // Scan function bodies
         for func in &module.functions {
             for stmt in &func.body {
-                scan_for_native_func_returns(stmt, &func_return_instances, &mut local_native_instances, &mut local_id_native_instances);
+                scan_for_native_func_returns(
+                    stmt,
+                    &func_return_instances,
+                    &mut local_native_instances,
+                    &mut local_id_native_instances,
+                );
             }
         }
         // Scan class methods
         for class in &module.classes {
             if let Some(ctor) = &class.constructor {
                 for stmt in &ctor.body {
-                    scan_for_native_func_returns(stmt, &func_return_instances, &mut local_native_instances, &mut local_id_native_instances);
+                    scan_for_native_func_returns(
+                        stmt,
+                        &func_return_instances,
+                        &mut local_native_instances,
+                        &mut local_id_native_instances,
+                    );
                 }
             }
             for method in &class.methods {
                 for stmt in &method.body {
-                    scan_for_native_func_returns(stmt, &func_return_instances, &mut local_native_instances, &mut local_id_native_instances);
+                    scan_for_native_func_returns(
+                        stmt,
+                        &func_return_instances,
+                        &mut local_native_instances,
+                        &mut local_id_native_instances,
+                    );
                 }
             }
             for method in &class.static_methods {
                 for stmt in &method.body {
-                    scan_for_native_func_returns(stmt, &func_return_instances, &mut local_native_instances, &mut local_id_native_instances);
+                    scan_for_native_func_returns(
+                        stmt,
+                        &func_return_instances,
+                        &mut local_native_instances,
+                        &mut local_id_native_instances,
+                    );
                 }
             }
         }
@@ -987,13 +1253,21 @@ pub fn fix_cross_module_native_instances(
             changed = false;
             // Init block
             for stmt in &module.init {
-                if scan_for_ident_init_propagation(stmt, &mut local_native_instances, &mut local_id_native_instances) {
+                if scan_for_ident_init_propagation(
+                    stmt,
+                    &mut local_native_instances,
+                    &mut local_id_native_instances,
+                ) {
                     changed = true;
                 }
             }
             for func in &module.functions {
                 for stmt in &func.body {
-                    if scan_for_ident_init_propagation(stmt, &mut local_native_instances, &mut local_id_native_instances) {
+                    if scan_for_ident_init_propagation(
+                        stmt,
+                        &mut local_native_instances,
+                        &mut local_id_native_instances,
+                    ) {
                         changed = true;
                     }
                 }
@@ -1001,21 +1275,33 @@ pub fn fix_cross_module_native_instances(
             for class in &module.classes {
                 if let Some(ctor) = &class.constructor {
                     for stmt in &ctor.body {
-                        if scan_for_ident_init_propagation(stmt, &mut local_native_instances, &mut local_id_native_instances) {
+                        if scan_for_ident_init_propagation(
+                            stmt,
+                            &mut local_native_instances,
+                            &mut local_id_native_instances,
+                        ) {
                             changed = true;
                         }
                     }
                 }
                 for method in &class.methods {
                     for stmt in &method.body {
-                        if scan_for_ident_init_propagation(stmt, &mut local_native_instances, &mut local_id_native_instances) {
+                        if scan_for_ident_init_propagation(
+                            stmt,
+                            &mut local_native_instances,
+                            &mut local_id_native_instances,
+                        ) {
                             changed = true;
                         }
                     }
                 }
                 for method in &class.static_methods {
                     for stmt in &method.body {
-                        if scan_for_ident_init_propagation(stmt, &mut local_native_instances, &mut local_id_native_instances) {
+                        if scan_for_ident_init_propagation(
+                            stmt,
+                            &mut local_native_instances,
+                            &mut local_id_native_instances,
+                        ) {
                             changed = true;
                         }
                     }
@@ -1084,56 +1370,115 @@ fn scan_for_native_func_returns(
                     };
                     if let Some(fname) = func_name {
                         if let Some((module, class)) = func_return_instances.get(fname) {
-                            local_native_instances.insert(name.clone(), (module.clone(), class.clone()));
+                            local_native_instances
+                                .insert(name.clone(), (module.clone(), class.clone()));
                             local_id_native_instances.insert(*id, (module.clone(), class.clone()));
                         }
                     }
                 }
                 // Recurse into any closures embedded in the init expression
                 // (e.g. `new Promise((resolve, reject) => { const sock = openSocket(...) })`).
-                scan_expr_for_closure_returns(init_expr, func_return_instances, local_native_instances, local_id_native_instances);
+                scan_expr_for_closure_returns(
+                    init_expr,
+                    func_return_instances,
+                    local_native_instances,
+                    local_id_native_instances,
+                );
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => {
-            scan_expr_for_closure_returns(e, func_return_instances, local_native_instances, local_id_native_instances);
+            scan_expr_for_closure_returns(
+                e,
+                func_return_instances,
+                local_native_instances,
+                local_id_native_instances,
+            );
         }
         Stmt::Return(Some(e)) => {
-            scan_expr_for_closure_returns(e, func_return_instances, local_native_instances, local_id_native_instances);
+            scan_expr_for_closure_returns(
+                e,
+                func_return_instances,
+                local_native_instances,
+                local_id_native_instances,
+            );
         }
-        Stmt::If { then_branch, else_branch, .. } => {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
             for s in then_branch {
-                scan_for_native_func_returns(s, func_return_instances, local_native_instances, local_id_native_instances);
+                scan_for_native_func_returns(
+                    s,
+                    func_return_instances,
+                    local_native_instances,
+                    local_id_native_instances,
+                );
             }
             if let Some(else_stmts) = else_branch {
                 for s in else_stmts {
-                    scan_for_native_func_returns(s, func_return_instances, local_native_instances, local_id_native_instances);
+                    scan_for_native_func_returns(
+                        s,
+                        func_return_instances,
+                        local_native_instances,
+                        local_id_native_instances,
+                    );
                 }
             }
         }
         Stmt::While { body, .. } | Stmt::For { body, .. } => {
             for s in body {
-                scan_for_native_func_returns(s, func_return_instances, local_native_instances, local_id_native_instances);
+                scan_for_native_func_returns(
+                    s,
+                    func_return_instances,
+                    local_native_instances,
+                    local_id_native_instances,
+                );
             }
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             for s in body {
-                scan_for_native_func_returns(s, func_return_instances, local_native_instances, local_id_native_instances);
+                scan_for_native_func_returns(
+                    s,
+                    func_return_instances,
+                    local_native_instances,
+                    local_id_native_instances,
+                );
             }
             if let Some(catch_block) = catch {
                 for s in &catch_block.body {
-                    scan_for_native_func_returns(s, func_return_instances, local_native_instances, local_id_native_instances);
+                    scan_for_native_func_returns(
+                        s,
+                        func_return_instances,
+                        local_native_instances,
+                        local_id_native_instances,
+                    );
                 }
             }
             if let Some(finally_stmts) = finally {
                 for s in finally_stmts {
-                    scan_for_native_func_returns(s, func_return_instances, local_native_instances, local_id_native_instances);
+                    scan_for_native_func_returns(
+                        s,
+                        func_return_instances,
+                        local_native_instances,
+                        local_id_native_instances,
+                    );
                 }
             }
         }
         Stmt::Switch { cases, .. } => {
             for case in cases {
                 for s in &case.body {
-                    scan_for_native_func_returns(s, func_return_instances, local_native_instances, local_id_native_instances);
+                    scan_for_native_func_returns(
+                        s,
+                        func_return_instances,
+                        local_native_instances,
+                        local_id_native_instances,
+                    );
                 }
             }
         }
@@ -1157,9 +1502,16 @@ fn scan_for_ident_init_propagation(
     match stmt {
         Stmt::Let { id, name, init, .. } => {
             if let Some(init_expr) = init {
-                if let Some((module, class)) = lookup_native_from_init_ident(init_expr, local_native_instances, local_id_native_instances) {
+                if let Some((module, class)) = lookup_native_from_init_ident(
+                    init_expr,
+                    local_native_instances,
+                    local_id_native_instances,
+                ) {
                     let info = (module, class);
-                    if local_native_instances.insert(name.clone(), info.clone()).is_none() {
+                    if local_native_instances
+                        .insert(name.clone(), info.clone())
+                        .is_none()
+                    {
                         changed = true;
                     }
                     if local_id_native_instances.insert(*id, info).is_none() {
@@ -1168,15 +1520,27 @@ fn scan_for_ident_init_propagation(
                 }
             }
         }
-        Stmt::If { then_branch, else_branch, .. } => {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
             for s in then_branch {
-                if scan_for_ident_init_propagation(s, local_native_instances, local_id_native_instances) {
+                if scan_for_ident_init_propagation(
+                    s,
+                    local_native_instances,
+                    local_id_native_instances,
+                ) {
                     changed = true;
                 }
             }
             if let Some(else_stmts) = else_branch {
                 for s in else_stmts {
-                    if scan_for_ident_init_propagation(s, local_native_instances, local_id_native_instances) {
+                    if scan_for_ident_init_propagation(
+                        s,
+                        local_native_instances,
+                        local_id_native_instances,
+                    ) {
                         changed = true;
                     }
                 }
@@ -1184,27 +1548,47 @@ fn scan_for_ident_init_propagation(
         }
         Stmt::While { body, .. } | Stmt::For { body, .. } => {
             for s in body {
-                if scan_for_ident_init_propagation(s, local_native_instances, local_id_native_instances) {
+                if scan_for_ident_init_propagation(
+                    s,
+                    local_native_instances,
+                    local_id_native_instances,
+                ) {
                     changed = true;
                 }
             }
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             for s in body {
-                if scan_for_ident_init_propagation(s, local_native_instances, local_id_native_instances) {
+                if scan_for_ident_init_propagation(
+                    s,
+                    local_native_instances,
+                    local_id_native_instances,
+                ) {
                     changed = true;
                 }
             }
             if let Some(catch_block) = catch {
                 for s in &catch_block.body {
-                    if scan_for_ident_init_propagation(s, local_native_instances, local_id_native_instances) {
+                    if scan_for_ident_init_propagation(
+                        s,
+                        local_native_instances,
+                        local_id_native_instances,
+                    ) {
                         changed = true;
                     }
                 }
             }
             if let Some(finally_stmts) = finally {
                 for s in finally_stmts {
-                    if scan_for_ident_init_propagation(s, local_native_instances, local_id_native_instances) {
+                    if scan_for_ident_init_propagation(
+                        s,
+                        local_native_instances,
+                        local_id_native_instances,
+                    ) {
                         changed = true;
                     }
                 }
@@ -1213,7 +1597,11 @@ fn scan_for_ident_init_propagation(
         Stmt::Switch { cases, .. } => {
             for case in cases {
                 for s in &case.body {
-                    if scan_for_ident_init_propagation(s, local_native_instances, local_id_native_instances) {
+                    if scan_for_ident_init_propagation(
+                        s,
+                        local_native_instances,
+                        local_id_native_instances,
+                    ) {
                         changed = true;
                     }
                 }
@@ -1251,43 +1639,92 @@ fn scan_expr_for_closure_returns(
     match expr {
         Expr::Closure { body, .. } => {
             for s in body {
-                scan_for_native_func_returns(s, func_return_instances, local_native_instances, local_id_native_instances);
+                scan_for_native_func_returns(
+                    s,
+                    func_return_instances,
+                    local_native_instances,
+                    local_id_native_instances,
+                );
             }
         }
         Expr::Call { callee, args, .. } => {
-            scan_expr_for_closure_returns(callee, func_return_instances, local_native_instances, local_id_native_instances);
+            scan_expr_for_closure_returns(
+                callee,
+                func_return_instances,
+                local_native_instances,
+                local_id_native_instances,
+            );
             for a in args {
-                scan_expr_for_closure_returns(a, func_return_instances, local_native_instances, local_id_native_instances);
+                scan_expr_for_closure_returns(
+                    a,
+                    func_return_instances,
+                    local_native_instances,
+                    local_id_native_instances,
+                );
             }
         }
         Expr::CallSpread { callee, args, .. } => {
-            scan_expr_for_closure_returns(callee, func_return_instances, local_native_instances, local_id_native_instances);
+            scan_expr_for_closure_returns(
+                callee,
+                func_return_instances,
+                local_native_instances,
+                local_id_native_instances,
+            );
             for a in args {
                 let inner = match a {
                     crate::ir::CallArg::Expr(v) | crate::ir::CallArg::Spread(v) => v,
                 };
-                scan_expr_for_closure_returns(inner, func_return_instances, local_native_instances, local_id_native_instances);
+                scan_expr_for_closure_returns(
+                    inner,
+                    func_return_instances,
+                    local_native_instances,
+                    local_id_native_instances,
+                );
             }
         }
         Expr::New { args, .. } => {
             for a in args {
-                scan_expr_for_closure_returns(a, func_return_instances, local_native_instances, local_id_native_instances);
+                scan_expr_for_closure_returns(
+                    a,
+                    func_return_instances,
+                    local_native_instances,
+                    local_id_native_instances,
+                );
             }
         }
         Expr::NativeMethodCall { object, args, .. } => {
             if let Some(obj) = object {
-                scan_expr_for_closure_returns(obj, func_return_instances, local_native_instances, local_id_native_instances);
+                scan_expr_for_closure_returns(
+                    obj,
+                    func_return_instances,
+                    local_native_instances,
+                    local_id_native_instances,
+                );
             }
             for a in args {
-                scan_expr_for_closure_returns(a, func_return_instances, local_native_instances, local_id_native_instances);
+                scan_expr_for_closure_returns(
+                    a,
+                    func_return_instances,
+                    local_native_instances,
+                    local_id_native_instances,
+                );
             }
         }
-        Expr::Await(inner) => scan_expr_for_closure_returns(inner, func_return_instances, local_native_instances, local_id_native_instances),
+        Expr::Await(inner) => scan_expr_for_closure_returns(
+            inner,
+            func_return_instances,
+            local_native_instances,
+            local_id_native_instances,
+        ),
         _ => {}
     }
 }
 
-fn fix_native_instance_stmt(stmt: &mut Stmt, native_instances: &HashMap<String, (String, String)>, local_id_instances: &HashMap<perry_types::LocalId, (String, String)>) {
+fn fix_native_instance_stmt(
+    stmt: &mut Stmt,
+    native_instances: &HashMap<String, (String, String)>,
+    local_id_instances: &HashMap<perry_types::LocalId, (String, String)>,
+) {
     match stmt {
         Stmt::Expr(expr) => fix_native_instance_expr(expr, native_instances, local_id_instances),
         Stmt::Let { init, .. } => {
@@ -1297,7 +1734,11 @@ fn fix_native_instance_stmt(stmt: &mut Stmt, native_instances: &HashMap<String, 
         }
         Stmt::Return(Some(e)) => fix_native_instance_expr(e, native_instances, local_id_instances),
         Stmt::Return(None) => {}
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             fix_native_instance_expr(condition, native_instances, local_id_instances);
             for s in then_branch {
                 fix_native_instance_stmt(s, native_instances, local_id_instances);
@@ -1323,7 +1764,12 @@ fn fix_native_instance_stmt(stmt: &mut Stmt, native_instances: &HashMap<String, 
         Stmt::Labeled { body, .. } => {
             fix_native_instance_stmt(body, native_instances, local_id_instances);
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
                 fix_native_instance_stmt(init_stmt, native_instances, local_id_instances);
             }
@@ -1337,7 +1783,10 @@ fn fix_native_instance_stmt(stmt: &mut Stmt, native_instances: &HashMap<String, 
                 fix_native_instance_stmt(s, native_instances, local_id_instances);
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             fix_native_instance_expr(discriminant, native_instances, local_id_instances);
             for case in cases {
                 if let Some(ref mut test) = case.test {
@@ -1348,7 +1797,11 @@ fn fix_native_instance_stmt(stmt: &mut Stmt, native_instances: &HashMap<String, 
                 }
             }
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             for s in body {
                 fix_native_instance_stmt(s, native_instances, local_id_instances);
             }
@@ -1375,24 +1828,26 @@ fn resolve_native_instance<'a>(
     local_id_instances: &'a HashMap<perry_types::LocalId, (String, String)>,
 ) -> Option<(&'a String, &'a String)> {
     match object {
-        Expr::ExternFuncRef { name, .. } => {
-            native_instances.get(name).map(|(m, c)| (m, c))
-        }
-        Expr::LocalGet(id) => {
-            local_id_instances.get(id).map(|(m, c)| (m, c))
-        }
+        Expr::ExternFuncRef { name, .. } => native_instances.get(name).map(|(m, c)| (m, c)),
+        Expr::LocalGet(id) => local_id_instances.get(id).map(|(m, c)| (m, c)),
         _ => None,
     }
 }
 
-fn fix_native_instance_expr(expr: &mut Expr, native_instances: &HashMap<String, (String, String)>, local_id_instances: &HashMap<perry_types::LocalId, (String, String)>) {
+fn fix_native_instance_expr(
+    expr: &mut Expr,
+    native_instances: &HashMap<String, (String, String)>,
+    local_id_instances: &HashMap<perry_types::LocalId, (String, String)>,
+) {
     match expr {
         // The key case: method calls that might be on native instances
         Expr::Call { callee, args, .. } => {
             // Check if this is a method call: obj.method(args)
             if let Expr::PropertyGet { object, property } = callee.as_mut() {
                 // Check if the object is a native instance (ExternFuncRef or LocalGet)
-                if let Some((native_module, native_class)) = resolve_native_instance(object.as_ref(), native_instances, local_id_instances) {
+                if let Some((native_module, native_class)) =
+                    resolve_native_instance(object.as_ref(), native_instances, local_id_instances)
+                {
                     let native_module = native_module.clone();
                     let native_class = native_class.clone();
                     // Transform args first
@@ -1442,7 +1897,11 @@ fn fix_native_instance_expr(expr: &mut Expr, native_instances: &HashMap<String, 
         Expr::GlobalSet(_, value) => {
             fix_native_instance_expr(value, native_instances, local_id_instances);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             fix_native_instance_expr(condition, native_instances, local_id_instances);
             fix_native_instance_expr(then_expr, native_instances, local_id_instances);
             fix_native_instance_expr(else_expr, native_instances, local_id_instances);
@@ -1455,8 +1914,12 @@ fn fix_native_instance_expr(expr: &mut Expr, native_instances: &HashMap<String, 
         Expr::ArraySpread(elements) => {
             for elem in elements {
                 match elem {
-                    crate::ir::ArrayElement::Expr(e) => fix_native_instance_expr(e, native_instances, local_id_instances),
-                    crate::ir::ArrayElement::Spread(e) => fix_native_instance_expr(e, native_instances, local_id_instances),
+                    crate::ir::ArrayElement::Expr(e) => {
+                        fix_native_instance_expr(e, native_instances, local_id_instances)
+                    }
+                    crate::ir::ArrayElement::Spread(e) => {
+                        fix_native_instance_expr(e, native_instances, local_id_instances)
+                    }
                 }
             }
         }
@@ -1484,7 +1947,11 @@ fn fix_native_instance_expr(expr: &mut Expr, native_instances: &HashMap<String, 
             fix_native_instance_expr(object, native_instances, local_id_instances);
             fix_native_instance_expr(index, native_instances, local_id_instances);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             fix_native_instance_expr(object, native_instances, local_id_instances);
             fix_native_instance_expr(index, native_instances, local_id_instances);
             fix_native_instance_expr(value, native_instances, local_id_instances);
@@ -1493,7 +1960,11 @@ fn fix_native_instance_expr(expr: &mut Expr, native_instances: &HashMap<String, 
             // Handle Await(Call{PropertyGet{obj...}}) pattern for native instances
             if let Expr::Call { callee, args, .. } = inner.as_mut() {
                 if let Expr::PropertyGet { object, property } = callee.as_mut() {
-                    if let Some((native_module, native_class)) = resolve_native_instance(object.as_ref(), native_instances, local_id_instances) {
+                    if let Some((native_module, native_class)) = resolve_native_instance(
+                        object.as_ref(),
+                        native_instances,
+                        local_id_instances,
+                    ) {
                         let native_module = native_module.clone();
                         let native_class = native_class.clone();
                         // Transform args first
@@ -1554,7 +2025,11 @@ fn fix_native_instance_expr(expr: &mut Expr, native_instances: &HashMap<String, 
                 fix_native_instance_expr(arg, native_instances, local_id_instances);
             }
         }
-        Expr::JsCallFunction { module_handle, args, .. } => {
+        Expr::JsCallFunction {
+            module_handle,
+            args,
+            ..
+        } => {
             fix_native_instance_expr(module_handle, native_instances, local_id_instances);
             for arg in args {
                 fix_native_instance_expr(arg, native_instances, local_id_instances);
@@ -1570,7 +2045,11 @@ fn fix_native_instance_expr(expr: &mut Expr, native_instances: &HashMap<String, 
             fix_native_instance_expr(object, native_instances, local_id_instances);
             fix_native_instance_expr(value, native_instances, local_id_instances);
         }
-        Expr::JsNew { module_handle, args, .. } => {
+        Expr::JsNew {
+            module_handle,
+            args,
+            ..
+        } => {
             fix_native_instance_expr(module_handle, native_instances, local_id_instances);
             for arg in args {
                 fix_native_instance_expr(arg, native_instances, local_id_instances);
@@ -1616,19 +2095,29 @@ pub fn fix_local_native_instances(module: &mut Module) {
 
     // Scan init statements for native instance creations (recursively)
     for stmt in &module.init {
-        scan_stmt_for_native_instances(stmt, &mut local_native_instances, &mut local_id_native_instances);
+        scan_stmt_for_native_instances(
+            stmt,
+            &mut local_native_instances,
+            &mut local_id_native_instances,
+        );
     }
 
     // Transform method calls on these native instances in init
     for stmt in &mut module.init {
-        fix_native_instance_stmt_with_locals(stmt, &local_native_instances, &local_id_native_instances);
+        fix_native_instance_stmt_with_locals(
+            stmt,
+            &local_native_instances,
+            &local_id_native_instances,
+        );
     }
 
     // Process each function separately with its own local variable scope
     for func in &mut module.functions {
         // Build per-function local mapping by scanning all statements recursively
-        let mut func_local_ids: HashMap<LocalId, (String, String)> = local_id_native_instances.clone();
-        let mut func_local_names: HashMap<String, (String, String)> = local_native_instances.clone();
+        let mut func_local_ids: HashMap<LocalId, (String, String)> =
+            local_id_native_instances.clone();
+        let mut func_local_names: HashMap<String, (String, String)> =
+            local_native_instances.clone();
         for stmt in &func.body {
             scan_stmt_for_native_instances(stmt, &mut func_local_names, &mut func_local_ids);
         }
@@ -1653,7 +2142,11 @@ pub fn fix_local_native_instances(module: &mut Module) {
             let mut method_local_ids = local_id_native_instances.clone();
             let mut method_local_names = local_native_instances.clone();
             for stmt in &method.body {
-                scan_stmt_for_native_instances(stmt, &mut method_local_names, &mut method_local_ids);
+                scan_stmt_for_native_instances(
+                    stmt,
+                    &mut method_local_names,
+                    &mut method_local_ids,
+                );
             }
             for stmt in &mut method.body {
                 fix_native_instance_stmt_with_locals(stmt, &method_local_names, &method_local_ids);
@@ -1663,7 +2156,11 @@ pub fn fix_local_native_instances(module: &mut Module) {
             let mut method_local_ids = local_id_native_instances.clone();
             let mut method_local_names = local_native_instances.clone();
             for stmt in &method.body {
-                scan_stmt_for_native_instances(stmt, &mut method_local_names, &mut method_local_ids);
+                scan_stmt_for_native_instances(
+                    stmt,
+                    &mut method_local_names,
+                    &mut method_local_ids,
+                );
             }
             for stmt in &mut method.body {
                 fix_native_instance_stmt_with_locals(stmt, &method_local_names, &method_local_ids);
@@ -1679,13 +2176,24 @@ fn scan_stmt_for_native_instances(
     local_ids: &mut HashMap<LocalId, (String, String)>,
 ) {
     match stmt {
-        Stmt::Let { id, name, init: Some(init_expr), .. } => {
-            if let Some((native_module, class_name)) = detect_native_instance_creation_with_context(init_expr, local_ids) {
+        Stmt::Let {
+            id,
+            name,
+            init: Some(init_expr),
+            ..
+        } => {
+            if let Some((native_module, class_name)) =
+                detect_native_instance_creation_with_context(init_expr, local_ids)
+            {
                 local_names.insert(name.clone(), (native_module.clone(), class_name.clone()));
                 local_ids.insert(*id, (native_module, class_name));
             }
         }
-        Stmt::If { then_branch, else_branch, .. } => {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
             for s in then_branch {
                 scan_stmt_for_native_instances(s, local_names, local_ids);
             }
@@ -1708,7 +2216,11 @@ fn scan_stmt_for_native_instances(
                 scan_stmt_for_native_instances(s, local_names, local_ids);
             }
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             for s in body {
                 scan_stmt_for_native_instances(s, local_names, local_ids);
             }
@@ -1733,15 +2245,23 @@ fn fix_native_instance_stmt_with_locals(
     local_id_instances: &HashMap<LocalId, (String, String)>,
 ) {
     match stmt {
-        Stmt::Expr(expr) => fix_native_instance_expr_with_locals(expr, native_instances, local_id_instances),
+        Stmt::Expr(expr) => {
+            fix_native_instance_expr_with_locals(expr, native_instances, local_id_instances)
+        }
         Stmt::Let { init, .. } => {
             if let Some(e) = init {
                 fix_native_instance_expr_with_locals(e, native_instances, local_id_instances);
             }
         }
-        Stmt::Return(Some(e)) => fix_native_instance_expr_with_locals(e, native_instances, local_id_instances),
+        Stmt::Return(Some(e)) => {
+            fix_native_instance_expr_with_locals(e, native_instances, local_id_instances)
+        }
         Stmt::Return(None) => {}
-        Stmt::If { condition, then_branch, else_branch } => {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             fix_native_instance_expr_with_locals(condition, native_instances, local_id_instances);
             for s in then_branch {
                 fix_native_instance_stmt_with_locals(s, native_instances, local_id_instances);
@@ -1767,9 +2287,18 @@ fn fix_native_instance_stmt_with_locals(
         Stmt::Labeled { body, .. } => {
             fix_native_instance_stmt_with_locals(body, native_instances, local_id_instances);
         }
-        Stmt::For { init, condition, update, body } => {
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             if let Some(init_stmt) = init {
-                fix_native_instance_stmt_with_locals(init_stmt.as_mut(), native_instances, local_id_instances);
+                fix_native_instance_stmt_with_locals(
+                    init_stmt.as_mut(),
+                    native_instances,
+                    local_id_instances,
+                );
             }
             if let Some(cond) = condition {
                 fix_native_instance_expr_with_locals(cond, native_instances, local_id_instances);
@@ -1781,7 +2310,11 @@ fn fix_native_instance_stmt_with_locals(
                 fix_native_instance_stmt_with_locals(s, native_instances, local_id_instances);
             }
         }
-        Stmt::Try { body, catch, finally } => {
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
             for s in body {
                 fix_native_instance_stmt_with_locals(s, native_instances, local_id_instances);
             }
@@ -1796,12 +2329,25 @@ fn fix_native_instance_stmt_with_locals(
                 }
             }
         }
-        Stmt::Throw(e) => fix_native_instance_expr_with_locals(e, native_instances, local_id_instances),
-        Stmt::Switch { discriminant, cases } => {
-            fix_native_instance_expr_with_locals(discriminant, native_instances, local_id_instances);
+        Stmt::Throw(e) => {
+            fix_native_instance_expr_with_locals(e, native_instances, local_id_instances)
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            fix_native_instance_expr_with_locals(
+                discriminant,
+                native_instances,
+                local_id_instances,
+            );
             for case in cases {
                 if let Some(test) = &mut case.test {
-                    fix_native_instance_expr_with_locals(test, native_instances, local_id_instances);
+                    fix_native_instance_expr_with_locals(
+                        test,
+                        native_instances,
+                        local_id_instances,
+                    );
                 }
                 for s in &mut case.body {
                     fix_native_instance_stmt_with_locals(s, native_instances, local_id_instances);
@@ -1828,7 +2374,11 @@ fn fix_native_instance_expr_with_locals(
                     if let Some((native_module, native_class)) = found {
                         // Transform args first
                         for arg in args.iter_mut() {
-                            fix_native_instance_expr_with_locals(arg, native_instances, local_id_instances);
+                            fix_native_instance_expr_with_locals(
+                                arg,
+                                native_instances,
+                                local_id_instances,
+                            );
                         }
                         let args_owned: Vec<Expr> = args.drain(..).collect();
                         let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
@@ -1849,7 +2399,11 @@ fn fix_native_instance_expr_with_locals(
                     if let Some((native_module, native_class)) = native_instances.get(name) {
                         // Transform args first
                         for arg in args.iter_mut() {
-                            fix_native_instance_expr_with_locals(arg, native_instances, local_id_instances);
+                            fix_native_instance_expr_with_locals(
+                                arg,
+                                native_instances,
+                                local_id_instances,
+                            );
                         }
                         let args_owned: Vec<Expr> = args.drain(..).collect();
                         let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
@@ -1879,10 +2433,16 @@ fn fix_native_instance_expr_with_locals(
                 if let Expr::PropertyGet { object, property } = callee.as_mut() {
                     // Check for LocalGet
                     if let Expr::LocalGet(local_id) = object.as_ref() {
-                        if let Some((native_module, native_class)) = local_id_instances.get(local_id) {
+                        if let Some((native_module, native_class)) =
+                            local_id_instances.get(local_id)
+                        {
                             // Transform args first
                             for arg in args.iter_mut() {
-                                fix_native_instance_expr_with_locals(arg, native_instances, local_id_instances);
+                                fix_native_instance_expr_with_locals(
+                                    arg,
+                                    native_instances,
+                                    local_id_instances,
+                                );
                             }
                             let args_owned: Vec<Expr> = args.drain(..).collect();
                             let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
@@ -1903,7 +2463,11 @@ fn fix_native_instance_expr_with_locals(
                         if let Some((native_module, native_class)) = native_instances.get(name) {
                             // Transform args first
                             for arg in args.iter_mut() {
-                                fix_native_instance_expr_with_locals(arg, native_instances, local_id_instances);
+                                fix_native_instance_expr_with_locals(
+                                    arg,
+                                    native_instances,
+                                    local_id_instances,
+                                );
                             }
                             let args_owned: Vec<Expr> = args.drain(..).collect();
                             let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
@@ -1945,7 +2509,11 @@ fn fix_native_instance_expr_with_locals(
         Expr::GlobalSet(_, value) => {
             fix_native_instance_expr_with_locals(value, native_instances, local_id_instances);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             fix_native_instance_expr_with_locals(condition, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(then_expr, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(else_expr, native_instances, local_id_instances);
@@ -1958,8 +2526,16 @@ fn fix_native_instance_expr_with_locals(
         Expr::ArraySpread(elements) => {
             for elem in elements {
                 match elem {
-                    crate::ir::ArrayElement::Expr(e) => fix_native_instance_expr_with_locals(e, native_instances, local_id_instances),
-                    crate::ir::ArrayElement::Spread(e) => fix_native_instance_expr_with_locals(e, native_instances, local_id_instances),
+                    crate::ir::ArrayElement::Expr(e) => fix_native_instance_expr_with_locals(
+                        e,
+                        native_instances,
+                        local_id_instances,
+                    ),
+                    crate::ir::ArrayElement::Spread(e) => fix_native_instance_expr_with_locals(
+                        e,
+                        native_instances,
+                        local_id_instances,
+                    ),
                 }
             }
         }
@@ -1984,7 +2560,11 @@ fn fix_native_instance_expr_with_locals(
             fix_native_instance_expr_with_locals(object, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(index, native_instances, local_id_instances);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
             fix_native_instance_expr_with_locals(object, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(index, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(value, native_instances, local_id_instances);
@@ -2013,7 +2593,12 @@ fn detect_native_instance_creation_with_context(
     local_ids: &HashMap<LocalId, (String, String)>,
 ) -> Option<(String, String)> {
     match expr {
-        Expr::NativeMethodCall { module, object: None, method, .. } => {
+        Expr::NativeMethodCall {
+            module,
+            object: None,
+            method,
+            ..
+        } => {
             // Creation functions like mysql.createPool(), mysql.createConnection()
             let class_name = match method.as_str() {
                 "createPool" => "Pool",
@@ -2022,18 +2607,20 @@ fn detect_native_instance_creation_with_context(
             };
             Some((module.clone(), class_name.to_string()))
         }
-        Expr::NativeMethodCall { module, object: Some(_), class_name: Some(class), method, .. } => {
+        Expr::NativeMethodCall {
+            module,
+            object: Some(_),
+            class_name: Some(class),
+            method,
+            ..
+        } => {
             // Instance methods that return new native instances
             match (module.as_str(), class.as_str(), method.as_str()) {
                 ("mysql2" | "mysql2/promise", "Pool", "getConnection") => {
                     Some((module.clone(), "PoolConnection".to_string()))
                 }
-                ("pg", "Pool", "connect") => {
-                    Some((module.clone(), "PoolClient".to_string()))
-                }
-                ("ioredis", "Redis", "duplicate") => {
-                    Some((module.clone(), "Redis".to_string()))
-                }
+                ("pg", "Pool", "connect") => Some((module.clone(), "PoolClient".to_string())),
+                ("ioredis", "Redis", "duplicate") => Some((module.clone(), "Redis".to_string())),
                 ("better-sqlite3", "Database", "prepare") => {
                     Some((module.clone(), "Statement".to_string()))
                 }

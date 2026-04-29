@@ -83,7 +83,11 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
         // addresses back to function names. Only enabled when
         // PERRY_DEBUG_SYMBOLS=1 is set — otherwise omitted to keep
         // binaries small.
-        .args(if std::env::var("PERRY_DEBUG_SYMBOLS").is_ok() { vec!["-g"] } else { vec![] })
+        .args(if std::env::var("PERRY_DEBUG_SYMBOLS").is_ok() {
+            vec!["-g"]
+        } else {
+            vec![]
+        })
         // We want LLVM to reassociate f64 ops (for loop unrolling)
         // but NOT to assume NaN never occurs — Perry's NaN-boxing uses
         // NaN bit patterns for ALL non-number values (strings, objects,
@@ -104,11 +108,13 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     // `-mcpu=native` to a clang invocation aimed at x86, which fails
     // with `unsupported option '-mcpu='`.)
     if target_triple.is_none() {
-        cmd.arg(if cfg!(target_arch = "aarch64") { "-mcpu=native" } else { "-march=native" });
+        cmd.arg(if cfg!(target_arch = "aarch64") {
+            "-mcpu=native"
+        } else {
+            "-march=native"
+        });
     }
-    cmd.arg(&ll_path)
-        .arg("-o")
-        .arg(&obj_path);
+    cmd.arg(&ll_path).arg("-o").arg(&obj_path);
     // Always pass -target. Clang's behavior on a `.ll` file is "use my own
     // default target, override the module's stated triple if it differs"
     // (you can see the `warning: overriding the module target triple` log
@@ -204,11 +210,18 @@ fn probe_clang_default_triple(clang: &Path, requested_triple: &str) {
             let text = String::from_utf8(out.stdout).ok()?;
             text.lines()
                 .find(|l| l.trim_start().starts_with("Target:"))
-                .map(|l| l.trim_start().trim_start_matches("Target:").trim().to_string())
+                .map(|l| {
+                    l.trim_start()
+                        .trim_start_matches("Target:")
+                        .trim()
+                        .to_string()
+                })
         })
         .as_deref();
 
-    let Some(default) = default_triple else { return; };
+    let Some(default) = default_triple else {
+        return;
+    };
 
     // Only warn when the host is Windows and clang's default is GNU/MinGW
     // but we're targeting msvc. Any other mismatch (e.g. cross-compile)
@@ -240,7 +253,12 @@ fn build_clang_failure_hint(stderr: &str, clang_version: &str, requested_triple:
     let clang_default_triple = clang_version
         .lines()
         .find(|l| l.trim_start().starts_with("Target:"))
-        .map(|l| l.trim_start().trim_start_matches("Target:").trim().to_string());
+        .map(|l| {
+            l.trim_start()
+                .trim_start_matches("Target:")
+                .trim()
+                .to_string()
+        });
 
     let mingw_clang = clang_default_triple
         .as_deref()
@@ -252,13 +270,20 @@ fn build_clang_failure_hint(stderr: &str, clang_version: &str, requested_triple:
             "Hint: the clang on PATH defaults to {} (a MinGW/GNU toolchain). \
              Perry now pins -target to {} so the .o is msvc-flavored, but if your \
              clang install lacks the msvc backend support, pick a clang built for msvc:",
-            clang_default_triple.as_deref().unwrap_or("a non-msvc target"),
+            clang_default_triple
+                .as_deref()
+                .unwrap_or("a non-msvc target"),
             requested_triple
         ));
         lines.push("  - winget install LLVM.LLVM        (Windows Package Manager)".to_string());
         lines.push("  - choco install llvm              (Chocolatey)".to_string());
-        lines.push("  - https://github.com/llvm/llvm-project/releases (LLVM-<ver>-win64.exe)".to_string());
-        lines.push("Then either put it first on PATH, or set PERRY_LLVM_CLANG to its full path.".to_string());
+        lines.push(
+            "  - https://github.com/llvm/llvm-project/releases (LLVM-<ver>-win64.exe)".to_string(),
+        );
+        lines.push(
+            "Then either put it first on PATH, or set PERRY_LLVM_CLANG to its full path."
+                .to_string(),
+        );
     } else if lower.contains("overriding the module target triple") {
         lines.push(format!(
             "Hint: clang ({}) is overriding the module target triple. \
@@ -354,17 +379,26 @@ fn find_msvc_bundled_clang() -> Option<PathBuf> {
         PathBuf::from(r"C:\Program Files\Microsoft Visual Studio\Installer\vswhere.exe"),
     ];
     for vswhere in &vswhere_paths {
-        if !vswhere.exists() { continue; }
+        if !vswhere.exists() {
+            continue;
+        }
         let output = std::process::Command::new(vswhere)
             .args(msvc_vswhere_installation_path_args())
             .output()
             .ok()?;
         let install_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if install_path.is_empty() { continue; }
+        if install_path.is_empty() {
+            continue;
+        }
         // Check x64 first, then ARM64
         for arch in &["x64", "ARM64"] {
             let candidate = PathBuf::from(&install_path)
-                .join("VC").join("Tools").join("Llvm").join(arch).join("bin").join("clang.exe");
+                .join("VC")
+                .join("Tools")
+                .join("Llvm")
+                .join(arch)
+                .join("bin")
+                .join("clang.exe");
             if candidate.exists() {
                 return Some(candidate);
             }
@@ -485,7 +519,9 @@ pub fn bitcode_link_pipeline(
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow!(
                 "llvm-as failed on {} (status={}):\n{}",
-                ll_file.display(), output.status, stderr
+                ll_file.display(),
+                output.status,
+                stderr
             ));
         }
         intermediates.push(bc_path.clone());
@@ -513,7 +549,11 @@ pub fn bitcode_link_pipeline(
         let output = cmd.output().context("Failed to invoke llvm-link")?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("llvm-link failed (status={}):\n{}", output.status, stderr));
+            return Err(anyhow!(
+                "llvm-link failed (status={}):\n{}",
+                output.status,
+                stderr
+            ));
         }
     }
     intermediates.push(linked_bc.clone());
@@ -527,7 +567,11 @@ pub fn bitcode_link_pipeline(
         let output = cmd.output().context("Failed to invoke opt")?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("opt -O3 failed (status={}):\n{}", output.status, stderr));
+            return Err(anyhow!(
+                "opt -O3 failed (status={}):\n{}",
+                output.status,
+                stderr
+            ));
         }
     }
     intermediates.push(opt_bc.clone());
@@ -536,7 +580,11 @@ pub fn bitcode_link_pipeline(
     let linked_obj = PathBuf::from(format!("{}_linked.o", prefix));
     {
         let mut cmd = Command::new(&llc);
-        cmd.arg("-filetype=obj").arg("-O3").arg(&opt_bc).arg("-o").arg(&linked_obj);
+        cmd.arg("-filetype=obj")
+            .arg("-O3")
+            .arg(&opt_bc)
+            .arg("-o")
+            .arg(&linked_obj);
         if let Some(triple) = target_triple {
             cmd.arg("-mtriple").arg(triple);
         }
@@ -544,7 +592,11 @@ pub fn bitcode_link_pipeline(
         let output = cmd.output().context("Failed to invoke llc")?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("llc failed (status={}):\n{}", output.status, stderr));
+            return Err(anyhow!(
+                "llc failed (status={}):\n{}",
+                output.status,
+                stderr
+            ));
         }
     }
 
@@ -584,7 +636,11 @@ mod tests {
             "x86_64-pc-windows-msvc",
         );
         if cfg!(target_os = "windows") {
-            assert!(hint.contains("MinGW/GNU"), "expected MinGW hint, got: {}", hint);
+            assert!(
+                hint.contains("MinGW/GNU"),
+                "expected MinGW hint, got: {}",
+                hint
+            );
             assert!(hint.contains("winget install LLVM.LLVM"));
             assert!(hint.contains("PERRY_LLVM_CLANG"));
         } else {
@@ -602,8 +658,11 @@ mod tests {
         );
         // On non-Windows hosts the override-warning branch should win.
         if !cfg!(target_os = "windows") {
-            assert!(hint.contains("overriding the module target triple"),
-                "expected override hint, got: {}", hint);
+            assert!(
+                hint.contains("overriding the module target triple"),
+                "expected override hint, got: {}",
+                hint
+            );
         }
     }
 
@@ -615,8 +674,11 @@ mod tests {
             &v,
             "arm64-apple-macosx15.0.0",
         );
-        assert!(hint.contains("library") || hint.contains("PERRY_LLVM_CLANG"),
-            "got: {}", hint);
+        assert!(
+            hint.contains("library") || hint.contains("PERRY_LLVM_CLANG"),
+            "got: {}",
+            hint
+        );
     }
 
     #[test]
@@ -627,8 +689,11 @@ mod tests {
             &v,
             "arm64-apple-macosx15.0.0",
         );
-        assert!(hint.contains("PERRY_LLVM_CLANG"),
-            "fallback hint should mention PERRY_LLVM_CLANG; got: {}", hint);
+        assert!(
+            hint.contains("PERRY_LLVM_CLANG"),
+            "fallback hint should mention PERRY_LLVM_CLANG; got: {}",
+            hint
+        );
         assert!(hint.contains("arm64-apple-macosx15.0.0"));
     }
 }

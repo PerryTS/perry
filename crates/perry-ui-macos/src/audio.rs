@@ -61,11 +61,32 @@ impl AWeightState {
 // low and high frequencies per IEC 61672.
 const A_WEIGHT_SOS: [[f64; 6]; 3] = [
     // Section 1: High-pass pair (20.6 Hz poles)
-    [1.0, -2.0, 1.0, 1.0, -1.9746716508129498, 0.97504628855498883],
+    [
+        1.0,
+        -2.0,
+        1.0,
+        1.0,
+        -1.9746716508129498,
+        0.97504628855498883,
+    ],
     // Section 2: High-pass pair (107.7 Hz, 737.9 Hz poles)
-    [1.0, -2.0, 1.0, 1.0, -1.1440825051498020, 0.20482985688498268],
+    [
+        1.0,
+        -2.0,
+        1.0,
+        1.0,
+        -1.1440825051498020,
+        0.20482985688498268,
+    ],
     // Section 3: Low-pass pair (12194 Hz poles)
-    [0.24649652853975498, -0.49299305707950996, 0.24649652853975498, 1.0, -0.48689808685150487, 0.0],
+    [
+        0.24649652853975498,
+        -0.49299305707950996,
+        0.24649652853975498,
+        1.0,
+        -0.48689808685150487,
+        0.0,
+    ],
 ];
 
 // Overall gain to normalize the A-weighting filter to 0 dB at 1 kHz reference.
@@ -87,9 +108,9 @@ fn a_weight_filter(sample: f64, state: &mut AWeightState) -> f64 {
 
         // Shift state
         s[1] = s[0]; // x[n-2] = x[n-1]
-        s[0] = x;    // x[n-1] = x[n]
+        s[0] = x; // x[n-1] = x[n]
         s[3] = s[2]; // y[n-2] = y[n-1]
-        s[2] = y;    // y[n-1] = y[n]
+        s[2] = y; // y[n-1] = y[n]
 
         x = y;
     }
@@ -162,13 +183,17 @@ pub fn start() -> i64 {
         // Read sample rate from format
         let sample_rate: f64 = msg_send![format, sampleRate];
         let channel_count: u32 = msg_send![format, channelCount];
-        eprintln!("[audio] input format: {}Hz, {} channels", sample_rate, channel_count);
+        eprintln!(
+            "[audio] input format: {}Hz, {} channels",
+            sample_rate, channel_count
+        );
 
         // Create the tap block
         // The block signature is: void (^)(AVAudioPCMBuffer *buffer, AVAudioTime *when)
-        let tap_block = block2::RcBlock::new(move |buffer: *mut AnyObject, _when: *mut AnyObject| {
-            process_audio_buffer(buffer, sample_rate);
-        });
+        let tap_block =
+            block2::RcBlock::new(move |buffer: *mut AnyObject, _when: *mut AnyObject| {
+                process_audio_buffer(buffer, sample_rate);
+            });
 
         // Install tap on bus 0
         let buffer_size: u32 = 1024;
@@ -263,9 +288,7 @@ pub fn get_waveform(count: f64) -> f64 {
 /// Returns a NaN-boxed string pointer.
 pub fn get_device_model() -> i64 {
     let model = get_sysctl_model();
-    unsafe {
-        js_string_from_bytes(model.as_ptr(), model.len() as i32)
-    }
+    unsafe { js_string_from_bytes(model.as_ptr(), model.len() as i32) }
 }
 
 // =============================================================================
@@ -382,7 +405,13 @@ fn get_sysctl_model() -> String {
     let mut size: libc::size_t = 0;
     let name = c"hw.model";
     unsafe {
-        libc::sysctlbyname(name.as_ptr(), std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0);
+        libc::sysctlbyname(
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        );
         if size == 0 {
             return "Unknown".to_string();
         }

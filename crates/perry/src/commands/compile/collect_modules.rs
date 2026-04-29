@@ -19,10 +19,10 @@ use std::path::PathBuf;
 use crate::OutputFormat;
 
 use super::{
-    cached_resolve_import, djb2_hash, extract_compile_package_dir,
-    has_perry_native_library, is_declaration_file, is_in_compile_package,
-    is_in_perry_native_package, is_js_file, parse_cached, parse_native_library_manifest,
-    parse_package_specifier, CompilationContext, JsModule, ParseCache,
+    cached_resolve_import, djb2_hash, extract_compile_package_dir, has_perry_native_library,
+    is_declaration_file, is_in_compile_package, is_in_perry_native_package, is_js_file,
+    parse_cached, parse_native_library_manifest, parse_package_specifier, CompilationContext,
+    JsModule, ParseCache,
 };
 
 /// Collect all modules to compile (transitive closure of imports)
@@ -81,7 +81,6 @@ pub(super) fn collect_modules(
     }
 
     if should_use_js_runtime {
-
         // Skip declaration files - they're just type information
         if is_declaration_file(&canonical) {
             return Ok(());
@@ -97,11 +96,14 @@ pub(super) fn collect_modules(
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
 
         let specifier = canonical.to_string_lossy().to_string();
-        ctx.js_modules.insert(specifier.clone(), JsModule {
-            path: canonical.clone(),
-            source,
-            specifier,
-        });
+        ctx.js_modules.insert(
+            specifier.clone(),
+            JsModule {
+                path: canonical.clone(),
+                source,
+                specifier,
+            },
+        );
         ctx.needs_js_runtime = true;
 
         // We don't parse JS/node_modules files for their imports (V8 will handle that at runtime)
@@ -151,7 +153,11 @@ pub(super) fn collect_modules(
         let positions = crate::commands::typecheck::collect_untyped_positions(ast_module);
         if !positions.is_empty() {
             let client = ctx.type_checker.as_mut().unwrap();
-            match crate::commands::typecheck::resolve_types_for_file(client, &source_file_path, &positions) {
+            match crate::commands::typecheck::resolve_types_for_file(
+                client,
+                &source_file_path,
+                &positions,
+            ) {
                 Ok(types) => {
                     if !types.is_empty() {
                         Some(types)
@@ -169,7 +175,11 @@ pub(super) fn collect_modules(
     };
 
     let (mut hir_module, new_next_class_id) = perry_hir::lower_module_with_class_id_and_types(
-        ast_module, &module_name, &source_file_path, *next_class_id, resolved_types,
+        ast_module,
+        &module_name,
+        &source_file_path,
+        *next_class_id,
+        resolved_types,
     )?;
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
@@ -216,7 +226,9 @@ pub(super) fn collect_modules(
                 // Track for `--minimal-stdlib` feature computation. Strip
                 // any "node:" prefix so the mapping table sees the bare
                 // module name.
-                let normalized = import.source.strip_prefix("node:")
+                let normalized = import
+                    .source
+                    .strip_prefix("node:")
                     .unwrap_or(&import.source)
                     .to_string();
                 ctx.native_module_imports.insert(normalized);
@@ -224,7 +236,8 @@ pub(super) fn collect_modules(
             continue;
         }
 
-        if let Some((resolved_path, kind)) = cached_resolve_import(&import.source, &canonical, ctx) {
+        if let Some((resolved_path, kind)) = cached_resolve_import(&import.source, &canonical, ctx)
+        {
             import.resolved_path = Some(resolved_path.to_string_lossy().to_string());
             import.module_kind = kind;
 
@@ -236,8 +249,12 @@ pub(super) fn collect_modules(
                     let module_name = &import.source;
                     if !module_name.starts_with('.') && !module_name.starts_with('/') {
                         let (pkg_name, _) = parse_package_specifier(module_name);
-                        if ctx.compile_packages.contains(&pkg_name) && !ctx.compile_package_dirs.contains_key(&pkg_name) {
-                            if let Some(pkg_dir) = extract_compile_package_dir(&resolved_path, &pkg_name) {
+                        if ctx.compile_packages.contains(&pkg_name)
+                            && !ctx.compile_package_dirs.contains_key(&pkg_name)
+                        {
+                            if let Some(pkg_dir) =
+                                extract_compile_package_dir(&resolved_path, &pkg_name)
+                            {
                                 ctx.compile_package_dirs.insert(pkg_name, pkg_dir);
                             } else {
                                 // Symlinked local package: canonical path is outside node_modules.
@@ -256,15 +273,27 @@ pub(super) fn collect_modules(
                     // Collect native library manifest (FFI functions, build config)
                     // Only for package imports (not relative imports within the same package)
                     if !module_name.starts_with('.') && !module_name.starts_with('/') {
-                        if !ctx.native_libraries.iter().any(|nl| nl.module == *module_name) {
+                        if !ctx
+                            .native_libraries
+                            .iter()
+                            .any(|nl| nl.module == *module_name)
+                        {
                             // Walk up to find the package directory with perry.nativeLibrary
                             // Works for both node_modules packages and symlinked local packages
                             let mut pkg_dir = resolved_path.parent();
                             while let Some(dir) = pkg_dir {
-                                if dir.join("package.json").exists() && has_perry_native_library(dir) {
-                                    if let Some(manifest) = parse_native_library_manifest(dir, module_name, target) {
+                                if dir.join("package.json").exists()
+                                    && has_perry_native_library(dir)
+                                {
+                                    if let Some(manifest) =
+                                        parse_native_library_manifest(dir, module_name, target)
+                                    {
                                         match format {
-                                            OutputFormat::Text => println!("  Native library: {} ({} FFI functions)", manifest.module, manifest.functions.len()),
+                                            OutputFormat::Text => println!(
+                                                "  Native library: {} ({} FFI functions)",
+                                                manifest.module,
+                                                manifest.functions.len()
+                                            ),
                                             OutputFormat::Json => {}
                                         }
                                         ctx.native_libraries.push(manifest);
@@ -276,7 +305,17 @@ pub(super) fn collect_modules(
                         }
                     }
                     // Recursively collect TypeScript modules
-                    collect_modules(&resolved_path, ctx, visited, enable_js_runtime, format, target, next_class_id, skip_transforms, parse_cache.as_deref_mut())?;
+                    collect_modules(
+                        &resolved_path,
+                        ctx,
+                        visited,
+                        enable_js_runtime,
+                        format,
+                        target,
+                        next_class_id,
+                        skip_transforms,
+                        parse_cache.as_deref_mut(),
+                    )?;
                 }
                 ModuleKind::Interpreted => {
                     // Perry native extension packages (ioredis, ethers, ws, mysql2, dotenv)
@@ -299,13 +338,25 @@ pub(super) fn collect_modules(
                     // canonical resolved path walks up to the correct package.json).
                     let module_name = &import.source;
                     if !module_name.starts_with('.') && !module_name.starts_with('/') {
-                        if !ctx.native_libraries.iter().any(|nl| nl.module == *module_name) {
+                        if !ctx
+                            .native_libraries
+                            .iter()
+                            .any(|nl| nl.module == *module_name)
+                        {
                             let mut pkg_dir = resolved_path.parent();
                             while let Some(dir) = pkg_dir {
-                                if dir.join("package.json").exists() && has_perry_native_library(dir) {
-                                    if let Some(manifest) = parse_native_library_manifest(dir, module_name, target) {
+                                if dir.join("package.json").exists()
+                                    && has_perry_native_library(dir)
+                                {
+                                    if let Some(manifest) =
+                                        parse_native_library_manifest(dir, module_name, target)
+                                    {
                                         match format {
-                                            OutputFormat::Text => println!("  Native library: {} ({} FFI functions)", manifest.module, manifest.functions.len()),
+                                            OutputFormat::Text => println!(
+                                                "  Native library: {} ({} FFI functions)",
+                                                manifest.module,
+                                                manifest.functions.len()
+                                            ),
                                             OutputFormat::Json => {}
                                         }
                                         ctx.native_libraries.push(manifest);
@@ -319,13 +370,27 @@ pub(super) fn collect_modules(
 
                     match format {
                         OutputFormat::Text => {
-                            println!("  JS module: {} -> {}", import.source, resolved_path.display());
+                            println!(
+                                "  JS module: {} -> {}",
+                                import.source,
+                                resolved_path.display()
+                            );
                         }
                         OutputFormat::Json => {}
                     }
 
                     // Collect JS module
-                    collect_modules(&resolved_path, ctx, visited, enable_js_runtime, format, target, next_class_id, skip_transforms, parse_cache.as_deref_mut())?;
+                    collect_modules(
+                        &resolved_path,
+                        ctx,
+                        visited,
+                        enable_js_runtime,
+                        format,
+                        target,
+                        next_class_id,
+                        skip_transforms,
+                        parse_cache.as_deref_mut(),
+                    )?;
                 }
                 ModuleKind::NativeRust => {
                     // Native Rust modules are handled by stdlib
@@ -337,7 +402,10 @@ pub(super) fn collect_modules(
             if !import.is_native {
                 match format {
                     OutputFormat::Text => {
-                        println!("  Warning: Could not resolve import '{}' from {}", import.source, filename);
+                        println!(
+                            "  Warning: Could not resolve import '{}' from {}",
+                            import.source, filename
+                        );
                     }
                     OutputFormat::Json => {}
                 }
@@ -356,11 +424,31 @@ pub(super) fn collect_modules(
             if let Some((resolved_path, kind)) = cached_resolve_import(src, &canonical, ctx) {
                 match kind {
                     ModuleKind::NativeCompiled => {
-                        collect_modules(&resolved_path, ctx, visited, enable_js_runtime, format, target, next_class_id, skip_transforms, parse_cache.as_deref_mut())?;
+                        collect_modules(
+                            &resolved_path,
+                            ctx,
+                            visited,
+                            enable_js_runtime,
+                            format,
+                            target,
+                            next_class_id,
+                            skip_transforms,
+                            parse_cache.as_deref_mut(),
+                        )?;
                     }
                     ModuleKind::Interpreted => {
                         if enable_js_runtime {
-                            collect_modules(&resolved_path, ctx, visited, enable_js_runtime, format, target, next_class_id, skip_transforms, parse_cache.as_deref_mut())?;
+                            collect_modules(
+                                &resolved_path,
+                                ctx,
+                                visited,
+                                enable_js_runtime,
+                                format,
+                                target,
+                                next_class_id,
+                                skip_transforms,
+                                parse_cache.as_deref_mut(),
+                            )?;
                         }
                     }
                     ModuleKind::NativeRust => {}

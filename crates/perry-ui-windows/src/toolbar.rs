@@ -24,7 +24,9 @@ extern "C" {
 }
 
 fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() { return ""; }
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let header = ptr as *const perry_runtime::string::StringHeader;
         let len = (*header).byte_len as usize;
@@ -59,11 +61,11 @@ pub fn create() -> i64 {
 
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::*;
-        use windows::Win32::UI::WindowsAndMessaging::*;
-        use windows::Win32::Graphics::Gdi::{HBRUSH, COLOR_BTNFACE};
-        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows::core::PCWSTR;
+        use windows::Win32::Foundation::*;
+        use windows::Win32::Graphics::Gdi::{COLOR_BTNFACE, HBRUSH};
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::WindowsAndMessaging::*;
 
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();
@@ -88,11 +90,16 @@ pub fn create() -> i64 {
                 PCWSTR(class_name.as_ptr()),
                 PCWSTR::null(),
                 WS_CHILD | WS_VISIBLE,
-                0, 0, 800, 32,
-                parking, None,
+                0,
+                0,
+                800,
+                32,
+                parking,
+                None,
                 HINSTANCE::from(hinstance),
                 None,
-            ).unwrap();
+            )
+            .unwrap();
 
             TOOLBAR_HWNDS.with(|t| t.borrow_mut().insert(id, hwnd));
         }
@@ -114,23 +121,30 @@ pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, icon_ptr: *const u8, 
 
     TOOLBARS.with(|t| {
         if let Some(items) = t.borrow_mut().get_mut(&toolbar_handle) {
-            items.push(ToolbarItem { label: label.clone(), _icon: icon, callback });
+            items.push(ToolbarItem {
+                label: label.clone(),
+                _icon: icon,
+                callback,
+            });
         }
     });
 
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::*;
-        use windows::Win32::UI::WindowsAndMessaging::*;
-        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows::core::PCWSTR;
+        use windows::Win32::Foundation::*;
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::WindowsAndMessaging::*;
 
         TOOLBAR_HWNDS.with(|t| {
             if let Some(parent) = t.borrow().get(&toolbar_handle) {
                 unsafe {
                     let hinstance = GetModuleHandleW(None).unwrap();
                     let item_count = TOOLBARS.with(|tb| {
-                        tb.borrow().get(&toolbar_handle).map(|i| i.len()).unwrap_or(0)
+                        tb.borrow()
+                            .get(&toolbar_handle)
+                            .map(|i| i.len())
+                            .unwrap_or(0)
                     });
                     let x = ((item_count - 1) * 80) as i32;
                     let label_wide = to_wide(&label);
@@ -140,8 +154,12 @@ pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, icon_ptr: *const u8, 
                         PCWSTR(btn_class.as_ptr()),
                         PCWSTR(label_wide.as_ptr()),
                         WINDOW_STYLE(BS_PUSHBUTTON as u32 | WS_CHILD.0 | WS_VISIBLE.0),
-                        x, 2, 76, 28,
-                        *parent, None,
+                        x,
+                        2,
+                        76,
+                        28,
+                        *parent,
+                        None,
                         HINSTANCE::from(hinstance),
                         None,
                     );
@@ -151,7 +169,9 @@ pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, icon_ptr: *const u8, 
     }
 
     #[cfg(not(target_os = "windows"))]
-    { let _ = (toolbar_handle, callback); }
+    {
+        let _ = (toolbar_handle, callback);
+    }
 }
 
 /// Attach toolbar to the main app window.
@@ -173,5 +193,7 @@ pub fn attach(toolbar_handle: i64) {
         });
     }
     #[cfg(not(target_os = "windows"))]
-    { let _ = toolbar_handle; }
+    {
+        let _ = toolbar_handle;
+    }
 }

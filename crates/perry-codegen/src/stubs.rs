@@ -106,7 +106,11 @@ mod tests {
     fn empty_stubs_produce_object() {
         let bytes = generate_stub_object(&[], &[], &[], None).unwrap();
         // Object files are not empty and start with a recognizable magic.
-        assert!(bytes.len() > 16, "stub object too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() > 16,
+            "stub object too small: {} bytes",
+            bytes.len()
+        );
     }
 
     #[test]

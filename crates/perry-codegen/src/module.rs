@@ -67,7 +67,12 @@ impl LlModule {
     /// calls with the same name are no-ops. If a function with the same name
     /// is later *defined* in this module, the declaration is dropped at
     /// `to_ir` time so LLVM doesn't see both.
-    pub fn declare_function(&mut self, name: &str, return_type: LlvmType, param_types: &[LlvmType]) {
+    pub fn declare_function(
+        &mut self,
+        name: &str,
+        return_type: LlvmType,
+        param_types: &[LlvmType],
+    ) {
         if self.declared_names.contains(name) {
             return;
         }
@@ -78,7 +83,11 @@ impl LlModule {
         // the setjmp boundary. Without it, local variables modified
         // between setjmp and longjmp are clobbered when the second
         // return (via longjmp) happens.
-        let attrs = if name == "setjmp" || name == "_setjmp" { " #0" } else { "" };
+        let attrs = if name == "setjmp" || name == "_setjmp" {
+            " #0"
+        } else {
+            ""
+        };
         self.declarations.push((
             name.to_string(),
             format!("declare {} @{}({}){}", return_type, name, param_str, attrs),
@@ -107,11 +116,13 @@ impl LlModule {
     }
 
     pub fn add_global(&mut self, name: &str, ty: LlvmType, init: &str) {
-        self.globals.push(format!("@{} = global {} {}", name, ty, init));
+        self.globals
+            .push(format!("@{} = global {} {}", name, ty, init));
     }
 
     pub fn add_external_global(&mut self, name: &str, ty: LlvmType) {
-        self.globals.push(format!("@{} = external global {}", name, ty));
+        self.globals
+            .push(format!("@{} = external global {}", name, ty));
     }
 
     pub fn add_internal_global(&mut self, name: &str, ty: LlvmType, init: &str) {
@@ -145,12 +156,7 @@ impl LlModule {
     /// `escaped_lit` is the full LLVM IR literal *including* the surrounding
     /// `c"…"` and the trailing `\00`. `total_bytes` is the array length
     /// (= byte_len + 1 for the null terminator).
-    pub fn add_named_string_constant(
-        &mut self,
-        name: &str,
-        total_bytes: usize,
-        escaped_lit: &str,
-    ) {
+    pub fn add_named_string_constant(&mut self, name: &str, total_bytes: usize, escaped_lit: &str) {
         self.string_constants.push(format!(
             "@{} = private unnamed_addr constant [{} x i8] {}",
             name, total_bytes, escaped_lit

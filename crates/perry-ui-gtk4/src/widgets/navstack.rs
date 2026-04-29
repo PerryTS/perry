@@ -41,7 +41,13 @@ pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
 
     let handle = super::register_widget(stack.clone().upcast());
     NAV_STACKS.with(|n| {
-        n.borrow_mut().insert(handle, NavStackState { stack, page_count: 1 });
+        n.borrow_mut().insert(
+            handle,
+            NavStackState {
+                stack,
+                page_count: 1,
+            },
+        );
     });
     handle
 }

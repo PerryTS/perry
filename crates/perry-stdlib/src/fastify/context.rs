@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use perry_runtime::{js_string_from_bytes, StringHeader, JSValue};
+use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
 use crate::common::{get_handle, get_handle_mut, register_handle, Handle};
 
@@ -138,7 +138,9 @@ impl FastifyContext {
 
     /// Get body as string
     pub fn body_string(&self) -> Option<String> {
-        self.body.as_ref().map(|b| String::from_utf8_lossy(b).to_string())
+        self.body
+            .as_ref()
+            .map(|b| String::from_utf8_lossy(b).to_string())
     }
 
     /// Set response status code
@@ -148,7 +150,8 @@ impl FastifyContext {
 
     /// Add a response header
     pub fn add_header(&mut self, name: &str, value: &str) {
-        self.response_headers.push((name.to_string(), value.to_string()));
+        self.response_headers
+            .push((name.to_string(), value.to_string()));
     }
 }
 
@@ -212,7 +215,10 @@ pub unsafe extern "C" fn js_fastify_req_params(ctx_handle: Handle) -> *mut Strin
 /// Get all route params as a JavaScript object (NaN-boxed pointer)
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_req_params_object(ctx_handle: Handle) -> f64 {
-    use perry_runtime::{js_object_alloc, js_object_set_keys, js_object_set_field_f64, js_array_alloc, js_array_push_f64, js_nanbox_string};
+    use perry_runtime::{
+        js_array_alloc, js_array_push_f64, js_nanbox_string, js_object_alloc,
+        js_object_set_field_f64, js_object_set_keys,
+    };
 
     if let Some(ctx) = get_handle::<FastifyContext>(ctx_handle) {
         let field_count = ctx.params.len() as u32;
@@ -270,7 +276,10 @@ pub unsafe extern "C" fn js_fastify_req_query(ctx_handle: Handle) -> *mut String
 /// Get all query params as a JavaScript object (NaN-boxed pointer)
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_req_query_object(ctx_handle: Handle) -> f64 {
-    use perry_runtime::{js_object_alloc, js_object_set_keys, js_object_set_field_f64, js_array_alloc, js_array_push_f64, js_nanbox_string};
+    use perry_runtime::{
+        js_array_alloc, js_array_push_f64, js_nanbox_string, js_object_alloc,
+        js_object_set_field_f64, js_object_set_keys,
+    };
 
     if let Some(ctx) = get_handle::<FastifyContext>(ctx_handle) {
         let params = ctx.get_query_params();
@@ -407,7 +416,11 @@ pub unsafe extern "C" fn js_fastify_reply_status(ctx_handle: Handle, code: f64) 
 
 /// Set a response header (chainable, returns handle)
 #[no_mangle]
-pub unsafe extern "C" fn js_fastify_reply_header(ctx_handle: Handle, name: i64, value: i64) -> Handle {
+pub unsafe extern "C" fn js_fastify_reply_header(
+    ctx_handle: Handle,
+    name: i64,
+    value: i64,
+) -> Handle {
     let name = match string_from_nanboxed(name) {
         Some(n) => n,
         None => return ctx_handle,
@@ -455,7 +468,10 @@ pub unsafe extern "C" fn js_fastify_ctx_json(ctx_handle: Handle, data: f64, stat
         }
 
         // Add content-type header
-        ctx.response_headers.push(("content-type".to_string(), "application/json; charset=utf-8".to_string()));
+        ctx.response_headers.push((
+            "content-type".to_string(),
+            "application/json; charset=utf-8".to_string(),
+        ));
 
         // Convert data to JSON string
         let body = jsvalue_to_json_string(data);
@@ -477,7 +493,10 @@ pub unsafe extern "C" fn js_fastify_ctx_text(ctx_handle: Handle, text: i64, stat
             ctx.status_code = status as u16;
         }
 
-        ctx.response_headers.push(("content-type".to_string(), "text/plain; charset=utf-8".to_string()));
+        ctx.response_headers.push((
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        ));
         ctx.response_body = Some(text.into_bytes());
         ctx.sent = true;
     }
@@ -495,7 +514,10 @@ pub unsafe extern "C" fn js_fastify_ctx_html(ctx_handle: Handle, html: i64, stat
             ctx.status_code = status as u16;
         }
 
-        ctx.response_headers.push(("content-type".to_string(), "text/html; charset=utf-8".to_string()));
+        ctx.response_headers.push((
+            "content-type".to_string(),
+            "text/html; charset=utf-8".to_string(),
+        ));
         ctx.response_body = Some(html.into_bytes());
         ctx.sent = true;
     }
@@ -548,7 +570,11 @@ unsafe fn jsvalue_to_json_string(value: f64) -> String {
         return "null".to_string();
     }
     if jsv.is_bool() {
-        return if jsv.as_bool() { "true".to_string() } else { "false".to_string() };
+        return if jsv.as_bool() {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        };
     }
     if jsv.is_number() {
         return format!("{}", value);
