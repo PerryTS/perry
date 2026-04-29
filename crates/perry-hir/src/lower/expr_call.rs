@@ -2186,7 +2186,20 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                             // `Expr::ArrayFind` and dispatches to `js_array_find`,
                                             // which silently returns 0 on a class receiver.
                                             let recv_ty = ctx.lookup_local_type(&arr_name);
-                                            let is_class_instance = recv_ty
+                                            // TypedArray types are Named but must NOT be treated as
+                                            // class instances — they need the array-method fast path
+                                            // so `.at()` / `.findLast()` emit the right HIR variants.
+                                            let is_typed_array = recv_ty.as_ref().map(|ty| {
+                                                matches!(ty, Type::Named(n) if matches!(
+                                                    n.as_str(),
+                                                    "Int8Array" | "Int16Array" | "Int32Array"
+                                                    | "Uint8Array" | "Uint8ClampedArray"
+                                                    | "Uint16Array" | "Uint32Array"
+                                                    | "Float32Array" | "Float64Array"
+                                                    | "BigInt64Array" | "BigUint64Array"
+                                                ))
+                                            }).unwrap_or(false);
+                                            let is_class_instance = !is_typed_array && recv_ty
                                                 .as_ref()
                                                 .map(|ty| matches!(ty, Type::Named(_) | Type::Generic { .. })
                                                     && !matches!(ty, Type::Array(_)))

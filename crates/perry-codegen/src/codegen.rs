@@ -501,7 +501,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut local_async_funcs: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
     for f in &hir.functions {
-        if f.is_async {
+        // Include both truly-async functions and those transformed from
+        // async to generator (was_plain_async=true, is_async=false after
+        // the v0.5.371 async-to-generator pass) — both return Promises
+        // so is_promise_expr must recognize their call sites.
+        if f.is_async || f.was_plain_async {
             local_async_funcs.insert(f.id);
         }
     }

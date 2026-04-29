@@ -850,7 +850,11 @@ fn transform_generator_function(func: &mut Function, next_local_id: &mut u32, ne
         for s in wrapper_stmts {
             new_body.push(s);
         }
-        func.was_plain_async = false; // consumed
+        // Keep was_plain_async = true so codegen can populate
+        // local_async_funcs and is_promise_expr() correctly recognises
+        // calls to this function as Promise-returning (issue #269 fix).
+        // The flag is safe to keep set — the generator transform only
+        // checks it here, and codegen only reads it.
     } else {
         // Plain generator: return the iterator object directly.
         new_body.push(Stmt::Return(Some(iter_obj)));
