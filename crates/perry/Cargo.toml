@@ -20,6 +20,7 @@ perry-runtime.workspace = true
 perry-diagnostics.workspace = true
 perry-codegen-js.workspace = true
 perry-codegen-swiftui.workspace = true
+perry-codegen-arkts.workspace = true
 perry-codegen-glance.workspace = true
 perry-codegen-wear-tiles.workspace = true
 perry-codegen-wasm.workspace = true
