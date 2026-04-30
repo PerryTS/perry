@@ -92,7 +92,7 @@ tick if the signal hasn't arrived.
 | Windows | `Windows.Media.Playback.MediaPlayer` (WinRT) | **Implemented** (`SystemMediaTransportControls` lock-screen is a follow-up) |
 | watchOS | AVPlayer (limited; `WKApplication` Now Playing has a different shape) | Stub |
 | HarmonyOS | `@ohos.multimedia.media.AVPlayer` via napi | Stub |
-| Web | `<audio>` element + Media Session API | Stub |
+| Web | `<audio>` element + Media Session API | **Implemented** (`--target web`; `setNowPlaying` populates `navigator.mediaSession.metadata` + wires play / pause / seekto / seekforward / seekbackward action handlers) |
 
 Stub platforms link cleanly against the same FFI surface — code that
 imports `perry/media` compiles on every target. `createPlayer` returns
