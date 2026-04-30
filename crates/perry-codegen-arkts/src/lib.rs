@@ -2,62 +2,75 @@
 //!
 //! HarmonyOS NEXT renders UI declaratively from `.ets` files annotated with
 //! `@Entry @Component struct ... { build() { ... } }`. Perry's `perry/ui`
-//! surface (`App({body: Text("hi")})`) is normally lowered to native FFI
-//! calls (perry_ui_app_create / perry_ui_app_set_body / perry_ui_app_run) on
+//! surface (`App({body: VStack([Text("hi"), Button("OK", () => {})])})`) is
+//! normally lowered to native FFI calls (perry_ui_*_create / set_*) on
 //! iOS / macOS / Android / Linux / Windows — backed by perry-ui-* crates that
 //! call into UIKit / AppKit / GTK4 / Win32 imperatively.
 //!
 //! HarmonyOS doesn't fit that imperative model: ArkTS owns the UI tree, not
-//! native code. So instead of routing `App({...})` through FFI, this crate
-//! walks the HIR pre-codegen, harvests the `perry/ui` widget tree, and emits
+//! native code. So instead of routing perry/ui calls through FFI, this crate
+//! walks the HIR pre-codegen, harvests the perry/ui widget tree, and emits
 //! it as a real ArkUI `pages/Index.ets` file. The compiled `.so` then has
 //! no UI calls at all — Perry's `main()` runs once at NAPI startup for any
 //! non-UI logic, and ArkUI declaratively renders the harvested tree.
 //!
-//! Phase 2 v1 scope (this PR): handles `App({body: Text(literal)})`. Wider
-//! widget support (VStack, HStack, Button, TextField, State<T> reactivity,
-//! …) extends the `emit_widget` arm matching by widget name. Each new
-//! widget is one match arm + one ArkUI shape line.
+//! Phase 2 v1.5 scope:
+//! - `App({body: <expr>})` extraction
+//! - `Text(literal)` → `Text('lit').fontSize(20)`
+//! - `VStack([...], spacing?)` → `Column({space: <spacing>}) { ... }`
+//! - `HStack([...], spacing?)` → `Row({space: <spacing>}) { ... }`
+//! - `Button(label, onPress)` → `Button('label')` (callback dropped — see Reactivity caveat)
+//! - `TextField(placeholder, onChange)` → `TextInput({placeholder: 'hint'})`
+//! - `Toggle(label, onChange)` → label rendered as Text + ArkUI Toggle in a Row
+//! - `Slider(min, max, onChange)` → `Slider({min, max, value: min})`
+//! - `Spacer()` → `Blank()`
+//! - `Divider()` → `Divider()`
+//! - LocalGet escape: `let x = Text("hi"); App({body: x})` follows the
+//!   binding back to its init expression for any read-only top-level local.
+//! - String / numeric / boolean literal arg coverage; closure args are silently
+//!   dropped (no reactivity bridge yet).
 //!
 //! Reactivity caveat: ArkUI's `@State` / `@Link` decorators handle UI
 //! reactivity natively, but Perry's runtime `State<T>` lives in the .so
 //! and doesn't share memory with the ArkTS heap. State binding across the
 //! NAPI boundary needs a poll/push mechanism that's deferred to a later
-//! phase. Today's emitter handles static UI only.
+//! phase. Today's emitter handles static UI shapes only — Button / Toggle /
+//! Slider / TextField widgets render but their event callbacks don't fire
+//! Perry TS code yet.
 
 use anyhow::Result;
 use perry_hir::ir::{Class, Expr, Module, Stmt};
+use std::collections::HashMap;
+
+// LocalId is `u32` upstream; re-import directly so we don't carry a
+// transitive dep on perry-types just for the type alias.
+type LocalId = u32;
 
 /// Walk `module.init` for the first `App({...})` call from `perry/ui`,
 /// emit the corresponding ArkUI `pages/Index.ets`, AND **destructively
 /// strip the App call from the HIR** so the LLVM backend doesn't emit
-/// `perry_ui_app_create` / `perry_ui_app_set_body` / `perry_ui_app_run`
-/// FFI calls that would be unresolved on the OHOS target (no
-/// `perry-ui-harmonyos` crate exists — UI is rendered declaratively from
-/// the emitted `.ets`, not imperatively from native code).
+/// `perry_ui_*` FFI calls that would be unresolved on the OHOS target
+/// (no `perry-ui-harmonyos` crate exists — UI is rendered declaratively
+/// from the emitted `.ets`, not imperatively from native code).
 ///
 /// Returns `Ok(None)` if the module doesn't use `perry/ui App` (the caller
 /// should fall through to the blank EntryAbility-only stub; HIR is
 /// untouched). Returns `Ok(Some(ets_source))` for static-UI programs where
-/// we successfully harvested the widget tree (HIR has been mutated — the
-/// `App({...})` `Stmt::Expr` is replaced with `Stmt::Expr(Expr::Number(0.0))`
-/// to keep statement count stable for any debug-info indexing). Returns
-/// `Err(...)` only on internal bugs.
-///
-/// Phase 2 v1 caveat: the body walk only follows perry/ui calls **directly
-/// inline** inside `App({body: ...})`. If a user binds a widget to a local
-/// (`let t = Text("hi"); App({body: t})`), the LocalGet escape isn't
-/// followed and `t`'s nested calls survive into codegen as unresolved
-/// FFIs. Document the inline-body restriction; broader walking comes later.
+/// we successfully harvested the widget tree.
 pub fn emit_index_ets(module: &mut Module) -> Result<Option<String>> {
     // Snapshot the class table BEFORE the &mut borrow on init so we can
     // look up __AnonShape_* classes (Perry's closed-shape object-literal
     // optimization, v0.5.337+) without aliasing &mut module.
     let classes = module.classes.clone();
+    // Build a const-binding lookup for top-level `let x = <perry/ui call>;`
+    // so the Body can reference a local: `App({body: x})` finds x's init.
+    // Cloning the Stmt list is cheap relative to codegen; avoids a second
+    // mutable-borrow pass over init.
+    let bindings = collect_const_bindings(&module.init);
     let Some(body_expr) = find_and_strip_app(&mut module.init, &classes) else {
         return Ok(None);
     };
-    let widget_arkui = emit_widget(&body_expr);
+    let widget_arkui = emit_widget(&body_expr, &bindings, 0);
     Ok(Some(wrap_index_page(&widget_arkui)))
 }
 
@@ -65,17 +78,6 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<String>> {
 /// **return its body by-value**, and replace the entire statement with a
 /// no-op `Stmt::Expr(Expr::Number(0.0))`. Other statements are untouched
 /// so logic before/after `App(...)` still runs in `perryEntry.run()`.
-///
-/// Two object-literal shapes are accepted:
-///
-///  1. `Expr::Object(Vec<(String, Expr)>)` — used for spread-bearing or
-///     dynamic-key objects. Direct lookup by key.
-///  2. `Expr::New { class_name: "__AnonShape_<N>", args }` — Perry's
-///     closed-shape optimization (v0.5.337+) where `App({title: "X",
-///     body: ...})` lowers to `new __AnonShape_0("X", ...)` with field
-///     order matching the synthesized class's `fields[]` declaration.
-///     We look up the class in `module.classes`, find the index of the
-///     `body` field, and return `args[body_index]`.
 fn find_and_strip_app(init: &mut [Stmt], classes: &[Class]) -> Option<Expr> {
     for stmt in init.iter_mut() {
         if let Stmt::Expr(Expr::NativeMethodCall {
@@ -121,12 +123,51 @@ fn extract_body_field(arg: &mut Expr, classes: &[Class]) -> Option<Expr> {
     }
 }
 
+/// Snapshot read-only top-level `let x = <expr>;` so widget walks can
+/// follow `Expr::LocalGet(x)` back to the init expression. We index by
+/// LocalId rather than name because perry-hir's identifier resolution
+/// runs by id — names are debug aids only.
+///
+/// Phase 2 v1.5 only follows TOP-level inits; nested let-bindings inside
+/// blocks would need a wider analysis pass (the code path is only invoked
+/// via `App({body: x})` which itself is top-level, so the binding it
+/// references is also top-level — works for the common case).
+fn collect_const_bindings(init: &[Stmt]) -> HashMap<LocalId, Expr> {
+    let mut map = HashMap::new();
+    for stmt in init {
+        if let Stmt::Let {
+            id,
+            init: Some(expr),
+            mutable: false,
+            ..
+        } = stmt
+        {
+            map.insert(*id, expr.clone());
+        }
+    }
+    map
+}
+
+/// Resolve `Expr::LocalGet(id)` to its bound init expression if available.
+/// Returns the original expression for any non-LocalGet shape so callers
+/// can use it as a transparent identity-or-deref helper.
+fn resolve(expr: &Expr, bindings: &HashMap<LocalId, Expr>) -> Expr {
+    if let Expr::LocalGet(id) = expr {
+        if let Some(init) = bindings.get(id) {
+            return init.clone();
+        }
+    }
+    expr.clone()
+}
+
 /// Emit an ArkUI expression for a perry/ui widget call. Returns the inner
-/// `build()`-block content (no wrapping component). Unrecognized widgets
-/// degrade to a comment + a placeholder Text — never errors out, since
-/// emit-time errors would leave the user without any UI at all.
-fn emit_widget(expr: &Expr) -> String {
-    match expr {
+/// `build()`-block content (no wrapping component). `depth` controls
+/// indentation when emitting nested children (Column/Row contents).
+/// Unrecognized widgets degrade to a comment + a placeholder Text — never
+/// errors out, since emit-time errors would leave the user without any UI.
+fn emit_widget(expr: &Expr, bindings: &HashMap<LocalId, Expr>, depth: usize) -> String {
+    let resolved = resolve(expr, bindings);
+    match &resolved {
         Expr::NativeMethodCall {
             module: m,
             method,
@@ -134,8 +175,16 @@ fn emit_widget(expr: &Expr) -> String {
             ..
         } if m == "perry/ui" => match method.as_str() {
             "Text" => emit_text(args),
+            "VStack" => emit_stack("Column", args, bindings, depth),
+            "HStack" => emit_stack("Row", args, bindings, depth),
+            "Button" => emit_button(args),
+            "TextField" => emit_textfield(args),
+            "Toggle" => emit_toggle(args),
+            "Slider" => emit_slider(args),
+            "Spacer" => "Blank()".to_string(),
+            "Divider" => "Divider()".to_string(),
             other => format!(
-                "// unsupported perry/ui widget: {} (Phase 2 v1 supports Text only)\n\
+                "// unsupported perry/ui widget: {} (Phase 2 v1.5)\n\
                  Text('[unsupported: {}]').fontSize(16).fontColor('#888888')",
                 other, other
             ),
@@ -147,8 +196,8 @@ fn emit_widget(expr: &Expr) -> String {
     }
 }
 
-/// `Text("hello")` → `Text('hello').fontSize(20)`. Non-string-literal args
-/// fall back to a placeholder so unsupported shapes don't break the build.
+/// `Text("hi")` → `Text('hi').fontSize(20)`. Non-string-literal args fall
+/// back to a placeholder so unsupported shapes don't break the build.
 fn emit_text(args: &[Expr]) -> String {
     if let Some(Expr::String(s)) = args.first() {
         format!("Text({}).fontSize(20)", arkts_string_lit(s))
@@ -157,11 +206,112 @@ fn emit_text(args: &[Expr]) -> String {
     }
 }
 
+/// VStack/HStack: detect (Array, ...) vs (Number, Array, ...) signatures.
+/// Recurse into the children array via `emit_widget`. Spacing prop
+/// becomes `Column({space: <n>})` / `Row({space: <n>})`. ArkUI's default
+/// of 0 makes spacing-less stacks look cramped, so we default to 8 which
+/// matches the perry-ui-macos default.
+fn emit_stack(
+    arkui_kind: &str,
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+) -> String {
+    // First-arg shape detection — same logic as lower_call/native.rs:91.
+    let (spacing, children_idx) = match args.first() {
+        Some(Expr::Array(_)) => (8.0, 0),
+        Some(Expr::Number(n)) => (*n, 1),
+        Some(Expr::Integer(n)) => (*n as f64, 1),
+        _ => (8.0, 0),
+    };
+
+    let children = match args.get(children_idx) {
+        Some(Expr::Array(items)) => items
+            .iter()
+            .map(|child| emit_widget(child, bindings, depth + 1))
+            .collect::<Vec<_>>(),
+        Some(_) => vec![format!(
+            "// children arg wasn't an array literal — Phase 2 v1.5 limitation\n\
+             Text('[non-array children]').fontSize(16).fontColor('#888888')"
+        )],
+        None => vec![],
+    };
+
+    let inner_indent = "    ".repeat(depth + 1);
+    let outer_indent = "    ".repeat(depth);
+
+    let body = if children.is_empty() {
+        String::new()
+    } else {
+        children
+            .iter()
+            .map(|c| {
+                c.lines()
+                    .map(|line| format!("{}{}", inner_indent, line))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        "{kind}({{ space: {space} }}) {{\n{body}\n{outer}}}",
+        kind = arkui_kind,
+        space = fmt_num(spacing),
+        body = body,
+        outer = outer_indent,
+    )
+}
+
+/// `Button("label", onPress)` → `Button('label')`. The closure is dropped
+/// — ArkUI's `.onClick(...)` would need a way to call back into Perry's
+/// .so, which we don't have without a NAPI reactivity bridge.
+fn emit_button(args: &[Expr]) -> String {
+    let label = first_string_arg(args).unwrap_or_else(|| "Button".to_string());
+    format!("Button({}).fontSize(16)", arkts_string_lit(&label))
+}
+
+/// `TextField(placeholder, onChange)` → `TextInput({placeholder: 'hint'})`.
+/// Closure dropped (same reactivity-bridge caveat as Button).
+fn emit_textfield(args: &[Expr]) -> String {
+    let placeholder = first_string_arg(args).unwrap_or_default();
+    format!(
+        "TextInput({{ placeholder: {} }})",
+        arkts_string_lit(&placeholder)
+    )
+}
+
+/// `Toggle(label, onChange)` → label as a sibling Text + ArkUI's Toggle in
+/// a Row. Visual approximation; reactivity bridge is the future work.
+fn emit_toggle(args: &[Expr]) -> String {
+    let label = first_string_arg(args).unwrap_or_default();
+    if label.is_empty() {
+        "Toggle({ type: ToggleType.Switch, isOn: false })".to_string()
+    } else {
+        format!(
+            "Row({{ space: 8 }}) {{\n\
+             \x20\x20\x20\x20Text({}).fontSize(16)\n\
+             \x20\x20\x20\x20Toggle({{ type: ToggleType.Switch, isOn: false }})\n\
+             }}",
+            arkts_string_lit(&label)
+        )
+    }
+}
+
+/// `Slider(min, max, onChange)` → `Slider({min, max, value: min, step: 1})`.
+fn emit_slider(args: &[Expr]) -> String {
+    let min = numeric_arg(args, 0).unwrap_or(0.0);
+    let max = numeric_arg(args, 1).unwrap_or(100.0);
+    format!(
+        "Slider({{ value: {min}, min: {min}, max: {max}, step: 1, style: SliderStyle.OutSet }})",
+        min = fmt_num(min),
+        max = fmt_num(max),
+    )
+}
+
 /// Wrap a widget body expression in a complete ArkUI `@Entry @Component
-/// struct Index { build() { Column() { ... } } }` page. The `Column()`
-/// + width/height/justify wrapping matches DevEco's stock Index.ets so
-/// the emitted page lays out identically until a user supplies their own
-/// container widget.
+/// struct Index { build() { Column() { ... } } }` page.
 fn wrap_index_page(widget_body: &str) -> String {
     let indented = widget_body
         .lines()
@@ -188,6 +338,37 @@ fn wrap_index_page(widget_body: &str) -> String {
          }}\n",
         body = indented
     )
+}
+
+// ----- helpers -----
+
+/// First arg matched as a string literal. Returns None if absent or
+/// non-literal so callers can pick a sensible default.
+fn first_string_arg(args: &[Expr]) -> Option<String> {
+    match args.first() {
+        Some(Expr::String(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// Get arg at `idx` as a Number, supporting both Integer and Number HIR
+/// variants since perry-hir distinguishes them.
+fn numeric_arg(args: &[Expr], idx: usize) -> Option<f64> {
+    match args.get(idx) {
+        Some(Expr::Number(n)) => Some(*n),
+        Some(Expr::Integer(n)) => Some(*n as f64),
+        _ => None,
+    }
+}
+
+/// Format a float as ArkTS source. Whole numbers emit without a decimal
+/// (`8`, not `8.0`) to match ArkUI's idiomatic style.
+fn fmt_num(n: f64) -> String {
+    if n == n.trunc() && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else {
+        format!("{}", n)
+    }
 }
 
 /// Escape a Rust string into an ArkTS single-quoted string literal.
@@ -235,6 +416,26 @@ mod tests {
         }
     }
 
+    fn nmc(method: &str, args: Vec<Expr>) -> Expr {
+        Expr::NativeMethodCall {
+            module: "perry/ui".to_string(),
+            class_name: None,
+            object: None,
+            method: method.to_string(),
+            args,
+        }
+    }
+
+    fn app_with_body(body: Expr) -> Stmt {
+        Stmt::Expr(Expr::NativeMethodCall {
+            module: "perry/ui".to_string(),
+            class_name: None,
+            object: None,
+            method: "App".to_string(),
+            args: vec![Expr::Object(vec![("body".to_string(), body)])],
+        })
+    }
+
     #[test]
     fn emits_none_for_empty_module() {
         let mut m = empty_module();
@@ -242,57 +443,163 @@ mod tests {
     }
 
     #[test]
-    fn emits_text_widget_and_strips_app_call() {
+    fn text_strips_app_call() {
         let mut m = empty_module();
-        m.init.push(Stmt::Expr(Expr::NativeMethodCall {
-            module: "perry/ui".to_string(),
-            class_name: None,
-            object: None,
-            method: "App".to_string(),
-            args: vec![Expr::Object(vec![(
-                "body".to_string(),
-                Expr::NativeMethodCall {
-                    module: "perry/ui".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: "Text".to_string(),
-                    args: vec![Expr::String("hello phase 2".to_string())],
-                },
-            )])],
-        }));
-        let ets = emit_index_ets(&mut m).unwrap().expect("expected Index.ets");
-        assert!(ets.contains("@Entry"));
-        assert!(ets.contains("@Component"));
-        assert!(ets.contains("struct Index"));
-        assert!(ets.contains("Text('hello phase 2')"));
-        assert!(ets.contains(".fontSize(20)"));
-        // App call was stripped — the statement is now a no-op number expr
-        assert_eq!(m.init.len(), 1);
+        m.init
+            .push(app_with_body(nmc("Text", vec![Expr::String("hi".into())])));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("Text('hi').fontSize(20)"));
         assert!(matches!(m.init[0], Stmt::Expr(Expr::Number(_))));
+    }
+
+    #[test]
+    fn vstack_with_text_children() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "VStack",
+            vec![Expr::Array(vec![
+                nmc("Text", vec![Expr::String("a".into())]),
+                nmc("Text", vec![Expr::String("b".into())]),
+            ])],
+        )));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("Column({ space: 8 })"));
+        assert!(ets.contains("Text('a').fontSize(20)"));
+        assert!(ets.contains("Text('b').fontSize(20)"));
+    }
+
+    #[test]
+    fn vstack_with_explicit_spacing() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "VStack",
+            vec![
+                Expr::Number(16.0),
+                Expr::Array(vec![nmc("Text", vec![Expr::String("a".into())])]),
+            ],
+        )));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("Column({ space: 16 })"));
+    }
+
+    #[test]
+    fn hstack_emits_row() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "HStack",
+            vec![Expr::Array(vec![nmc("Spacer", vec![])])],
+        )));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("Row({ space: 8 })"));
+        assert!(ets.contains("Blank()"));
+    }
+
+    #[test]
+    fn button_label_only() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Button",
+            vec![
+                Expr::String("Save".into()),
+                Expr::Number(0.0), // would be a closure in real code; we ignore it
+            ],
+        )));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("Button('Save').fontSize(16)"));
+    }
+
+    #[test]
+    fn textfield_placeholder() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "TextField",
+            vec![Expr::String("Search…".into()), Expr::Number(0.0)],
+        )));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("TextInput({ placeholder: 'Search…' })"));
+    }
+
+    #[test]
+    fn toggle_with_label_emits_row() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Toggle",
+            vec![Expr::String("Notifications".into()), Expr::Number(0.0)],
+        )));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("Row({ space: 8 })"));
+        assert!(ets.contains("Text('Notifications')"));
+        assert!(ets.contains("Toggle({ type: ToggleType.Switch, isOn: false })"));
+    }
+
+    #[test]
+    fn slider_min_max() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Slider",
+            vec![
+                Expr::Number(0.0),
+                Expr::Number(100.0),
+                Expr::Number(0.0), // would be closure
+            ],
+        )));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("min: 0"));
+        assert!(ets.contains("max: 100"));
+    }
+
+    #[test]
+    fn divider_no_args() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc("Divider", vec![])));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("Divider()"));
+    }
+
+    #[test]
+    fn nested_vstack_in_hstack() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "VStack",
+            vec![Expr::Array(vec![nmc(
+                "HStack",
+                vec![Expr::Array(vec![
+                    nmc("Text", vec![Expr::String("L".into())]),
+                    nmc("Text", vec![Expr::String("R".into())]),
+                ])],
+            )])],
+        )));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("Column({ space: 8 })"));
+        assert!(ets.contains("Row({ space: 8 })"));
+        assert!(ets.contains("Text('L')"));
+        assert!(ets.contains("Text('R')"));
+    }
+
+    #[test]
+    fn local_get_escape_follows_const_binding() {
+        let mut m = empty_module();
+        // Simulate: const t = Text("via let"); App({body: t});
+        m.init.push(Stmt::Let {
+            id: 7,
+            name: "t".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(nmc("Text", vec![Expr::String("via let".into())])),
+        });
+        m.init.push(app_with_body(Expr::LocalGet(7)));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("Text('via let')"));
     }
 
     #[test]
     fn unsupported_widget_degrades_with_comment_not_error() {
         let mut m = empty_module();
-        m.init.push(Stmt::Expr(Expr::NativeMethodCall {
-            module: "perry/ui".to_string(),
-            class_name: None,
-            object: None,
-            method: "App".to_string(),
-            args: vec![Expr::Object(vec![(
-                "body".to_string(),
-                Expr::NativeMethodCall {
-                    module: "perry/ui".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: "VStack".to_string(),
-                    args: vec![],
-                },
-            )])],
-        }));
-        let ets = emit_index_ets(&mut m).unwrap().expect("expected Index.ets");
-        assert!(ets.contains("// unsupported perry/ui widget: VStack"));
-        assert!(ets.contains("Text('[unsupported: VStack]')"));
+        m.init
+            .push(app_with_body(nmc("Picker", vec![Expr::Array(vec![])])));
+        let ets = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(ets.contains("// unsupported perry/ui widget: Picker"));
+        assert!(ets.contains("Text('[unsupported: Picker]')"));
     }
 
     #[test]
@@ -301,5 +608,13 @@ mod tests {
         assert_eq!(arkts_string_lit("he's there"), "'he\\'s there'");
         assert_eq!(arkts_string_lit("a\\b"), "'a\\\\b'");
         assert_eq!(arkts_string_lit("line1\nline2"), "'line1\\nline2'");
+    }
+
+    #[test]
+    fn fmt_num_drops_decimal_for_whole_numbers() {
+        assert_eq!(fmt_num(8.0), "8");
+        assert_eq!(fmt_num(16.0), "16");
+        assert_eq!(fmt_num(1.5), "1.5");
+        assert_eq!(fmt_num(-3.0), "-3");
     }
 }
