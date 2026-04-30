@@ -1009,6 +1009,8 @@ pub(super) fn build_and_run_link(
             .arg("UserNotifications") // UNUserNotificationCenter (perry/system notificationSend)
             .arg("-framework")
             .arg("CoreLocation") // CLCircularRegion for UNLocationNotificationTrigger (#96)
+            .arg("-framework")
+            .arg("MediaPlayer") // perry/media — Now Playing + Remote Command Center
             .arg("-liconv")
             .arg("-lresolv")
             .arg("-lobjc")
@@ -1038,6 +1040,8 @@ pub(super) fn build_and_run_link(
             .arg("CoreMedia")
             .arg("-framework")
             .arg("CoreVideo")
+            .arg("-framework")
+            .arg("MediaPlayer") // perry/media — Now Playing + Remote Command Center
             .arg("-liconv")
             .arg("-lresolv")
             .arg("-lobjc")
@@ -1064,6 +1068,8 @@ pub(super) fn build_and_run_link(
             .arg("GameController")
             .arg("-framework")
             .arg("Metal")
+            .arg("-framework")
+            .arg("MediaPlayer") // perry/media — Now Playing + Siri Remote
             .arg("-liconv")
             .arg("-lresolv")
             .arg("-lobjc")
@@ -1357,6 +1363,13 @@ pub(super) fn build_and_run_link(
                     cmd.arg("-framework").arg("Metal");
                     cmd.arg("-framework").arg("IOKit");
                     cmd.arg("-framework").arg("DiskArbitration"); // needed by CoreGraphics
+                    // perry/media — AVPlayer is in AVFoundation (already linked
+                    // above). CoreMedia provides CMTime + CMTimeGetSeconds /
+                    // CMTimeMakeWithSeconds used for seek + position. MediaPlayer
+                    // provides MPNowPlayingInfoCenter / MPRemoteCommandCenter /
+                    // MPMediaItemArtwork (lock screen + Touch Bar + Now Playing).
+                    cmd.arg("-framework").arg("CoreMedia");
+                    cmd.arg("-framework").arg("MediaPlayer");
                 }
             }
 

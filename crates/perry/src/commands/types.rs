@@ -23,6 +23,7 @@ const PERRY_UI_DTS: &str = include_str!("../../../../types/perry/ui/index.d.ts")
 const PERRY_THREAD_DTS: &str = include_str!("../../../../types/perry/thread/index.d.ts");
 const PERRY_I18N_DTS: &str = include_str!("../../../../types/perry/i18n/index.d.ts");
 const PERRY_SYSTEM_DTS: &str = include_str!("../../../../types/perry/system/index.d.ts");
+const PERRY_MEDIA_DTS: &str = include_str!("../../../../types/perry/media/index.d.ts");
 
 /// Write Perry type stubs into `<project>/.perry/types/perry/`.
 /// Always overwrites — these are generated files.
@@ -34,6 +35,7 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
         ("thread", PERRY_THREAD_DTS),
         ("i18n", PERRY_I18N_DTS),
         ("system", PERRY_SYSTEM_DTS),
+        ("media", PERRY_MEDIA_DTS),
     ];
 
     // Each sub-module gets index.d.ts
@@ -44,7 +46,7 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
     }
 
     if !quiet {
-        println!("  Created .perry/types/ type stubs (ui, thread, i18n, system)");
+        println!("  Created .perry/types/ type stubs (ui, thread, i18n, system, media)");
     }
 
     Ok(())

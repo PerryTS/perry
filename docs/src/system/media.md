@@ -1,0 +1,145 @@
+# Media Playback
+
+The `perry/media` module provides streaming media playback — HTTP/HTTPS
+audio URLs (Subsonic, Icecast, plain MP3/AAC, HLS m3u8), `file://` paths,
+lock-screen / Now Playing metadata, and remote-command (Siri Remote /
+Touch Bar / Control Center) integration.
+
+## Quick start
+
+```typescript
+import {
+  createPlayer,
+  play,
+  pause,
+  setVolume,
+  onStateChange,
+  onTimeUpdate,
+  setNowPlaying,
+} from "perry/media";
+
+const player = createPlayer("https://example.com/track.mp3");
+if (player === 0) {
+  console.error("createPlayer failed");
+} else {
+  setVolume(player, 0.8);
+  setNowPlaying(player, "Track Title", "Artist", "Album", "");
+
+  onStateChange(player, (state) => console.log("state:", state));
+  onTimeUpdate(player, (cur, dur) => console.log(`${cur}/${dur}s`));
+
+  play(player); // begins (or resumes) once buffered
+}
+```
+
+## API surface
+
+| Function | Returns | Notes |
+| --- | --- | --- |
+| `createPlayer(url)` | handle (1+) or `0` on failure | HTTP/HTTPS or `file://` |
+| `play(handle)` | void | Resumes if paused |
+| `pause(handle)` | void | Position preserved |
+| `stop(handle)` | void | Resets position to 0 |
+| `seek(handle, seconds)` | void | |
+| `setVolume(handle, volume)` | void | 0.0–1.0, clamped |
+| `setRate(handle, rate)` | void | 1.0 = normal; Apple supports 0.5–2.0 |
+| `getCurrentTime(handle)` | seconds | |
+| `getDuration(handle)` | seconds | `0` if live / loading |
+| `getState(handle)` | `MediaState` | See states below |
+| `isPlaying(handle)` | boolean | |
+| `onStateChange(h, cb)` | void | Fires on every transition |
+| `onTimeUpdate(h, cb)` | void | ~10 Hz while playing |
+| `setNowPlaying(h, title, artist, album, artworkUrl)` | void | All strings; pass `""` for unknown |
+| `destroy(handle)` | void | Frees resources |
+
+## States
+
+`MediaState` is one of:
+
+- `idle` — never started
+- `loading` — buffering / fetching headers
+- `ready` — first chunk decoded, ready to `play()`
+- `playing` — actively rendering
+- `paused` — paused (position preserved)
+- `ended` — reached end of stream
+- `error` — irrecoverable failure (network, codec, …)
+
+### `ended` reliability
+
+`ended` is fired both from the platform's native end-of-playback signal
+**and** from a `currentTime ≈ duration` fallback. Per [issue #351
+discussion](https://github.com/PerryTS/perry/issues/351), the native
+event has been historically flaky on the web / Chromecast — the same
+belt-and-braces is cheap to apply on every backend so a `perry/media`
+consumer can rely on `ended` firing once per track.
+
+The fallback engages only after `play()` has been called and `duration`
+is known (live streams report `+inf`, which sanitises to `0` and disables
+the fallback). Window: 0.25s before duration. The native signal sets the
+flag first when it works; the fallback sets the same flag on the polling
+tick if the signal hasn't arrived.
+
+## Platform implementations
+
+| Platform | Backend | Status |
+| --- | --- | --- |
+| macOS | AVPlayer + MPNowPlayingInfoCenter + MPRemoteCommandCenter | **Implemented** |
+| iOS | AVPlayer + AVAudioSession Playback + UIImage artwork | **Implemented** |
+| tvOS | AVPlayer + Siri Remote play/pause/skip | **Implemented** |
+| visionOS | AVPlayer + UIImage artwork | **Implemented** |
+| Android | `android.media.MediaPlayer` via JNI + `MediaSessionCompat` | Stub (issue #351 follow-up) |
+| GTK4 / Linux | `gst::ElementFactory::make("playbin")` + MPRIS | Stub (issue #351 follow-up) |
+| Windows | `IMFMediaEngine` + `SystemMediaTransportControls` | Stub (issue #351 follow-up) |
+| watchOS | AVPlayer (limited; `WKApplication` Now Playing has a different shape) | Stub |
+| HarmonyOS | `@ohos.multimedia.media.AVPlayer` via napi | Stub |
+| Web | `<audio>` element + Media Session API | Stub |
+
+Stub platforms link cleanly against the same FFI surface — code that
+imports `perry/media` compiles on every target. `createPlayer` returns
+`0` on a stub backend so `if (player === 0)` is the canonical "feature
+not available here" check.
+
+## Now Playing on Apple platforms
+
+Apple's MPNowPlayingInfoCenter is a process-wide singleton — the most
+recent `setNowPlaying` call wins. For a single-player app (Subsonic
+client, podcast player) this matches user expectation. The
+MPRemoteCommandCenter handlers route `play` / `pause` / `togglePlayPause`
+events to the **first live player handle** — multi-player apps that
+need an explicit "active player" should manage that themselves.
+
+`artworkUrl` accepts:
+
+- `file://` paths — loaded synchronously via NSImage / UIImage
+- `https://` URLs — fetched synchronously via NSData(contentsOf:) and
+  wrapped in UIImage. The synchronous fetch is acceptable for a one-off
+  artwork load (the MPNowPlayingInfoCenter dict is consumed
+  synchronously when set).
+
+## Subsonic example
+
+```typescript
+import { createPlayer, play, setNowPlaying, onStateChange } from "perry/media";
+
+function streamUrl(serverUrl: string, user: string, pass: string, songId: string): string {
+  const params = new URLSearchParams({
+    u: user, p: pass, v: "1.16.1", c: "PerryClient", id: songId, format: "mp3",
+  });
+  return `${serverUrl}/rest/stream?${params.toString()}`;
+}
+
+const player = createPlayer(streamUrl("https://music.example.com", "alice", "secret", "12345"));
+setNowPlaying(player, "All These Things That I've Done", "The Killers", "Hot Fuss",
+              "https://music.example.com/rest/getCoverArt?id=12345&u=alice&p=secret&v=1.16.1&c=PerryClient");
+onStateChange(player, (state) => {
+  if (state === "ended") {
+    // queue.next() ...
+  }
+});
+play(player);
+```
+
+## Next steps
+
+- [Audio Capture](audio.md) — Microphone input + dB metering
+- [Overview](overview.md) — All system APIs

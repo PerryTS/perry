@@ -26,9 +26,9 @@ use super::{
     apply_inline_style, collect_closure_introduced_ids, extract_options_fields,
     find_outer_writes_stmt, get_raw_string_ptr, lower_fetch_native_method,
     lower_native_module_dispatch, lower_notification_schedule, lower_perry_ui_table_call,
-    native_module_lookup, perry_i18n_table_lookup, perry_plugin_instance_method_lookup,
-    perry_plugin_table_lookup, perry_system_table_lookup, perry_ui_instance_method_lookup,
-    perry_ui_table_lookup, perry_updater_table_lookup,
+    native_module_lookup, perry_i18n_table_lookup, perry_media_table_lookup,
+    perry_plugin_instance_method_lookup, perry_plugin_table_lookup, perry_system_table_lookup,
+    perry_ui_instance_method_lookup, perry_ui_table_lookup, perry_updater_table_lookup,
 };
 
 pub(crate) fn lower_native_method_call(
@@ -370,6 +370,22 @@ pub(crate) fn lower_native_method_call(
         if let Some(sig) = perry_system_table_lookup(method) {
             return lower_perry_ui_table_call(ctx, sig, args);
         }
+    }
+
+    // perry/media dispatch: createPlayer, play, pause, seek, setVolume,
+    // onStateChange, onTimeUpdate, setNowPlaying, destroy. Streaming
+    // media playback backed by AVPlayer (Apple), MediaPlayer/JNI
+    // (Android), GStreamer (GTK4/Linux), Media Foundation (Windows).
+    if module == "perry/media" && object.is_none() {
+        if let Some(sig) = perry_media_table_lookup(method) {
+            return lower_perry_ui_table_call(ctx, sig, args);
+        }
+        bail!(
+            "perry/media: '{}' is not a known function (args: {}). \
+             Check types/perry/media/index.d.ts for the supported API surface.",
+            method,
+            args.len()
+        );
     }
 
     // perry/i18n format wrappers: Currency, Percent, FormatNumber, ShortDate,

@@ -212,6 +212,15 @@ pub(super) fn collect_modules(
             if import.source == "perry/ui" {
                 ctx.needs_ui = true;
             }
+            // perry/media (issue #351) lives in the platform UI crates
+            // (libperry_ui_macos.a etc.) because AVPlayer / MediaPlayer /
+            // GStreamer / Media Foundation are tightly coupled to the
+            // same per-platform code that hosts the widget tree. So a
+            // perry/media import triggers UI lib linking even when the
+            // program uses no widgets.
+            if import.source == "perry/media" {
+                ctx.needs_ui = true;
+            }
             if import.source == "perry/plugin" {
                 ctx.needs_plugins = true;
             }

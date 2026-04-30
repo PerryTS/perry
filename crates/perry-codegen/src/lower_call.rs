@@ -19,7 +19,8 @@ use crate::lower_array_method::lower_array_method;
 // pre-refactor type names used throughout this file.
 use perry_dispatch::{
     ArgKind as UiArgKind, MethodRow as UiSig, ReturnKind as UiReturnKind, PERRY_I18N_TABLE,
-    PERRY_SYSTEM_TABLE, PERRY_UI_INSTANCE_TABLE, PERRY_UI_TABLE, PERRY_UPDATER_TABLE,
+    PERRY_MEDIA_TABLE, PERRY_SYSTEM_TABLE, PERRY_UI_INSTANCE_TABLE, PERRY_UI_TABLE,
+    PERRY_UPDATER_TABLE,
 };
 
 // Tier 2.2 (v0.5.333-339): incremental extraction of `lower_call.rs`
@@ -3820,6 +3821,18 @@ pub(super) fn perry_ui_instance_method_lookup(method: &str) -> Option<&'static U
 
 pub(super) fn perry_system_table_lookup(method: &str) -> Option<&'static UiSig> {
     PERRY_SYSTEM_TABLE.iter().find(|s| s.method == method)
+}
+
+// =============================================================================
+// perry/media dispatch table
+// =============================================================================
+
+/// Maps the TS exports from `types/perry/media/index.d.ts` (createPlayer,
+/// play, pause, stop, seek, setVolume, setRate, getCurrentTime, getDuration,
+/// getState, isPlaying, onStateChange, onTimeUpdate, setNowPlaying, destroy)
+/// to their `perry_media_*` runtime symbols.
+pub(super) fn perry_media_table_lookup(method: &str) -> Option<&'static UiSig> {
+    PERRY_MEDIA_TABLE.iter().find(|s| s.method == method)
 }
 
 // =============================================================================

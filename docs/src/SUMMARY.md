@@ -88,6 +88,7 @@
 - [Keychain](system/keychain.md)
 - [Notifications](system/notifications.md)
 - [Audio Capture](system/audio.md)
+- [Media Playback](system/media.md)
 - [Other](system/other.md)
 
 # Widgets
