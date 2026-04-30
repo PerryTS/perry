@@ -262,8 +262,17 @@ fn emit_widget(
                 "Section" => emit_section(
                     args, bindings, depth, callbacks, text_slots, arkts_locals, classes,
                 ),
+                // Phase 2 v12 widgets.
+                "Tabs" => emit_tabs(
+                    args, bindings, depth, callbacks, text_slots, arkts_locals, classes,
+                ),
+                "Modal" | "Dialog" => emit_modal(args, callbacks),
+                "Menu" | "ContextMenu" => emit_menu(args, callbacks),
+                "Grid" => emit_grid(
+                    args, bindings, depth, callbacks, text_slots, arkts_locals, classes,
+                ),
                 other => format!(
-                    "// unsupported perry/ui widget: {} (Phase 2 v4)\n\
+                    "// unsupported perry/ui widget: {} (Phase 2 v12)\n\
                      Text('[unsupported: {}]').fontSize(16).fontColor('#888888')",
                     other, other
                 ),
@@ -1196,6 +1205,220 @@ fn emit_section(
 }
 
 /// Wrap a widget body expression in a complete ArkUI `@Entry @Component
+// ----- Phase 2 v12 widgets -----
+
+/// `Tabs([{label: "A", body: ...}, {label: "B", body: ...}])` →
+/// ArkUI `Tabs() { TabContent() {...}.tabBar('A'); TabContent() {...}.tabBar('B') }`.
+/// Each tab's body harvests like a normal sub-widget tree. Closure-bearing
+/// children compose with the v2 callback registry transparently.
+#[allow(clippy::too_many_arguments)]
+fn emit_tabs(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+    text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+) -> String {
+    let tab_specs: Vec<&Expr> = match args.first() {
+        Some(Expr::Array(items)) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+    let inner_indent = "    ".repeat(depth + 1);
+    let outer_indent = "    ".repeat(depth);
+    let tab_blocks: Vec<String> = tab_specs
+        .iter()
+        .map(|spec| {
+            // Each spec is `{label: string, body: Widget}`. Handle both
+            // open Object and closed-shape New, same pattern as styles.
+            let pairs: Option<Vec<(String, Expr)>> = match spec {
+                Expr::Object(props) => Some(props.clone()),
+                Expr::New {
+                    class_name, args, ..
+                } if class_name.starts_with("__AnonShape_") => {
+                    classes.iter().find(|c| &c.name == class_name).map(|cls| {
+                        cls.fields
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, f)| args.get(i).map(|a| (f.name.clone(), a.clone())))
+                            .collect()
+                    })
+                }
+                _ => None,
+            };
+            let Some(pairs) = pairs else {
+                return format!(
+                    "{ind}// tab spec wasn't an object\n\
+                     {ind}TabContent() {{\n\
+                     {ind}    Text('[invalid tab]').fontSize(16)\n\
+                     {ind}}}.tabBar('?')",
+                    ind = inner_indent
+                );
+            };
+            let label = pairs
+                .iter()
+                .find(|(k, _)| k == "label")
+                .and_then(|(_, v)| match v {
+                    Expr::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "Tab".to_string());
+            let body = pairs
+                .iter()
+                .find(|(k, _)| k == "body")
+                .map(|(_, v)| {
+                    emit_widget(
+                        v,
+                        bindings,
+                        depth + 2,
+                        callbacks,
+                        text_slots,
+                        arkts_locals,
+                        classes,
+                    )
+                })
+                .unwrap_or_else(|| "Text('[empty tab]').fontSize(16)".to_string());
+            // Indent the body inside TabContent { ... }.
+            let body_indent = "    ".repeat(depth + 2);
+            let body_indented = body
+                .lines()
+                .map(|l| format!("{}{}", body_indent, l))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "{ind}TabContent() {{\n\
+                 {body}\n\
+                 {ind}}}.tabBar({lbl})",
+                ind = inner_indent,
+                body = body_indented,
+                lbl = arkts_string_lit(&label),
+            )
+        })
+        .collect();
+    let body = tab_blocks.join("\n");
+    format!(
+        "Tabs() {{\n\
+         {body}\n\
+         {outer}}}",
+        body = body,
+        outer = outer_indent,
+    )
+}
+
+/// `Modal(title, body, [{label, action}])` → emits a small wrapper widget.
+/// Real ArkUI `AlertDialog.show({...})` is fired imperatively; harvest-time
+/// emission can only stage the dialog config. Phase 2 v12 emits a
+/// placeholder Text + comment documenting the runtime-side wiring (a
+/// proper `showDialog(...)` runtime FFI is the v12.5 follow-up).
+fn emit_modal(_args: &[Expr], _callbacks: &mut Vec<Expr>) -> String {
+    "// Modal: configure with `showDialog(...)` from a closure body \
+     (Phase 2 v12.5 — needs runtime FFI bridge to AlertDialog.show)\n\
+     Text('[Modal — call showDialog() instead]').fontSize(16).fontColor('#888888')"
+        .to_string()
+}
+
+/// `Menu([{label, action}])` → ArkUI menu shape. ArkUI's `.bindMenu(...)` is
+/// a modifier on a triggering widget, not a standalone widget. Phase 2 v12
+/// emits the menu as a `Column { Button(label) }` for each item — visible
+/// + functional via the v2 callback registry — and the user can wrap it
+/// in any container they want. Real `.bindMenu()` modifier integration is
+/// v12.5.
+fn emit_menu(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
+    let items: Vec<&Expr> = match args.first() {
+        Some(Expr::Array(items)) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+    let buttons: Vec<String> = items
+        .iter()
+        .map(|item| {
+            let pairs: Option<Vec<(String, Expr)>> = match item {
+                Expr::Object(props) => Some(props.clone()),
+                _ => None,
+            };
+            let Some(pairs) = pairs else {
+                return "Text('[invalid menu item]').fontSize(14).fontColor('#888888')".to_string();
+            };
+            let label = pairs
+                .iter()
+                .find(|(k, _)| k == "label")
+                .and_then(|(_, v)| match v {
+                    Expr::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "Item".to_string());
+            let action = pairs.iter().find(|(k, _)| k == "action").map(|(_, v)| v);
+            // Reuse Button's emit shape so action closures register
+            // correctly via the v2 callback pipeline.
+            let pseudo_args: Vec<Expr> = vec![Expr::String(label.clone()), action.cloned().unwrap_or(Expr::Number(0.0))];
+            emit_button(&pseudo_args, callbacks)
+        })
+        .collect();
+    format!(
+        "Column({{ space: 4 }}) {{\n    {}\n}}",
+        buttons.join("\n    "),
+    )
+}
+
+/// `Grid(columns, items)` → ArkUI `Grid() { GridItem() {...} }` with
+/// `.columnsTemplate('1fr 1fr ...')` for the column count.
+#[allow(clippy::too_many_arguments)]
+fn emit_grid(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+    text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+) -> String {
+    let columns = numeric_arg(args, 0).unwrap_or(2.0) as i64;
+    let columns = columns.clamp(1, 12);
+    let template = (0..columns)
+        .map(|_| "1fr")
+        .collect::<Vec<_>>()
+        .join(" ");
+    let items: Vec<&Expr> = match args.get(1) {
+        Some(Expr::Array(items)) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+    let inner_indent = "    ".repeat(depth + 1);
+    let outer_indent = "    ".repeat(depth);
+    let grid_items: Vec<String> = items
+        .iter()
+        .map(|child| {
+            let body = emit_widget(
+                child,
+                bindings,
+                depth + 2,
+                callbacks,
+                text_slots,
+                arkts_locals,
+                classes,
+            );
+            let body_indent = "    ".repeat(depth + 2);
+            let body_indented = body
+                .lines()
+                .map(|l| format!("{}{}", body_indent, l))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "{ind}GridItem() {{\n{body}\n{ind}}}",
+                ind = inner_indent,
+                body = body_indented,
+            )
+        })
+        .collect();
+    format!(
+        "Grid() {{\n\
+         {body}\n\
+         {outer}}}.columnsTemplate('{template}')",
+        body = grid_items.join("\n"),
+        outer = outer_indent,
+        template = template,
+    )
+}
+
 /// struct Index { build() { Column() { ... } } }` page.
 ///
 /// The leading imports make `perryEntry.invokeCallback` (Phase 2 v2),
@@ -1847,6 +2070,86 @@ mod tests {
         assert!(r.ets_source.contains("ForEach(['a', 'b', 'c'], (__item: any)"));
         // Body resolves `LocalGet(item_param.id)` → __item.
         assert!(r.ets_source.contains("Text(__item)"));
+    }
+
+    #[test]
+    // ----- Phase 2 v12: Tabs / Modal / Menu / Grid -----
+
+    #[test]
+    fn tabs_emits_tabcontent_per_spec() {
+        // Tabs([{label: "Home", body: Text("home content")}, {label: "Settings", body: Text("settings")}])
+        let mut m = empty_module();
+        let tab1 = Expr::Object(vec![
+            ("label".into(), Expr::String("Home".into())),
+            ("body".into(), nmc("Text", vec![Expr::String("home content".into())])),
+        ]);
+        let tab2 = Expr::Object(vec![
+            ("label".into(), Expr::String("Settings".into())),
+            ("body".into(), nmc("Text", vec![Expr::String("settings".into())])),
+        ]);
+        m.init.push(app_with_body(nmc("Tabs", vec![Expr::Array(vec![tab1, tab2])])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Tabs() {"));
+        assert!(r.ets_source.contains(".tabBar('Home')"));
+        assert!(r.ets_source.contains(".tabBar('Settings')"));
+        assert!(r.ets_source.contains("Text('home content')"));
+        assert!(r.ets_source.contains("Text('settings')"));
+    }
+
+    #[test]
+    fn menu_emits_buttons_per_item() {
+        let mut m = empty_module();
+        let item1 = Expr::Object(vec![
+            ("label".into(), Expr::String("Edit".into())),
+            ("action".into(), closure_stub()),
+        ]);
+        let item2 = Expr::Object(vec![
+            ("label".into(), Expr::String("Delete".into())),
+            ("action".into(), closure_stub()),
+        ]);
+        m.init.push(app_with_body(nmc("Menu", vec![Expr::Array(vec![item1, item2])])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Button('Edit')"));
+        assert!(r.ets_source.contains("Button('Delete')"));
+        // Both action closures should register (slot 0 + slot 1).
+        assert!(r.ets_source.contains("perryEntry.invokeCallback(0)"));
+        assert!(r.ets_source.contains("perryEntry.invokeCallback(1)"));
+        assert_eq!(r.callbacks.len(), 2);
+    }
+
+    #[test]
+    fn grid_emits_columns_template_and_griditems() {
+        // Grid(3, [Text("a"), Text("b"), Text("c")])
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Grid",
+            vec![
+                Expr::Number(3.0),
+                Expr::Array(vec![
+                    nmc("Text", vec![Expr::String("a".into())]),
+                    nmc("Text", vec![Expr::String("b".into())]),
+                    nmc("Text", vec![Expr::String("c".into())]),
+                ]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Grid() {"));
+        assert!(r.ets_source.contains(".columnsTemplate('1fr 1fr 1fr')"));
+        assert!(r.ets_source.contains("GridItem()"));
+        assert!(r.ets_source.contains("Text('a')"));
+        assert!(r.ets_source.contains("Text('c')"));
+    }
+
+    #[test]
+    fn modal_emits_placeholder_with_runtime_hint() {
+        let mut m = empty_module();
+        m.init
+            .push(app_with_body(nmc("Modal", vec![Expr::String("Title".into())])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // Phase 2 v12 emits a placeholder + comment pointing at the
+        // showDialog runtime FFI follow-up.
+        assert!(r.ets_source.contains("// Modal:"));
+        assert!(r.ets_source.contains("showDialog"));
     }
 
     #[test]
