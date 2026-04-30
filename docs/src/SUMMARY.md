@@ -54,6 +54,7 @@
 - [tvOS](platforms/tvos.md)
 - [watchOS](platforms/watchos.md)
 - [Android](platforms/android.md)
+- [HarmonyOS NEXT](platforms/harmonyos.md)
 - [Windows](platforms/windows.md)
   - [Windows 7 Compatibility](platforms/windows-7.md)
 - [Linux (GTK4)](platforms/linux.md)
