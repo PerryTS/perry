@@ -354,6 +354,9 @@ pub fn app_run(_app_handle: i64) {
     // Install crash reporting hooks before anything else
     crate::crash_log::install_crash_hooks();
 
+    // Phase 2 v3.3: register cross-platform showToast / setText handlers.
+    register_cross_platform_text_handlers();
+
     // Force PerryAppDelegate class registration (define_class! registers it lazily)
     let _ = PerryAppDelegate::class();
 
@@ -804,5 +807,30 @@ pub fn set_timer(interval_ms: f64, callback: f64) {
 
         // Keep the target alive
         std::mem::forget(target);
+    }
+}
+
+extern "C" {
+    fn js_register_show_toast_handler(
+        f: extern "C" fn(msg_ptr: *const u8, msg_len: usize),
+    );
+    fn js_register_set_text_handler(
+        f: extern "C" fn(
+            id_ptr: *const u8,
+            id_len: usize,
+            val_ptr: *const u8,
+            val_len: usize,
+        ),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(widgets::toast::show_toast_handler);
+        js_register_set_text_handler(widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(widgets::text_registry::register_text_id_handler);
     }
 }
