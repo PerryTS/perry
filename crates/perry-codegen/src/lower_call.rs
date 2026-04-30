@@ -1868,15 +1868,22 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 }
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
-            // Single-arg fast path: just print directly.
+            // Single-arg fast path: just print directly. Pre-fix #345 this
+            // ignored the `property` and always called `js_console_log_*`,
+            // which collapsed `console.error("x")` and `console.warn("x")`
+            // onto stdout. Dispatch on property so each console method
+            // routes to its matching runtime fn (and stream).
             if args.len() == 1 {
                 let arg = &args[0];
                 let is_number_literal = matches!(arg, Expr::Integer(_) | Expr::Number(_));
                 let v = lower_expr(ctx, arg)?;
-                let runtime_fn = if is_number_literal {
-                    "js_console_log_number"
-                } else {
-                    "js_console_log_dynamic"
+                let runtime_fn = match (property.as_str(), is_number_literal) {
+                    ("error", true) => "js_console_error_number",
+                    ("error", false) => "js_console_error_dynamic",
+                    ("warn", true) => "js_console_warn_number",
+                    ("warn", false) => "js_console_warn_dynamic",
+                    (_, true) => "js_console_log_number",
+                    (_, false) => "js_console_log_dynamic",
                 };
                 ctx.block().call_void(runtime_fn, &[(DOUBLE, &v)]);
                 return Ok("0.0".to_string());

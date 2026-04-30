@@ -1193,6 +1193,11 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         | Expr::ObjectKeys(_)
         | Expr::ObjectValues(_)
         | Expr::ObjectEntries(_) => Some(HirType::Array(Box::new(HirType::Any))),
+        // `process.argv` is a real Array<string> at runtime (see
+        // `js_process_argv` in perry-runtime/os.rs). Without this entry
+        // `is_array_expr(Expr::ProcessArgv)` is false and `argv.includes(x)`
+        // takes the string-method dispatch path (issue #346) — closes #346.
+        Expr::ProcessArgv => Some(HirType::Array(Box::new(HirType::String))),
         // `str.split(delim)` returns Array<String>. Catches the generic
         // Call form that bypasses the `Expr::StringSplit` variant — e.g.
         // `"a,b,c".split(",")` in an expression position where we need
