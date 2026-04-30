@@ -625,6 +625,40 @@ pub(crate) fn lower_native_method_call(
         }
     }
 
+    // process module functions: cwd / uptime / memoryUsage / versions
+    // accessed as destructured imports. `import { cwd } from 'node:process'`
+    // → NativeMethodCall { module: "process", method: "cwd", object: None }.
+    // The implicit-global form `process.cwd()` is already lowered to
+    // dedicated HIR variants (Expr::ProcessCwd etc) in
+    // perry-hir/src/lower/expr_call.rs:262, so the runtime helpers
+    // (js_process_cwd / js_process_uptime / js_process_versions /
+    // js_process_memory_usage) already exist — this arm just routes the
+    // destructured-import shape to the same helpers. Closes #360 item #2's
+    // dispatch gap (the warning fix alone would link cwd() but return
+    // undefined silently — worse UX than the original "Could not resolve").
+    if module == "process" && object.is_none() {
+        match method {
+            "cwd" => {
+                let blk = ctx.block();
+                let h = blk.call(I64, "js_process_cwd", &[]);
+                return Ok(crate::expr::nanbox_string_inline(blk, &h));
+            }
+            "uptime" => {
+                return Ok(ctx.block().call(DOUBLE, "js_process_uptime", &[]));
+            }
+            "memoryUsage" => {
+                return Ok(ctx.block().call(DOUBLE, "js_process_memory_usage", &[]));
+            }
+            _ => {
+                // Unknown process method — fall through to the generic
+                // dispatch which will emit a diagnostic if no signature
+                // matches. Likely candidates not wired here: nextTick
+                // (needs a callback arg), exit (takes a code), kill,
+                // hrtime. Each is its own follow-up under #360.
+            }
+        }
+    }
+
     // Generic native module dispatch (receiver-less): fastify, mysql2,
     // ws, pg, ioredis, mongodb, better-sqlite3, etc. These were in the
     // old Cranelift codegen's dispatch table but lost in the v0.5.0

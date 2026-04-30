@@ -107,6 +107,16 @@ pub const NATIVE_MODULES: &[&str] = &[
     "fastify",
     // Node.js built-in modules
     "async_hooks",
+    // Closes #360 item #2: ink does both `import process from 'node:process'`
+    // (default import) and `import { cwd } from 'node:process'` (named import
+    // of process.cwd) across 8 build files. Without this entry, both shapes
+    // hit "Could not resolve import 'process' from <file>" and the destructured
+    // `cwd` call link-fails with `Undefined symbols: _cwd`. The `node:`
+    // prefix is already stripped by `is_native_module` before lookup, so this
+    // entry covers both `process` and `node:process`. Existing `process.X`
+    // global-access machinery in lower/expr_member.rs handles property reads
+    // on the imported binding the same as on the implicit global.
+    "process",
     // Perry native UI
     "perry/ui",
     // Perry system APIs
@@ -154,6 +164,10 @@ const RUNTIME_ONLY_MODULES: &[&str] = &[
     "stream",
     "url",
     "util",
+    // process surface (argv / env / stdout / stderr / cwd) lives in
+    // perry-runtime, not perry-stdlib — no need to pull stdlib in for an
+    // `import process from 'node:process'`-only program.
+    "process",
     "perry/ui",
     "perry/system",
     "perry/widget",
