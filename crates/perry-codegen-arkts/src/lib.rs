@@ -497,7 +497,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
-                lazy_sources,
+                    lazy_sources,
                 ),
                 "HStack" => emit_stack(
                     "Row",
@@ -509,7 +509,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
-                lazy_sources,
+                    lazy_sources,
                 ),
                 "Button" => emit_button(args, callbacks),
                 "TextField" => emit_textfield(args, callbacks),
@@ -527,7 +527,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
-                lazy_sources,
+                    lazy_sources,
                 ),
                 "LazyVStack" => emit_lazy_vstack(
                     args,
@@ -538,7 +538,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
-                lazy_sources,
+                    lazy_sources,
                 ),
                 "Picker" => emit_picker(args, callbacks),
                 "ProgressView" => emit_progressview(args),
@@ -551,7 +551,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
-                lazy_sources,
+                    lazy_sources,
                 ),
                 // Phase 2 v12 widgets.
                 "Tabs" => emit_tabs(
@@ -563,7 +563,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
-                lazy_sources,
+                    lazy_sources,
                 ),
                 "Modal" | "Dialog" => emit_modal(args, callbacks),
                 "Menu" | "ContextMenu" => emit_menu(args, callbacks),
@@ -576,7 +576,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
-                lazy_sources,
+                    lazy_sources,
                 ),
                 other => format!(
                     "// unsupported perry/ui widget: {} (Phase 2 v12)\n\
@@ -612,7 +612,7 @@ fn emit_widget(
             arkts_locals,
             classes,
             state_registry,
-        lazy_sources,
+            lazy_sources,
         ),
         _ => format!(
             "// unrecognized body expression (must be a perry/ui widget call)\n\
@@ -672,7 +672,7 @@ fn emit_for_each(
                 &locals,
                 classes,
                 state_registry,
-            lazy_sources,
+                lazy_sources,
             );
             ("__item".to_string(), inner)
         }
@@ -1124,7 +1124,7 @@ fn emit_stack(
                     arkts_locals,
                     classes,
                     state_registry,
-                lazy_sources,
+                    lazy_sources,
                 )
             })
             .collect::<Vec<_>>(),
@@ -1140,7 +1140,7 @@ fn emit_stack(
             arkts_locals,
             classes,
             state_registry,
-        lazy_sources,
+            lazy_sources,
         )],
         Some(_) => vec![format!(
             "// children arg wasn't an array literal — Phase 2 v1.5 limitation\n\
@@ -1393,7 +1393,7 @@ fn emit_scrollview(
                     arkts_locals,
                     classes,
                     state_registry,
-                lazy_sources,
+                    lazy_sources,
                 )
             })
             .collect(),
@@ -1406,7 +1406,7 @@ fn emit_scrollview(
             arkts_locals,
             classes,
             state_registry,
-        lazy_sources,
+            lazy_sources,
         )],
         _ => vec![],
     };
@@ -1682,7 +1682,7 @@ fn emit_section(
                     arkts_locals,
                     classes,
                     state_registry,
-                lazy_sources,
+                    lazy_sources,
                 )
             })
             .collect(),
@@ -1695,7 +1695,7 @@ fn emit_section(
             arkts_locals,
             classes,
             state_registry,
-        lazy_sources,
+            lazy_sources,
         )],
         _ => vec![],
     };
@@ -1807,7 +1807,7 @@ fn emit_tabs(
                         arkts_locals,
                         classes,
                         state_registry,
-                    lazy_sources,
+                        lazy_sources,
                     )
                 })
                 .unwrap_or_else(|| "Text('[empty tab]').fontSize(16)".to_string());
@@ -1930,7 +1930,7 @@ fn emit_grid(
                 arkts_locals,
                 classes,
                 state_registry,
-            lazy_sources,
+                lazy_sources,
             );
             let body_indent = "    ".repeat(depth + 2);
             let body_indented = body
@@ -2520,7 +2520,9 @@ mod tests {
             ],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(r.ets_source.contains(".animation({ duration: 300, curve: Curve.EaseIn })"));
+        assert!(r
+            .ets_source
+            .contains(".animation({ duration: 300, curve: Curve.EaseIn })"));
     }
 
     #[test]
@@ -2557,11 +2559,16 @@ mod tests {
             "Text",
             vec![
                 Expr::String("hi".into()),
-                Expr::Object(vec![("textDecoration".into(), Expr::String("underline".into()))]),
+                Expr::Object(vec![(
+                    "textDecoration".into(),
+                    Expr::String("underline".into()),
+                )]),
             ],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(r.ets_source.contains(".decoration({ type: TextDecorationType.Underline })"));
+        assert!(r
+            .ets_source
+            .contains(".decoration({ type: TextDecorationType.Underline })"));
     }
 
     #[test]
@@ -2571,17 +2578,25 @@ mod tests {
             "Text",
             vec![
                 Expr::String("hi".into()),
-                Expr::Object(vec![("textDecoration".into(), Expr::String("strikethrough".into()))]),
+                Expr::Object(vec![(
+                    "textDecoration".into(),
+                    Expr::String("strikethrough".into()),
+                )]),
             ],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(r.ets_source.contains(".decoration({ type: TextDecorationType.LineThrough })"));
+        assert!(r
+            .ets_source
+            .contains(".decoration({ type: TextDecorationType.LineThrough })"));
     }
 
     #[test]
     fn image_app_media_path_maps_to_resource_accessor() {
         let mut m = empty_module();
-        m.init.push(app_with_body(nmc("Image", vec![Expr::String("@app.media/icon".into())])));
+        m.init.push(app_with_body(nmc(
+            "Image",
+            vec![Expr::String("@app.media/icon".into())],
+        )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
         // `$r('app.media.icon')` (no quotes around the $r() arg).
         assert!(r.ets_source.contains("Image($r('app.media.icon'))"));
@@ -2592,9 +2607,14 @@ mod tests {
     #[test]
     fn image_plain_url_passes_through_as_string() {
         let mut m = empty_module();
-        m.init.push(app_with_body(nmc("Image", vec![Expr::String("https://example.com/foo.png".into())])));
+        m.init.push(app_with_body(nmc(
+            "Image",
+            vec![Expr::String("https://example.com/foo.png".into())],
+        )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(r.ets_source.contains("Image('https://example.com/foo.png')"));
+        assert!(r
+            .ets_source
+            .contains("Image('https://example.com/foo.png')"));
     }
 
     // ----- Phase 2 v5: inline style + ForEach -----
@@ -3079,7 +3099,8 @@ mod tests {
                 is_async: false,
             }),
         };
-        m.init.push(app_with_body(nmc("LazyVStack", vec![map_expr])));
+        m.init
+            .push(app_with_body(nmc("LazyVStack", vec![map_expr])));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
         // ArkUI shape: List() { LazyForEach(this.lazy_source_0, ...) }
         assert!(r.ets_source.contains("List() {"));
@@ -3088,9 +3109,13 @@ mod tests {
         // Inner widget body resolves item to __item.
         assert!(r.ets_source.contains("Text(__item)"));
         // IDataSource boilerplate emitted at module top.
-        assert!(r.ets_source.contains("class PerryListDataSource implements IDataSource"));
+        assert!(r
+            .ets_source
+            .contains("class PerryListDataSource implements IDataSource"));
         // @State field decl on the page.
-        assert!(r.ets_source.contains("@State lazy_source_0: PerryListDataSource = new PerryListDataSource(['a', 'b'])"));
+        assert!(r.ets_source.contains(
+            "@State lazy_source_0: PerryListDataSource = new PerryListDataSource(['a', 'b'])"
+        ));
     }
 
     #[test]
@@ -3100,7 +3125,10 @@ mod tests {
         let mut m = empty_module();
         m.init.push(app_with_body(nmc(
             "LazyVStack",
-            vec![Expr::Array(vec![nmc("Text", vec![Expr::String("hi".into())])])],
+            vec![Expr::Array(vec![nmc(
+                "Text",
+                vec![Expr::String("hi".into())],
+            )])],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
         assert!(!r.ets_source.contains("class PerryListDataSource"));
