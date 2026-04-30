@@ -68,15 +68,22 @@ pub(crate) fn lower_string_method(
             Ok(blk.sitofp(I32, &result_i32, DOUBLE))
         }
         "slice" | "substring" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
-                    "perry-codegen: String.{} expects 1 or 2 args, got {}",
+                    "perry-codegen: String.{} expects 0, 1 or 2 args, got {}",
                     property,
                     args.len()
                 );
             }
-            let start_d = lower_expr(ctx, &args[0])?;
-            // 2-arg form: explicit end. 1-arg form: end defaults to the
+            // Issue #316: 0-arg form is the spec'd "clone" idiom —
+            // `s.slice()` ≡ `s.slice(0, length)`. Was rejected at
+            // codegen with "expects 1 or 2 args, got 0" before this fix.
+            let start_d = if args.is_empty() {
+                "0.0".to_string()
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
+            // 2-arg form: explicit end. 0/1-arg form: end defaults to the
             // string's length, computed inline (load i32 at offset 0).
             let end_d = if args.len() == 2 {
                 lower_expr(ctx, &args[1])?
