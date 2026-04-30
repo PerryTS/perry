@@ -331,6 +331,240 @@ unsafe extern "C" fn invoke_callback1(
     undef
 }
 
+// ────────────────────────────────────────────────────────────────────
+// perry/media — HarmonyOS AVPlayer drain bridge (issue #369)
+// ────────────────────────────────────────────────────────────────────
+//
+// Same architectural shape as drainToast / drainTextUpdate above. Perry
+// can't reach `@ohos.multimedia.media.AVPlayer` directly from a `.so`
+// loaded by ArkTS, so:
+//
+// - TS-side `createPlayer(url)` lowers to `perry_media_create_player`
+//   which records a `MediaCreateIntent { handle, url }` in the runtime
+//   queue and returns the new handle synchronously.
+// - TS-side `play / pause / seek / setVolume / setRate / stop / destroy`
+//   each enqueue a `MediaCommand` variant against the existing handle.
+// - TS-side `setNowPlaying` enqueues a `MediaNowPlaying` for the
+//   AVSession side (best-effort).
+//
+// ArkTS-side code emitted by `perry-codegen-arkts` polls these three
+// drains on a 100 ms tick, dispatches each entry to the matching
+// `@ohos.multimedia.media.AVPlayer` op (and `@ohos.multimedia.avsession`
+// for now-playing), and pushes state observations back into the runtime
+// via `pushMediaState(handle, state, current, duration)`. State queries
+// (`getCurrentTime`, `getDuration`, `getState`, `isPlaying`) read from
+// the inbox the next push populates.
+
+/// Helper: build a JS string property from a Rust `String` and attach it
+/// to `obj` under `key` (NUL-terminated). Caller must ensure `key` ends
+/// in a `\0` byte.
+unsafe fn napi_set_string_prop(
+    env: *mut NapiEnv,
+    obj: *mut NapiValue,
+    key: &[u8],
+    value: &str,
+) {
+    let mut v: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_string_utf8(
+        env,
+        value.as_ptr() as *const c_char,
+        value.len(),
+        &mut v,
+    );
+    let _ = napi_set_named_property(env, obj, key.as_ptr() as *const c_char, v);
+}
+
+/// Helper: attach a `f64`-typed JS number property to `obj` under `key`.
+unsafe fn napi_set_number_prop(env: *mut NapiEnv, obj: *mut NapiValue, key: &[u8], value: f64) {
+    extern "C" {
+        fn napi_create_double(
+            env: *mut NapiEnv,
+            value: f64,
+            result: *mut *mut NapiValue,
+        ) -> NapiStatus;
+    }
+    let mut v: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_double(env, value, &mut v);
+    let _ = napi_set_named_property(env, obj, key.as_ptr() as *const c_char, v);
+}
+
+/// Pop one queued `createPlayer(url)` request. Returns
+/// `{ handle: number, url: string }` or `undefined` when empty. ArkTS
+/// loops calling this on tick to allocate AVPlayer instances and wire
+/// up their state/time observers.
+unsafe extern "C" fn drain_media_create(
+    env: *mut NapiEnv,
+    _info: *mut NapiCallbackInfo,
+) -> *mut NapiValue {
+    let mut intents = crate::media_playback::drain_create_intents();
+    if intents.is_empty() {
+        let mut undef: *mut NapiValue = ptr::null_mut();
+        let _ = napi_get_undefined(env, &mut undef);
+        return undef;
+    }
+    // Drain returns the entire queue at once; we hand back exactly one
+    // entry per call to keep the ArkTS-side dispatch loop simple. Push
+    // the rest back so the next tick picks them up. (Order preserved.)
+    let intent = intents.remove(0);
+    if !intents.is_empty() {
+        crate::media_playback::requeue_create_intents(intents);
+    }
+    let mut obj: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_object(env, &mut obj);
+    napi_set_number_prop(env, obj, b"handle\0", intent.handle as f64);
+    napi_set_string_prop(env, obj, b"url\0", &intent.url);
+    obj
+}
+
+/// Pop one queued control-plane command. Returns
+/// `{ op: string, handle: number, ...payload }` or `undefined` when
+/// empty. ArkTS dispatches on the `op` string against the matching
+/// AVPlayer instance.
+///
+/// `op` strings: `"play"`, `"pause"`, `"stop"`, `"seek"`,
+/// `"setVolume"`, `"setRate"`, `"destroy"`. The `seconds` / `volume` /
+/// `rate` fields are present only for the variants that need them.
+unsafe extern "C" fn drain_media_control(
+    env: *mut NapiEnv,
+    _info: *mut NapiCallbackInfo,
+) -> *mut NapiValue {
+    let mut cmds = crate::media_playback::drain_control_commands();
+    if cmds.is_empty() {
+        let mut undef: *mut NapiValue = ptr::null_mut();
+        let _ = napi_get_undefined(env, &mut undef);
+        return undef;
+    }
+    let cmd = cmds.remove(0);
+    if !cmds.is_empty() {
+        crate::media_playback::requeue_control_commands(cmds);
+    }
+    use crate::media_playback::MediaCommand;
+    let mut obj: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_object(env, &mut obj);
+    let (op, handle, extra_key, extra_val): (&str, i64, Option<&[u8]>, Option<f64>) = match cmd {
+        MediaCommand::Play { handle } => ("play", handle, None, None),
+        MediaCommand::Pause { handle } => ("pause", handle, None, None),
+        MediaCommand::Stop { handle } => ("stop", handle, None, None),
+        MediaCommand::Destroy { handle } => ("destroy", handle, None, None),
+        MediaCommand::Seek { handle, seconds } => {
+            ("seek", handle, Some(b"seconds\0"), Some(seconds))
+        }
+        MediaCommand::SetVolume { handle, volume } => {
+            ("setVolume", handle, Some(b"volume\0"), Some(volume))
+        }
+        MediaCommand::SetRate { handle, rate } => {
+            ("setRate", handle, Some(b"rate\0"), Some(rate))
+        }
+    };
+    napi_set_string_prop(env, obj, b"op\0", op);
+    napi_set_number_prop(env, obj, b"handle\0", handle as f64);
+    if let (Some(k), Some(v)) = (extra_key, extra_val) {
+        napi_set_number_prop(env, obj, k, v);
+    }
+    obj
+}
+
+/// Pop one queued lock-screen / now-playing metadata update. Returns
+/// `{ handle, title, artist, album, artworkUrl }` or `undefined`. ArkTS
+/// forwards to `@ohos.multimedia.avsession` (best-effort — AVSession
+/// integration may no-op if the user's hap manifest doesn't declare the
+/// `ohos.permission.AVSESSION` permission).
+unsafe extern "C" fn drain_now_playing(
+    env: *mut NapiEnv,
+    _info: *mut NapiCallbackInfo,
+) -> *mut NapiValue {
+    let mut intents = crate::media_playback::drain_now_playing_intents();
+    if intents.is_empty() {
+        let mut undef: *mut NapiValue = ptr::null_mut();
+        let _ = napi_get_undefined(env, &mut undef);
+        return undef;
+    }
+    let np = intents.remove(0);
+    if !intents.is_empty() {
+        crate::media_playback::requeue_now_playing_intents(intents);
+    }
+    let mut obj: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_object(env, &mut obj);
+    napi_set_number_prop(env, obj, b"handle\0", np.handle as f64);
+    napi_set_string_prop(env, obj, b"title\0", &np.title);
+    napi_set_string_prop(env, obj, b"artist\0", &np.artist);
+    napi_set_string_prop(env, obj, b"album\0", &np.album);
+    napi_set_string_prop(env, obj, b"artworkUrl\0", &np.artwork_url);
+    obj
+}
+
+/// ArkTS calls this from AVPlayer's `stateChange` / `timeUpdate` handlers
+/// to sync the latest state into Perry's runtime, where the synchronous
+/// `getState / getCurrentTime / getDuration / isPlaying` accessors read
+/// it back. Also fires any registered Perry-side
+/// `onStateChange` / `onTimeUpdate` closures (`media_playback::push_media_state`).
+///
+/// JS signature: `pushMediaState(handle: number, state: string,
+/// current: number, duration: number): void`.
+unsafe extern "C" fn push_media_state(
+    env: *mut NapiEnv,
+    info: *mut NapiCallbackInfo,
+) -> *mut NapiValue {
+    let mut argc: usize = 4;
+    let mut argv: [*mut NapiValue; 4] = [ptr::null_mut(); 4];
+    let _ = napi_get_cb_info(
+        env,
+        info,
+        &mut argc,
+        argv.as_mut_ptr(),
+        ptr::null_mut(),
+        ptr::null_mut(),
+    );
+
+    let handle: i64 = if argc >= 1 && !argv[0].is_null() {
+        let mut n: f64 = 0.0;
+        let _ = napi_get_value_double(env, argv[0], &mut n);
+        n as i64
+    } else {
+        0
+    };
+
+    // Read state string into a stack buffer (32 bytes is plenty — the
+    // longest mapped value is "initialized" at 11 bytes).
+    let state_str: String = if argc >= 2 && !argv[1].is_null() {
+        let mut buf = [0u8; 32];
+        let mut written: usize = 0;
+        let _ = napi_get_value_string_utf8(
+            env,
+            argv[1],
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len(),
+            &mut written,
+        );
+        String::from_utf8_lossy(&buf[..written]).into_owned()
+    } else {
+        String::new()
+    };
+
+    let current: f64 = if argc >= 3 && !argv[2].is_null() {
+        let mut n: f64 = 0.0;
+        let _ = napi_get_value_double(env, argv[2], &mut n);
+        n
+    } else {
+        0.0
+    };
+
+    let duration: f64 = if argc >= 4 && !argv[3].is_null() {
+        let mut n: f64 = 0.0;
+        let _ = napi_get_value_double(env, argv[3], &mut n);
+        n
+    } else {
+        0.0
+    };
+
+    let state = crate::media_playback::MediaState::from_avplayer_str(&state_str);
+    crate::media_playback::push_media_state(handle, state, current, duration);
+
+    let mut undef: *mut NapiValue = ptr::null_mut();
+    let _ = napi_get_undefined(env, &mut undef);
+    undef
+}
+
 unsafe extern "C" fn napi_init(env: *mut NapiEnv, exports: *mut NapiValue) -> *mut NapiValue {
     // run(): module init + user top-level code. Called from EntryAbility.
     let run_name = b"run\0";
@@ -401,6 +635,63 @@ unsafe extern "C" fn napi_init(env: *mut NapiEnv, exports: *mut NapiValue) -> *m
         &mut cb1_fn,
     );
     let _ = napi_set_named_property(env, exports, cb1_name.as_ptr() as *const c_char, cb1_fn);
+
+    // perry/media — issue #369. Four NAPI exports for the AVPlayer
+    // drain-bridge: three drain queues (create / control / now-playing)
+    // and one state-push entry that ArkTS calls when AVPlayer's
+    // stateChange or timeUpdate handlers fire.
+    let dmc_name = b"drainMediaCreate\0";
+    let mut dmc_fn: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_function(
+        env,
+        dmc_name.as_ptr() as *const c_char,
+        17,
+        drain_media_create,
+        ptr::null_mut(),
+        &mut dmc_fn,
+    );
+    let _ = napi_set_named_property(env, exports, dmc_name.as_ptr() as *const c_char, dmc_fn);
+
+    let dmctrl_name = b"drainMediaControl\0";
+    let mut dmctrl_fn: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_function(
+        env,
+        dmctrl_name.as_ptr() as *const c_char,
+        18,
+        drain_media_control,
+        ptr::null_mut(),
+        &mut dmctrl_fn,
+    );
+    let _ = napi_set_named_property(
+        env,
+        exports,
+        dmctrl_name.as_ptr() as *const c_char,
+        dmctrl_fn,
+    );
+
+    let dnp_name = b"drainNowPlaying\0";
+    let mut dnp_fn: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_function(
+        env,
+        dnp_name.as_ptr() as *const c_char,
+        16,
+        drain_now_playing,
+        ptr::null_mut(),
+        &mut dnp_fn,
+    );
+    let _ = napi_set_named_property(env, exports, dnp_name.as_ptr() as *const c_char, dnp_fn);
+
+    let pms_name = b"pushMediaState\0";
+    let mut pms_fn: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_function(
+        env,
+        pms_name.as_ptr() as *const c_char,
+        15,
+        push_media_state,
+        ptr::null_mut(),
+        &mut pms_fn,
+    );
+    let _ = napi_set_named_property(env, exports, pms_name.as_ptr() as *const c_char, pms_fn);
 
     exports
 }

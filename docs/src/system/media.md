@@ -91,7 +91,7 @@ tick if the signal hasn't arrived.
 | GTK4 / Linux | GStreamer `playbin` element + MPRIS D-Bus | **Implemented** + lock-screen |
 | Windows | `Windows.Media.Playback.MediaPlayer` (WinRT) + `SystemMediaTransportControls` | **Implemented** + Now Playing |
 | watchOS | AVPlayer + AVAudioSession Playback + UIImage artwork | **Implemented** + Now Playing complication |
-| HarmonyOS | `@ohos.multimedia.media.AVPlayer` via napi | Stub |
+| HarmonyOS | `@ohos.multimedia.media.AVPlayer` via napi | **Implemented** (lock-screen via `@ohos.multimedia.avsession` is a follow-up) |
 | Web | `<audio>` element + Media Session API | **Implemented** (`--target web`; `setNowPlaying` populates `navigator.mediaSession.metadata` + wires play / pause / seekto / seekforward / seekbackward action handlers) |
 
 Stub platforms link cleanly against the same FFI surface — code that
@@ -127,6 +127,23 @@ calling code. Implementation detail varies:
   closure.
 - **Windows** — driven from the `GetMessageW` / `PeekMessageW` message
   loop after each dispatch, throttled to 100 ms by wall-clock comparison.
+- **HarmonyOS** — Perry's `.so` cannot reach `@ohos.multimedia.media`
+  directly, so `perry/media` calls record intents into Mutex-protected
+  drain queues in `perry-runtime::media_playback`. The harvested
+  `pages/Index.ets` (emitted by `perry-codegen-arkts` whenever the
+  module uses `perry/media`) installs a 100 ms `setInterval` pump in
+  `aboutToAppear` that drains the queues, dispatches each op against
+  the matching `media.AVPlayer` instance (allocated lazily on the
+  first `createPlayer` drain), and pushes state observations back into
+  the runtime via the `pushMediaState(handle, state, current,
+  duration)` NAPI export. AVPlayer's own `stateChange` / `timeUpdate`
+  / `error` / `endOfStream` events feed the same callback path. The
+  pump runs on the ArkTS UI thread, so closures fired by
+  `media_playback::push_media_state` share the same arena as Perry's
+  `main()`. Lock-screen integration (`@ohos.multimedia.avsession`) is
+  a follow-up — the runtime queues now-playing metadata via
+  `drainNowPlaying` but the ArkTS-side AVSession dispatch is a no-op
+  beyond a hilog line for now (tracked under issue #369).
 
 ## Now Playing on Apple platforms
 

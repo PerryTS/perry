@@ -29,6 +29,7 @@
 
 #![cfg(feature = "ohos-napi")]
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -37,6 +38,29 @@ use crate::closure::{ClosureHeader, js_closure_call1, js_closure_call2};
 use crate::value::{POINTER_MASK, TAG_UNDEFINED};
 
 const POINTER_TAG_BITS: u64 = 0x7FFD_0000_0000_0000;
+
+thread_local! {
+    /// Per-thread once-flag: ensures `media_callbacks_root_scanner` is
+    /// only registered with the local GC scanner list once. ROOT_SCANNERS
+    /// in `gc.rs` is thread-local, so each thread that interacts with
+    /// `perry_media_*` registers on first use. Cheap (one branch + one
+    /// thread-local read) on the steady state.
+    static GC_SCANNER_REGISTERED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Register `media_callbacks_root_scanner` with the local thread's GC
+/// once. Called from every `perry_media_*` FFI entry point so closure
+/// pointers stored in `MEDIA_STATE_INBOX` survive between
+/// `onStateChange` / `onTimeUpdate` invocations regardless of which
+/// thread first interacts with the module.
+fn ensure_gc_scanner_registered() {
+    GC_SCANNER_REGISTERED.with(|flag| {
+        if !flag.get() {
+            crate::gc::gc_register_root_scanner(media_callbacks_root_scanner);
+            flag.set(true);
+        }
+    });
+}
 
 // ---------------------------------------------------------------------------
 // MediaState enum + string mapping
@@ -293,6 +317,7 @@ pub extern "C" fn perry_media_is_playing(handle: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn perry_media_on_state_change(handle: f64, closure: f64) {
+    ensure_gc_scanner_registered();
     let h = handle as i64;
     with_inbox(|m| {
         m.entry(h).or_default().on_state_change = Some(closure);
@@ -301,6 +326,7 @@ pub extern "C" fn perry_media_on_state_change(handle: f64, closure: f64) {
 
 #[no_mangle]
 pub extern "C" fn perry_media_on_time_update(handle: f64, closure: f64) {
+    ensure_gc_scanner_registered();
     let h = handle as i64;
     with_inbox(|m| {
         m.entry(h).or_default().on_time_update = Some(closure);
@@ -368,6 +394,41 @@ pub(crate) fn drain_now_playing_intents() -> Vec<MediaNowPlaying> {
         .lock()
         .map(|mut q| std::mem::take(&mut *q))
         .unwrap_or_default()
+}
+
+/// Push leftover create-intents back to the front of the queue. Used by
+/// `napi_drain_media_create` to hand back exactly one intent per call
+/// while preserving FIFO order across multiple ticks.
+pub(crate) fn requeue_create_intents(mut tail: Vec<MediaCreateIntent>) {
+    if tail.is_empty() {
+        return;
+    }
+    if let Ok(mut q) = MEDIA_CREATE_QUEUE.lock() {
+        // Anything queued while we were holding the popped intent goes
+        // *after* the leftover tail — keep FIFO.
+        tail.append(&mut *q);
+        *q = tail;
+    }
+}
+
+pub(crate) fn requeue_control_commands(mut tail: Vec<MediaCommand>) {
+    if tail.is_empty() {
+        return;
+    }
+    if let Ok(mut q) = MEDIA_CONTROL_QUEUE.lock() {
+        tail.append(&mut *q);
+        *q = tail;
+    }
+}
+
+pub(crate) fn requeue_now_playing_intents(mut tail: Vec<MediaNowPlaying>) {
+    if tail.is_empty() {
+        return;
+    }
+    if let Ok(mut q) = MEDIA_NOW_PLAYING_QUEUE.lock() {
+        tail.append(&mut *q);
+        *q = tail;
+    }
 }
 
 // ---------------------------------------------------------------------------
