@@ -224,6 +224,10 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
         js_interval_timer_tick();
         js_promise_run_microtasks();
     }
+    // perry/media (#351) — drive state polling on the UI thread so the
+    // PLAYERS thread_local stays consistent with where create_player
+    // stored entries. Internally throttled to ~10 Hz.
+    crate::media_playback::pump_tick();
     #[cfg(feature = "geisterhand")]
     {
         extern "C" {

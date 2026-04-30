@@ -384,6 +384,9 @@ pub fn app_run(app_handle: i64) {
                         js_interval_timer_tick();
                     }
                 }
+                // perry/media (#351) — UI-thread state poll for active
+                // MediaPlayer instances. Internally throttled to ~10 Hz.
+                crate::media_playback::pump_tick();
                 #[cfg(feature = "geisterhand")]
                 {
                     extern "C" {

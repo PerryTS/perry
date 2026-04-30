@@ -41,4 +41,9 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
     "Win32_System_SystemInformation",
     "Win32_Graphics_GdiPlus",
+    # perry/media — Windows.Media.Playback.MediaPlayer (winrt) for streaming
+    # audio playback (#351).
+    "Media_Playback",
+    "Media_Core",
+    "Foundation",
 ] }

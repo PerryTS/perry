@@ -83,13 +83,13 @@ tick if the signal hasn't arrived.
 
 | Platform | Backend | Status |
 | --- | --- | --- |
-| macOS | AVPlayer + MPNowPlayingInfoCenter + MPRemoteCommandCenter | **Implemented** |
-| iOS | AVPlayer + AVAudioSession Playback + UIImage artwork | **Implemented** |
-| tvOS | AVPlayer + Siri Remote play/pause/skip | **Implemented** |
-| visionOS | AVPlayer + UIImage artwork | **Implemented** |
-| Android | `android.media.MediaPlayer` via JNI + `MediaSessionCompat` | Stub (issue #351 follow-up) |
-| GTK4 / Linux | `gst::ElementFactory::make("playbin")` + MPRIS | Stub (issue #351 follow-up) |
-| Windows | `IMFMediaEngine` + `SystemMediaTransportControls` | Stub (issue #351 follow-up) |
+| macOS | AVPlayer + MPNowPlayingInfoCenter + MPRemoteCommandCenter | **Implemented** + lock-screen |
+| iOS | AVPlayer + AVAudioSession Playback + UIImage artwork | **Implemented** + lock-screen |
+| tvOS | AVPlayer + Siri Remote play/pause/skip | **Implemented** + remote |
+| visionOS | AVPlayer + UIImage artwork | **Implemented** + lock-screen |
+| Android | `android.media.MediaPlayer` via JNI | **Implemented** (lock-screen via `MediaSessionCompat` is a follow-up) |
+| GTK4 / Linux | GStreamer `playbin` element | **Implemented** (MPRIS lock-screen is a follow-up) |
+| Windows | `Windows.Media.Playback.MediaPlayer` (WinRT) | **Implemented** (`SystemMediaTransportControls` lock-screen is a follow-up) |
 | watchOS | AVPlayer (limited; `WKApplication` Now Playing has a different shape) | Stub |
 | HarmonyOS | `@ohos.multimedia.media.AVPlayer` via napi | Stub |
 | Web | `<audio>` element + Media Session API | Stub |
@@ -98,6 +98,25 @@ Stub platforms link cleanly against the same FFI surface — code that
 imports `perry/media` compiles on every target. `createPlayer` returns
 `0` on a stub backend so `if (player === 0)` is the canonical "feature
 not available here" check.
+
+### Threading notes
+
+The `onStateChange` and `onTimeUpdate` callbacks fire from the platform's
+main UI thread on every backend, so they share the same JS heap as the
+calling code. Implementation detail varies:
+
+- **macOS / iOS / tvOS / visionOS** — driven by an `NSTimer` scheduled
+  on the main run loop at 10 Hz.
+- **Android** — driven from `Java_com_perry_app_PerryBridge_nativePumpTick`
+  (the existing 125 Hz UI-thread pump), throttled internally to ~10 Hz.
+  The `prepare()` call runs on a background worker thread to avoid
+  blocking the UI on network buffering.
+- **GTK4** — driven by a `glib::timeout_add_local` timer on the GLib
+  main loop. EOS / error messages arrive on the GStreamer bus and get
+  forwarded to per-player atomic flags via a `bus.add_watch_local`
+  closure.
+- **Windows** — driven from the `GetMessageW` / `PeekMessageW` message
+  loop after each dispatch, throttled to 100 ms by wall-clock comparison.
 
 ## Now Playing on Apple platforms
 
