@@ -90,6 +90,7 @@ extern "C" {
         length: usize,
         result: *mut *mut NapiValue,
     ) -> NapiStatus;
+    pub fn napi_create_object(env: *mut NapiEnv, result: *mut *mut NapiValue) -> NapiStatus;
 }
 
 // Perry's compiled entry. The TypeScript compiler always emits `main`
@@ -176,6 +177,48 @@ unsafe extern "C" fn drain_toast(env: *mut NapiEnv, _info: *mut NapiCallbackInfo
     s
 }
 
+// Phase 2 v3 Option 2: drain one queued (id, value) text update and
+// return it as a JS object `{ id, value }` (or undefined when empty).
+// The auto-emitted .ets onClick loops calling this and applies each
+// entry to the matching `@State text_<id>` for reactive Text rerendering.
+//
+// We pop directly from the Rust-side queue (no Perry-object roundtrip)
+// and build the JS object inline via napi_create_object +
+// napi_set_named_property. Avoids the interned-string-key trap from
+// the previous shape — `js_object_set_field_by_name` keys by
+// pointer-equality on interned StringHeaders, so reading back through
+// `js_object_get_field_by_name_f64` with freshly-allocated keys (not
+// pointer-equal to the originals) silently returned undefined fields.
+unsafe extern "C" fn drain_text_update(
+    env: *mut NapiEnv,
+    _info: *mut NapiCallbackInfo,
+) -> *mut NapiValue {
+    let Some((id, value)) = crate::arkts_callbacks::pop_text_update() else {
+        let mut undef: *mut NapiValue = ptr::null_mut();
+        let _ = napi_get_undefined(env, &mut undef);
+        return undef;
+    };
+    let mut id_napi: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_string_utf8(
+        env,
+        id.as_ptr() as *const c_char,
+        id.len(),
+        &mut id_napi,
+    );
+    let mut val_napi: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_string_utf8(
+        env,
+        value.as_ptr() as *const c_char,
+        value.len(),
+        &mut val_napi,
+    );
+    let mut obj: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_object(env, &mut obj);
+    let _ = napi_set_named_property(env, obj, b"id\0".as_ptr() as *const c_char, id_napi);
+    let _ = napi_set_named_property(env, obj, b"value\0".as_ptr() as *const c_char, val_napi);
+    obj
+}
+
 unsafe extern "C" fn napi_init(env: *mut NapiEnv, exports: *mut NapiValue) -> *mut NapiValue {
     // run(): module init + user top-level code. Called from EntryAbility.
     let run_name = b"run\0";
@@ -218,6 +261,20 @@ unsafe extern "C" fn napi_init(env: *mut NapiEnv, exports: *mut NapiValue) -> *m
         &mut dt_fn,
     );
     let _ = napi_set_named_property(env, exports, dt_name.as_ptr() as *const c_char, dt_fn);
+
+    // drainTextUpdate(): pop one queued (id, value) text update.
+    // Phase 2 v3 Option 2.
+    let dtu_name = b"drainTextUpdate\0";
+    let mut dtu_fn: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_function(
+        env,
+        dtu_name.as_ptr() as *const c_char,
+        15,
+        drain_text_update,
+        ptr::null_mut(),
+        &mut dtu_fn,
+    );
+    let _ = napi_set_named_property(env, exports, dtu_name.as_ptr() as *const c_char, dtu_fn);
 
     exports
 }

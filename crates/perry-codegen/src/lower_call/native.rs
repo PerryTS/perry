@@ -287,6 +287,26 @@ pub(crate) fn lower_native_method_call(
         return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
     }
 
+    // perry/ui.setText(id, value) — Phase 2 v3 Option 2 reactive Text.
+    // Enqueues a (id, value) update; the auto-emitted .ets onClick
+    // pumps the queue into the matching `@State text_<id>` after the
+    // closure body returns. Same drain-pattern shape as showToast.
+    if module == "perry/ui" && method == "setText" && object.is_none() {
+        if args.len() < 2 {
+            return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+        }
+        let id_d = lower_expr(ctx, &args[0])?;
+        let val_d = lower_expr(ctx, &args[1])?;
+        ctx.pending_declares.push((
+            "perry_arkts_set_text".to_string(),
+            crate::types::VOID,
+            vec![DOUBLE, DOUBLE],
+        ));
+        let blk = ctx.block();
+        blk.call_void("perry_arkts_set_text", &[(DOUBLE, &id_d), (DOUBLE, &val_d)]);
+        return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+    }
+
     // perry/arkts: HarmonyOS Phase 2 v2 callback bridge. Synthetic module
     // injected by the harvest pass (`compile.rs::emit_index_ets`) — never
     // user-authored. `registerCallback(idx, closure)` lowers to a call to

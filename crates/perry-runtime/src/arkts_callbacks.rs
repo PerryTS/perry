@@ -195,8 +195,26 @@ pub fn arkts_callbacks_root_scanner(mark: &mut dyn FnMut(f64)) {
 }
 
 // --- Phase 2 v3 Option 1: showToast drain queue ---
+// --- Phase 2 v3 Option 2: setText(id, value) drain queue ---
 
 static PENDING_TOASTS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+static PENDING_TEXT_UPDATES: Mutex<VecDeque<(String, String)>> = Mutex::new(VecDeque::new());
+
+/// Decode a NaN-boxed JS value to a Rust String via the StringHeader
+/// payload-after-header layout. Used by both showToast and setText for
+/// the same coerce-to-string semantics. Returns empty on null header.
+fn decode_jsvalue_string(handle: f64) -> String {
+    let header = crate::value::js_jsvalue_to_string(handle);
+    if header.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let blen = (*header).byte_len as usize;
+        let data_ptr = (header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let bytes = std::slice::from_raw_parts(data_ptr, blen);
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
 
 /// Enqueue a toast message. Called from TS-side `showToast(msg)` via
 /// codegen dispatch on `perry/ui.showToast`. After the closure returns,
@@ -209,27 +227,42 @@ static PENDING_TOASTS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 /// (matching JS semantics).
 #[no_mangle]
 pub extern "C" fn perry_arkts_show_toast(msg_handle: f64) {
-    // Coerce to a *StringHeader (handles SSO + heap + ToString for
-    // non-string args), then decode to a Rust String. Lossy UTF-8 so
-    // a stray byte sequence shows up as a placeholder rather than
-    // panicking the .so.
-    let header = crate::value::js_jsvalue_to_string(msg_handle);
-    let s = if header.is_null() {
-        String::new()
-    } else {
-        unsafe {
-            let blen = (*header).byte_len as usize;
-            // StringHeader is followed by `byte_len` payload bytes
-            // immediately after the struct (see string.rs layout doc).
-            let data_ptr = (header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-            let bytes = std::slice::from_raw_parts(data_ptr, blen);
-            String::from_utf8_lossy(bytes).into_owned()
-        }
-    };
+    let s = decode_jsvalue_string(msg_handle);
     arkts_log(&format!("show_toast queued msg={:?}", s));
     if let Ok(mut q) = PENDING_TOASTS.lock() {
         q.push_back(s);
     }
+}
+
+/// Phase 2 v3 Option 2: queue a (id, value) text update for the next
+/// drain pass. The auto-emitted .ets onClick consumes these via
+/// `drainTextUpdate()` and assigns to the matching `@State text_<id>`.
+///
+/// Both args are NaN-boxed JS values; we coerce both to strings via
+/// `js_jsvalue_to_string`. JS-side `setText("counter", count)` works
+/// even when `count` is a number — it gets ToString'd at the boundary.
+#[no_mangle]
+pub extern "C" fn perry_arkts_set_text(id_handle: f64, val_handle: f64) {
+    let id = decode_jsvalue_string(id_handle);
+    let val = decode_jsvalue_string(val_handle);
+    arkts_log(&format!("set_text queued id={:?} val={:?}", id, val));
+    if let Ok(mut q) = PENDING_TEXT_UPDATES.lock() {
+        q.push_back((id, val));
+    }
+}
+
+/// Pop the oldest (id, value) text update from the queue. Returns
+/// `Some((id, value))` if any, `None` if empty. Direct Rust-string
+/// pop — no Perry-runtime object roundtrip — so the NAPI handler in
+/// `ohos_napi.rs` can build a JS object from the raw strings without
+/// hitting the interned-key pointer-equality trap that the previous
+/// `*ObjectHeader`-returning shape ran into.
+pub(crate) fn pop_text_update() -> Option<(String, String)> {
+    let popped = PENDING_TEXT_UPDATES.lock().ok()?.pop_front();
+    if let Some((id, val)) = &popped {
+        arkts_log(&format!("drain_text_update emitting id={:?} val={:?}", id, val));
+    }
+    popped
 }
 
 /// Pop the oldest queued toast message and return it as a NaN-boxed

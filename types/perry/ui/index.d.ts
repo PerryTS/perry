@@ -202,11 +202,38 @@ export function VStack(spacing: number, children: Widget[]): Widget;
 export function HStack(children: Widget[]): Widget;
 export function HStack(spacing: number, children: Widget[]): Widget;
 
-/** Static text label. */
-export function Text(content: string): Widget;
+/**
+ * Static text label.
+ *
+ * Phase 2 v3 Option 2: passing a second `id` arg makes the Text
+ * reactive — its content is bound to a `@State` field on the page.
+ * Update from inside any closure via `setText(id, newValue)` to
+ * trigger a UI rerender:
+ *
+ *     let count = 0;
+ *     App({ body: VStack([
+ *       Text("Count: 0", "counter"),
+ *       Button("+", () => { count++; setText("counter", `Count: ${count}`); })
+ *     ])});
+ */
+export function Text(content: string, id?: string): Widget;
 
 /** Clickable button. */
 export function Button(label: string, onPress: () => void): Widget;
+
+/**
+ * Update a reactive `Text(initial, id)` widget's content.
+ *
+ * On `--target harmonyos`, queues a `(id, value)` update that the
+ * auto-emitted .ets onClick drains after the closure returns,
+ * assigning to the matching `@State text_<id>: string` field — ArkUI
+ * rerenders the Text. On other platforms this is currently a no-op.
+ *
+ * `id` must match exactly what was passed as the second arg to the
+ * `Text()` call you want to update. Calls to `setText` for unregistered
+ * ids are silently ignored (no Text widget binds to them).
+ */
+export function setText(id: string, value: string): void;
 
 /**
  * Show a transient banner/toast on supported platforms.
