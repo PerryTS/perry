@@ -5,6 +5,24 @@
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::JSValue;
 
+// On harmonyos, the .so is loaded by ArkTS and stdout/stderr have no
+// terminal — every `println!("foo")` from inside Perry's runtime
+// disappears into the void. Override `println!` to route through hilog
+// (libhilog_ndk.z.so::OH_LOG_Print) instead, so `console.log("hi")`
+// surfaces in DevEco/hdc the same way ArkTS's console.log does. The
+// shadowing is module-scoped (only this file) so other runtime modules
+// keep their normal stdout-bound println! semantics — only the
+// user-facing console.* family routes to hilog.
+#[cfg(feature = "ohos-napi")]
+macro_rules! println {
+    () => {
+        $crate::arkts_callbacks::ohos_stdout_println("")
+    };
+    ($($arg:tt)*) => {
+        $crate::arkts_callbacks::ohos_stdout_println(&format!($($arg)*))
+    };
+}
+
 /// Returns true if the f64 value is negative zero (-0.0).
 /// Uses bit pattern comparison so +0.0 and -0.0 are distinguished
 /// (they compare equal with normal `==`).

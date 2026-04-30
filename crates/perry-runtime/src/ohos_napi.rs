@@ -70,6 +70,20 @@ extern "C" {
         utf8name: *const c_char,
         value: *mut NapiValue,
     ) -> NapiStatus;
+    pub fn napi_get_cb_info(
+        env: *mut NapiEnv,
+        info: *mut NapiCallbackInfo,
+        argc: *mut usize,
+        argv: *mut *mut NapiValue,
+        this_arg: *mut *mut NapiValue,
+        data: *mut *mut c_void,
+    ) -> NapiStatus;
+    pub fn napi_get_value_int32(
+        env: *mut NapiEnv,
+        value: *mut NapiValue,
+        result: *mut i32,
+    ) -> NapiStatus;
+    pub fn napi_get_undefined(env: *mut NapiEnv, result: *mut *mut NapiValue) -> NapiStatus;
 }
 
 // Perry's compiled entry. The TypeScript compiler always emits `main`
@@ -90,19 +104,73 @@ unsafe extern "C" fn run(env: *mut NapiEnv, _info: *mut NapiCallbackInfo) -> *mu
     out
 }
 
+// Phase 2 v2 callback bridge. ArkUI's auto-emitted `.onClick(() =>
+// perryEntry.invokeCallback(idx))` lands here. We read the int32 idx,
+// dispatch to `perry_arkts_invoke_callback` (which unboxes the registered
+// closure pointer and calls js_closure_call0), and return undefined.
+//
+// Multi-arg variants (Toggle/TextField/Slider value forwarding) are v2.5
+// follow-ups — they need NaN-box marshaling on the way in.
+unsafe extern "C" fn invoke_callback(
+    env: *mut NapiEnv,
+    info: *mut NapiCallbackInfo,
+) -> *mut NapiValue {
+    crate::arkts_callbacks::arkts_log_napi("invokeCallback NAPI ENTER");
+    let mut argc: usize = 1;
+    let mut argv: [*mut NapiValue; 1] = [ptr::null_mut(); 1];
+    let _ = napi_get_cb_info(
+        env,
+        info,
+        &mut argc,
+        argv.as_mut_ptr(),
+        ptr::null_mut(),
+        ptr::null_mut(),
+    );
+    let mut idx_i32: i32 = -1;
+    if argc >= 1 && !argv[0].is_null() {
+        let _ = napi_get_value_int32(env, argv[0], &mut idx_i32);
+    }
+    crate::arkts_callbacks::arkts_log_napi(&format!(
+        "invokeCallback NAPI argc={} idx={}",
+        argc, idx_i32
+    ));
+    if idx_i32 >= 0 {
+        let _ = crate::arkts_callbacks::perry_arkts_invoke_callback(idx_i32 as i64);
+    }
+    let mut undef: *mut NapiValue = ptr::null_mut();
+    let _ = napi_get_undefined(env, &mut undef);
+    undef
+}
+
 unsafe extern "C" fn napi_init(env: *mut NapiEnv, exports: *mut NapiValue) -> *mut NapiValue {
-    // Export a single function, `run`. ArkTS callers do `entry.run()`.
-    let name = b"run\0";
-    let mut fn_val: *mut NapiValue = ptr::null_mut();
+    // run(): module init + user top-level code. Called from EntryAbility.
+    let run_name = b"run\0";
+    let mut run_fn: *mut NapiValue = ptr::null_mut();
     let _ = napi_create_function(
         env,
-        name.as_ptr() as *const c_char,
+        run_name.as_ptr() as *const c_char,
         3,
         run,
         ptr::null_mut(),
-        &mut fn_val,
+        &mut run_fn,
     );
-    let _ = napi_set_named_property(env, exports, name.as_ptr() as *const c_char, fn_val);
+    let _ = napi_set_named_property(env, exports, run_name.as_ptr() as *const c_char, run_fn);
+
+    // invokeCallback(idx): dispatch a registered Perry closure by slot.
+    // ArkUI's auto-emitted onClick handlers call this with the slot id
+    // assigned at compile time by perry-codegen-arkts.
+    let cb_name = b"invokeCallback\0";
+    let mut cb_fn: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_function(
+        env,
+        cb_name.as_ptr() as *const c_char,
+        14,
+        invoke_callback,
+        ptr::null_mut(),
+        &mut cb_fn,
+    );
+    let _ = napi_set_named_property(env, exports, cb_name.as_ptr() as *const c_char, cb_fn);
+
     exports
 }
 

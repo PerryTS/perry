@@ -3171,6 +3171,8 @@ pub fn gc_init() {
     gc_register_root_scanner(intern_table_root_scanner);
     gc_register_root_scanner(shadow_stack_root_scanner);
     gc_register_root_scanner(crate::builtins::scan_console_log_singleton_roots);
+    #[cfg(feature = "ohos-napi")]
+    gc_register_root_scanner(crate::arkts_callbacks::arkts_callbacks_root_scanner);
 }
 
 /// Root scanner for the string intern table.

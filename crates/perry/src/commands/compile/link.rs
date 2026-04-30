@@ -1082,6 +1082,12 @@ pub(super) fn build_and_run_link(
         // is `<name>.z.so` — the `-l` flag strips `lib` and `.so` but NOT the
         // middle `.z`, so `-lace_napi.z` is the deliberate spelling.
         cmd.arg("-lace_napi.z");
+        // `libhilog_ndk.z.so` provides OH_LOG_Print, used by Perry's
+        // `js_console_log_*` family on harmonyos to route compiled-TS
+        // console output to hilog (so Perry-emitted log lines surface
+        // in DevEco/hdc the same way ArkTS console.log does), and by the
+        // arkts_callbacks bridge for diagnostic register/invoke traces.
+        cmd.arg("-lhilog_ndk.z");
     } else if is_android {
         // Android system libraries
         cmd.arg("-Wl,--allow-multiple-definition")

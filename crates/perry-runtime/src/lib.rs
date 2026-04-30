@@ -66,6 +66,8 @@ pub mod json;
 pub mod json_tape;
 pub mod jsx;
 #[cfg(feature = "ohos-napi")]
+pub mod arkts_callbacks;
+#[cfg(feature = "ohos-napi")]
 pub mod ohos_napi;
 #[cfg(feature = "full")]
 pub mod plugin;

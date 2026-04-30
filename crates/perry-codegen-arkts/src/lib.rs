@@ -14,12 +14,12 @@
 //! no UI calls at all — Perry's `main()` runs once at NAPI startup for any
 //! non-UI logic, and ArkUI declaratively renders the harvested tree.
 //!
-//! Phase 2 v1.5 scope:
+//! Phase 2 v1.5 scope (visual surface):
 //! - `App({body: <expr>})` extraction
 //! - `Text(literal)` → `Text('lit').fontSize(20)`
 //! - `VStack([...], spacing?)` → `Column({space: <spacing>}) { ... }`
 //! - `HStack([...], spacing?)` → `Row({space: <spacing>}) { ... }`
-//! - `Button(label, onPress)` → `Button('label')` (callback dropped — see Reactivity caveat)
+//! - `Button(label, onPress)` → `Button('label')`
 //! - `TextField(placeholder, onChange)` → `TextInput({placeholder: 'hint'})`
 //! - `Toggle(label, onChange)` → label rendered as Text + ArkUI Toggle in a Row
 //! - `Slider(min, max, onChange)` → `Slider({min, max, value: min})`
@@ -27,16 +27,24 @@
 //! - `Divider()` → `Divider()`
 //! - LocalGet escape: `let x = Text("hi"); App({body: x})` follows the
 //!   binding back to its init expression for any read-only top-level local.
-//! - String / numeric / boolean literal arg coverage; closure args are silently
-//!   dropped (no reactivity bridge yet).
 //!
-//! Reactivity caveat: ArkUI's `@State` / `@Link` decorators handle UI
-//! reactivity natively, but Perry's runtime `State<T>` lives in the .so
-//! and doesn't share memory with the ArkTS heap. State binding across the
-//! NAPI boundary needs a poll/push mechanism that's deferred to a later
-//! phase. Today's emitter handles static UI shapes only — Button / Toggle /
-//! Slider / TextField widgets render but their event callbacks don't fire
-//! Perry TS code yet.
+//! Phase 2 v2 scope (callback bridge):
+//! - `Button(label, onPress)` captures `onPress` as a closure, assigns it
+//!   a slot id, and emits ArkUI `.onClick(() => perryEntry.invokeCallback(<id>))`.
+//!   The closure is then registered into a runtime slot table by an
+//!   injected `perry_arkts_register_callback(<id>, <closure>)` call (the
+//!   compile harvest pass plants this in `module.init`). On tap, NAPI's
+//!   `invokeCallback` looks the slot up and calls the closure via
+//!   `js_closure_call0` — running the original Perry TS body.
+//! - Toggle/TextField/Slider callbacks are still dropped because their
+//!   event payloads (boolean / string / number) need NaN-box marshaling
+//!   on the ArkTS → Rust boundary; that's v2.5.
+//!
+//! State-binding caveat: ArkUI's `@State` / `@Link` reactivity is handled
+//! natively in the ArkTS runtime, but Perry's `State<T>` lives in the .so
+//! heap and doesn't share memory with the ArkTS heap. Reactive UI updates
+//! after a callback (e.g. `count++` re-rendering a `Text(count)`) need a
+//! push channel from the .so back to ArkUI; that's a future phase.
 
 use anyhow::Result;
 use perry_hir::ir::{Class, Expr, Module, Stmt};
@@ -46,8 +54,20 @@ use std::collections::HashMap;
 // transitive dep on perry-types just for the type alias.
 type LocalId = u32;
 
+/// Result of harvesting an `App({body: ...})` call: the emitted ArkUI
+/// source plus the closures that need to be registered into the runtime
+/// callback table. Each `callbacks[i]` is the original Perry HIR closure
+/// expression at slot `i`; the emitted .ets references it as
+/// `perryEntry.invokeCallback(i)`.
+pub struct HarvestResult {
+    pub ets_source: String,
+    pub callbacks: Vec<Expr>,
+}
+
 /// Walk `module.init` for the first `App({...})` call from `perry/ui`,
-/// emit the corresponding ArkUI `pages/Index.ets`, AND **destructively
+/// emit the corresponding ArkUI `pages/Index.ets`, capture every
+/// closure-bearing arg into `HarvestResult.callbacks` so the compile
+/// harvest pass can inject runtime registrations, AND **destructively
 /// strip the App call from the HIR** so the LLVM backend doesn't emit
 /// `perry_ui_*` FFI calls that would be unresolved on the OHOS target
 /// (no `perry-ui-harmonyos` crate exists — UI is rendered declaratively
@@ -55,9 +75,8 @@ type LocalId = u32;
 ///
 /// Returns `Ok(None)` if the module doesn't use `perry/ui App` (the caller
 /// should fall through to the blank EntryAbility-only stub; HIR is
-/// untouched). Returns `Ok(Some(ets_source))` for static-UI programs where
-/// we successfully harvested the widget tree.
-pub fn emit_index_ets(module: &mut Module) -> Result<Option<String>> {
+/// untouched). Returns `Ok(Some(HarvestResult))` for static-UI programs.
+pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
     // Snapshot the class table BEFORE the &mut borrow on init so we can
     // look up __AnonShape_* classes (Perry's closed-shape object-literal
     // optimization, v0.5.337+) without aliasing &mut module.
@@ -70,8 +89,12 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<String>> {
     let Some(body_expr) = find_and_strip_app(&mut module.init, &classes) else {
         return Ok(None);
     };
-    let widget_arkui = emit_widget(&body_expr, &bindings, 0);
-    Ok(Some(wrap_index_page(&widget_arkui)))
+    let mut callbacks: Vec<Expr> = Vec::new();
+    let widget_arkui = emit_widget(&body_expr, &bindings, 0, &mut callbacks);
+    Ok(Some(HarvestResult {
+        ets_source: wrap_index_page(&widget_arkui),
+        callbacks,
+    }))
 }
 
 /// Find the first top-level `App({body: <expr>})` call in `module.init`,
@@ -162,10 +185,18 @@ fn resolve(expr: &Expr, bindings: &HashMap<LocalId, Expr>) -> Expr {
 
 /// Emit an ArkUI expression for a perry/ui widget call. Returns the inner
 /// `build()`-block content (no wrapping component). `depth` controls
-/// indentation when emitting nested children (Column/Row contents).
+/// indentation when emitting nested children. `callbacks` accumulates
+/// closure expressions that need runtime registration; each push assigns
+/// the next slot id (= callbacks.len() before push).
+///
 /// Unrecognized widgets degrade to a comment + a placeholder Text — never
 /// errors out, since emit-time errors would leave the user without any UI.
-fn emit_widget(expr: &Expr, bindings: &HashMap<LocalId, Expr>, depth: usize) -> String {
+fn emit_widget(
+    expr: &Expr,
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+) -> String {
     let resolved = resolve(expr, bindings);
     match &resolved {
         Expr::NativeMethodCall {
@@ -175,9 +206,9 @@ fn emit_widget(expr: &Expr, bindings: &HashMap<LocalId, Expr>, depth: usize) -> 
             ..
         } if m == "perry/ui" => match method.as_str() {
             "Text" => emit_text(args),
-            "VStack" => emit_stack("Column", args, bindings, depth),
-            "HStack" => emit_stack("Row", args, bindings, depth),
-            "Button" => emit_button(args),
+            "VStack" => emit_stack("Column", args, bindings, depth, callbacks),
+            "HStack" => emit_stack("Row", args, bindings, depth, callbacks),
+            "Button" => emit_button(args, callbacks),
             "TextField" => emit_textfield(args),
             "Toggle" => emit_toggle(args),
             "Slider" => emit_slider(args),
@@ -216,6 +247,7 @@ fn emit_stack(
     args: &[Expr],
     bindings: &HashMap<LocalId, Expr>,
     depth: usize,
+    callbacks: &mut Vec<Expr>,
 ) -> String {
     // First-arg shape detection — same logic as lower_call/native.rs:91.
     let (spacing, children_idx) = match args.first() {
@@ -228,7 +260,7 @@ fn emit_stack(
     let children = match args.get(children_idx) {
         Some(Expr::Array(items)) => items
             .iter()
-            .map(|child| emit_widget(child, bindings, depth + 1))
+            .map(|child| emit_widget(child, bindings, depth + 1, callbacks))
             .collect::<Vec<_>>(),
         Some(_) => vec![format!(
             "// children arg wasn't an array literal — Phase 2 v1.5 limitation\n\
@@ -264,12 +296,30 @@ fn emit_stack(
     )
 }
 
-/// `Button("label", onPress)` → `Button('label')`. The closure is dropped
-/// — ArkUI's `.onClick(...)` would need a way to call back into Perry's
-/// .so, which we don't have without a NAPI reactivity bridge.
-fn emit_button(args: &[Expr]) -> String {
+/// `Button("label", onPress)` → `Button('label').onClick(() =>
+/// perryEntry.invokeCallback(<idx>))`. Phase 2 v2: the closure is captured
+/// into the callbacks vec at the next available slot id; the compile
+/// harvest pass injects a `perry_arkts_register_callback(idx, closure)`
+/// call into `module.init` so the closure pointer ends up in the runtime
+/// slot table at startup.
+///
+/// Non-closure second args (or absent) emit a label-only Button with no
+/// onClick — preserves v1.5 behavior for simpler tests.
+fn emit_button(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
     let label = first_string_arg(args).unwrap_or_else(|| "Button".to_string());
-    format!("Button({}).fontSize(16)", arkts_string_lit(&label))
+    let onclick_attached = match args.get(1) {
+        Some(closure @ Expr::Closure { .. }) => {
+            let idx = callbacks.len();
+            callbacks.push(closure.clone());
+            format!(".onClick(() => {{ perryEntry.invokeCallback({}) }})", idx)
+        }
+        _ => String::new(),
+    };
+    format!(
+        "Button({}).fontSize(16){}",
+        arkts_string_lit(&label),
+        onclick_attached
+    )
 }
 
 /// `TextField(placeholder, onChange)` → `TextInput({placeholder: 'hint'})`.
@@ -311,7 +361,9 @@ fn emit_slider(args: &[Expr]) -> String {
 }
 
 /// Wrap a widget body expression in a complete ArkUI `@Entry @Component
-/// struct Index { build() { Column() { ... } } }` page.
+/// struct Index { build() { Column() { ... } } }` page. The leading
+/// `import perryEntry from 'libentry.so'` makes `perryEntry.invokeCallback`
+/// available to the auto-emitted `.onClick(...)` handlers (Phase 2 v2).
 fn wrap_index_page(widget_body: &str) -> String {
     let indented = widget_body
         .lines()
@@ -324,6 +376,8 @@ fn wrap_index_page(widget_body: &str) -> String {
          //\n\
          // Source of truth is the `App({{body: ...}})` call in your\n\
          // TypeScript entry. Edit there; this file is overwritten.\n\
+         import perryEntry from 'libentry.so';\n\
+         \n\
          @Entry\n\
          @Component\n\
          struct Index {{\n\
@@ -436,6 +490,20 @@ mod tests {
         })
     }
 
+    fn closure_stub() -> Expr {
+        Expr::Closure {
+            func_id: 0 as perry_types::FuncId,
+            params: vec![],
+            return_type: perry_types::Type::Any,
+            body: vec![],
+            captures: vec![],
+            mutable_captures: vec![],
+            captures_this: false,
+            enclosing_class: None,
+            is_async: false,
+        }
+    }
+
     #[test]
     fn emits_none_for_empty_module() {
         let mut m = empty_module();
@@ -447,9 +515,10 @@ mod tests {
         let mut m = empty_module();
         m.init
             .push(app_with_body(nmc("Text", vec![Expr::String("hi".into())])));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("Text('hi').fontSize(20)"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Text('hi').fontSize(20)"));
         assert!(matches!(m.init[0], Stmt::Expr(Expr::Number(_))));
+        assert_eq!(r.callbacks.len(), 0);
     }
 
     #[test]
@@ -462,10 +531,10 @@ mod tests {
                 nmc("Text", vec![Expr::String("b".into())]),
             ])],
         )));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("Column({ space: 8 })"));
-        assert!(ets.contains("Text('a').fontSize(20)"));
-        assert!(ets.contains("Text('b').fontSize(20)"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Column({ space: 8 })"));
+        assert!(r.ets_source.contains("Text('a').fontSize(20)"));
+        assert!(r.ets_source.contains("Text('b').fontSize(20)"));
     }
 
     #[test]
@@ -478,8 +547,8 @@ mod tests {
                 Expr::Array(vec![nmc("Text", vec![Expr::String("a".into())])]),
             ],
         )));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("Column({ space: 16 })"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Column({ space: 16 })"));
     }
 
     #[test]
@@ -489,23 +558,69 @@ mod tests {
             "HStack",
             vec![Expr::Array(vec![nmc("Spacer", vec![])])],
         )));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("Row({ space: 8 })"));
-        assert!(ets.contains("Blank()"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Row({ space: 8 })"));
+        assert!(r.ets_source.contains("Blank()"));
     }
 
     #[test]
-    fn button_label_only() {
+    fn button_label_only_no_closure_drops_onclick() {
         let mut m = empty_module();
         m.init.push(app_with_body(nmc(
             "Button",
             vec![
                 Expr::String("Save".into()),
-                Expr::Number(0.0), // would be a closure in real code; we ignore it
+                Expr::Number(0.0), // not a closure — placeholder
             ],
         )));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("Button('Save').fontSize(16)"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Button('Save').fontSize(16)"));
+        assert!(!r.ets_source.contains(".onClick"));
+        assert_eq!(r.callbacks.len(), 0);
+    }
+
+    #[test]
+    fn button_with_closure_emits_onclick_and_captures_callback() {
+        // Phase 2 v2 headline test: Button("Save", () => {}) → emit
+        // .onClick(...) and capture closure into callbacks[0].
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Button",
+            vec![Expr::String("Save".into()), closure_stub()],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r
+            .ets_source
+            .contains(".onClick(() => { perryEntry.invokeCallback(0) })"));
+        assert_eq!(r.callbacks.len(), 1);
+        assert!(matches!(r.callbacks[0], Expr::Closure { .. }));
+        // Page wrapper imports perryEntry so the onClick body resolves.
+        assert!(r
+            .ets_source
+            .contains("import perryEntry from 'libentry.so'"));
+    }
+
+    #[test]
+    fn multi_button_assigns_sequential_callback_slots() {
+        // Two buttons in a VStack — slot 0 and slot 1 in declaration order.
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "VStack",
+            vec![Expr::Array(vec![
+                nmc(
+                    "Button",
+                    vec![Expr::String("First".into()), closure_stub()],
+                ),
+                nmc(
+                    "Button",
+                    vec![Expr::String("Second".into()), closure_stub()],
+                ),
+            ])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("invokeCallback(0)"));
+        assert!(r.ets_source.contains("invokeCallback(1)"));
+        assert_eq!(r.callbacks.len(), 2);
     }
 
     #[test]
@@ -515,8 +630,10 @@ mod tests {
             "TextField",
             vec![Expr::String("Search…".into()), Expr::Number(0.0)],
         )));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("TextInput({ placeholder: 'Search…' })"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r
+            .ets_source
+            .contains("TextInput({ placeholder: 'Search…' })"));
     }
 
     #[test]
@@ -526,10 +643,12 @@ mod tests {
             "Toggle",
             vec![Expr::String("Notifications".into()), Expr::Number(0.0)],
         )));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("Row({ space: 8 })"));
-        assert!(ets.contains("Text('Notifications')"));
-        assert!(ets.contains("Toggle({ type: ToggleType.Switch, isOn: false })"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Row({ space: 8 })"));
+        assert!(r.ets_source.contains("Text('Notifications')"));
+        assert!(r
+            .ets_source
+            .contains("Toggle({ type: ToggleType.Switch, isOn: false })"));
     }
 
     #[test]
@@ -543,17 +662,17 @@ mod tests {
                 Expr::Number(0.0), // would be closure
             ],
         )));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("min: 0"));
-        assert!(ets.contains("max: 100"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("min: 0"));
+        assert!(r.ets_source.contains("max: 100"));
     }
 
     #[test]
     fn divider_no_args() {
         let mut m = empty_module();
         m.init.push(app_with_body(nmc("Divider", vec![])));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("Divider()"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Divider()"));
     }
 
     #[test]
@@ -569,11 +688,11 @@ mod tests {
                 ])],
             )])],
         )));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("Column({ space: 8 })"));
-        assert!(ets.contains("Row({ space: 8 })"));
-        assert!(ets.contains("Text('L')"));
-        assert!(ets.contains("Text('R')"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Column({ space: 8 })"));
+        assert!(r.ets_source.contains("Row({ space: 8 })"));
+        assert!(r.ets_source.contains("Text('L')"));
+        assert!(r.ets_source.contains("Text('R')"));
     }
 
     #[test]
@@ -588,8 +707,8 @@ mod tests {
             init: Some(nmc("Text", vec![Expr::String("via let".into())])),
         });
         m.init.push(app_with_body(Expr::LocalGet(7)));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("Text('via let')"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Text('via let')"));
     }
 
     #[test]
@@ -597,9 +716,11 @@ mod tests {
         let mut m = empty_module();
         m.init
             .push(app_with_body(nmc("Picker", vec![Expr::Array(vec![])])));
-        let ets = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(ets.contains("// unsupported perry/ui widget: Picker"));
-        assert!(ets.contains("Text('[unsupported: Picker]')"));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r
+            .ets_source
+            .contains("// unsupported perry/ui widget: Picker"));
+        assert!(r.ets_source.contains("Text('[unsupported: Picker]')"));
     }
 
     #[test]
