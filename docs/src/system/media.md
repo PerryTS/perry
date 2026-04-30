@@ -87,7 +87,7 @@ tick if the signal hasn't arrived.
 | iOS | AVPlayer + AVAudioSession Playback + UIImage artwork | **Implemented** + lock-screen |
 | tvOS | AVPlayer + Siri Remote play/pause/skip | **Implemented** + remote |
 | visionOS | AVPlayer + UIImage artwork | **Implemented** + lock-screen |
-| Android | `android.media.MediaPlayer` via JNI | **Implemented** (lock-screen via `MediaSessionCompat` is a follow-up) |
+| Android | `android.media.MediaPlayer` + `MediaSessionCompat` via JNI | **Implemented** + lock-screen |
 | GTK4 / Linux | GStreamer `playbin` element + MPRIS D-Bus | **Implemented** + lock-screen |
 | Windows | `Windows.Media.Playback.MediaPlayer` (WinRT) + `SystemMediaTransportControls` | **Implemented** + Now Playing |
 | watchOS | AVPlayer + AVAudioSession Playback + UIImage artwork | **Implemented** + Now Playing complication |
@@ -108,6 +108,35 @@ server is lazy-bootstrapped on the first `setNowPlaying` call so apps
 that don't need lock-screen integration don't pay the zbus startup
 cost. `Next` / `Previous` are no-ops (single-track playback model);
 playlists are an app-level concern.
+
+### Android — background playback
+
+Perry's Android backend wires `MediaSessionCompat` so the lock-screen
+tile, Bluetooth headset, Android Auto, and Wear OS see the metadata
+pushed by `setNowPlaying` and route headphone play/pause/stop/seek
+events back into the registered `onStateChange` closure. That covers
+foreground use. Apps that want playback to survive the activity being
+backgrounded (a podcast app, music player, etc.) need a foreground
+service of their own — Android will otherwise kill the audio when the
+process drops to the cached state. Add the following to your app's
+`AndroidManifest.xml` and start the service when playback begins:
+
+```xml
+<service
+    android:name=".PerryMediaService"
+    android:foregroundServiceType="mediaPlayback"
+    android:exported="false" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+```
+
+The service implementation is app-specific — it should hold a
+`MediaSessionCompat.Token` (the same session Perry created), build a
+`Notification.MediaStyle` notification from it, and call
+`startForeground(...)` on `play` / `stopForeground(false)` on `pause` /
+`stopSelf()` on `stop`. We deliberately don't ship a default service
+because the notification's branding (small icon, tint, content intent)
+depends on the host app.
 
 ### Threading notes
 

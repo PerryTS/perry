@@ -43,4 +43,8 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
+    // MediaSessionCompat — surfaces lock-screen / Bluetooth / Wear OS
+    // metadata + transport callbacks. Used by `perry/media`'s
+    // `setNowPlaying`.
+    implementation("androidx.media:media:1.7.0")
 }
