@@ -61,6 +61,12 @@ pub mod value;
 #[cfg(feature = "ohos-napi")]
 pub mod arkts_callbacks;
 pub mod geisterhand_registry;
+/// HarmonyOS streaming media playback (`perry/media`) — drain-queue
+/// bridge to `@ohos.multimedia.media.AVPlayer`. Symbols mirror the per-
+/// platform `media_playback.rs` modules in the perry-ui-* crates; on
+/// harmonyos there's no perry-ui-harmonyos so they live here. Issue #369.
+#[cfg(feature = "ohos-napi")]
+pub mod media_playback;
 pub mod i18n;
 #[cfg(all(any(target_os = "ios", target_os = "tvos"), feature = "ios-game-loop"))]
 pub mod ios_game_loop;
