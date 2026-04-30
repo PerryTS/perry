@@ -725,6 +725,21 @@ object PerryBridge {
         }
     }
 
+    // --- Toast (Phase 2 v3.3) ---
+
+    /**
+     * Show an Android Toast message on the UI thread.
+     * Called from the Perry native thread via JNI; posts to uiHandler so
+     * Toast.makeText runs on the main looper as required by the Android SDK.
+     */
+    @JvmStatic
+    fun showToast(msg: String) {
+        val ctx = activity
+        uiHandler.post {
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // --- Timer ---
 
     @JvmStatic

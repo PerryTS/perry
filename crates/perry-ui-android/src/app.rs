@@ -243,6 +243,12 @@ pub fn app_run(_app_handle: i64) {
     unsafe {
         __android_log_print(3, b"PerryApp\0".as_ptr(), b"app_run: called\0".as_ptr());
     }
+
+    // Phase 2 v3.3: register cross-platform showToast / setText handlers.
+    // Forwards perry_arkts_show_toast → PerryBridge.showToast (UI-thread
+    // Toast.makeText) and perry_arkts_set_text → TextView.setText via JNI.
+    register_cross_platform_text_handlers();
+
     // Attach the root widget to the Activity
     attach_root_to_activity();
 
@@ -271,6 +277,33 @@ pub fn app_run(_app_handle: i64) {
     }
 
     // On Android we must NOT block — the Activity lifecycle IS the event loop.
+}
+
+// ============================================================================
+// Phase 2 v3.3: cross-platform showToast / setText wiring.
+// ============================================================================
+
+extern "C" {
+    fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
+    fn js_register_set_text_handler(
+        f: extern "C" fn(
+            id_ptr: *const u8,
+            id_len: usize,
+            val_ptr: *const u8,
+            val_len: usize,
+        ),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(widgets::toast::show_toast_handler);
+        js_register_set_text_handler(widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(widgets::text_registry::register_text_id_handler);
+    }
 }
 
 /// Called when the Activity is destroyed. No-op since App() doesn't block on Android.
