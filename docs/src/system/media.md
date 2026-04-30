@@ -90,7 +90,7 @@ tick if the signal hasn't arrived.
 | Android | `android.media.MediaPlayer` via JNI | **Implemented** (lock-screen via `MediaSessionCompat` is a follow-up) |
 | GTK4 / Linux | GStreamer `playbin` element | **Implemented** (MPRIS lock-screen is a follow-up) |
 | Windows | `Windows.Media.Playback.MediaPlayer` (WinRT) | **Implemented** (`SystemMediaTransportControls` lock-screen is a follow-up) |
-| watchOS | AVPlayer (limited; `WKApplication` Now Playing has a different shape) | Stub |
+| watchOS | AVPlayer + AVAudioSession Playback + UIImage artwork | **Implemented** + Now Playing complication |
 | HarmonyOS | `@ohos.multimedia.media.AVPlayer` via napi | Stub |
 | Web | `<audio>` element + Media Session API | Stub |
 
@@ -134,6 +134,31 @@ need an explicit "active player" should manage that themselves.
   wrapped in UIImage. The synchronous fetch is acceptable for a one-off
   artwork load (the MPNowPlayingInfoCenter dict is consumed
   synchronously when set).
+
+### watchOS Info.plist requirements
+
+watchOS keeps the audio engine alive when the watch screen sleeps **only
+if** the app's `Info.plist` declares the `audio` background mode under
+`WKBackgroundModes` (the WatchKit equivalent of iOS's `UIBackgroundModes`):
+
+```xml
+<key>WKBackgroundModes</key>
+<array>
+    <string>audio</string>
+</array>
+```
+
+Without this entry the OS suspends the watch app a few seconds after the
+wrist-down gesture or screen timeout, regardless of whether AVPlayer is
+actively rendering. The runtime also auto-activates an `AVAudioSession`
+with category `Playback` on the first `createPlayer(...)` call — combined
+with the Info.plist entry, this is what tells watchOS the app intends to
+keep playing audio in the background.
+
+The Now Playing surface on the watch face is independent from the paired
+iPhone's lock screen — they're separate processes with separate
+`MPNowPlayingInfoCenter` instances. `setNowPlaying` on watchOS targets
+the watch's Now Playing complication / glance screen.
 
 ## Subsonic example
 
