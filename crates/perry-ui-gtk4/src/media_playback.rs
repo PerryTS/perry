@@ -421,10 +421,13 @@ fn poll_tick() {
                 .unwrap_or(0.0);
             let dur = entry.duration_seconds;
 
-            if state_changed {
-                #[cfg(target_os = "linux")]
-                mpris::push_playback_status(new_state);
-            }
+            // Always offer the current state to MPRIS (the impl dedupes
+            // internally via LAST_STATUS). This makes sure the first
+            // `set_now_playing` call after `play()` boots the D-Bus
+            // server and immediately publishes the actual PlaybackStatus,
+            // not just an old transition that fired before MPRIS was up.
+            #[cfg(target_os = "linux")]
+            mpris::push_playback_status(new_state);
             if let Some(cb) = on_state {
                 fire_state_callback(cb, new_state);
             }
