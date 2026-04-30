@@ -51,6 +51,19 @@ zip.workspace = true
 jsonwebtoken = "9.3"
 dotenvy = "0.15"
 rayon = "1.10"
+regex = "1"
+
+# Cross-platform file locking (Unix flock + Windows LockFileEx) — used by
+# the auto-optimize driver in commands/compile/optimized_libs.rs to
+# serialize parallel `perry compile` invocations that target the same
+# `target/perry-auto-<hash>` directory. Without this, two workers
+# rebuilding the same feature combo race on the .a write — clang in
+# worker B sees a momentarily-missing file and bails with errno=2. Was
+# the root cause that forced the v0.5.384 NJOBS 6→3 retreat in the
+# CI compile-smoke job; v0.5.429 restores NJOBS=6 once this lands.
+# Already in the transitive link surface (gzip-header pulls it via
+# bindgen), so it's a no-cost direct dep.
+fslock = "0.2"
 
 # `perry updater` sign-side tooling (closes #229 loop). All three are
 # already in the link surface via perry-runtime / perry-stdlib's crypto

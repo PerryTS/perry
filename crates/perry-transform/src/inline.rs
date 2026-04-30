@@ -1845,290 +1845,52 @@ fn substitute_locals(
 
 /// Substitute Expr::This with a LocalGet reference
 fn substitute_this(expr: &mut Expr, obj_id: LocalId) {
-    match expr {
-        Expr::This => {
-            *expr = Expr::LocalGet(obj_id);
-        }
-        Expr::PropertyGet { object, .. } => {
-            substitute_this(object, obj_id);
-        }
-        Expr::PropertySet { object, value, .. } => {
-            substitute_this(object, obj_id);
-            substitute_this(value, obj_id);
-        }
-        Expr::Binary { left, right, .. }
-        | Expr::Logical { left, right, .. }
-        | Expr::Compare { left, right, .. } => {
-            substitute_this(left, obj_id);
-            substitute_this(right, obj_id);
-        }
-        Expr::Unary { operand, .. } => {
-            substitute_this(operand, obj_id);
-        }
-        Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            substitute_this(condition, obj_id);
-            substitute_this(then_expr, obj_id);
-            substitute_this(else_expr, obj_id);
-        }
-        Expr::Call { callee, args, .. } => {
-            substitute_this(callee, obj_id);
-            for arg in args {
-                substitute_this(arg, obj_id);
-            }
-        }
-        Expr::Array(elements) => {
-            for elem in elements {
-                substitute_this(elem, obj_id);
-            }
-        }
-        Expr::ArraySpread(elements) => {
-            for elem in elements {
-                match elem {
-                    perry_hir::ArrayElement::Expr(e) | perry_hir::ArrayElement::Spread(e) => {
-                        substitute_this(e, obj_id);
-                    }
-                }
-            }
-        }
-        Expr::CallSpread { callee, args, .. } => {
-            substitute_this(callee, obj_id);
-            for arg in args {
-                match arg {
-                    perry_hir::CallArg::Expr(e) | perry_hir::CallArg::Spread(e) => {
-                        substitute_this(e, obj_id);
-                    }
-                }
-            }
-        }
-        Expr::IndexGet { object, index } => {
-            substitute_this(object, obj_id);
-            substitute_this(index, obj_id);
-        }
-        Expr::IndexSet {
-            object,
-            index,
-            value,
-        } => {
-            substitute_this(object, obj_id);
-            substitute_this(index, obj_id);
-            substitute_this(value, obj_id);
-        }
-        Expr::LocalSet(_, value) => {
-            substitute_this(value, obj_id);
-        }
-        Expr::TypeOf(inner) => {
-            substitute_this(inner, obj_id);
-        }
-        Expr::Void(inner) => {
-            substitute_this(inner, obj_id);
-        }
-        Expr::Yield { value, .. } => {
-            if let Some(v) = value {
-                substitute_this(v, obj_id);
-            }
-        }
-        Expr::New { args, .. } => {
-            for arg in args {
-                substitute_this(arg, obj_id);
-            }
-        }
-        Expr::NewDynamic { callee, args } => {
-            substitute_this(callee, obj_id);
-            for arg in args {
-                substitute_this(arg, obj_id);
-            }
-        }
-        Expr::Object(fields) => {
-            for (_, v) in fields {
-                substitute_this(v, obj_id);
-            }
-        }
-        Expr::ObjectSpread { parts } => {
-            for (_, v) in parts {
-                substitute_this(v, obj_id);
-            }
-        }
-        Expr::NativeMethodCall { object, args, .. } => {
-            if let Some(obj) = object {
-                substitute_this(obj, obj_id);
-            }
-            for arg in args {
-                substitute_this(arg, obj_id);
-            }
-        }
-        // Math operations
-        Expr::MathFloor(inner)
-        | Expr::MathCeil(inner)
-        | Expr::MathRound(inner)
-        | Expr::MathAbs(inner)
-        | Expr::MathSqrt(inner)
-        | Expr::MathLog(inner)
-        | Expr::MathLog2(inner)
-        | Expr::MathLog10(inner) => {
-            substitute_this(inner, obj_id);
-        }
-        Expr::MathPow(base, exp) | Expr::MathImul(base, exp) => {
-            substitute_this(base, obj_id);
-            substitute_this(exp, obj_id);
-        }
-        Expr::MathMin(exprs) | Expr::MathMax(exprs) => {
-            for e in exprs {
-                substitute_this(e, obj_id);
-            }
-        }
-        Expr::MathMinSpread(inner) | Expr::MathMaxSpread(inner) => {
-            substitute_this(inner, obj_id);
-        }
-        // Array operations that may contain This references
-        Expr::ArrayIndexOf { array, value } | Expr::ArrayIncludes { array, value } => {
-            substitute_this(array, obj_id);
-            substitute_this(value, obj_id);
-        }
-        Expr::ArrayPush { value, .. } | Expr::ArrayUnshift { value, .. } => {
-            substitute_this(value, obj_id);
-        }
-        Expr::ArrayMap { array, callback }
-        | Expr::ArrayFilter { array, callback }
-        | Expr::ArrayForEach { array, callback }
-        | Expr::ArrayFind { array, callback }
-        | Expr::ArrayFindIndex { array, callback }
-        | Expr::ArraySort {
-            array,
-            comparator: callback,
-        } => {
-            substitute_this(array, obj_id);
-            substitute_this(callback, obj_id);
-        }
-        Expr::ArrayReduce {
-            array,
-            callback,
-            initial,
-        }
-        | Expr::ArrayReduceRight {
-            array,
-            callback,
-            initial,
-        } => {
-            substitute_this(array, obj_id);
-            substitute_this(callback, obj_id);
-            if let Some(init) = initial {
-                substitute_this(init, obj_id);
-            }
-        }
-        Expr::ArraySlice { array, start, end } => {
-            substitute_this(array, obj_id);
-            substitute_this(start, obj_id);
-            if let Some(e) = end {
-                substitute_this(e, obj_id);
-            }
-        }
-        Expr::ArrayJoin { array, separator } => {
-            substitute_this(array, obj_id);
-            if let Some(sep) = separator {
-                substitute_this(sep, obj_id);
-            }
-        }
-        Expr::ArrayFlat { array } | Expr::ArrayFrom(array) | Expr::ArrayToReversed { array } => {
-            substitute_this(array, obj_id);
-        }
-        Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
-            substitute_this(array, obj_id);
-        }
-        Expr::ArrayToSorted { array, comparator } => {
-            substitute_this(array, obj_id);
-            if let Some(cmp) = comparator {
-                substitute_this(cmp, obj_id);
-            }
-        }
-        Expr::ArrayToSpliced {
-            array,
-            start,
-            delete_count,
-            items,
-        } => {
-            substitute_this(array, obj_id);
-            substitute_this(start, obj_id);
-            substitute_this(delete_count, obj_id);
-            for item in items {
-                substitute_this(item, obj_id);
-            }
-        }
-        Expr::ArrayWith {
-            array,
-            index,
-            value,
-        } => {
-            substitute_this(array, obj_id);
-            substitute_this(index, obj_id);
-            substitute_this(value, obj_id);
-        }
-        Expr::ArrayCopyWithin {
-            target, start, end, ..
-        } => {
-            substitute_this(target, obj_id);
-            substitute_this(start, obj_id);
-            if let Some(e) = end {
-                substitute_this(e, obj_id);
-            }
-        }
-        Expr::ArrayFromMapped { iterable, map_fn } => {
-            substitute_this(iterable, obj_id);
-            substitute_this(map_fn, obj_id);
-        }
-        Expr::ArraySplice {
-            start,
-            delete_count,
-            items,
-            ..
-        } => {
-            substitute_this(start, obj_id);
-            if let Some(dc) = delete_count {
-                substitute_this(dc, obj_id);
-            }
-            for item in items {
-                substitute_this(item, obj_id);
-            }
-        }
-        Expr::StringSplit(s, sep) => {
-            substitute_this(s, obj_id);
-            substitute_this(sep, obj_id);
-        }
-        Expr::Await(inner) => {
-            substitute_this(inner, obj_id);
-        }
-        // Issue #291: when inlining a method body, nested closures that
-        // captured `this` from the outer method's frame need their own
-        // `Expr::This` → `LocalGet(obj_id)` rewrite — after inlining the
-        // closure is hoisted into the call site's frame (module init for
-        // top-level calls, where `this_stack` is empty), so the codegen-
-        // side fallback can't recover a meaningful `this`. Substituting
-        // here lets the closure run with the correct receiver.
-        //
-        // Also: explicitly add `obj_id` to the closure's captures list
-        // and clear `captures_this` — the body now reads `LocalGet(obj_id)`
-        // rather than `Expr::This`, and `compute_auto_captures` blends
-        // explicit + body-scanned ids before excluding module globals,
-        // so adding to `captures` ensures the receiver is forwarded
-        // through the closure's capture array regardless of where the
-        // call site lands.
-        Expr::Closure {
-            body,
-            captures,
-            captures_this,
-            ..
-        } => {
-            substitute_this_in_stmts(body, obj_id);
-            *captures_this = false;
-            if !captures.contains(&obj_id) {
-                captures.push(obj_id);
-            }
-        }
-        _ => {}
+    if let Expr::This = expr {
+        *expr = Expr::LocalGet(obj_id);
+        return;
     }
+
+    // Issue #291 / #350: nested closures that captured `this` from the outer
+    // method's frame need their own `Expr::This` → `LocalGet(obj_id)` rewrite
+    // — after inlining the closure is hoisted into the call site's frame
+    // (module init for top-level calls, where `this_stack` is empty), so the
+    // codegen-side fallback can't recover a meaningful `this`. Substituting
+    // here lets the closure run with the correct receiver.
+    //
+    // Also: explicitly add `obj_id` to the closure's captures list and clear
+    // `captures_this` — the body now reads `LocalGet(obj_id)` rather than
+    // `Expr::This`, and `compute_auto_captures` blends explicit + body-scanned
+    // ids before excluding module globals, so adding to `captures` ensures the
+    // receiver is forwarded through the closure's capture array regardless of
+    // where the call site lands.
+    //
+    // `walk_expr_children_mut` deliberately does NOT recurse into Closure
+    // bodies (per its module docs); we descend into the body explicitly
+    // before falling through to the walker. Param.default exprs are visited
+    // by the walker.
+    if let Expr::Closure {
+        body,
+        captures,
+        captures_this,
+        ..
+    } = expr
+    {
+        substitute_this_in_stmts(body, obj_id);
+        *captures_this = false;
+        if !captures.contains(&obj_id) {
+            captures.push(obj_id);
+        }
+    }
+
+    // Descend into every immediate sub-expression. The walker is exhaustive
+    // on `Expr` — adding a new variant to `ir.rs` without updating
+    // `walker.rs` is a compile error. This closes the bug class (issue #350)
+    // where new HIR variants like `Expr::ArrayIsArray(inner)` containing
+    // nested `PropertyGet → This` chains silently fell through the previous
+    // ad-hoc match and left `Expr::This` references unsubstituted in inlined
+    // method bodies — same shape as the v0.5.408 fix for the closure
+    // collector (issue #318).
+    walk_expr_children_mut(expr, &mut |child| substitute_this(child, obj_id));
 }
 
 /// Substitute Expr::This with a LocalGet reference in statements

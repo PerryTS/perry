@@ -79,6 +79,27 @@ struct TextSlot {
     initial: String,
 }
 
+/// Phase 2 v10 — Real LazyVStack registration. Each
+/// `LazyVStack(items.map(item => widget))` allocates a
+/// `PerryListDataSource`-backed `@State` field on the page struct. The
+/// harvest collects these so `wrap_index_page` can emit the field decls +
+/// the `PerryListDataSource` helper-class boilerplate once.
+struct LazyDataSource {
+    field_id: String,
+    items_source: String,
+}
+
+/// Phase 2 v6 — `state<T>(initial)` registry. Each `let x = state(initial)`
+/// declaration in `module.init` registers a synthetic id (`__state_<N>`)
+/// + the initial value. Subsequent `x.text()` calls emit reactive Text
+/// using the synth id; `x.set(v)` calls inside closures get rewritten to
+/// `setText(synth_id, v)` calls (the runtime's `perry_arkts_set_text`
+/// already coerces non-string args via `js_jsvalue_to_string`).
+struct StateBinding {
+    synth_id: String,
+    initial_str: String,
+}
+
 /// Walk `module.init` for the first `App({...})` call from `perry/ui`,
 /// emit the corresponding ArkUI `pages/Index.ets`, capture every
 /// closure-bearing arg into `HarvestResult.callbacks` so the compile
@@ -96,21 +117,233 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
     // look up __AnonShape_* classes (Perry's closed-shape object-literal
     // optimization, v0.5.337+) without aliasing &mut module.
     let classes = module.classes.clone();
+    // Phase 2 v6 — pre-walk for `state<T>(initial)` declarations + rewrite
+    // `state.set(v)` calls inside the entire module to `setText(synth_id, v)`.
+    // This needs to run BEFORE find_and_strip_app + bindings collection so
+    // the rewrites land before any harvest detection sees the closures.
+    let state_registry = collect_state_bindings(&module.init);
+    if !state_registry.is_empty() {
+        rewrite_state_calls_in_stmts(&mut module.init, &state_registry);
+    }
     // Build a const-binding lookup for top-level `let x = <perry/ui call>;`
     // so the Body can reference a local: `App({body: x})` finds x's init.
-    // Cloning the Stmt list is cheap relative to codegen; avoids a second
-    // mutable-borrow pass over init.
     let bindings = collect_const_bindings(&module.init);
     let Some(body_expr) = find_and_strip_app(&mut module.init, &classes) else {
         return Ok(None);
     };
     let mut callbacks: Vec<Expr> = Vec::new();
     let mut text_slots: Vec<TextSlot> = Vec::new();
-    let widget_arkui = emit_widget(&body_expr, &bindings, 0, &mut callbacks, &mut text_slots);
+    let mut lazy_sources: Vec<LazyDataSource> = Vec::new();
+    let arkts_locals: HashMap<LocalId, String> = HashMap::new();
+    let widget_arkui = emit_widget(
+        &body_expr,
+        &bindings,
+        0,
+        &mut callbacks,
+        &mut text_slots,
+        &arkts_locals,
+        &classes,
+        &state_registry,
+        &mut lazy_sources,
+    );
     Ok(Some(HarvestResult {
-        ets_source: wrap_index_page(&widget_arkui, &text_slots),
+        ets_source: wrap_index_page(&widget_arkui, &text_slots, &lazy_sources),
         callbacks,
     }))
+}
+
+/// Phase 2 v6 — discover top-level `let x = state(initial)` declarations
+/// and assign each a synthetic id `__state_<N>`. The initial value is
+/// stringified for the v3.2 reactive-Text initial state.
+fn collect_state_bindings(init: &[Stmt]) -> HashMap<LocalId, StateBinding> {
+    let mut map = HashMap::new();
+    let mut counter: usize = 0;
+    for stmt in init {
+        if let Stmt::Let {
+            id,
+            init: Some(call_expr),
+            ..
+        } = stmt
+        {
+            let initial = match call_expr {
+                // Match either `Expr::NativeMethodCall { module: "perry/ui", method: "state", args: [v] }`
+                // OR `Expr::Call { callee: Ident("state"), args: [v] }` (whichever
+                // shape the perry-hir lowerer produces for the import).
+                Expr::NativeMethodCall {
+                    module,
+                    method,
+                    object: None,
+                    args,
+                    ..
+                } if module == "perry/ui" && method == "state" && args.len() == 1 => {
+                    Some(args[0].clone())
+                }
+                _ => None,
+            };
+            if let Some(initial_expr) = initial {
+                let synth_id = format!("__state_{}", counter);
+                counter += 1;
+                let initial_str = match &initial_expr {
+                    Expr::String(s) => s.clone(),
+                    Expr::Number(n) => fmt_num(*n),
+                    Expr::Integer(n) => format!("{}", n),
+                    Expr::Bool(b) => format!("{}", b),
+                    _ => "".to_string(),
+                };
+                map.insert(
+                    *id,
+                    StateBinding {
+                        synth_id,
+                        initial_str,
+                    },
+                );
+            }
+        }
+    }
+    map
+}
+
+/// Walk a Vec<Stmt> and rewrite any `state.set(v)` calls (where state's
+/// LocalId is in the registry) to `setText(synth_id, v)` calls. Recurses
+/// into closure bodies, blocks, control flow.
+fn rewrite_state_calls_in_stmts(stmts: &mut Vec<Stmt>, reg: &HashMap<LocalId, StateBinding>) {
+    for stmt in stmts.iter_mut() {
+        rewrite_state_in_stmt(stmt, reg);
+    }
+}
+
+fn rewrite_state_in_stmt(stmt: &mut Stmt, reg: &HashMap<LocalId, StateBinding>) {
+    match stmt {
+        Stmt::Expr(e) => rewrite_state_in_expr(e, reg),
+        Stmt::Let { init: Some(e), .. } => rewrite_state_in_expr(e, reg),
+        Stmt::Return(Some(e)) => rewrite_state_in_expr(e, reg),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            rewrite_state_in_expr(condition, reg);
+            rewrite_state_calls_in_stmts(then_branch, reg);
+            if let Some(else_branch) = else_branch {
+                rewrite_state_calls_in_stmts(else_branch, reg);
+            }
+        }
+        Stmt::While {
+            condition, body, ..
+        }
+        | Stmt::DoWhile {
+            body, condition, ..
+        } => {
+            rewrite_state_in_expr(condition, reg);
+            rewrite_state_calls_in_stmts(body, reg);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+            ..
+        } => {
+            if let Some(init) = init {
+                rewrite_state_in_stmt(init.as_mut(), reg);
+            }
+            if let Some(c) = condition {
+                rewrite_state_in_expr(c, reg);
+            }
+            if let Some(u) = update {
+                rewrite_state_in_expr(u, reg);
+            }
+            rewrite_state_calls_in_stmts(body, reg);
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBinding>) {
+    // Detect `state.set(v)` first (most specific shape).
+    if let Expr::Call { callee, args, .. } = e {
+        if args.len() == 1 {
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "set" {
+                    if let Expr::LocalGet(state_id) = object.as_ref() {
+                        if let Some(binding) = reg.get(state_id) {
+                            let value_expr = args[0].clone();
+                            *e = Expr::NativeMethodCall {
+                                module: "perry/ui".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "setText".to_string(),
+                                args: vec![Expr::String(binding.synth_id.clone()), value_expr],
+                            };
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Recurse into ALL expression children so nested state.set(v) calls
+    // inside method args / object literals / closure bodies / etc. are
+    // also rewritten. Each variant unrolls its sub-Exprs explicitly so
+    // we don't miss any HIR shape.
+    match e {
+        Expr::Call { callee, args, .. } => {
+            rewrite_state_in_expr(callee, reg);
+            for a in args.iter_mut() {
+                rewrite_state_in_expr(a, reg);
+            }
+        }
+        Expr::NativeMethodCall { object, args, .. } => {
+            if let Some(o) = object {
+                rewrite_state_in_expr(o, reg);
+            }
+            for a in args.iter_mut() {
+                rewrite_state_in_expr(a, reg);
+            }
+        }
+        Expr::Object(props) => {
+            for (_, v) in props.iter_mut() {
+                rewrite_state_in_expr(v, reg);
+            }
+        }
+        Expr::Array(items) => {
+            for v in items.iter_mut() {
+                rewrite_state_in_expr(v, reg);
+            }
+        }
+        Expr::Closure { body, .. } => {
+            rewrite_state_calls_in_stmts(body, reg);
+        }
+        Expr::PropertyGet { object, .. } => {
+            rewrite_state_in_expr(object, reg);
+        }
+        Expr::PropertySet { object, value, .. } => {
+            rewrite_state_in_expr(object, reg);
+            rewrite_state_in_expr(value, reg);
+        }
+        Expr::IndexGet { object, index } => {
+            rewrite_state_in_expr(object, reg);
+            rewrite_state_in_expr(index, reg);
+        }
+        Expr::Binary { left, right, .. } => {
+            rewrite_state_in_expr(left, reg);
+            rewrite_state_in_expr(right, reg);
+        }
+        Expr::ArrayMap { array, callback } => {
+            rewrite_state_in_expr(array, reg);
+            rewrite_state_in_expr(callback, reg);
+        }
+        Expr::New { args, .. } => {
+            for a in args.iter_mut() {
+                rewrite_state_in_expr(a, reg);
+            }
+        }
+        // Leaf/other variants don't carry rewriteable sub-Exprs (or are
+        // rare enough that v6 deferring them is fine — file as v6.5
+        // follow-up if anyone hits a real-world miss).
+        _ => {}
+    }
 }
 
 /// Find the first top-level `App({body: <expr>})` call in `module.init`,
@@ -207,13 +440,43 @@ fn resolve(expr: &Expr, bindings: &HashMap<LocalId, Expr>) -> Expr {
 ///
 /// Unrecognized widgets degrade to a comment + a placeholder Text — never
 /// errors out, since emit-time errors would leave the user without any UI.
+#[allow(clippy::too_many_arguments)]
 fn emit_widget(
     expr: &Expr,
     bindings: &HashMap<LocalId, Expr>,
     depth: usize,
     callbacks: &mut Vec<Expr>,
     text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
+    // Phase 2 v6 — `state.text()` shape: Expr::Call { callee: PropertyGet
+    // { obj: LocalGet(state_id), property: "text" }, args: [] } where
+    // state_id is in the registry. Emit a reactive Text using the
+    // registered synth_id + initial value (uses the v3.2 path).
+    if let Expr::Call { callee, args, .. } = expr {
+        if args.is_empty() {
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "text" {
+                    if let Expr::LocalGet(state_id) = object.as_ref() {
+                        if let Some(binding) = state_registry.get(state_id) {
+                            text_slots.push(TextSlot {
+                                original_id: binding.synth_id.clone(),
+                                field_id: sanitize_text_id(&binding.synth_id),
+                                initial: binding.initial_str.clone(),
+                            });
+                            return format!(
+                                "Text(this.text_{}).fontSize(20)",
+                                sanitize_text_id(&binding.synth_id)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
     let resolved = resolve(expr, bindings);
     match &resolved {
         Expr::NativeMethodCall {
@@ -221,33 +484,254 @@ fn emit_widget(
             method,
             args,
             ..
-        } if m == "perry/ui" => match method.as_str() {
-            "Text" => emit_text(args, text_slots),
-            "VStack" => emit_stack("Column", args, bindings, depth, callbacks, text_slots),
-            "HStack" => emit_stack("Row", args, bindings, depth, callbacks, text_slots),
-            "Button" => emit_button(args, callbacks),
-            "TextField" => emit_textfield(args, callbacks),
-            "Toggle" => emit_toggle(args, callbacks),
-            "Slider" => emit_slider(args, callbacks),
-            "Spacer" => "Blank()".to_string(),
-            "Divider" => "Divider()".to_string(),
-            // Phase 2 v4 widgets.
-            "Image" | "ImageFile" => emit_image(args),
-            "ScrollView" => emit_scrollview(args, bindings, depth, callbacks, text_slots),
-            "LazyVStack" => emit_lazy_vstack(args, bindings, depth, callbacks, text_slots),
-            "Picker" => emit_picker(args, callbacks),
-            "ProgressView" => emit_progressview(args),
-            "Section" => emit_section(args, bindings, depth, callbacks, text_slots),
-            other => format!(
-                "// unsupported perry/ui widget: {} (Phase 2 v4)\n\
-                 Text('[unsupported: {}]').fontSize(16).fontColor('#888888')",
-                other, other
-            ),
-        },
+        } if m == "perry/ui" => {
+            let core = match method.as_str() {
+                "Text" => emit_text(args, text_slots, arkts_locals),
+                "VStack" => emit_stack(
+                    "Column",
+                    args,
+                    bindings,
+                    depth,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                lazy_sources,
+                ),
+                "HStack" => emit_stack(
+                    "Row",
+                    args,
+                    bindings,
+                    depth,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                lazy_sources,
+                ),
+                "Button" => emit_button(args, callbacks),
+                "TextField" => emit_textfield(args, callbacks),
+                "Toggle" => emit_toggle(args, callbacks),
+                "Slider" => emit_slider(args, callbacks),
+                "Spacer" => "Blank()".to_string(),
+                "Divider" => "Divider()".to_string(),
+                "Image" | "ImageFile" => emit_image(args),
+                "ScrollView" => emit_scrollview(
+                    args,
+                    bindings,
+                    depth,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                lazy_sources,
+                ),
+                "LazyVStack" => emit_lazy_vstack(
+                    args,
+                    bindings,
+                    depth,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                lazy_sources,
+                ),
+                "Picker" => emit_picker(args, callbacks),
+                "ProgressView" => emit_progressview(args),
+                "Section" => emit_section(
+                    args,
+                    bindings,
+                    depth,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                lazy_sources,
+                ),
+                // Phase 2 v12 widgets.
+                "Tabs" => emit_tabs(
+                    args,
+                    bindings,
+                    depth,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                lazy_sources,
+                ),
+                "Modal" | "Dialog" => emit_modal(args, callbacks),
+                "Menu" | "ContextMenu" => emit_menu(args, callbacks),
+                "Grid" => emit_grid(
+                    args,
+                    bindings,
+                    depth,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                lazy_sources,
+                ),
+                other => format!(
+                    "// unsupported perry/ui widget: {} (Phase 2 v12)\n\
+                     Text('[unsupported: {}]').fontSize(16).fontColor('#888888')",
+                    other, other
+                ),
+            };
+            // Phase 2 v5: detect a trailing StyleProps object and append
+            // its modifier chain. Disambiguates Text's 2nd-arg id-vs-style
+            // by checking whether the last arg is an object (style) or a
+            // plain string (id) — Text("hi", "id") leaves args.last() as
+            // a String which extract_style_object returns None for.
+            let style_props = args.last().and_then(|a| extract_style_object(a, classes));
+            if let Some(props) = style_props {
+                let modifiers = emit_style_modifiers(&props);
+                if !modifiers.is_empty() {
+                    return format!("{}{}", core, modifiers);
+                }
+            }
+            core
+        }
+        // Phase 2 v5: ForEach via array.map. When a widget position
+        // contains `array.map(item => widgetExpr)`, lower it to ArkUI's
+        // ForEach with the closure body emitted in a fresh local-scope
+        // env where the closure's param resolves to `__item`.
+        Expr::ArrayMap { array, callback } => emit_for_each(
+            array,
+            callback,
+            bindings,
+            depth,
+            callbacks,
+            text_slots,
+            arkts_locals,
+            classes,
+            state_registry,
+        lazy_sources,
+        ),
         _ => format!(
             "// unrecognized body expression (must be a perry/ui widget call)\n\
              Text('[unrecognized body]').fontSize(16).fontColor('#888888')"
         ),
+    }
+}
+
+/// Phase 2 v5: emit ArkUI `ForEach(<array>, (__item) => { <body> })`
+/// from a `Expr::ArrayMap { array, callback }` HIR node. The callback's
+/// closure parameter is bound to `__item` in arkts_locals so any
+/// `LocalGet(param_id)` inside the body resolves correctly.
+///
+/// The array source must be a literal `Expr::Array` or a `LocalGet`
+/// that resolves to a top-level binding (via `bindings`). Other shapes
+/// (e.g., complex computed expressions) fall back to a degraded inline
+/// emit so the build doesn't break.
+#[allow(clippy::too_many_arguments)]
+fn emit_for_each(
+    array: &Expr,
+    callback: &Expr,
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+    text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
+) -> String {
+    let array_src = arkts_array_source(array, bindings);
+    let (param_id, body_expr) = match callback {
+        Expr::Closure { params, body, .. } if !params.is_empty() => {
+            // The closure body is a Vec<Stmt>; we expect a single return-
+            // expr or expression-statement. Take the first Expr we find.
+            let body_expr = body.iter().find_map(|s| match s {
+                Stmt::Return(Some(e)) => Some(e.clone()),
+                Stmt::Expr(e) => Some(e.clone()),
+                _ => None,
+            });
+            (Some(params[0].id), body_expr)
+        }
+        _ => (None, None),
+    };
+    let inner_indent = "    ".repeat(depth + 1);
+    let outer_indent = "    ".repeat(depth);
+    let (param_name, body_str) = match (param_id, body_expr) {
+        (Some(pid), Some(body)) => {
+            let mut locals = arkts_locals.clone();
+            locals.insert(pid, "__item".to_string());
+            let inner = emit_widget(
+                &body,
+                bindings,
+                depth + 1,
+                callbacks,
+                text_slots,
+                &locals,
+                classes,
+                state_registry,
+            lazy_sources,
+            );
+            ("__item".to_string(), inner)
+        }
+        _ => (
+            "__item".to_string(),
+            "Text('[non-closure ForEach body]').fontSize(16).fontColor('#888888')".to_string(),
+        ),
+    };
+    let indented_body = body_str
+        .lines()
+        .map(|l| format!("{}{}", inner_indent, l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "ForEach({arr}, ({pname}: any) => {{\n\
+         {body}\n\
+         {outer}}}, ({pname}: any) => {pname})",
+        arr = array_src,
+        pname = param_name,
+        body = indented_body,
+        outer = outer_indent,
+    )
+}
+
+/// Emit a TS expression for the array source of a ForEach. Supports
+/// literal `Expr::Array(items)` (serialized inline) and `Expr::LocalGet`
+/// resolved to a top-level binding's name. Other shapes fall back to
+/// an empty `[]` with a note comment.
+fn arkts_array_source(e: &Expr, bindings: &HashMap<LocalId, Expr>) -> String {
+    match e {
+        Expr::Array(items) => {
+            let parts: Vec<String> = items.iter().map(arkts_value_literal).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Expr::LocalGet(_id) => {
+            // Look up the binding's init expr; if it's an Array literal,
+            // serialize. Otherwise fall through to empty.
+            if let Expr::LocalGet(id) = e {
+                if let Some(Expr::Array(items)) = bindings.get(id) {
+                    let parts: Vec<String> = items.iter().map(arkts_value_literal).collect();
+                    return format!("[{}]", parts.join(", "));
+                }
+            }
+            // Phase 2 v5 limitation: complex array sources need real
+            // ArkTS-side state binding. Emit a placeholder.
+            "[/* unresolved ForEach source — needs Phase 2 v6 state binding */]".to_string()
+        }
+        _ => "[/* unsupported ForEach source */]".to_string(),
+    }
+}
+
+/// Serialize a literal-shaped `Expr` to TS source for inline array lit.
+fn arkts_value_literal(e: &Expr) -> String {
+    match e {
+        Expr::String(s) => arkts_string_lit(s),
+        Expr::Number(n) => fmt_num(*n),
+        Expr::Integer(n) => format!("{}", n),
+        Expr::Bool(b) => format!("{}", b),
+        _ => "null".to_string(),
     }
 }
 
@@ -261,23 +745,315 @@ fn emit_widget(
 ///
 /// Non-string-literal args fall back to a placeholder so unsupported
 /// shapes don't break the build.
-fn emit_text(args: &[Expr], text_slots: &mut Vec<TextSlot>) -> String {
-    let Some(Expr::String(content)) = args.first() else {
+fn emit_text(
+    args: &[Expr],
+    text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+) -> String {
+    // Phase 2 v5: inside a ForEach body, `Text(item)` where `item` is
+    // the closure's loop param resolves via arkts_locals → `Text(__item)`.
+    let first = args.first();
+    let content_str = match first {
+        Some(Expr::String(content)) => Some(arkts_string_lit(content)),
+        Some(Expr::LocalGet(id)) => arkts_locals.get(id).cloned(),
+        _ => None,
+    };
+    let Some(content_arg) = content_str else {
         return "Text('[non-literal Text arg]').fontSize(20).fontColor('#888888')".to_string();
     };
     if let Some(Expr::String(id)) = args.get(1) {
         // Reactive Text. Sanitize the id so it's a valid ArkTS field-
         // name suffix (alphanumeric + underscore). The original id stays
         // alongside it for the runtime-side switch match.
-        let safe = sanitize_text_id(id);
-        text_slots.push(TextSlot {
-            original_id: id.clone(),
-            field_id: safe.clone(),
-            initial: content.clone(),
-        });
-        format!("Text(this.text_{}).fontSize(20)", safe)
-    } else {
-        format!("Text({}).fontSize(20)", arkts_string_lit(content))
+        // Only the literal-string form is reactive — ForEach's __item
+        // binding is per-iteration and doesn't persist to a slot.
+        if let Some(Expr::String(initial)) = first {
+            let safe = sanitize_text_id(id);
+            text_slots.push(TextSlot {
+                original_id: id.clone(),
+                field_id: safe.clone(),
+                initial: initial.clone(),
+            });
+            return format!("Text(this.text_{}).fontSize(20)", safe);
+        }
+    }
+    format!("Text({}).fontSize(20)", content_arg)
+}
+
+/// Extract a `style: {...}` object from a widget arg. Handles both
+/// `Expr::Object(props)` (open shape) and Perry's closed-shape
+/// optimization `Expr::New { class_name: "__AnonShape_*", args }` where
+/// the class's fields list correlates positionally with args. Used by
+/// `emit_style_modifiers` to map StyleProps into ArkUI modifiers.
+///
+/// Phase 2 v5 — ergonomic parity with macOS/iOS/etc inline styling.
+fn extract_style_object(arg: &Expr, classes: &[Class]) -> Option<Vec<(String, Expr)>> {
+    match arg {
+        Expr::Object(props) => Some(props.clone()),
+        Expr::New {
+            class_name, args, ..
+        } if class_name.starts_with("__AnonShape_") => {
+            let class = classes.iter().find(|c| &c.name == class_name)?;
+            // Pair each field with its positional arg; missing args fall through.
+            let pairs: Vec<(String, Expr)> = class
+                .fields
+                .iter()
+                .enumerate()
+                .filter_map(|(i, f)| args.get(i).map(|a| (f.name.clone(), a.clone())))
+                .collect();
+            Some(pairs)
+        }
+        _ => None,
+    }
+}
+
+/// Map a Perry color expression to an ArkUI color string.
+///   - `Expr::String("blue")` / `"#3B82F6"` → quoted string passthrough
+///   - `Expr::Object([(r,…),(g,…),(b,…),(a,…)])` (PerryColor) → `'rgba(R,G,B,A)'`
+///     where channels are scaled to 0..255 / 0..1 per CSS rgba() convention
+fn arkts_color_value(e: &Expr) -> String {
+    match e {
+        Expr::String(s) => arkts_string_lit(s),
+        Expr::Object(props) => {
+            let chan = |name: &str, default: f64| -> f64 {
+                props
+                    .iter()
+                    .find(|(k, _)| k == name)
+                    .and_then(|(_, v)| match v {
+                        Expr::Number(n) => Some(*n),
+                        Expr::Integer(n) => Some(*n as f64),
+                        _ => None,
+                    })
+                    .unwrap_or(default)
+            };
+            let r = (chan("r", 0.0) * 255.0).round() as i64;
+            let g = (chan("g", 0.0) * 255.0).round() as i64;
+            let b = (chan("b", 0.0) * 255.0).round() as i64;
+            let a = chan("a", 1.0);
+            format!("'rgba({}, {}, {}, {})'", r, g, b, fmt_num(a))
+        }
+        _ => "'#000000'".to_string(),
+    }
+}
+
+/// Phase 2 v13 — map a CSS-style curve string to ArkUI's `Curve` enum.
+/// ArkUI `Curve` lives at `@ohos.curves` and the values match the W3C
+/// timing-function names with PascalCase (`Curve.Linear`, `Curve.Ease`,
+/// `Curve.EaseInOut`, etc.). Unrecognized values fall back to `Curve.Ease`.
+fn arkts_curve_value(s: &str) -> String {
+    let name = match s {
+        "linear" => "Linear",
+        "ease" => "Ease",
+        "ease-in" | "easeIn" => "EaseIn",
+        "ease-out" | "easeOut" => "EaseOut",
+        "ease-in-out" | "easeInOut" => "EaseInOut",
+        "fast-out-slow-in" => "FastOutSlowIn",
+        "linear-out-slow-in" => "LinearOutSlowIn",
+        "fast-out-linear-in" => "FastOutLinearIn",
+        "extreme-deceleration" => "ExtremeDeceleration",
+        "sharp" => "Sharp",
+        "rhythm" => "Rhythm",
+        "smooth" => "Smooth",
+        "friction" => "Friction",
+        _ => "Ease",
+    };
+    format!("Curve.{}", name)
+}
+
+/// Map a `StyleProps` object to an ArkUI modifier chain like
+/// `.backgroundColor('blue').borderRadius(8).opacity(0.95)`.
+///
+/// Phase 2 v5 covers the high-traffic props: backgroundColor, color,
+/// fontSize, fontWeight, fontFamily, borderRadius, padding, opacity,
+/// hidden, borderColor + borderWidth (as combined `.border({...})`).
+/// Skipped (complex / multi-arg ArkUI shape): shadow, gradient,
+/// textDecoration, tooltip, animation, transition — these would each
+/// need their own ArkUI modifier and are deferred to Phase 2 v13.
+fn emit_style_modifiers(props: &[(String, Expr)]) -> String {
+    let mut out = String::new();
+    let mut border_color: Option<String> = None;
+    let mut border_width: Option<String> = None;
+    for (k, v) in props {
+        match k.as_str() {
+            "backgroundColor" => {
+                out.push_str(&format!(".backgroundColor({})", arkts_color_value(v)));
+            }
+            "color" => {
+                // ArkUI's `.fontColor` works on Text; non-text widgets
+                // silently ignore it.
+                out.push_str(&format!(".fontColor({})", arkts_color_value(v)));
+            }
+            "fontSize" => {
+                if let Some(n) = numeric_expr(v) {
+                    out.push_str(&format!(".fontSize({})", fmt_num(n)));
+                }
+            }
+            "fontWeight" => {
+                if let Some(n) = numeric_expr(v) {
+                    out.push_str(&format!(".fontWeight({})", fmt_num(n)));
+                }
+            }
+            "fontFamily" => {
+                if let Expr::String(s) = v {
+                    out.push_str(&format!(".fontFamily({})", arkts_string_lit(s)));
+                }
+            }
+            "borderRadius" => {
+                if let Some(n) = numeric_expr(v) {
+                    out.push_str(&format!(".borderRadius({})", fmt_num(n)));
+                }
+            }
+            "borderColor" => {
+                border_color = Some(arkts_color_value(v));
+            }
+            "borderWidth" => {
+                if let Some(n) = numeric_expr(v) {
+                    border_width = Some(fmt_num(n));
+                }
+            }
+            "padding" => match v {
+                Expr::Number(n) => out.push_str(&format!(".padding({})", fmt_num(*n))),
+                Expr::Integer(n) => out.push_str(&format!(".padding({})", *n)),
+                Expr::Object(sides) => {
+                    let side = |name: &str| -> Option<f64> {
+                        sides
+                            .iter()
+                            .find(|(k, _)| k == name)
+                            .and_then(|(_, v)| numeric_expr(v))
+                    };
+                    let parts: Vec<String> = ["top", "right", "bottom", "left"]
+                        .iter()
+                        .filter_map(|s| side(s).map(|n| format!("{}: {}", s, fmt_num(n))))
+                        .collect();
+                    if !parts.is_empty() {
+                        out.push_str(&format!(".padding({{ {} }})", parts.join(", ")));
+                    }
+                }
+                _ => {}
+            },
+            "opacity" => {
+                if let Some(n) = numeric_expr(v) {
+                    out.push_str(&format!(".opacity({})", fmt_num(n)));
+                }
+            }
+            "hidden" => {
+                let is_hidden = matches!(v, Expr::Bool(true));
+                if is_hidden {
+                    out.push_str(".visibility(Visibility.Hidden)");
+                }
+            }
+            // Phase 2 v13 — animation/transition/shadow/textDecoration.
+            "animation" => {
+                if let Expr::Object(props) = v {
+                    let mut parts: Vec<String> = Vec::new();
+                    for (k2, v2) in props {
+                        match k2.as_str() {
+                            "duration" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("duration: {}", fmt_num(n)));
+                                }
+                            }
+                            "curve" => {
+                                if let Expr::String(s) = v2 {
+                                    parts.push(format!("curve: {}", arkts_curve_value(s)));
+                                }
+                            }
+                            "delay" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("delay: {}", fmt_num(n)));
+                                }
+                            }
+                            "iterations" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("iterations: {}", fmt_num(n)));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !parts.is_empty() {
+                        out.push_str(&format!(".animation({{ {} }})", parts.join(", ")));
+                    }
+                }
+            }
+            "shadow" => {
+                if let Expr::Object(props) = v {
+                    let mut parts: Vec<String> = Vec::new();
+                    for (k2, v2) in props {
+                        match k2.as_str() {
+                            "color" => {
+                                parts.push(format!("color: {}", arkts_color_value(v2)));
+                            }
+                            "blur" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("radius: {}", fmt_num(n)));
+                                }
+                            }
+                            "offsetX" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("offsetX: {}", fmt_num(n)));
+                                }
+                            }
+                            "offsetY" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("offsetY: {}", fmt_num(n)));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !parts.is_empty() {
+                        out.push_str(&format!(".shadow({{ {} }})", parts.join(", ")));
+                    }
+                }
+            }
+            "textDecoration" => {
+                if let Expr::String(s) = v {
+                    let kind = match s.as_str() {
+                        "underline" => Some("Underline"),
+                        "strikethrough" | "line-through" => Some("LineThrough"),
+                        "overline" => Some("Overline"),
+                        "none" => Some("None"),
+                        _ => None,
+                    };
+                    if let Some(k) = kind {
+                        out.push_str(&format!(
+                            ".decoration({{ type: TextDecorationType.{} }})",
+                            k
+                        ));
+                    }
+                }
+            }
+            // Phase 2 v13 deferred: gradient, transition, tooltip — these
+            // each need more complex ArkUI shapes (linearGradient, multi-
+            // part transition config, custom-component popup) and are
+            // tracked as v13.5 follow-ups.
+            _ => {}
+        }
+    }
+    // Joint border: ArkUI's `.border({color, width})` is one modifier
+    // taking a config object; emit only if at least one was set.
+    if border_color.is_some() || border_width.is_some() {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(w) = border_width {
+            parts.push(format!("width: {}", w));
+        }
+        if let Some(c) = border_color {
+            parts.push(format!("color: {}", c));
+        }
+        out.push_str(&format!(".border({{ {} }})", parts.join(", ")));
+    }
+    out
+}
+
+/// Extract a Number / Integer expression as `f64`. Returns None for
+/// anything else (including `Expr::String` parseable numerals — those
+/// are intentionally rejected because StyleProps forbids them).
+fn numeric_expr(e: &Expr) -> Option<f64> {
+    match e {
+        Expr::Number(n) => Some(*n),
+        Expr::Integer(n) => Some(*n as f64),
+        _ => None,
     }
 }
 
@@ -314,6 +1090,7 @@ fn sanitize_text_id(s: &str) -> String {
 /// becomes `Column({space: <n>})` / `Row({space: <n>})`. ArkUI's default
 /// of 0 makes spacing-less stacks look cramped, so we default to 8 which
 /// matches the perry-ui-macos default.
+#[allow(clippy::too_many_arguments)]
 fn emit_stack(
     arkui_kind: &str,
     args: &[Expr],
@@ -321,10 +1098,14 @@ fn emit_stack(
     depth: usize,
     callbacks: &mut Vec<Expr>,
     text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     // First-arg shape detection — same logic as lower_call/native.rs:91.
     let (spacing, children_idx) = match args.first() {
-        Some(Expr::Array(_)) => (8.0, 0),
+        Some(Expr::Array(_)) | Some(Expr::ArrayMap { .. }) => (8.0, 0),
         Some(Expr::Number(n)) => (*n, 1),
         Some(Expr::Integer(n)) => (*n as f64, 1),
         _ => (8.0, 0),
@@ -333,8 +1114,34 @@ fn emit_stack(
     let children = match args.get(children_idx) {
         Some(Expr::Array(items)) => items
             .iter()
-            .map(|child| emit_widget(child, bindings, depth + 1, callbacks, text_slots))
+            .map(|child| {
+                emit_widget(
+                    child,
+                    bindings,
+                    depth + 1,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                lazy_sources,
+                )
+            })
             .collect::<Vec<_>>(),
+        // Phase 2 v5: stack(items.map(item => Widget)) — the children
+        // arg IS the array.map. Emit a single ForEach as the only child
+        // of the Column/Row.
+        Some(am @ Expr::ArrayMap { .. }) => vec![emit_widget(
+            am,
+            bindings,
+            depth + 1,
+            callbacks,
+            text_slots,
+            arkts_locals,
+            classes,
+            state_registry,
+        lazy_sources,
+        )],
         Some(_) => vec![format!(
             "// children arg wasn't an array literal — Phase 2 v1.5 limitation\n\
              Text('[non-array children]').fontSize(16).fontColor('#888888')"
@@ -537,7 +1344,19 @@ fn emit_image(args: &[Expr]) -> String {
     let Some(Expr::String(src)) = args.first() else {
         return "Text('[non-literal Image src]').fontSize(16).fontColor('#888888')".to_string();
     };
-    format!("Image({}).width('100%').height(200)", arkts_string_lit(src))
+    // Phase 2 v13 — recognize the `@app.media/<name>` resource path
+    // shape and emit ArkUI's `$r('app.media.<name>')` accessor instead
+    // of a quoted string literal. Plain URLs / file paths still pass
+    // through as quoted strings.
+    let src_arg = if let Some(name) = src.strip_prefix("@app.media/") {
+        // ArkUI's $r() takes a dot-path string, NOT a slash-path.
+        format!("$r('app.media.{}')", name)
+    } else if let Some(name) = src.strip_prefix("@app.icon/") {
+        format!("$r('app.icon.{}')", name)
+    } else {
+        arkts_string_lit(src)
+    };
+    format!("Image({}).width('100%').height(200)", src_arg)
 }
 
 /// `ScrollView(children)` → `Scroll() { Column({space: 8}) { ... } }`.
@@ -545,12 +1364,17 @@ fn emit_image(args: &[Expr]) -> String {
 /// default; we wrap in a `Column` so multiple children stack the way users
 /// expect from the perry-ui-* native ScrollView wiring. Empty / non-array
 /// children degrade to an empty Scroll just like the native variant.
+#[allow(clippy::too_many_arguments)]
 fn emit_scrollview(
     args: &[Expr],
     bindings: &HashMap<LocalId, Expr>,
     depth: usize,
     callbacks: &mut Vec<Expr>,
     text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 2);
     let mid_indent = "    ".repeat(depth + 1);
@@ -559,8 +1383,31 @@ fn emit_scrollview(
     let children: Vec<String> = match args.first() {
         Some(Expr::Array(items)) => items
             .iter()
-            .map(|c| emit_widget(c, bindings, depth + 2, callbacks, text_slots))
+            .map(|c| {
+                emit_widget(
+                    c,
+                    bindings,
+                    depth + 2,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                lazy_sources,
+                )
+            })
             .collect(),
+        Some(am @ Expr::ArrayMap { .. }) => vec![emit_widget(
+            am,
+            bindings,
+            depth + 2,
+            callbacks,
+            text_slots,
+            arkts_locals,
+            classes,
+            state_registry,
+        lazy_sources,
+        )],
         _ => vec![],
     };
 
@@ -598,24 +1445,118 @@ fn emit_scrollview(
 /// row, which isn't expressible in the harvest pass without a runtime
 /// callback bridge. Deferred to a future Phase 2 v5; today users write the
 /// expanded children list explicitly and pay the eager-render cost.
+#[allow(clippy::too_many_arguments)]
 fn emit_lazy_vstack(
     args: &[Expr],
     bindings: &HashMap<LocalId, Expr>,
     depth: usize,
     callbacks: &mut Vec<Expr>,
     text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 1);
     let outer_indent = "    ".repeat(depth);
 
+    // Phase 2 v10 — Real LazyVStack: when args[0] is `Expr::ArrayMap`,
+    // emit ArkUI's `List() { LazyForEach(this.<src>, item => { ListItem() {<inner>} }, item => item) }`
+    // and register a `PerryListDataSource`-backed `@State` field on the
+    // page struct. wrap_index_page emits the IDataSource helper class +
+    // the per-source field decls.
+    if let Some(Expr::ArrayMap { array, callback }) = args.first() {
+        let items_source = arkts_array_source(array, bindings);
+        let field_id = format!("lazy_source_{}", lazy_sources.len());
+        // Lower the closure body in a fresh arkts_locals scope so
+        // LocalGet(param_id) resolves to `__item`.
+        let (param_name, body_str) = match callback.as_ref() {
+            Expr::Closure { params, body, .. } if !params.is_empty() => {
+                let body_expr = body.iter().find_map(|s| match s {
+                    Stmt::Return(Some(e)) => Some(e.clone()),
+                    Stmt::Expr(e) => Some(e.clone()),
+                    _ => None,
+                });
+                if let Some(body) = body_expr {
+                    let mut locals = arkts_locals.clone();
+                    locals.insert(params[0].id, "__item".to_string());
+                    let inner = emit_widget(
+                        &body,
+                        bindings,
+                        depth + 3,
+                        callbacks,
+                        text_slots,
+                        &locals,
+                        classes,
+                        state_registry,
+                        lazy_sources,
+                    );
+                    ("__item".to_string(), inner)
+                } else {
+                    (
+                        "__item".to_string(),
+                        "Text('[empty body]').fontSize(16)".to_string(),
+                    )
+                }
+            }
+            _ => (
+                "__item".to_string(),
+                "Text('[non-closure ForEach body]').fontSize(16)".to_string(),
+            ),
+        };
+        // Push the source AFTER recursive emit_widget to maintain a
+        // deterministic ordering (outermost-last so nested LazyVStacks
+        // get inner ids before outer).
+        lazy_sources.push(LazyDataSource {
+            field_id: field_id.clone(),
+            items_source,
+        });
+        let item_indent = "    ".repeat(depth + 3);
+        let body_indented = body_str
+            .lines()
+            .map(|l| format!("{}{}", item_indent, l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mid_indent = "    ".repeat(depth + 2);
+        return format!(
+            "List() {{\n\
+             {inner}LazyForEach(this.{field}, ({pname}: any) => {{\n\
+             {mid}ListItem() {{\n\
+             {body}\n\
+             {mid}}}\n\
+             {inner}}}, ({pname}: any) => {pname})\n\
+             {outer}}}",
+            inner = inner_indent,
+            mid = mid_indent,
+            field = field_id,
+            pname = param_name,
+            body = body_indented,
+            outer = outer_indent,
+        );
+    }
+
+    // Fall-through (v4 behavior): non-ArrayMap children render eagerly
+    // as a plain Column. Preserves backwards compat for explicit-list
+    // LazyVStack callers.
     let children: Vec<String> = match args.first() {
         Some(Expr::Array(items)) => items
             .iter()
-            .map(|c| emit_widget(c, bindings, depth + 1, callbacks, text_slots))
+            .map(|c| {
+                emit_widget(
+                    c,
+                    bindings,
+                    depth + 1,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                    lazy_sources,
+                )
+            })
             .collect(),
         _ => vec![],
     };
-
     let body = if children.is_empty() {
         String::new()
     } else {
@@ -630,10 +1571,9 @@ fn emit_lazy_vstack(
             .collect::<Vec<_>>()
             .join("\n")
     };
-
     format!(
-        "// LazyVStack: rendered eagerly as Column. Real lazy support needs\n\
-         {outer}// LazyForEach + IDataSource (Phase 2 v5 follow-up).\n\
+        "// LazyVStack with explicit children: rendered eagerly as Column.\n\
+         {outer}// For real lazy rendering, pass `items.map(item => Widget)`.\n\
          {outer}Column({{ space: 8 }}) {{\n\
          {body}\n\
          {outer}}}",
@@ -712,12 +1652,17 @@ fn emit_progressview(args: &[Expr]) -> String {
 /// Emits `Column({space: 4}) { Text('<title>').fontSize(14).fontColor('#888888'); <children> }`.
 /// The greyed-out small label header matches the iOS UITableView section
 /// header convention; no native ArkUI primitive maps 1:1, so we hand-roll.
+#[allow(clippy::too_many_arguments)]
 fn emit_section(
     args: &[Expr],
     bindings: &HashMap<LocalId, Expr>,
     depth: usize,
     callbacks: &mut Vec<Expr>,
     text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     let title = first_string_arg(args).unwrap_or_default();
 
@@ -727,8 +1672,31 @@ fn emit_section(
     let children: Vec<String> = match args.get(1) {
         Some(Expr::Array(items)) => items
             .iter()
-            .map(|c| emit_widget(c, bindings, depth + 1, callbacks, text_slots))
+            .map(|c| {
+                emit_widget(
+                    c,
+                    bindings,
+                    depth + 1,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                lazy_sources,
+                )
+            })
             .collect(),
+        Some(am @ Expr::ArrayMap { .. }) => vec![emit_widget(
+            am,
+            bindings,
+            depth + 1,
+            callbacks,
+            text_slots,
+            arkts_locals,
+            classes,
+            state_registry,
+        lazy_sources,
+        )],
         _ => vec![],
     };
 
@@ -765,6 +1733,228 @@ fn emit_section(
 }
 
 /// Wrap a widget body expression in a complete ArkUI `@Entry @Component
+// ----- Phase 2 v12 widgets -----
+
+/// `Tabs([{label: "A", body: ...}, {label: "B", body: ...}])` →
+/// ArkUI `Tabs() { TabContent() {...}.tabBar('A'); TabContent() {...}.tabBar('B') }`.
+/// Each tab's body harvests like a normal sub-widget tree. Closure-bearing
+/// children compose with the v2 callback registry transparently.
+#[allow(clippy::too_many_arguments)]
+fn emit_tabs(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+    text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
+) -> String {
+    let tab_specs: Vec<&Expr> = match args.first() {
+        Some(Expr::Array(items)) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+    let inner_indent = "    ".repeat(depth + 1);
+    let outer_indent = "    ".repeat(depth);
+    let tab_blocks: Vec<String> = tab_specs
+        .iter()
+        .map(|spec| {
+            // Each spec is `{label: string, body: Widget}`. Handle both
+            // open Object and closed-shape New, same pattern as styles.
+            let pairs: Option<Vec<(String, Expr)>> = match spec {
+                Expr::Object(props) => Some(props.clone()),
+                Expr::New {
+                    class_name, args, ..
+                } if class_name.starts_with("__AnonShape_") => {
+                    classes.iter().find(|c| &c.name == class_name).map(|cls| {
+                        cls.fields
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, f)| args.get(i).map(|a| (f.name.clone(), a.clone())))
+                            .collect()
+                    })
+                }
+                _ => None,
+            };
+            let Some(pairs) = pairs else {
+                return format!(
+                    "{ind}// tab spec wasn't an object\n\
+                     {ind}TabContent() {{\n\
+                     {ind}    Text('[invalid tab]').fontSize(16)\n\
+                     {ind}}}.tabBar('?')",
+                    ind = inner_indent
+                );
+            };
+            let label = pairs
+                .iter()
+                .find(|(k, _)| k == "label")
+                .and_then(|(_, v)| match v {
+                    Expr::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "Tab".to_string());
+            let body = pairs
+                .iter()
+                .find(|(k, _)| k == "body")
+                .map(|(_, v)| {
+                    emit_widget(
+                        v,
+                        bindings,
+                        depth + 2,
+                        callbacks,
+                        text_slots,
+                        arkts_locals,
+                        classes,
+                        state_registry,
+                    lazy_sources,
+                    )
+                })
+                .unwrap_or_else(|| "Text('[empty tab]').fontSize(16)".to_string());
+            // Indent the body inside TabContent { ... }.
+            let body_indent = "    ".repeat(depth + 2);
+            let body_indented = body
+                .lines()
+                .map(|l| format!("{}{}", body_indent, l))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "{ind}TabContent() {{\n\
+                 {body}\n\
+                 {ind}}}.tabBar({lbl})",
+                ind = inner_indent,
+                body = body_indented,
+                lbl = arkts_string_lit(&label),
+            )
+        })
+        .collect();
+    let body = tab_blocks.join("\n");
+    format!(
+        "Tabs() {{\n\
+         {body}\n\
+         {outer}}}",
+        body = body,
+        outer = outer_indent,
+    )
+}
+
+/// `Modal(title, body, [{label, action}])` → emits a small wrapper widget.
+/// Real ArkUI `AlertDialog.show({...})` is fired imperatively; harvest-time
+/// emission can only stage the dialog config. Phase 2 v12 emits a
+/// placeholder Text + comment documenting the runtime-side wiring (a
+/// proper `showDialog(...)` runtime FFI is the v12.5 follow-up).
+fn emit_modal(_args: &[Expr], _callbacks: &mut Vec<Expr>) -> String {
+    "// Modal: configure with `showDialog(...)` from a closure body \
+     (Phase 2 v12.5 — needs runtime FFI bridge to AlertDialog.show)\n\
+     Text('[Modal — call showDialog() instead]').fontSize(16).fontColor('#888888')"
+        .to_string()
+}
+
+/// `Menu([{label, action}])` → ArkUI menu shape. ArkUI's `.bindMenu(...)` is
+/// a modifier on a triggering widget, not a standalone widget. Phase 2 v12
+/// emits the menu as a `Column { Button(label) }` for each item — visible
+/// + functional via the v2 callback registry — and the user can wrap it
+/// in any container they want. Real `.bindMenu()` modifier integration is
+/// v12.5.
+fn emit_menu(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
+    let items: Vec<&Expr> = match args.first() {
+        Some(Expr::Array(items)) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+    let buttons: Vec<String> = items
+        .iter()
+        .map(|item| {
+            let pairs: Option<Vec<(String, Expr)>> = match item {
+                Expr::Object(props) => Some(props.clone()),
+                _ => None,
+            };
+            let Some(pairs) = pairs else {
+                return "Text('[invalid menu item]').fontSize(14).fontColor('#888888')".to_string();
+            };
+            let label = pairs
+                .iter()
+                .find(|(k, _)| k == "label")
+                .and_then(|(_, v)| match v {
+                    Expr::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "Item".to_string());
+            let action = pairs.iter().find(|(k, _)| k == "action").map(|(_, v)| v);
+            // Reuse Button's emit shape so action closures register
+            // correctly via the v2 callback pipeline.
+            let pseudo_args: Vec<Expr> = vec![
+                Expr::String(label.clone()),
+                action.cloned().unwrap_or(Expr::Number(0.0)),
+            ];
+            emit_button(&pseudo_args, callbacks)
+        })
+        .collect();
+    format!(
+        "Column({{ space: 4 }}) {{\n    {}\n}}",
+        buttons.join("\n    "),
+    )
+}
+
+/// `Grid(columns, items)` → ArkUI `Grid() { GridItem() {...} }` with
+/// `.columnsTemplate('1fr 1fr ...')` for the column count.
+#[allow(clippy::too_many_arguments)]
+fn emit_grid(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+    text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
+) -> String {
+    let columns = numeric_arg(args, 0).unwrap_or(2.0) as i64;
+    let columns = columns.clamp(1, 12);
+    let template = (0..columns).map(|_| "1fr").collect::<Vec<_>>().join(" ");
+    let items: Vec<&Expr> = match args.get(1) {
+        Some(Expr::Array(items)) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+    let inner_indent = "    ".repeat(depth + 1);
+    let outer_indent = "    ".repeat(depth);
+    let grid_items: Vec<String> = items
+        .iter()
+        .map(|child| {
+            let body = emit_widget(
+                child,
+                bindings,
+                depth + 2,
+                callbacks,
+                text_slots,
+                arkts_locals,
+                classes,
+                state_registry,
+            lazy_sources,
+            );
+            let body_indent = "    ".repeat(depth + 2);
+            let body_indented = body
+                .lines()
+                .map(|l| format!("{}{}", body_indent, l))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "{ind}GridItem() {{\n{body}\n{ind}}}",
+                ind = inner_indent,
+                body = body_indented,
+            )
+        })
+        .collect();
+    format!(
+        "Grid() {{\n\
+         {body}\n\
+         {outer}}}.columnsTemplate('{template}')",
+        body = grid_items.join("\n"),
+        outer = outer_indent,
+        template = template,
+    )
+}
+
 /// struct Index { build() { Column() { ... } } }` page.
 ///
 /// The leading imports make `perryEntry.invokeCallback` (Phase 2 v2),
@@ -777,7 +1967,11 @@ fn emit_section(
 ///   - `@State text_<id>: string = '<initial>'` field decl
 ///   - a switch arm in `applyTextUpdate(id, value)` that assigns to
 ///     the matching field
-fn wrap_index_page(widget_body: &str, text_slots: &[TextSlot]) -> String {
+fn wrap_index_page(
+    widget_body: &str,
+    text_slots: &[TextSlot],
+    lazy_sources: &[LazyDataSource],
+) -> String {
     let indented = widget_body
         .lines()
         .map(|line| format!("            {}", line))
@@ -796,6 +1990,36 @@ fn wrap_index_page(widget_body: &str, text_slots: &[TextSlot]) -> String {
             )
         })
         .collect();
+
+    // Phase 2 v10 — `@State <id>: PerryListDataSource = new PerryListDataSource(<items>)`
+    // for each LazyVStack(items.map(...)) in the harvested tree.
+    let lazy_decls: String = lazy_sources
+        .iter()
+        .map(|src| {
+            format!(
+                "    @State {}: PerryListDataSource = new PerryListDataSource({});\n",
+                src.field_id, src.items_source,
+            )
+        })
+        .collect();
+
+    // Phase 2 v10 — boilerplate IDataSource class. Emitted once per page
+    // if any LazyVStack registered a source. Idempotent (no-op if none).
+    let lazy_class = if lazy_sources.is_empty() {
+        String::new()
+    } else {
+        "\
+class PerryListDataSource implements IDataSource {\n\
+    private items: any[];\n\
+    private listeners: DataChangeListener[] = [];\n\
+    constructor(items: any[]) { this.items = items; }\n\
+    totalCount(): number { return this.items.length; }\n\
+    getData(idx: number): any { return this.items[idx]; }\n\
+    registerDataChangeListener(listener: DataChangeListener): void { this.listeners.push(listener); }\n\
+    unregisterDataChangeListener(listener: DataChangeListener): void { this.listeners = this.listeners.filter(l => l !== listener); }\n\
+}\n\n"
+            .to_string()
+    };
 
     // applyTextUpdate(id, value) switch arms. Always emit the method,
     // even with zero slots, so the auto-generated onClick body's call
@@ -831,10 +2055,12 @@ fn wrap_index_page(widget_body: &str, text_slots: &[TextSlot]) -> String {
          import perryEntry from 'libentry.so';\n\
          import promptAction from '@ohos.promptAction';\n\
          \n\
+         {lazy_class}\
          @Entry\n\
          @Component\n\
          struct Index {{\n\
          {states}\
+         {lazy_decls}\
          {apply}\
          \x20\x20\x20\x20build() {{\n\
          \x20\x20\x20\x20\x20\x20\x20\x20Column() {{\n\
@@ -846,6 +2072,8 @@ fn wrap_index_page(widget_body: &str, text_slots: &[TextSlot]) -> String {
          \x20\x20\x20\x20}}\n\
          }}\n",
         states = state_decls,
+        lazy_class = lazy_class,
+        lazy_decls = lazy_decls,
         apply = apply_method,
         body = indented
     )
@@ -1273,6 +2501,472 @@ mod tests {
             .contains("this.applyTextUpdate(__u.id, __u.value)"));
     }
 
+    // ----- Phase 2 v13: animation / shadow / textDecoration / image asset -----
+
+    #[test]
+    fn animation_modifier_maps_curve_string_to_curve_enum() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![(
+                    "animation".into(),
+                    Expr::Object(vec![
+                        ("duration".into(), Expr::Number(300.0)),
+                        ("curve".into(), Expr::String("ease-in".into())),
+                    ]),
+                )]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(".animation({ duration: 300, curve: Curve.EaseIn })"));
+    }
+
+    #[test]
+    fn shadow_modifier_maps_blur_to_radius_offsets_to_offsetXY() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![(
+                    "shadow".into(),
+                    Expr::Object(vec![
+                        ("color".into(), Expr::String("black".into())),
+                        ("blur".into(), Expr::Number(8.0)),
+                        ("offsetX".into(), Expr::Number(2.0)),
+                        ("offsetY".into(), Expr::Number(4.0)),
+                    ]),
+                )]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // ArkUI's shadow uses `radius` not `blur`; offsetX/Y match.
+        assert!(r.ets_source.contains(".shadow({"));
+        assert!(r.ets_source.contains("color: 'black'"));
+        assert!(r.ets_source.contains("radius: 8"));
+        assert!(r.ets_source.contains("offsetX: 2"));
+        assert!(r.ets_source.contains("offsetY: 4"));
+    }
+
+    #[test]
+    fn text_decoration_underline_maps_to_decoration_modifier() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![("textDecoration".into(), Expr::String("underline".into()))]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(".decoration({ type: TextDecorationType.Underline })"));
+    }
+
+    #[test]
+    fn text_decoration_strikethrough_maps_to_linethrough() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![("textDecoration".into(), Expr::String("strikethrough".into()))]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(".decoration({ type: TextDecorationType.LineThrough })"));
+    }
+
+    #[test]
+    fn image_app_media_path_maps_to_resource_accessor() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc("Image", vec![Expr::String("@app.media/icon".into())])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // `$r('app.media.icon')` (no quotes around the $r() arg).
+        assert!(r.ets_source.contains("Image($r('app.media.icon'))"));
+        // Plain string passthrough still works for HTTP URLs etc.
+        assert!(!r.ets_source.contains("'@app.media/icon'"));
+    }
+
+    #[test]
+    fn image_plain_url_passes_through_as_string() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc("Image", vec![Expr::String("https://example.com/foo.png".into())])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Image('https://example.com/foo.png')"));
+    }
+
+    // ----- Phase 2 v5: inline style + ForEach -----
+
+    #[test]
+    fn inline_style_object_emits_arkui_modifier_chain() {
+        // Button("Save", () => {}, { backgroundColor: "blue", borderRadius: 8, opacity: 0.9 })
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Button",
+            vec![
+                Expr::String("Save".into()),
+                closure_stub(),
+                Expr::Object(vec![
+                    ("backgroundColor".into(), Expr::String("blue".into())),
+                    ("borderRadius".into(), Expr::Number(8.0)),
+                    ("opacity".into(), Expr::Number(0.9)),
+                ]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(".backgroundColor('blue')"));
+        assert!(r.ets_source.contains(".borderRadius(8)"));
+        assert!(r.ets_source.contains(".opacity(0.9)"));
+    }
+
+    #[test]
+    fn inline_style_color_object_emits_rgba() {
+        // Text("hi", { color: { r: 0.2, g: 0.5, b: 0.95, a: 1 } })
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![(
+                    "color".into(),
+                    Expr::Object(vec![
+                        ("r".into(), Expr::Number(0.2)),
+                        ("g".into(), Expr::Number(0.5)),
+                        ("b".into(), Expr::Number(0.95)),
+                        ("a".into(), Expr::Number(1.0)),
+                    ]),
+                )]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // 0.2 * 255 = 51, 0.5 * 255 ≈ 128, 0.95 * 255 ≈ 242
+        assert!(r.ets_source.contains(".fontColor('rgba(51, 128, 242, 1)')"));
+    }
+
+    #[test]
+    fn inline_style_padding_per_side_object() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![(
+                    "padding".into(),
+                    Expr::Object(vec![
+                        ("top".into(), Expr::Number(10.0)),
+                        ("bottom".into(), Expr::Number(20.0)),
+                    ]),
+                )]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(".padding({ top: 10, bottom: 20 })"));
+    }
+
+    #[test]
+    fn inline_style_border_combines_color_and_width() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![
+                    ("borderColor".into(), Expr::String("red".into())),
+                    ("borderWidth".into(), Expr::Number(2.0)),
+                ]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // ArkUI's `.border({ width, color })` is one combined modifier.
+        assert!(r.ets_source.contains(".border({ width: 2, color: 'red' })"));
+    }
+
+    #[test]
+    fn text_with_id_string_is_NOT_treated_as_style() {
+        // Text("Count: 0", "counter") — second string arg is the reactive
+        // id, NOT a style object. extract_style_object returns None for
+        // String args, so the v3.2 reactive path still wins.
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("Count: 0".into()),
+                Expr::String("counter".into()),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Text(this.text_counter)"));
+        // Should NOT have any inline-style modifiers tacked on.
+        assert!(!r.ets_source.contains(".backgroundColor"));
+    }
+
+    #[test]
+    fn for_each_lowers_array_map_in_vstack() {
+        // VStack(items.map(item => Text(item))) — the closure-param `item`
+        // resolves via arkts_locals → __item in the emitted ForEach body.
+        let mut m = empty_module();
+        // Build `Expr::ArrayMap { array: ["a","b","c"], callback: (p) => Text(p) }`.
+        let item_param = perry_hir::ir::Param {
+            id: 42,
+            name: "item".to_string(),
+            ty: perry_types::Type::Any,
+            default: None,
+            is_rest: false,
+        };
+        let inner_text = nmc("Text", vec![Expr::LocalGet(42)]);
+        let map_expr = Expr::ArrayMap {
+            array: Box::new(Expr::Array(vec![
+                Expr::String("a".into()),
+                Expr::String("b".into()),
+                Expr::String("c".into()),
+            ])),
+            callback: Box::new(Expr::Closure {
+                func_id: 0 as perry_types::FuncId,
+                params: vec![item_param],
+                return_type: perry_types::Type::Any,
+                body: vec![Stmt::Return(Some(inner_text))],
+                captures: vec![],
+                mutable_captures: vec![],
+                captures_this: false,
+                enclosing_class: None,
+                is_async: false,
+            }),
+        };
+        m.init.push(app_with_body(nmc(
+            "VStack",
+            vec![Expr::Array(vec![map_expr])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r
+            .ets_source
+            .contains("ForEach(['a', 'b', 'c'], (__item: any)"));
+        // Body resolves `LocalGet(item_param.id)` → __item.
+        assert!(r.ets_source.contains("Text(__item)"));
+    }
+
+    #[test]
+    // ----- Phase 2 v12: Tabs / Modal / Menu / Grid -----
+    #[test]
+    fn tabs_emits_tabcontent_per_spec() {
+        // Tabs([{label: "Home", body: Text("home content")}, {label: "Settings", body: Text("settings")}])
+        let mut m = empty_module();
+        let tab1 = Expr::Object(vec![
+            ("label".into(), Expr::String("Home".into())),
+            (
+                "body".into(),
+                nmc("Text", vec![Expr::String("home content".into())]),
+            ),
+        ]);
+        let tab2 = Expr::Object(vec![
+            ("label".into(), Expr::String("Settings".into())),
+            (
+                "body".into(),
+                nmc("Text", vec![Expr::String("settings".into())]),
+            ),
+        ]);
+        m.init.push(app_with_body(nmc(
+            "Tabs",
+            vec![Expr::Array(vec![tab1, tab2])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Tabs() {"));
+        assert!(r.ets_source.contains(".tabBar('Home')"));
+        assert!(r.ets_source.contains(".tabBar('Settings')"));
+        assert!(r.ets_source.contains("Text('home content')"));
+        assert!(r.ets_source.contains("Text('settings')"));
+    }
+
+    #[test]
+    fn menu_emits_buttons_per_item() {
+        let mut m = empty_module();
+        let item1 = Expr::Object(vec![
+            ("label".into(), Expr::String("Edit".into())),
+            ("action".into(), closure_stub()),
+        ]);
+        let item2 = Expr::Object(vec![
+            ("label".into(), Expr::String("Delete".into())),
+            ("action".into(), closure_stub()),
+        ]);
+        m.init.push(app_with_body(nmc(
+            "Menu",
+            vec![Expr::Array(vec![item1, item2])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Button('Edit')"));
+        assert!(r.ets_source.contains("Button('Delete')"));
+        // Both action closures should register (slot 0 + slot 1).
+        assert!(r.ets_source.contains("perryEntry.invokeCallback(0)"));
+        assert!(r.ets_source.contains("perryEntry.invokeCallback(1)"));
+        assert_eq!(r.callbacks.len(), 2);
+    }
+
+    #[test]
+    fn grid_emits_columns_template_and_griditems() {
+        // Grid(3, [Text("a"), Text("b"), Text("c")])
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Grid",
+            vec![
+                Expr::Number(3.0),
+                Expr::Array(vec![
+                    nmc("Text", vec![Expr::String("a".into())]),
+                    nmc("Text", vec![Expr::String("b".into())]),
+                    nmc("Text", vec![Expr::String("c".into())]),
+                ]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Grid() {"));
+        assert!(r.ets_source.contains(".columnsTemplate('1fr 1fr 1fr')"));
+        assert!(r.ets_source.contains("GridItem()"));
+        assert!(r.ets_source.contains("Text('a')"));
+        assert!(r.ets_source.contains("Text('c')"));
+    }
+
+    #[test]
+    fn modal_emits_placeholder_with_runtime_hint() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Modal",
+            vec![Expr::String("Title".into())],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // Phase 2 v12 emits a placeholder + comment pointing at the
+        // showDialog runtime FFI follow-up.
+        assert!(r.ets_source.contains("// Modal:"));
+        assert!(r.ets_source.contains("showDialog"));
+    }
+
+    // ----- Phase 2 v6: state<T> reactive container -----
+
+    fn state_call(initial: Expr) -> Expr {
+        Expr::NativeMethodCall {
+            module: "perry/ui".to_string(),
+            class_name: None,
+            object: None,
+            method: "state".to_string(),
+            args: vec![initial],
+        }
+    }
+
+    fn state_method_call(state_id: u32, method: &str, args: Vec<Expr>) -> Expr {
+        Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(state_id)),
+                property: method.to_string(),
+            }),
+            args,
+            type_args: vec![],
+        }
+    }
+
+    #[test]
+    fn state_text_emits_reactive_text_with_synth_id() {
+        // const count = state(0); App({body: count.text()});
+        let mut m = empty_module();
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "count".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::Number(0.0))),
+        });
+        m.init
+            .push(app_with_body(state_method_call(5, "text", vec![])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // Synth id is __state_0; sanitized to __state_0 (already valid).
+        assert!(r.ets_source.contains("Text(this.text___state_0)"));
+        // @State decl with initial value 0.
+        assert!(r.ets_source.contains("@State text___state_0: string = '0'"));
+    }
+
+    #[test]
+    fn state_set_in_closure_rewrites_to_settext() {
+        // const count = state(0);
+        // App({body: Button("+", () => count.set(5))});
+        let mut m = empty_module();
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "count".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::Number(0.0))),
+        });
+        // Closure body: Stmt::Expr(count.set(5))
+        let closure = Expr::Closure {
+            func_id: 0 as perry_types::FuncId,
+            params: vec![],
+            return_type: perry_types::Type::Any,
+            body: vec![Stmt::Expr(state_method_call(
+                5,
+                "set",
+                vec![Expr::Number(5.0)],
+            ))],
+            captures: vec![],
+            mutable_captures: vec![],
+            captures_this: false,
+            enclosing_class: None,
+            is_async: false,
+        };
+        m.init.push(app_with_body(nmc(
+            "Button",
+            vec![Expr::String("+".into()), closure],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // The closure body should now contain a setText call. Codegen-side
+        // we can't directly assert on that — but we can verify the harvest
+        // captured exactly 1 callback (the rewritten closure).
+        assert_eq!(r.callbacks.len(), 1);
+        // And confirm the rewritten HIR has the setText shape inside.
+        let captured = &r.callbacks[0];
+        if let Expr::Closure { body, .. } = captured {
+            let has_settext = body.iter().any(|s| {
+                matches!(s, Stmt::Expr(Expr::NativeMethodCall { method, .. }) if method == "setText")
+            });
+            assert!(
+                has_settext,
+                "closure body should have been rewritten to setText"
+            );
+        } else {
+            panic!("expected Closure in callback registry");
+        }
+    }
+
+    #[test]
+    fn multiple_state_decls_get_unique_ids() {
+        let mut m = empty_module();
+        m.init.push(Stmt::Let {
+            id: 1,
+            name: "count".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::Number(0.0))),
+        });
+        m.init.push(Stmt::Let {
+            id: 2,
+            name: "name".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::String("Alice".into()))),
+        });
+        m.init.push(app_with_body(nmc(
+            "VStack",
+            vec![Expr::Array(vec![
+                state_method_call(1, "text", vec![]),
+                state_method_call(2, "text", vec![]),
+            ])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("@State text___state_0: string = '0'"));
+        assert!(r
+            .ets_source
+            .contains("@State text___state_1: string = 'Alice'"));
+        assert!(r.ets_source.contains("Text(this.text___state_0)"));
+        assert!(r.ets_source.contains("Text(this.text___state_1)"));
+    }
+
     #[test]
     fn unsupported_widget_degrades_with_comment_not_error() {
         // Use a widget that's intentionally NOT yet supported so this
@@ -1344,13 +3038,73 @@ mod tests {
             ])],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        // The deferral note is part of the source so a future contributor
-        // sees the LazyForEach + IDataSource follow-up at the call site.
+        // Phase 2 v10: explicit-children variant (non-ArrayMap) still
+        // renders eagerly as a plain Column for backwards compat. The
+        // real lazy path triggers only on `LazyVStack(items.map(...))`.
         assert!(r
             .ets_source
-            .contains("LazyVStack: rendered eagerly as Column"));
+            .contains("LazyVStack with explicit children: rendered eagerly as Column"));
         assert!(r.ets_source.contains("Column({ space: 8 })"));
         assert!(r.ets_source.contains("Text('row 0')"));
+    }
+
+    // ----- Phase 2 v10: real LazyVStack with LazyForEach + IDataSource -----
+
+    #[test]
+    fn lazyvstack_with_array_map_emits_lazy_for_each() {
+        // LazyVStack(items.map(item => Text(item)))
+        let mut m = empty_module();
+        let item_param = perry_hir::ir::Param {
+            id: 99,
+            name: "item".to_string(),
+            ty: perry_types::Type::Any,
+            default: None,
+            is_rest: false,
+        };
+        let inner_text = nmc("Text", vec![Expr::LocalGet(99)]);
+        let map_expr = Expr::ArrayMap {
+            array: Box::new(Expr::Array(vec![
+                Expr::String("a".into()),
+                Expr::String("b".into()),
+            ])),
+            callback: Box::new(Expr::Closure {
+                func_id: 0 as perry_types::FuncId,
+                params: vec![item_param],
+                return_type: perry_types::Type::Any,
+                body: vec![Stmt::Return(Some(inner_text))],
+                captures: vec![],
+                mutable_captures: vec![],
+                captures_this: false,
+                enclosing_class: None,
+                is_async: false,
+            }),
+        };
+        m.init.push(app_with_body(nmc("LazyVStack", vec![map_expr])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // ArkUI shape: List() { LazyForEach(this.lazy_source_0, ...) }
+        assert!(r.ets_source.contains("List() {"));
+        assert!(r.ets_source.contains("LazyForEach(this.lazy_source_0"));
+        assert!(r.ets_source.contains("ListItem()"));
+        // Inner widget body resolves item to __item.
+        assert!(r.ets_source.contains("Text(__item)"));
+        // IDataSource boilerplate emitted at module top.
+        assert!(r.ets_source.contains("class PerryListDataSource implements IDataSource"));
+        // @State field decl on the page.
+        assert!(r.ets_source.contains("@State lazy_source_0: PerryListDataSource = new PerryListDataSource(['a', 'b'])"));
+    }
+
+    #[test]
+    fn lazyvstack_no_array_map_skips_lazy_class_emission() {
+        // Eager-mode (explicit Array) variant should NOT emit the
+        // PerryListDataSource boilerplate.
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "LazyVStack",
+            vec![Expr::Array(vec![nmc("Text", vec![Expr::String("hi".into())])])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(!r.ets_source.contains("class PerryListDataSource"));
+        assert!(!r.ets_source.contains("LazyForEach"));
     }
 
     #[test]

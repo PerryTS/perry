@@ -524,6 +524,15 @@ fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
         // scope for the v1 plain-async pre-pass.
         return;
     }
+    // A `cond ? await a() : b()` would otherwise have BOTH branches'
+    // awaits hoisted unconditionally above the containing statement,
+    // executing both calls regardless of `cond` — breaks JS semantics
+    // (issue #342). Lift the conditional to a statement-level if/else
+    // with a temp before the general hoisting walks into it.
+    if matches!(expr, Expr::Conditional { .. }) && conditional_branches_contain_await(expr) {
+        lift_conditional_with_await_branches(expr, next_id, hoisted);
+        return;
+    }
     // Recurse into children first (innermost-first hoisting).
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
         hoist_awaits_in_expr_full(child, next_id, hoisted);
@@ -558,11 +567,94 @@ fn hoist_awaits_avoiding_top_level(
     if matches!(expr, Expr::Closure { .. }) {
         return;
     }
+    // Top-level conditional like `let r = cond ? await a() : b();` — see
+    // the matching note in `hoist_awaits_in_expr_full`. Lift here too so
+    // the await ends up inside an if-branch instead of unconditionally
+    // above the let.
+    if matches!(expr, Expr::Conditional { .. }) && conditional_branches_contain_await(expr) {
+        lift_conditional_with_await_branches(expr, next_id, hoisted);
+        return;
+    }
     // Outer is NOT an await. Children may contain awaits which ARE
     // nested — fully hoist them.
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
         hoist_awaits_in_expr_full(child, next_id, hoisted);
     });
+}
+
+/// Returns true if either branch of `expr` (assumed `Expr::Conditional`)
+/// contains an `Expr::Await`, anywhere except inside nested closures.
+fn conditional_branches_contain_await(expr: &Expr) -> bool {
+    if let Expr::Conditional {
+        then_expr,
+        else_expr,
+        ..
+    } = expr
+    {
+        return expr_contains_await(then_expr) || expr_contains_await(else_expr);
+    }
+    false
+}
+
+fn expr_contains_await(expr: &Expr) -> bool {
+    if matches!(expr, Expr::Await(_)) {
+        return true;
+    }
+    if matches!(expr, Expr::Closure { .. }) {
+        return false;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_contains_await(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Replace `cond ? then_e : else_e` (where then_e or else_e contains an
+/// await) with `LocalGet(__cond_await_N)`, and emit before the containing
+/// statement:
+///
+///   let __cond_await_N: any;
+///   if (cond) { __cond_await_N = then_e; } else { __cond_await_N = else_e; }
+///
+/// Awaits inside each branch's `LocalSet` are then hoisted by the recursive
+/// `hoist_awaits_in_stmts` call so they end up at the top of their own
+/// if-branch — the position the await→yield rewrite expects.
+fn lift_conditional_with_await_branches(
+    expr: &mut Expr,
+    next_id: &mut LocalId,
+    hoisted: &mut Vec<Stmt>,
+) {
+    let temp_id = alloc_local(next_id);
+    let owned = std::mem::replace(expr, Expr::LocalGet(temp_id));
+    if let Expr::Conditional {
+        condition,
+        then_expr,
+        else_expr,
+    } = owned
+    {
+        hoisted.push(Stmt::Let {
+            id: temp_id,
+            name: format!("__cond_await_{}", temp_id),
+            ty: Type::Any,
+            mutable: true,
+            init: None,
+        });
+
+        let mut then_branch = vec![Stmt::Expr(Expr::LocalSet(temp_id, then_expr))];
+        hoist_awaits_in_stmts(&mut then_branch, next_id);
+
+        let mut else_branch = vec![Stmt::Expr(Expr::LocalSet(temp_id, else_expr))];
+        hoist_awaits_in_stmts(&mut else_branch, next_id);
+
+        hoisted.push(Stmt::If {
+            condition: *condition,
+            then_branch,
+            else_branch: Some(else_branch),
+        });
+    }
 }
 
 // ─── Rewrite await → yield ───────────────────────────────────────────────

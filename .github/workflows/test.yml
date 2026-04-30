@@ -330,19 +330,22 @@ jobs:
           }
           export -f compile_one
 
-          # macos-14 GitHub runner has 3 vCPUs; perry compile is
+          # ubuntu-latest runners have 4 vCPUs; perry compile is
           # CPU-bound for HIR/codegen but waits on the linker (clang)
-          # for a meaningful chunk of each test. Default lowered to 3
-          # (= vCPU count) after v0.5.383's compile-smoke run hit a
-          # cargo auto-optimize file-lock race at NJOBS=6: two workers
-          # rebuilding the same `target/perry-auto-<hash>/lib*.a` led
-          # to one worker's clang seeing `errno=2` mid-link. Local
-          # 12-core machines didn't surface this because the race
-          # window is sub-second and rare under low contention. With
-          # NJOBS=3 + the retry-once in compile_one, the race is both
-          # less likely and self-healing. Sequential baseline was
-          # ~26 min; expect ~10-12 min at NJOBS=3.
-          NJOBS="${PERRY_SMOKE_JOBS:-3}"
+          # for a meaningful chunk of each test. v0.5.384 dropped to
+          # NJOBS=3 after NJOBS=6 hit a cargo auto-optimize file-lock
+          # race: two workers rebuilding the same `target/perry-auto-
+          # <hash>/lib*.a` led to one worker's clang seeing `errno=2`
+          # mid-link. v0.5.429 closed that race at the source via an
+          # OS file lock in `commands/compile/optimized_libs.rs::
+          # build_optimized_libs` (fslock dep — flock on Unix,
+          # LockFileEx on Windows; serializes per-hash, parallel across
+          # different hashes). NJOBS=6 is now safe again. Sequential
+          # baseline was ~26 min; NJOBS=3 → ~10-12 min; NJOBS=6 → ~6-8
+          # min on a 4-vCPU runner. The retry-once in compile_one stays
+          # as a belt-and-suspenders safety net for any remaining race
+          # corner the lock doesn't catch.
+          NJOBS="${PERRY_SMOKE_JOBS:-6}"
           printf '%s\n' test-files/*.ts \
             | xargs -P "$NJOBS" -n 1 -I{} bash -c 'compile_one "$@"' _ {}
 
@@ -464,7 +467,13 @@ jobs:
             # single comma-delimited value because PowerShell splits even
             # `--foo=a,b` at the comma when unquoted (array literal).
             # Repetition sidesteps the whole issue on every shell.
-            cmd_xcompile_blocking: "./scripts/run_doc_tests.sh --verbose --xcompile-only --xcompile-only-target=web --xcompile-only-target=wasm --xcompile-only-target=ios-simulator"
+            #
+            # web + wasm cross-compile dropped from the macOS blocking gate
+            # in v0.5.429 — both targets are portable and the ubuntu-24.04
+            # matrix entry below already verifies them at 1× billing
+            # weight. Keep ios-simulator here because it requires Apple
+            # SDK that only macos-14 has.
+            cmd_xcompile_blocking: "./scripts/run_doc_tests.sh --verbose --xcompile-only --xcompile-only-target=ios-simulator"
             cmd_xcompile_advisory: "./scripts/run_doc_tests.sh --verbose --xcompile-only"
             # Baseline captured from a clean CI run of 24723671119 (900x970).
             gallery_advisory: false

@@ -51,8 +51,25 @@ pub fn write_screenshot_bytes(path: &str, ptr: *const u8, len: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Serialize env-mutation tests. cargo test runs each `#[test]` in
+    // parallel by default (one thread per CPU), and `std::env::set_var` /
+    // `remove_var` are process-global — two tests touching the same env
+    // var at once will see each other's mutations and race their
+    // assertions. macos-14's CI runner has 3 vCPUs which made this rare;
+    // the ubuntu-latest migration in v0.5.392 bumped that to 4 vCPUs and
+    // surfaced `test_mode_off_for_falsy_values` as a flake. The Mutex
+    // serializes EVERY env-mutating test in this mod regardless of which
+    // var it touches, which is overkill but cheap (each test runs in
+    // microseconds) and prevents future env-var collisions.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_env<F: FnOnce()>(key: &str, value: Option<&str>, f: F) {
+        // Hold the lock for the entire setup → run → restore window so
+        // concurrent tests can't observe partial state. PoisonError ignored
+        // — a panicking test still leaves a usable lock for others.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var(key).ok();
         match value {
             Some(v) => std::env::set_var(key, v),

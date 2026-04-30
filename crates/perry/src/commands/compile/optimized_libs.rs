@@ -235,6 +235,35 @@ pub(super) fn build_optimized_libs(
         cargo_cmd.env("RUSTFLAGS", "-C panic=abort");
     }
 
+    // Closes #25 (the v0.5.384 NJOBS 6→3 retreat): serialize parallel
+    // `perry compile` invocations that target the SAME `target/perry-auto
+    // -<hash>` directory via an OS-level file lock. Cargo has its own
+    // target-dir lock (`.cargo-lock`) that prevents concurrent COMPILES,
+    // but the FILE OUTPUT is rename'd at link end — meaning worker B's
+    // clang can read `libperry_runtime.a` while worker A's cargo is
+    // mid-rename and see errno=2. The race window is sub-second but
+    // fired reliably at NJOBS=6 on the macos-14 compile-smoke runner.
+    //
+    // The lock is per-hash, so different feature combos still build in
+    // parallel. fslock is portable (flock on Unix, LockFileEx on
+    // Windows) and was already a transitive dep — no new crate cost.
+    //
+    // Best-effort: if the dir create or lock acquisition fails for any
+    // reason, fall through and run cargo unguarded. The retry loop in
+    // the smoke script's compile_one already handles the residual race
+    // window if any worker still slips through.
+    let _build_lock = {
+        let _ = std::fs::create_dir_all(&target_dir);
+        let lock_path = target_dir.join(".perry-auto-build.lock");
+        match fslock::LockFile::open(&lock_path) {
+            Ok(mut lf) => {
+                let _ = lf.lock();
+                Some(lf)
+            }
+            Err(_) => None,
+        }
+    };
+
     let status = match cargo_cmd.status() {
         Ok(s) => s,
         Err(e) => {

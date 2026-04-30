@@ -222,31 +222,21 @@ fn check_system_linker() -> CheckResult {
 }
 
 fn check_runtime_library() -> CheckResult {
-    #[cfg(target_os = "windows")]
-    let lib_name = "perry_runtime.lib";
-    #[cfg(not(target_os = "windows"))]
-    let lib_name = "libperry_runtime.a";
-
-    let candidates = [
-        PathBuf::from(format!("target/release/{}", lib_name)),
-        PathBuf::from(format!("target/debug/{}", lib_name)),
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.join(lib_name)))
-            .unwrap_or_default(),
-        PathBuf::from(format!("/usr/local/lib/{}", lib_name)),
-    ];
-
-    for path in &candidates {
-        if path.exists() {
-            return CheckResult {
-                name: "runtime library".to_string(),
-                status: CheckStatus::Ok,
-                details: Some(path.display().to_string()),
-            };
-        }
+    // Delegate to the same search machinery `perry compile` uses, so the
+    // doctor view stays in sync with the linker's actual lookup paths
+    // (env-var overrides, WinGet Packages dir, brew/usr-local, etc).
+    let lib_name = if cfg!(target_os = "windows") {
+        "perry_runtime.lib"
+    } else {
+        "libperry_runtime.a"
+    };
+    if let Some(path) = crate::commands::compile::find_library(lib_name, None) {
+        return CheckResult {
+            name: "runtime library".to_string(),
+            status: CheckStatus::Ok,
+            details: Some(path.display().to_string()),
+        };
     }
-
     CheckResult {
         name: "runtime library".to_string(),
         status: CheckStatus::Warning,

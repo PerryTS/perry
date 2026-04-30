@@ -486,8 +486,46 @@ pub(super) fn find_library_with_candidates(
     Err(candidates)
 }
 
-pub(super) fn find_library(name: &str, target: Option<&str>) -> Option<PathBuf> {
+pub fn find_library(name: &str, target: Option<&str>) -> Option<PathBuf> {
     find_library_with_candidates(name, target).ok()
+}
+
+/// Probe WinGet's Packages directory for a library file. WinGet stores
+/// `perry.exe` and the `.lib` files together in
+/// `%LOCALAPPDATA%\Microsoft\WinGet\Packages\PerryTS.Perry_<source-hash>\`,
+/// but exposes the binary via a launcher-shim `WinGet\Links\perry.exe`.
+/// The shim is a launcher .exe rather than a symlink, so `current_exe()`
+/// returns the shim path and the existing `dir.join(name)` lookups land
+/// in the wrong place. Closes #352.
+#[cfg(target_os = "windows")]
+fn winget_lib_candidates(name: &str) -> Vec<PathBuf> {
+    let Ok(local_app_data) = std::env::var("LOCALAPPDATA") else {
+        return Vec::new();
+    };
+    let packages = PathBuf::from(local_app_data)
+        .join("Microsoft")
+        .join("WinGet")
+        .join("Packages");
+    let Ok(entries) = std::fs::read_dir(&packages) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.starts_with("PerryTS.Perry_"))
+        {
+            out.push(path.join(name));
+        }
+    }
+    out
+}
+
+#[cfg(not(target_os = "windows"))]
+fn winget_lib_candidates(_name: &str) -> Vec<PathBuf> {
+    Vec::new()
 }
 
 pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Vec<PathBuf> {
@@ -516,6 +554,7 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
         if matches!(target, Some("windows")) {
             candidates.push(PathBuf::from(format!("target/release/{}", name)));
             candidates.push(PathBuf::from(format!("target/debug/{}", name)));
+            candidates.extend(winget_lib_candidates(name));
         }
         #[cfg(target_os = "linux")]
         if matches!(target, Some("linux")) {
@@ -617,6 +656,7 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
         candidates.push(PathBuf::from(format!("/usr/local/lib/{}", name)));
         // Debian/Ubuntu: libs installed in /usr/lib/perry
         candidates.push(PathBuf::from(format!("/usr/lib/perry/{}", name)));
+        candidates.extend(winget_lib_candidates(name));
     }
 
     candidates

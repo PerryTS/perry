@@ -31,6 +31,14 @@ pub fn declare_phase1(module: &mut LlModule) {
     // Console.
     module.declare_function("js_console_log_dynamic", VOID, &[DOUBLE]);
     module.declare_function("js_console_log_number", VOID, &[DOUBLE]);
+    // console.error / console.warn single-arg fast paths (#345). These
+    // route the print to stderr / stdout-styled-as-warn respectively;
+    // pre-fix the single-arg path always called js_console_log_dynamic
+    // and silently lost the stream distinction.
+    module.declare_function("js_console_error_dynamic", VOID, &[DOUBLE]);
+    module.declare_function("js_console_error_number", VOID, &[DOUBLE]);
+    module.declare_function("js_console_warn_dynamic", VOID, &[DOUBLE]);
+    module.declare_function("js_console_warn_number", VOID, &[DOUBLE]);
 
     // NaN-boxing wrappers (bridge between raw handles and NaN-boxed doubles).
     module.declare_function("js_nanbox_string", DOUBLE, &[I64]);

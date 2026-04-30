@@ -520,51 +520,107 @@ pub extern "C" fn js_process_kill(pid: f64, signal: f64) {
     }
 }
 
-/// Stub `write` function used by process.stdin/stdout/stderr objects.
-/// Receives a single value, writes it to stdout/stderr, returns true.
-extern "C" fn process_stream_write_stub(
+/// Coerce a NaN-boxed JSValue to its display bytes, suitable for raw
+/// stream writes. Used by `process.stdout.write` / `process.stderr.write`.
+/// Mirrors Node's behavior: numbers/booleans/null/undefined coerce to
+/// their string form; strings pass through verbatim.
+fn jsvalue_to_write_bytes(value: f64) -> Vec<u8> {
+    let s_ptr = crate::value::js_jsvalue_to_string(value);
+    if s_ptr.is_null() {
+        return Vec::new();
+    }
+    unsafe {
+        let header = &*s_ptr;
+        let len = header.byte_len as usize;
+        let data = (s_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        std::slice::from_raw_parts(data, len).to_vec()
+    }
+}
+
+/// `write` impl for process.stdout — writes the value's display bytes to
+/// fd 1 without appending a newline (matching Node.js semantics — the
+/// caller is responsible for `\n`).
+extern "C" fn process_stdout_write_stub(
     _closure: *const crate::closure::ClosureHeader,
-    _arg: f64,
+    arg: f64,
 ) -> f64 {
-    // Just return true
+    use std::io::Write;
+    let bytes = jsvalue_to_write_bytes(arg);
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    let _ = handle.write_all(&bytes);
+    let _ = handle.flush();
     f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
 }
 
-/// Build a stub stream object with a `write` field set to a closure.
-fn build_stream_object() -> *mut crate::object::ObjectHeader {
+/// `write` impl for process.stderr — same as the stdout stub but
+/// targeting fd 2.
+extern "C" fn process_stderr_write_stub(
+    _closure: *const crate::closure::ClosureHeader,
+    arg: f64,
+) -> f64 {
+    use std::io::Write;
+    let bytes = jsvalue_to_write_bytes(arg);
+    let stderr = std::io::stderr();
+    let mut handle = stderr.lock();
+    let _ = handle.write_all(&bytes);
+    let _ = handle.flush();
+    f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
+}
+
+/// `write` impl for process.stdin — reading from stdin via `.write` is
+/// nonsensical; keep it as a no-op that returns `true` so existing code
+/// that calls `process.stdin.write(...)` (rare) doesn't crash.
+extern "C" fn process_stdin_write_noop_stub(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
+}
+
+/// Build a stream object with a `write` field bound to the given stub.
+/// Each invocation of `process.stdout` / `process.stderr` returns a fresh
+/// object whose `write` closure points at the matching fd.
+fn build_stream_object_with_write(
+    write_stub: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64,
+) -> *mut crate::object::ObjectHeader {
     use crate::closure::js_closure_alloc;
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;
 
     let packed = b"write\0";
     let obj = js_object_alloc_with_shape(0x7FFF_FF22, 1, packed.as_ptr(), packed.len() as u32);
-    let closure = js_closure_alloc(process_stream_write_stub as *const u8, 0);
+    let closure = js_closure_alloc(write_stub as *const u8, 0);
     let cval = JSValue::pointer(closure as *const u8);
     js_object_set_field(obj, 0, cval);
     obj
 }
 
-/// process.stdin -> stub stream object
+/// process.stdin -> stream object whose `.write(...)` is a no-op (writing
+/// to stdin from the program side has no useful semantics — kept as a
+/// crash-free placeholder).
 #[no_mangle]
 pub extern "C" fn js_process_stdin() -> f64 {
     use crate::value::JSValue;
-    let obj = build_stream_object();
+    let obj = build_stream_object_with_write(process_stdin_write_noop_stub);
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
 
-/// process.stdout -> stub stream object
+/// process.stdout -> stream object whose `.write(s)` writes `s` to fd 1
+/// without appending a newline, matching Node.js semantics.
 #[no_mangle]
 pub extern "C" fn js_process_stdout() -> f64 {
     use crate::value::JSValue;
-    let obj = build_stream_object();
+    let obj = build_stream_object_with_write(process_stdout_write_stub);
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
 
-/// process.stderr -> stub stream object
+/// process.stderr -> stream object whose `.write(s)` writes `s` to fd 2
+/// without appending a newline, matching Node.js semantics.
 #[no_mangle]
 pub extern "C" fn js_process_stderr() -> f64 {
     use crate::value::JSValue;
-    let obj = build_stream_object();
+    let obj = build_stream_object_with_write(process_stderr_write_stub);
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
 

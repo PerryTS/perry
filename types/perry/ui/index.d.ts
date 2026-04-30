@@ -236,6 +236,44 @@ export function Button(label: string, onPress: () => void): Widget;
 export function setText(id: string, value: string): void;
 
 /**
+ * A reactive state container. Wraps a value of type `T` and provides:
+ *
+ * - `value` / `get()` — read the current value
+ * - `set(v)` — update the value and trigger any bound UI to rerender
+ * - `text()` — return a reactive `Text` widget bound to this state
+ *
+ * Phase 2 v6 implementation desugars to the existing v3.2 setText/Text
+ * reactive binding at compile time (perry-codegen-arkts) — each
+ * `state(initial)` declaration registers a synthetic id; `state.text()`
+ * emits a reactive `Text(initial.toString(), "<synth_id>")`, and
+ * `state.set(v)` rewrites to `setText("<synth_id>", String(v))` inside
+ * any closure body. No runtime FFIs change vs v3.2.
+ *
+ * Example:
+ *
+ *     import { App, VStack, Button, state } from "perry/ui";
+ *
+ *     const count = state(0);
+ *
+ *     App({ body: VStack([
+ *       count.text(),
+ *       Button("+", () => count.set(count.get() + 1)),
+ *     ])});
+ *
+ * Cross-platform: harvest detection only fires on `--target harmonyos`
+ * today. On other platforms the runtime side is a plain holder object —
+ * `set()` updates the value but no UI binding fires (deferred to v6.5).
+ */
+export interface State<T> {
+    readonly value: T;
+    get(): T;
+    set(value: T): void;
+    text(): Widget;
+}
+
+export function state<T>(initial: T): State<T>;
+
+/**
  * Show a transient banner/toast on supported platforms.
  *
  * On `--target harmonyos`, calls `promptAction.showToast({message})` via
