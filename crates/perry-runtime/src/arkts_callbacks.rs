@@ -46,7 +46,7 @@ use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::Mutex;
 
-use crate::closure::{js_closure_call0, ClosureHeader};
+use crate::closure::{js_closure_call0, js_closure_call1, ClosureHeader};
 use crate::value::{POINTER_MASK, TAG_UNDEFINED};
 
 // POINTER_TAG is private to the value module; redeclare the constant here
@@ -181,6 +181,49 @@ pub extern "C" fn perry_arkts_invoke_callback(idx: i64) -> f64 {
     arkts_log(&format!("invoke calling closure idx={}", idx));
     let result = js_closure_call0(raw);
     arkts_log(&format!("invoke RETURN idx={}", idx));
+    result
+}
+
+/// Phase 2 v2.5: invoke a registered closure with one NaN-boxed f64
+/// argument. ArkUI's Toggle/TextField/Slider onChange handlers route
+/// here via NAPI's `invokeCallback1(idx, value)` after marshaling the
+/// JS-typed value (boolean/string/number) into a NaN-boxed f64.
+///
+/// Mirrors `perry_arkts_invoke_callback` exactly, just with `js_closure_call1`
+/// instead of call0 and an extra arg passed through.
+#[no_mangle]
+pub extern "C" fn perry_arkts_invoke_callback1(idx: i64, arg_d: f64) -> f64 {
+    arkts_log(&format!(
+        "invoke1 ENTER idx={} arg_bits=0x{:016x}",
+        idx,
+        arg_d.to_bits()
+    ));
+    let closure_d = {
+        let cbs = CALLBACKS.lock().unwrap();
+        let i = idx as usize;
+        if i >= cbs.len() {
+            arkts_log(&format!(
+                "invoke1 OOB idx={} cbs.len={}",
+                i,
+                cbs.len()
+            ));
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        cbs[i]
+    };
+    let bits = closure_d.to_bits();
+    if (bits & !POINTER_MASK) != POINTER_TAG_BITS {
+        arkts_log(&format!("invoke1 not-a-pointer idx={}", idx));
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let raw = (bits & POINTER_MASK) as *const ClosureHeader;
+    if raw.is_null() {
+        arkts_log(&format!("invoke1 null-pointer idx={}", idx));
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    arkts_log(&format!("invoke1 calling closure idx={}", idx));
+    let result = js_closure_call1(raw, arg_d);
+    arkts_log(&format!("invoke1 RETURN idx={}", idx));
     result
 }
 

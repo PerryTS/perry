@@ -226,9 +226,9 @@ fn emit_widget(
             "VStack" => emit_stack("Column", args, bindings, depth, callbacks, text_slots),
             "HStack" => emit_stack("Row", args, bindings, depth, callbacks, text_slots),
             "Button" => emit_button(args, callbacks),
-            "TextField" => emit_textfield(args),
-            "Toggle" => emit_toggle(args),
-            "Slider" => emit_slider(args),
+            "TextField" => emit_textfield(args, callbacks),
+            "Toggle" => emit_toggle(args, callbacks),
+            "Slider" => emit_slider(args, callbacks),
             "Spacer" => "Blank()".to_string(),
             "Divider" => "Divider()".to_string(),
             other => format!(
@@ -377,30 +377,13 @@ fn emit_button(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
         Some(closure @ Expr::Closure { .. }) => {
             let idx = callbacks.len();
             callbacks.push(closure.clone());
-            // Three-pass drain after the closure body returns:
-            //   1. invokeCallback runs the user's TS body, which may
-            //      call showToast / setText / both.
-            //   2. drainToast loop dispatches each queued toast to
-            //      promptAction.showToast({message}).
-            //   3. drainTextUpdate loop dispatches each (id, value) to
-            //      this.applyTextUpdate(id, value), which routes to
-            //      the matching @State setter via a switch table that
-            //      wrap_index_page generates from the registered slots.
             format!(
                 ".onClick(() => {{\n    \
                  perryEntry.invokeCallback({});\n    \
-                 let __t = perryEntry.drainToast();\n    \
-                 while (__t !== undefined) {{ \
-                 promptAction.showToast({{ message: __t }}); \
-                 __t = perryEntry.drainToast(); \
-                 }}\n    \
-                 let __u = perryEntry.drainTextUpdate();\n    \
-                 while (__u !== undefined) {{ \
-                 this.applyTextUpdate(__u.id, __u.value); \
-                 __u = perryEntry.drainTextUpdate(); \
-                 }}\n  \
+                 {drain}\
                  }})",
-                idx
+                idx,
+                drain = drain_loop_body()
             )
         }
         _ => String::new(),
@@ -412,41 +395,117 @@ fn emit_button(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
     )
 }
 
-/// `TextField(placeholder, onChange)` → `TextInput({placeholder: 'hint'})`.
-/// Closure dropped (same reactivity-bridge caveat as Button).
-fn emit_textfield(args: &[Expr]) -> String {
+/// Three-pass drain after a closure body returns. Used by Button.onClick
+/// (Phase 2 v2) and Toggle/TextField/Slider.onChange (v2.5):
+///   1. drainToast loop → promptAction.showToast({message})
+///   2. drainTextUpdate loop → this.applyTextUpdate(id, value)
+/// `invokeCallback` itself is emitted by the caller because it varies
+/// (callN with N-arg widgets, plus ArkUI's per-widget onChange shape).
+fn drain_loop_body() -> String {
+    "let __t = perryEntry.drainToast();\n    \
+     while (__t !== undefined) { \
+     promptAction.showToast({ message: __t }); \
+     __t = perryEntry.drainToast(); \
+     }\n    \
+     let __u = perryEntry.drainTextUpdate();\n    \
+     while (__u !== undefined) { \
+     this.applyTextUpdate(__u.id, __u.value); \
+     __u = perryEntry.drainTextUpdate(); \
+     }\n  "
+        .to_string()
+}
+
+/// `TextField(placeholder, onChange)` → `TextInput(...).onChange(...)`.
+/// Phase 2 v2.5: when `onChange` is a closure, register it in the slot
+/// table and emit an `onChange((value: string) => perryEntry.invokeCallback1(idx, value))`
+/// handler that also drains toast + text-update queues.
+fn emit_textfield(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
     let placeholder = first_string_arg(args).unwrap_or_default();
+    let onchange = match args.get(1) {
+        Some(closure @ Expr::Closure { .. }) => {
+            let idx = callbacks.len();
+            callbacks.push(closure.clone());
+            format!(
+                ".onChange((value: string) => {{\n    \
+                 perryEntry.invokeCallback1({}, value);\n    \
+                 {drain}\
+                 }})",
+                idx,
+                drain = drain_loop_body()
+            )
+        }
+        _ => String::new(),
+    };
     format!(
-        "TextInput({{ placeholder: {} }})",
-        arkts_string_lit(&placeholder)
+        "TextInput({{ placeholder: {} }}){}",
+        arkts_string_lit(&placeholder),
+        onchange,
     )
 }
 
-/// `Toggle(label, onChange)` → label as a sibling Text + ArkUI's Toggle in
-/// a Row. Visual approximation; reactivity bridge is the future work.
-fn emit_toggle(args: &[Expr]) -> String {
+/// `Toggle(label, onChange)` → label as a sibling Text + ArkUI's Toggle
+/// in a Row. Phase 2 v2.5: closure receives `(isOn: boolean)`.
+fn emit_toggle(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
     let label = first_string_arg(args).unwrap_or_default();
+    let onchange = match args.get(1) {
+        Some(closure @ Expr::Closure { .. }) => {
+            let idx = callbacks.len();
+            callbacks.push(closure.clone());
+            format!(
+                ".onChange((isOn: boolean) => {{\n    \
+                 perryEntry.invokeCallback1({}, isOn);\n    \
+                 {drain}\
+                 }})",
+                idx,
+                drain = drain_loop_body()
+            )
+        }
+        _ => String::new(),
+    };
     if label.is_empty() {
-        "Toggle({ type: ToggleType.Switch, isOn: false })".to_string()
+        format!(
+            "Toggle({{ type: ToggleType.Switch, isOn: false }}){}",
+            onchange
+        )
     } else {
         format!(
             "Row({{ space: 8 }}) {{\n\
              \x20\x20\x20\x20Text({}).fontSize(16)\n\
-             \x20\x20\x20\x20Toggle({{ type: ToggleType.Switch, isOn: false }})\n\
+             \x20\x20\x20\x20Toggle({{ type: ToggleType.Switch, isOn: false }}){}\n\
              }}",
-            arkts_string_lit(&label)
+            arkts_string_lit(&label),
+            onchange,
         )
     }
 }
 
-/// `Slider(min, max, onChange)` → `Slider({min, max, value: min, step: 1})`.
-fn emit_slider(args: &[Expr]) -> String {
+/// `Slider(min, max, onChange)` → ArkUI Slider with onChange. Phase 2
+/// v2.5: closure receives `(value: number)`. ArkUI's onChange callback
+/// is `(value: number, mode: SliderChangeMode)` — we ignore `mode` and
+/// only forward `value`.
+fn emit_slider(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
     let min = numeric_arg(args, 0).unwrap_or(0.0);
     let max = numeric_arg(args, 1).unwrap_or(100.0);
+    let onchange = match args.get(2) {
+        Some(closure @ Expr::Closure { .. }) => {
+            let idx = callbacks.len();
+            callbacks.push(closure.clone());
+            format!(
+                ".onChange((value: number, _mode: SliderChangeMode) => {{\n    \
+                 perryEntry.invokeCallback1({}, value);\n    \
+                 {drain}\
+                 }})",
+                idx,
+                drain = drain_loop_body()
+            )
+        }
+        _ => String::new(),
+    };
     format!(
-        "Slider({{ value: {min}, min: {min}, max: {max}, step: 1, style: SliderStyle.OutSet }})",
+        "Slider({{ value: {min}, min: {min}, max: {max}, step: 1, style: SliderStyle.OutSet }}){onchange}",
         min = fmt_num(min),
         max = fmt_num(max),
+        onchange = onchange,
     )
 }
 
@@ -898,6 +957,53 @@ mod tests {
         let r = emit_index_ets(&mut m).unwrap().unwrap();
         assert!(r.ets_source.contains("@State text_user_name"));
         assert!(r.ets_source.contains("case 'user-name'"));
+    }
+
+    #[test]
+    fn toggle_with_closure_emits_onchange_with_invokecallback1() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Toggle",
+            vec![Expr::String("Notify".into()), closure_stub()],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r
+            .ets_source
+            .contains(".onChange((isOn: boolean) => {"));
+        assert!(r.ets_source.contains("perryEntry.invokeCallback1(0, isOn)"));
+        assert_eq!(r.callbacks.len(), 1);
+    }
+
+    #[test]
+    fn textfield_with_closure_forwards_value_to_invokecallback1() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "TextField",
+            vec![Expr::String("Search…".into()), closure_stub()],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r
+            .ets_source
+            .contains(".onChange((value: string) => {"));
+        assert!(r.ets_source.contains("perryEntry.invokeCallback1(0, value)"));
+    }
+
+    #[test]
+    fn slider_with_closure_forwards_value_to_invokecallback1() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Slider",
+            vec![
+                Expr::Number(0.0),
+                Expr::Number(100.0),
+                closure_stub(),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r
+            .ets_source
+            .contains(".onChange((value: number, _mode: SliderChangeMode) => {"));
+        assert!(r.ets_source.contains("perryEntry.invokeCallback1(0, value)"));
     }
 
     #[test]

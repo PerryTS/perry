@@ -91,6 +91,28 @@ extern "C" {
         result: *mut *mut NapiValue,
     ) -> NapiStatus;
     pub fn napi_create_object(env: *mut NapiEnv, result: *mut *mut NapiValue) -> NapiStatus;
+    pub fn napi_typeof(
+        env: *mut NapiEnv,
+        value: *mut NapiValue,
+        result: *mut c_int, // NapiValueType: 0=undefined,1=null,2=bool,3=number,4=string,5=symbol,6=object,7=function,8=external
+    ) -> NapiStatus;
+    pub fn napi_get_value_bool(
+        env: *mut NapiEnv,
+        value: *mut NapiValue,
+        result: *mut bool,
+    ) -> NapiStatus;
+    pub fn napi_get_value_double(
+        env: *mut NapiEnv,
+        value: *mut NapiValue,
+        result: *mut f64,
+    ) -> NapiStatus;
+    pub fn napi_get_value_string_utf8(
+        env: *mut NapiEnv,
+        value: *mut NapiValue,
+        buf: *mut c_char,
+        bufsize: usize,
+        result: *mut usize,
+    ) -> NapiStatus;
 }
 
 // Perry's compiled entry. The TypeScript compiler always emits `main`
@@ -219,6 +241,99 @@ unsafe extern "C" fn drain_text_update(
     obj
 }
 
+// Phase 2 v2.5: invoke a registered closure with one value arg. ArkUI's
+// Toggle / TextField / Slider onChange handlers call this with the
+// event payload (boolean / string / number); we marshal it to a
+// NaN-boxed f64 and dispatch via `perry_arkts_invoke_callback1`, which
+// calls js_closure_call1 with the original Perry closure body.
+//
+// Marshaling rules:
+//   - boolean → NaN-boxed TAG_TRUE (0x7FFC_0000_0000_0004) /
+//                          TAG_FALSE (0x7FFC_0000_0000_0003)
+//   - string  → allocate StringHeader via js_string_from_bytes,
+//               NaN-box with STRING_TAG (0x7FFF)
+//   - number  → pass through f64 directly (Perry's NaN-boxing keeps
+//               raw f64 numbers as-is)
+//   - other   → TAG_UNDEFINED so the closure body's typeof check sees
+//               undefined rather than mistyped data
+unsafe extern "C" fn invoke_callback1(
+    env: *mut NapiEnv,
+    info: *mut NapiCallbackInfo,
+) -> *mut NapiValue {
+    let mut argc: usize = 2;
+    let mut argv: [*mut NapiValue; 2] = [ptr::null_mut(); 2];
+    let _ = napi_get_cb_info(
+        env,
+        info,
+        &mut argc,
+        argv.as_mut_ptr(),
+        ptr::null_mut(),
+        ptr::null_mut(),
+    );
+    let mut idx_i32: i32 = -1;
+    if argc >= 1 && !argv[0].is_null() {
+        let _ = napi_get_value_int32(env, argv[0], &mut idx_i32);
+    }
+    let arg_d: f64 = if argc >= 2 && !argv[1].is_null() {
+        let mut t: c_int = 0;
+        let _ = napi_typeof(env, argv[1], &mut t);
+        match t {
+            // boolean
+            2 => {
+                let mut b: bool = false;
+                let _ = napi_get_value_bool(env, argv[1], &mut b);
+                f64::from_bits(if b {
+                    0x7FFC_0000_0000_0004
+                } else {
+                    0x7FFC_0000_0000_0003
+                })
+            }
+            // number
+            3 => {
+                let mut n: f64 = 0.0;
+                let _ = napi_get_value_double(env, argv[1], &mut n);
+                n
+            }
+            // string — read into a stack buffer (4 KB cap), allocate a
+            // Perry StringHeader, NaN-box with STRING_TAG. Larger inputs
+            // get truncated; future v2.6 follow-up: dynamic alloc via
+            // 2-call probe (size first, then bytes).
+            4 => {
+                let mut buf = [0u8; 4096];
+                let mut written: usize = 0;
+                let _ = napi_get_value_string_utf8(
+                    env,
+                    argv[1],
+                    buf.as_mut_ptr() as *mut c_char,
+                    buf.len(),
+                    &mut written,
+                );
+                let header =
+                    crate::string::js_string_from_bytes(buf.as_ptr(), written as u32);
+                if header.is_null() {
+                    f64::from_bits(0x7FFC_0000_0000_0001)
+                } else {
+                    crate::value::js_nanbox_string(header as i64)
+                }
+            }
+            _ => f64::from_bits(0x7FFC_0000_0000_0001),
+        }
+    } else {
+        f64::from_bits(0x7FFC_0000_0000_0001)
+    };
+    crate::arkts_callbacks::arkts_log_napi(&format!(
+        "invokeCallback1 NAPI idx={} arg_bits=0x{:016x}",
+        idx_i32,
+        arg_d.to_bits()
+    ));
+    if idx_i32 >= 0 {
+        let _ = crate::arkts_callbacks::perry_arkts_invoke_callback1(idx_i32 as i64, arg_d);
+    }
+    let mut undef: *mut NapiValue = ptr::null_mut();
+    let _ = napi_get_undefined(env, &mut undef);
+    undef
+}
+
 unsafe extern "C" fn napi_init(env: *mut NapiEnv, exports: *mut NapiValue) -> *mut NapiValue {
     // run(): module init + user top-level code. Called from EntryAbility.
     let run_name = b"run\0";
@@ -275,6 +390,20 @@ unsafe extern "C" fn napi_init(env: *mut NapiEnv, exports: *mut NapiValue) -> *m
         &mut dtu_fn,
     );
     let _ = napi_set_named_property(env, exports, dtu_name.as_ptr() as *const c_char, dtu_fn);
+
+    // invokeCallback1(idx, value): dispatch a registered closure with
+    // one value arg (Phase 2 v2.5 — Toggle/TextField/Slider onChange).
+    let cb1_name = b"invokeCallback1\0";
+    let mut cb1_fn: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_function(
+        env,
+        cb1_name.as_ptr() as *const c_char,
+        15,
+        invoke_callback1,
+        ptr::null_mut(),
+        &mut cb1_fn,
+    );
+    let _ = napi_set_named_property(env, exports, cb1_name.as_ptr() as *const c_char, cb1_fn);
 
     exports
 }
