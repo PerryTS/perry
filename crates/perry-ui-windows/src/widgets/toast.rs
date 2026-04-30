@@ -190,7 +190,14 @@ fn present_toast_win32(msg: String) {
         };
 
         // Clip the window to a rounded rectangle.
-        let rgn = CreateRoundRectRgn(0, 0, TOAST_WIDTH, TOAST_HEIGHT, CORNER_RADIUS, CORNER_RADIUS);
+        let rgn = CreateRoundRectRgn(
+            0,
+            0,
+            TOAST_WIDTH,
+            TOAST_HEIGHT,
+            CORNER_RADIUS,
+            CORNER_RADIUS,
+        );
         if !rgn.is_invalid() {
             SetWindowRgn(hwnd, rgn, false);
             // SetWindowRgn takes ownership of the region — don't DeleteObject(rgn).
@@ -223,7 +230,9 @@ fn present_toast_win32(msg: String) {
 fn tick_animation(hwnd: HWND) {
     let done = ACTIVE_TOAST.with(|state| {
         let mut guard = state.borrow_mut();
-        let Some(ref mut s) = *guard else { return false };
+        let Some(ref mut s) = *guard else {
+            return false;
+        };
 
         match s.phase {
             ToastPhase::FadeIn { ref mut ticks } => {

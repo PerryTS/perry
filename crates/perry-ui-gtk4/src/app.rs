@@ -248,7 +248,16 @@ pub fn app_run(_app_handle: i64) {
                         widget.set_vexpand(true);
                         widget.set_halign(gtk4::Align::Fill);
                         widget.set_valign(gtk4::Align::Fill);
-                        window.set_child(Some(&widget));
+                        // Wrap in an Overlay so toast banners can be layered on
+                        // top without altering the user's widget tree.
+                        let overlay = gtk4::Overlay::new();
+                        overlay.set_child(Some(&widget));
+                        overlay.set_hexpand(true);
+                        overlay.set_vexpand(true);
+                        overlay.set_halign(gtk4::Align::Fill);
+                        overlay.set_valign(gtk4::Align::Fill);
+                        window.set_child(Some(&overlay));
+                        crate::widgets::toast::set_toast_overlay(&overlay);
                     }
                 }
 

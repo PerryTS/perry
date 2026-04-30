@@ -3004,8 +3004,12 @@ fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<String>) 
     for s in stmts {
         let bad = match s {
             Stmt::Expr(e) | Stmt::Throw(e) => expr_uses_this_as_value(e, fields),
-            Stmt::Return(opt) => opt.as_ref().is_some_and(|e| expr_uses_this_as_value(e, fields)),
-            Stmt::Let { init, .. } => init.as_ref().is_some_and(|e| expr_uses_this_as_value(e, fields)),
+            Stmt::Return(opt) => opt
+                .as_ref()
+                .is_some_and(|e| expr_uses_this_as_value(e, fields)),
+            Stmt::Let { init, .. } => init
+                .as_ref()
+                .is_some_and(|e| expr_uses_this_as_value(e, fields)),
             Stmt::If {
                 condition,
                 then_branch,
@@ -3013,11 +3017,12 @@ fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<String>) 
             } => {
                 expr_uses_this_as_value(condition, fields)
                     || stmts_use_this_as_value(then_branch, fields)
-                    || else_branch.as_ref().is_some_and(|eb| stmts_use_this_as_value(eb, fields))
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|eb| stmts_use_this_as_value(eb, fields))
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                expr_uses_this_as_value(condition, fields)
-                    || stmts_use_this_as_value(body, fields)
+                expr_uses_this_as_value(condition, fields) || stmts_use_this_as_value(body, fields)
             }
             Stmt::For {
                 init,
@@ -3025,11 +3030,11 @@ fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<String>) 
                 update,
                 body,
             } => {
-                init.as_ref()
-                    .is_some_and(|i| stmts_use_this_as_value(std::slice::from_ref(i.as_ref()), fields))
-                    || condition
-                        .as_ref()
-                        .is_some_and(|c| expr_uses_this_as_value(c, fields))
+                init.as_ref().is_some_and(|i| {
+                    stmts_use_this_as_value(std::slice::from_ref(i.as_ref()), fields)
+                }) || condition
+                    .as_ref()
+                    .is_some_and(|c| expr_uses_this_as_value(c, fields))
                     || update
                         .as_ref()
                         .is_some_and(|u| expr_uses_this_as_value(u, fields))
@@ -3048,7 +3053,10 @@ fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<String>) 
                         .as_ref()
                         .is_some_and(|f| stmts_use_this_as_value(f, fields))
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 expr_uses_this_as_value(discriminant, fields)
                     || cases.iter().any(|c| {
                         c.test
@@ -3060,10 +3068,9 @@ fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<String>) 
             Stmt::Labeled { body, .. } => {
                 stmts_use_this_as_value(std::slice::from_ref(body.as_ref()), fields)
             }
-            Stmt::Break
-            | Stmt::Continue
-            | Stmt::LabeledBreak(_)
-            | Stmt::LabeledContinue(_) => false,
+            Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {
+                false
+            }
         };
         if bad {
             return true;
@@ -3173,10 +3180,12 @@ fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) -> boo
         Expr::ArraySpread(elements) => elements.iter().any(|el| match el {
             ArrayElement::Expr(e) | ArrayElement::Spread(e) => expr_uses_this_as_value(e, fields),
         }),
-        Expr::Object(props) => props.iter().any(|(_, v)| expr_uses_this_as_value(v, fields)),
-        Expr::ObjectSpread { parts } => {
-            parts.iter().any(|(_, e)| expr_uses_this_as_value(e, fields))
-        }
+        Expr::Object(props) => props
+            .iter()
+            .any(|(_, v)| expr_uses_this_as_value(v, fields)),
+        Expr::ObjectSpread { parts } => parts
+            .iter()
+            .any(|(_, e)| expr_uses_this_as_value(e, fields)),
         Expr::New { args, .. } => args.iter().any(|a| expr_uses_this_as_value(a, fields)),
         Expr::NewDynamic { callee, args } => {
             expr_uses_this_as_value(callee, fields)

@@ -61,7 +61,8 @@ pub(crate) fn decode_jsvalue_string(handle: f64) -> String {
     }
     unsafe {
         let blen = (*header).byte_len as usize;
-        let data_ptr = (header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let data_ptr =
+            (header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
         let bytes = std::slice::from_raw_parts(data_ptr, blen);
         String::from_utf8_lossy(bytes).into_owned()
     }

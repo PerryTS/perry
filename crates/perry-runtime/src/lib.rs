@@ -58,6 +58,8 @@ pub mod value;
 // collide with the new stdlib ones. Delete the file entirely once no
 // in-tree code references it.
 // pub mod net;
+#[cfg(feature = "ohos-napi")]
+pub mod arkts_callbacks;
 pub mod geisterhand_registry;
 pub mod i18n;
 #[cfg(all(any(target_os = "ios", target_os = "tvos"), feature = "ios-game-loop"))]
@@ -65,8 +67,6 @@ pub mod ios_game_loop;
 pub mod json;
 pub mod json_tape;
 pub mod jsx;
-#[cfg(feature = "ohos-napi")]
-pub mod arkts_callbacks;
 #[cfg(feature = "ohos-napi")]
 pub mod ohos_napi;
 #[cfg(feature = "full")]

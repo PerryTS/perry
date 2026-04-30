@@ -175,7 +175,10 @@ unsafe extern "C" fn invoke_callback(
 // a JS string (or undefined when empty). The auto-emitted .ets onClick
 // loops calling this until it sees undefined, dispatching each entry to
 // `promptAction.showToast({ message })` so the user sees the popup.
-unsafe extern "C" fn drain_toast(env: *mut NapiEnv, _info: *mut NapiCallbackInfo) -> *mut NapiValue {
+unsafe extern "C" fn drain_toast(
+    env: *mut NapiEnv,
+    _info: *mut NapiCallbackInfo,
+) -> *mut NapiValue {
     let bits = crate::arkts_callbacks::perry_arkts_drain_toast();
     // TAG_UNDEFINED → return JS undefined to the caller so its loop ends.
     if bits.to_bits() == 0x7FFC_0000_0000_0001 {
@@ -221,12 +224,7 @@ unsafe extern "C" fn drain_text_update(
         return undef;
     };
     let mut id_napi: *mut NapiValue = ptr::null_mut();
-    let _ = napi_create_string_utf8(
-        env,
-        id.as_ptr() as *const c_char,
-        id.len(),
-        &mut id_napi,
-    );
+    let _ = napi_create_string_utf8(env, id.as_ptr() as *const c_char, id.len(), &mut id_napi);
     let mut val_napi: *mut NapiValue = ptr::null_mut();
     let _ = napi_create_string_utf8(
         env,
@@ -308,8 +306,7 @@ unsafe extern "C" fn invoke_callback1(
                     buf.len(),
                     &mut written,
                 );
-                let header =
-                    crate::string::js_string_from_bytes(buf.as_ptr(), written as u32);
+                let header = crate::string::js_string_from_bytes(buf.as_ptr(), written as u32);
                 if header.is_null() {
                     f64::from_bits(0x7FFC_0000_0000_0001)
                 } else {

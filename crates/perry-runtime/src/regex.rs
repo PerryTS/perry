@@ -399,7 +399,10 @@ pub extern "C" fn js_string_match_all(
             // double whose bits happen to alias the heap pointer; the codegen
             // IndexGet path then reads `arr[i]` as a plain number and crashes
             // when iterating with `for (const m of arr) m[1]`.
-            std::ptr::write(outer_elements.add(i), crate::value::js_nanbox_pointer(inner as i64));
+            std::ptr::write(
+                outer_elements.add(i),
+                crate::value::js_nanbox_pointer(inner as i64),
+            );
         }
 
         outer

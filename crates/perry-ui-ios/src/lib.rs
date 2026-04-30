@@ -2114,3 +2114,18 @@ pub extern "C" fn hone_ws_close(handle: f64) {
 pub extern "C" fn __wrapper_hone_ws_close(handle: f64) {
     websocket::close(handle)
 }
+
+// --- Cross-platform toast + reactive setText stubs (Phase 2 v3.3) ---
+// Full GTK4 implementation in perry-ui-gtk4. Present here so cross-platform
+// code that calls showToast / setText links on iOS targets.
+
+#[no_mangle]
+pub extern "C" fn perry_ui_show_toast(_msg_ptr: i64) {}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_text_create_with_id(text_ptr: i64, _id_ptr: i64) -> i64 {
+    perry_ui_text_create(text_ptr)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_set_text(_id_ptr: i64, _value_ptr: i64) {}

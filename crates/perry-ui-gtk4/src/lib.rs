@@ -1643,3 +1643,33 @@ pub extern "C" fn perry_ui_camera_sample_color(_x: f64, _y: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_camera_set_on_tap(_handle: i64, _callback: f64) {}
+
+// --- Cross-platform toast + reactive setText (Phase 2 v3.3) ---
+
+/// Show a brief slide-down toast banner on the main window.
+/// msg_ptr is a raw StringHeader pointer (NaN-boxed string, unboxed to i64 by codegen).
+#[no_mangle]
+pub extern "C" fn perry_ui_show_toast(msg_ptr: i64) {
+    let msg = app::str_from_header(msg_ptr as *const u8);
+    widgets::toast::show_toast(msg);
+}
+
+/// Create a Text (GtkLabel) widget and register it under a string id so that
+/// perry_ui_set_text can update it imperatively later.
+/// Returns the widget handle (1-based i64, NaN-boxed by codegen).
+#[no_mangle]
+pub extern "C" fn perry_ui_text_create_with_id(text_ptr: i64, id_ptr: i64) -> i64 {
+    let handle = widgets::text::create(text_ptr as *const u8);
+    let id = app::str_from_header(id_ptr as *const u8);
+    widgets::text_registry::register(id, handle);
+    handle
+}
+
+/// Update the label of a Text widget previously registered via
+/// perry_ui_text_create_with_id.
+#[no_mangle]
+pub extern "C" fn perry_ui_set_text(id_ptr: i64, value_ptr: i64) {
+    let id = app::str_from_header(id_ptr as *const u8);
+    let value = app::str_from_header(value_ptr as *const u8);
+    widgets::text_registry::set_text_for_id(id, value);
+}

@@ -38,11 +38,7 @@ where
 
 /// Cross-platform handler entry point. Registered with
 /// `js_register_text_id_handler` at app startup.
-pub extern "C" fn register_text_id_handler(
-    widget_handle: i64,
-    id_ptr: *const u8,
-    id_len: usize,
-) {
+pub extern "C" fn register_text_id_handler(widget_handle: i64, id_ptr: *const u8, id_len: usize) {
     if id_ptr.is_null() || id_len == 0 {
         return;
     }

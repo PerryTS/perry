@@ -83,7 +83,10 @@ fn present_toast(msg: String) {
         let view_cls = AnyClass::get(c"UIView").expect("UIView");
         let toast_view_raw: *mut AnyObject = msg_send![view_cls, alloc];
         let frame = objc2_core_foundation::CGRect {
-            origin: objc2_core_foundation::CGPoint { x: toast_x, y: toast_y },
+            origin: objc2_core_foundation::CGPoint {
+                x: toast_x,
+                y: toast_y,
+            },
             size: objc2_core_foundation::CGSize {
                 width: TOAST_WIDTH,
                 height: TOAST_HEIGHT,

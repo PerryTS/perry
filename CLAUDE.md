@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.422
+**Current Version:** 0.5.423
 
 
 ## TypeScript Parity Status
@@ -150,6 +150,7 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 
 Keep entries to 1-2 lines max. Full details in CHANGELOG.md.
 
+- **v0.5.423** — Phase 2 v3.3 GTK4 / Linux (PR #330): GtkRevealer-backed banner overlaid on the main GtkWindow with slide-down transition + 2.5s hold + remove. New `crates/perry-ui-gtk4/src/widgets/toast.rs` + `text_registry.rs` (id→handle map calling existing `widgets::text::set_text_str` which uses `GtkLabel::set_label`). Completes the Phase 2 v3.3 cross-platform sweep — every UI backend (macOS, iOS, tvOS, visionOS, Android, GTK4, Windows) now has working showToast + setText.
 - **v0.5.422** — Phase 2 v3.3 Windows (PR #329): borderless layered HWND popup at the bottom-center of the main app window for showToast (`WS_EX_LAYERED` + `SetLayeredWindowAttributes` for alpha-fade; `SetTimer` + `WM_TIMER` for 2.5s hold + fade-out; FIFO queue). New `crates/perry-ui-windows/src/widgets/toast.rs` + `text_registry.rs` (id→handle map calling existing `SetWindowTextW`). Cross-compile from non-Windows host might need `--target x86_64-pc-windows-msvc` + cargo-xwin; the cloud agent handled this and the changes will compile cleanly on a real Windows host in CI.
 - **v0.5.421** — Phase 2 v3.3 Android (PR #328): JNI bridge to `android.widget.Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()`. New `crates/perry-ui-android/src/widgets/toast.rs` + `text_registry.rs`. Toast.show schedules its own dismissal so no FIFO queue is needed (Android handles sequencing natively, unlike the macOS NSPanel impl).
 - **v0.5.420** — Phase 2 v3.3 iOS / tvOS / visionOS (PR #327): UIKit ports of the macOS toast + setText pattern from v0.5.419. Each platform gets `widgets/toast.rs` (UIView overlay added to the key UIWindow's root view; alpha-fade in 0.25s + hold 2.5s + fade-out 0.25s; FIFO queue) and `widgets/text_registry.rs` (id→handle map calling existing `widgets::text::set_text_str`). All three platforms share the macOS implementation shape via direct port.

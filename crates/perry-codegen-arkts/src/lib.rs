@@ -290,9 +290,20 @@ fn sanitize_text_id(s: &str) -> String {
     }
     let mut out: String = s
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
-    if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if out
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         out.insert(0, 'x');
     }
     out
@@ -524,13 +535,9 @@ fn emit_slider(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
 /// shapes don't break the build.
 fn emit_image(args: &[Expr]) -> String {
     let Some(Expr::String(src)) = args.first() else {
-        return "Text('[non-literal Image src]').fontSize(16).fontColor('#888888')"
-            .to_string();
+        return "Text('[non-literal Image src]').fontSize(16).fontColor('#888888')".to_string();
     };
-    format!(
-        "Image({}).width('100%').height(200)",
-        arkts_string_lit(src)
-    )
+    format!("Image({}).width('100%').height(200)", arkts_string_lit(src))
 }
 
 /// `ScrollView(children)` → `Scroll() { Column({space: 8}) { ... } }`.
@@ -1066,10 +1073,7 @@ mod tests {
         m.init.push(app_with_body(nmc(
             "VStack",
             vec![Expr::Array(vec![
-                nmc(
-                    "Button",
-                    vec![Expr::String("First".into()), closure_stub()],
-                ),
+                nmc("Button", vec![Expr::String("First".into()), closure_stub()]),
                 nmc(
                     "Button",
                     vec![Expr::String("Second".into()), closure_stub()],
@@ -1185,7 +1189,9 @@ mod tests {
             ],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(r.ets_source.contains("@State text_counter: string = 'Count: 0'"));
+        assert!(r
+            .ets_source
+            .contains("@State text_counter: string = 'Count: 0'"));
         assert!(r.ets_source.contains("Text(this.text_counter)"));
         assert!(r
             .ets_source
@@ -1215,9 +1221,7 @@ mod tests {
             vec![Expr::String("Notify".into()), closure_stub()],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(r
-            .ets_source
-            .contains(".onChange((isOn: boolean) => {"));
+        assert!(r.ets_source.contains(".onChange((isOn: boolean) => {"));
         assert!(r.ets_source.contains("perryEntry.invokeCallback1(0, isOn)"));
         assert_eq!(r.callbacks.len(), 1);
     }
@@ -1230,10 +1234,10 @@ mod tests {
             vec![Expr::String("Search…".into()), closure_stub()],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(".onChange((value: string) => {"));
         assert!(r
             .ets_source
-            .contains(".onChange((value: string) => {"));
-        assert!(r.ets_source.contains("perryEntry.invokeCallback1(0, value)"));
+            .contains("perryEntry.invokeCallback1(0, value)"));
     }
 
     #[test]
@@ -1241,17 +1245,15 @@ mod tests {
         let mut m = empty_module();
         m.init.push(app_with_body(nmc(
             "Slider",
-            vec![
-                Expr::Number(0.0),
-                Expr::Number(100.0),
-                closure_stub(),
-            ],
+            vec![Expr::Number(0.0), Expr::Number(100.0), closure_stub()],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
         assert!(r
             .ets_source
             .contains(".onChange((value: number, _mode: SliderChangeMode) => {"));
-        assert!(r.ets_source.contains("perryEntry.invokeCallback1(0, value)"));
+        assert!(r
+            .ets_source
+            .contains("perryEntry.invokeCallback1(0, value)"));
     }
 
     #[test]
@@ -1266,7 +1268,9 @@ mod tests {
         let r = emit_index_ets(&mut m).unwrap().unwrap();
         assert!(r.ets_source.contains("perryEntry.drainToast()"));
         assert!(r.ets_source.contains("perryEntry.drainTextUpdate()"));
-        assert!(r.ets_source.contains("this.applyTextUpdate(__u.id, __u.value)"));
+        assert!(r
+            .ets_source
+            .contains("this.applyTextUpdate(__u.id, __u.value)"));
     }
 
     #[test]
@@ -1275,8 +1279,10 @@ mod tests {
         // test stays valid as the supported set grows. As of v4 we
         // still don't emit anything for `Canvas` / `Window` / `TabBar`.
         let mut m = empty_module();
-        m.init
-            .push(app_with_body(nmc("Canvas", vec![Expr::Number(100.0), Expr::Number(100.0)])));
+        m.init.push(app_with_body(nmc(
+            "Canvas",
+            vec![Expr::Number(100.0), Expr::Number(100.0)],
+        )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
         assert!(r
             .ets_source
@@ -1340,7 +1346,9 @@ mod tests {
         let r = emit_index_ets(&mut m).unwrap().unwrap();
         // The deferral note is part of the source so a future contributor
         // sees the LazyForEach + IDataSource follow-up at the call site.
-        assert!(r.ets_source.contains("LazyVStack: rendered eagerly as Column"));
+        assert!(r
+            .ets_source
+            .contains("LazyVStack: rendered eagerly as Column"));
         assert!(r.ets_source.contains("Column({ space: 8 })"));
         assert!(r.ets_source.contains("Text('row 0')"));
     }
@@ -1366,7 +1374,9 @@ mod tests {
         assert!(r
             .ets_source
             .contains(".onChange((_value: string, index: number) => {"));
-        assert!(r.ets_source.contains("perryEntry.invokeCallback1(0, index)"));
+        assert!(r
+            .ets_source
+            .contains("perryEntry.invokeCallback1(0, index)"));
         assert_eq!(r.callbacks.len(), 1);
     }
 
@@ -1375,9 +1385,9 @@ mod tests {
         let mut m = empty_module();
         m.init.push(app_with_body(nmc("ProgressView", vec![])));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(r.ets_source.contains(
-            "Progress({ value: 0, total: 100, type: ProgressType.Linear })"
-        ));
+        assert!(r
+            .ets_source
+            .contains("Progress({ value: 0, total: 100, type: ProgressType.Linear })"));
     }
 
     #[test]
@@ -1388,9 +1398,9 @@ mod tests {
             vec![Expr::Number(42.0), Expr::Number(200.0)],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(r.ets_source.contains(
-            "Progress({ value: 42, total: 200, type: ProgressType.Linear })"
-        ));
+        assert!(r
+            .ets_source
+            .contains("Progress({ value: 42, total: 200, type: ProgressType.Linear })"));
     }
 
     #[test]

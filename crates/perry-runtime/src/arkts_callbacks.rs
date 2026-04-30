@@ -155,20 +155,13 @@ pub extern "C" fn perry_arkts_invoke_callback(idx: i64) -> f64 {
         let cbs = CALLBACKS.lock().unwrap();
         let i = idx as usize;
         if i >= cbs.len() {
-            arkts_log(&format!(
-                "invoke OOB idx={} cbs.len={}",
-                i,
-                cbs.len()
-            ));
+            arkts_log(&format!("invoke OOB idx={} cbs.len={}", i, cbs.len()));
             return f64::from_bits(TAG_UNDEFINED);
         }
         cbs[i]
     };
     let bits = closure_d.to_bits();
-    arkts_log(&format!(
-        "invoke idx={} closure_bits=0x{:016x}",
-        idx, bits
-    ));
+    arkts_log(&format!("invoke idx={} closure_bits=0x{:016x}", idx, bits));
     if (bits & !POINTER_MASK) != POINTER_TAG_BITS {
         arkts_log(&format!("invoke not-a-pointer idx={}", idx));
         return f64::from_bits(TAG_UNDEFINED);
@@ -202,11 +195,7 @@ pub extern "C" fn perry_arkts_invoke_callback1(idx: i64, arg_d: f64) -> f64 {
         let cbs = CALLBACKS.lock().unwrap();
         let i = idx as usize;
         if i >= cbs.len() {
-            arkts_log(&format!(
-                "invoke1 OOB idx={} cbs.len={}",
-                i,
-                cbs.len()
-            ));
+            arkts_log(&format!("invoke1 OOB idx={} cbs.len={}", i, cbs.len()));
             return f64::from_bits(TAG_UNDEFINED);
         }
         cbs[i]
@@ -253,7 +242,8 @@ fn decode_jsvalue_string(handle: f64) -> String {
     }
     unsafe {
         let blen = (*header).byte_len as usize;
-        let data_ptr = (header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let data_ptr =
+            (header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
         let bytes = std::slice::from_raw_parts(data_ptr, blen);
         String::from_utf8_lossy(bytes).into_owned()
     }
@@ -303,7 +293,10 @@ pub extern "C" fn perry_arkts_set_text(id_handle: f64, val_handle: f64) {
 pub(crate) fn pop_text_update() -> Option<(String, String)> {
     let popped = PENDING_TEXT_UPDATES.lock().ok()?.pop_front();
     if let Some((id, val)) = &popped {
-        arkts_log(&format!("drain_text_update emitting id={:?} val={:?}", id, val));
+        arkts_log(&format!(
+            "drain_text_update emitting id={:?} val={:?}",
+            id, val
+        ));
     }
     popped
 }

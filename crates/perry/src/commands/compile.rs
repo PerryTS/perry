@@ -1061,18 +1061,13 @@ pub fn run_with_parse_cache(
                             .into_iter()
                             .enumerate()
                             .map(|(idx, closure)| {
-                                perry_hir::ir::Stmt::Expr(
-                                    perry_hir::ir::Expr::NativeMethodCall {
-                                        module: "perry/arkts".to_string(),
-                                        class_name: None,
-                                        object: None,
-                                        method: "registerCallback".to_string(),
-                                        args: vec![
-                                            perry_hir::ir::Expr::Number(idx as f64),
-                                            closure,
-                                        ],
-                                    },
-                                )
+                                perry_hir::ir::Stmt::Expr(perry_hir::ir::Expr::NativeMethodCall {
+                                    module: "perry/arkts".to_string(),
+                                    class_name: None,
+                                    object: None,
+                                    method: "registerCallback".to_string(),
+                                    args: vec![perry_hir::ir::Expr::Number(idx as f64), closure],
+                                })
                             })
                             .collect();
                         // Splice registrations to the front of init.

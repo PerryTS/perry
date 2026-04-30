@@ -116,6 +116,23 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str],
         ret: ReturnKind::Widget,
     },
+    // ---- Cross-platform reactive text + toast (Phase 2 v3.3) ----
+    // `Text(content, id)` 2-arg form is special-cased in lower_call/native.rs
+    // (like VStack / Button) so the id string reaches perry_ui_text_create_with_id.
+    // Only the 1-arg form routes through this table entry; the 2-arg form is
+    // intercepted before the table lookup and is not represented here.
+    MethodRow {
+        method: "showToast",
+        runtime: "perry_ui_show_toast",
+        args: &[ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "setText",
+        runtime: "perry_ui_set_text",
+        args: &[ArgKind::Str, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "TextArea",
         runtime: "perry_ui_textarea_create",

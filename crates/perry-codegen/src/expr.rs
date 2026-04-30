@@ -1942,9 +1942,17 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // must translate HOLE → UNDEFINED so user code never
                         // sees the sentinel. Branchless select.
                         let fast_raw_bits = fast_blk.bitcast_double_to_i64(&fast_raw);
-                        let is_hole = fast_blk.icmp_eq(I64, &fast_raw_bits, crate::nanbox::TAG_HOLE_I64);
-                        let undef_d = fast_blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
-                        let fast_val = fast_blk.select(crate::types::I1, &is_hole, DOUBLE, &undef_d, &fast_raw);
+                        let is_hole =
+                            fast_blk.icmp_eq(I64, &fast_raw_bits, crate::nanbox::TAG_HOLE_I64);
+                        let undef_d =
+                            fast_blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
+                        let fast_val = fast_blk.select(
+                            crate::types::I1,
+                            &is_hole,
+                            DOUBLE,
+                            &undef_d,
+                            &fast_raw,
+                        );
                         let fast_end_label = fast_blk.label.clone();
                         fast_blk.br(&merge_label);
 
@@ -2207,9 +2215,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Issue #323: HOLE → UNDEFINED translation for `new Array(n)` slots
             // (see the bounded-index path in IndexGet for context).
             let v_num_raw_bits = ctx.block().bitcast_double_to_i64(&v_num_raw);
-            let v_num_is_hole = ctx
-                .block()
-                .icmp_eq(I64, &v_num_raw_bits, crate::nanbox::TAG_HOLE_I64);
+            let v_num_is_hole =
+                ctx.block()
+                    .icmp_eq(I64, &v_num_raw_bits, crate::nanbox::TAG_HOLE_I64);
             let v_num_undef = ctx
                 .block()
                 .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);

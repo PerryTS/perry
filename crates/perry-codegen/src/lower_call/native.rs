@@ -204,6 +204,32 @@ pub(crate) fn lower_native_method_call(
         return Ok(nanbox_pointer_inline(blk, &container_final));
     }
 
+    // perry/ui Text(content, id) — 2-arg form registers the widget in the
+    // per-platform text registry so setText(id, val) can update it later.
+    // The 1-arg form `Text(content)` routes through the PERRY_UI_TABLE entry
+    // (perry_ui_text_create) as normal; only the 2-arg form is intercepted here.
+    if module == "perry/ui" && method == "Text" && object.is_none() && args.len() == 2 {
+        let text_ptr = get_raw_string_ptr(ctx, &args[0])?;
+        let id_ptr = get_raw_string_ptr(ctx, &args[1])?;
+        ctx.pending_declares.push((
+            "perry_ui_text_create_with_id".to_string(),
+            I64,
+            vec![I64, I64],
+        ));
+        let blk = ctx.block();
+        let handle = blk.call(
+            I64,
+            "perry_ui_text_create_with_id",
+            &[(I64, &text_ptr), (I64, &id_ptr)],
+        );
+        // Optional trailing style arg (position 2) — same pattern as Button.
+        if let Some(style_arg) = args.get(2).cloned() {
+            apply_inline_style(ctx, &handle, &style_arg)?;
+        }
+        let blk = ctx.block();
+        return Ok(nanbox_pointer_inline(blk, &handle));
+    }
+
     // perry/ui Button — TS shape is `Button(label, handler)` where
     // handler is a closure. The simple positional form is what mango
     // uses. The Object-config form (`Button(label, { onPress: cb })`)
@@ -398,17 +424,10 @@ pub(crate) fn lower_native_method_call(
     // emits `@State text_<id>` directly into the .ets and the
     // register_text_id call is a runtime no-op (see
     // perry-runtime/src/ui_text_registry.rs).
-    if module == "perry/ui"
-        && method == "Text"
-        && object.is_none()
-        && args.len() == 2
-    {
+    if module == "perry/ui" && method == "Text" && object.is_none() && args.len() == 2 {
         let content_ptr = get_raw_string_ptr(ctx, &args[0])?;
-        ctx.pending_declares.push((
-            "perry_ui_text_create".to_string(),
-            I64,
-            vec![I64],
-        ));
+        ctx.pending_declares
+            .push(("perry_ui_text_create".to_string(), I64, vec![I64]));
         let handle = {
             let blk = ctx.block();
             blk.call(I64, "perry_ui_text_create", &[(I64, &content_ptr)])

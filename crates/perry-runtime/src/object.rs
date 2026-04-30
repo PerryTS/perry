@@ -2031,8 +2031,8 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // `arr[i] = undefined` write, the latter overwrites HOLE with UNDEFINED).
     if (obj_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
         unsafe {
-            let gc_header = (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-                as *const crate::gc::GcHeader;
+            let gc_header =
+                (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                 let arr = obj_ptr as *const crate::array::ArrayHeader;
                 let length = (*arr).length;
@@ -2044,7 +2044,11 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                 // non-negative integer in range.
                 let idx: Option<u32> = if key_val.is_int32() {
                     let i = key_val.as_int32();
-                    if i >= 0 { Some(i as u32) } else { None }
+                    if i >= 0 {
+                        Some(i as u32)
+                    } else {
+                        None
+                    }
                 } else if key_val.is_number() {
                     let f = f64::from_bits(key_val.bits());
                     if f >= 0.0 && f.fract() == 0.0 && f < u32::MAX as f64 {

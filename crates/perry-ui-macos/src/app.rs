@@ -1684,16 +1684,9 @@ extern "C" {
     /// `perry_arkts_show_toast`/`perry_arkts_set_text`/`perry_arkts_register_text_id`
     /// consult on each call. No-op when `ohos-napi` is on (the drain-queue
     /// path owns dispatch there).
-    fn js_register_show_toast_handler(
-        f: extern "C" fn(msg_ptr: *const u8, msg_len: usize),
-    );
+    fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
     fn js_register_set_text_handler(
-        f: extern "C" fn(
-            id_ptr: *const u8,
-            id_len: usize,
-            val_ptr: *const u8,
-            val_len: usize,
-        ),
+        f: extern "C" fn(id_ptr: *const u8, id_len: usize, val_ptr: *const u8, val_len: usize),
     );
     fn js_register_text_id_handler(
         f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),

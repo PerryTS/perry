@@ -104,15 +104,17 @@ fn present_toast(msg: String) {
 
         let win_frame: objc2_core_foundation::CGRect = msg_send![anchor_window, frame];
         let toast_x = win_frame.origin.x + (win_frame.size.width - TOAST_WIDTH) / 2.0;
-        let toast_y =
-            win_frame.origin.y + win_frame.size.height - TOAST_TOP_MARGIN - TOAST_HEIGHT;
+        let toast_y = win_frame.origin.y + win_frame.size.height - TOAST_TOP_MARGIN - TOAST_HEIGHT;
 
         // Borderless NSPanel — non-activating overlay above the window.
         let panel_cls = AnyClass::get(c"NSPanel").unwrap();
         let panel: Retained<AnyObject> = {
             let alloc: *mut AnyObject = msg_send![panel_cls, alloc];
             let frame = objc2_core_foundation::CGRect {
-                origin: objc2_core_foundation::CGPoint { x: toast_x, y: toast_y },
+                origin: objc2_core_foundation::CGPoint {
+                    x: toast_x,
+                    y: toast_y,
+                },
                 size: objc2_core_foundation::CGSize {
                     width: TOAST_WIDTH,
                     height: TOAST_HEIGHT,
@@ -128,11 +130,9 @@ fn present_toast(msg: String) {
             Retained::from_raw(initialized).expect("NSPanel init returned nil")
         };
 
-        let _: () = msg_send![&*panel, setLevel: 3i64];                  // NSFloatingWindowLevel
+        let _: () = msg_send![&*panel, setLevel: 3i64]; // NSFloatingWindowLevel
         let _: () = msg_send![&*panel, setOpaque: false];
-        let clear_bg: Retained<NSColor> = msg_send![
-            AnyClass::get(c"NSColor").unwrap(), clearColor
-        ];
+        let clear_bg: Retained<NSColor> = msg_send![AnyClass::get(c"NSColor").unwrap(), clearColor];
         let _: () = msg_send![&*panel, setBackgroundColor: &*clear_bg];
         let _: () = msg_send![&*panel, setHasShadow: true];
         let _: () = msg_send![&*panel, setIgnoresMouseEvents: true];
@@ -161,11 +161,9 @@ fn present_toast(msg: String) {
         let label: Retained<NSTextField> = NSTextField::labelWithString(&ns_msg, mtm);
         let _: () = msg_send![&*label, setTranslatesAutoresizingMaskIntoConstraints: false];
 
-        let white: Retained<NSColor> = msg_send![
-            AnyClass::get(c"NSColor").unwrap(), whiteColor
-        ];
+        let white: Retained<NSColor> = msg_send![AnyClass::get(c"NSColor").unwrap(), whiteColor];
         let _: () = msg_send![&*label, setTextColor: &*white];
-        let _: () = msg_send![&*label, setAlignment: 1i64];               // NSTextAlignmentCenter
+        let _: () = msg_send![&*label, setAlignment: 1i64]; // NSTextAlignmentCenter
         let font_cls = AnyClass::get(c"NSFont").unwrap();
         let font: Retained<AnyObject> = msg_send![
             font_cls,

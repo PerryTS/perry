@@ -286,12 +286,7 @@ pub fn app_run(_app_handle: i64) {
 extern "C" {
     fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
     fn js_register_set_text_handler(
-        f: extern "C" fn(
-            id_ptr: *const u8,
-            id_len: usize,
-            val_ptr: *const u8,
-            val_len: usize,
-        ),
+        f: extern "C" fn(id_ptr: *const u8, id_len: usize, val_ptr: *const u8, val_len: usize),
     );
     fn js_register_text_id_handler(
         f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
