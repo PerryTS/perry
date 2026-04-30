@@ -529,9 +529,7 @@ fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
     // executing both calls regardless of `cond` — breaks JS semantics
     // (issue #342). Lift the conditional to a statement-level if/else
     // with a temp before the general hoisting walks into it.
-    if matches!(expr, Expr::Conditional { .. })
-        && conditional_branches_contain_await(expr)
-    {
+    if matches!(expr, Expr::Conditional { .. }) && conditional_branches_contain_await(expr) {
         lift_conditional_with_await_branches(expr, next_id, hoisted);
         return;
     }
@@ -573,9 +571,7 @@ fn hoist_awaits_avoiding_top_level(
     // the matching note in `hoist_awaits_in_expr_full`. Lift here too so
     // the await ends up inside an if-branch instead of unconditionally
     // above the let.
-    if matches!(expr, Expr::Conditional { .. })
-        && conditional_branches_contain_await(expr)
-    {
+    if matches!(expr, Expr::Conditional { .. }) && conditional_branches_contain_await(expr) {
         lift_conditional_with_await_branches(expr, next_id, hoisted);
         return;
     }
