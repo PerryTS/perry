@@ -79,6 +79,16 @@ struct TextSlot {
     initial: String,
 }
 
+/// Phase 2 v10 — Real LazyVStack registration. Each
+/// `LazyVStack(items.map(item => widget))` allocates a
+/// `PerryListDataSource`-backed `@State` field on the page struct. The
+/// harvest collects these so `wrap_index_page` can emit the field decls +
+/// the `PerryListDataSource` helper-class boilerplate once.
+struct LazyDataSource {
+    field_id: String,
+    items_source: String,
+}
+
 /// Phase 2 v6 — `state<T>(initial)` registry. Each `let x = state(initial)`
 /// declaration in `module.init` registers a synthetic id (`__state_<N>`)
 /// + the initial value. Subsequent `x.text()` calls emit reactive Text
@@ -123,6 +133,7 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
     };
     let mut callbacks: Vec<Expr> = Vec::new();
     let mut text_slots: Vec<TextSlot> = Vec::new();
+    let mut lazy_sources: Vec<LazyDataSource> = Vec::new();
     let arkts_locals: HashMap<LocalId, String> = HashMap::new();
     let widget_arkui = emit_widget(
         &body_expr,
@@ -133,9 +144,10 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
         &arkts_locals,
         &classes,
         &state_registry,
+        &mut lazy_sources,
     );
     Ok(Some(HarvestResult {
-        ets_source: wrap_index_page(&widget_arkui, &text_slots),
+        ets_source: wrap_index_page(&widget_arkui, &text_slots, &lazy_sources),
         callbacks,
     }))
 }
@@ -438,6 +450,7 @@ fn emit_widget(
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     // Phase 2 v6 — `state.text()` shape: Expr::Call { callee: PropertyGet
     // { obj: LocalGet(state_id), property: "text" }, args: [] } where
@@ -484,6 +497,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
+                lazy_sources,
                 ),
                 "HStack" => emit_stack(
                     "Row",
@@ -495,6 +509,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
+                lazy_sources,
                 ),
                 "Button" => emit_button(args, callbacks),
                 "TextField" => emit_textfield(args, callbacks),
@@ -512,6 +527,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
+                lazy_sources,
                 ),
                 "LazyVStack" => emit_lazy_vstack(
                     args,
@@ -522,6 +538,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
+                lazy_sources,
                 ),
                 "Picker" => emit_picker(args, callbacks),
                 "ProgressView" => emit_progressview(args),
@@ -534,6 +551,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
+                lazy_sources,
                 ),
                 // Phase 2 v12 widgets.
                 "Tabs" => emit_tabs(
@@ -545,6 +563,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
+                lazy_sources,
                 ),
                 "Modal" | "Dialog" => emit_modal(args, callbacks),
                 "Menu" | "ContextMenu" => emit_menu(args, callbacks),
@@ -557,6 +576,7 @@ fn emit_widget(
                     arkts_locals,
                     classes,
                     state_registry,
+                lazy_sources,
                 ),
                 other => format!(
                     "// unsupported perry/ui widget: {} (Phase 2 v12)\n\
@@ -592,6 +612,7 @@ fn emit_widget(
             arkts_locals,
             classes,
             state_registry,
+        lazy_sources,
         ),
         _ => format!(
             "// unrecognized body expression (must be a perry/ui widget call)\n\
@@ -620,6 +641,7 @@ fn emit_for_each(
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     let array_src = arkts_array_source(array, bindings);
     let (param_id, body_expr) = match callback {
@@ -650,6 +672,7 @@ fn emit_for_each(
                 &locals,
                 classes,
                 state_registry,
+            lazy_sources,
             );
             ("__item".to_string(), inner)
         }
@@ -1078,6 +1101,7 @@ fn emit_stack(
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     // First-arg shape detection — same logic as lower_call/native.rs:91.
     let (spacing, children_idx) = match args.first() {
@@ -1100,6 +1124,7 @@ fn emit_stack(
                     arkts_locals,
                     classes,
                     state_registry,
+                lazy_sources,
                 )
             })
             .collect::<Vec<_>>(),
@@ -1115,6 +1140,7 @@ fn emit_stack(
             arkts_locals,
             classes,
             state_registry,
+        lazy_sources,
         )],
         Some(_) => vec![format!(
             "// children arg wasn't an array literal — Phase 2 v1.5 limitation\n\
@@ -1348,6 +1374,7 @@ fn emit_scrollview(
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 2);
     let mid_indent = "    ".repeat(depth + 1);
@@ -1366,6 +1393,7 @@ fn emit_scrollview(
                     arkts_locals,
                     classes,
                     state_registry,
+                lazy_sources,
                 )
             })
             .collect(),
@@ -1378,6 +1406,7 @@ fn emit_scrollview(
             arkts_locals,
             classes,
             state_registry,
+        lazy_sources,
         )],
         _ => vec![],
     };
@@ -1426,10 +1455,89 @@ fn emit_lazy_vstack(
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 1);
     let outer_indent = "    ".repeat(depth);
 
+    // Phase 2 v10 — Real LazyVStack: when args[0] is `Expr::ArrayMap`,
+    // emit ArkUI's `List() { LazyForEach(this.<src>, item => { ListItem() {<inner>} }, item => item) }`
+    // and register a `PerryListDataSource`-backed `@State` field on the
+    // page struct. wrap_index_page emits the IDataSource helper class +
+    // the per-source field decls.
+    if let Some(Expr::ArrayMap { array, callback }) = args.first() {
+        let items_source = arkts_array_source(array, bindings);
+        let field_id = format!("lazy_source_{}", lazy_sources.len());
+        // Lower the closure body in a fresh arkts_locals scope so
+        // LocalGet(param_id) resolves to `__item`.
+        let (param_name, body_str) = match callback.as_ref() {
+            Expr::Closure { params, body, .. } if !params.is_empty() => {
+                let body_expr = body.iter().find_map(|s| match s {
+                    Stmt::Return(Some(e)) => Some(e.clone()),
+                    Stmt::Expr(e) => Some(e.clone()),
+                    _ => None,
+                });
+                if let Some(body) = body_expr {
+                    let mut locals = arkts_locals.clone();
+                    locals.insert(params[0].id, "__item".to_string());
+                    let inner = emit_widget(
+                        &body,
+                        bindings,
+                        depth + 3,
+                        callbacks,
+                        text_slots,
+                        &locals,
+                        classes,
+                        state_registry,
+                        lazy_sources,
+                    );
+                    ("__item".to_string(), inner)
+                } else {
+                    (
+                        "__item".to_string(),
+                        "Text('[empty body]').fontSize(16)".to_string(),
+                    )
+                }
+            }
+            _ => (
+                "__item".to_string(),
+                "Text('[non-closure ForEach body]').fontSize(16)".to_string(),
+            ),
+        };
+        // Push the source AFTER recursive emit_widget to maintain a
+        // deterministic ordering (outermost-last so nested LazyVStacks
+        // get inner ids before outer).
+        lazy_sources.push(LazyDataSource {
+            field_id: field_id.clone(),
+            items_source,
+        });
+        let item_indent = "    ".repeat(depth + 3);
+        let body_indented = body_str
+            .lines()
+            .map(|l| format!("{}{}", item_indent, l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mid_indent = "    ".repeat(depth + 2);
+        return format!(
+            "List() {{\n\
+             {inner}LazyForEach(this.{field}, ({pname}: any) => {{\n\
+             {mid}ListItem() {{\n\
+             {body}\n\
+             {mid}}}\n\
+             {inner}}}, ({pname}: any) => {pname})\n\
+             {outer}}}",
+            inner = inner_indent,
+            mid = mid_indent,
+            field = field_id,
+            pname = param_name,
+            body = body_indented,
+            outer = outer_indent,
+        );
+    }
+
+    // Fall-through (v4 behavior): non-ArrayMap children render eagerly
+    // as a plain Column. Preserves backwards compat for explicit-list
+    // LazyVStack callers.
     let children: Vec<String> = match args.first() {
         Some(Expr::Array(items)) => items
             .iter()
@@ -1443,22 +1551,12 @@ fn emit_lazy_vstack(
                     arkts_locals,
                     classes,
                     state_registry,
+                    lazy_sources,
                 )
             })
             .collect(),
-        Some(am @ Expr::ArrayMap { .. }) => vec![emit_widget(
-            am,
-            bindings,
-            depth + 1,
-            callbacks,
-            text_slots,
-            arkts_locals,
-            classes,
-            state_registry,
-        )],
         _ => vec![],
     };
-
     let body = if children.is_empty() {
         String::new()
     } else {
@@ -1473,10 +1571,9 @@ fn emit_lazy_vstack(
             .collect::<Vec<_>>()
             .join("\n")
     };
-
     format!(
-        "// LazyVStack: rendered eagerly as Column. Real lazy support needs\n\
-         {outer}// LazyForEach + IDataSource (Phase 2 v10 follow-up).\n\
+        "// LazyVStack with explicit children: rendered eagerly as Column.\n\
+         {outer}// For real lazy rendering, pass `items.map(item => Widget)`.\n\
          {outer}Column({{ space: 8 }}) {{\n\
          {body}\n\
          {outer}}}",
@@ -1565,6 +1662,7 @@ fn emit_section(
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     let title = first_string_arg(args).unwrap_or_default();
 
@@ -1584,6 +1682,7 @@ fn emit_section(
                     arkts_locals,
                     classes,
                     state_registry,
+                lazy_sources,
                 )
             })
             .collect(),
@@ -1596,6 +1695,7 @@ fn emit_section(
             arkts_locals,
             classes,
             state_registry,
+        lazy_sources,
         )],
         _ => vec![],
     };
@@ -1649,6 +1749,7 @@ fn emit_tabs(
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     let tab_specs: Vec<&Expr> = match args.first() {
         Some(Expr::Array(items)) => items.iter().collect(),
@@ -1706,6 +1807,7 @@ fn emit_tabs(
                         arkts_locals,
                         classes,
                         state_registry,
+                    lazy_sources,
                     )
                 })
                 .unwrap_or_else(|| "Text('[empty tab]').fontSize(16)".to_string());
@@ -1805,6 +1907,7 @@ fn emit_grid(
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
 ) -> String {
     let columns = numeric_arg(args, 0).unwrap_or(2.0) as i64;
     let columns = columns.clamp(1, 12);
@@ -1827,6 +1930,7 @@ fn emit_grid(
                 arkts_locals,
                 classes,
                 state_registry,
+            lazy_sources,
             );
             let body_indent = "    ".repeat(depth + 2);
             let body_indented = body
@@ -1863,7 +1967,11 @@ fn emit_grid(
 ///   - `@State text_<id>: string = '<initial>'` field decl
 ///   - a switch arm in `applyTextUpdate(id, value)` that assigns to
 ///     the matching field
-fn wrap_index_page(widget_body: &str, text_slots: &[TextSlot]) -> String {
+fn wrap_index_page(
+    widget_body: &str,
+    text_slots: &[TextSlot],
+    lazy_sources: &[LazyDataSource],
+) -> String {
     let indented = widget_body
         .lines()
         .map(|line| format!("            {}", line))
@@ -1882,6 +1990,36 @@ fn wrap_index_page(widget_body: &str, text_slots: &[TextSlot]) -> String {
             )
         })
         .collect();
+
+    // Phase 2 v10 — `@State <id>: PerryListDataSource = new PerryListDataSource(<items>)`
+    // for each LazyVStack(items.map(...)) in the harvested tree.
+    let lazy_decls: String = lazy_sources
+        .iter()
+        .map(|src| {
+            format!(
+                "    @State {}: PerryListDataSource = new PerryListDataSource({});\n",
+                src.field_id, src.items_source,
+            )
+        })
+        .collect();
+
+    // Phase 2 v10 — boilerplate IDataSource class. Emitted once per page
+    // if any LazyVStack registered a source. Idempotent (no-op if none).
+    let lazy_class = if lazy_sources.is_empty() {
+        String::new()
+    } else {
+        "\
+class PerryListDataSource implements IDataSource {\n\
+    private items: any[];\n\
+    private listeners: DataChangeListener[] = [];\n\
+    constructor(items: any[]) { this.items = items; }\n\
+    totalCount(): number { return this.items.length; }\n\
+    getData(idx: number): any { return this.items[idx]; }\n\
+    registerDataChangeListener(listener: DataChangeListener): void { this.listeners.push(listener); }\n\
+    unregisterDataChangeListener(listener: DataChangeListener): void { this.listeners = this.listeners.filter(l => l !== listener); }\n\
+}\n\n"
+            .to_string()
+    };
 
     // applyTextUpdate(id, value) switch arms. Always emit the method,
     // even with zero slots, so the auto-generated onClick body's call
@@ -1917,10 +2055,12 @@ fn wrap_index_page(widget_body: &str, text_slots: &[TextSlot]) -> String {
          import perryEntry from 'libentry.so';\n\
          import promptAction from '@ohos.promptAction';\n\
          \n\
+         {lazy_class}\
          @Entry\n\
          @Component\n\
          struct Index {{\n\
          {states}\
+         {lazy_decls}\
          {apply}\
          \x20\x20\x20\x20build() {{\n\
          \x20\x20\x20\x20\x20\x20\x20\x20Column() {{\n\
@@ -1932,6 +2072,8 @@ fn wrap_index_page(widget_body: &str, text_slots: &[TextSlot]) -> String {
          \x20\x20\x20\x20}}\n\
          }}\n",
         states = state_decls,
+        lazy_class = lazy_class,
+        lazy_decls = lazy_decls,
         apply = apply_method,
         body = indented
     )
@@ -2896,13 +3038,73 @@ mod tests {
             ])],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        // The deferral note is part of the source so a future contributor
-        // sees the LazyForEach + IDataSource follow-up at the call site.
+        // Phase 2 v10: explicit-children variant (non-ArrayMap) still
+        // renders eagerly as a plain Column for backwards compat. The
+        // real lazy path triggers only on `LazyVStack(items.map(...))`.
         assert!(r
             .ets_source
-            .contains("LazyVStack: rendered eagerly as Column"));
+            .contains("LazyVStack with explicit children: rendered eagerly as Column"));
         assert!(r.ets_source.contains("Column({ space: 8 })"));
         assert!(r.ets_source.contains("Text('row 0')"));
+    }
+
+    // ----- Phase 2 v10: real LazyVStack with LazyForEach + IDataSource -----
+
+    #[test]
+    fn lazyvstack_with_array_map_emits_lazy_for_each() {
+        // LazyVStack(items.map(item => Text(item)))
+        let mut m = empty_module();
+        let item_param = perry_hir::ir::Param {
+            id: 99,
+            name: "item".to_string(),
+            ty: perry_types::Type::Any,
+            default: None,
+            is_rest: false,
+        };
+        let inner_text = nmc("Text", vec![Expr::LocalGet(99)]);
+        let map_expr = Expr::ArrayMap {
+            array: Box::new(Expr::Array(vec![
+                Expr::String("a".into()),
+                Expr::String("b".into()),
+            ])),
+            callback: Box::new(Expr::Closure {
+                func_id: 0 as perry_types::FuncId,
+                params: vec![item_param],
+                return_type: perry_types::Type::Any,
+                body: vec![Stmt::Return(Some(inner_text))],
+                captures: vec![],
+                mutable_captures: vec![],
+                captures_this: false,
+                enclosing_class: None,
+                is_async: false,
+            }),
+        };
+        m.init.push(app_with_body(nmc("LazyVStack", vec![map_expr])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // ArkUI shape: List() { LazyForEach(this.lazy_source_0, ...) }
+        assert!(r.ets_source.contains("List() {"));
+        assert!(r.ets_source.contains("LazyForEach(this.lazy_source_0"));
+        assert!(r.ets_source.contains("ListItem()"));
+        // Inner widget body resolves item to __item.
+        assert!(r.ets_source.contains("Text(__item)"));
+        // IDataSource boilerplate emitted at module top.
+        assert!(r.ets_source.contains("class PerryListDataSource implements IDataSource"));
+        // @State field decl on the page.
+        assert!(r.ets_source.contains("@State lazy_source_0: PerryListDataSource = new PerryListDataSource(['a', 'b'])"));
+    }
+
+    #[test]
+    fn lazyvstack_no_array_map_skips_lazy_class_emission() {
+        // Eager-mode (explicit Array) variant should NOT emit the
+        // PerryListDataSource boilerplate.
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "LazyVStack",
+            vec![Expr::Array(vec![nmc("Text", vec![Expr::String("hi".into())])])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(!r.ets_source.contains("class PerryListDataSource"));
+        assert!(!r.ets_source.contains("LazyForEach"));
     }
 
     #[test]
