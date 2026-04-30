@@ -985,6 +985,19 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     );
                 }
             }
+            // #338: same gap as the main compile loop — static field inits
+            // (`static make = (x) => ...`) need walking so the global-
+            // detection pre-walk sees their captures and globalises any
+            // module-level lets the closure body references.
+            for field in &c.static_fields {
+                if let Some(init) = &field.init {
+                    collect_closures_in_stmts(
+                        &[perry_hir::Stmt::Expr(init.clone())],
+                        &mut seen,
+                        &mut closures,
+                    );
+                }
+            }
         }
         collect_closures_in_stmts(&hir.init, &mut seen, &mut closures);
         for (_, closure_expr) in &closures {
@@ -1401,6 +1414,24 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // emission. We must walk the inits too, otherwise the body never
             // gets compiled and clang errors with "use of undefined value" (#261).
             for field in &c.fields {
+                if let Some(init) = &field.init {
+                    collect_closures_in_stmts(
+                        &[perry_hir::Stmt::Expr(init.clone())],
+                        &mut seen,
+                        &mut closures,
+                    );
+                }
+            }
+            // #338: static fields with closure inits (`static make = (x) =>
+            // ...`) emit `js_closure_alloc(@perry_closure_*)` at module-init
+            // time too — the codegen path that initialises
+            // `@perry_static_<class>__<field>` globals. Pre-fix this loop
+            // walked instance fields (`c.fields`) only, so closures inside
+            // `c.static_fields[i].init` were never collected and clang
+            // errored on the undefined `@perry_closure_*` reference.
+            // Surfaced on Effect's `SchemaAST.ts` (Union.make / Union.unify)
+            // and any class shipping arrow-style static helpers.
+            for field in &c.static_fields {
                 if let Some(init) = &field.init {
                     collect_closures_in_stmts(
                         &[perry_hir::Stmt::Expr(init.clone())],
