@@ -51,6 +51,7 @@ zip.workspace = true
 jsonwebtoken = "9.3"
 dotenvy = "0.15"
 rayon = "1.10"
+regex = "1"
 
 # Cross-platform file locking (Unix flock + Windows LockFileEx) — used by
 # the auto-optimize driver in commands/compile/optimized_libs.rs to

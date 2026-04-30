@@ -111,8 +111,21 @@ pub(super) fn collect_modules(
     }
 
     // It's a TypeScript file to compile natively
-    let source = fs::read_to_string(&canonical)
+    let raw_source = fs::read_to_string(&canonical)
         .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+
+    // Issue #348: when a `compilePackages` target ships CommonJS (e.g. React
+    // 18's `module.exports = require('./cjs/react.production.min.js')`),
+    // rewrite the source as ESM before SWC parses it. Only fires for files
+    // inside a `compilePackages` target — user TypeScript and ESM-shaped
+    // packages skip the wrap. See `cjs_wrap.rs` for the wrap shape.
+    let source = if is_in_compiled_pkg
+        && super::cjs_wrap::is_commonjs(&raw_source)
+    {
+        super::cjs_wrap::wrap_commonjs(&raw_source, &canonical)
+    } else {
+        raw_source
+    };
 
     // Record the source hash for V2.2's per-module object cache. Computed here
     // (instead of in the rayon codegen loop) so the cache key doesn't force a

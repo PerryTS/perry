@@ -14,6 +14,7 @@ use crate::OutputFormat;
 // `compile/` directory. The `compile.rs` orchestrator stays as the
 // public API surface; helpers move to focused modules so unrelated
 // changes don't churn this file.
+mod cjs_wrap;
 mod collect_modules;
 mod library_search;
 mod link;
