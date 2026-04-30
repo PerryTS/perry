@@ -335,8 +335,43 @@ export function Section(title: string): Widget;
  */
 export function Section(title: string, children: Widget[]): Widget;
 
-/** Navigation stack for push/pop navigation. */
+/**
+ * Navigation stack for multi-page apps.
+ *
+ * **HarmonyOS Phase 2 v11**: state-driven shape — pass a `state<string>(...)`
+ * holding the active route name, plus an array of `{ name, body }` route
+ * specs. Navigation is just `route.set("detail")` from any closure; the
+ * v6 setText drain queue swaps the visible branch.
+ *
+ * Example:
+ * ```ts
+ * const route = state("home");
+ * App({
+ *   body: NavStack(route, [
+ *     { name: "home", body: VStack([
+ *       Text("Welcome"),
+ *       Button("Go to detail", () => route.set("detail")),
+ *     ]) },
+ *     { name: "detail", body: VStack([
+ *       Text("Detail page"),
+ *       Button("Back", () => route.set("home")),
+ *     ]) },
+ *   ]),
+ * });
+ * ```
+ *
+ * Native ArkUI `Navigation` + `NavPathStack` integration (hardware-back
+ * gesture, `pageStack.pop()`) is the v11.5 follow-up. The state-driven
+ * shape works today on every platform via the existing v6 + v3.2 bridge.
+ *
+ * The no-arg form is the legacy stub from Phase 1 — keep using it on
+ * platforms that haven't shipped the multi-page emission yet.
+ */
 export function NavStack(): Widget;
+export function NavStack(
+  active: State<string>,
+  routes: { name: string; body: Widget }[],
+): Widget;
 
 /**
  * Tab bar container.

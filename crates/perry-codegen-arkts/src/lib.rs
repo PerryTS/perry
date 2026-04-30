@@ -204,9 +204,9 @@ fn module_uses_media(module: &Module) -> bool {
     }
     fn expr_uses(e: &Expr) -> bool {
         match e {
-            Expr::NativeMethodCall { module: m, args, .. } => {
-                m == "perry/media" || args.iter().any(expr_uses)
-            }
+            Expr::NativeMethodCall {
+                module: m, args, ..
+            } => m == "perry/media" || args.iter().any(expr_uses),
             Expr::Call { callee, args, .. } => expr_uses(callee) || args.iter().any(expr_uses),
             Expr::Closure { body, .. } => stmts_use(body),
             Expr::Array(items) => items.iter().any(expr_uses),
@@ -641,6 +641,18 @@ fn emit_widget(
                 "Modal" | "Dialog" => emit_modal(args, callbacks),
                 "Menu" | "ContextMenu" => emit_menu(args, callbacks),
                 "Grid" => emit_grid(
+                    args,
+                    bindings,
+                    depth,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                    lazy_sources,
+                ),
+                // Phase 2 v11: state-driven multi-page nav.
+                "NavStack" => emit_nav_stack(
                     args,
                     bindings,
                     depth,
@@ -2028,6 +2040,225 @@ fn emit_grid(
     )
 }
 
+/// Phase 2 v11: `NavStack(state, [{name, body}, ...])` for multi-page
+/// navigation. Composes on the v6 state<T> + v3.2 reactive-Text bridge
+/// instead of ArkUI's heavier `Navigation` + `NavPathStack` + @Builder
+/// pattern — the user holds a `state<string>("home")` for the active
+/// route, and `route.set("detail")` from any closure flips the visible
+/// branch via the existing setText drain queue. Zero new runtime FFIs.
+///
+/// Native ArkUI back-gesture integration (proper `Navigation` +
+/// `NavDestination` + `pageStack.pop()` on Android-style hardware-back)
+/// is the v11.5 follow-up — it needs the @Builder-based pattern that
+/// requires real navigator state on the page struct, not a string state.
+/// The state-driven if/elseif emission shipped here covers the canonical
+/// "tap button → forward; tap back button → state.set(prev)" happy
+/// path, which is what most apps actually need.
+///
+/// Emit shape:
+/// ```ets
+/// Column() {
+///     if (this.text_<sid> === 'home') {
+///         <home body>
+///     } else if (this.text_<sid> === 'detail') {
+///         <detail body>
+///     }
+/// }
+/// ```
+///
+/// `args[0]` must be `Expr::LocalGet(state_id)` referring to a
+/// state<string> binding harvested by `collect_state_bindings`. If it's
+/// not, emit a placeholder comment + use the first route as fallback so
+/// the page still renders something.
+#[allow(clippy::too_many_arguments)]
+fn emit_nav_stack(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+    text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
+) -> String {
+    let inner_indent = "    ".repeat(depth + 1);
+    let outer_indent = "    ".repeat(depth);
+
+    // Resolve the state arg — must be a LocalGet whose id is registered
+    // in state_registry (v6 collect_state_bindings handles this on init).
+    // Register the synth_id with a text_slot so wrap_index_page emits
+    // the @State decl + applyTextUpdate dispatch arm.
+    let state_field = match args.first() {
+        Some(Expr::LocalGet(id)) => state_registry.get(id).map(|b| {
+            let field_id = sanitize_text_id(&b.synth_id);
+            // Avoid double-registering if the user *also* called
+            // route.text() somewhere else in the tree — text_slots is
+            // de-duped by original_id at wrap_index_page emission time.
+            text_slots.push(TextSlot {
+                original_id: b.synth_id.clone(),
+                field_id: field_id.clone(),
+                initial: b.initial_str.clone(),
+            });
+            field_id
+        }),
+        _ => None,
+    };
+
+    // Routes array: each elem is `{name: string, body: Widget}` (open
+    // Object) or `__AnonShape_*` New (Perry's closed-shape form).
+    let route_specs: Vec<&Expr> = match args.get(1) {
+        Some(Expr::Array(items)) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+
+    if route_specs.is_empty() {
+        return format!(
+            "Column() {{\n\
+             {ind}// NavStack: empty routes array\n\
+             {outer}}}",
+            ind = inner_indent,
+            outer = outer_indent,
+        );
+    }
+
+    // No state binding — fall back to rendering only the first route so
+    // the page still has something visible. Emit a developer-facing hint
+    // comment so the lapse is discoverable.
+    let Some(state_field) = state_field else {
+        let first_body = extract_route_body(route_specs[0], classes)
+            .map(|body| {
+                emit_widget(
+                    &body,
+                    bindings,
+                    depth + 1,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                    lazy_sources,
+                )
+            })
+            .unwrap_or_else(|| "Text('[invalid route body]').fontSize(16)".to_string());
+        let body_indent = "    ".repeat(depth + 1);
+        let first_body_indented = first_body
+            .lines()
+            .map(|l| format!("{}{}", body_indent, l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return format!(
+            "Column() {{\n\
+             {ind}// NavStack: first arg must be a `state<string>(...)` local — \
+             rendering first route only\n\
+             {body}\n\
+             {outer}}}",
+            ind = inner_indent,
+            body = first_body_indented,
+            outer = outer_indent,
+        );
+    };
+
+    // Per-route emission: each gets an `if/else if` arm keyed on the
+    // state field's current value. The first route is the `if`; the rest
+    // are `else if`. We don't add a final `else` — if the state holds an
+    // unknown route name, nothing renders, which is the expected
+    // behavior for a cleared/unset route.
+    let mut arms: Vec<String> = Vec::new();
+    for (idx, spec) in route_specs.iter().enumerate() {
+        let name = extract_route_name(spec, classes).unwrap_or_else(|| format!("route_{}", idx));
+        let body_expr = extract_route_body(spec, classes);
+        let body_str = body_expr
+            .as_ref()
+            .map(|b| {
+                emit_widget(
+                    b,
+                    bindings,
+                    depth + 2,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                    lazy_sources,
+                )
+            })
+            .unwrap_or_else(|| "Text('[empty route]').fontSize(16)".to_string());
+        let body_indent = "    ".repeat(depth + 2);
+        let body_indented = body_str
+            .lines()
+            .map(|l| format!("{}{}", body_indent, l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let keyword = if idx == 0 { "if" } else { "else if" };
+        arms.push(format!(
+            "{ind}{kw} (this.text_{field} === {lit}) {{\n\
+             {body}\n\
+             {ind}}}",
+            ind = inner_indent,
+            kw = keyword,
+            field = state_field,
+            lit = arkts_string_lit(&name),
+            body = body_indented,
+        ));
+    }
+
+    format!(
+        "Column() {{\n\
+         {body}\n\
+         {outer}}}",
+        body = arms.join(" "),
+        outer = outer_indent,
+    )
+}
+
+/// Extract the `name` field from a route spec object — handles open
+/// `Expr::Object` and Perry's closed-shape `Expr::New { __AnonShape_* }`.
+fn extract_route_name(spec: &Expr, classes: &[Class]) -> Option<String> {
+    let pairs: Vec<(String, Expr)> = match spec {
+        Expr::Object(props) => props.clone(),
+        Expr::New {
+            class_name, args, ..
+        } if class_name.starts_with("__AnonShape_") => {
+            classes.iter().find(|c| &c.name == class_name).map(|cls| {
+                cls.fields
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, f)| args.get(i).map(|a| (f.name.clone(), a.clone())))
+                    .collect()
+            })?
+        }
+        _ => return None,
+    };
+    pairs
+        .into_iter()
+        .find(|(k, _)| k == "name")
+        .and_then(|(_, v)| match v {
+            Expr::String(s) => Some(s),
+            _ => None,
+        })
+}
+
+/// Extract the `body` field from a route spec object.
+fn extract_route_body(spec: &Expr, classes: &[Class]) -> Option<Expr> {
+    let pairs: Vec<(String, Expr)> = match spec {
+        Expr::Object(props) => props.clone(),
+        Expr::New {
+            class_name, args, ..
+        } if class_name.starts_with("__AnonShape_") => {
+            classes.iter().find(|c| &c.name == class_name).map(|cls| {
+                cls.fields
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, f)| args.get(i).map(|a| (f.name.clone(), a.clone())))
+                    .collect()
+            })?
+        }
+        _ => return None,
+    };
+    pairs.into_iter().find(|(k, _)| k == "body").map(|(_, v)| v)
+}
+
 /// struct Index { build() { Column() { ... } } }` page.
 ///
 /// The leading imports make `perryEntry.invokeCallback` (Phase 2 v2),
@@ -3091,6 +3322,193 @@ mod tests {
         assert!(r.ets_source.contains("showDialog"));
     }
 
+    // ----- Phase 2 v11: NavStack multi-page navigation -----
+
+    #[test]
+    fn navstack_emits_state_driven_branches() {
+        // const route = state("home");
+        // App({body: NavStack(route, [
+        //     {name: "home", body: Text("Home")},
+        //     {name: "detail", body: Text("Detail")},
+        // ])});
+        let mut m = empty_module();
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "route".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::String("home".into()))),
+        });
+        let routes = Expr::Array(vec![
+            Expr::Object(vec![
+                ("name".into(), Expr::String("home".into())),
+                (
+                    "body".into(),
+                    nmc("Text", vec![Expr::String("Home".into())]),
+                ),
+            ]),
+            Expr::Object(vec![
+                ("name".into(), Expr::String("detail".into())),
+                (
+                    "body".into(),
+                    nmc("Text", vec![Expr::String("Detail".into())]),
+                ),
+            ]),
+        ]);
+        m.init.push(app_with_body(nmc(
+            "NavStack",
+            vec![Expr::LocalGet(5), routes],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // Should register an @State decl for the synth id (v6 path).
+        assert!(
+            r.ets_source.contains("@State text___state_0"),
+            "missing v6 @State decl:\n{}",
+            r.ets_source
+        );
+        // First arm is `if`, second is `else if`. The state field used
+        // is `this.text___state_0` since the synth id (`__state_0`)
+        // sanitizes to `__state_0` and gets prefixed with `text_`.
+        assert!(
+            r.ets_source.contains("if (this.text___state_0 === 'home')"),
+            "missing if-arm for first route:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source
+                .contains("else if (this.text___state_0 === 'detail')"),
+            "missing else-if for second route:\n{}",
+            r.ets_source
+        );
+        // Both bodies should be present.
+        assert!(r.ets_source.contains("Text('Home')"));
+        assert!(r.ets_source.contains("Text('Detail')"));
+    }
+
+    #[test]
+    fn navstack_no_state_falls_back_to_first_route() {
+        // NavStack(<plain non-state local>, [...]) — first arg isn't
+        // registered in state_registry, so emit falls back to rendering
+        // the first route only with a developer-facing hint comment.
+        let mut m = empty_module();
+        m.init.push(Stmt::Let {
+            id: 7,
+            name: "x".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(Expr::String("home".into())),
+        });
+        let routes = Expr::Array(vec![Expr::Object(vec![
+            ("name".into(), Expr::String("home".into())),
+            (
+                "body".into(),
+                nmc("Text", vec![Expr::String("Home".into())]),
+            ),
+        ])]);
+        m.init.push(app_with_body(nmc(
+            "NavStack",
+            vec![Expr::LocalGet(7), routes],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // Hint comment is in the output.
+        assert!(
+            r.ets_source
+                .contains("first arg must be a `state<string>(...)` local"),
+            "missing fallback hint:\n{}",
+            r.ets_source
+        );
+        // Body of first route still rendered.
+        assert!(r.ets_source.contains("Text('Home')"));
+    }
+
+    #[test]
+    fn navstack_empty_routes_emits_empty_column_with_comment() {
+        let mut m = empty_module();
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "route".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::String("home".into()))),
+        });
+        m.init.push(app_with_body(nmc(
+            "NavStack",
+            vec![Expr::LocalGet(5), Expr::Array(vec![])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("// NavStack: empty routes array"));
+    }
+
+    #[test]
+    fn navstack_set_in_closure_rewrites_to_settext() {
+        // const route = state("home");
+        // Button("Detail", () => route.set("detail")) — the closure body
+        // should rewrite via the existing v6 `state.set(v)` → setText
+        // path so navigation actually triggers a re-render.
+        let mut m = empty_module();
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "route".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::String("home".into()))),
+        });
+        let nav_button = nmc(
+            "Button",
+            vec![
+                Expr::String("Go".into()),
+                Expr::Closure {
+                    func_id: 0 as perry_types::FuncId,
+                    params: vec![],
+                    return_type: perry_types::Type::Any,
+                    body: vec![Stmt::Expr(state_method_call(
+                        5,
+                        "set",
+                        vec![Expr::String("detail".into())],
+                    ))],
+                    captures: vec![],
+                    mutable_captures: vec![],
+                    captures_this: false,
+                    enclosing_class: None,
+                    is_async: false,
+                },
+            ],
+        );
+        let routes = Expr::Array(vec![Expr::Object(vec![
+            ("name".into(), Expr::String("home".into())),
+            ("body".into(), nav_button),
+        ])]);
+        m.init.push(app_with_body(nmc(
+            "NavStack",
+            vec![Expr::LocalGet(5), routes],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // Exactly one callback registered (the Button's onClick).
+        assert_eq!(r.callbacks.len(), 1);
+        // The closure's body should now be a setText call (rewritten by
+        // the v6 pre-walk that also runs for NavStack-nested closures).
+        let captured = &r.callbacks[0];
+        if let Expr::Closure { body, .. } = captured {
+            let has_settext = body.iter().any(|s| {
+                matches!(
+                    s,
+                    Stmt::Expr(Expr::NativeMethodCall {
+                        module,
+                        method,
+                        ..
+                    }) if module == "perry/ui" && method == "setText"
+                )
+            });
+            assert!(
+                has_settext,
+                "expected setText rewrite, got body: {:?}",
+                body
+            );
+        } else {
+            panic!("expected Closure callback");
+        }
+    }
+
     // ----- Phase 2 v6: state<T> reactive container -----
 
     fn state_call(initial: Expr) -> Expr {
@@ -3528,10 +3946,7 @@ mod tests {
             func_id: 0 as perry_types::FuncId,
             params: vec![],
             return_type: perry_types::Type::Any,
-            body: vec![Stmt::Expr(media_call(
-                "play",
-                vec![Expr::Number(1.0)],
-            ))],
+            body: vec![Stmt::Expr(media_call("play", vec![Expr::Number(1.0)]))],
             captures: vec![],
             mutable_captures: vec![],
             captures_this: false,
