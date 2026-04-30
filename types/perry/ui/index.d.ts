@@ -208,6 +208,17 @@ export function Text(content: string): Widget;
 /** Clickable button. */
 export function Button(label: string, onPress: () => void): Widget;
 
+/**
+ * Show a transient banner/toast on supported platforms.
+ *
+ * On `--target harmonyos`, calls `promptAction.showToast({message})` via
+ * a queue drained after each Button onClick — the message pops at the
+ * bottom of the screen for ~3 seconds. On other platforms this is
+ * currently a no-op (Phase 2 v3 only wires HarmonyOS); follow-ups will
+ * route to NSAlert/UIAlertController/system notifications.
+ */
+export function showToast(message: string): void;
+
 /** Single-line text input. */
 export function TextField(placeholder: string, onChange: (value: string) => void): Widget;
 

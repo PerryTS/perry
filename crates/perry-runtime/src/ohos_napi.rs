@@ -84,6 +84,12 @@ extern "C" {
         result: *mut i32,
     ) -> NapiStatus;
     pub fn napi_get_undefined(env: *mut NapiEnv, result: *mut *mut NapiValue) -> NapiStatus;
+    pub fn napi_create_string_utf8(
+        env: *mut NapiEnv,
+        str_: *const c_char,
+        length: usize,
+        result: *mut *mut NapiValue,
+    ) -> NapiStatus;
 }
 
 // Perry's compiled entry. The TypeScript compiler always emits `main`
@@ -142,6 +148,34 @@ unsafe extern "C" fn invoke_callback(
     undef
 }
 
+// Phase 2 v3 Option 1: drain one queued toast message and return it as
+// a JS string (or undefined when empty). The auto-emitted .ets onClick
+// loops calling this until it sees undefined, dispatching each entry to
+// `promptAction.showToast({ message })` so the user sees the popup.
+unsafe extern "C" fn drain_toast(env: *mut NapiEnv, _info: *mut NapiCallbackInfo) -> *mut NapiValue {
+    let bits = crate::arkts_callbacks::perry_arkts_drain_toast();
+    // TAG_UNDEFINED → return JS undefined to the caller so its loop ends.
+    if bits.to_bits() == 0x7FFC_0000_0000_0001 {
+        let mut undef: *mut NapiValue = ptr::null_mut();
+        let _ = napi_get_undefined(env, &mut undef);
+        return undef;
+    }
+    // STRING_TAG-boxed *StringHeader. Decode via the same payload-after-
+    // header layout used elsewhere in the runtime, then create an N-API
+    // utf8 string. byte_len fits in u32 by spec.
+    let header = (bits.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::string::StringHeader;
+    if header.is_null() {
+        let mut undef: *mut NapiValue = ptr::null_mut();
+        let _ = napi_get_undefined(env, &mut undef);
+        return undef;
+    }
+    let blen = (*header).byte_len as usize;
+    let data_ptr = (header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    let mut s: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_string_utf8(env, data_ptr as *const c_char, blen, &mut s);
+    s
+}
+
 unsafe extern "C" fn napi_init(env: *mut NapiEnv, exports: *mut NapiValue) -> *mut NapiValue {
     // run(): module init + user top-level code. Called from EntryAbility.
     let run_name = b"run\0";
@@ -170,6 +204,20 @@ unsafe extern "C" fn napi_init(env: *mut NapiEnv, exports: *mut NapiValue) -> *m
         &mut cb_fn,
     );
     let _ = napi_set_named_property(env, exports, cb_name.as_ptr() as *const c_char, cb_fn);
+
+    // drainToast(): pop one queued toast message and return it as a JS
+    // string, or undefined when the queue is empty. Phase 2 v3 Option 1.
+    let dt_name = b"drainToast\0";
+    let mut dt_fn: *mut NapiValue = ptr::null_mut();
+    let _ = napi_create_function(
+        env,
+        dt_name.as_ptr() as *const c_char,
+        10,
+        drain_toast,
+        ptr::null_mut(),
+        &mut dt_fn,
+    );
+    let _ = napi_set_named_property(env, exports, dt_name.as_ptr() as *const c_char, dt_fn);
 
     exports
 }

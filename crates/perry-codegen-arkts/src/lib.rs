@@ -296,12 +296,23 @@ fn emit_stack(
     )
 }
 
-/// `Button("label", onPress)` → `Button('label').onClick(() =>
-/// perryEntry.invokeCallback(<idx>))`. Phase 2 v2: the closure is captured
-/// into the callbacks vec at the next available slot id; the compile
-/// harvest pass injects a `perry_arkts_register_callback(idx, closure)`
-/// call into `module.init` so the closure pointer ends up in the runtime
-/// slot table at startup.
+/// `Button("label", onPress)` → `Button('label').onClick(() => { ... })`.
+/// The onClick body invokes the registered closure via NAPI then drains
+/// the toast queue (Phase 2 v3 Option 1):
+///
+/// ```text
+/// perryEntry.invokeCallback(<idx>);
+/// let __t = perryEntry.drainToast();
+/// while (__t !== undefined) {
+///     promptAction.showToast({ message: __t });
+///     __t = perryEntry.drainToast();
+/// }
+/// ```
+///
+/// The drain loop runs unconditionally — most closures don't enqueue
+/// toasts, so it's a single fast `drainToast()` returning undefined.
+/// When the user calls `showToast("Saved!")` from inside the closure,
+/// the message lands on the queue and pops out here as a popup banner.
 ///
 /// Non-closure second args (or absent) emit a label-only Button with no
 /// onClick — preserves v1.5 behavior for simpler tests.
@@ -311,7 +322,17 @@ fn emit_button(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
         Some(closure @ Expr::Closure { .. }) => {
             let idx = callbacks.len();
             callbacks.push(closure.clone());
-            format!(".onClick(() => {{ perryEntry.invokeCallback({}) }})", idx)
+            format!(
+                ".onClick(() => {{\n    \
+                 perryEntry.invokeCallback({});\n    \
+                 let __t = perryEntry.drainToast();\n    \
+                 while (__t !== undefined) {{ \
+                 promptAction.showToast({{ message: __t }}); \
+                 __t = perryEntry.drainToast(); \
+                 }}\n  \
+                 }})",
+                idx
+            )
         }
         _ => String::new(),
     };
@@ -377,6 +398,7 @@ fn wrap_index_page(widget_body: &str) -> String {
          // Source of truth is the `App({{body: ...}})` call in your\n\
          // TypeScript entry. Edit there; this file is overwritten.\n\
          import perryEntry from 'libentry.so';\n\
+         import promptAction from '@ohos.promptAction';\n\
          \n\
          @Entry\n\
          @Component\n\
@@ -581,23 +603,32 @@ mod tests {
 
     #[test]
     fn button_with_closure_emits_onclick_and_captures_callback() {
-        // Phase 2 v2 headline test: Button("Save", () => {}) → emit
-        // .onClick(...) and capture closure into callbacks[0].
+        // Phase 2 v2 + v3 headline test: Button("Save", () => {}) emits
+        // an onClick that invokes the registered closure THEN drains the
+        // toast queue (so `showToast(msg)` calls inside the closure body
+        // produce visible popups).
         let mut m = empty_module();
         m.init.push(app_with_body(nmc(
             "Button",
             vec![Expr::String("Save".into()), closure_stub()],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(r
-            .ets_source
-            .contains(".onClick(() => { perryEntry.invokeCallback(0) })"));
+        // v2: invokeCallback dispatches the registered closure.
+        assert!(r.ets_source.contains("perryEntry.invokeCallback(0)"));
+        // v3: drain loop dispatches queued toasts after the closure
+        // returns. Single-line search avoids depending on whitespace.
+        assert!(r.ets_source.contains("perryEntry.drainToast()"));
+        assert!(r.ets_source.contains("promptAction.showToast"));
         assert_eq!(r.callbacks.len(), 1);
         assert!(matches!(r.callbacks[0], Expr::Closure { .. }));
-        // Page wrapper imports perryEntry so the onClick body resolves.
+        // Page wrapper imports both perryEntry and promptAction so the
+        // auto-emitted onClick body resolves at ArkTS compile time.
         assert!(r
             .ets_source
             .contains("import perryEntry from 'libentry.so'"));
+        assert!(r
+            .ets_source
+            .contains("import promptAction from '@ohos.promptAction'"));
     }
 
     #[test]
@@ -618,8 +649,8 @@ mod tests {
             ])],
         )));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
-        assert!(r.ets_source.contains("invokeCallback(0)"));
-        assert!(r.ets_source.contains("invokeCallback(1)"));
+        assert!(r.ets_source.contains("perryEntry.invokeCallback(0)"));
+        assert!(r.ets_source.contains("perryEntry.invokeCallback(1)"));
         assert_eq!(r.callbacks.len(), 2);
     }
 

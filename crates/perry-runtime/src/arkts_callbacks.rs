@@ -24,7 +24,24 @@
 //! GC: registered closure pointers are scanned via
 //! `arkts_callbacks_root_scanner`, registered in `gc_init`, so the
 //! generational mark-sweep doesn't reclaim them between callbacks.
+//!
+//! ## Phase 2 v3 Option 1: ArkUI side-effect drain queue
+//!
+//! Perry's runtime in the .so can't directly call ArkTS-side modules
+//! like `@ohos.promptAction`. Instead we use a drain-queue pattern:
+//!
+//! 1. TS code calls `showToast("Saved!")` from inside a Button closure.
+//! 2. That lowers to a runtime FFI `perry_arkts_show_toast(msg)` which
+//!    pushes the message onto `PENDING_TOASTS: Mutex<VecDeque<String>>`.
+//! 3. After `invokeCallback(idx)` returns, the auto-emitted .ets onClick
+//!    drains the queue via `perryEntry.drainToast(): string | undefined`
+//!    and calls `promptAction.showToast({ message })` on each.
+//!
+//! Drain runs in the same thread as the closure invocation (ArkTS UI
+//! thread), so there's no cross-thread synchronization needed for
+//! ordering — the user sees toasts in the order the closure emitted them.
 
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::Mutex;
@@ -175,4 +192,67 @@ pub fn arkts_callbacks_root_scanner(mark: &mut dyn FnMut(f64)) {
             mark(c);
         }
     }
+}
+
+// --- Phase 2 v3 Option 1: showToast drain queue ---
+
+static PENDING_TOASTS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+
+/// Enqueue a toast message. Called from TS-side `showToast(msg)` via
+/// codegen dispatch on `perry/ui.showToast`. After the closure returns,
+/// the auto-emitted .ets onClick drains the queue via NAPI `drainToast`
+/// and calls `promptAction.showToast({ message })` on each entry.
+///
+/// `msg_handle` is a NaN-boxed JS value (must be a string). We unbox via
+/// `js_jsvalue_to_string` so SSO short strings + heap StringHeader both
+/// resolve correctly. Non-string args are coerced to their string form
+/// (matching JS semantics).
+#[no_mangle]
+pub extern "C" fn perry_arkts_show_toast(msg_handle: f64) {
+    // Coerce to a *StringHeader (handles SSO + heap + ToString for
+    // non-string args), then decode to a Rust String. Lossy UTF-8 so
+    // a stray byte sequence shows up as a placeholder rather than
+    // panicking the .so.
+    let header = crate::value::js_jsvalue_to_string(msg_handle);
+    let s = if header.is_null() {
+        String::new()
+    } else {
+        unsafe {
+            let blen = (*header).byte_len as usize;
+            // StringHeader is followed by `byte_len` payload bytes
+            // immediately after the struct (see string.rs layout doc).
+            let data_ptr = (header as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+            let bytes = std::slice::from_raw_parts(data_ptr, blen);
+            String::from_utf8_lossy(bytes).into_owned()
+        }
+    };
+    arkts_log(&format!("show_toast queued msg={:?}", s));
+    if let Ok(mut q) = PENDING_TOASTS.lock() {
+        q.push_back(s);
+    }
+}
+
+/// Pop the oldest queued toast message and return it as a NaN-boxed
+/// StringHeader pointer (NaN-boxed with STRING_TAG). Returns
+/// TAG_UNDEFINED when the queue is empty so the .ets caller can stop
+/// looping. Called from NAPI's `drainToast` handler in `ohos_napi.rs`.
+#[no_mangle]
+pub extern "C" fn perry_arkts_drain_toast() -> f64 {
+    let msg = match PENDING_TOASTS.lock() {
+        Ok(mut q) => q.pop_front(),
+        Err(_) => return f64::from_bits(TAG_UNDEFINED),
+    };
+    let Some(s) = msg else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    arkts_log(&format!("drain_toast emitting msg={:?}", s));
+    // js_string_from_bytes returns a *mut StringHeader. NaN-box with
+    // STRING_TAG (0x7FFF) so the NAPI handler can read it back as a
+    // JS string via the existing string-conversion helpers.
+    let bytes = s.as_bytes();
+    let header = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    if header.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    crate::value::js_nanbox_string(header as i64)
 }

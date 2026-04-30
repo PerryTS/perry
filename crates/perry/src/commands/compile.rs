@@ -494,7 +494,12 @@ fn emit_harmonyos_arkts_stubs(
                       export const run: () => number;\n\
                       // Phase 2 v2: ArkUI .onClick / event handlers call this to invoke a\n\
                       // Perry TS closure registered at startup by perry-codegen-arkts.\n\
-                      export const invokeCallback: (idx: number) => void;\n";
+                      export const invokeCallback: (idx: number) => void;\n\
+                      // Phase 2 v3 Option 1: pop one queued toast message produced by\n\
+                      // `showToast(...)` inside a closure body, or undefined when the\n\
+                      // queue is empty. The auto-emitted onClick body loops on this\n\
+                      // and dispatches each entry to `promptAction.showToast`.\n\
+                      export const drainToast: () => string | undefined;\n";
     fs::write(dts_dir.join("Index.d.ts"), dts_source)?;
 
     Ok(())
