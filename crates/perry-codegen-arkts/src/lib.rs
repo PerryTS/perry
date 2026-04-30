@@ -808,6 +808,30 @@ fn arkts_color_value(e: &Expr) -> String {
     }
 }
 
+/// Phase 2 v13 — map a CSS-style curve string to ArkUI's `Curve` enum.
+/// ArkUI `Curve` lives at `@ohos.curves` and the values match the W3C
+/// timing-function names with PascalCase (`Curve.Linear`, `Curve.Ease`,
+/// `Curve.EaseInOut`, etc.). Unrecognized values fall back to `Curve.Ease`.
+fn arkts_curve_value(s: &str) -> String {
+    let name = match s {
+        "linear" => "Linear",
+        "ease" => "Ease",
+        "ease-in" | "easeIn" => "EaseIn",
+        "ease-out" | "easeOut" => "EaseOut",
+        "ease-in-out" | "easeInOut" => "EaseInOut",
+        "fast-out-slow-in" => "FastOutSlowIn",
+        "linear-out-slow-in" => "LinearOutSlowIn",
+        "fast-out-linear-in" => "FastOutLinearIn",
+        "extreme-deceleration" => "ExtremeDeceleration",
+        "sharp" => "Sharp",
+        "rhythm" => "Rhythm",
+        "smooth" => "Smooth",
+        "friction" => "Friction",
+        _ => "Ease",
+    };
+    format!("Curve.{}", name)
+}
+
 /// Map a `StyleProps` object to an ArkUI modifier chain like
 /// `.backgroundColor('blue').borderRadius(8).opacity(0.95)`.
 ///
@@ -890,8 +914,92 @@ fn emit_style_modifiers(props: &[(String, Expr)]) -> String {
                     out.push_str(".visibility(Visibility.Hidden)");
                 }
             }
-            // Phase 2 v5 deferred: shadow, gradient, textDecoration,
-            // tooltip, animation, transition — see Phase 2 v13.
+            // Phase 2 v13 — animation/transition/shadow/textDecoration.
+            "animation" => {
+                if let Expr::Object(props) = v {
+                    let mut parts: Vec<String> = Vec::new();
+                    for (k2, v2) in props {
+                        match k2.as_str() {
+                            "duration" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("duration: {}", fmt_num(n)));
+                                }
+                            }
+                            "curve" => {
+                                if let Expr::String(s) = v2 {
+                                    parts.push(format!("curve: {}", arkts_curve_value(s)));
+                                }
+                            }
+                            "delay" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("delay: {}", fmt_num(n)));
+                                }
+                            }
+                            "iterations" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("iterations: {}", fmt_num(n)));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !parts.is_empty() {
+                        out.push_str(&format!(".animation({{ {} }})", parts.join(", ")));
+                    }
+                }
+            }
+            "shadow" => {
+                if let Expr::Object(props) = v {
+                    let mut parts: Vec<String> = Vec::new();
+                    for (k2, v2) in props {
+                        match k2.as_str() {
+                            "color" => {
+                                parts.push(format!("color: {}", arkts_color_value(v2)));
+                            }
+                            "blur" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("radius: {}", fmt_num(n)));
+                                }
+                            }
+                            "offsetX" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("offsetX: {}", fmt_num(n)));
+                                }
+                            }
+                            "offsetY" => {
+                                if let Some(n) = numeric_expr(v2) {
+                                    parts.push(format!("offsetY: {}", fmt_num(n)));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !parts.is_empty() {
+                        out.push_str(&format!(".shadow({{ {} }})", parts.join(", ")));
+                    }
+                }
+            }
+            "textDecoration" => {
+                if let Expr::String(s) = v {
+                    let kind = match s.as_str() {
+                        "underline" => Some("Underline"),
+                        "strikethrough" | "line-through" => Some("LineThrough"),
+                        "overline" => Some("Overline"),
+                        "none" => Some("None"),
+                        _ => None,
+                    };
+                    if let Some(k) = kind {
+                        out.push_str(&format!(
+                            ".decoration({{ type: TextDecorationType.{} }})",
+                            k
+                        ));
+                    }
+                }
+            }
+            // Phase 2 v13 deferred: gradient, transition, tooltip — these
+            // each need more complex ArkUI shapes (linearGradient, multi-
+            // part transition config, custom-component popup) and are
+            // tracked as v13.5 follow-ups.
             _ => {}
         }
     }
@@ -1205,7 +1313,19 @@ fn emit_image(args: &[Expr]) -> String {
     let Some(Expr::String(src)) = args.first() else {
         return "Text('[non-literal Image src]').fontSize(16).fontColor('#888888')".to_string();
     };
-    format!("Image({}).width('100%').height(200)", arkts_string_lit(src))
+    // Phase 2 v13 — recognize the `@app.media/<name>` resource path
+    // shape and emit ArkUI's `$r('app.media.<name>')` accessor instead
+    // of a quoted string literal. Plain URLs / file paths still pass
+    // through as quoted strings.
+    let src_arg = if let Some(name) = src.strip_prefix("@app.media/") {
+        // ArkUI's $r() takes a dot-path string, NOT a slash-path.
+        format!("$r('app.media.{}')", name)
+    } else if let Some(name) = src.strip_prefix("@app.icon/") {
+        format!("$r('app.icon.{}')", name)
+    } else {
+        arkts_string_lit(src)
+    };
+    format!("Image({}).width('100%').height(200)", src_arg)
 }
 
 /// `ScrollView(children)` → `Scroll() { Column({space: 8}) { ... } }`.
@@ -2232,6 +2352,102 @@ mod tests {
         assert!(r
             .ets_source
             .contains("this.applyTextUpdate(__u.id, __u.value)"));
+    }
+
+    // ----- Phase 2 v13: animation / shadow / textDecoration / image asset -----
+
+    #[test]
+    fn animation_modifier_maps_curve_string_to_curve_enum() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![(
+                    "animation".into(),
+                    Expr::Object(vec![
+                        ("duration".into(), Expr::Number(300.0)),
+                        ("curve".into(), Expr::String("ease-in".into())),
+                    ]),
+                )]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(".animation({ duration: 300, curve: Curve.EaseIn })"));
+    }
+
+    #[test]
+    fn shadow_modifier_maps_blur_to_radius_offsets_to_offsetXY() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![(
+                    "shadow".into(),
+                    Expr::Object(vec![
+                        ("color".into(), Expr::String("black".into())),
+                        ("blur".into(), Expr::Number(8.0)),
+                        ("offsetX".into(), Expr::Number(2.0)),
+                        ("offsetY".into(), Expr::Number(4.0)),
+                    ]),
+                )]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // ArkUI's shadow uses `radius` not `blur`; offsetX/Y match.
+        assert!(r.ets_source.contains(".shadow({"));
+        assert!(r.ets_source.contains("color: 'black'"));
+        assert!(r.ets_source.contains("radius: 8"));
+        assert!(r.ets_source.contains("offsetX: 2"));
+        assert!(r.ets_source.contains("offsetY: 4"));
+    }
+
+    #[test]
+    fn text_decoration_underline_maps_to_decoration_modifier() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![("textDecoration".into(), Expr::String("underline".into()))]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(".decoration({ type: TextDecorationType.Underline })"));
+    }
+
+    #[test]
+    fn text_decoration_strikethrough_maps_to_linethrough() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Text",
+            vec![
+                Expr::String("hi".into()),
+                Expr::Object(vec![("textDecoration".into(), Expr::String("strikethrough".into()))]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(".decoration({ type: TextDecorationType.LineThrough })"));
+    }
+
+    #[test]
+    fn image_app_media_path_maps_to_resource_accessor() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc("Image", vec![Expr::String("@app.media/icon".into())])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // `$r('app.media.icon')` (no quotes around the $r() arg).
+        assert!(r.ets_source.contains("Image($r('app.media.icon'))"));
+        // Plain string passthrough still works for HTTP URLs etc.
+        assert!(!r.ets_source.contains("'@app.media/icon'"));
+    }
+
+    #[test]
+    fn image_plain_url_passes_through_as_string() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc("Image", vec![Expr::String("https://example.com/foo.png".into())])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Image('https://example.com/foo.png')"));
     }
 
     // ----- Phase 2 v5: inline style + ForEach -----
