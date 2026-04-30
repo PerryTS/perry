@@ -1760,6 +1760,46 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         blk.ret(DOUBLE, &result);
     }
 
+    // #337: emit an always-defined fallback wrapper for the
+    // `perry_unknown_func` sentinel. `expr.rs::Expr::FuncRef` falls
+    // through to `wrap_name = "__perry_wrap_perry_unknown_func"` when the
+    // FuncRef's id isn't in `func_names` (cross-module reference whose
+    // Source HIR wasn't lowered into THIS LLVM module — should normally
+    // route to ExternFuncRef instead, but some HIR shapes still emit
+    // FuncRef with an unresolvable id). Pre-fix the wrapper was never
+    // defined and clang errored with `use of undefined value
+    // @__perry_wrap_perry_unknown_func`. This stub returns TAG_UNDEFINED
+    // (encoded as `f64::from_bits(0x7FFC_0000_0000_0001)` =
+    // 1.7800590868057611e-307 — the canonical undefined sentinel matching
+    // `value::TAG_UNDEFINED`); any runtime-side `js_closure_callN`
+    // through this wrapper just observes "the callable returned
+    // undefined", which is the right fail-closed behavior matching how
+    // the `__perry_wrap_extern_*` wrappers handle missing extern
+    // imported classes (see the existing comment block below).
+    //
+    // Emitted unconditionally — link-time DCE strips it when no
+    // `Expr::FuncRef(unknown_id)` site exists in this module.
+    {
+        let wrap_name = "__perry_wrap_perry_unknown_func";
+        let wf = llmod.define_function(
+            wrap_name,
+            DOUBLE,
+            vec![
+                (I64, "%this_closure".to_string()),
+                (DOUBLE, "%a0".to_string()),
+                (DOUBLE, "%a1".to_string()),
+                (DOUBLE, "%a2".to_string()),
+                (DOUBLE, "%a3".to_string()),
+                (DOUBLE, "%a4".to_string()),
+            ],
+        );
+        let _ = wf.create_block("entry");
+        let blk = wf.block_mut(0).unwrap();
+        // f64::from_bits(0x7FFC_0000_0000_0001) — TAG_UNDEFINED. Format
+        // identical to how other expr.rs lowerings emit it.
+        blk.ret(DOUBLE, "0x7FFC000000000001");
+    }
+
     // Emit ExternFuncRef-as-value wrappers for every imported function in
     // `opts.import_function_prefixes`. Each gets a thin wrapper plus a
     // static `ClosureHeader` so the value can be passed as a callback,
