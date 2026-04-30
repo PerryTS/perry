@@ -3216,6 +3216,257 @@ function perry_ui_camera_unfreeze(_h) {}
 function perry_ui_camera_sample_color(_x, _y) { return -1; }
 function perry_ui_camera_set_on_tap(_h, _cb) {}
 
+// ---------- perry/media (issue #370) — HTML5 <audio> + Media Session API ----------
+//
+// Per-process player table. Index 0 is reserved (handles are 1-based).
+// Each entry: { audio, state, duration, hasStarted, ended, onStateChange?, onTimeUpdate? }.
+const PERRY_MEDIA_PLAYERS = [];
+let PERRY_MEDIA_SESSION_WIRED = false;
+
+function _perry_media_get(handle) {
+  // handle arrives as a JS number (NaN-boxed values are decoded by mem_call before dispatch).
+  if (typeof handle !== "number" || handle < 1) return null;
+  return PERRY_MEDIA_PLAYERS[handle - 1] || null;
+}
+
+function _perry_media_flush_state(handle) {
+  const e = _perry_media_get(handle);
+  if (!e || e.onStateChange === undefined || e.onStateChange === null) return;
+  try {
+    callWasmClosure(e.onStateChange, fromJsValue(e.state));
+  } catch (err) { console.warn("perry/media onStateChange threw:", err); }
+}
+
+function _perry_media_flush_time(handle) {
+  const e = _perry_media_get(handle);
+  if (!e || e.onTimeUpdate === undefined || e.onTimeUpdate === null) return;
+  const t = isFinite(e.audio.currentTime) ? e.audio.currentTime : 0;
+  const d = isFinite(e.duration) ? e.duration : 0;
+  try {
+    callWasmClosure(e.onTimeUpdate, t, d);
+  } catch (err) { console.warn("perry/media onTimeUpdate threw:", err); }
+}
+
+function _perry_media_first_live_handle() {
+  for (let i = 0; i < PERRY_MEDIA_PLAYERS.length; i++) {
+    if (PERRY_MEDIA_PLAYERS[i]) return i + 1;
+  }
+  return 0;
+}
+
+function _perry_media_wire_session() {
+  if (PERRY_MEDIA_SESSION_WIRED) return;
+  if (!('mediaSession' in navigator)) return;
+  PERRY_MEDIA_SESSION_WIRED = true;
+  try {
+    navigator.mediaSession.setActionHandler('play', () => {
+      const h = _perry_media_first_live_handle();
+      if (h) perry_media_play(h);
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      const h = _perry_media_first_live_handle();
+      if (h) perry_media_pause(h);
+    });
+    navigator.mediaSession.setActionHandler('seekto', (details) => {
+      const h = _perry_media_first_live_handle();
+      if (h && typeof details.seekTime === "number") perry_media_seek(h, details.seekTime);
+    });
+    navigator.mediaSession.setActionHandler('seekforward', (details) => {
+      const h = _perry_media_first_live_handle();
+      if (!h) return;
+      const e = _perry_media_get(h);
+      if (!e) return;
+      const skip = (details && details.seekOffset) || 10;
+      perry_media_seek(h, (e.audio.currentTime || 0) + skip);
+    });
+    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+      const h = _perry_media_first_live_handle();
+      if (!h) return;
+      const e = _perry_media_get(h);
+      if (!e) return;
+      const skip = (details && details.seekOffset) || 10;
+      perry_media_seek(h, Math.max(0, (e.audio.currentTime || 0) - skip));
+    });
+  } catch (err) { /* setActionHandler can throw on unsupported actions — ignore */ }
+}
+
+function perry_media_create_player(url) {
+  const audio = new Audio(typeof url === "string" ? url : "");
+  audio.preload = "auto";
+  const entry = { audio, state: "loading", duration: 0, hasStarted: false, ended: false };
+  PERRY_MEDIA_PLAYERS.push(entry);
+  const handle = PERRY_MEDIA_PLAYERS.length; // 1-based
+  audio.addEventListener('loadedmetadata', () => {
+    entry.duration = isFinite(audio.duration) ? audio.duration : 0;
+  });
+  audio.addEventListener('canplay', () => {
+    if (entry.state === 'loading') entry.state = 'ready';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('play', () => {
+    entry.state = 'playing';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('playing', () => {
+    entry.state = 'playing';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('pause', () => {
+    if (entry.ended) return;
+    entry.state = entry.hasStarted ? 'paused' : 'ready';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('ended', () => {
+    entry.ended = true;
+    entry.state = 'ended';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('error', () => {
+    entry.state = 'error';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('waiting', () => {
+    entry.state = 'loading';
+    _perry_media_flush_state(handle);
+  });
+  audio.addEventListener('timeupdate', () => {
+    // Belt-and-braces ended fallback (acroyear #351 comment) — Chromium /
+    // Chromecast have historically dropped the `ended` event.
+    if (entry.hasStarted && entry.duration > 0.25 && audio.currentTime >= entry.duration - 0.25 && !entry.ended) {
+      entry.ended = true;
+      entry.state = 'ended';
+      _perry_media_flush_state(handle);
+    }
+    if (entry.state === 'playing' || entry.state === 'loading') {
+      _perry_media_flush_time(handle);
+    }
+  });
+  return handle;
+}
+
+function perry_media_play(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  e.hasStarted = true;
+  e.ended = false;
+  const p = e.audio.play();
+  if (p && typeof p.catch === "function") {
+    p.catch(() => { e.state = 'error'; _perry_media_flush_state(handle); });
+  }
+}
+
+function perry_media_pause(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  e.audio.pause();
+}
+
+function perry_media_stop(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  e.audio.pause();
+  try { e.audio.currentTime = 0; } catch (_) { /* live stream */ }
+  e.hasStarted = false;
+  e.ended = false;
+  e.state = 'ready';
+  _perry_media_flush_state(handle);
+}
+
+function perry_media_seek(handle, seconds) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  const d = e.audio.duration;
+  let target = Number(seconds) || 0;
+  if (target < 0) target = 0;
+  if (isFinite(d) && target > d) target = d;
+  try { e.audio.currentTime = target; } catch (_) { /* live stream */ }
+}
+
+function perry_media_set_volume(handle, vol) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  let v = Number(vol);
+  if (!isFinite(v)) v = 1;
+  if (v < 0) v = 0;
+  if (v > 1) v = 1;
+  e.audio.volume = v;
+}
+
+function perry_media_set_rate(handle, rate) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  const r = Number(rate);
+  if (!isFinite(r) || r <= 0) return;
+  e.audio.playbackRate = r;
+}
+
+function perry_media_get_current_time(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return 0;
+  return isFinite(e.audio.currentTime) ? e.audio.currentTime : 0;
+}
+
+function perry_media_get_duration(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return 0;
+  return isFinite(e.duration) ? e.duration : 0;
+}
+
+function perry_media_get_state(handle) {
+  const e = _perry_media_get(handle);
+  return e ? e.state : "error";
+}
+
+function perry_media_is_playing(handle) {
+  const e = _perry_media_get(handle);
+  return (e && e.state === 'playing') ? 1 : 0;
+}
+
+function perry_media_on_state_change(handle, callback) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  // callback comes through mem_call as a decoded JS value — either a JS
+  // function (closure) or a wasm-closure handle object {funcIdx, captures}.
+  // Both shapes are handled by callWasmClosure.
+  e.onStateChange = (callback === undefined || callback === null) ? null : callback;
+}
+
+function perry_media_on_time_update(handle, callback) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  e.onTimeUpdate = (callback === undefined || callback === null) ? null : callback;
+}
+
+function perry_media_set_now_playing(handle, title, artist, album, artworkUrl) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  if (!('mediaSession' in navigator)) return;
+  try {
+    const meta = {
+      title: String(title || ""),
+      artist: String(artist || ""),
+      album: String(album || ""),
+    };
+    if (artworkUrl && typeof MediaMetadata !== "undefined") {
+      meta.artwork = [{ src: String(artworkUrl) }];
+    }
+    navigator.mediaSession.metadata = (typeof MediaMetadata !== "undefined")
+      ? new MediaMetadata(meta)
+      : meta;
+    _perry_media_wire_session();
+  } catch (err) { console.warn("perry/media setNowPlaying:", err); }
+}
+
+function perry_media_destroy(handle) {
+  const e = _perry_media_get(handle);
+  if (!e) return;
+  try { e.audio.pause(); } catch (_) {}
+  try { e.audio.src = ""; } catch (_) {}
+  e.onStateChange = null;
+  e.onTimeUpdate = null;
+  PERRY_MEDIA_PLAYERS[handle - 1] = null;
+}
+
 // ---------- UI Dispatch table (maps bridge function names to implementations) ----------
 const __perryUiDispatch = {
   // Widget creation
@@ -3308,6 +3559,12 @@ const __perryUiDispatch = {
   perry_ui_camera_create, perry_ui_camera_start, perry_ui_camera_stop,
   perry_ui_camera_freeze, perry_ui_camera_unfreeze,
   perry_ui_camera_sample_color, perry_ui_camera_set_on_tap,
+  // Media (issue #370) — HTML5 <audio> + Media Session API
+  perry_media_create_player, perry_media_play, perry_media_pause, perry_media_stop,
+  perry_media_seek, perry_media_set_volume, perry_media_set_rate,
+  perry_media_get_current_time, perry_media_get_duration, perry_media_get_state,
+  perry_media_is_playing, perry_media_on_state_change, perry_media_on_time_update,
+  perry_media_set_now_playing, perry_media_destroy,
 };
 
 // Also expose as __perryUi for JS async function context
