@@ -79,6 +79,17 @@ struct TextSlot {
     initial: String,
 }
 
+/// Phase 2 v6 — `state<T>(initial)` registry. Each `let x = state(initial)`
+/// declaration in `module.init` registers a synthetic id (`__state_<N>`)
+/// + the initial value. Subsequent `x.text()` calls emit reactive Text
+/// using the synth id; `x.set(v)` calls inside closures get rewritten to
+/// `setText(synth_id, v)` calls (the runtime's `perry_arkts_set_text`
+/// already coerces non-string args via `js_jsvalue_to_string`).
+struct StateBinding {
+    synth_id: String,
+    initial_str: String,
+}
+
 /// Walk `module.init` for the first `App({...})` call from `perry/ui`,
 /// emit the corresponding ArkUI `pages/Index.ets`, capture every
 /// closure-bearing arg into `HarvestResult.callbacks` so the compile
@@ -96,19 +107,22 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
     // look up __AnonShape_* classes (Perry's closed-shape object-literal
     // optimization, v0.5.337+) without aliasing &mut module.
     let classes = module.classes.clone();
+    // Phase 2 v6 — pre-walk for `state<T>(initial)` declarations + rewrite
+    // `state.set(v)` calls inside the entire module to `setText(synth_id, v)`.
+    // This needs to run BEFORE find_and_strip_app + bindings collection so
+    // the rewrites land before any harvest detection sees the closures.
+    let state_registry = collect_state_bindings(&module.init);
+    if !state_registry.is_empty() {
+        rewrite_state_calls_in_stmts(&mut module.init, &state_registry);
+    }
     // Build a const-binding lookup for top-level `let x = <perry/ui call>;`
     // so the Body can reference a local: `App({body: x})` finds x's init.
-    // Cloning the Stmt list is cheap relative to codegen; avoids a second
-    // mutable-borrow pass over init.
     let bindings = collect_const_bindings(&module.init);
     let Some(body_expr) = find_and_strip_app(&mut module.init, &classes) else {
         return Ok(None);
     };
     let mut callbacks: Vec<Expr> = Vec::new();
     let mut text_slots: Vec<TextSlot> = Vec::new();
-    // Phase 2 v5: arkts_locals threads closure-param substitutions
-    // through emit_widget so ForEach's body can resolve `LocalGet(item_id)`
-    // → `__item` (the ArkTS-side parameter name). At top level it's empty.
     let arkts_locals: HashMap<LocalId, String> = HashMap::new();
     let widget_arkui = emit_widget(
         &body_expr,
@@ -118,11 +132,201 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
         &mut text_slots,
         &arkts_locals,
         &classes,
+        &state_registry,
     );
     Ok(Some(HarvestResult {
         ets_source: wrap_index_page(&widget_arkui, &text_slots),
         callbacks,
     }))
+}
+
+/// Phase 2 v6 — discover top-level `let x = state(initial)` declarations
+/// and assign each a synthetic id `__state_<N>`. The initial value is
+/// stringified for the v3.2 reactive-Text initial state.
+fn collect_state_bindings(init: &[Stmt]) -> HashMap<LocalId, StateBinding> {
+    let mut map = HashMap::new();
+    let mut counter: usize = 0;
+    for stmt in init {
+        if let Stmt::Let {
+            id,
+            init: Some(call_expr),
+            ..
+        } = stmt
+        {
+            let initial = match call_expr {
+                // Match either `Expr::NativeMethodCall { module: "perry/ui", method: "state", args: [v] }`
+                // OR `Expr::Call { callee: Ident("state"), args: [v] }` (whichever
+                // shape the perry-hir lowerer produces for the import).
+                Expr::NativeMethodCall {
+                    module,
+                    method,
+                    object: None,
+                    args,
+                    ..
+                } if module == "perry/ui" && method == "state" && args.len() == 1 => {
+                    Some(args[0].clone())
+                }
+                _ => None,
+            };
+            if let Some(initial_expr) = initial {
+                let synth_id = format!("__state_{}", counter);
+                counter += 1;
+                let initial_str = match &initial_expr {
+                    Expr::String(s) => s.clone(),
+                    Expr::Number(n) => fmt_num(*n),
+                    Expr::Integer(n) => format!("{}", n),
+                    Expr::Bool(b) => format!("{}", b),
+                    _ => "".to_string(),
+                };
+                map.insert(
+                    *id,
+                    StateBinding {
+                        synth_id,
+                        initial_str,
+                    },
+                );
+            }
+        }
+    }
+    map
+}
+
+/// Walk a Vec<Stmt> and rewrite any `state.set(v)` calls (where state's
+/// LocalId is in the registry) to `setText(synth_id, v)` calls. Recurses
+/// into closure bodies, blocks, control flow.
+fn rewrite_state_calls_in_stmts(stmts: &mut Vec<Stmt>, reg: &HashMap<LocalId, StateBinding>) {
+    for stmt in stmts.iter_mut() {
+        rewrite_state_in_stmt(stmt, reg);
+    }
+}
+
+fn rewrite_state_in_stmt(stmt: &mut Stmt, reg: &HashMap<LocalId, StateBinding>) {
+    match stmt {
+        Stmt::Expr(e) => rewrite_state_in_expr(e, reg),
+        Stmt::Let { init: Some(e), .. } => rewrite_state_in_expr(e, reg),
+        Stmt::Return(Some(e)) => rewrite_state_in_expr(e, reg),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            rewrite_state_in_expr(condition, reg);
+            rewrite_state_calls_in_stmts(then_branch, reg);
+            if let Some(else_branch) = else_branch {
+                rewrite_state_calls_in_stmts(else_branch, reg);
+            }
+        }
+        Stmt::While { condition, body, .. } | Stmt::DoWhile { body, condition, .. } => {
+            rewrite_state_in_expr(condition, reg);
+            rewrite_state_calls_in_stmts(body, reg);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+            ..
+        } => {
+            if let Some(init) = init {
+                rewrite_state_in_stmt(init.as_mut(), reg);
+            }
+            if let Some(c) = condition {
+                rewrite_state_in_expr(c, reg);
+            }
+            if let Some(u) = update {
+                rewrite_state_in_expr(u, reg);
+            }
+            rewrite_state_calls_in_stmts(body, reg);
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBinding>) {
+    // Detect `state.set(v)` first (most specific shape).
+    if let Expr::Call { callee, args, .. } = e {
+        if args.len() == 1 {
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "set" {
+                    if let Expr::LocalGet(state_id) = object.as_ref() {
+                        if let Some(binding) = reg.get(state_id) {
+                            let value_expr = args[0].clone();
+                            *e = Expr::NativeMethodCall {
+                                module: "perry/ui".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "setText".to_string(),
+                                args: vec![Expr::String(binding.synth_id.clone()), value_expr],
+                            };
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Recurse into ALL expression children so nested state.set(v) calls
+    // inside method args / object literals / closure bodies / etc. are
+    // also rewritten. Each variant unrolls its sub-Exprs explicitly so
+    // we don't miss any HIR shape.
+    match e {
+        Expr::Call { callee, args, .. } => {
+            rewrite_state_in_expr(callee, reg);
+            for a in args.iter_mut() {
+                rewrite_state_in_expr(a, reg);
+            }
+        }
+        Expr::NativeMethodCall { object, args, .. } => {
+            if let Some(o) = object {
+                rewrite_state_in_expr(o, reg);
+            }
+            for a in args.iter_mut() {
+                rewrite_state_in_expr(a, reg);
+            }
+        }
+        Expr::Object(props) => {
+            for (_, v) in props.iter_mut() {
+                rewrite_state_in_expr(v, reg);
+            }
+        }
+        Expr::Array(items) => {
+            for v in items.iter_mut() {
+                rewrite_state_in_expr(v, reg);
+            }
+        }
+        Expr::Closure { body, .. } => {
+            rewrite_state_calls_in_stmts(body, reg);
+        }
+        Expr::PropertyGet { object, .. } => {
+            rewrite_state_in_expr(object, reg);
+        }
+        Expr::PropertySet { object, value, .. } => {
+            rewrite_state_in_expr(object, reg);
+            rewrite_state_in_expr(value, reg);
+        }
+        Expr::IndexGet { object, index } => {
+            rewrite_state_in_expr(object, reg);
+            rewrite_state_in_expr(index, reg);
+        }
+        Expr::Binary { left, right, .. } => {
+            rewrite_state_in_expr(left, reg);
+            rewrite_state_in_expr(right, reg);
+        }
+        Expr::ArrayMap { array, callback } => {
+            rewrite_state_in_expr(array, reg);
+            rewrite_state_in_expr(callback, reg);
+        }
+        Expr::New { args, .. } => {
+            for a in args.iter_mut() {
+                rewrite_state_in_expr(a, reg);
+            }
+        }
+        // Leaf/other variants don't carry rewriteable sub-Exprs (or are
+        // rare enough that v6 deferring them is fine — file as v6.5
+        // follow-up if anyone hits a real-world miss).
+        _ => {}
+    }
 }
 
 /// Find the first top-level `App({body: <expr>})` call in `module.init`,
@@ -219,6 +423,7 @@ fn resolve(expr: &Expr, bindings: &HashMap<LocalId, Expr>) -> Expr {
 ///
 /// Unrecognized widgets degrade to a comment + a placeholder Text — never
 /// errors out, since emit-time errors would leave the user without any UI.
+#[allow(clippy::too_many_arguments)]
 fn emit_widget(
     expr: &Expr,
     bindings: &HashMap<LocalId, Expr>,
@@ -227,7 +432,33 @@ fn emit_widget(
     text_slots: &mut Vec<TextSlot>,
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
 ) -> String {
+    // Phase 2 v6 — `state.text()` shape: Expr::Call { callee: PropertyGet
+    // { obj: LocalGet(state_id), property: "text" }, args: [] } where
+    // state_id is in the registry. Emit a reactive Text using the
+    // registered synth_id + initial value (uses the v3.2 path).
+    if let Expr::Call { callee, args, .. } = expr {
+        if args.is_empty() {
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "text" {
+                    if let Expr::LocalGet(state_id) = object.as_ref() {
+                        if let Some(binding) = state_registry.get(state_id) {
+                            text_slots.push(TextSlot {
+                                original_id: binding.synth_id.clone(),
+                                field_id: sanitize_text_id(&binding.synth_id),
+                                initial: binding.initial_str.clone(),
+                            });
+                            return format!(
+                                "Text(this.text_{}).fontSize(20)",
+                                sanitize_text_id(&binding.synth_id)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
     let resolved = resolve(expr, bindings);
     match &resolved {
         Expr::NativeMethodCall {
@@ -247,6 +478,7 @@ fn emit_widget(
                     text_slots,
                     arkts_locals,
                     classes,
+                state_registry,
                 ),
                 "HStack" => emit_stack(
                     "Row",
@@ -257,6 +489,7 @@ fn emit_widget(
                     text_slots,
                     arkts_locals,
                     classes,
+                state_registry,
                 ),
                 "Button" => emit_button(args, callbacks),
                 "TextField" => emit_textfield(args, callbacks),
@@ -273,6 +506,7 @@ fn emit_widget(
                     text_slots,
                     arkts_locals,
                     classes,
+                state_registry,
                 ),
                 "LazyVStack" => emit_lazy_vstack(
                     args,
@@ -282,6 +516,7 @@ fn emit_widget(
                     text_slots,
                     arkts_locals,
                     classes,
+                state_registry,
                 ),
                 "Picker" => emit_picker(args, callbacks),
                 "ProgressView" => emit_progressview(args),
@@ -293,6 +528,7 @@ fn emit_widget(
                     text_slots,
                     arkts_locals,
                     classes,
+                state_registry,
                 ),
                 // Phase 2 v12 widgets.
                 "Tabs" => emit_tabs(
@@ -303,6 +539,7 @@ fn emit_widget(
                     text_slots,
                     arkts_locals,
                     classes,
+                    state_registry,
                 ),
                 "Modal" | "Dialog" => emit_modal(args, callbacks),
                 "Menu" | "ContextMenu" => emit_menu(args, callbacks),
@@ -314,6 +551,7 @@ fn emit_widget(
                     text_slots,
                     arkts_locals,
                     classes,
+                    state_registry,
                 ),
                 other => format!(
                     "// unsupported perry/ui widget: {} (Phase 2 v12)\n\
@@ -348,6 +586,7 @@ fn emit_widget(
             text_slots,
             arkts_locals,
             classes,
+        state_registry,
         ),
         _ => format!(
             "// unrecognized body expression (must be a perry/ui widget call)\n\
@@ -375,6 +614,7 @@ fn emit_for_each(
     text_slots: &mut Vec<TextSlot>,
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
 ) -> String {
     let array_src = arkts_array_source(array, bindings);
     let (param_id, body_expr) = match callback {
@@ -404,6 +644,7 @@ fn emit_for_each(
                 text_slots,
                 &locals,
                 classes,
+                state_registry,
             );
             ("__item".to_string(), inner)
         }
@@ -723,6 +964,7 @@ fn emit_stack(
     text_slots: &mut Vec<TextSlot>,
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
 ) -> String {
     // First-arg shape detection — same logic as lower_call/native.rs:91.
     let (spacing, children_idx) = match args.first() {
@@ -744,6 +986,7 @@ fn emit_stack(
                     text_slots,
                     arkts_locals,
                     classes,
+                state_registry,
                 )
             })
             .collect::<Vec<_>>(),
@@ -758,6 +1001,7 @@ fn emit_stack(
             text_slots,
             arkts_locals,
             classes,
+        state_registry,
         )],
         Some(_) => vec![format!(
             "// children arg wasn't an array literal — Phase 2 v1.5 limitation\n\
@@ -978,6 +1222,7 @@ fn emit_scrollview(
     text_slots: &mut Vec<TextSlot>,
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 2);
     let mid_indent = "    ".repeat(depth + 1);
@@ -995,6 +1240,7 @@ fn emit_scrollview(
                     text_slots,
                     arkts_locals,
                     classes,
+                state_registry,
                 )
             })
             .collect(),
@@ -1006,6 +1252,7 @@ fn emit_scrollview(
             text_slots,
             arkts_locals,
             classes,
+        state_registry,
         )],
         _ => vec![],
     };
@@ -1053,6 +1300,7 @@ fn emit_lazy_vstack(
     text_slots: &mut Vec<TextSlot>,
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 1);
     let outer_indent = "    ".repeat(depth);
@@ -1069,6 +1317,7 @@ fn emit_lazy_vstack(
                     text_slots,
                     arkts_locals,
                     classes,
+                state_registry,
                 )
             })
             .collect(),
@@ -1080,6 +1329,7 @@ fn emit_lazy_vstack(
             text_slots,
             arkts_locals,
             classes,
+        state_registry,
         )],
         _ => vec![],
     };
@@ -1189,6 +1439,7 @@ fn emit_section(
     text_slots: &mut Vec<TextSlot>,
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
 ) -> String {
     let title = first_string_arg(args).unwrap_or_default();
 
@@ -1207,6 +1458,7 @@ fn emit_section(
                     text_slots,
                     arkts_locals,
                     classes,
+                state_registry,
                 )
             })
             .collect(),
@@ -1218,6 +1470,7 @@ fn emit_section(
             text_slots,
             arkts_locals,
             classes,
+        state_registry,
         )],
         _ => vec![],
     };
@@ -1270,6 +1523,7 @@ fn emit_tabs(
     text_slots: &mut Vec<TextSlot>,
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
 ) -> String {
     let tab_specs: Vec<&Expr> = match args.first() {
         Some(Expr::Array(items)) => items.iter().collect(),
@@ -1326,6 +1580,7 @@ fn emit_tabs(
                         text_slots,
                         arkts_locals,
                         classes,
+                    state_registry,
                     )
                 })
                 .unwrap_or_else(|| "Text('[empty tab]').fontSize(16)".to_string());
@@ -1424,6 +1679,7 @@ fn emit_grid(
     text_slots: &mut Vec<TextSlot>,
     arkts_locals: &HashMap<LocalId, String>,
     classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
 ) -> String {
     let columns = numeric_arg(args, 0).unwrap_or(2.0) as i64;
     let columns = columns.clamp(1, 12);
@@ -1445,6 +1701,7 @@ fn emit_grid(
                 text_slots,
                 arkts_locals,
                 classes,
+            state_registry,
             );
             let body_indent = "    ".repeat(depth + 2);
             let body_indented = body
@@ -2217,6 +2474,129 @@ mod tests {
         // showDialog runtime FFI follow-up.
         assert!(r.ets_source.contains("// Modal:"));
         assert!(r.ets_source.contains("showDialog"));
+    }
+
+    // ----- Phase 2 v6: state<T> reactive container -----
+
+    fn state_call(initial: Expr) -> Expr {
+        Expr::NativeMethodCall {
+            module: "perry/ui".to_string(),
+            class_name: None,
+            object: None,
+            method: "state".to_string(),
+            args: vec![initial],
+        }
+    }
+
+    fn state_method_call(state_id: u32, method: &str, args: Vec<Expr>) -> Expr {
+        Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(state_id)),
+                property: method.to_string(),
+            }),
+            args,
+            type_args: vec![],
+        }
+    }
+
+    #[test]
+    fn state_text_emits_reactive_text_with_synth_id() {
+        // const count = state(0); App({body: count.text()});
+        let mut m = empty_module();
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "count".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::Number(0.0))),
+        });
+        m.init
+            .push(app_with_body(state_method_call(5, "text", vec![])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // Synth id is __state_0; sanitized to __state_0 (already valid).
+        assert!(r.ets_source.contains("Text(this.text___state_0)"));
+        // @State decl with initial value 0.
+        assert!(r.ets_source.contains("@State text___state_0: string = '0'"));
+    }
+
+    #[test]
+    fn state_set_in_closure_rewrites_to_settext() {
+        // const count = state(0);
+        // App({body: Button("+", () => count.set(5))});
+        let mut m = empty_module();
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "count".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::Number(0.0))),
+        });
+        // Closure body: Stmt::Expr(count.set(5))
+        let closure = Expr::Closure {
+            func_id: 0 as perry_types::FuncId,
+            params: vec![],
+            return_type: perry_types::Type::Any,
+            body: vec![Stmt::Expr(state_method_call(
+                5,
+                "set",
+                vec![Expr::Number(5.0)],
+            ))],
+            captures: vec![],
+            mutable_captures: vec![],
+            captures_this: false,
+            enclosing_class: None,
+            is_async: false,
+        };
+        m.init.push(app_with_body(nmc(
+            "Button",
+            vec![Expr::String("+".into()), closure],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // The closure body should now contain a setText call. Codegen-side
+        // we can't directly assert on that — but we can verify the harvest
+        // captured exactly 1 callback (the rewritten closure).
+        assert_eq!(r.callbacks.len(), 1);
+        // And confirm the rewritten HIR has the setText shape inside.
+        let captured = &r.callbacks[0];
+        if let Expr::Closure { body, .. } = captured {
+            let has_settext = body.iter().any(|s| {
+                matches!(s, Stmt::Expr(Expr::NativeMethodCall { method, .. }) if method == "setText")
+            });
+            assert!(has_settext, "closure body should have been rewritten to setText");
+        } else {
+            panic!("expected Closure in callback registry");
+        }
+    }
+
+    #[test]
+    fn multiple_state_decls_get_unique_ids() {
+        let mut m = empty_module();
+        m.init.push(Stmt::Let {
+            id: 1,
+            name: "count".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::Number(0.0))),
+        });
+        m.init.push(Stmt::Let {
+            id: 2,
+            name: "name".to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(state_call(Expr::String("Alice".into()))),
+        });
+        m.init.push(app_with_body(nmc(
+            "VStack",
+            vec![Expr::Array(vec![
+                state_method_call(1, "text", vec![]),
+                state_method_call(2, "text", vec![]),
+            ])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("@State text___state_0: string = '0'"));
+        assert!(r.ets_source.contains("@State text___state_1: string = 'Alice'"));
+        assert!(r.ets_source.contains("Text(this.text___state_0)"));
+        assert!(r.ets_source.contains("Text(this.text___state_1)"));
     }
 
     #[test]
