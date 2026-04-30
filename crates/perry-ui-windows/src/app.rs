@@ -18,11 +18,15 @@ use windows::Win32::UI::Controls::ICC_STANDARD_CLASSES;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Controls::INITCOMMONCONTROLSEX;
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext;
-#[cfg(target_os = "windows")]
-use windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
-#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::*;
+// NOTE: SetProcessDpiAwarenessContext + GetDpiForSystem are deliberately NOT
+// imported from `windows::Win32::UI::HiDpi` here. Hard-importing them produces
+// link-time IAT entries that the OS resolves before main() runs. On Win7 those
+// exports don't exist → the loader fails the process with "entry point not
+// found in user32.dll" before any Rust code runs. For #303 we need the binary
+// to start on Win7, so the Win10 DPI APIs are resolved lazily via
+// LoadLibraryW + GetProcAddress in `crate::dpi_compat`. See
+// `docs/src/platforms/windows-7.md`.
 
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
@@ -42,20 +46,14 @@ const TEST_EXIT_TIMER_ID: usize = 9997;
 static DPI_SCALE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Get the system DPI for the primary monitor.
+///
+/// Routes through `crate::dpi_compat::get_system_dpi_compat`, which uses
+/// `GetDpiForSystem` (Win10 1607+) when available and falls back to
+/// `GetDC + GetDeviceCaps` (Win2000+) on older systems including Win7. See
+/// `dpi_compat.rs` for why this can't be a hard import (issue #303).
 #[cfg(target_os = "windows")]
 fn get_system_dpi() -> u32 {
-    unsafe {
-        // GetDpiForSystem requires Windows 10 1607+
-        extern "system" {
-            fn GetDpiForSystem() -> u32;
-        }
-        let dpi = GetDpiForSystem();
-        if dpi > 0 {
-            dpi
-        } else {
-            96
-        }
-    }
+    crate::dpi_compat::get_system_dpi_compat()
 }
 
 /// Store the DPI scale factor for use by font/widget sizing.
@@ -158,8 +156,9 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     #[cfg(target_os = "windows")]
     {
         unsafe {
-            // Enable DPI awareness
-            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            // Enable DPI awareness — Win10 1607+ best, Win8.1 ok, Win7 silent
+            // fallback to system DPI. See dpi_compat.rs (issue #303).
+            crate::dpi_compat::set_process_dpi_awareness_compat();
 
             // Scale window size by system DPI (96 = 100%, 144 = 150%, 192 = 200%)
             let dpi = get_system_dpi();

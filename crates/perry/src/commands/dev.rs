@@ -295,6 +295,7 @@ fn build_once(
         minimal_stdlib: false,
         no_auto_optimize: false,
         no_cache: false,
+        min_windows_version: "10".to_string(),
     };
     parse_cache.reset_counters();
     let result = super::compile::run_with_parse_cache(

@@ -213,11 +213,27 @@ pub(super) fn find_perry_windows_sdk() -> Option<PathBuf> {
 /// window that would otherwise flash alongside the app window. Passing neither
 /// flag lets the linker pick a default, which historically resolved to `WINDOWS`
 /// for Perry builds and silently discarded all `console.log` output (issue #120).
-pub(super) fn windows_pe_subsystem_flag(needs_ui: bool) -> &'static str {
-    if needs_ui {
+///
+/// `min_windows_version` accepts `"7"`, `"8"`, or `"10"` (default). Per the
+/// PE subsystem ABI: `,5.1` = Win7-compatible, `,6.02` = Win8-compatible,
+/// no suffix = linker default (Win8+ on modern toolchains). The PE subsystem
+/// version is just the loader-side declaration of "this binary claims to run
+/// on this version" — the binary still has to actually avoid calling APIs
+/// newer than that version. Perry's UI runtime handles the API side via
+/// `crates/perry-ui-windows/src/dpi_compat.rs` (issue #303).
+pub(super) fn windows_pe_subsystem_flag(needs_ui: bool, min_windows_version: &str) -> String {
+    let base = if needs_ui {
         "/SUBSYSTEM:WINDOWS"
     } else {
         "/SUBSYSTEM:CONSOLE"
+    };
+    match min_windows_version {
+        "7" => format!("{},5.1", base),
+        "8" => format!("{},6.02", base),
+        // "10" or anything else (caller is expected to validate) — no suffix,
+        // linker picks its default. Preserves current behavior for users
+        // who don't pass --min-windows-version.
+        _ => base.to_string(),
     }
 }
 

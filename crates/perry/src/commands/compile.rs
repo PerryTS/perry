@@ -172,6 +172,27 @@ pub struct CompileArgs {
     /// around a suspected stale cache.
     #[arg(long)]
     pub no_cache: bool,
+
+    /// Minimum Windows version the compiled executable must run on.
+    /// Accepted values: `7`, `8`, `10` (default `10`). Ignored on every
+    /// non-Windows target.
+    ///
+    /// `10` (default) preserves current behavior — the linker picks its
+    /// default subsystem version (Win8+).
+    ///
+    /// `7` emits the linker subsystem suffix `,5.1` (e.g.
+    /// `/SUBSYSTEM:WINDOWS,5.1`) so the PE marks itself Win7-compatible.
+    /// Perry's UI runtime falls back through the DPI API tiers
+    /// (Win10 → Win8.1 → Vista) at startup via lazy GetProcAddress.
+    /// Caveats: programs that import any `.js` module pull V8/deno_core,
+    /// which is unconditionally Win10+; cosmetic effects like dark
+    /// titlebars and rounded corners silently no-op on Win7. See
+    /// `docs/src/platforms/windows-7.md` for the full story (issue #303).
+    ///
+    /// `8` emits `,6.02` — useful when a deployment baseline is Win8/10
+    /// without needing Win7.
+    #[arg(long, default_value = "10")]
+    pub min_windows_version: String,
 }
 
 /// Information about a JavaScript module that will be interpreted at runtime
@@ -245,6 +266,13 @@ pub struct CompilationContext {
     /// entries without re-reading the source in the codegen loop. Mirrors the
     /// djb2 scheme already used by `build_optimized_libs` (see prior art).
     pub module_source_hashes: HashMap<PathBuf, u64>,
+    /// Minimum Windows version for `--target windows` builds. One of `"7"`,
+    /// `"8"`, `"10"`. `"10"` (default) means "no subsystem version suffix";
+    /// `"7"` and `"8"` emit `,5.1` / `,6.02` on the linker `/SUBSYSTEM:` flag
+    /// so the resulting PE marks itself runnable on the older OS. See issue
+    /// #303 + `docs/src/platforms/windows-7.md`. Ignored on non-Windows
+    /// targets.
+    pub min_windows_version: String,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -282,6 +310,7 @@ impl CompilationContext {
             uses_crypto_builtins: false,
             needs_thread: false,
             module_source_hashes: HashMap::new(),
+            min_windows_version: "10".to_string(),
         }
     }
 }
@@ -758,6 +787,23 @@ pub fn run_with_parse_cache(
         ctx.needs_geisterhand = true;
         if let Some(port) = args.geisterhand_port {
             ctx.geisterhand_port = port;
+        }
+    }
+
+    // Validate --min-windows-version. Accepted: "7", "8", "10". Anything
+    // else is a hard error so typos like `--min-windows-version=11` fail
+    // loudly instead of silently behaving like the default. See issue #303
+    // and `docs/src/platforms/windows-7.md`.
+    match args.min_windows_version.as_str() {
+        "7" | "8" | "10" => {
+            ctx.min_windows_version = args.min_windows_version.clone();
+        }
+        other => {
+            anyhow::bail!(
+                "--min-windows-version: expected '7', '8', or '10', got '{}'. \
+                 See docs/src/platforms/windows-7.md for the trade-offs.",
+                other
+            );
         }
     }
 
@@ -4951,11 +4997,47 @@ mod windows_link_tests {
 
     #[test]
     fn cli_build_uses_console_subsystem() {
-        assert_eq!(windows_pe_subsystem_flag(false), "/SUBSYSTEM:CONSOLE");
+        assert_eq!(windows_pe_subsystem_flag(false, "10"), "/SUBSYSTEM:CONSOLE");
     }
 
     #[test]
     fn ui_build_uses_windows_subsystem() {
-        assert_eq!(windows_pe_subsystem_flag(true), "/SUBSYSTEM:WINDOWS");
+        assert_eq!(windows_pe_subsystem_flag(true, "10"), "/SUBSYSTEM:WINDOWS");
+    }
+
+    // Issue #303: --min-windows-version=7 emits the ,5.1 suffix that marks
+    // the PE as Win7-compatible.
+    #[test]
+    fn min_windows_7_appends_5_1_suffix() {
+        assert_eq!(
+            windows_pe_subsystem_flag(false, "7"),
+            "/SUBSYSTEM:CONSOLE,5.1"
+        );
+        assert_eq!(
+            windows_pe_subsystem_flag(true, "7"),
+            "/SUBSYSTEM:WINDOWS,5.1"
+        );
+    }
+
+    // Issue #303: --min-windows-version=8 emits the ,6.02 suffix.
+    #[test]
+    fn min_windows_8_appends_6_02_suffix() {
+        assert_eq!(
+            windows_pe_subsystem_flag(false, "8"),
+            "/SUBSYSTEM:CONSOLE,6.02"
+        );
+        assert_eq!(
+            windows_pe_subsystem_flag(true, "8"),
+            "/SUBSYSTEM:WINDOWS,6.02"
+        );
+    }
+
+    // Anything other than 7/8/10 falls through to no suffix — caller-side
+    // CompileArgs validation rejects unknown values before reaching the
+    // linker, so this branch is unreachable in practice but documented.
+    #[test]
+    fn unknown_min_windows_falls_through_to_default() {
+        assert_eq!(windows_pe_subsystem_flag(false, "11"), "/SUBSYSTEM:CONSOLE");
+        assert_eq!(windows_pe_subsystem_flag(true, ""), "/SUBSYSTEM:WINDOWS");
     }
 }

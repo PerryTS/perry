@@ -4,7 +4,7 @@ Perry compiles TypeScript apps for Windows using the Win32 API.
 
 ## Requirements
 
-- Windows 10 or later
+- Windows 10 or later by default (Windows 7 SP1 / Windows 8 supported via `--min-windows-version=7|8` — see [Windows 7 Compatibility](./windows-7.md) for the trade-offs)
 - A linker toolchain — either of these two options:
 
 ### Option A — Lightweight (recommended, ~1.5 GB, no Visual Studio)

@@ -592,8 +592,11 @@ pub(super) fn build_and_run_link(
         // /ENTRY:mainCRTStartup works for both subsystems: Perry emits
         // `int main()` and the MSVC CRT invokes it regardless of subsystem.
         // See windows_pe_subsystem_flag() for subsystem selection rationale.
-        c.arg(windows_pe_subsystem_flag(ctx.needs_ui))
-            .arg("/ENTRY:mainCRTStartup")
+        c.arg(windows_pe_subsystem_flag(
+            ctx.needs_ui,
+            &ctx.min_windows_version,
+        ))
+        .arg("/ENTRY:mainCRTStartup")
             .arg("/NOLOGO")
             // Perry generates large init functions for TS modules (one function
             // per module). Large codebases (100+ modules) can overflow the

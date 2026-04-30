@@ -184,6 +184,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         minimal_stdlib: false,
         no_auto_optimize: false,
         no_cache: false,
+        min_windows_version: "10".to_string(),
     };
 
     let result = super::compile::run(compile_args, format, use_color, verbose)?;

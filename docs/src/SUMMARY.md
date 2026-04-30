@@ -55,6 +55,7 @@
 - [watchOS](platforms/watchos.md)
 - [Android](platforms/android.md)
 - [Windows](platforms/windows.md)
+  - [Windows 7 Compatibility](platforms/windows-7.md)
 - [Linux (GTK4)](platforms/linux.md)
 - [Web](platforms/web.md)
 - [WebAssembly](platforms/wasm.md)
