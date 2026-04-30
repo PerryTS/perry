@@ -88,7 +88,7 @@ tick if the signal hasn't arrived.
 | tvOS | AVPlayer + Siri Remote play/pause/skip | **Implemented** + remote |
 | visionOS | AVPlayer + UIImage artwork | **Implemented** + lock-screen |
 | Android | `android.media.MediaPlayer` via JNI | **Implemented** (lock-screen via `MediaSessionCompat` is a follow-up) |
-| GTK4 / Linux | GStreamer `playbin` element | **Implemented** (MPRIS lock-screen is a follow-up) |
+| GTK4 / Linux | GStreamer `playbin` element + MPRIS D-Bus | **Implemented** + lock-screen |
 | Windows | `Windows.Media.Playback.MediaPlayer` (WinRT) | **Implemented** (`SystemMediaTransportControls` lock-screen is a follow-up) |
 | watchOS | AVPlayer (limited; `WKApplication` Now Playing has a different shape) | Stub |
 | HarmonyOS | `@ohos.multimedia.media.AVPlayer` via napi | Stub |
@@ -98,6 +98,16 @@ Stub platforms link cleanly against the same FFI surface — code that
 imports `perry/media` compiles on every target. `createPlayer` returns
 `0` on a stub backend so `if (player === 0)` is the canonical "feature
 not available here" check.
+
+On Linux, `setNowPlaying` exposes the player to the desktop via MPRIS
+(`org.mpris.MediaPlayer2.perry-<pid>` on the session bus). GNOME Shell,
+KDE Plasma, `playerctl`, and any Bluetooth-headphone media-key bridge
+that speaks MPRIS will see the metadata and route Play / Pause /
+PlayPause / Stop / Seek / SetPosition back to the player. The MPRIS
+server is lazy-bootstrapped on the first `setNowPlaying` call so apps
+that don't need lock-screen integration don't pay the zbus startup
+cost. `Next` / `Previous` are no-ops (single-track playback model);
+playlists are an app-level concern.
 
 ### Threading notes
 

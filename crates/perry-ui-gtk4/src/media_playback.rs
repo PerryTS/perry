@@ -11,6 +11,16 @@
 //! both the GStreamer EOS message AND a `position ≥ duration - 0.25s`
 //! fallback set the same `ended` flag, so the JS state-change callback
 //! fires once per track even if EOS is dropped (rare, but cheap insurance).
+//!
+//! Lock-screen / system media-key integration (#366) goes through MPRIS
+//! — the canonical Linux desktop spec exposed over D-Bus as
+//! `org.mpris.MediaPlayer2.Player`. The MPRIS server runs on a dedicated
+//! thread with a tokio current-thread runtime owning the zbus connection;
+//! D-Bus method calls (Play / Pause / Seek …) post commands into a
+//! channel that the GLib poll tick drains, so all GStreamer pipeline
+//! mutation stays on the main thread (pipelines are stored in a
+//! thread_local). `set_now_playing` and state changes push the other
+//! direction via a sync `properties_changed` call into the runtime.
 
 use gstreamer::prelude::*;
 use std::cell::RefCell;
@@ -257,17 +267,21 @@ pub fn on_time_update(handle: f64, closure: f64) {
 
 pub fn set_now_playing(
     _handle: f64,
-    _title_ptr: *const u8,
-    _artist_ptr: *const u8,
-    _album_ptr: *const u8,
-    _artwork_ptr: *const u8,
+    title_ptr: *const u8,
+    artist_ptr: *const u8,
+    album_ptr: *const u8,
+    artwork_ptr: *const u8,
 ) {
-    // MPRIS is the canonical Linux lock-screen / media-key protocol.
-    // It's a D-Bus interface (org.mpris.MediaPlayer2.Player) — we'd
-    // expose ourselves as an MPRIS service so GNOME / KDE / playerctl
-    // can issue play/pause/skip events. Tracked as a #351 follow-up;
-    // the metadata is silently dropped here so callers don't have to
-    // feature-detect.
+    let title = str_from_header(title_ptr).to_string();
+    let artist = str_from_header(artist_ptr).to_string();
+    let album = str_from_header(album_ptr).to_string();
+    let artwork = str_from_header(artwork_ptr).to_string();
+    #[cfg(target_os = "linux")]
+    mpris::push_now_playing(title, artist, album, artwork);
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (title, artist, album, artwork);
+    }
 }
 
 pub fn destroy(handle: f64) {
@@ -407,6 +421,10 @@ fn poll_tick() {
                 .unwrap_or(0.0);
             let dur = entry.duration_seconds;
 
+            if state_changed {
+                #[cfg(target_os = "linux")]
+                mpris::push_playback_status(new_state);
+            }
             if let Some(cb) = on_state {
                 fire_state_callback(cb, new_state);
             }
@@ -415,6 +433,8 @@ fn poll_tick() {
             }
         }
     });
+    #[cfg(target_os = "linux")]
+    mpris::drain_commands();
 }
 
 fn derive_state(entry: &PlayerEntry) -> MediaState {
@@ -469,5 +489,390 @@ fn fire_time_callback(closure_f64: f64, current: f64, duration: f64) {
         let _ = js_promise_run_microtasks();
         let closure_ptr = js_nanbox_get_pointer(closure_f64);
         let _ = js_closure_call2(closure_ptr as *const u8, current, duration);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn first_active_handle() -> Option<f64> {
+    PLAYERS.with(|p| {
+        let players = p.borrow();
+        players
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.is_some())
+            .map(|(i, _)| (i + 1) as f64)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn current_position_seconds(handle: f64) -> f64 {
+    with_entry(handle, |entry| {
+        entry
+            .pipeline
+            .query_position::<gstreamer::ClockTime>()
+            .map(|t| t.nseconds() as f64 / 1_000_000_000.0)
+            .unwrap_or(0.0)
+    })
+    .unwrap_or(0.0)
+}
+
+#[cfg(target_os = "linux")]
+mod mpris {
+    //! D-Bus MPRIS server. Lazy-bootstrapped on the first
+    //! `set_now_playing` call so apps that don't use Now Playing don't
+    //! pay the zbus / tokio-runtime startup cost.
+    //!
+    //! Threading: the zbus connection lives on a dedicated tokio
+    //! current-thread runtime. The `PlayerInterface` impl runs there
+    //! and forwards method calls (Play / Pause / Seek …) into a
+    //! `std::sync::mpsc` queue that `poll_tick` drains on the main
+    //! GLib thread — that's where the GStreamer pipelines live
+    //! (thread_local PLAYERS), so all pipeline mutation stays on
+    //! the main thread.
+    //!
+    //! Property pushes (Metadata / PlaybackStatus) go the other way
+    //! through a tokio mpsc channel: the main thread enqueues, the
+    //! runtime drains and calls `Server::properties_changed` from
+    //! within an async context.
+
+    use super::{first_active_handle, MediaState};
+    use mpris_server::{
+        zbus::{fdo, Result as ZResult},
+        LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property,
+        RootInterface, Server, Time, TrackId, Volume,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{mpsc, Mutex, OnceLock};
+    use tokio::sync::mpsc as tmpsc;
+
+    /// D-Bus → main thread.
+    enum Command {
+        Play,
+        Pause,
+        PlayPause,
+        Stop,
+        /// offset in seconds (signed)
+        SeekRelative(f64),
+        /// absolute position in seconds
+        SeekAbsolute(f64),
+    }
+
+    /// Main thread → tokio runtime.
+    enum Update {
+        Metadata(Metadata),
+        Status(PlaybackStatus),
+    }
+
+    static CMD_TX: OnceLock<Mutex<mpsc::Sender<Command>>> = OnceLock::new();
+    static CMD_RX: OnceLock<Mutex<mpsc::Receiver<Command>>> = OnceLock::new();
+    static UPDATE_TX: OnceLock<tmpsc::UnboundedSender<Update>> = OnceLock::new();
+    static INIT_FAILED: AtomicBool = AtomicBool::new(false);
+    static TRACKID_COUNTER: AtomicU64 = AtomicU64::new(0);
+    static LAST_STATUS: Mutex<Option<PlaybackStatus>> = Mutex::new(None);
+
+    fn ensure_started() -> bool {
+        if INIT_FAILED.load(Ordering::Relaxed) {
+            return false;
+        }
+        if UPDATE_TX.get().is_some() {
+            return true;
+        }
+        // Single-shot initializer — racing callers either both succeed
+        // or both fail (the OnceLock writes are atomic).
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
+        let _ = CMD_TX.set(Mutex::new(cmd_tx));
+        let _ = CMD_RX.set(Mutex::new(cmd_rx));
+
+        let (utx, urx) = tmpsc::unbounded_channel::<Update>();
+        // The runtime owns urx; we share utx via OnceLock.
+        if UPDATE_TX.set(utx).is_err() {
+            return true; // another thread won the race
+        }
+
+        let pid = std::process::id();
+        std::thread::Builder::new()
+            .name("perry-mpris".into())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(r) => r,
+                    Err(_) => {
+                        INIT_FAILED.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                };
+                rt.block_on(async move {
+                    run_server(pid, urx).await;
+                });
+            })
+            .map(|_| true)
+            .unwrap_or_else(|_| {
+                INIT_FAILED.store(true, Ordering::Relaxed);
+                false
+            })
+    }
+
+    async fn run_server(pid: u32, mut urx: tmpsc::UnboundedReceiver<Update>) {
+        // Bus name pattern `org.mpris.MediaPlayer2.<suffix>` — Server
+        // prepends the prefix internally, so we only supply the
+        // suffix (`perry-<pid>`).
+        let suffix = format!("perry-{}", pid);
+        let server = match Server::new(&suffix, PerryPlayer).await {
+            Ok(s) => s,
+            Err(_) => {
+                INIT_FAILED.store(true, Ordering::Relaxed);
+                return;
+            }
+        };
+        while let Some(update) = urx.recv().await {
+            let prop = match update {
+                Update::Metadata(m) => Property::Metadata(m),
+                Update::Status(s) => Property::PlaybackStatus(s),
+            };
+            let _ = server.properties_changed([prop]).await;
+        }
+    }
+
+    pub fn push_now_playing(title: String, artist: String, album: String, artwork: String) {
+        if !ensure_started() {
+            return;
+        }
+        let trackid_str = format!(
+            "/org/perry/track/{}",
+            TRACKID_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut builder = Metadata::builder().title(title);
+        if !artist.is_empty() {
+            // Spec: xesam:artist is a string list even for a single artist.
+            builder = builder.artist([artist]);
+        }
+        if !album.is_empty() {
+            builder = builder.album(album);
+        }
+        if !artwork.is_empty() {
+            builder = builder.art_url(artwork);
+        }
+        if let Ok(tid) = TrackId::try_from(trackid_str.as_str()) {
+            builder = builder.trackid(tid);
+        }
+        let metadata = builder.build();
+        if let Some(tx) = UPDATE_TX.get() {
+            let _ = tx.send(Update::Metadata(metadata));
+        }
+    }
+
+    pub fn push_playback_status(state: MediaState) {
+        let status = match state {
+            MediaState::Playing => PlaybackStatus::Playing,
+            MediaState::Paused | MediaState::Ready => PlaybackStatus::Paused,
+            MediaState::Idle | MediaState::Loading | MediaState::Ended | MediaState::Error => {
+                PlaybackStatus::Stopped
+            }
+        };
+        // Don't push if MPRIS hasn't been initialised yet — we only
+        // bring up the D-Bus server on the first set_now_playing call,
+        // and a state change before that means the app isn't using
+        // Now Playing at all.
+        if UPDATE_TX.get().is_none() {
+            return;
+        }
+        // De-dupe identical status pushes; the GStreamer poll fires
+        // every 100 ms and most ticks don't change state, but
+        // derive_state() can still flip Loading↔Ready spuriously.
+        let mut last = LAST_STATUS.lock().unwrap();
+        if *last == Some(status) {
+            return;
+        }
+        *last = Some(status);
+        if let Some(tx) = UPDATE_TX.get() {
+            let _ = tx.send(Update::Status(status));
+        }
+    }
+
+    /// Drain any pending D-Bus commands and dispatch them to the
+    /// first live player. Called from `poll_tick` on the main thread.
+    pub fn drain_commands() {
+        let rx = match CMD_RX.get() {
+            Some(r) => r,
+            None => return,
+        };
+        let rx = rx.lock().unwrap();
+        while let Ok(cmd) = rx.try_recv() {
+            let handle = match first_active_handle() {
+                Some(h) => h,
+                None => continue,
+            };
+            match cmd {
+                Command::Play => super::play(handle),
+                Command::Pause => super::pause(handle),
+                Command::PlayPause => {
+                    if super::is_playing(handle) >= 0.5 {
+                        super::pause(handle);
+                    } else {
+                        super::play(handle);
+                    }
+                }
+                Command::Stop => super::stop(handle),
+                Command::SeekRelative(offset) => {
+                    let cur = super::current_position_seconds(handle);
+                    super::seek(handle, (cur + offset).max(0.0));
+                }
+                Command::SeekAbsolute(pos) => super::seek(handle, pos.max(0.0)),
+            }
+        }
+    }
+
+    fn send_cmd(cmd: Command) {
+        if let Some(tx) = CMD_TX.get() {
+            let _ = tx.lock().unwrap().send(cmd);
+        }
+    }
+
+    struct PerryPlayer;
+
+    impl RootInterface for PerryPlayer {
+        async fn raise(&self) -> fdo::Result<()> {
+            Ok(())
+        }
+        async fn quit(&self) -> fdo::Result<()> {
+            Ok(())
+        }
+        async fn can_quit(&self) -> fdo::Result<bool> {
+            Ok(false)
+        }
+        async fn fullscreen(&self) -> fdo::Result<bool> {
+            Ok(false)
+        }
+        async fn set_fullscreen(&self, _fullscreen: bool) -> ZResult<()> {
+            Ok(())
+        }
+        async fn can_set_fullscreen(&self) -> fdo::Result<bool> {
+            Ok(false)
+        }
+        async fn can_raise(&self) -> fdo::Result<bool> {
+            Ok(false)
+        }
+        async fn has_track_list(&self) -> fdo::Result<bool> {
+            Ok(false)
+        }
+        async fn identity(&self) -> fdo::Result<String> {
+            Ok("Perry".into())
+        }
+        async fn desktop_entry(&self) -> fdo::Result<String> {
+            Ok(String::new())
+        }
+        async fn supported_uri_schemes(&self) -> fdo::Result<Vec<String>> {
+            Ok(vec!["http".into(), "https".into(), "file".into()])
+        }
+        async fn supported_mime_types(&self) -> fdo::Result<Vec<String>> {
+            Ok(vec![
+                "audio/mpeg".into(),
+                "audio/aac".into(),
+                "audio/ogg".into(),
+                "audio/flac".into(),
+                "audio/wav".into(),
+                "audio/x-wav".into(),
+            ])
+        }
+    }
+
+    impl PlayerInterface for PerryPlayer {
+        async fn next(&self) -> fdo::Result<()> {
+            Ok(())
+        }
+        async fn previous(&self) -> fdo::Result<()> {
+            Ok(())
+        }
+        async fn pause(&self) -> fdo::Result<()> {
+            send_cmd(Command::Pause);
+            Ok(())
+        }
+        async fn play_pause(&self) -> fdo::Result<()> {
+            send_cmd(Command::PlayPause);
+            Ok(())
+        }
+        async fn stop(&self) -> fdo::Result<()> {
+            send_cmd(Command::Stop);
+            Ok(())
+        }
+        async fn play(&self) -> fdo::Result<()> {
+            send_cmd(Command::Play);
+            Ok(())
+        }
+        async fn seek(&self, offset: Time) -> fdo::Result<()> {
+            send_cmd(Command::SeekRelative(offset.as_micros() as f64 / 1_000_000.0));
+            Ok(())
+        }
+        async fn set_position(&self, _track_id: TrackId, position: Time) -> fdo::Result<()> {
+            send_cmd(Command::SeekAbsolute(
+                position.as_micros() as f64 / 1_000_000.0,
+            ));
+            Ok(())
+        }
+        async fn open_uri(&self, _uri: String) -> fdo::Result<()> {
+            Ok(())
+        }
+        async fn playback_status(&self) -> fdo::Result<PlaybackStatus> {
+            Ok(LAST_STATUS
+                .lock()
+                .unwrap()
+                .unwrap_or(PlaybackStatus::Stopped))
+        }
+        async fn loop_status(&self) -> fdo::Result<LoopStatus> {
+            Ok(LoopStatus::None)
+        }
+        async fn set_loop_status(&self, _loop_status: LoopStatus) -> ZResult<()> {
+            Ok(())
+        }
+        async fn rate(&self) -> fdo::Result<PlaybackRate> {
+            Ok(1.0)
+        }
+        async fn set_rate(&self, _rate: PlaybackRate) -> ZResult<()> {
+            Ok(())
+        }
+        async fn shuffle(&self) -> fdo::Result<bool> {
+            Ok(false)
+        }
+        async fn set_shuffle(&self, _shuffle: bool) -> ZResult<()> {
+            Ok(())
+        }
+        async fn metadata(&self) -> fdo::Result<Metadata> {
+            Ok(Metadata::new())
+        }
+        async fn volume(&self) -> fdo::Result<Volume> {
+            Ok(1.0)
+        }
+        async fn set_volume(&self, _volume: Volume) -> ZResult<()> {
+            Ok(())
+        }
+        async fn position(&self) -> fdo::Result<Time> {
+            Ok(Time::ZERO)
+        }
+        async fn minimum_rate(&self) -> fdo::Result<PlaybackRate> {
+            Ok(1.0)
+        }
+        async fn maximum_rate(&self) -> fdo::Result<PlaybackRate> {
+            Ok(1.0)
+        }
+        async fn can_go_next(&self) -> fdo::Result<bool> {
+            Ok(false)
+        }
+        async fn can_go_previous(&self) -> fdo::Result<bool> {
+            Ok(false)
+        }
+        async fn can_play(&self) -> fdo::Result<bool> {
+            Ok(true)
+        }
+        async fn can_pause(&self) -> fdo::Result<bool> {
+            Ok(true)
+        }
+        async fn can_seek(&self) -> fdo::Result<bool> {
+            Ok(true)
+        }
+        async fn can_control(&self) -> fdo::Result<bool> {
+            Ok(true)
+        }
     }
 }
