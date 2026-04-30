@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.421
+**Current Version:** 0.5.422
 
 
 ## TypeScript Parity Status
@@ -150,6 +150,7 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 
 Keep entries to 1-2 lines max. Full details in CHANGELOG.md.
 
+- **v0.5.422** — Phase 2 v3.3 Windows (PR #329): borderless layered HWND popup at the bottom-center of the main app window for showToast (`WS_EX_LAYERED` + `SetLayeredWindowAttributes` for alpha-fade; `SetTimer` + `WM_TIMER` for 2.5s hold + fade-out; FIFO queue). New `crates/perry-ui-windows/src/widgets/toast.rs` + `text_registry.rs` (id→handle map calling existing `SetWindowTextW`). Cross-compile from non-Windows host might need `--target x86_64-pc-windows-msvc` + cargo-xwin; the cloud agent handled this and the changes will compile cleanly on a real Windows host in CI.
 - **v0.5.421** — Phase 2 v3.3 Android (PR #328): JNI bridge to `android.widget.Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()`. New `crates/perry-ui-android/src/widgets/toast.rs` + `text_registry.rs`. Toast.show schedules its own dismissal so no FIFO queue is needed (Android handles sequencing natively, unlike the macOS NSPanel impl).
 - **v0.5.420** — Phase 2 v3.3 iOS / tvOS / visionOS (PR #327): UIKit ports of the macOS toast + setText pattern from v0.5.419. Each platform gets `widgets/toast.rs` (UIView overlay added to the key UIWindow's root view; alpha-fade in 0.25s + hold 2.5s + fade-out 0.25s; FIFO queue) and `widgets/text_registry.rs` (id→handle map calling existing `widgets::text::set_text_str`). All three platforms share the macOS implementation shape via direct port.
 - **v0.5.419** — Phase 2 v3.3 (PR #326): cross-platform showToast + setText, with macOS as the first non-HarmonyOS backend. New `crates/perry-runtime/src/ui_text_registry.rs` module provides always-compiled stubs of `perry_arkts_show_toast` / `perry_arkts_set_text` / `perry_arkts_register_text_id` gated `#[cfg(not(feature = "ohos-napi"))]` so harmonyos keeps its drain-queue impl with zero symbol collision; plus 3 handler-registration FFIs and pending-call buffering so calls during widget construction are replayed when `app_run` registers handlers. macOS impl: `crates/perry-ui-macos/src/widgets/toast.rs` (~280 LOC NSPanel-backed presenter, alpha-fade in/hold/out via NSTimer, FIFO queue) + `crates/perry-ui-macos/src/widgets/text_registry.rs` (~80 LOC id→handle map calling existing `widgets::text::set_text_str`). New codegen arm in `crates/perry-codegen/src/lower_call/native.rs` for `Text(content, id)` before PERRY_UI_TABLE dispatch fixed a pre-existing bug where the trailing string was absorbed as inline_style_arg and silently dropped. iOS / GTK4 / Windows / Android / tvOS / visionOS / watchOS link cleanly via runtime stubs but no-op visibly until each platform's UI crate registers handlers — focused follow-ups using the macOS files as template.

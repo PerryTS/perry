@@ -270,6 +270,12 @@ pub fn app_set_body(app_handle: i64, root_handle: i64) {
 
 /// Run the app event loop (blocks until window closes).
 pub fn app_run(app_handle: i64) {
+    // Phase 2 v3.3: register cross-platform showToast / setText handlers so
+    // `perry_arkts_show_toast` and `perry_arkts_set_text` (defined in
+    // perry-runtime/src/ui_text_registry.rs) forward to our Win32
+    // borderless-popup toast presenter and SetWindowTextW text updater.
+    register_cross_platform_text_handlers();
+
     // Install pending keyboard shortcuts
     PENDING_SHORTCUTS.with(|pending| {
         let shortcuts: Vec<PendingShortcut> = pending.borrow_mut().drain(..).collect();
@@ -1206,4 +1212,36 @@ pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64)
 pub fn get_app_icon(_path_ptr: *const u8) -> i64 {
     // TODO: Full implementation with SHGetFileInfo + HICON -> bitmap conversion
     0
+}
+
+// ============================================================================
+// Phase 2 v3.3: cross-platform showToast / setText wiring.
+// ============================================================================
+
+extern "C" {
+    /// Defined in `perry-runtime/src/ui_text_registry.rs`. Stores the passed
+    /// handler in an AtomicPtr consulted by `perry_arkts_show_toast` on each
+    /// call. No-op when `ohos-napi` feature is active.
+    fn js_register_show_toast_handler(
+        f: extern "C" fn(msg_ptr: *const u8, msg_len: usize),
+    );
+    fn js_register_set_text_handler(
+        f: extern "C" fn(
+            id_ptr: *const u8,
+            id_len: usize,
+            val_ptr: *const u8,
+            val_len: usize,
+        ),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(crate::widgets::toast::show_toast_handler);
+        js_register_set_text_handler(crate::widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(crate::widgets::text_registry::register_text_id_handler);
+    }
 }
