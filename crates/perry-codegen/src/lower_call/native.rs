@@ -383,6 +383,54 @@ pub(crate) fn lower_native_method_call(
         );
     }
 
+    // Phase 2 v3.3: `Text(content, id)` reactive form. The 1-arg
+    // `Text(content)` row in PERRY_UI_TABLE doesn't know about the
+    // optional `id` second arg — pre-fix the table-call's "if args.len()
+    // == sig.args.len() + 1 ⇒ inline_style_arg" path absorbed it as a
+    // would-be style object, then `apply_inline_style` silently no-op'd
+    // because strings aren't object literals. Effect: id was dropped on
+    // the floor and `setText("counter", ...)` had nothing to look up.
+    //
+    // Fix: detect Text-with-id BEFORE the table lookup, lower the
+    // create call manually (mirroring the table-call shape), then
+    // emit `perry_arkts_register_text_id(handle, id)` so the platform
+    // UI lib can map id → widget handle. On harmonyos, codegen-arkts
+    // emits `@State text_<id>` directly into the .ets and the
+    // register_text_id call is a runtime no-op (see
+    // perry-runtime/src/ui_text_registry.rs).
+    if module == "perry/ui"
+        && method == "Text"
+        && object.is_none()
+        && args.len() == 2
+    {
+        let content_ptr = get_raw_string_ptr(ctx, &args[0])?;
+        ctx.pending_declares.push((
+            "perry_ui_text_create".to_string(),
+            I64,
+            vec![I64],
+        ));
+        let handle = {
+            let blk = ctx.block();
+            blk.call(I64, "perry_ui_text_create", &[(I64, &content_ptr)])
+        };
+        // Lower the id arg as a regular NaN-boxed JS value so the
+        // runtime's `decode_jsvalue_string` can read it through the
+        // standard StringHeader path (handles SSO + heap strings the
+        // same way, and matches the harmonyos drain-queue contract).
+        let id_d = lower_expr(ctx, &args[1])?;
+        ctx.pending_declares.push((
+            "perry_arkts_register_text_id".to_string(),
+            crate::types::VOID,
+            vec![I64, DOUBLE],
+        ));
+        let blk = ctx.block();
+        blk.call_void(
+            "perry_arkts_register_text_id",
+            &[(I64, &handle), (DOUBLE, &id_d)],
+        );
+        return Ok(nanbox_pointer_inline(blk, &handle));
+    }
+
     if module == "perry/ui"
         && object.is_none()
         && method != "App"

@@ -384,6 +384,13 @@ pub fn app_run(_app_handle: i64) {
     // Install crash reporting hooks before anything else
     crate::crash_log::install_crash_hooks();
 
+    // Phase 2 v3.3: register cross-platform showToast / setText handlers.
+    // These are no-ops on harmonyos (where the ArkUI drain-queue path
+    // owns the dispatch) but on macOS they wire `perry_arkts_show_toast`
+    // and `perry_arkts_set_text` to our native NSPanel toast presenter
+    // and NSTextField setStringValue: respectively.
+    register_cross_platform_text_handlers();
+
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     let app = NSApplication::sharedApplication(mtm);
@@ -1665,4 +1672,38 @@ pub fn get_app_icon(path_ptr: *const u8) -> i64 {
             widgets::register_widget(view)
         }
     })
+}
+
+// ============================================================================
+// Phase 2 v3.3: cross-platform showToast / setText wiring.
+// ============================================================================
+
+extern "C" {
+    /// Defined in `perry-runtime/src/ui_text_registry.rs`. Stores the
+    /// passed handler in an AtomicPtr that
+    /// `perry_arkts_show_toast`/`perry_arkts_set_text`/`perry_arkts_register_text_id`
+    /// consult on each call. No-op when `ohos-napi` is on (the drain-queue
+    /// path owns dispatch there).
+    fn js_register_show_toast_handler(
+        f: extern "C" fn(msg_ptr: *const u8, msg_len: usize),
+    );
+    fn js_register_set_text_handler(
+        f: extern "C" fn(
+            id_ptr: *const u8,
+            id_len: usize,
+            val_ptr: *const u8,
+            val_len: usize,
+        ),
+    );
+    fn js_register_text_id_handler(
+        f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
+    );
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(widgets::toast::show_toast_handler);
+        js_register_set_text_handler(widgets::text_registry::set_text_handler);
+        js_register_text_id_handler(widgets::text_registry::register_text_id_handler);
+    }
 }

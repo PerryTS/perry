@@ -76,6 +76,12 @@ pub mod static_plugins;
 #[cfg(not(feature = "stdlib"))]
 pub mod stdlib_stubs;
 pub mod thread;
+/// Cross-platform showToast / setText handler registry (Phase 2 v3.3).
+/// Always compiled — provides `perry_arkts_*` stubs on non-harmonyos
+/// builds so the codegen at lower_call/native.rs links cleanly without
+/// target-aware branching. UI crates register their handlers here at
+/// startup. See module docs for the ohos-napi gating story.
+pub mod ui_text_registry;
 #[cfg(all(target_os = "watchos", feature = "watchos-game-loop"))]
 pub mod watchos_game_loop;
 pub mod weakref;
