@@ -394,9 +394,12 @@ pub extern "C" fn js_string_match_all(
                 }
             }
 
-            // Store inner array as NaN-boxed pointer in outer array
-            let inner_ptr = inner as i64;
-            std::ptr::write(outer_elements.add(i), f64::from_bits(inner_ptr as u64));
+            // Store inner array as NaN-boxed POINTER_TAG in outer array slot —
+            // raw `inner as i64 -> f64::from_bits` would write a non-NaN-boxed
+            // double whose bits happen to alias the heap pointer; the codegen
+            // IndexGet path then reads `arr[i]` as a plain number and crashes
+            // when iterating with `for (const m of arr) m[1]`.
+            std::ptr::write(outer_elements.add(i), crate::value::js_nanbox_pointer(inner as i64));
         }
 
         outer

@@ -4997,6 +4997,25 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
+        // -------- string.matchAll(regex) --------
+        // Returns Array<Array<string>>, never null. Each inner array is
+        // [fullMatch, ...captureGroups], matching the shape Node produces
+        // when iterating `for (const m of s.matchAll(re))`. SSO-safe receiver
+        // unbox via `unbox_str_handle` for the same reason as `StringMatch`.
+        Expr::StringMatchAll { string, regex } => {
+            let s_box = lower_expr(ctx, string)?;
+            let r_box = lower_expr(ctx, regex)?;
+            let blk = ctx.block();
+            let s_handle = unbox_str_handle(blk, &s_box);
+            let r_handle = unbox_to_i64(blk, &r_box);
+            let result = blk.call(
+                I64,
+                "js_string_match_all",
+                &[(I64, &s_handle), (I64, &r_handle)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
         // -------- obj.field++ / obj.field-- (PropertyUpdate) --------
         // Lowered as: load → fadd/fsub 1.0 → store. Same as the
         // Update variant but for a property instead of a local.
