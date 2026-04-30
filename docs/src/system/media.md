@@ -89,7 +89,7 @@ tick if the signal hasn't arrived.
 | visionOS | AVPlayer + UIImage artwork | **Implemented** + lock-screen |
 | Android | `android.media.MediaPlayer` via JNI | **Implemented** (lock-screen via `MediaSessionCompat` is a follow-up) |
 | GTK4 / Linux | GStreamer `playbin` element + MPRIS D-Bus | **Implemented** + lock-screen |
-| Windows | `Windows.Media.Playback.MediaPlayer` (WinRT) | **Implemented** (`SystemMediaTransportControls` lock-screen is a follow-up) |
+| Windows | `Windows.Media.Playback.MediaPlayer` (WinRT) + `SystemMediaTransportControls` | **Implemented** + Now Playing |
 | watchOS | AVPlayer + AVAudioSession Playback + UIImage artwork | **Implemented** + Now Playing complication |
 | HarmonyOS | `@ohos.multimedia.media.AVPlayer` via napi | Stub |
 | Web | `<audio>` element + Media Session API | **Implemented** (`--target web`; `setNowPlaying` populates `navigator.mediaSession.metadata` + wires play / pause / seekto / seekforward / seekbackward action handlers) |

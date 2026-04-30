@@ -16,12 +16,16 @@
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use windows::core::HSTRING;
 use windows::Foundation::{TimeSpan, Uri};
 use windows::Media::Core::MediaSource;
 use windows::Media::Playback::{MediaPlaybackState, MediaPlayer};
+use windows::Media::{
+    MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControlsButton,
+};
+use windows::Storage::Streams::RandomAccessStreamReference;
 
 extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
@@ -70,6 +74,10 @@ struct PlayerEntry {
     duration_seconds: f64,
     on_state_change: Option<f64>,
     on_time_update: Option<f64>,
+    /// Last `MediaPlaybackStatus` we pushed to SMTC. Avoids redundant
+    /// vtable calls when the derived state hasn't changed buckets.
+    smtc_installed: bool,
+    last_smtc_status: Option<MediaPlaybackStatus>,
 }
 
 thread_local! {
@@ -136,6 +144,8 @@ pub fn create_player(url_ptr: *const u8) -> i64 {
         duration_seconds: 0.0,
         on_state_change: None,
         on_time_update: None,
+        smtc_installed: false,
+        last_smtc_status: None,
     };
 
     let handle = PLAYERS.with(|p| {
@@ -240,18 +250,150 @@ pub fn on_time_update(handle: f64, closure: f64) {
     with_entry_mut(handle, |entry| entry.on_time_update = Some(closure));
 }
 
+/// Wires `MediaPlayer.SystemMediaTransportControls` so the metadata shows
+/// up on the Windows volume HUD media tile, the Edge / Chromium Now
+/// Playing widget, and Bluetooth headphone media keys (#367).
+///
+/// `artworkUrl` accepts `https://` URLs (the common case — fed straight
+/// to `RandomAccessStreamReference::CreateFromUri`). `file://` paths are
+/// **not** supported in v1 — `StorageFile::GetFileFromPathAsync` is
+/// genuinely asynchronous and the synchronous-blocking-on-`IAsyncOperation`
+/// dance has its own gotchas in non-MTA threads. Pass an `https://` URL
+/// or `""` (empty string skips artwork). Tracked as a follow-up.
 pub fn set_now_playing(
-    _handle: f64,
-    _title_ptr: *const u8,
-    _artist_ptr: *const u8,
-    _album_ptr: *const u8,
-    _artwork_ptr: *const u8,
+    handle: f64,
+    title_ptr: *const u8,
+    artist_ptr: *const u8,
+    album_ptr: *const u8,
+    artwork_ptr: *const u8,
 ) {
-    // Windows.Media.SystemMediaTransportControls is the canonical
-    // surface — exposes per-app metadata to the volume HUD, headphone
-    // play/pause buttons, and the Edge Now Playing tile. Tracked in a
-    // #351 follow-up; the metadata is silently dropped here so callers
-    // don't have to feature-detect.
+    let title = str_from_header(title_ptr);
+    let artist = str_from_header(artist_ptr);
+    let album = str_from_header(album_ptr);
+    let artwork = str_from_header(artwork_ptr);
+
+    with_entry_mut(handle, |entry| {
+        let smtc = match entry.player.SystemMediaTransportControls() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        // Enable buttons. Idempotent — Windows ignores repeat sets.
+        let _ = smtc.SetIsPlayEnabled(true);
+        let _ = smtc.SetIsPauseEnabled(true);
+        let _ = smtc.SetIsStopEnabled(true);
+        let _ = smtc.SetIsNextEnabled(true);
+        let _ = smtc.SetIsPreviousEnabled(true);
+
+        if let Ok(updater) = smtc.DisplayUpdater() {
+            let _ = updater.SetType(MediaPlaybackType::Music);
+            if let Ok(music) = updater.MusicProperties() {
+                if !title.is_empty() {
+                    let _ = music.SetTitle(&HSTRING::from(title));
+                }
+                if !artist.is_empty() {
+                    let _ = music.SetArtist(&HSTRING::from(artist));
+                }
+                if !album.is_empty() {
+                    let _ = music.SetAlbumArtist(&HSTRING::from(album));
+                }
+            }
+
+            if !artwork.is_empty() {
+                if artwork.starts_with("https://") || artwork.starts_with("http://") {
+                    if let Ok(uri) = Uri::CreateUri(&HSTRING::from(artwork)) {
+                        if let Ok(stream) = RandomAccessStreamReference::CreateFromUri(&uri) {
+                            let _ = updater.SetThumbnail(&stream);
+                        }
+                    }
+                } else if artwork.starts_with("file://") {
+                    // file:// requires StorageFile::GetFileFromPathAsync —
+                    // skipped in v1 (see fn doc). Silently ignored.
+                    eprintln!(
+                        "perry/media: setNowPlaying file:// artwork not supported on Windows yet (#367 follow-up); use https://"
+                    );
+                }
+            }
+            let _ = updater.Update();
+        }
+
+        // Install ButtonPressed handler once per player. The handler
+        // fires on a WinRT thread-pool worker — `play / pause / ...`
+        // dispatch via `thread_local!` PLAYERS, which is empty on the
+        // worker thread. So the handler enqueues into BUTTON_QUEUE
+        // (cross-thread) and the main-thread `pump_tick` drains it.
+        if !entry.smtc_installed {
+            use windows::Foundation::TypedEventHandler;
+            let player_handle = handle;
+            let _ = smtc.ButtonPressed(&TypedEventHandler::new(move |_, args| {
+                if let Some(args) = args {
+                    let args: &windows::Media::SystemMediaTransportControlsButtonPressedEventArgs = args;
+                    if let Ok(button) = args.Button() {
+                        enqueue_button(player_handle, button);
+                    }
+                }
+                Ok(())
+            }));
+            entry.smtc_installed = true;
+        }
+
+        // Initial status push so the system UI doesn't open with stale
+        // "Stopped". Mirrors the state poller's mapping.
+        let status = state_to_smtc_status(entry.state);
+        if entry.last_smtc_status != Some(status) {
+            let _ = smtc.SetPlaybackStatus(status);
+            entry.last_smtc_status = Some(status);
+        }
+    });
+}
+
+fn state_to_smtc_status(state: MediaState) -> MediaPlaybackStatus {
+    match state {
+        MediaState::Playing => MediaPlaybackStatus::Playing,
+        MediaState::Paused | MediaState::Ready => MediaPlaybackStatus::Paused,
+        MediaState::Ended => MediaPlaybackStatus::Stopped,
+        MediaState::Idle | MediaState::Loading | MediaState::Error => MediaPlaybackStatus::Closed,
+    }
+}
+
+// SMTC ButtonPressed fires on a WinRT thread-pool worker — drain to the
+// main thread via `pump_tick`. `Mutex<Vec>` is fine; queue is tiny and
+// only contended on actual button presses.
+fn button_queue() -> &'static Mutex<Vec<(f64, SystemMediaTransportControlsButton)>> {
+    static Q: OnceLock<Mutex<Vec<(f64, SystemMediaTransportControlsButton)>>> = OnceLock::new();
+    Q.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn enqueue_button(handle: f64, button: SystemMediaTransportControlsButton) {
+    if let Ok(mut q) = button_queue().lock() {
+        q.push((handle, button));
+    }
+}
+
+fn drain_buttons() {
+    let drained: Vec<(f64, SystemMediaTransportControlsButton)> = match button_queue().lock() {
+        Ok(mut q) => std::mem::take(&mut *q),
+        Err(_) => return,
+    };
+    for (handle, button) in drained {
+        match button {
+            SystemMediaTransportControlsButton::Play => play(handle),
+            SystemMediaTransportControlsButton::Pause => pause(handle),
+            SystemMediaTransportControlsButton::Stop => stop(handle),
+            SystemMediaTransportControlsButton::FastForward => {
+                let cur = get_current_time(handle);
+                seek(handle, cur + 5.0);
+            }
+            SystemMediaTransportControlsButton::Rewind => {
+                let cur = get_current_time(handle);
+                seek(handle, (cur - 5.0).max(0.0));
+            }
+            // Next / Previous are queue-level concerns; v1 leaves them
+            // as no-ops. Multi-track apps can wire their own queue logic
+            // on top of `onStateChange`.
+            _ => {}
+        }
+    }
 }
 
 pub fn destroy(handle: f64) {
@@ -349,6 +491,10 @@ pub fn pump_tick() {
         }
     });
     if should_run {
+        // Drain button presses queued from the WinRT worker thread first,
+        // so a press that arrived since the last tick observes the right
+        // player state when it dispatches.
+        drain_buttons();
         poll_tick();
     }
 }
@@ -377,6 +523,19 @@ fn poll_tick() {
             let new_state = derive_state(entry);
             let state_changed = new_state != entry.state;
             entry.state = new_state;
+
+            // Push status to SMTC so the volume HUD / Edge Now Playing
+            // tile reflect transitions (#367). Only after setNowPlaying
+            // installed the handler — otherwise the SMTC isn't surfaced.
+            if state_changed && entry.smtc_installed {
+                let status = state_to_smtc_status(new_state);
+                if entry.last_smtc_status != Some(status) {
+                    if let Ok(smtc) = entry.player.SystemMediaTransportControls() {
+                        let _ = smtc.SetPlaybackStatus(status);
+                    }
+                    entry.last_smtc_status = Some(status);
+                }
+            }
 
             let on_state = if state_changed {
                 entry.on_state_change

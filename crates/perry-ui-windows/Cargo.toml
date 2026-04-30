@@ -46,4 +46,8 @@ windows = { version = "0.58", features = [
     "Media_Playback",
     "Media_Core",
     "Foundation",
+    # SystemMediaTransportControls / DisplayUpdater / MusicDisplayProperties
+    # (#367 — volume HUD media tile, headphone media keys, Edge Now Playing).
+    "Media",
+    "Storage_Streams",
 ] }
