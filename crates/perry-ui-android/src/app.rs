@@ -266,6 +266,9 @@ pub fn app_run(_app_handle: i64) {
                 f: extern "C" fn(*mut usize) -> *mut u8,
             );
             fn perry_geisterhand_register_textfield_set_string(f: extern "C" fn(i64, i64));
+            fn perry_geisterhand_register_apply_style(
+                f: extern "C" fn(i64, u32, f64, f64, f64, f64),
+            );
         }
         unsafe {
             perry_geisterhand_register_state_set(crate::perry_ui_state_set);
@@ -273,6 +276,7 @@ pub fn app_run(_app_handle: i64) {
                 crate::screenshot::perry_ui_screenshot_capture,
             );
             perry_geisterhand_register_textfield_set_string(crate::perry_ui_textfield_set_string);
+            perry_geisterhand_register_apply_style(crate::geisterhand_style::apply_style);
         }
     }
 

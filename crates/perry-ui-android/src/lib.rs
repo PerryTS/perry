@@ -6,6 +6,8 @@ pub mod clipboard;
 pub mod dialog;
 pub mod fetch;
 pub mod file_dialog;
+#[cfg(feature = "geisterhand")]
+pub mod geisterhand_style;
 pub mod jni_bridge;
 pub mod json;
 pub mod keychain;
@@ -1851,7 +1853,11 @@ pub extern "C" fn perry_ui_camera_set_on_tap(handle: i64, callback: f64) {
     camera::set_on_tap(handle, callback)
 }
 
-// Geisterhand screenshot stub (not implemented on Android)
+// Geisterhand screenshot stub: only when the geisterhand feature is OFF.
+// When the feature is ON, `screenshot::perry_ui_screenshot_capture` is the
+// real implementation and providing this stub here would be a duplicate
+// `#[no_mangle]` symbol.
+#[cfg(not(feature = "geisterhand"))]
 #[no_mangle]
 pub extern "C" fn perry_ui_screenshot_capture(_out_len: *mut usize) -> *mut u8 {
     std::ptr::null_mut()
