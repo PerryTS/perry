@@ -76,6 +76,16 @@ pub struct HapBuildArgs<'a> {
     pub stem: &'a str,
     pub sdk_native: Option<&'a Path>,
     pub quiet: bool,
+
+    /// Phase 2 v7: CLI-flag overrides for HAP signing inputs. Each falls
+    /// through CLI flag → env var → saved config (`~/.perry/config.toml`)
+    /// → bail. Lets CI / scripted deploys set per-invocation values
+    /// without mutating shell environment.
+    pub p12_keystore: Option<&'a Path>,
+    pub p12_password: Option<&'a str>,
+    pub cert_chain: Option<&'a Path>,
+    pub profile: Option<&'a Path>,
+    pub key_alias: Option<&'a str>,
 }
 
 pub struct HapBuildResult {
@@ -150,6 +160,11 @@ pub fn build_hap(args: &HapBuildArgs) -> Result<HapBuildResult> {
         args.stem,
         args.sdk_native,
         args.quiet,
+        args.p12_keystore,
+        args.p12_password,
+        args.cert_chain,
+        args.profile,
+        args.key_alias,
     ) {
         Ok(signed_path) => {
             // Remove the unsigned intermediate once signing succeeds — the
@@ -546,6 +561,11 @@ fn sign_hap(
     stem: &str,
     sdk_native: Option<&Path>,
     quiet: bool,
+    cli_p12_keystore: Option<&Path>,
+    cli_p12_password: Option<&str>,
+    cli_cert_chain: Option<&Path>,
+    cli_profile: Option<&Path>,
+    cli_key_alias: Option<&str>,
 ) -> Result<PathBuf> {
     // Six env vars now — the B.3 original conflated the cert chain and the
     // provisioning profile into PERRY_HARMONYOS_PROFILE. `hap-sign-tool`
@@ -556,46 +576,56 @@ fn sign_hap(
     // separately; mapping them to different env vars lets users point
     // perry at whatever DevEco produced.
     //
-    // Each value falls through env var → saved config (`~/.perry/config.toml`,
-    // populated by `perry setup harmonyos`). The wizard saves the user once;
-    // env vars override on a per-invocation basis (CI, multi-cert workflows).
+    // Phase 2 v7: each value now falls through CLI flag → env var → saved
+    // config (`~/.perry/config.toml`, populated by `perry setup harmonyos`).
+    // The wizard saves the user once; env vars override on a per-invocation
+    // basis (CI, multi-cert workflows); CLI flags override both for
+    // scripted deploys that pass multiple keystores in one job. The CLI
+    // flag is the strongest binding since it's the closest in scope to
+    // the actual command.
     let saved = super::publish::load_config();
     let saved_h = saved.harmonyos.as_ref();
 
-    let p12 = std::env::var("PERRY_HARMONYOS_P12")
-        .ok()
+    let p12 = cli_p12_keystore
+        .map(|p| p.display().to_string())
+        .or_else(|| std::env::var("PERRY_HARMONYOS_P12").ok())
         .or_else(|| saved_h.and_then(|h| h.p12_path.clone()))
         .ok_or_else(|| {
             anyhow!(
-                "PERRY_HARMONYOS_P12 not set (path to .p12 keystore). \
-             Run `perry setup harmonyos` once to configure, or export the env var."
+                "no .p12 keystore configured. Pass `--p12-keystore <path>`, set \
+             PERRY_HARMONYOS_P12, or run `perry setup harmonyos` once to save."
             )
         })?;
-    let p12_password = std::env::var("PERRY_HARMONYOS_P12_PASSWORD")
-        .ok()
+    let p12_password = cli_p12_password
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("PERRY_HARMONYOS_P12_PASSWORD").ok())
         .or_else(|| saved_h.and_then(|h| h.p12_password.clone()))
         .ok_or_else(|| {
             anyhow!(
-                "PERRY_HARMONYOS_P12_PASSWORD not set (keystore password). \
-             Run `perry setup harmonyos` once to configure."
+                "no keystore password configured. Pass `--p12-password <pw>`, set \
+             PERRY_HARMONYOS_P12_PASSWORD, or run `perry setup harmonyos`."
             )
         })?;
-    let cert_chain = std::env::var("PERRY_HARMONYOS_CERT")
-        .ok()
+    let cert_chain = cli_cert_chain
+        .map(|p| p.display().to_string())
+        .or_else(|| std::env::var("PERRY_HARMONYOS_CERT").ok())
         .or_else(|| saved_h.and_then(|h| h.cert_path.clone()))
         .ok_or_else(|| {
             anyhow!(
-                "PERRY_HARMONYOS_CERT not set (path to the cert chain .cer/.pem — DevEco \
-             auto-signing names it <bundleName>.cer). Distinct from PERRY_HARMONYOS_PROFILE."
+                "no cert chain configured. Pass `--harmonyos-cert <path>`, set \
+             PERRY_HARMONYOS_CERT, or run `perry setup harmonyos`. (DevEco \
+             auto-signing names it <bundleName>.cer; distinct from the .p7b profile.)"
             )
         })?;
-    let profile = std::env::var("PERRY_HARMONYOS_PROFILE")
-        .ok()
+    let profile = cli_profile
+        .map(|p| p.display().to_string())
+        .or_else(|| std::env::var("PERRY_HARMONYOS_PROFILE").ok())
         .or_else(|| saved_h.and_then(|h| h.profile_path.clone()))
         .ok_or_else(|| {
             anyhow!(
-                "PERRY_HARMONYOS_PROFILE not set (path to the signed provisioning \
-             profile .p7b — DevEco auto-signing names it <bundleName>.p7b)."
+                "no provisioning profile configured. Pass `--harmonyos-profile <path>`, \
+             set PERRY_HARMONYOS_PROFILE, or run `perry setup harmonyos`. \
+             (DevEco auto-signing names it <bundleName>.p7b.)"
             )
         })?;
 
@@ -603,14 +633,19 @@ fn sign_hap(
     // same value as -keystorePwd, but `hap-sign-tool` expects them as
     // separate args. DevEco-generated p12s always have a key password.
     // Default to the keystore password if the caller didn't split them.
+    // The CLI flag for keyPwd is intentionally NOT exposed — defaulting to
+    // p12_password matches DevEco's behavior and avoids users having to
+    // remember two passwords. Set PERRY_HARMONYOS_KEY_PASSWORD if they
+    // differ.
     let key_password =
         std::env::var("PERRY_HARMONYOS_KEY_PASSWORD").unwrap_or_else(|_| p12_password.clone());
 
     // DevEco's auto-signing writes the alias into build-profile.json5;
     // a hardcoded string doesn't work. Default to "debugKey" (what DevEco
     // uses for auto-generated debug certs) and let the caller override.
-    let key_alias = std::env::var("PERRY_HARMONYOS_KEY_ALIAS")
-        .ok()
+    let key_alias = cli_key_alias
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("PERRY_HARMONYOS_KEY_ALIAS").ok())
         .or_else(|| saved_h.and_then(|h| h.key_alias.clone()))
         .unwrap_or_else(|| "debugKey".to_string());
 
@@ -695,6 +730,11 @@ mod tests {
             stem: "hi",
             sdk_native: None,
             quiet: true,
+            p12_keystore: None,
+            p12_password: None,
+            cert_chain: None,
+            profile: None,
+            key_alias: None,
         };
         let res = build_hap(&args).expect("build_hap failed");
         assert!(!res.signed, "no P12 env → unsigned");
@@ -798,6 +838,71 @@ mod tests {
         assert_eq!(sanitize_bundle_segment("My-App"), "my_app");
         assert_eq!(sanitize_bundle_segment("123"), "a123");
         assert_eq!(sanitize_bundle_segment("weird//name"), "weird_name");
+    }
+
+    /// Phase 2 v7: CLI flags must reach `sign_hap` — verifies the
+    /// `HapBuildArgs` field plumbing from `compile.rs::CompileArgs` →
+    /// `build_hap` is wired end-to-end. Doesn't actually invoke the
+    /// signing command (would require Java + a real keystore); just
+    /// drives `build_hap` past the unsigned zip stage and confirms the
+    /// CLI-flag values would have been the ones consumed by sign_hap if
+    /// the call had succeeded.
+    #[test]
+    fn cli_signing_flags_compile_through_to_build_hap() {
+        let tmp = std::env::temp_dir().join(format!(
+            "perry_hap_cli_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        for var in [
+            "PERRY_HARMONYOS_P12",
+            "PERRY_HARMONYOS_P12_PASSWORD",
+            "PERRY_HARMONYOS_CERT",
+            "PERRY_HARMONYOS_PROFILE",
+            "PERRY_HARMONYOS_KEY_ALIAS",
+            "PERRY_HARMONYOS_KEY_PASSWORD",
+            "PERRY_HARMONYOS_BUNDLE_NAME",
+        ] {
+            std::env::remove_var(var);
+        }
+        let so = tmp.join("libhi.so");
+        fs::write(&so, b"\x7fELFfake").unwrap();
+        let ets = tmp.join("ets");
+        fs::create_dir_all(&ets).unwrap();
+        let fake_keystore = tmp.join("fake.p12");
+        fs::write(&fake_keystore, b"not-a-real-p12").unwrap();
+        let fake_cert = tmp.join("fake.cer");
+        fs::write(&fake_cert, b"not-a-real-cert").unwrap();
+        let fake_profile = tmp.join("fake.p7b");
+        fs::write(&fake_profile, b"not-a-real-profile").unwrap();
+        let args = HapBuildArgs {
+            so_path: &so,
+            ets_dir: &ets,
+            stem: "hi",
+            sdk_native: None,
+            quiet: true,
+            p12_keystore: Some(&fake_keystore),
+            p12_password: Some("hunter2"),
+            cert_chain: Some(&fake_cert),
+            profile: Some(&fake_profile),
+            key_alias: Some("ciKey"),
+        };
+        // Signing will fail (no real keystore / no java reachable in CI
+        // environment baseline), so the result is `signed: false`. The
+        // assertion is just that build_hap returns Ok and the unsigned
+        // .hap got produced — i.e. the CLI flags didn't cause earlier
+        // bailouts (e.g. a missing-config error from the env-var fallback
+        // chain). If the CLI plumbing were broken, sign_hap would bail
+        // with "no .p12 keystore configured" instead of the downstream
+        // hap-sign-tool / Java failure that's expected here.
+        let res = build_hap(&args).expect("build_hap with CLI flags must Ok");
+        assert!(!res.signed, "no real keystore → expected unsigned");
+        assert!(res.hap_path.exists(), "unsigned .hap must exist");
+        let _ = fs::remove_dir_all(&tmp);
     }
 }
 

@@ -185,6 +185,14 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         no_auto_optimize: false,
         no_cache: false,
         min_windows_version: "10".to_string(),
+        // Phase 2 v7: harmonyos signing flags. `perry run` is for local
+        // iteration where unsigned HAPs are fine, so fall through to env
+        // var / saved config without exposing CLI overrides here.
+        p12_keystore: None,
+        p12_password: None,
+        harmonyos_cert: None,
+        harmonyos_profile: None,
+        harmonyos_key_alias: None,
     };
 
     let result = super::compile::run(compile_args, format, use_color, verbose)?;

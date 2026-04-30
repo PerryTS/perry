@@ -296,6 +296,14 @@ fn build_once(
         no_auto_optimize: false,
         no_cache: false,
         min_windows_version: "10".to_string(),
+        // Phase 2 v7: harmonyos signing flags. `perry dev` is the watch
+        // mode for local iteration; unsigned HAPs are fine, fall through
+        // to env / saved config.
+        p12_keystore: None,
+        p12_password: None,
+        harmonyos_cert: None,
+        harmonyos_profile: None,
+        harmonyos_key_alias: None,
     };
     parse_cache.reset_counters();
     let result = super::compile::run_with_parse_cache(

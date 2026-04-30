@@ -195,6 +195,40 @@ pub struct CompileArgs {
     /// without needing Win7.
     #[arg(long, default_value = "10")]
     pub min_windows_version: String,
+
+    /// HarmonyOS HAP signing: path to the .p12 keystore file. Falls
+    /// through CLI flag → `PERRY_HARMONYOS_P12` env var → saved config
+    /// (`~/.perry/config.toml`, populated by `perry setup harmonyos`).
+    /// Phase 2 v7: lets CI/scripted deploys point at a keystore without
+    /// shell config. Only consulted on `--target harmonyos`.
+    #[arg(long)]
+    pub p12_keystore: Option<PathBuf>,
+
+    /// HarmonyOS HAP signing: keystore password. Same fallback chain as
+    /// `--p12-keystore`. Phase 2 v7. Prefer this over the env var when
+    /// scripting against multiple keystores in one CI job — env vars are
+    /// process-global, the flag is per-invocation.
+    #[arg(long)]
+    pub p12_password: Option<String>,
+
+    /// HarmonyOS HAP signing: app cert chain (.cer / .pem). Falls through
+    /// CLI flag → `PERRY_HARMONYOS_CERT` env var → saved config. Phase 2
+    /// v7. Distinct from the provisioning profile (`--harmonyos-profile`).
+    #[arg(long)]
+    pub harmonyos_cert: Option<PathBuf>,
+
+    /// HarmonyOS HAP signing: signed provisioning profile (.p7b). Falls
+    /// through CLI flag → `PERRY_HARMONYOS_PROFILE` env var → saved
+    /// config. Phase 2 v7.
+    #[arg(long)]
+    pub harmonyos_profile: Option<PathBuf>,
+
+    /// HarmonyOS HAP signing: keystore alias (defaults to `debugKey`,
+    /// matching DevEco's auto-generated debug certs). Falls through CLI
+    /// flag → `PERRY_HARMONYOS_KEY_ALIAS` env var → saved config →
+    /// `debugKey`. Phase 2 v7.
+    #[arg(long)]
+    pub harmonyos_key_alias: Option<String>,
 }
 
 /// Information about a JavaScript module that will be interpreted at runtime
@@ -3909,6 +3943,15 @@ pub fn run_with_parse_cache(
                         stem,
                         sdk_native: sdk.as_deref(),
                         quiet: !matches!(format, OutputFormat::Text),
+                        // Phase 2 v7: forward CLI signing flags through to
+                        // sign_hap. Each is None when the user didn't pass
+                        // the flag; sign_hap then falls through to env var
+                        // → saved config → bail.
+                        p12_keystore: args.p12_keystore.as_deref(),
+                        p12_password: args.p12_password.as_deref(),
+                        cert_chain: args.harmonyos_cert.as_deref(),
+                        profile: args.harmonyos_profile.as_deref(),
+                        key_alias: args.harmonyos_key_alias.as_deref(),
                     };
                     match crate::commands::harmonyos_hap::build_hap(&hap_args) {
                         Ok(res) => {
