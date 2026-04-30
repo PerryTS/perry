@@ -231,8 +231,15 @@ fn emit_widget(
             "Slider" => emit_slider(args, callbacks),
             "Spacer" => "Blank()".to_string(),
             "Divider" => "Divider()".to_string(),
+            // Phase 2 v4 widgets.
+            "Image" | "ImageFile" => emit_image(args),
+            "ScrollView" => emit_scrollview(args, bindings, depth, callbacks, text_slots),
+            "LazyVStack" => emit_lazy_vstack(args, bindings, depth, callbacks, text_slots),
+            "Picker" => emit_picker(args, callbacks),
+            "ProgressView" => emit_progressview(args),
+            "Section" => emit_section(args, bindings, depth, callbacks, text_slots),
             other => format!(
-                "// unsupported perry/ui widget: {} (Phase 2 v1.5)\n\
+                "// unsupported perry/ui widget: {} (Phase 2 v4)\n\
                  Text('[unsupported: {}]').fontSize(16).fontColor('#888888')",
                 other, other
             ),
@@ -506,6 +513,247 @@ fn emit_slider(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
         min = fmt_num(min),
         max = fmt_num(max),
         onchange = onchange,
+    )
+}
+
+/// `Image(src)` / `ImageFile(src)` → `Image('src').width('100%').height(200)`.
+/// Default sizing matches the perry-ui-* native default of "fill width,
+/// 200pt tall"; users can wrap in further sizing via container modifiers
+/// later (Phase 2 v5 will likely accept a `style: { ... }` trailing arg).
+/// Non-string-literal args fall back to a placeholder Text so unsupported
+/// shapes don't break the build.
+fn emit_image(args: &[Expr]) -> String {
+    let Some(Expr::String(src)) = args.first() else {
+        return "Text('[non-literal Image src]').fontSize(16).fontColor('#888888')"
+            .to_string();
+    };
+    format!(
+        "Image({}).width('100%').height(200)",
+        arkts_string_lit(src)
+    )
+}
+
+/// `ScrollView(children)` → `Scroll() { Column({space: 8}) { ... } }`.
+/// ArkUI's `Scroll` is a single-child container that scrolls vertically by
+/// default; we wrap in a `Column` so multiple children stack the way users
+/// expect from the perry-ui-* native ScrollView wiring. Empty / non-array
+/// children degrade to an empty Scroll just like the native variant.
+fn emit_scrollview(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+    text_slots: &mut Vec<TextSlot>,
+) -> String {
+    let inner_indent = "    ".repeat(depth + 2);
+    let mid_indent = "    ".repeat(depth + 1);
+    let outer_indent = "    ".repeat(depth);
+
+    let children: Vec<String> = match args.first() {
+        Some(Expr::Array(items)) => items
+            .iter()
+            .map(|c| emit_widget(c, bindings, depth + 2, callbacks, text_slots))
+            .collect(),
+        _ => vec![],
+    };
+
+    let body = if children.is_empty() {
+        String::new()
+    } else {
+        children
+            .iter()
+            .map(|c| {
+                c.lines()
+                    .map(|line| format!("{}{}", inner_indent, line))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        "Scroll() {{\n\
+         {mid}Column({{ space: 8 }}) {{\n\
+         {body}\n\
+         {mid}}}\n\
+         {outer}}}",
+        mid = mid_indent,
+        body = body,
+        outer = outer_indent,
+    )
+}
+
+/// `LazyVStack(children)` → for now just emit `Column({space: 8}) { ... }`.
+/// Real lazy rendering needs ArkUI's `LazyForEach` + a custom `IDataSource`
+/// implementation, which doesn't fit the static-tree harvest model — the
+/// children would have to be a function `(index) => Widget` evaluated per
+/// row, which isn't expressible in the harvest pass without a runtime
+/// callback bridge. Deferred to a future Phase 2 v5; today users write the
+/// expanded children list explicitly and pay the eager-render cost.
+fn emit_lazy_vstack(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+    text_slots: &mut Vec<TextSlot>,
+) -> String {
+    let inner_indent = "    ".repeat(depth + 1);
+    let outer_indent = "    ".repeat(depth);
+
+    let children: Vec<String> = match args.first() {
+        Some(Expr::Array(items)) => items
+            .iter()
+            .map(|c| emit_widget(c, bindings, depth + 1, callbacks, text_slots))
+            .collect(),
+        _ => vec![],
+    };
+
+    let body = if children.is_empty() {
+        String::new()
+    } else {
+        children
+            .iter()
+            .map(|c| {
+                c.lines()
+                    .map(|line| format!("{}{}", inner_indent, line))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        "// LazyVStack: rendered eagerly as Column. Real lazy support needs\n\
+         {outer}// LazyForEach + IDataSource (Phase 2 v5 follow-up).\n\
+         {outer}Column({{ space: 8 }}) {{\n\
+         {body}\n\
+         {outer}}}",
+        outer = outer_indent,
+        body = body,
+    )
+}
+
+/// `Picker(options, onChange)` → ArkUI `TextPicker({range, value: range[0]}).onChange(...)`.
+/// Closure receives `(idx: number)` matching the perry-ui-* TS surface.
+/// ArkUI's onChange has the shape `(value: string, index: number)` — we
+/// forward only `index` since that's what the Perry callback expects.
+/// Same drain pattern as Toggle/Slider.
+fn emit_picker(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
+    let options = match args.first() {
+        Some(Expr::Array(items)) => {
+            let strs: Vec<String> = items
+                .iter()
+                .filter_map(|item| match item {
+                    Expr::String(s) => Some(arkts_string_lit(s)),
+                    _ => None,
+                })
+                .collect();
+            format!("[{}]", strs.join(", "))
+        }
+        _ => "[]".to_string(),
+    };
+    // ArkUI requires a `value` field set to a member of `range`; falling
+    // back to an empty string is safe when options is empty.
+    let initial = match args.first() {
+        Some(Expr::Array(items)) => match items.first() {
+            Some(Expr::String(s)) => arkts_string_lit(s),
+            _ => "''".to_string(),
+        },
+        _ => "''".to_string(),
+    };
+
+    let onchange = match args.get(1) {
+        Some(closure @ Expr::Closure { .. }) => {
+            let idx = callbacks.len();
+            callbacks.push(closure.clone());
+            format!(
+                ".onChange((_value: string, index: number) => {{\n    \
+                 perryEntry.invokeCallback1({}, index);\n    \
+                 {drain}\
+                 }})",
+                idx,
+                drain = drain_loop_body()
+            )
+        }
+        _ => String::new(),
+    };
+
+    format!(
+        "TextPicker({{ range: {opts}, value: {init} }}){onchange}",
+        opts = options,
+        init = initial,
+        onchange = onchange,
+    )
+}
+
+/// `ProgressView(value?, total?)` → ArkUI `Progress({value, total, type: ProgressType.Linear})`.
+/// Defaults: value=0, total=100. Both args optional — leaf widget, no
+/// callbacks, no children.
+fn emit_progressview(args: &[Expr]) -> String {
+    let value = numeric_arg(args, 0).unwrap_or(0.0);
+    let total = numeric_arg(args, 1).unwrap_or(100.0);
+    format!(
+        "Progress({{ value: {value}, total: {total}, type: ProgressType.Linear }})",
+        value = fmt_num(value),
+        total = fmt_num(total),
+    )
+}
+
+/// `Section(title, children)` → labeled vertical group.
+/// Emits `Column({space: 4}) { Text('<title>').fontSize(14).fontColor('#888888'); <children> }`.
+/// The greyed-out small label header matches the iOS UITableView section
+/// header convention; no native ArkUI primitive maps 1:1, so we hand-roll.
+fn emit_section(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+    text_slots: &mut Vec<TextSlot>,
+) -> String {
+    let title = first_string_arg(args).unwrap_or_default();
+
+    let inner_indent = "    ".repeat(depth + 1);
+    let outer_indent = "    ".repeat(depth);
+
+    let children: Vec<String> = match args.get(1) {
+        Some(Expr::Array(items)) => items
+            .iter()
+            .map(|c| emit_widget(c, bindings, depth + 1, callbacks, text_slots))
+            .collect(),
+        _ => vec![],
+    };
+
+    // Always emit the title Text at the top, regardless of children count.
+    let title_line = format!(
+        "{}Text({}).fontSize(14).fontColor('#888888')",
+        inner_indent,
+        arkts_string_lit(&title)
+    );
+
+    let body = if children.is_empty() {
+        title_line
+    } else {
+        let kids = children
+            .iter()
+            .map(|c| {
+                c.lines()
+                    .map(|line| format!("{}{}", inner_indent, line))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{}\n{}", title_line, kids)
+    };
+
+    format!(
+        "Column({{ space: 4 }}) {{\n\
+         {body}\n\
+         {outer}}}",
+        body = body,
+        outer = outer_indent,
     )
 }
 
@@ -1023,14 +1271,148 @@ mod tests {
 
     #[test]
     fn unsupported_widget_degrades_with_comment_not_error() {
+        // Use a widget that's intentionally NOT yet supported so this
+        // test stays valid as the supported set grows. As of v4 we
+        // still don't emit anything for `Canvas` / `Window` / `TabBar`.
         let mut m = empty_module();
         m.init
-            .push(app_with_body(nmc("Picker", vec![Expr::Array(vec![])])));
+            .push(app_with_body(nmc("Canvas", vec![Expr::Number(100.0), Expr::Number(100.0)])));
         let r = emit_index_ets(&mut m).unwrap().unwrap();
         assert!(r
             .ets_source
-            .contains("// unsupported perry/ui widget: Picker"));
-        assert!(r.ets_source.contains("Text('[unsupported: Picker]')"));
+            .contains("// unsupported perry/ui widget: Canvas"));
+        assert!(r.ets_source.contains("Text('[unsupported: Canvas]')"));
+    }
+
+    #[test]
+    fn image_with_src() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Image",
+            vec![Expr::String("logo.png".into())],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r
+            .ets_source
+            .contains("Image('logo.png').width('100%').height(200)"));
+    }
+
+    #[test]
+    fn imagefile_alias_emits_same_shape() {
+        // ImageFile is the existing perry-ui-* TS surface name; both must
+        // route through the same emitter for cross-platform parity.
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "ImageFile",
+            vec![Expr::String("photo.jpg".into())],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Image('photo.jpg')"));
+    }
+
+    #[test]
+    fn scrollview_with_children() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "ScrollView",
+            vec![Expr::Array(vec![
+                nmc("Text", vec![Expr::String("a".into())]),
+                nmc("Text", vec![Expr::String("b".into())]),
+            ])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Scroll() {"));
+        assert!(r.ets_source.contains("Column({ space: 8 })"));
+        assert!(r.ets_source.contains("Text('a').fontSize(20)"));
+        assert!(r.ets_source.contains("Text('b').fontSize(20)"));
+    }
+
+    #[test]
+    fn lazyvstack_emits_column_with_deferral_comment() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "LazyVStack",
+            vec![Expr::Array(vec![
+                nmc("Text", vec![Expr::String("row 0".into())]),
+                nmc("Text", vec![Expr::String("row 1".into())]),
+            ])],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // The deferral note is part of the source so a future contributor
+        // sees the LazyForEach + IDataSource follow-up at the call site.
+        assert!(r.ets_source.contains("LazyVStack: rendered eagerly as Column"));
+        assert!(r.ets_source.contains("Column({ space: 8 })"));
+        assert!(r.ets_source.contains("Text('row 0')"));
+    }
+
+    #[test]
+    fn picker_with_options_and_closure() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Picker",
+            vec![
+                Expr::Array(vec![
+                    Expr::String("Red".into()),
+                    Expr::String("Green".into()),
+                    Expr::String("Blue".into()),
+                ]),
+                closure_stub(),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r
+            .ets_source
+            .contains("TextPicker({ range: ['Red', 'Green', 'Blue'], value: 'Red' })"));
+        assert!(r
+            .ets_source
+            .contains(".onChange((_value: string, index: number) => {"));
+        assert!(r.ets_source.contains("perryEntry.invokeCallback1(0, index)"));
+        assert_eq!(r.callbacks.len(), 1);
+    }
+
+    #[test]
+    fn progressview_with_default_value_and_total() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc("ProgressView", vec![])));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(
+            "Progress({ value: 0, total: 100, type: ProgressType.Linear })"
+        ));
+    }
+
+    #[test]
+    fn progressview_with_explicit_value() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "ProgressView",
+            vec![Expr::Number(42.0), Expr::Number(200.0)],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains(
+            "Progress({ value: 42, total: 200, type: ProgressType.Linear })"
+        ));
+    }
+
+    #[test]
+    fn section_with_title_and_children() {
+        let mut m = empty_module();
+        m.init.push(app_with_body(nmc(
+            "Section",
+            vec![
+                Expr::String("Personal Info".into()),
+                Expr::Array(vec![
+                    nmc("Text", vec![Expr::String("name".into())]),
+                    nmc("Text", vec![Expr::String("email".into())]),
+                ]),
+            ],
+        )));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(r.ets_source.contains("Column({ space: 4 })"));
+        assert!(r
+            .ets_source
+            .contains("Text('Personal Info').fontSize(14).fontColor('#888888')"));
+        assert!(r.ets_source.contains("Text('name').fontSize(20)"));
+        assert!(r.ets_source.contains("Text('email').fontSize(20)"));
     }
 
     #[test]

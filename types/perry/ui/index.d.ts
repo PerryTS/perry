@@ -289,6 +289,14 @@ export function Picker(onChange: (index: number) => void): Widget;
 /** Form section with a title. */
 export function Section(title: string): Widget;
 
+/**
+ * Form section with a title and inline children. Convenience overload — emits
+ * a labeled vertical group on HarmonyOS (`Column({space:4}) { Text(title); ... }`)
+ * and falls through to the imperative `Section(title)` + `widgetAddChild`
+ * pattern on every other platform.
+ */
+export function Section(title: string, children: Widget[]): Widget;
+
 /** Navigation stack for push/pop navigation. */
 export function NavStack(): Widget;
 
