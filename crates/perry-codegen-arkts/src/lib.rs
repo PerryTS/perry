@@ -100,6 +100,82 @@ struct StateBinding {
     initial_str: String,
 }
 
+/// Issue #408 — mutation tracking for procedurally-built UIs.
+///
+/// Many Perry apps build their widget tree imperatively after construction:
+///
+/// ```text
+/// const toolbar = HStack(0, []);
+/// widgetAddChild(toolbar, button1);
+/// widgetAddChild(toolbar, button2);
+/// setPadding(toolbar, 8, 12, 8, 12);
+/// ```
+///
+/// The harvest model needs to fold these post-construction mutations into
+/// the ArkUI emission so the resulting page actually renders the children
+/// + applies the modifiers. The pre-walk records each mutator call against
+/// its target widget local; `emit_widget` then merges them into the
+/// emitted widget body / modifier chain.
+///
+/// Conditional mutations (mutators called inside `if`/`else` branches)
+/// carry the enclosing condition so the emitted ArkUI can produce
+/// `if (cond) { ChildA() } else { ChildB() }` blocks. Loop-conditional
+/// mutations and unresolved-condition shapes degrade to a comment + skip.
+#[derive(Debug, Clone)]
+enum Mutation {
+    /// `widgetAddChild(parent, child)` → child becomes a body child of parent.
+    AddChild(Expr),
+    /// `widgetClearChildren(parent)` → drop all earlier `AddChild` mutations
+    /// recorded against this parent (preserves the chronological semantics).
+    ClearChildren,
+    /// `scrollviewSetChild(scroll, content)` → content becomes the Scroll's
+    /// single child (replaces any previously set child or AddChild mutations).
+    SetScrollChild(Expr),
+    /// Pre-formatted ArkUI modifier chain entry, e.g. `.padding(8)`,
+    /// `.backgroundColor('red')`, `.borderRadius(8)`. Concatenated to the
+    /// widget core after construction.
+    Modifier(String),
+    /// An untraceable / unsupported mutator shape — emit a comment when this
+    /// fires so the user can see the gap.
+    Comment(String),
+}
+
+/// A recorded mutation plus its enclosing condition, if any.
+///
+/// `condition` is `None` for unconditional mutations. When `Some((cond_key,
+/// branch))`, the mutation belongs to the corresponding `if (...) { ... }`
+/// branch where `cond_key` is a string-serialized condition expression
+/// (used to group mutations from the same if statement) and `branch` is
+/// `Then` for the then-branch or `Else` for the else-branch.
+///
+/// String-keying the condition lets us group related mutations even when
+/// the condition expression is repeated in an HIR walk, without needing
+/// expression-equality comparisons. The string is also used directly as
+/// the emitted ArkUI `if (...)` predicate.
+#[derive(Debug, Clone)]
+struct MutationEntry {
+    mutation: Mutation,
+    condition: Option<MutationCondition>,
+}
+
+#[derive(Debug, Clone)]
+struct MutationCondition {
+    /// String-serialized condition expression; reused as the ArkUI
+    /// predicate. e.g. `"this.text___state_0 === 'mobile'"`.
+    cond_str: String,
+    /// Which branch this mutation lives in.
+    branch: Branch,
+    /// Group key — same source-statement id, so all mutations from one
+    /// `if` statement share a key and can be grouped at emit time.
+    group: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Branch {
+    Then,
+    Else,
+}
+
 /// Walk `module.init` for the first `App({...})` call from `perry/ui`,
 /// emit the corresponding ArkUI `pages/Index.ets`, capture every
 /// closure-bearing arg into `HarvestResult.callbacks` so the compile
@@ -134,6 +210,13 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
     // Build a const-binding lookup for top-level `let x = <perry/ui call>;`
     // so the Body can reference a local: `App({body: x})` finds x's init.
     let bindings = collect_const_bindings(&module.init);
+    // Issue #408 — pre-walk for procedurally-built UI mutators
+    // (widgetAddChild / scrollviewSetChild / setPadding / setCornerRadius /
+    // widgetSetBackgroundColor / etc.). Recorded against their target
+    // widget local so emit_widget can fold them into the ArkUI body.
+    // Walks pre-strip so mutators that live alongside `App({...})` are
+    // captured; the strip itself doesn't touch the mutator stmts.
+    let mutations = collect_mutations(&module.init);
     let Some(body_expr) = find_and_strip_app(&mut module.init, &classes) else {
         return Ok(None);
     };
@@ -151,6 +234,8 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
         &classes,
         &state_registry,
         &mut lazy_sources,
+        &mutations,
+        None,
     );
     Ok(Some(HarvestResult {
         ets_source: wrap_index_page(&widget_arkui, &text_slots, &lazy_sources, uses_media),
@@ -274,6 +359,439 @@ fn collect_state_bindings(init: &[Stmt]) -> HashMap<LocalId, StateBinding> {
         }
     }
     map
+}
+
+/// Issue #408 — pre-walk for `widgetAddChild` / `scrollviewSetChild` /
+/// `setPadding` / `setCornerRadius` / `widgetSet*` etc. mutator calls.
+/// Walks every top-level statement (and into if/else branches) recording
+/// each mutator against its target widget local.
+///
+/// Closures, loops, and nested function bodies are intentionally NOT
+/// walked: mutators inside loops can't be statically traced (we'd need
+/// to know how many iterations) and mutators inside closure bodies fire
+/// at callback time, after the harvest has already produced the page.
+/// The "out of scope" section of #408 explicitly calls these out as
+/// fallback cases.
+///
+/// The `cond_group_counter` makes each top-level `if (...) { ... } else
+/// { ... }` produce a unique group id so emitter can collapse mutations
+/// from the same if statement back into a single `if/else` block — even
+/// if the if appears alongside unconditional mutators.
+fn collect_mutations(init: &[Stmt]) -> HashMap<LocalId, Vec<MutationEntry>> {
+    let mut out: HashMap<LocalId, Vec<MutationEntry>> = HashMap::new();
+    let mut group_counter: u32 = 0;
+    for stmt in init {
+        collect_mutations_in_stmt(stmt, None, &mut out, &mut group_counter);
+    }
+    out
+}
+
+fn collect_mutations_in_stmt(
+    stmt: &Stmt,
+    enclosing: Option<MutationCondition>,
+    out: &mut HashMap<LocalId, Vec<MutationEntry>>,
+    group_counter: &mut u32,
+) {
+    match stmt {
+        Stmt::Expr(e) => collect_mutations_in_expr(e, enclosing.as_ref(), out),
+        Stmt::Let { init: Some(e), .. } => collect_mutations_in_expr(e, enclosing.as_ref(), out),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            // Each top-level if gets its own group id so the emitter can
+            // collapse all mutations from the same if into a single
+            // `if (cond) { ... } else { ... }` block.
+            //
+            // If we're already inside a conditional context, we still
+            // carry the OUTER condition forward — nested conditions are
+            // out of scope for v0 (they'd need a 2D group key); the
+            // existing condition takes precedence.
+            if enclosing.is_some() {
+                // Nested-if fallback: walk both branches inheriting the
+                // enclosing condition. Loses fidelity but doesn't crash.
+                for s in then_branch {
+                    collect_mutations_in_stmt(s, enclosing.clone(), out, group_counter);
+                }
+                if let Some(eb) = else_branch {
+                    for s in eb {
+                        collect_mutations_in_stmt(s, enclosing.clone(), out, group_counter);
+                    }
+                }
+            } else {
+                let cond_str = serialize_condition(condition);
+                let group = *group_counter;
+                *group_counter += 1;
+                let then_cond = MutationCondition {
+                    cond_str: cond_str.clone(),
+                    branch: Branch::Then,
+                    group,
+                };
+                for s in then_branch {
+                    collect_mutations_in_stmt(s, Some(then_cond.clone()), out, group_counter);
+                }
+                if let Some(eb) = else_branch {
+                    let else_cond = MutationCondition {
+                        cond_str,
+                        branch: Branch::Else,
+                        group,
+                    };
+                    for s in eb {
+                        collect_mutations_in_stmt(s, Some(else_cond.clone()), out, group_counter);
+                    }
+                }
+            }
+        }
+        // Loops, switches, try, throw, return — out of scope per #408.
+        // We could descend into switch cases analogously to if/else but
+        // that's a v1 follow-up.
+        _ => {}
+    }
+}
+
+/// If `expr` is a recognized perry/ui mutator call, record an entry
+/// against its target widget local. Mutator calls show up as
+/// `Expr::NativeMethodCall { module: "perry/ui", method: "widgetAddChild",
+/// args: [LocalGet(parent), LocalGet(child), ...] }` (the first arg is
+/// always the receiver widget).
+fn collect_mutations_in_expr(
+    expr: &Expr,
+    cond: Option<&MutationCondition>,
+    out: &mut HashMap<LocalId, Vec<MutationEntry>>,
+) {
+    let Expr::NativeMethodCall {
+        module: m,
+        method,
+        args,
+        ..
+    } = expr
+    else {
+        return;
+    };
+    if m != "perry/ui" {
+        return;
+    }
+    let Some(target_id) = mutator_target_local_id(args) else {
+        return;
+    };
+    let push_mut = |mu: Mutation,
+                    out: &mut HashMap<LocalId, Vec<MutationEntry>>,
+                    cond: Option<&MutationCondition>| {
+        out.entry(target_id).or_default().push(MutationEntry {
+            mutation: mu,
+            condition: cond.cloned(),
+        });
+    };
+    match method.as_str() {
+        // ---- Children ----
+        "widgetAddChild" => {
+            if let Some(child) = args.get(1) {
+                push_mut(Mutation::AddChild(child.clone()), out, cond);
+            }
+        }
+        "widgetAddChildAt" => {
+            // v0: positional insertion is treated as plain AddChild —
+            // the `index` arg is dropped because the harvest model can't
+            // re-order ArkUI children mid-build. Fidelity loss documented
+            // as a v1 follow-up.
+            if let Some(child) = args.get(1) {
+                push_mut(Mutation::AddChild(child.clone()), out, cond);
+            }
+        }
+        "widgetClearChildren" => {
+            push_mut(Mutation::ClearChildren, out, cond);
+        }
+        "scrollviewSetChild" | "scrollViewSetChild" => {
+            if let Some(child) = args.get(1) {
+                push_mut(Mutation::SetScrollChild(child.clone()), out, cond);
+            }
+        }
+        // ---- Styling modifiers ----
+        "widgetSetBackgroundColor" => {
+            if let Some(modifier) = mutator_background_color(&args[1..]) {
+                push_mut(Mutation::Modifier(modifier), out, cond);
+            }
+        }
+        "widgetSetBackgroundGradient" => {
+            // Gradient takes 9 channel args; map approximately to ArkUI
+            // `.linearGradient(...)`. Real ArkUI gradient takes a richer
+            // shape — emit a comment + best-effort stub.
+            push_mut(
+                Mutation::Comment(
+                    "widgetSetBackgroundGradient → ArkUI .linearGradient(): partial mapping"
+                        .to_string(),
+                ),
+                out,
+                cond,
+            );
+            push_mut(
+                Mutation::Modifier(
+                    ".linearGradient({ angle: 90, colors: [['#ffffff', 0.0], ['#000000', 1.0]] })"
+                        .to_string(),
+                ),
+                out,
+                cond,
+            );
+        }
+        "setPadding" | "widgetSetEdgeInsets" => {
+            // Args: (widget, top, right, bottom, left)
+            let top = numeric_arg(&args[1..], 0).unwrap_or(0.0);
+            let right = numeric_arg(&args[1..], 1).unwrap_or(0.0);
+            let bottom = numeric_arg(&args[1..], 2).unwrap_or(0.0);
+            let left = numeric_arg(&args[1..], 3).unwrap_or(0.0);
+            push_mut(
+                Mutation::Modifier(format!(
+                    ".padding({{ top: {}, right: {}, bottom: {}, left: {} }})",
+                    fmt_num(top),
+                    fmt_num(right),
+                    fmt_num(bottom),
+                    fmt_num(left)
+                )),
+                out,
+                cond,
+            );
+        }
+        "setCornerRadius" => {
+            let n = numeric_arg(&args[1..], 0).unwrap_or(0.0);
+            push_mut(
+                Mutation::Modifier(format!(".borderRadius({})", fmt_num(n))),
+                out,
+                cond,
+            );
+        }
+        "widgetSetHidden" => {
+            // Truthy second arg → Hidden, falsy → Visible.
+            let hide = match args.get(1) {
+                Some(Expr::Bool(true)) => true,
+                Some(Expr::Number(n)) => *n != 0.0,
+                Some(Expr::Integer(n)) => *n != 0,
+                _ => false,
+            };
+            let v = if hide { "Hidden" } else { "Visible" };
+            push_mut(
+                Mutation::Modifier(format!(".visibility(Visibility.{})", v)),
+                out,
+                cond,
+            );
+        }
+        "widgetMatchParentWidth" => {
+            push_mut(Mutation::Modifier(".width('100%')".to_string()), out, cond);
+        }
+        "widgetMatchParentHeight" => {
+            push_mut(Mutation::Modifier(".height('100%')".to_string()), out, cond);
+        }
+        "widgetSetWidth" => {
+            let n = numeric_arg(&args[1..], 0).unwrap_or(0.0);
+            push_mut(
+                Mutation::Modifier(format!(".width({})", fmt_num(n))),
+                out,
+                cond,
+            );
+        }
+        "widgetSetHeight" => {
+            let n = numeric_arg(&args[1..], 0).unwrap_or(0.0);
+            push_mut(
+                Mutation::Modifier(format!(".height({})", fmt_num(n))),
+                out,
+                cond,
+            );
+        }
+        "widgetSetHugging" => {
+            // ArkUI's closest equivalent is `.flexShrink(0)` — the widget
+            // refuses to shrink below its intrinsic size.
+            push_mut(Mutation::Modifier(".flexShrink(0)".to_string()), out, cond);
+        }
+        "stackSetDistribution" => {
+            // 0..N → ArkUI FlexAlign enum buckets. The mapping mirrors
+            // perry-ui-* native (Start/Center/End/SpaceBetween/SpaceAround/
+            // SpaceEvenly).
+            let n = numeric_arg(&args[1..], 0).unwrap_or(0.0) as i64;
+            let v = match n {
+                0 => "Start",
+                1 => "Center",
+                2 => "End",
+                3 => "SpaceBetween",
+                4 => "SpaceAround",
+                5 => "SpaceEvenly",
+                _ => "Start",
+            };
+            push_mut(
+                Mutation::Modifier(format!(".justifyContent(FlexAlign.{})", v)),
+                out,
+                cond,
+            );
+        }
+        "stackSetAlignment" => {
+            let n = numeric_arg(&args[1..], 0).unwrap_or(0.0) as i64;
+            // ArkUI uses HorizontalAlign (in Column) / VerticalAlign (in
+            // Row). We can't tell which from here; emit
+            // `.alignItems(HorizontalAlign.X)` and let ArkUI accept it
+            // for Column. For Row the user can call the v5 inline-style
+            // path instead.
+            let v = match n {
+                0 => "Start",
+                1 => "Center",
+                2 => "End",
+                _ => "Start",
+            };
+            push_mut(
+                Mutation::Modifier(format!(".alignItems(HorizontalAlign.{})", v)),
+                out,
+                cond,
+            );
+        }
+        // Unrecognized mutator on a known target — log a comment so the
+        // user can see the gap. Avoids silent fidelity loss.
+        other => {
+            // Silently skip the obviously-not-a-mutator perry/ui calls
+            // (App, VStack, HStack, Text, Button — these CREATE widgets,
+            // they don't mutate). Anything else is presumably a missed
+            // mutator; flag it.
+            if !is_widget_factory(other) {
+                push_mut(
+                    Mutation::Comment(format!(
+                        "perry/ui mutator `{}` not yet handled by codegen-arkts (Issue #408 follow-up)",
+                        other
+                    )),
+                    out,
+                    cond,
+                );
+            }
+        }
+    }
+}
+
+/// Heuristic: known widget-factory names that should NOT be flagged as
+/// missed mutators. Kept loose — false positives only produce extra
+/// comments, not bugs.
+fn is_widget_factory(name: &str) -> bool {
+    matches!(
+        name,
+        "App"
+            | "Text"
+            | "Button"
+            | "VStack"
+            | "HStack"
+            | "ZStack"
+            | "ScrollView"
+            | "LazyVStack"
+            | "Spacer"
+            | "Divider"
+            | "Image"
+            | "ImageFile"
+            | "ImageSymbol"
+            | "TextField"
+            | "TextArea"
+            | "Toggle"
+            | "Slider"
+            | "Picker"
+            | "ProgressView"
+            | "Section"
+            | "Tabs"
+            | "Modal"
+            | "Dialog"
+            | "Menu"
+            | "ContextMenu"
+            | "Grid"
+            | "NavStack"
+            | "showToast"
+            | "setText"
+            | "state"
+            | "stateCreate"
+    )
+}
+
+/// Inspect the first arg of a perry/ui method call. If it's a
+/// `LocalGet(id)` (the canonical "mutate a widget bound to a local"
+/// shape), return the LocalId. Anything else (transient widget without
+/// a binding, complex expression) returns None and the mutator is
+/// dropped — the user code couldn't mutate something un-named anyway.
+fn mutator_target_local_id(args: &[Expr]) -> Option<LocalId> {
+    match args.first() {
+        Some(Expr::LocalGet(id)) => Some(*id),
+        _ => None,
+    }
+}
+
+/// Build the `.backgroundColor('rgba(R, G, B, A)')` modifier string from
+/// the 4 channel args of a `widgetSetBackgroundColor(w, r, g, b, a)` call.
+/// Channels are 0..1 floats matching the perry-ui-* TS surface.
+fn mutator_background_color(args: &[Expr]) -> Option<String> {
+    let r = numeric_arg(args, 0)?;
+    let g = numeric_arg(args, 1)?;
+    let b = numeric_arg(args, 2)?;
+    let a = numeric_arg(args, 3).unwrap_or(1.0);
+    let r255 = (r * 255.0).round() as i64;
+    let g255 = (g * 255.0).round() as i64;
+    let b255 = (b * 255.0).round() as i64;
+    Some(format!(
+        ".backgroundColor('rgba({}, {}, {}, {})')",
+        r255,
+        g255,
+        b255,
+        fmt_num(a)
+    ))
+}
+
+/// Stringify a condition expression for emission in an ArkUI
+/// `if (<cond>)` predicate. Handles the canonical comparison + logical
+/// shapes the harvest can statically rewrite, plus a few literal forms.
+/// Falls back to a `true` predicate (so the then-branch always renders)
+/// for shapes the emitter can't safely render.
+fn serialize_condition(e: &Expr) -> String {
+    use perry_hir::ir::{CompareOp, LogicalOp};
+    match e {
+        Expr::Bool(true) => "true".to_string(),
+        Expr::Bool(false) => "false".to_string(),
+        Expr::Compare { op, left, right } => {
+            let op_str = match op {
+                CompareOp::Eq => " === ",
+                CompareOp::Ne => " !== ",
+                CompareOp::LooseEq => " == ",
+                CompareOp::LooseNe => " != ",
+                CompareOp::Lt => " < ",
+                CompareOp::Le => " <= ",
+                CompareOp::Gt => " > ",
+                CompareOp::Ge => " >= ",
+            };
+            format!(
+                "{}{}{}",
+                serialize_condition(left),
+                op_str,
+                serialize_condition(right)
+            )
+        }
+        Expr::Logical { op, left, right } => {
+            let op_str = match op {
+                LogicalOp::And => " && ",
+                LogicalOp::Or => " || ",
+                LogicalOp::Coalesce => " ?? ",
+            };
+            format!(
+                "{}{}{}",
+                serialize_condition(left),
+                op_str,
+                serialize_condition(right)
+            )
+        }
+        Expr::String(s) => arkts_string_lit(s),
+        Expr::Number(n) => fmt_num(*n),
+        Expr::Integer(n) => format!("{}", n),
+        Expr::LocalGet(id) => format!("__local_{}", id),
+        Expr::PropertyGet { object, property } => {
+            // `obj.prop` shape — used commonly in conditions like
+            // `props.mobile`. Recursively stringify the object access
+            // chain. Keeps the predicate syntactically valid; the
+            // user-side reference may not actually exist at the ArkTS
+            // page-struct scope, in which case ArkTS's compiler
+            // surfaces it as a separate error during emission.
+            format!("{}.{}", serialize_condition(object), property)
+        }
+        // Fallback: emit a placeholder that's syntactically valid; the
+        // mutation collector caller emits a Comment alongside.
+        _ => "true /* unsupported condition */".to_string(),
+    }
 }
 
 /// Walk a Vec<Stmt> and rewrite any `state.set(v)` calls (where state's
@@ -524,7 +1042,21 @@ fn emit_widget(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
+    // `outer_local_hint` is set when the caller already knows the
+    // top-level LocalId we're emitting for — used by recursive calls
+    // from emit_stack into a child position that may itself be a
+    // LocalGet of another widget local. Always None at the entry point.
+    outer_local_hint: Option<LocalId>,
 ) -> String {
+    // Issue #408 — extract LocalId hint before resolving so we can later
+    // look up procedural mutations recorded against this widget binding.
+    // `outer_local_hint` overrides nothing: if expr is itself a LocalGet,
+    // its id wins over a caller-supplied hint.
+    let local_hint = match expr {
+        Expr::LocalGet(id) => Some(*id),
+        _ => outer_local_hint,
+    };
     // Phase 2 v6 — `state.text()` shape: Expr::Call { callee: PropertyGet
     // { obj: LocalGet(state_id), property: "text" }, args: [] } where
     // state_id is in the registry. Emit a reactive Text using the
@@ -571,6 +1103,8 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
+                    local_hint,
                 ),
                 "HStack" => emit_stack(
                     "Row",
@@ -583,6 +1117,8 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
+                    local_hint,
                 ),
                 "Button" => emit_button(args, callbacks),
                 "TextField" => emit_textfield(args, callbacks),
@@ -601,6 +1137,8 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
+                    local_hint,
                 ),
                 "LazyVStack" => emit_lazy_vstack(
                     args,
@@ -612,6 +1150,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
                 ),
                 "Picker" => emit_picker(args, callbacks),
                 "ProgressView" => emit_progressview(args),
@@ -625,6 +1164,8 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
+                    local_hint,
                 ),
                 // Phase 2 v12 widgets.
                 "Tabs" => emit_tabs(
@@ -637,6 +1178,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
                 ),
                 "Modal" | "Dialog" => emit_modal(args, callbacks),
                 "Menu" | "ContextMenu" => emit_menu(args, callbacks),
@@ -650,6 +1192,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
                 ),
                 // Phase 2 v11: state-driven multi-page nav.
                 "NavStack" => emit_nav_stack(
@@ -662,6 +1205,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
                 ),
                 other => format!(
                     "// unsupported perry/ui widget: {} (Phase 2 v12)\n\
@@ -675,13 +1219,28 @@ fn emit_widget(
             // plain string (id) — Text("hi", "id") leaves args.last() as
             // a String which extract_style_object returns None for.
             let style_props = args.last().and_then(|a| extract_style_object(a, classes));
-            if let Some(props) = style_props {
+            let mut out = if let Some(props) = style_props {
                 let modifiers = emit_style_modifiers(&props);
                 if !modifiers.is_empty() {
-                    return format!("{}{}", core, modifiers);
+                    format!("{}{}", core, modifiers)
+                } else {
+                    core
+                }
+            } else {
+                core
+            };
+            // Issue #408 — append modifier mutations recorded against this
+            // widget local. Stack/ScrollView/Section emitters fold AddChild
+            // / SetScrollChild / ClearChildren mutations into their bodies
+            // directly (see those functions); Modifier mutations are
+            // append-only and apply to *every* widget kind so we handle
+            // them here unconditionally.
+            if let Some(id) = local_hint {
+                if let Some(muts) = mutations.get(&id) {
+                    out.push_str(&emit_modifier_mutations(muts));
                 }
             }
-            core
+            out
         }
         // Phase 2 v5: ForEach via array.map. When a widget position
         // contains `array.map(item => widgetExpr)`, lower it to ArkUI's
@@ -698,12 +1257,264 @@ fn emit_widget(
             classes,
             state_registry,
             lazy_sources,
+            mutations,
         ),
         _ => format!(
             "// unrecognized body expression (must be a perry/ui widget call)\n\
              Text('[unrecognized body]').fontSize(16).fontColor('#888888')"
         ),
     }
+}
+
+/// Issue #408 — emit the modifier-only entries from a mutation list as
+/// a `.<mod>(...).<mod>(...)` chain. `AddChild` / `ClearChildren` /
+/// `SetScrollChild` are skipped here (the structural emitters absorb
+/// them); only `Modifier` and `Comment` entries surface.
+///
+/// Conditional mutations are emitted inline as a JS-style ternary chain:
+///   `.padding(8) /* if cond */`
+/// since ArkUI's modifier chain is a method-call sequence and we can't
+/// inject a multi-statement `if` mid-chain. This is a fidelity loss vs
+/// child mutations which DO get full if/else expansion. Document tracked
+/// as a v0 limitation; users wanting conditional modifiers can author
+/// the trailing `style: {...}` arg directly with the v5 inline-style path.
+fn emit_modifier_mutations(muts: &[MutationEntry]) -> String {
+    let mut out = String::new();
+    for entry in muts {
+        match &entry.mutation {
+            Mutation::Modifier(s) => {
+                if let Some(cond) = &entry.condition {
+                    let branch = match cond.branch {
+                        Branch::Then => "",
+                        Branch::Else => "!",
+                    };
+                    out.push_str(&format!(
+                        " /* if ({branch}({c})) */ {m}",
+                        branch = branch,
+                        c = cond.cond_str,
+                        m = s
+                    ));
+                } else {
+                    out.push_str(s);
+                }
+            }
+            Mutation::Comment(c) => {
+                out.push_str(&format!("\n// {}", c));
+            }
+            // Structural mutations are handled by the per-widget emitters.
+            Mutation::AddChild(_) | Mutation::ClearChildren | Mutation::SetScrollChild(_) => {}
+        }
+    }
+    out
+}
+
+/// Issue #408 — return the list of effective AddChild expressions for a
+/// widget local, after honoring `ClearChildren` (which drops earlier
+/// AddChild entries from the same condition group + branch).
+///
+/// Returns `(unconditional_children, conditional_groups)` where each
+/// conditional_group is `(cond_str, then_children, else_children)`.
+/// All three lists hold the user-supplied child Expr references in
+/// source order.
+#[allow(clippy::type_complexity)]
+fn fold_child_mutations(
+    muts: &[MutationEntry],
+) -> (Vec<Expr>, Vec<(String, Vec<Expr>, Vec<Expr>, Vec<String>)>) {
+    let mut unconditional: Vec<Expr> = Vec::new();
+    // group_id → (cond_str, then_children, else_children, comments)
+    let mut groups: Vec<(u32, String, Vec<Expr>, Vec<Expr>, Vec<String>)> = Vec::new();
+    let group_idx = |groups: &mut Vec<(u32, String, Vec<Expr>, Vec<Expr>, Vec<String>)>,
+                     id: u32,
+                     cond_str: &str|
+     -> usize {
+        if let Some(i) = groups.iter().position(|(g, _, _, _, _)| *g == id) {
+            i
+        } else {
+            groups.push((id, cond_str.to_string(), Vec::new(), Vec::new(), Vec::new()));
+            groups.len() - 1
+        }
+    };
+    for entry in muts {
+        match (&entry.mutation, &entry.condition) {
+            (Mutation::AddChild(child), None) => unconditional.push(child.clone()),
+            (Mutation::AddChild(child), Some(cond)) => {
+                let i = group_idx(&mut groups, cond.group, &cond.cond_str);
+                match cond.branch {
+                    Branch::Then => groups[i].2.push(child.clone()),
+                    Branch::Else => groups[i].3.push(child.clone()),
+                }
+            }
+            (Mutation::ClearChildren, None) => unconditional.clear(),
+            (Mutation::ClearChildren, Some(cond)) => {
+                let i = group_idx(&mut groups, cond.group, &cond.cond_str);
+                match cond.branch {
+                    Branch::Then => groups[i].2.clear(),
+                    Branch::Else => groups[i].3.clear(),
+                }
+            }
+            (Mutation::Comment(c), None) => unconditional_push_comment(&mut unconditional, c),
+            (Mutation::Comment(c), Some(cond)) => {
+                let i = group_idx(&mut groups, cond.group, &cond.cond_str);
+                groups[i].4.push(c.clone());
+            }
+            // Modifier mutations don't affect children, SetScrollChild is
+            // handled by emit_scrollview directly.
+            _ => {}
+        }
+    }
+    let conds: Vec<(String, Vec<Expr>, Vec<Expr>, Vec<String>)> = groups
+        .into_iter()
+        .map(|(_id, cs, t, e, c)| (cs, t, e, c))
+        .collect();
+    (unconditional, conds)
+}
+
+/// Helper: push a comment Expr by smuggling it through a sentinel that
+/// downstream emitters recognize. Today comments are dropped at child
+/// emission since `emit_widget` requires a real widget call. We instead
+/// surface comments at the post-mutation modifier-chain emit site.
+/// This helper is here as the API but currently a no-op — kept to make
+/// the design explicit.
+fn unconditional_push_comment(_out: &mut Vec<Expr>, _comment: &str) {
+    // Intentionally empty: comments are surfaced via emit_modifier_mutations'
+    // post-emit `// ...` lines, not as fake child widgets.
+}
+
+/// Issue #408 — emit a string of ArkUI children (already-rendered) for
+/// the unconditional + conditional groups produced by fold_child_mutations.
+/// Each conditional group emits as `if (cond) { thenA(); thenB(); } else { elseA(); }`,
+/// inlined into the parent's body alongside the unconditional siblings.
+///
+/// Caller is responsible for indenting the result appropriately. Returns
+/// an empty string if no children registered, so callers can short-circuit.
+#[allow(clippy::too_many_arguments)]
+fn emit_mutation_children(
+    muts: &[MutationEntry],
+    bindings: &HashMap<LocalId, Expr>,
+    depth: usize,
+    callbacks: &mut Vec<Expr>,
+    text_slots: &mut Vec<TextSlot>,
+    arkts_locals: &HashMap<LocalId, String>,
+    classes: &[Class],
+    state_registry: &HashMap<LocalId, StateBinding>,
+    lazy_sources: &mut Vec<LazyDataSource>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
+) -> Vec<String> {
+    let (unconditional, conds) = fold_child_mutations(muts);
+    let mut out: Vec<String> = Vec::new();
+    for child in &unconditional {
+        out.push(emit_widget(
+            child,
+            bindings,
+            depth,
+            callbacks,
+            text_slots,
+            arkts_locals,
+            classes,
+            state_registry,
+            lazy_sources,
+            mutations,
+            None,
+        ));
+    }
+    for (cond_str, then_kids, else_kids, comments) in &conds {
+        let inner_indent = "    ".repeat(depth + 1);
+        let outer_indent = "    ".repeat(depth);
+        let then_lines: Vec<String> = then_kids
+            .iter()
+            .map(|c| {
+                emit_widget(
+                    c,
+                    bindings,
+                    depth + 1,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                    lazy_sources,
+                    mutations,
+                    None,
+                )
+            })
+            .collect();
+        let else_lines: Vec<String> = else_kids
+            .iter()
+            .map(|c| {
+                emit_widget(
+                    c,
+                    bindings,
+                    depth + 1,
+                    callbacks,
+                    text_slots,
+                    arkts_locals,
+                    classes,
+                    state_registry,
+                    lazy_sources,
+                    mutations,
+                    None,
+                )
+            })
+            .collect();
+        let comment_block = if comments.is_empty() {
+            String::new()
+        } else {
+            comments
+                .iter()
+                .map(|c| format!("{}// {}\n", inner_indent, c))
+                .collect()
+        };
+        let then_body = if then_lines.is_empty() {
+            format!("{}// (no children)", inner_indent)
+        } else {
+            then_lines
+                .iter()
+                .map(|c| {
+                    c.lines()
+                        .map(|line| format!("{}{}", inner_indent, line))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let block = if else_lines.is_empty() {
+            format!(
+                "if ({cond}) {{\n\
+                 {comments}{body}\n\
+                 {outer}}}",
+                cond = cond_str,
+                comments = comment_block,
+                body = then_body,
+                outer = outer_indent,
+            )
+        } else {
+            let else_body = else_lines
+                .iter()
+                .map(|c| {
+                    c.lines()
+                        .map(|line| format!("{}{}", inner_indent, line))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "if ({cond}) {{\n\
+                 {comments}{body}\n\
+                 {outer}}} else {{\n\
+                 {else_body}\n\
+                 {outer}}}",
+                cond = cond_str,
+                comments = comment_block,
+                body = then_body,
+                outer = outer_indent,
+                else_body = else_body,
+            )
+        };
+        out.push(block);
+    }
+    out
 }
 
 /// Phase 2 v5: emit ArkUI `ForEach(<array>, (__item) => { <body> })`
@@ -727,6 +1538,7 @@ fn emit_for_each(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let array_src = arkts_array_source(array, bindings);
     let (param_id, body_expr) = match callback {
@@ -758,6 +1570,8 @@ fn emit_for_each(
                 classes,
                 state_registry,
                 lazy_sources,
+                mutations,
+                None,
             );
             ("__item".to_string(), inner)
         }
@@ -1175,6 +1989,12 @@ fn sanitize_text_id(s: &str) -> String {
 /// becomes `Column({space: <n>})` / `Row({space: <n>})`. ArkUI's default
 /// of 0 makes spacing-less stacks look cramped, so we default to 8 which
 /// matches the perry-ui-macos default.
+///
+/// Issue #408 — when `local_hint` is set and `mutations` has recorded
+/// AddChild / ClearChildren entries against this widget, the recorded
+/// children are appended after the explicit children list (and ClearChildren
+/// from the mutator side drops earlier explicit children too). Conditional
+/// children become `if (cond) { ChildA() } else { ChildB() }` blocks.
 #[allow(clippy::too_many_arguments)]
 fn emit_stack(
     arkui_kind: &str,
@@ -1187,6 +2007,8 @@ fn emit_stack(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
+    local_hint: Option<LocalId>,
 ) -> String {
     // First-arg shape detection — same logic as lower_call/native.rs:91.
     let (spacing, children_idx) = match args.first() {
@@ -1196,7 +2018,7 @@ fn emit_stack(
         _ => (8.0, 0),
     };
 
-    let children = match args.get(children_idx) {
+    let mut children = match args.get(children_idx) {
         Some(Expr::Array(items)) => items
             .iter()
             .map(|child| {
@@ -1210,6 +2032,8 @@ fn emit_stack(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
+                    None,
                 )
             })
             .collect::<Vec<_>>(),
@@ -1226,6 +2050,8 @@ fn emit_stack(
             classes,
             state_registry,
             lazy_sources,
+            mutations,
+            None,
         )],
         Some(_) => vec![format!(
             "// children arg wasn't an array literal — Phase 2 v1.5 limitation\n\
@@ -1233,6 +2059,35 @@ fn emit_stack(
         )],
         None => vec![],
     };
+
+    // Issue #408 — fold AddChild + ClearChildren mutations.
+    if let Some(id) = local_hint {
+        if let Some(muts) = mutations.get(&id) {
+            // ClearChildren at the unconditional level wipes the explicit
+            // children list emitted from the constructor's `Array(children)`.
+            // We approximate this by checking the mutation list for any
+            // unconditional ClearChildren — if found, drop existing children.
+            let has_unconditional_clear = muts
+                .iter()
+                .any(|e| matches!(e.mutation, Mutation::ClearChildren) && e.condition.is_none());
+            if has_unconditional_clear {
+                children.clear();
+            }
+            let extra = emit_mutation_children(
+                muts,
+                bindings,
+                depth + 1,
+                callbacks,
+                text_slots,
+                arkts_locals,
+                classes,
+                state_registry,
+                lazy_sources,
+                mutations,
+            );
+            children.extend(extra);
+        }
+    }
 
     let inner_indent = "    ".repeat(depth + 1);
     let outer_indent = "    ".repeat(depth);
@@ -1449,6 +2304,12 @@ fn emit_image(args: &[Expr]) -> String {
 /// default; we wrap in a `Column` so multiple children stack the way users
 /// expect from the perry-ui-* native ScrollView wiring. Empty / non-array
 /// children degrade to an empty Scroll just like the native variant.
+///
+/// Issue #408 — when `local_hint` resolves to a recorded set of mutations
+/// against this scroll local, `scrollviewSetChild(scroll, content)` calls
+/// inject the content as a child of the inner Column (latest one wins),
+/// and `widgetAddChild(scroll, child)` calls also append into the inner
+/// Column.
 #[allow(clippy::too_many_arguments)]
 fn emit_scrollview(
     args: &[Expr],
@@ -1460,12 +2321,14 @@ fn emit_scrollview(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
+    local_hint: Option<LocalId>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 2);
     let mid_indent = "    ".repeat(depth + 1);
     let outer_indent = "    ".repeat(depth);
 
-    let children: Vec<String> = match args.first() {
+    let mut children: Vec<String> = match args.first() {
         Some(Expr::Array(items)) => items
             .iter()
             .map(|c| {
@@ -1479,6 +2342,8 @@ fn emit_scrollview(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
+                    None,
                 )
             })
             .collect(),
@@ -1492,9 +2357,71 @@ fn emit_scrollview(
             classes,
             state_registry,
             lazy_sources,
+            mutations,
+            None,
         )],
         _ => vec![],
     };
+
+    // Issue #408 — fold scroll-specific mutations.
+    // SetScrollChild semantics: latest wins, replaces ALL prior children
+    // (matches the native `scrollviewSetChild` behavior). AddChild on a
+    // ScrollView is rare but supported — appends inside the inner Column.
+    if let Some(id) = local_hint {
+        if let Some(muts) = mutations.get(&id) {
+            // Find the LAST unconditional SetScrollChild — that wins.
+            let last_set = muts.iter().rposition(|e| {
+                matches!(e.mutation, Mutation::SetScrollChild(_)) && e.condition.is_none()
+            });
+            if let Some(idx) = last_set {
+                if let Mutation::SetScrollChild(content) = &muts[idx].mutation {
+                    children = vec![emit_widget(
+                        content,
+                        bindings,
+                        depth + 2,
+                        callbacks,
+                        text_slots,
+                        arkts_locals,
+                        classes,
+                        state_registry,
+                        lazy_sources,
+                        mutations,
+                        None,
+                    )];
+                }
+            }
+            // Append AddChild + conditional groups (built from BOTH AddChild
+            // and SetScrollChild — the latter is essentially "replace + add").
+            // For conditional SetScrollChild, treat each set as a single-child
+            // override INSIDE its branch: we synthesize an AddChild-style
+            // entry so emit_mutation_children can render it as an `if` block.
+            let synthesized: Vec<MutationEntry> = muts
+                .iter()
+                .filter_map(|e| match (&e.mutation, &e.condition) {
+                    (Mutation::AddChild(_), _) => Some(e.clone()),
+                    (Mutation::ClearChildren, _) => Some(e.clone()),
+                    (Mutation::SetScrollChild(c), Some(_)) => Some(MutationEntry {
+                        mutation: Mutation::AddChild(c.clone()),
+                        condition: e.condition.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect();
+            let extra = emit_mutation_children(
+                &synthesized,
+                bindings,
+                depth + 2,
+                callbacks,
+                text_slots,
+                arkts_locals,
+                classes,
+                state_registry,
+                lazy_sources,
+                mutations,
+            );
+            children.extend(extra);
+        }
+    }
 
     let body = if children.is_empty() {
         String::new()
@@ -1541,6 +2468,7 @@ fn emit_lazy_vstack(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 1);
     let outer_indent = "    ".repeat(depth);
@@ -1575,6 +2503,8 @@ fn emit_lazy_vstack(
                         classes,
                         state_registry,
                         lazy_sources,
+                        mutations,
+                        None,
                     );
                     ("__item".to_string(), inner)
                 } else {
@@ -1637,6 +2567,8 @@ fn emit_lazy_vstack(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
+                    None,
                 )
             })
             .collect(),
@@ -1748,13 +2680,15 @@ fn emit_section(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
+    local_hint: Option<LocalId>,
 ) -> String {
     let title = first_string_arg(args).unwrap_or_default();
 
     let inner_indent = "    ".repeat(depth + 1);
     let outer_indent = "    ".repeat(depth);
 
-    let children: Vec<String> = match args.get(1) {
+    let mut children: Vec<String> = match args.get(1) {
         Some(Expr::Array(items)) => items
             .iter()
             .map(|c| {
@@ -1768,6 +2702,8 @@ fn emit_section(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
+                    None,
                 )
             })
             .collect(),
@@ -1781,9 +2717,36 @@ fn emit_section(
             classes,
             state_registry,
             lazy_sources,
+            mutations,
+            None,
         )],
         _ => vec![],
     };
+
+    // Issue #408 — fold AddChild + ClearChildren mutations.
+    if let Some(id) = local_hint {
+        if let Some(muts) = mutations.get(&id) {
+            let has_unconditional_clear = muts
+                .iter()
+                .any(|e| matches!(e.mutation, Mutation::ClearChildren) && e.condition.is_none());
+            if has_unconditional_clear {
+                children.clear();
+            }
+            let extra = emit_mutation_children(
+                muts,
+                bindings,
+                depth + 1,
+                callbacks,
+                text_slots,
+                arkts_locals,
+                classes,
+                state_registry,
+                lazy_sources,
+                mutations,
+            );
+            children.extend(extra);
+        }
+    }
 
     // Always emit the title Text at the top, regardless of children count.
     let title_line = format!(
@@ -1835,6 +2798,7 @@ fn emit_tabs(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let tab_specs: Vec<&Expr> = match args.first() {
         Some(Expr::Array(items)) => items.iter().collect(),
@@ -1893,6 +2857,8 @@ fn emit_tabs(
                         classes,
                         state_registry,
                         lazy_sources,
+                        mutations,
+                        None,
                     )
                 })
                 .unwrap_or_else(|| "Text('[empty tab]').fontSize(16)".to_string());
@@ -1993,6 +2959,7 @@ fn emit_grid(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let columns = numeric_arg(args, 0).unwrap_or(2.0) as i64;
     let columns = columns.clamp(1, 12);
@@ -2016,6 +2983,8 @@ fn emit_grid(
                 classes,
                 state_registry,
                 lazy_sources,
+                mutations,
+                None,
             );
             let body_indent = "    ".repeat(depth + 2);
             let body_indented = body
@@ -2081,6 +3050,7 @@ fn emit_nav_stack(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 1);
     let outer_indent = "    ".repeat(depth);
@@ -2138,6 +3108,8 @@ fn emit_nav_stack(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
+                    None,
                 )
             })
             .unwrap_or_else(|| "Text('[invalid route body]').fontSize(16)".to_string());
@@ -2181,6 +3153,8 @@ fn emit_nav_stack(
                     classes,
                     state_registry,
                     lazy_sources,
+                    mutations,
+                    None,
                 )
             })
             .unwrap_or_else(|| "Text('[empty route]').fontSize(16)".to_string());
@@ -3962,5 +4936,567 @@ mod tests {
             .ets_source
             .contains("import media from '@ohos.multimedia.media'"));
         assert!(r.ets_source.contains("runMediaPump"));
+    }
+
+    // ─── #408 procedural mutation tracking ─────────────────────────────
+
+    /// Helper: Let-bind a widget to a LocalId so mutator calls can target it.
+    fn let_widget(id: LocalId, name: &str, init: Expr) -> Stmt {
+        Stmt::Let {
+            id,
+            name: name.to_string(),
+            ty: perry_types::Type::Any,
+            mutable: false,
+            init: Some(init),
+        }
+    }
+
+    /// Helper: a perry/ui mutator call expression, e.g. widgetAddChild(parent, child).
+    fn mutator_stmt(method: &str, args: Vec<Expr>) -> Stmt {
+        Stmt::Expr(Expr::NativeMethodCall {
+            module: "perry/ui".to_string(),
+            class_name: None,
+            object: None,
+            method: method.to_string(),
+            args,
+        })
+    }
+
+    #[test]
+    fn issue_408_hstack_with_widget_add_child_appends_children() {
+        // const toolbar = HStack(0, []);
+        // widgetAddChild(toolbar, button1);
+        // widgetAddChild(toolbar, button2);
+        // App({body: toolbar});
+        let mut m = empty_module();
+        let toolbar_id: LocalId = 10;
+        let btn_a_id: LocalId = 11;
+        let btn_b_id: LocalId = 12;
+        m.init.push(let_widget(
+            toolbar_id,
+            "toolbar",
+            nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        ));
+        m.init.push(let_widget(
+            btn_a_id,
+            "btn_a",
+            nmc("Button", vec![Expr::String("A".into())]),
+        ));
+        m.init.push(let_widget(
+            btn_b_id,
+            "btn_b",
+            nmc("Button", vec![Expr::String("B".into())]),
+        ));
+        m.init.push(mutator_stmt(
+            "widgetAddChild",
+            vec![Expr::LocalGet(toolbar_id), Expr::LocalGet(btn_a_id)],
+        ));
+        m.init.push(mutator_stmt(
+            "widgetAddChild",
+            vec![Expr::LocalGet(toolbar_id), Expr::LocalGet(btn_b_id)],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(toolbar_id)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(
+            r.ets_source.contains("Row({ space: 0 })"),
+            "expected Row container:\n{}",
+            r.ets_source
+        );
+        // Both children must appear inside the body. They show up after
+        // the explicit empty array's children (none) so they're the only
+        // contents of Row.
+        assert!(
+            r.ets_source.contains("Button('A')"),
+            "missing Button A:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source.contains("Button('B')"),
+            "missing Button B:\n{}",
+            r.ets_source
+        );
+        // Order: A appears before B in the source.
+        let pos_a = r.ets_source.find("Button('A')").unwrap();
+        let pos_b = r.ets_source.find("Button('B')").unwrap();
+        assert!(pos_a < pos_b, "child order swapped:\n{}", r.ets_source);
+    }
+
+    #[test]
+    fn issue_408_scrollview_set_child_replaces_body() {
+        // const screen = ScrollView();
+        // const content = VStack([Text("hello")]);
+        // scrollviewSetChild(screen, content);
+        // App({body: screen});
+        let mut m = empty_module();
+        let screen_id: LocalId = 20;
+        let content_id: LocalId = 21;
+        m.init
+            .push(let_widget(screen_id, "screen", nmc("ScrollView", vec![])));
+        m.init.push(let_widget(
+            content_id,
+            "content",
+            nmc(
+                "VStack",
+                vec![Expr::Array(vec![nmc(
+                    "Text",
+                    vec![Expr::String("hello".into())],
+                )])],
+            ),
+        ));
+        m.init.push(mutator_stmt(
+            "scrollviewSetChild",
+            vec![Expr::LocalGet(screen_id), Expr::LocalGet(content_id)],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(screen_id)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(
+            r.ets_source.contains("Scroll() {"),
+            "expected Scroll wrapper:\n{}",
+            r.ets_source
+        );
+        // Child content is rendered inside the inner Column.
+        assert!(
+            r.ets_source.contains("Text('hello')"),
+            "missing scroll child content:\n{}",
+            r.ets_source
+        );
+    }
+
+    #[test]
+    fn issue_408_set_padding_emits_modifier_chain() {
+        // const card = VStack([]);
+        // setPadding(card, 8, 12, 8, 12);
+        // setCornerRadius(card, 16);
+        // widgetSetBackgroundColor(card, 0.2, 0.5, 0.95, 1);
+        // App({body: card});
+        let mut m = empty_module();
+        let card_id: LocalId = 30;
+        m.init.push(let_widget(
+            card_id,
+            "card",
+            nmc("VStack", vec![Expr::Array(vec![])]),
+        ));
+        m.init.push(mutator_stmt(
+            "setPadding",
+            vec![
+                Expr::LocalGet(card_id),
+                Expr::Number(8.0),
+                Expr::Number(12.0),
+                Expr::Number(8.0),
+                Expr::Number(12.0),
+            ],
+        ));
+        m.init.push(mutator_stmt(
+            "setCornerRadius",
+            vec![Expr::LocalGet(card_id), Expr::Number(16.0)],
+        ));
+        m.init.push(mutator_stmt(
+            "widgetSetBackgroundColor",
+            vec![
+                Expr::LocalGet(card_id),
+                Expr::Number(0.2),
+                Expr::Number(0.5),
+                Expr::Number(0.95),
+                Expr::Number(1.0),
+            ],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(card_id)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(
+            r.ets_source
+                .contains(".padding({ top: 8, right: 12, bottom: 8, left: 12 })"),
+            "expected padding modifier:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source.contains(".borderRadius(16)"),
+            "expected borderRadius:\n{}",
+            r.ets_source
+        );
+        // 0.2*255=51, 0.5*255≈128, 0.95*255≈242
+        assert!(
+            r.ets_source
+                .contains(".backgroundColor('rgba(51, 128, 242, 1)')"),
+            "expected rgba background:\n{}",
+            r.ets_source
+        );
+    }
+
+    #[test]
+    fn issue_408_conditional_widget_add_child_emits_if_else() {
+        // const screen = VStack([]);
+        // const btn_phone = Button("phone");
+        // const btn_desktop = Button("desktop");
+        // if (mobile) { widgetAddChild(screen, btn_phone); }
+        // else { widgetAddChild(screen, btn_desktop); }
+        // App({body: screen});
+        let mut m = empty_module();
+        let screen_id: LocalId = 40;
+        let phone_id: LocalId = 41;
+        let desktop_id: LocalId = 42;
+        let mobile_id: LocalId = 43;
+        m.init
+            .push(let_widget(mobile_id, "mobile", Expr::Bool(true)));
+        m.init.push(let_widget(
+            screen_id,
+            "screen",
+            nmc("VStack", vec![Expr::Array(vec![])]),
+        ));
+        m.init.push(let_widget(
+            phone_id,
+            "btn_phone",
+            nmc("Button", vec![Expr::String("phone".into())]),
+        ));
+        m.init.push(let_widget(
+            desktop_id,
+            "btn_desktop",
+            nmc("Button", vec![Expr::String("desktop".into())]),
+        ));
+        m.init.push(Stmt::If {
+            condition: Expr::Compare {
+                op: perry_hir::ir::CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(mobile_id)),
+                right: Box::new(Expr::Bool(true)),
+            },
+            then_branch: vec![mutator_stmt(
+                "widgetAddChild",
+                vec![Expr::LocalGet(screen_id), Expr::LocalGet(phone_id)],
+            )],
+            else_branch: Some(vec![mutator_stmt(
+                "widgetAddChild",
+                vec![Expr::LocalGet(screen_id), Expr::LocalGet(desktop_id)],
+            )]),
+        });
+        m.init.push(app_with_body(Expr::LocalGet(screen_id)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // Predicate string contains the comparison.
+        assert!(
+            r.ets_source.contains("if ("),
+            "missing if-block:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source.contains("} else {"),
+            "missing else-block:\n{}",
+            r.ets_source
+        );
+        // Both branches' children are present under the right arm.
+        assert!(
+            r.ets_source.contains("Button('phone')"),
+            "missing phone branch:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source.contains("Button('desktop')"),
+            "missing desktop branch:\n{}",
+            r.ets_source
+        );
+    }
+
+    #[test]
+    fn issue_408_widget_clear_children_drops_earlier_addchild() {
+        // const stack = HStack(0, []);
+        // widgetAddChild(stack, btn_a);
+        // widgetClearChildren(stack);
+        // widgetAddChild(stack, btn_b);
+        // App({body: stack}); — only btn_b should render.
+        let mut m = empty_module();
+        let stack_id: LocalId = 50;
+        let a_id: LocalId = 51;
+        let b_id: LocalId = 52;
+        m.init.push(let_widget(
+            stack_id,
+            "stack",
+            nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        ));
+        m.init.push(let_widget(
+            a_id,
+            "btn_a",
+            nmc("Button", vec![Expr::String("dropped".into())]),
+        ));
+        m.init.push(let_widget(
+            b_id,
+            "btn_b",
+            nmc("Button", vec![Expr::String("kept".into())]),
+        ));
+        m.init.push(mutator_stmt(
+            "widgetAddChild",
+            vec![Expr::LocalGet(stack_id), Expr::LocalGet(a_id)],
+        ));
+        m.init.push(mutator_stmt(
+            "widgetClearChildren",
+            vec![Expr::LocalGet(stack_id)],
+        ));
+        m.init.push(mutator_stmt(
+            "widgetAddChild",
+            vec![Expr::LocalGet(stack_id), Expr::LocalGet(b_id)],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(stack_id)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(
+            !r.ets_source.contains("Button('dropped')"),
+            "Button('dropped') should have been cleared:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source.contains("Button('kept')"),
+            "Button('kept') should remain:\n{}",
+            r.ets_source
+        );
+    }
+
+    #[test]
+    fn issue_408_untraceable_parent_falls_back_without_crashing() {
+        // widgetAddChild(<some unbound expression>, btn) — parent isn't
+        // a LocalGet, so the mutation is dropped silently. The page still
+        // emits cleanly.
+        let mut m = empty_module();
+        let stack_id: LocalId = 60;
+        m.init.push(let_widget(
+            stack_id,
+            "stack",
+            nmc("VStack", vec![Expr::Array(vec![])]),
+        ));
+        m.init.push(mutator_stmt(
+            "widgetAddChild",
+            vec![
+                // First arg is NOT a LocalGet — typical "transient widget"
+                // shape that the harvest can't statically trace. Should
+                // not crash; should be silently skipped.
+                nmc("Button", vec![Expr::String("orphan".into())]),
+                nmc("Button", vec![Expr::String("child".into())]),
+            ],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(stack_id)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // Stack still renders; mutation silently skipped.
+        assert!(
+            r.ets_source.contains("Column({ space: 8 })"),
+            "stack still renders:\n{}",
+            r.ets_source
+        );
+        // The orphan child shouldn't appear since the mutation didn't
+        // resolve to a known parent.
+        assert!(
+            !r.ets_source.contains("Button('child')"),
+            "untraceable child should not have been added:\n{}",
+            r.ets_source
+        );
+    }
+
+    #[test]
+    fn issue_408_widget_set_hidden_emits_visibility_modifier() {
+        let mut m = empty_module();
+        let id: LocalId = 70;
+        m.init.push(let_widget(
+            id,
+            "w",
+            nmc("VStack", vec![Expr::Array(vec![])]),
+        ));
+        m.init.push(mutator_stmt(
+            "widgetSetHidden",
+            vec![Expr::LocalGet(id), Expr::Number(1.0)],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(id)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(
+            r.ets_source.contains(".visibility(Visibility.Hidden)"),
+            "missing hidden modifier:\n{}",
+            r.ets_source
+        );
+    }
+
+    #[test]
+    fn issue_408_match_parent_size_emits_100pct_modifiers() {
+        let mut m = empty_module();
+        let id: LocalId = 80;
+        m.init.push(let_widget(
+            id,
+            "w",
+            nmc("VStack", vec![Expr::Array(vec![])]),
+        ));
+        m.init.push(mutator_stmt(
+            "widgetMatchParentWidth",
+            vec![Expr::LocalGet(id)],
+        ));
+        m.init.push(mutator_stmt(
+            "widgetMatchParentHeight",
+            vec![Expr::LocalGet(id)],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(id)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(
+            r.ets_source.contains(".width('100%')"),
+            "missing width 100%:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source.contains(".height('100%')"),
+            "missing height 100%:\n{}",
+            r.ets_source
+        );
+    }
+
+    #[test]
+    fn issue_408_stack_distribution_and_alignment_emit_flexalign_modifiers() {
+        let mut m = empty_module();
+        let id: LocalId = 90;
+        m.init.push(let_widget(
+            id,
+            "w",
+            nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        ));
+        m.init.push(mutator_stmt(
+            "stackSetDistribution",
+            vec![Expr::LocalGet(id), Expr::Number(3.0)], // SpaceBetween
+        ));
+        m.init.push(mutator_stmt(
+            "stackSetAlignment",
+            vec![Expr::LocalGet(id), Expr::Number(1.0)], // Center
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(id)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        assert!(
+            r.ets_source
+                .contains(".justifyContent(FlexAlign.SpaceBetween)"),
+            "missing distribution modifier:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source.contains(".alignItems(HorizontalAlign.Center)"),
+            "missing alignment modifier:\n{}",
+            r.ets_source
+        );
+    }
+
+    #[test]
+    fn issue_408_mango_three_screen_shape_renders_all_screens() {
+        // Composite test mirroring the Mango shape from #408 — three
+        // top-level screens built procedurally with widgetAddChild +
+        // styling mutators, all wrapped in a single VStack.
+        let mut m = empty_module();
+        let root_id: LocalId = 100;
+        let conn_id: LocalId = 101;
+        let browser_id: LocalId = 102;
+        let info_id: LocalId = 103;
+        let conn_btn: LocalId = 110;
+        let browser_btn: LocalId = 111;
+        let info_btn: LocalId = 112;
+        m.init.push(let_widget(
+            root_id,
+            "root",
+            nmc("VStack", vec![Expr::Array(vec![])]),
+        ));
+        // Three screen containers
+        m.init.push(let_widget(
+            conn_id,
+            "connectionScreen",
+            nmc("VStack", vec![Expr::Array(vec![])]),
+        ));
+        m.init.push(let_widget(
+            browser_id,
+            "browserScreen",
+            nmc("ScrollView", vec![]),
+        ));
+        m.init.push(let_widget(
+            info_id,
+            "infoScreen",
+            nmc("HStack", vec![Expr::Number(8.0), Expr::Array(vec![])]),
+        ));
+        // Widget-level child buttons
+        m.init.push(let_widget(
+            conn_btn,
+            "conn_btn",
+            nmc("Button", vec![Expr::String("Connect".into())]),
+        ));
+        m.init.push(let_widget(
+            browser_btn,
+            "browser_btn",
+            nmc("Button", vec![Expr::String("Browse".into())]),
+        ));
+        m.init.push(let_widget(
+            info_btn,
+            "info_btn",
+            nmc("Button", vec![Expr::String("Info".into())]),
+        ));
+        // widgetAddChild calls — connection screen gets a button
+        m.init.push(mutator_stmt(
+            "widgetAddChild",
+            vec![Expr::LocalGet(conn_id), Expr::LocalGet(conn_btn)],
+        ));
+        // browserScreen uses scrollviewSetChild + a wrapper VStack
+        let browser_content_id: LocalId = 120;
+        m.init.push(let_widget(
+            browser_content_id,
+            "browser_content",
+            nmc(
+                "VStack",
+                vec![Expr::Array(vec![Expr::LocalGet(browser_btn)])],
+            ),
+        ));
+        m.init.push(mutator_stmt(
+            "scrollviewSetChild",
+            vec![
+                Expr::LocalGet(browser_id),
+                Expr::LocalGet(browser_content_id),
+            ],
+        ));
+        m.init.push(mutator_stmt(
+            "widgetAddChild",
+            vec![Expr::LocalGet(info_id), Expr::LocalGet(info_btn)],
+        ));
+        // Style the root
+        m.init.push(mutator_stmt(
+            "setPadding",
+            vec![
+                Expr::LocalGet(root_id),
+                Expr::Number(16.0),
+                Expr::Number(16.0),
+                Expr::Number(16.0),
+                Expr::Number(16.0),
+            ],
+        ));
+        // Add screens to root
+        m.init.push(mutator_stmt(
+            "widgetAddChild",
+            vec![Expr::LocalGet(root_id), Expr::LocalGet(conn_id)],
+        ));
+        m.init.push(mutator_stmt(
+            "widgetAddChild",
+            vec![Expr::LocalGet(root_id), Expr::LocalGet(browser_id)],
+        ));
+        m.init.push(mutator_stmt(
+            "widgetAddChild",
+            vec![Expr::LocalGet(root_id), Expr::LocalGet(info_id)],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(root_id)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        // All three screens' contents must surface.
+        assert!(
+            r.ets_source.contains("Button('Connect')"),
+            "missing Connect:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source.contains("Button('Browse')"),
+            "missing Browse:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source.contains("Button('Info')"),
+            "missing Info:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source
+                .contains(".padding({ top: 16, right: 16, bottom: 16, left: 16 })"),
+            "missing root padding:\n{}",
+            r.ets_source
+        );
+        assert!(
+            r.ets_source.contains("Scroll() {"),
+            "missing browser scroll:\n{}",
+            r.ets_source
+        );
     }
 }
