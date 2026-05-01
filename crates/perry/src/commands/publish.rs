@@ -2656,6 +2656,16 @@ pub(crate) fn create_project_tarball_with_excludes(
 
     // Walk the project directory
     for entry in WalkDir::new(project_dir).into_iter().filter_entry(|e| {
+        // The walk root is always kept — exclusion rules below apply to
+        // children only. Without this guard, a user whose project root
+        // basename happens to match a bare-name entry in
+        // `publish.exclude` (typical when excluding a built binary that
+        // shares a name with the project dir) would have the entire
+        // tree pruned at depth 0, producing an empty tarball with no
+        // CLI-side error. Tracked in #416.
+        if e.depth() == 0 {
+            return true;
+        }
         let name = e.file_name().to_string_lossy();
         if builtin_exclude_dirs.iter().any(|ex| name == *ex) {
             return false;
