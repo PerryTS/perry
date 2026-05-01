@@ -24,7 +24,7 @@ People are building real apps with Perry today. Here are some highlights:
 | [**Bloom Engine**](https://bloomengine.dev) | Native TypeScript game engine — Metal, DirectX 12, Vulkan, OpenGL. Write games in TS, ship native. | macOS, Windows, Linux, iOS, tvOS, Android |
 | [**Mango**](https://github.com/MangoQuery/app) | Native MongoDB GUI. ~7 MB binary, <100 MB RAM, sub-second cold start. | macOS, Windows, Linux, iOS, Android |
 | [**Hone**](https://hone.codes) | AI-powered native code editor with built-in terminal, Git, and LSP. | macOS, Windows, Linux, iOS, Android, Web |
-| [**Pry**](https://github.com/nicktrebes/perry-pry) | Fast, native JSON viewer with tree navigation and search. | macOS, iOS, Android |
+| [**Pry**](https://github.com/PerryTS/pry) | Fast, native JSON viewer with tree navigation and search. | macOS, iOS, Android |
 | [**dB Meter**](https://dbmeter.app) | Real-time sound level measurement with 60fps updates and per-device calibration. | iOS, macOS, Android |
 
 ### Screenshots
