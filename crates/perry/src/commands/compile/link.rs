@@ -1359,6 +1359,64 @@ pub(super) fn build_and_run_link(
                 }
                 // PulseAudio for audio capture (only needed with UI)
                 cmd.arg("-lpulse-simple").arg("-lpulse");
+                // GStreamer libs — pulled in by perry-ui-gtk4's gstreamer-rs
+                // dep (added in v0.5.440 for the perry/media playbin backend).
+                // GTK4's pkg-config doesn't transitively reference the
+                // gstreamer-1.0 sonames, so the `-lgstreamer-1.0` (and the
+                // base/app/video/audio sublibs that gstreamer-rs's playbin
+                // path touches) have to land on the link line explicitly or ld
+                // fails with `undefined reference to gst_message_parse_buffering`
+                // + `DSO missing from command line` (#423). Same pkg-config →
+                // hardcoded-fallback shape as the GTK4 block above.
+                let mut got_gst_libs = false;
+                let gst_pc_out = Command::new("pkg-config")
+                    .args([
+                        "--libs",
+                        "gstreamer-1.0",
+                        "gstreamer-base-1.0",
+                        "gstreamer-app-1.0",
+                        "gstreamer-video-1.0",
+                        "gstreamer-audio-1.0",
+                    ])
+                    .output();
+                if let Ok(ref output) = gst_pc_out {
+                    if output.status.success() {
+                        let libs = String::from_utf8_lossy(&output.stdout);
+                        for flag in libs.trim().split_whitespace() {
+                            cmd.arg(flag);
+                        }
+                        got_gst_libs = true;
+                    }
+                }
+                if !got_gst_libs {
+                    eprintln!(
+                        "Warning: `pkg-config --libs gstreamer-1.0 ...` did not \
+                         return GStreamer linker flags ({}). Falling back to a \
+                         hardcoded GStreamer link set — install \
+                         `libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev` \
+                         (Debian/Ubuntu) or `gstreamer1-devel \
+                         gstreamer1-plugins-base-devel` (Fedora/RHEL) to silence \
+                         this warning.",
+                        match &gst_pc_out {
+                            Err(e) => format!("pkg-config not runnable: {e}"),
+                            Ok(o) if !o.status.success() => format!(
+                                "pkg-config exited {}: {}",
+                                o.status.code().unwrap_or(-1),
+                                String::from_utf8_lossy(&o.stderr).trim()
+                            ),
+                            Ok(_) => "no output".to_string(),
+                        }
+                    );
+                    for lib in [
+                        "-lgstreamer-1.0",
+                        "-lgstbase-1.0",
+                        "-lgstapp-1.0",
+                        "-lgstvideo-1.0",
+                        "-lgstaudio-1.0",
+                    ] {
+                        cmd.arg(lib);
+                    }
+                }
             } else if is_windows {
                 // Win32 system libs already linked above
             } else {
