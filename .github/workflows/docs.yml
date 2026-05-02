@@ -25,9 +25,11 @@ jobs:
           mkdir -p "$HOME/.cargo/bin"
           tag=$(curl -sS -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/rust-lang/mdBook/releases/latest | jq -r .tag_name)
           curl -sSL "https://github.com/rust-lang/mdBook/releases/download/${tag}/mdbook-${tag}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.cargo/bin"
-      - name: Build docs
+      - name: Install mdbook-i18n-helpers
+        run: cargo install mdbook-i18n-helpers --locked --version 0.4.0
+      - name: Build docs (all languages)
         run: |
-          mdbook build docs
+          ./docs/i18n.sh build-all
           cp docs/CNAME docs/book/CNAME
       - uses: actions/configure-pages@v4
       - uses: actions/upload-pages-artifact@v3
