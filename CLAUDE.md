@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.624
+**Current Version:** 0.5.625
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.625** — Refs #478: Rich text editor — GTK4 stub replaced with `GtkTextView` + `GtkTextBuffer` + pre-registered bold / italic / underline `GtkTextTag`s in `crates/perry-ui-gtk4/src/widgets/rich_text.rs`. `connect_changed` on the buffer fires onChange with the buffer's plain text. Toggle commands check `selection_bounds()` for a non-collapsed selection and apply / remove the matching tag (toggle behaviour: probe iter at start to test the tag's presence, then `remove_tag` if present else `apply_tag`). HTML round-trip is a v1 placeholder — `set_html` strips tags via a coarse non-regex pass and stores the result as plain text; `get_html` wraps the plain text in `<p>...</p>` with minimal `&` / `<` / `>` escaping. Pango-Markup ↔ HTML conversion is a follow-up.
 
 - **v0.5.624** — Refs #477: Command palette — GTK4 stub replaced with floating `GtkWindow` (`set_decorated(false)` + `set_modal(true)`) hosting a `GtkSearchEntry` + scrolled `GtkListBox` in `crates/perry-ui-gtk4/src/widgets/command_palette.rs`. Single thread-local `STATE { commands, filtered, query, window, listbox }`. `connect_search_changed` updates query + calls `refresh_filter` which rebuilds the listbox children with one `GtkListBoxRow` per filtered command (`cmd_idx` stashed via `set_data` for the activate handler to recover). `connect_activate` on the search entry forwards Enter to row 0 via `emit_by_name<()>("row-activated", &[&row])`; `connect_row_activated` invokes the command's `on_run` closure (`js_closure_call0`) and dismisses. Esc dismiss wired through `GtkEventControllerKey::connect_key_pressed`.
 
