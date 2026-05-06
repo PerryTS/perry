@@ -552,6 +552,32 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                     }
                 }
             }
+            // Issue #529: `obj["method"]` on a class instance with a static
+            // string key is semantically equivalent to `obj.method` — both
+            // forms must hit the same vtable dispatch. The dot form lowers
+            // to `Expr::PropertyGet`, which codegen routes through
+            // `js_class_method_bind` / vtable lookup; `IndexGet` on a class
+            // instance falls through to the generic property-by-name read
+            // (`js_dyn_index_get`), which only sees object fields and
+            // returns undefined for methods. Fold static-string IndexGet
+            // into PropertyGet so the two forms share a code path.
+            //
+            // Fold only when the index is a literal string that does NOT
+            // parse as a non-negative integer — `arr["0"]` keeps IndexGet
+            // semantics (string-coerced numeric element access on arrays).
+            // This is the same disambiguator JavaScript's spec uses
+            // internally for indexed-vs-named properties.
+            if let Expr::String(key) = &*index {
+                let is_numeric_string = !key.is_empty()
+                    && key.chars().all(|c| c.is_ascii_digit())
+                    && !(key.len() > 1 && key.starts_with('0'));
+                if !is_numeric_string {
+                    return Ok(Expr::PropertyGet {
+                        object,
+                        property: key.clone(),
+                    });
+                }
+            }
             Ok(Expr::IndexGet { object, index })
         }
         ast::MemberProp::PrivateName(private) => {

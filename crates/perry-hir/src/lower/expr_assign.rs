@@ -330,6 +330,23 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             }
                         }
                     }
+                    // Issue #529: mirror the IndexGet fold — `obj["key"] = v`
+                    // with a static non-numeric string key is semantically a
+                    // property assignment, not an indexed-element write.
+                    // Numeric-string keys keep IndexSet so `arr["0"] = v`
+                    // preserves spec-compliant element-write semantics.
+                    if let Expr::String(key) = &*index {
+                        let is_numeric_string = !key.is_empty()
+                            && key.chars().all(|c| c.is_ascii_digit())
+                            && !(key.len() > 1 && key.starts_with('0'));
+                        if !is_numeric_string {
+                            return Ok(Expr::PropertySet {
+                                object,
+                                property: key.clone(),
+                                value,
+                            });
+                        }
+                    }
                     Ok(Expr::IndexSet {
                         object,
                         index,
