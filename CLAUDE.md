@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.618
+**Current Version:** 0.5.619
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.619** — Refs #481: Calendar widget — GTK4 stub replaced with real `gtk4::Calendar` impl in `crates/perry-ui-gtk4/src/widgets/calendar.rs`. `connect_day_selected` fires the user's onChange with the selected date in `yyyy-MM-dd` form (matches macOS POSIX-locale output) via `cal.date()` (`glib::DateTime`). `set_date` builds a `glib::DateTime::from_local` and calls `select_day`. Build not verified on macOS dev host (perry-ui-gtk4 needs gstreamer + gtk4 system libs); CI on Linux validates.
 
 - **v0.5.618** — Refs #478: Rich text editor widget v1. macOS impl in `crates/perry-ui-macos/src/widgets/rich_text.rs` wraps `NSTextView` (with `setRichText:true`, `setAllowsUndo:true`, `setAutomaticLinkDetectionEnabled:true`) inside an `NSScrollView`. The handle returned to user code is the scroll view; the inner text view is cached in `TEXT_VIEWS: HashMap<i64, Retained<AnyObject>>` so per-handle commands (set/get string, toggle bold/italic/underline) reach it directly. `PerryRichTextDelegate` (NSObject) handles `textDidChange:` and fires the user's onChange closure with the current plain-text value. HTML round-trip via `NSAttributedString` document-attributes machinery — `setHtml` builds an `{DocumentType: NSHTMLTextDocumentType}` options dict + `dataUsingEncoding:NSUTF8StringEncoding` and calls `initWithData:options:documentAttributes:error:`; `getHtml` mirrors with `dataFromRange:documentAttributes:`. Bold/italic/underline are wired through `performSelector:` on `toggleBold:` / `toggleItalic:` / `underline:` (NSResponder actions). 8 new dispatch rows. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 8 FFI symbols. Out of scope v1: markdown round-trip, block formatting (headings / lists / blockquotes / code blocks), configurable toolbar, paste handling for HTML / code blocks, tables, inline images, collaborative editing.
 
