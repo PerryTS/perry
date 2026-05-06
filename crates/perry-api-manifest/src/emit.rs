@@ -6,7 +6,7 @@
 //! alphabetically, entries within a module sort by kind then name —
 //! so regenerated docs produce stable diffs in CI.
 
-use crate::{ApiEntry, ApiKind, ApiSource, API_MANIFEST};
+use crate::{ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec, API_MANIFEST};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -116,11 +116,15 @@ pub fn emit_markdown(perry_version: &str) -> String {
 
 /// Render the manifest as a TypeScript declaration file (`.d.ts`).
 /// Editors that load this get squiggles on unimplemented references
-/// before `perry compile` runs. The declarations are intentionally
-/// loose — `any` for parameters and return types — because the
-/// manifest doesn't carry signature metadata yet (followup under #466
-/// Phase 2 when wrapper authors declare argument types). The point is
-/// existence, not type checking.
+/// before `perry compile` runs.
+///
+/// As of #512 module-level functions (no-receiver, no class_filter)
+/// render with their declared `params` / `returns` from the manifest.
+/// Entries without signature data fall back to the loose
+/// `(...args: any[]): any` shape so behavior never regresses for un-typed
+/// rows. Instance methods and class-filtered rows still hang off
+/// `[key: string]: any;` on their class — narrowing those needs a
+/// follow-up that threads receiver-type info through HIR.
 pub fn emit_dts(perry_version: &str) -> String {
     let mut out = String::new();
     let by_module = group_by_module();
@@ -209,14 +213,11 @@ pub fn emit_dts(perry_version: &str) -> String {
             // callable" (e.g. `import sharp from 'sharp'`). TypeScript
             // expresses that as `export default function (...)`, with
             // no name on the function declaration.
+            let signature = render_signature(e);
             if e.name == "default" {
-                let _ = writeln!(out, "  export default function (...args: any[]): any;");
+                let _ = writeln!(out, "  export default function {};", signature);
             } else {
-                let _ = writeln!(
-                    out,
-                    "  export function {}(...args: any[]): any;",
-                    ts_ident(e.name)
-                );
+                let _ = writeln!(out, "  export function {}{};", ts_ident(e.name), signature);
             }
         }
 
@@ -295,6 +296,63 @@ fn module_declaration_name(s: &str) -> &str {
     s
 }
 
+/// Render a method's parenthesized signature `(p0: string, p1: number): boolean`.
+/// Falls back to `(...args: any[]): any` when the entry has no params and
+/// returns `Any` so un-typed rows don't regress today's loose shape (#512).
+fn render_signature(entry: &ApiEntry) -> String {
+    let has_params = !entry.params.is_empty();
+    let has_return = entry.returns != TypeSpec::Any;
+    if !has_params && !has_return {
+        // Fall through to today's loose default — no usable signature data.
+        return "(...args: any[]): any".to_string();
+    }
+
+    let mut out = String::from("(");
+    let mut first = true;
+    for p in entry.params {
+        if !first {
+            out.push_str(", ");
+        }
+        first = false;
+        match p {
+            ParamSpec::Named { name, ty, optional } => {
+                out.push_str(name);
+                if *optional {
+                    out.push('?');
+                }
+                out.push_str(": ");
+                out.push_str(render_type(ty));
+            }
+            ParamSpec::Rest { name, ty } => {
+                out.push_str("...");
+                out.push_str(name);
+                out.push_str(": ");
+                out.push_str(render_type(ty));
+                out.push_str("[]");
+            }
+        }
+    }
+    out.push_str("): ");
+    out.push_str(render_type(&entry.returns));
+    out
+}
+
+/// Render a [`TypeSpec`] as the TypeScript type the .d.ts emitter
+/// should print. Mirrors the param/return-type vocabulary in
+/// `docs/src/native-libraries/manifest-v1.md`.
+fn render_type(ty: &TypeSpec) -> &'static str {
+    match ty {
+        TypeSpec::String => "string",
+        TypeSpec::Number => "number",
+        TypeSpec::Bool => "boolean",
+        TypeSpec::BigInt => "bigint",
+        TypeSpec::Buffer => "Buffer",
+        TypeSpec::Handle => "any",
+        TypeSpec::Void => "void",
+        TypeSpec::Any => "any",
+    }
+}
+
 /// TypeScript identifiers can't start with a digit and forbid most
 /// punctuation. Manifest names are already valid identifiers in
 /// practice; this is just defensive in case a future entry adds one.
@@ -366,6 +424,47 @@ mod tests {
         assert!(
             crypto_block.contains("export function randomUUID"),
             "crypto.randomUUID missing from .d.ts"
+        );
+    }
+
+    /// #512 acceptance contract: `bcrypt.hash` must declare its first
+    /// param as `string` so a `bcrypt.hash(123, "salt")` call site is
+    /// rejected by `tsc`. Untyped (`...args: any[]`) signatures pass
+    /// such calls silently — that's exactly what #512 carves out.
+    #[test]
+    fn dts_bcrypt_hash_has_real_signature() {
+        let dts = emit_dts("test");
+        let block_start = dts.find("declare module \"bcrypt\"").expect("bcrypt block");
+        let after = &dts[block_start..];
+        let block_end = after.find("\n}\n").expect("block end");
+        let block = &after[..block_end];
+        assert!(
+            block.contains("export function hash(password: string"),
+            "bcrypt.hash should declare password: string\nblock: {}",
+            block
+        );
+        // Defense-in-depth: the loose fallback shape must NOT appear
+        // for hash — that would mean the backfill regressed.
+        assert!(
+            !block.contains("export function hash(...args: any[]): any"),
+            "bcrypt.hash regressed to loose any signature\nblock: {}",
+            block
+        );
+    }
+
+    /// uuid.v4() is no-args and returns a string — verify the renderer
+    /// emits an empty arg list instead of `(...args: any[])`.
+    #[test]
+    fn dts_uuid_v4_has_no_args() {
+        let dts = emit_dts("test");
+        let block_start = dts.find("declare module \"uuid\"").expect("uuid block");
+        let after = &dts[block_start..];
+        let block_end = after.find("\n}\n").expect("block end");
+        let block = &after[..block_end];
+        assert!(
+            block.contains("export function v4(): string"),
+            "uuid.v4 should be (): string\nblock: {}",
+            block
         );
     }
 }

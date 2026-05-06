@@ -7823,12 +7823,70 @@ fn find_outer_writes_expr(
 /// Iterate the dispatch table, projected to manifest-relevant fields.
 /// Used by `perry-codegen`'s public `iter_native_method_signatures()`
 /// — see `lib.rs`. Stable order = declaration order in
-/// `NATIVE_MODULE_TABLE`.
-pub(crate) fn iter_native_module_table(
-) -> impl Iterator<Item = (&'static str, bool, &'static str, Option<&'static str>)> {
-    NATIVE_MODULE_TABLE
-        .iter()
-        .map(|sig| (sig.module, sig.has_receiver, sig.method, sig.class_filter))
+/// `NATIVE_MODULE_TABLE`. Returns args/ret as opaque tag strings so
+/// downstream crates (perry-api-manifest's drift test) don't have to
+/// know about `NativeArgKind` / `NativeRetKind` (#512).
+#[allow(clippy::type_complexity)]
+pub(crate) fn iter_native_module_table() -> impl Iterator<
+    Item = (
+        &'static str,
+        bool,
+        &'static str,
+        Option<&'static str>,
+        &'static [&'static str],
+        &'static str,
+    ),
+> {
+    NATIVE_MODULE_TABLE.iter().map(|sig| {
+        (
+            sig.module,
+            sig.has_receiver,
+            sig.method,
+            sig.class_filter,
+            arg_kinds_for(sig.args),
+            ret_kind_tag(&sig.ret),
+        )
+    })
+}
+
+/// Map a `NativeArgKind` slice to its `NA_*` tag-name slice. The
+/// returned slice is `&'static` — keeping each lookup costless on the
+/// dispatch-table iteration path. Per-arity buckets keep the static
+/// arrays addressable without alloc.
+fn arg_kinds_for(args: &'static [NativeArgKind]) -> &'static [&'static str] {
+    // Map each arg to its tag string. Up to 6 args covers every row
+    // in NATIVE_MODULE_TABLE today (tls.connect = 4 args is the max).
+    static TAGS_0: &[&str] = &[];
+    let tags: Vec<&'static str> = args.iter().map(|a| arg_kind_tag(a)).collect();
+    // Lookup against a small set of static fan-outs — but since we
+    // can't easily memoize without `OnceLock`, just leak. The dispatch
+    // table is < 400 rows; the resulting Vec leak is bounded and
+    // happens once per process.
+    if tags.is_empty() {
+        return TAGS_0;
+    }
+    Box::leak(tags.into_boxed_slice())
+}
+
+fn arg_kind_tag(a: &NativeArgKind) -> &'static str {
+    match a {
+        NativeArgKind::F64 => "NA_F64",
+        NativeArgKind::StrPtr => "NA_STR",
+        NativeArgKind::PtrI64 => "NA_PTR",
+        NativeArgKind::JsvalI64 => "NA_JSV",
+        NativeArgKind::VarArgsAsArray => "NA_VARARGS",
+    }
+}
+
+fn ret_kind_tag(r: &NativeRetKind) -> &'static str {
+    match r {
+        NativeRetKind::Ptr => "NR_PTR",
+        NativeRetKind::Str => "NR_STR",
+        NativeRetKind::BigInt => "NR_BIGINT",
+        NativeRetKind::F64 => "NR_F64",
+        NativeRetKind::I32Void => "NR_I32",
+        NativeRetKind::Void => "NR_VOID",
+    }
 }
 
 /// Look up a native module method in the static dispatch table.

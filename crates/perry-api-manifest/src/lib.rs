@@ -50,6 +50,80 @@ pub struct ApiEntry {
     /// together with the compiler, so its ABI moves in lockstep.
     /// Required for `External` source under #466 Phase 2.
     pub abi_version: Option<&'static str>,
+    /// Declared parameter list for this method (#512). Empty for
+    /// properties, classes, and methods whose param shape hasn't been
+    /// backfilled — emit code falls back to `(...args: any[])` in that
+    /// case so editors don't reject working calls. Auto-derived from
+    /// `NATIVE_MODULE_TABLE` for module-level (no-receiver, no
+    /// class_filter) rows; instance methods stay loose for now since
+    /// the receiver-binding shape varies per dispatch path.
+    pub params: &'static [ParamSpec],
+    /// Declared return type. [`TypeSpec::Any`] means "fall back to the
+    /// loose `any` rendering"; concrete values let the .d.ts emitter
+    /// produce a typed signature. (#512)
+    pub returns: TypeSpec,
+}
+
+/// One parameter slot on a method entry. Mirrors the param-type
+/// vocabulary in `docs/src/native-libraries/manifest-v1.md` so the
+/// in-tree manifest and external `perry.nativeLibrary` manifests share
+/// one type model.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum ParamSpec {
+    /// A named, typed positional parameter (`name: ty`).
+    Named {
+        /// Parameter name. Auto-derived params use `p0`/`p1`/... — the
+        /// dispatch table doesn't carry user-facing names.
+        name: &'static str,
+        /// Parameter type.
+        ty: TypeSpec,
+        /// True when the param is optional (`name?: ty`).
+        optional: bool,
+    },
+    /// A trailing rest parameter (`...name: ty[]`).
+    Rest {
+        /// Parameter name.
+        name: &'static str,
+        /// Element type.
+        ty: TypeSpec,
+    },
+}
+
+/// Reduced type vocabulary the manifest uses for parameter and return
+/// types. Mirrors the param/return type strings in
+/// `docs/src/native-libraries/manifest-v1.md` so the in-tree manifest
+/// and external `perry.nativeLibrary` manifests share one model.
+///
+/// Deliberately small. The dispatch table doesn't carry per-arg
+/// TypeScript types (it's a Rust-ABI table); the manifest's job is to
+/// say "this slot is a string vs. a number vs. opaque" with enough
+/// fidelity that the `.d.ts` catches obvious mismatches like
+/// `bcrypt.hash(123, "salt")`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind", rename_all = "camelCase"))]
+pub enum TypeSpec {
+    /// `string`.
+    String,
+    /// `number`.
+    Number,
+    /// `boolean`.
+    Bool,
+    /// `bigint`.
+    BigInt,
+    /// `Buffer` (Node Buffer / `Uint8Array`-shaped opaque).
+    Buffer,
+    /// `any` — opaque handle; the runtime shape varies and is not
+    /// expressible in a useful TypeScript type today.
+    Handle,
+    /// `void`. Used for return slots when the runtime ignores the
+    /// return value (`I32Void`/`Void`).
+    Void,
+    /// `any`. Default when no specific type fits or the dispatch path
+    /// returns a NaN-boxed JSValue whose user-side type isn't fixed
+    /// (`F64` returns can be `Promise<T>`, mixed strings/numbers, etc.).
+    Any,
 }
 
 /// What shape of symbol this entry describes.

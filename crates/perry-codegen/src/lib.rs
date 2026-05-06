@@ -29,11 +29,16 @@ pub use codegen::{compile_module, resolve_target_triple, CompileOptions, Importe
 
 /// One row of the native-module dispatch table, projected to just
 /// the manifest-relevant fields (module / method / has_receiver /
-/// class_filter — no runtime function name, arg coercion, or return
-/// kind). Exposed so `perry-api-manifest`'s consistency test can walk
-/// the dispatch table and assert every row has a counterpart entry
-/// in `API_MANIFEST` — drift between the two would otherwise let an
-/// unimplemented-API check (#463) miss a real implementation.
+/// class_filter / arg-kind summary / return-kind summary). Exposed so
+/// `perry-api-manifest`'s consistency test can walk the dispatch table
+/// and assert every row has a counterpart entry in `API_MANIFEST` —
+/// drift between the two would otherwise let an unimplemented-API
+/// check (#463) miss a real implementation.
+///
+/// Arg / return *kinds* are reported as opaque strings (`"NA_STR"`,
+/// `"NR_PTR"`, ...) so the consistency test can compare against the
+/// manifest's `params` / `returns` types without `perry-api-manifest`
+/// having to depend on `perry-codegen`'s internal enums (#512).
 pub struct NativeMethodRef {
     /// Module specifier (e.g. `"crypto"`, `"mysql2/promise"`).
     pub module: &'static str,
@@ -45,6 +50,14 @@ pub struct NativeMethodRef {
     /// Optional class filter. `Some("Pool")` matches only entries
     /// constructed via that class.
     pub class_filter: Option<&'static str>,
+    /// Per-arg coercion kinds, in declaration order. Each element is
+    /// one of `"NA_F64"`, `"NA_STR"`, `"NA_PTR"`, `"NA_JSV"`,
+    /// `"NA_VARARGS"`. Used by `perry-api-manifest`'s param-count
+    /// drift test (#512).
+    pub arg_kinds: &'static [&'static str],
+    /// Return-kind tag. One of `"NR_PTR"`, `"NR_STR"`, `"NR_BIGINT"`,
+    /// `"NR_F64"`, `"NR_I32"`, `"NR_VOID"`.
+    pub ret_kind: &'static str,
 }
 
 /// Walk every entry in the native-module dispatch table.
@@ -52,12 +65,14 @@ pub struct NativeMethodRef {
 /// the manifest is in sync with the dispatch table. Stable iteration
 /// order — declaration order in `lower_call.rs::NATIVE_MODULE_TABLE`.
 pub fn iter_native_method_signatures() -> impl Iterator<Item = NativeMethodRef> {
-    lower_call::iter_native_module_table().map(|(module, has_receiver, method, class_filter)| {
-        NativeMethodRef {
+    lower_call::iter_native_module_table().map(
+        |(module, has_receiver, method, class_filter, arg_kinds, ret_kind)| NativeMethodRef {
             module,
             has_receiver,
             method,
             class_filter,
-        }
-    })
+            arg_kinds,
+            ret_kind,
+        },
+    )
 }

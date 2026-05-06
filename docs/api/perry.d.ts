@@ -1,13 +1,13 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Perry version: 0.5.590
+// Perry version: 0.5.596
 // Coverage: 397 entries across 45 modules
 
 declare module "argon2" {
   /** stdlib */
-  export function hash(...args: any[]): any;
+  export function hash(password: string): any;
   /** stdlib */
-  export function verify(...args: any[]): any;
+  export function verify(hash: string, password: string): any;
 }
 
 declare module "async_hooks" {
@@ -15,14 +15,14 @@ declare module "async_hooks" {
 
 declare module "bcrypt" {
   /** stdlib */
-  export function compare(...args: any[]): any;
+  export function compare(plaintext: string, hash: string): any;
   /** stdlib */
-  export function hash(...args: any[]): any;
+  export function hash(password: string, saltOrRounds: any): any;
 }
 
 declare module "better-sqlite3" {
   /** stdlib */
-  export default function (...args: any[]): any;
+  export default function (p0: string): any;
 }
 
 declare module "buffer" {
@@ -32,7 +32,7 @@ declare module "buffer" {
 
 declare module "cheerio" {
   /** stdlib */
-  export function load(...args: any[]): any;
+  export function load(p0: string): any;
 }
 
 declare module "commander" {
@@ -40,11 +40,11 @@ declare module "commander" {
 
 declare module "cron" {
   /** stdlib */
-  export function describe(...args: any[]): any;
+  export function describe(expr: string): string;
   /** stdlib */
-  export function schedule(...args: any[]): any;
+  export function schedule(expr: string, handler: any): any;
   /** stdlib */
-  export function validate(...args: any[]): any;
+  export function validate(expr: string): boolean;
 }
 
 declare module "crypto" {
@@ -85,15 +85,15 @@ declare module "dotenv" {
 
 declare module "ethers" {
   /** stdlib */
-  export function formatEther(...args: any[]): any;
+  export function formatEther(p0: any): string;
   /** stdlib */
-  export function formatUnits(...args: any[]): any;
+  export function formatUnits(p0: any, p1: any): string;
   /** stdlib */
-  export function getAddress(...args: any[]): any;
+  export function getAddress(p0: string): string;
   /** stdlib */
-  export function parseEther(...args: any[]): any;
+  export function parseEther(p0: string): bigint;
   /** stdlib */
-  export function parseUnits(...args: any[]): any;
+  export function parseUnits(p0: string, p1: any): bigint;
 }
 
 declare module "events" {
@@ -105,19 +105,19 @@ declare module "events" {
 
 declare module "exponential-backoff" {
   /** stdlib */
-  export function backOff(...args: any[]): any;
+  export function backOff(p0: any, p1: any): any;
 }
 
 declare module "fastify" {
   /** stdlib */
-  export default function (...args: any[]): any;
+  export default function (p0: any): any;
 }
 
 declare module "ioredis" {
   /** stdlib */
   export class Redis { [key: string]: any; }
   /** stdlib */
-  export function createClient(...args: any[]): any;
+  export function createClient(p0: any): any;
 }
 
 declare module "iroh" {
@@ -127,53 +127,53 @@ declare module "iroh" {
 
 declare module "jsonwebtoken" {
   /** stdlib */
-  export function decode(...args: any[]): any;
+  export function decode(token: string): any;
   /** stdlib */
-  export function sign(...args: any[]): any;
+  export function sign(payload: any, secret: string, options: any): any;
   /** stdlib */
-  export function verify(...args: any[]): any;
+  export function verify(token: string, secret: string): any;
 }
 
 declare module "lodash" {
   /** stdlib */
-  export function camelCase(...args: any[]): any;
+  export function camelCase(p0: string): string;
   /** stdlib */
-  export function chunk(...args: any[]): any;
+  export function chunk(p0: any, p1: any): any;
   /** stdlib */
-  export function clamp(...args: any[]): any;
+  export function clamp(p0: any, p1: any, p2: any): any;
   /** stdlib */
-  export function compact(...args: any[]): any;
+  export function compact(p0: any): any;
   /** stdlib */
-  export function drop(...args: any[]): any;
+  export function drop(p0: any, p1: any): any;
   /** stdlib */
-  export function first(...args: any[]): any;
+  export function first(p0: any): any;
   /** stdlib */
-  export function flatten(...args: any[]): any;
+  export function flatten(p0: any): any;
   /** stdlib */
-  export function head(...args: any[]): any;
+  export function head(p0: any): any;
   /** stdlib */
-  export function kebabCase(...args: any[]): any;
+  export function kebabCase(p0: string): string;
   /** stdlib */
-  export function last(...args: any[]): any;
+  export function last(p0: any): any;
   /** stdlib */
-  export function range(...args: any[]): any;
+  export function range(p0: any, p1: any, p2: any): any;
   /** stdlib */
-  export function reverse(...args: any[]): any;
+  export function reverse(p0: any): any;
   /** stdlib */
-  export function size(...args: any[]): any;
+  export function size(p0: any): any;
   /** stdlib */
-  export function snakeCase(...args: any[]): any;
+  export function snakeCase(p0: string): string;
   /** stdlib */
-  export function take(...args: any[]): any;
+  export function take(p0: any, p1: any): any;
   /** stdlib */
-  export function times(...args: any[]): any;
+  export function times(p0: any): any;
   /** stdlib */
-  export function uniq(...args: any[]): any;
+  export function uniq(p0: any): any;
 }
 
 declare module "lru-cache" {
   /** stdlib */
-  export default function (...args: any[]): any;
+  export default function (p0: any): any;
 }
 
 declare module "moment" {
@@ -185,30 +185,30 @@ declare module "moment" {
 
 declare module "mongodb" {
   /** stdlib */
-  export function connect(...args: any[]): any;
+  export function connect(p0: any): any;
 }
 
 declare module "mysql2" {
   /** stdlib */
   export class Pool { [key: string]: any; }
   /** stdlib */
-  export function createConnection(...args: any[]): any;
+  export function createConnection(p0: any): any;
   /** stdlib */
-  export function createPool(...args: any[]): any;
+  export function createPool(p0: any): any;
 }
 
 declare module "mysql2/promise" {
   /** stdlib */
   export class Pool { [key: string]: any; }
   /** stdlib */
-  export function createConnection(...args: any[]): any;
+  export function createConnection(p0: any): any;
   /** stdlib */
-  export function createPool(...args: any[]): any;
+  export function createPool(p0: any): any;
 }
 
 declare module "nanoid" {
   /** stdlib */
-  export function nanoid(...args: any[]): any;
+  export function nanoid(size: number): string;
 }
 
 declare module "net" {
@@ -219,14 +219,14 @@ declare module "net" {
   /** stdlib */
   export function Socket(...args: any[]): any;
   /** stdlib */
-  export function connect(...args: any[]): any;
+  export function connect(p0: any, p1: string): any;
   /** stdlib */
-  export function createConnection(...args: any[]): any;
+  export function createConnection(p0: any, p1: string): any;
 }
 
 declare module "nodemailer" {
   /** stdlib */
-  export function createTransport(...args: any[]): any;
+  export function createTransport(p0: any): any;
 }
 
 declare module "os" {
@@ -293,60 +293,60 @@ declare module "path" {
 
 declare module "perry/thread" {
   /** stdlib */
-  export function parallelFilter(...args: any[]): any;
+  export function parallelFilter(p0: any, p1: any): any;
   /** stdlib */
-  export function parallelMap(...args: any[]): any;
+  export function parallelMap(p0: any, p1: any): any;
   /** stdlib */
-  export function spawn(...args: any[]): any;
+  export function spawn(p0: any): any;
 }
 
 declare module "perry/tui" {
   /** stdlib */
   export function Box(...args: any[]): any;
   /** stdlib */
-  export function Input(...args: any[]): any;
+  export function Input(p0: string): any;
   /** stdlib */
-  export function List(...args: any[]): any;
+  export function List(p0: any, p1: any): any;
   /** stdlib */
-  export function ProgressBar(...args: any[]): any;
+  export function ProgressBar(p0: any, p1: any, p2: any): any;
   /** stdlib */
-  export function Select(...args: any[]): any;
+  export function Select(p0: any, p1: any): any;
   /** stdlib */
   export function Spacer(...args: any[]): any;
   /** stdlib */
-  export function Spinner(...args: any[]): any;
+  export function Spinner(p0: any): any;
   /** stdlib */
-  export function Text(...args: any[]): any;
+  export function Text(p0: string): any;
   /** stdlib */
-  export function TextArea(...args: any[]): any;
+  export function TextArea(p0: string): any;
   /** stdlib */
-  export function boxSetAlignItems(...args: any[]): any;
+  export function boxSetAlignItems(p0: any, p1: string): void;
   /** stdlib */
-  export function boxSetFlexDirection(...args: any[]): any;
+  export function boxSetFlexDirection(p0: any, p1: string): void;
   /** stdlib */
-  export function boxSetFlexGrow(...args: any[]): any;
+  export function boxSetFlexGrow(p0: any, p1: any): void;
   /** stdlib */
-  export function boxSetGap(...args: any[]): any;
+  export function boxSetGap(p0: any, p1: any): void;
   /** stdlib */
-  export function boxSetHeight(...args: any[]): any;
+  export function boxSetHeight(p0: any, p1: any): void;
   /** stdlib */
-  export function boxSetJustifyContent(...args: any[]): any;
+  export function boxSetJustifyContent(p0: any, p1: string): void;
   /** stdlib */
-  export function boxSetPadding(...args: any[]): any;
+  export function boxSetPadding(p0: any, p1: any): void;
   /** stdlib */
-  export function boxSetWidth(...args: any[]): any;
+  export function boxSetWidth(p0: any, p1: any): void;
   /** stdlib */
-  export function enter(...args: any[]): any;
+  export function enter(): void;
   /** stdlib */
-  export function exit(...args: any[]): any;
+  export function exit(): void;
   /** stdlib */
-  export function render(...args: any[]): any;
+  export function render(p0: any): void;
   /** stdlib */
-  export function run(...args: any[]): any;
+  export function run(p0: any): void;
   /** stdlib */
-  export function state(...args: any[]): any;
+  export function state(p0: any): any;
   /** stdlib */
-  export function useInput(...args: any[]): any;
+  export function useInput(p0: any): void;
 }
 
 declare module "pg" {
@@ -355,9 +355,9 @@ declare module "pg" {
   /** stdlib */
   export class Pool { [key: string]: any; }
   /** stdlib */
-  export function Pool(...args: any[]): any;
+  export function Pool(p0: any): any;
   /** stdlib */
-  export function connect(...args: any[]): any;
+  export function connect(p0: any): any;
 }
 
 declare module "process" {
@@ -387,26 +387,26 @@ declare module "process" {
 
 declare module "readline" {
   /** stdlib */
-  export function createInterface(...args: any[]): any;
+  export function createInterface(p0: any): any;
 }
 
 declare module "sharp" {
   /** stdlib */
-  export default function (...args: any[]): any;
+  export default function (p0: string): any;
   /** stdlib */
-  export function sharp(...args: any[]): any;
+  export function sharp(p0: string): any;
 }
 
 declare module "slugify" {
   /** stdlib */
-  export default function (...args: any[]): any;
+  export default function (p0: string, p1: string, p2: string): string;
   /** stdlib */
-  export function slugify(...args: any[]): any;
+  export function slugify(p0: string, p1: string, p2: string): string;
 }
 
 declare module "tls" {
   /** stdlib */
-  export function connect(...args: any[]): any;
+  export function connect(p0: string, p1: any, p2: string, p3: any): any;
 }
 
 declare module "tursodb" {
@@ -423,26 +423,26 @@ declare module "url" {
 
 declare module "uuid" {
   /** stdlib */
-  export function v1(...args: any[]): any;
+  export function v1(): string;
   /** stdlib */
-  export function v4(...args: any[]): any;
+  export function v4(): string;
   /** stdlib */
-  export function v7(...args: any[]): any;
+  export function v7(): string;
   /** stdlib */
-  export function validate(...args: any[]): any;
+  export function validate(id: string): boolean;
 }
 
 declare module "validator" {
   /** stdlib */
-  export function isEmail(...args: any[]): any;
+  export function isEmail(s: string): boolean;
   /** stdlib */
-  export function isEmpty(...args: any[]): any;
+  export function isEmpty(s: string): boolean;
   /** stdlib */
-  export function isJSON(...args: any[]): any;
+  export function isJSON(s: string): boolean;
   /** stdlib */
-  export function isURL(...args: any[]): any;
+  export function isURL(s: string): boolean;
   /** stdlib */
-  export function isUUID(...args: any[]): any;
+  export function isUUID(s: string): boolean;
 }
 
 declare module "worker_threads" {
@@ -460,27 +460,27 @@ declare module "ws" {
   /** stdlib */
   export class WebSocketServer { [key: string]: any; }
   /** stdlib */
-  export function Server(...args: any[]): any;
+  export function Server(p0: any): any;
   /** stdlib */
-  export function WebSocket(...args: any[]): any;
+  export function WebSocket(p0: string): any;
   /** stdlib */
-  export function closeClient(...args: any[]): any;
+  export function closeClient(p0: any): void;
   /** stdlib */
-  export function sendToClient(...args: any[]): any;
+  export function sendToClient(p0: any, p1: string): void;
 }
 
 declare module "zlib" {
   /** stdlib */
-  export function deflateSync(...args: any[]): any;
+  export function deflateSync(p0: string): string;
   /** stdlib */
-  export function gunzip(...args: any[]): any;
+  export function gunzip(p0: string): any;
   /** stdlib */
-  export function gunzipSync(...args: any[]): any;
+  export function gunzipSync(p0: string): string;
   /** stdlib */
-  export function gzip(...args: any[]): any;
+  export function gzip(p0: string): any;
   /** stdlib */
-  export function gzipSync(...args: any[]): any;
+  export function gzipSync(p0: string): string;
   /** stdlib */
-  export function inflateSync(...args: any[]): any;
+  export function inflateSync(p0: string): string;
 }
 
