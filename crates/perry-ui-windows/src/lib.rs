@@ -1103,27 +1103,39 @@ pub extern "C" fn perry_ui_navstack_pop(handle: i64) {
 
 /// Create a Picker (dropdown).
 #[no_mangle]
-// Issue #478 — Rich text editor stubs.
+// Issue #478 — Rich text editor — real Windows impl via RichEdit (MSFTEDIT_CLASS).
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_create(_w: f64, _h: f64, _cb: f64) -> i64 { 0 }
-#[no_mangle]
-pub extern "C" fn perry_ui_rich_text_set_string(_h: i64, _t: i64) {}
-#[no_mangle]
-pub extern "C" fn perry_ui_rich_text_get_string(_h: i64) -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
+pub extern "C" fn perry_ui_rich_text_create(w: f64, h: f64, cb: f64) -> i64 {
+    widgets::rich_text::create(w, h, cb)
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_set_html(_h: i64, _html: i64) -> i64 { 0 }
-#[no_mangle]
-pub extern "C" fn perry_ui_rich_text_get_html(_h: i64) -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
+pub extern "C" fn perry_ui_rich_text_set_string(h: i64, t: i64) {
+    widgets::rich_text::set_string(h, t as *const u8)
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_toggle_bold(_h: i64) {}
+pub extern "C" fn perry_ui_rich_text_get_string(h: i64) -> f64 {
+    widgets::rich_text::get_string(h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_toggle_italic(_h: i64) {}
+pub extern "C" fn perry_ui_rich_text_set_html(h: i64, html: i64) -> i64 {
+    widgets::rich_text::set_html(h, html as *const u8)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_toggle_underline(_h: i64) {}
+pub extern "C" fn perry_ui_rich_text_get_html(h: i64) -> f64 {
+    widgets::rich_text::get_html(h)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_bold(h: i64) {
+    widgets::rich_text::toggle_bold(h)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_italic(h: i64) {
+    widgets::rich_text::toggle_italic(h)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_underline(h: i64) {
+    widgets::rich_text::toggle_underline(h)
+}
 
 // Issue #516 — PdfView stubs. Windows — Windows.Data.Pdf or a third-
 // party renderer is a future iteration.

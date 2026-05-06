@@ -21,6 +21,7 @@ pub mod text;
 pub mod text_registry;
 pub mod textfield;
 pub mod toast;
+pub mod rich_text;
 pub mod toggle;
 pub mod tree_view;
 pub mod vstack;
@@ -749,6 +750,7 @@ pub fn handle_command(control_id: u16, notify_code: u16, _lparam: LPARAM) {
             });
             match kind {
                 Some(WidgetKind::SecureField) => securefield::handle_change(handle),
+                Some(WidgetKind::RichText) => rich_text::handle_change(handle),
                 _ => textfield::handle_change(handle),
             }
         }
