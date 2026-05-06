@@ -560,6 +560,28 @@ export function chartAddDataPoint(widget: Widget, label: string, value: number):
 export function chartClearData(widget: Widget): void;
 export function chartSetTitle(widget: Widget, title: string): void;
 export function chartReload(widget: Widget): void;
+
+// ---------------------------------------------------------------------------
+// Command palette (issue #477, v1) — ⌘K-style fuzzy command launcher.
+// macOS: floating NSPanel with NSSearchField + NSTableView. iOS / tvOS /
+// visionOS / watchOS / Android / Windows / GTK4 stub the FFI today.
+//
+// Out of scope v1: fuzzy ranking (substring match for now), recent /
+// frequently-used boost, async command sources, command groups / section
+// headers, OS-native menu-bar integration. Bind `commandPaletteShow()`
+// to ⌘K via `addKeyboardShortcut` to wire the default hotkey.
+// ---------------------------------------------------------------------------
+
+export function commandPaletteRegister(
+    id: string,
+    label: string,
+    subtitle: string,
+    onRun: () => void,
+): void;
+export function commandPaletteUnregister(id: string): void;
+export function commandPaletteClear(): void;
+export function commandPaletteShow(): void;
+export function commandPaletteHide(): void;
 export function widgetSetControlSize(widget: Widget, size: number): void;
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;

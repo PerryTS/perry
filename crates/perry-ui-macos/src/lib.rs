@@ -1090,6 +1090,43 @@ pub extern "C" fn perry_ui_combobox_get_value(handle: i64) -> f64 {
     widgets::combobox::get_value(handle)
 }
 
+// ---- Command palette (issue #477) ----
+
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_register(
+    id_ptr: i64,
+    label_ptr: i64,
+    subtitle_ptr: i64,
+    on_run: f64,
+) {
+    widgets::command_palette::register(
+        id_ptr as *const u8,
+        label_ptr as *const u8,
+        subtitle_ptr as *const u8,
+        on_run,
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_unregister(id_ptr: i64) {
+    widgets::command_palette::unregister(id_ptr as *const u8);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_clear() {
+    widgets::command_palette::clear();
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_show() {
+    widgets::command_palette::show();
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_hide() {
+    widgets::command_palette::hide();
+}
+
 // ---- Chart (issue #474) ----
 
 /// Create a Chart widget. `kind` is 0=line, 1=bar, 2=pie.

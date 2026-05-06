@@ -885,6 +885,37 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget],
         ret: ReturnKind::Void,
     },
+    // ---- Command palette (issue #477) ----
+    MethodRow {
+        method: "commandPaletteRegister",
+        runtime: "perry_ui_command_palette_register",
+        args: &[ArgKind::Str, ArgKind::Str, ArgKind::Str, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "commandPaletteUnregister",
+        runtime: "perry_ui_command_palette_unregister",
+        args: &[ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "commandPaletteClear",
+        runtime: "perry_ui_command_palette_clear",
+        args: &[],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "commandPaletteShow",
+        runtime: "perry_ui_command_palette_show",
+        args: &[],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "commandPaletteHide",
+        runtime: "perry_ui_command_palette_hide",
+        args: &[],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "widgetSetControlSize",
         runtime: "perry_ui_widget_set_control_size",

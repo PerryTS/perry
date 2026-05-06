@@ -842,6 +842,18 @@ pub extern "C" fn perry_ui_combobox_get_value(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 
+// Issue #477 — Command palette stubs.
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_register(_id: i64, _l: i64, _s: i64, _cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_unregister(_id: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_clear() {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_show() {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_hide() {}
+
 // Issue #474 — Chart widget stubs.
 #[no_mangle]
 pub extern "C" fn perry_ui_chart_create(_kind: i64, _w: f64, _h: f64) -> i64 { 0 }

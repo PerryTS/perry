@@ -1362,6 +1362,18 @@ pub extern "C" fn perry_ui_navstack_pop(handle: i64) {
 
 /// Create a Picker (dropdown).
 #[no_mangle]
+// Issue #477 — Command palette stubs.
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_register(_id: i64, _l: i64, _s: i64, _cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_unregister(_id: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_clear() {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_show() {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_hide() {}
+
 // Issue #474 — Chart widget stubs. GTK4 — Cairo drawing on
 // `GtkDrawingArea` is a future iteration.
 #[no_mangle]

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.614
+**Current Version:** 0.5.615
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.615** — Refs #477: Command palette widget v1 (⌘K-style fuzzy launcher). macOS impl in `crates/perry-ui-macos/src/widgets/command_palette.rs`: borderless `NSPanel` (level 3 floating, level=floating window) anchored at the screen's visible-frame upper-third with rounded corners + light background. Top: `NSSearchField` with target-action `searchTextChanged:` listener. Bottom: scrolled `NSTableView` (no header) whose data source filters the global `COMMANDS: Vec<Command { id, label, subtitle, on_run }>` registry by case-insensitive substring against the current search query. Double-click on a row → `rowDoubleClicked:` invokes the command's NaN-boxed closure via `js_closure_call0` and dismisses the panel. Commands are upserted by `id` (re-register replaces). 5 new dispatch rows: `commandPaletteRegister(id, label, subtitle, onRun)`, `commandPaletteUnregister(id)`, `commandPaletteClear`, `commandPaletteShow`, `commandPaletteHide`. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 5 FFI symbols. Out of scope v1: fuzzy ranking, recent/frequently-used boost, async command sources, command groups / section headers, native menu-bar integration, default global hotkey wiring (user code binds via `addKeyboardShortcut`).
 
 - **v0.5.614** — Refs #474: Chart widget v1 (line/bar/pie). macOS impl in `crates/perry-ui-macos/src/widgets/chart.rs` is a `PerryChartView` (NSView subclass with `drawRect:`) that draws via CoreGraphics — `CGContextSetRGBFillColor` / `CGContextFillRect` for bars, `CGContextMoveToPoint` + `CGContextAddLineToPoint` + `CGContextStrokePath` for lines, `CGContextAddArc` + `CGContextFillPath` for pie wedges. Drawing-only (no Apple Charts framework dependency) keeps the widget portable to pre-13 macOS. 8-color palette for series, 24pt padding, optional title via `NSString.drawInRect:withAttributes:` with center-aligned NSParagraphStyle. 5 new dispatch rows: `Chart(kind, width, height)` (kind=0/1/2 for line/bar/pie), `chartAddDataPoint(label, value)`, `chartClearData`, `chartSetTitle`, `chartReload` (`setNeedsDisplay:`). iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 5 FFI symbols. Out of scope v1: multi-series line, grouped/stacked bars, donut, area chart, axis labels, legend, hover/tap tooltips, animated transitions, color theming, native Apple Charts integration.
 

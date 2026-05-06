@@ -907,6 +907,18 @@ pub extern "C" fn perry_ui_image_set_tint(handle: i64, r: f64, g: f64, b: f64, a
 
 /// Create a Picker (dropdown). style: 0=dropdown, 1=segmented. Returns widget handle.
 #[no_mangle]
+// Issue #477 — Command palette stubs.
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_register(_id: i64, _l: i64, _s: i64, _cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_unregister(_id: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_clear() {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_show() {}
+#[no_mangle]
+pub extern "C" fn perry_ui_command_palette_hide() {}
+
 // Issue #474 — Chart widget stubs. iOS — SwiftUI Charts (iOS 16+) is
 // a future iteration.
 #[no_mangle]
