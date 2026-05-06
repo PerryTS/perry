@@ -918,55 +918,89 @@ pub extern "C" fn perry_ui_image_set_tint(handle: i64, r: f64, g: f64, b: f64, a
 
 /// Create a Picker (dropdown). style: 0=dropdown, 1=segmented. Returns widget handle.
 #[no_mangle]
-// Issue #478 — Rich text editor stubs.
+// Issue #478 — Rich text editor — visionOS impl via UITextView.
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_create(_w: f64, _h: f64, _cb: f64) -> i64 { 0 }
-#[no_mangle]
-pub extern "C" fn perry_ui_rich_text_set_string(_h: i64, _t: i64) {}
-#[no_mangle]
-pub extern "C" fn perry_ui_rich_text_get_string(_h: i64) -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
+pub extern "C" fn perry_ui_rich_text_create(w: f64, h: f64, cb: f64) -> i64 {
+    widgets::rich_text::create(w, h, cb)
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_set_html(_h: i64, _html: i64) -> i64 { 0 }
-#[no_mangle]
-pub extern "C" fn perry_ui_rich_text_get_html(_h: i64) -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
+pub extern "C" fn perry_ui_rich_text_set_string(h: i64, t: i64) {
+    widgets::rich_text::set_string(h, t as *const u8)
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_toggle_bold(_h: i64) {}
+pub extern "C" fn perry_ui_rich_text_get_string(h: i64) -> f64 {
+    widgets::rich_text::get_string(h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_toggle_italic(_h: i64) {}
+pub extern "C" fn perry_ui_rich_text_set_html(h: i64, html: i64) -> i64 {
+    widgets::rich_text::set_html(h, html as *const u8)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_toggle_underline(_h: i64) {}
+pub extern "C" fn perry_ui_rich_text_get_html(h: i64) -> f64 {
+    widgets::rich_text::get_html(h)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_bold(h: i64) {
+    widgets::rich_text::toggle_bold(h)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_italic(h: i64) {
+    widgets::rich_text::toggle_italic(h)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_underline(h: i64) {
+    widgets::rich_text::toggle_underline(h)
+}
 
-// Issue #516 — PdfView stubs.
+// Issue #516 — PdfView — visionOS impl via PDFView.
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_create(w: f64, h: f64) -> i64 {
+    widgets::pdf_view::create(w, h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_load_file(_h: i64, _p: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_load_file(h: i64, p: i64) -> i64 {
+    if widgets::pdf_view::load_file(h, p as *const u8) { 1 } else { 0 }
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_get_page_count(_h: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_get_page_count(h: i64) -> i64 {
+    widgets::pdf_view::get_page_count(h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_go_to_page(_h: i64, _i: i64) {}
+pub extern "C" fn perry_ui_pdf_view_go_to_page(h: i64, i: i64) {
+    widgets::pdf_view::go_to_page(h, i)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_pdf_view_get_current_page(h: i64) -> i64 {
+    widgets::pdf_view::get_current_page(h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_set_scale(_h: i64, _s: f64) {}
+pub extern "C" fn perry_ui_pdf_view_set_scale(h: i64, s: f64) {
+    widgets::pdf_view::set_scale(h, s)
+}
 
-// Issue #517 — MapView stubs.
+// Issue #517 — MapView — visionOS impl via MKMapView.
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_create(_w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_map_view_create(w: f64, h: f64) -> i64 {
+    widgets::map_view::create(w, h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_set_region(_h: i64, _lat: f64, _lon: f64, _ls: f64, _os: f64) {}
+pub extern "C" fn perry_ui_map_view_set_region(h: i64, lat: f64, lon: f64, ls: f64, os: f64) {
+    widgets::map_view::set_region(h, lat, lon, ls, os)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_add_pin(_h: i64, _lat: f64, _lon: f64, _t: i64) {}
+pub extern "C" fn perry_ui_map_view_add_pin(h: i64, lat: f64, lon: f64, t: i64) {
+    widgets::map_view::add_pin(h, lat, lon, t as *const u8)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_clear_pins(_h: i64) {}
+pub extern "C" fn perry_ui_map_view_clear_pins(h: i64) {
+    widgets::map_view::clear_pins(h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_set_map_type(_h: i64, _s: i64) {}
+pub extern "C" fn perry_ui_map_view_set_map_type(h: i64, s: i64) {
+    widgets::map_view::set_map_type(h, s)
+}
 
-// Issue #477 — Command palette stubs.
+// Issue #477 — Command palette stubs (defer — needs spatial-aware presentation).
 #[no_mangle]
 pub extern "C" fn perry_ui_command_palette_register(_id: i64, _l: i64, _s: i64, _cb: f64) {}
 #[no_mangle]
@@ -978,26 +1012,40 @@ pub extern "C" fn perry_ui_command_palette_show() {}
 #[no_mangle]
 pub extern "C" fn perry_ui_command_palette_hide() {}
 
-// Issue #474 — Chart widget stubs.
+// Issue #474 — Chart — visionOS impl via UIView+CoreGraphics.
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_create(_kind: i64, _w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_chart_create(kind: i64, w: f64, h: f64) -> i64 {
+    widgets::chart::create(kind, w, h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_add_data_point(_h: i64, _l: i64, _v: f64) {}
+pub extern "C" fn perry_ui_chart_add_data_point(h: i64, l: i64, v: f64) {
+    widgets::chart::add_data_point(h, l as *const u8, v)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_clear_data(_h: i64) {}
+pub extern "C" fn perry_ui_chart_clear_data(h: i64) {
+    widgets::chart::clear_data(h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_set_title(_h: i64, _t: i64) {}
+pub extern "C" fn perry_ui_chart_set_title(h: i64, t: i64) {
+    widgets::chart::set_title(h, t as *const u8)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_reload(_h: i64) {}
+pub extern "C" fn perry_ui_chart_reload(h: i64) {
+    widgets::chart::reload(h)
+}
 
-// Issue #481 — Calendar widget stubs.
+// Issue #481 — Calendar — visionOS impl via UIDatePicker.inline.
 #[no_mangle]
-pub extern "C" fn perry_ui_calendar_create(_year: i64, _month: i64, _on_change: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_calendar_create(year: i64, month: i64, on_change: f64) -> i64 {
+    widgets::calendar::create(year, month, on_change)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_calendar_set_date(_h: i64, _y: i64, _m: i64, _d: i64) {}
+pub extern "C" fn perry_ui_calendar_set_date(h: i64, y: i64, m: i64, d: i64) {
+    widgets::calendar::set_date(h, y, m, d)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_calendar_get_selected_date(_h: i64) -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
+pub extern "C" fn perry_ui_calendar_get_selected_date(h: i64) -> f64 {
+    widgets::calendar::get_selected_date(h)
 }
 
 // Issue #473 — table sort/filter/multi-select stubs.

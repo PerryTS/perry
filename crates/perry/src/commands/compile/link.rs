@@ -1065,6 +1065,10 @@ pub(super) fn build_and_run_link(
             .arg("CoreVideo")
             .arg("-framework")
             .arg("MediaPlayer") // perry/media — Now Playing + Remote Command Center
+            .arg("-framework")
+            .arg("MapKit") // perry/ui MapView (#517) — MKMapView (visionOS)
+            .arg("-framework")
+            .arg("PDFKit") // perry/ui PdfView (#516) — PDFView (visionOS)
             .arg("-liconv")
             .arg("-lresolv")
             .arg("-lobjc")

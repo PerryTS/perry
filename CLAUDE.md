@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.636
+**Current Version:** 0.5.637
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.637** — visionOS un-stub batch: 5 widgets ported from iOS (calendar, map_view, pdf_view, rich_text, chart) — visionOS shares UIKit + MapKit + PDFKit with iOS so the impls cp directly. Renamed `define_class!` class names to avoid runtime collision with iOS classes that might co-load (`PerryCalendarTargetVisionOS` / `PerryChartViewVisionOS` / `PerryRichTextDelegateVisionOS`). Added `-framework MapKit` + `-framework PDFKit` to the visionOS link branch in `crates/perry/src/commands/compile/link.rs`. visionOS lib.rs FFI re-points 21 symbols from stubs to widget impls. Command palette stays stubbed on visionOS — its 2D popup model needs spatial-aware redesign for visionOS UX. Issue tracking: defers logged for tvOS (most widgets platform-mismatched), Android (needs JNI Kotlin bridge plumbing per widget), watchOS (most widgets impractical for screen size).
 
 - **v0.5.636** — Refs #474: Chart — iOS stub replaced with `PerryChartViewIOS` (UIView subclass with `drawRect:`) drawing line / bar / pie via CoreGraphics in `crates/perry-ui-ios/src/widgets/chart.rs`. Mirrors the macOS impl; key difference: UIKit's coordinate system is top-left (vs AppKit's bottom-left), so the y-mapping is flipped to keep "bigger value = higher on screen" matching macOS / GTK4 / Windows visual semantics. CG context fetched via `UIGraphicsGetCurrentContext()` (extern "C" FFI). Title rendered via `NSString.drawInRect:withAttributes:` with `UIFont.systemFontOfSize:` and a center-aligned NSMutableParagraphStyle. `setNeedsDisplay` (no colon — UIView vs NSView naming difference) on data mutations triggers redraw.
 
