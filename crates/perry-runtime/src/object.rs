@@ -4262,6 +4262,19 @@ pub unsafe extern "C" fn js_native_call_method(
                         let result = crate::array::js_array_slice(arr, start, end);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
+                    // Issue #515 followup: defensive `with` arm for arrays that
+                    // reach the generic dispatch tower because the HIR fold
+                    // bailed (untyped receiver, chained call returning Array,
+                    // etc.). Without this arm, tightening the HIR fold to
+                    // ignore unknown-type receivers would silently break
+                    // legitimate `(arr: any).with(idx, val)` callers.
+                    "with" if args_len >= 2 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let index = *args_ptr;
+                        let value = *args_ptr.add(1);
+                        let result = crate::array::js_array_with(arr, index, value);
+                        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                    }
                     _ => {} // not a handled array method — fall through to object dispatch
                 }
             }

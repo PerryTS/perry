@@ -2922,7 +2922,41 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                         }
                                     }
                                     "with" => {
-                                        if args.len() >= 2 {
+                                        // Issue #515: only fold `arr.with(idx, val)` to
+                                        // `Expr::ArrayWith` when the receiver is statically
+                                        // typed as an array or typed-array. `with` is
+                                        // heavily overloaded by user-defined builder
+                                        // methods (`class Builder { with(a, b): this {
+                                        // … } }`, `const obj = { with(a, b) { … } }`);
+                                        // folding optimistically on unknown-type receivers
+                                        // (the default for unannotated locals) silently
+                                        // rewrote the call to a typed-array index-replace
+                                        // and broke user code. Untyped-but-actually-array
+                                        // callers fall through to the codegen
+                                        // `lower_array_method` `with` arm (when
+                                        // `is_array_expr` recognizes the receiver) or to
+                                        // the runtime `js_native_call_method` arm.
+                                        let recv_ty = ctx.lookup_local_type(&arr_name);
+                                        let is_typed_array = recv_ty
+                                            .as_ref()
+                                            .map(|ty| {
+                                                matches!(ty, Type::Named(n) if matches!(
+                                                    n.as_str(),
+                                                    "Int8Array" | "Int16Array" | "Int32Array"
+                                                    | "Uint8Array" | "Uint8ClampedArray"
+                                                    | "Uint16Array" | "Uint32Array"
+                                                    | "Float32Array" | "Float64Array"
+                                                    | "BigInt64Array" | "BigUint64Array"
+                                                ))
+                                            })
+                                            .unwrap_or(false);
+                                        let is_known_array = is_typed_array
+                                            || recv_ty
+                                                .map(|ty| {
+                                                    matches!(ty, Type::Array(_) | Type::Tuple(_))
+                                                })
+                                                .unwrap_or(false);
+                                        if is_known_array && args.len() >= 2 {
                                             let mut args_iter = args.into_iter();
                                             let index = args_iter.next().unwrap();
                                             let value = args_iter.next().unwrap();
@@ -2932,6 +2966,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                                 value: Box::new(value),
                                             });
                                         }
+                                        // Fall through to general method dispatch
                                     }
                                     "copyWithin" => {
                                         if args.len() >= 2 {
@@ -4053,16 +4088,46 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     items,
                                 });
                             }
-                            "with" if args.len() >= 2 && !recv_is_class => {
-                                let array_expr = lower_expr(ctx, &member.obj)?;
-                                let mut args_iter = args.into_iter();
-                                let index = args_iter.next().unwrap();
-                                let value = args_iter.next().unwrap();
-                                return Ok(Expr::ArrayWith {
-                                    array: Box::new(array_expr),
-                                    index: Box::new(index),
-                                    value: Box::new(value),
-                                });
+                            "with" if args.len() >= 2 => {
+                                // Array.prototype.with(idx, value) — only fold when the
+                                // receiver is statically known to be array-like. The
+                                // `with` method name is heavily overloaded with user-defined
+                                // builder methods (`class Builder { with(a, b): this { … } }`,
+                                // `const obj = { with(a, b) { … } }`); aggressively folding
+                                // non-array receivers silently rewrites the call to a
+                                // typed-array index-replace and breaks user code.
+                                //
+                                // The sibling array arms (`map`/`filter`/`reduce`) fold
+                                // optimistically because the runtime's `js_native_call_method`
+                                // has dispatch arms for them — `with` has no such arm, but
+                                // that's fine: bailing here falls through to the general
+                                // method-call dispatch which finds the user's `with` method.
+                                // The known-array fold paths for bare-ident receivers
+                                // (line ~2897), imported-var array receivers (line ~3432),
+                                // and inline array literals (line ~3610) handle the
+                                // legitimate `Array.prototype.with` cases. (#515)
+                                let recv_is_array_like = match member.obj.as_ref() {
+                                    ast::Expr::Ident(ident) => {
+                                        let n = ident.sym.to_string();
+                                        ctx.lookup_local_type(&n)
+                                            .map(|ty| matches!(ty, Type::Array(_) | Type::Tuple(_)))
+                                            .unwrap_or(false)
+                                    }
+                                    ast::Expr::Array(_) => true,
+                                    _ => false,
+                                };
+                                if recv_is_array_like {
+                                    let array_expr = lower_expr(ctx, &member.obj)?;
+                                    let mut args_iter = args.into_iter();
+                                    let index = args_iter.next().unwrap();
+                                    let value = args_iter.next().unwrap();
+                                    return Ok(Expr::ArrayWith {
+                                        array: Box::new(array_expr),
+                                        index: Box::new(index),
+                                        value: Box::new(value),
+                                    });
+                                }
+                                // Fall through to general method-call dispatch
                             }
                             "push" if !args.is_empty() => {
                                 // Generic expr.push(value) or expr.push(...spread)

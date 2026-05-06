@@ -526,6 +526,24 @@ pub(crate) fn lower_array_method(
             let result = blk.call(I64, "js_array_values", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
+        // Issue #515 followup: `arr.with(idx, val)` reaches here when the
+        // receiver passes `is_array_expr` but the HIR fold bailed (e.g. the
+        // receiver is an `any`-typed local whose initializer is an Array
+        // literal — `is_array_expr` recognizes this even though the binding's
+        // declared type is `Type::Any`). Without this arm the catch-all below
+        // silently returned the receiver unchanged.
+        "with" if args.len() >= 2 => {
+            let idx_d = lower_expr(ctx, &args[0])?;
+            let val_d = lower_expr(ctx, &args[1])?;
+            let blk = ctx.block();
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let result = blk.call(
+                I64,
+                "js_array_with",
+                &[(I64, &recv_handle), (DOUBLE, &idx_d), (DOUBLE, &val_d)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
         // Best-effort fallback: lower args for side effects, return
         // the receiver.
         _ => {
