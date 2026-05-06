@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.627
+**Current Version:** 0.5.628
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.628** — Refs #480: Tree view — Windows stub replaced with native `SysTreeView32` impl in `crates/perry-ui-windows/src/widgets/tree_view.rs`. Topology built TS-side via `TreeNode` + `treeNodeAddChild`; `TreeView(root, onSelect)` recursively walks the topology and inserts via `TVM_INSERTITEMW` (each node's `lParam` carries its perry handle so `TVN_SELCHANGED` can resolve back to the `id` string without a parallel HTREEITEM→id map). Style flags `TVS_HASLINES | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS` give the standard Windows tree look. `expand_all` / `collapse_all` walk via `TVM_GETNEXTITEM(TVGN_CHILD/TVGN_NEXT)` recursing into siblings + descendants. `TVN_SELCHANGEDW` (-411) WM_NOTIFY arm in `widgets/mod.rs` (pre-reserved last iteration) now routes to `tree_view::handle_selection_change`.
 
 - **v0.5.627** — Refs #475: Combobox — Windows stub replaced with real `COMBOBOX` (`CBS_DROPDOWN | CBS_AUTOHSCROLL`) impl in `crates/perry-ui-windows/src/widgets/combobox.rs`. The picker widget already used `CBS_DROPDOWNLIST` (read-only); this is the editable variant. `add_item` sends `CB_ADDSTRING`; `set_value` / `get_value` use `SetWindowTextW` / `GetWindowTextW` against the edit-field portion. WM_COMMAND router extended: `CBN_SELCHANGE` (1) routes to `combobox::handle_dropdown_pick` (writes the picked item back into the edit field then fires onChange), and a new `CBN_EDITCHANGE` (5) arm routes to `combobox::handle_change` for as-you-type updates. Both fire onChange with the current edit-text NaN-boxed STRING.
 
