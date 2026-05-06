@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.630
+**Current Version:** 0.5.631
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.631** — Refs #474: Chart — Windows stub replaced with custom owner-draw `PerryChart` window class drawing line/bar/pie via GDI in WM_PAINT (`crates/perry-ui-windows/src/widgets/chart.rs`). `Polyline` (move/line) for line strokes, `FillRect` over per-bar rects for the bar variant, native `Pie` GDI primitive for pie wedges (computes radial endpoint vectors from centre + angle). 8-color palette for series, 24px padding, top-aligned title via `DrawTextW(DT_CENTER | DT_SINGLELINE | DT_VCENTER)`. `InvalidateRect` on data mutations triggers WM_PAINT redraw. Mirrors macOS / GTK4 chart visual conventions.
 
 - **v0.5.630** — Refs #478: Rich text editor — Windows stub replaced with real RichEdit (`MSFTEDIT_CLASS = "RichEdit50W"`) impl in `crates/perry-ui-windows/src/widgets/rich_text.rs`. `LoadLibraryW("Msftedit.dll")` once via `OnceLock` so the RichEdit window class is registered before the first `CreateWindowExW`. Style flags `ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_BORDER`. Bold / italic / underline applied via `EM_SETCHARFORMAT(SCF_SELECTION)` over a `#[repr(C)]` `CharFormat2W` struct with `CFM_BOLD/ITALIC/UNDERLINE` masks; `toggle_effect` first probes the current format via `EM_GETCHARFORMAT` to pick apply-vs-remove. EN_CHANGE (0x0300) WM_COMMAND arm extended: when the kind is `RichText`, route to `rich_text::handle_change` (was textfield only). HTML round-trip is a v1 placeholder (RichEdit's native serialised format is RTF, not HTML; tag-strip + `<p>` wrap with HTML escaping for now — RTF↔HTML converter is a #478 follow-up).
 
