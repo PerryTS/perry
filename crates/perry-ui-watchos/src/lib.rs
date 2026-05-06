@@ -841,6 +841,23 @@ pub extern "C" fn perry_ui_combobox_set_value(_h: i64, _v: i64) {}
 pub extern "C" fn perry_ui_combobox_get_value(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
+
+// TreeView (#480) — watchOS screen real estate makes hierarchical
+// outline impractical; stubs only.
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_create(_id: i64, _label: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_add_child(_p: i64, _c: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_create(_root: i64, _on_select: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_expand_all(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_collapse_all(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_get_selected_id(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_control_size(_h: i64, _s: i64) {}
 #[no_mangle]

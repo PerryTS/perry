@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.610
+**Current Version:** 0.5.611
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.611** — Refs #480: Tree / outline view widget. macOS impl in `crates/perry-ui-macos/src/widgets/tree_view.rs` wraps `NSOutlineView` (NSScrollView ⊃ NSOutlineView). Topology built TS-side via standalone `TreeNode(id, label)` + `treeNodeAddChild(parent, child)`; mounted via `TreeView(root, onSelect)`. `PerryTreeItem` (NSObject with `node_id` ivar) provides stable opaque identity for outline rows — cached one-per-node so `outlineView:child:ofItem:` always hands back the same instance. `PerryTreeDelegate` implements both data source (numberOfChildrenOfItem / child:ofItem / isItemExpandable / objectValueForTableColumn:byItem) and selection delegate (`outlineViewSelectionDidChange:` → `js_closure_call1` with picked node's `id` STRING-tagged). 6 new dispatch rows (TreeNode + treeNodeAddChild + TreeView + 3 instance setters/getters). iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 6 FFI symbols (return 0 for create, undefined for selection). Out of scope this iteration: drag-and-drop, lazy loading, multi-select, inline rename, icons.
 
 - **v0.5.610** — Refs #475: Combobox / autocomplete widget. macOS impl in `crates/perry-ui-macos/src/widgets/combobox.rs` wraps `NSComboBox` with `setCompletes:YES` for as-you-type completion + `addItemWithObjectValue:` for the dropdown list. `PerryComboboxTarget` (NSObject) handles both `controlTextDidChange:` (target-action via Return commit) and the `NSComboBoxSelectionDidChangeNotification` observer so item-pick from dropdown also fires `onChange` with the current `stringValue` (NaN-boxed STRING). New `PERRY_UI_TABLE` rows: `Combobox(initial, onChange)`, `comboboxAddItem`, `comboboxSetValue`, `comboboxGetValue`. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub `combobox_create` to forward to the existing text field; add/set/get-value are no-ops with `undefined` return — usable plain-text-input fallback while native filterable-dropdown impls land.
 

@@ -798,6 +798,43 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget],
         ret: ReturnKind::Str,
     },
+    // ---- TreeView (issue #480) ----
+    MethodRow {
+        method: "TreeNode",
+        runtime: "perry_ui_tree_node_create",
+        args: &[ArgKind::Str, ArgKind::Str],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "treeNodeAddChild",
+        runtime: "perry_ui_tree_node_add_child",
+        args: &[ArgKind::Widget, ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "TreeView",
+        runtime: "perry_ui_tree_view_create",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "treeViewExpandAll",
+        runtime: "perry_ui_tree_view_expand_all",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "treeViewCollapseAll",
+        runtime: "perry_ui_tree_view_collapse_all",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "treeViewGetSelectedId",
+        runtime: "perry_ui_tree_view_get_selected_id",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Str,
+    },
     MethodRow {
         method: "widgetSetControlSize",
         runtime: "perry_ui_widget_set_control_size",

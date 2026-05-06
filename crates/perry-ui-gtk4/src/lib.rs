@@ -1362,6 +1362,23 @@ pub extern "C" fn perry_ui_navstack_pop(handle: i64) {
 
 /// Create a Picker (dropdown).
 #[no_mangle]
+/// TreeView stubs (#480). GTK4 has `GtkTreeView` + `GtkTreeStore` (or
+/// the newer `GtkColumnView`) — native impl is a future iteration.
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_create(_id_ptr: i64, _label_ptr: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_add_child(_parent: i64, _child: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_create(_root: i64, _on_select: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_expand_all(_handle: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_collapse_all(_handle: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_get_selected_id(_handle: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
 /// Combobox stub (#475). GTK4 has `GtkDropDown` + `GtkEntry` with a
 /// completion model; native implementation is a future iteration.
 /// Falls back to a plain entry for now.

@@ -506,6 +506,22 @@ export function Combobox(initial: string, onChange: (value: string) => void): Wi
 export function comboboxAddItem(widget: Widget, value: string): void;
 export function comboboxSetValue(widget: Widget, value: string): void;
 export function comboboxGetValue(widget: Widget): string;
+
+// ---------------------------------------------------------------------------
+// TreeView / outline view (issue #480) — hierarchical disclosure list. Build
+// the topology bottom-up via TreeNode + treeNodeAddChild, then mount it via
+// TreeView(rootNode, onSelect). macOS uses NSOutlineView; iOS/tvOS/visionOS/
+// watchOS/Android/Windows/GTK4 stub the FFI today (selection always returns
+// undefined). Out of scope this iteration: drag-and-drop, lazy children
+// loader, multi-select, inline rename, icons.
+// ---------------------------------------------------------------------------
+
+export function TreeNode(id: string, label: string): Widget;
+export function treeNodeAddChild(parent: Widget, child: Widget): void;
+export function TreeView(rootNode: Widget, onSelect: (id: string) => void): Widget;
+export function treeViewExpandAll(widget: Widget): void;
+export function treeViewCollapseAll(widget: Widget): void;
+export function treeViewGetSelectedId(widget: Widget): string;
 export function widgetSetControlSize(widget: Widget, size: number): void;
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;

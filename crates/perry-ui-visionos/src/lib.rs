@@ -918,6 +918,22 @@ pub extern "C" fn perry_ui_image_set_tint(handle: i64, r: f64, g: f64, b: f64, a
 
 /// Create a Picker (dropdown). style: 0=dropdown, 1=segmented. Returns widget handle.
 #[no_mangle]
+/// TreeView stubs (#480). visionOS — future iteration.
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_create(_id_ptr: i64, _label_ptr: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_add_child(_parent: i64, _child: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_create(_root: i64, _on_select: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_expand_all(_handle: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_collapse_all(_handle: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_get_selected_id(_handle: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
 /// Combobox stub (#475). visionOS — falls back to text field.
 #[no_mangle]
 pub extern "C" fn perry_ui_combobox_create(initial_ptr: i64, on_change: f64) -> i64 {

@@ -1090,6 +1090,43 @@ pub extern "C" fn perry_ui_combobox_get_value(handle: i64) -> f64 {
     widgets::combobox::get_value(handle)
 }
 
+// ---- TreeView (issue #480) ----
+
+/// Register a tree node with `id` and `label`. Standalone — wire into
+/// a topology via `treeNodeAddChild`, then mount via `TreeView`.
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_create(id_ptr: i64, label_ptr: i64) -> i64 {
+    widgets::tree_view::node_create(id_ptr as *const u8, label_ptr as *const u8)
+}
+
+/// Append `child` as the last child of `parent`.
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_add_child(parent: i64, child: i64) {
+    widgets::tree_view::node_add_child(parent, child);
+}
+
+/// Mount the `root_node` topology in an `NSOutlineView`. `on_select`
+/// is invoked with the picked node's `id` when selection changes.
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_create(root_node: i64, on_select: f64) -> i64 {
+    widgets::tree_view::create(root_node, on_select)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_expand_all(handle: i64) {
+    widgets::tree_view::expand_all(handle);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_collapse_all(handle: i64) {
+    widgets::tree_view::collapse_all(handle);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_get_selected_id(handle: i64) -> f64 {
+    widgets::tree_view::get_selected_id(handle)
+}
+
 /// Create a Form container. Returns widget handle.
 #[no_mangle]
 pub extern "C" fn perry_ui_form_create() -> i64 {

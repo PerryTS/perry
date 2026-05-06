@@ -846,6 +846,23 @@ pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
 // =============================================================================
 
 #[no_mangle]
+/// TreeView stubs (#480). Android — `RecyclerView` with hierarchical
+/// adapter is a future iteration.
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_create(_id_ptr: i64, _label_ptr: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_add_child(_parent: i64, _child: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_create(_root: i64, _on_select: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_expand_all(_handle: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_collapse_all(_handle: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_get_selected_id(_handle: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
 /// Combobox stub (#475). Android `AutoCompleteTextView` is a future
 /// iteration; falls back to text field.
 #[no_mangle]

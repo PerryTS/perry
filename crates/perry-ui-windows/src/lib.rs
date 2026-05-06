@@ -1103,6 +1103,23 @@ pub extern "C" fn perry_ui_navstack_pop(handle: i64) {
 
 /// Create a Picker (dropdown).
 #[no_mangle]
+/// TreeView stubs (#480). Win32 has a native `SysTreeView32` control
+/// (TVM_INSERTITEM, TVN_SELCHANGED) — wiring it up is a future iteration.
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_create(_id_ptr: i64, _label_ptr: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_node_add_child(_parent: i64, _child: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_create(_root: i64, _on_select: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_expand_all(_handle: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_collapse_all(_handle: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_tree_view_get_selected_id(_handle: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
 /// Combobox stub (#475). Win32 has a `ComboBox` control with
 /// `CBS_DROPDOWN | CBS_AUTOHSCROLL` that's a natural fit; native
 /// implementation is a future iteration. Falls back to text field for
