@@ -522,6 +522,25 @@ export function TreeView(rootNode: Widget, onSelect: (id: string) => void): Widg
 export function treeViewExpandAll(widget: Widget): void;
 export function treeViewCollapseAll(widget: Widget): void;
 export function treeViewGetSelectedId(widget: Widget): string;
+
+// ---------------------------------------------------------------------------
+// Calendar widget (issue #481, v1) — month-grid date picker. macOS uses
+// NSDatePicker in graphical / clock-and-calendar style, elements limited
+// to year-month-day so the clock face is hidden. iOS / tvOS / visionOS /
+// watchOS / Android / Windows / GTK4 stub the FFI today (returns 0 on
+// create, undefined on get-date).
+//
+// Out of scope v1: event blocks / dot indicators, week / day views,
+// drag-to-create / drag-to-resize, overlap layout. The base widget
+// plumbing lands first; richer modes follow in #481 follow-ups.
+//
+// `onChange` receives the selected date as an ISO `yyyy-MM-dd` string
+// (POSIX-locale formatter, stable across user locales).
+// ---------------------------------------------------------------------------
+
+export function Calendar(year: number, month: number, onChange: (isoDate: string) => void): Widget;
+export function calendarSetDate(widget: Widget, year: number, month: number, day: number): void;
+export function calendarGetSelectedDate(widget: Widget): string;
 export function widgetSetControlSize(widget: Widget, size: number): void;
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;

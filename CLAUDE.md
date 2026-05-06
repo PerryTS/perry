@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.612
+**Current Version:** 0.5.613
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.613** — Refs #481: Calendar widget v1 (`Calendar(year, month, onChange)` + `calendarSetDate` + `calendarGetSelectedDate`). macOS impl in `crates/perry-ui-macos/src/widgets/calendar.rs` wraps `NSDatePicker` in graphical `NSDatePickerStyleClockAndCalendar` mode (style=1) with elements limited to year/month/day (`0xC0`) so the clock face is hidden. `PerryCalendarTarget` (NSObject) handles the target-action `dateChanged:` selector — formats the `NSDate` via `NSDateFormatter` with `en_US_POSIX` locale + `yyyy-MM-dd` to give the JS callback a stable ISO date regardless of user locale. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 3 FFI symbols (returns 0 / undefined). Out of scope v1 (per #481 scope): event blocks / dot indicators, week / day views, drag-to-create / drag-to-resize, overlap layout, all-day row.
 
 - **v0.5.612** — Refs #473: Data table sort + filter + multi-select extensions on the existing `Table` widget. macOS impl in `crates/perry-ui-macos/src/widgets/table.rs`: `tableSetOnSortChange(table, cb)` installs `NSSortDescriptor` prototypes (key=`col0`, `col1`, …) on every column and adds `tableView:sortDescriptorsDidChange:` to `PerryTableDelegate` — picks first descriptor's key, parses out the column index, fires `(colIndex, ascending)` to user. `tableSetAllowsMultipleSelection` toggles `setAllowsMultipleSelection:`; `tableGetSelectedRowsCount` + `tableGetSelectedRowAt` walk `selectedRowIndexes` (via NSIndexSet `firstIndex` + `indexGreaterThanIndex:`). Filter text is passive — `tableSetFilterText` / `tableGetFilterText` store + return a string the user reads back to drive their own row-count/visibility logic. Virtualization is NSTableView-native (only visible cells get views). 6 new dispatch rows; iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 6 FFI symbols. Out of scope v1: cell editing, column drag-reorder, frozen columns, grouping/aggregation.
 

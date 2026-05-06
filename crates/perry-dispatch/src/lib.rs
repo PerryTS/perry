@@ -835,6 +835,25 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget],
         ret: ReturnKind::Str,
     },
+    // ---- Calendar (issue #481) ----
+    MethodRow {
+        method: "Calendar",
+        runtime: "perry_ui_calendar_create",
+        args: &[ArgKind::I64Raw, ArgKind::I64Raw, ArgKind::Closure],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "calendarSetDate",
+        runtime: "perry_ui_calendar_set_date",
+        args: &[ArgKind::Widget, ArgKind::I64Raw, ArgKind::I64Raw, ArgKind::I64Raw],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "calendarGetSelectedDate",
+        runtime: "perry_ui_calendar_get_selected_date",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Str,
+    },
     MethodRow {
         method: "widgetSetControlSize",
         runtime: "perry_ui_widget_set_control_size",

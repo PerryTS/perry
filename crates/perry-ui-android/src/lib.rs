@@ -846,6 +846,16 @@ pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
 // =============================================================================
 
 #[no_mangle]
+// Issue #481 — Calendar widget stubs.
+#[no_mangle]
+pub extern "C" fn perry_ui_calendar_create(_year: i64, _month: i64, _on_change: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_calendar_set_date(_h: i64, _y: i64, _m: i64, _d: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_calendar_get_selected_date(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
 // Issue #473 — table sort/filter/multi-select stubs.
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_on_sort_change(_h: i64, _cb: f64) {}
