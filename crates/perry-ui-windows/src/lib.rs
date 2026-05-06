@@ -1177,15 +1177,18 @@ pub extern "C" fn perry_ui_chart_set_title(_h: i64, _t: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_chart_reload(_h: i64) {}
 
-// Issue #481 — Calendar widget stubs. Win32 has SysMonthCal32 — future
-// iteration.
+// Issue #481 — Calendar widget — real Windows impl via SysMonthCal32.
 #[no_mangle]
-pub extern "C" fn perry_ui_calendar_create(_year: i64, _month: i64, _on_change: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_calendar_create(year: i64, month: i64, on_change: f64) -> i64 {
+    widgets::calendar::create(year, month, on_change)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_calendar_set_date(_h: i64, _y: i64, _m: i64, _d: i64) {}
+pub extern "C" fn perry_ui_calendar_set_date(h: i64, y: i64, m: i64, d: i64) {
+    widgets::calendar::set_date(h, y, m, d)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_calendar_get_selected_date(_h: i64) -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
+pub extern "C" fn perry_ui_calendar_get_selected_date(h: i64) -> f64 {
+    widgets::calendar::get_selected_date(h)
 }
 
 // Issue #473 — table sort/filter/multi-select stubs.

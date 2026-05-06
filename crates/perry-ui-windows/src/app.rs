@@ -1061,6 +1061,14 @@ unsafe extern "system" fn wnd_proc(
             }
             LRESULT(0)
         }
+        // WM_NOTIFY (0x004E) — control notifications that don't fit
+        // WM_COMMAND. lparam is `*mut NMHDR { hwndFrom, idFrom, code }`.
+        // Calendar's `MCN_SELCHANGE` (-749 / 0xFFFFFD13) and TreeView's
+        // `TVN_SELCHANGED` (-402 / 0xFFFFFE6E) are routed here.
+        x if x == 0x004E => {
+            crate::widgets::handle_notify(lparam);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         x if x == WM_HSCROLL || x == WM_VSCROLL => {
             crate::widgets::handle_scroll(wparam, lparam);
             LRESULT(0)

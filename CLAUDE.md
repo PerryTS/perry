@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.625
+**Current Version:** 0.5.626
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.626** — Refs #481: Calendar widget — Windows stub replaced with real `SysMonthCal32` (MonthCalendar control) impl in `crates/perry-ui-windows/src/widgets/calendar.rs`. CreateWindowExW with the standard `SysMonthCal32` class name; `MCM_SETCURSEL` / `MCM_GETCURSEL` round-trip through a `#[repr(C)]` `SystemTime` struct (year/month/day/hour/minute/second/millis + day_of_week). Selection callback wired via a new `WM_NOTIFY` (0x004E) router added to `app.rs::wnd_proc` — the router parses `*const NMHDR { hwnd_from, id_from, code }` from lparam, looks up the perry handle by `id_from`, and dispatches `MCN_SELCHANGE` (-749) to `calendar::handle_selection_change`. The router also reserves a `TVN_SELCHANGEDW` (-411) slot for TreeView (next iteration). Five new `WidgetKind` variants added: `Calendar`, `Combobox`, `TreeView`, `RichText`, `Chart`.
 
 - **v0.5.625** — Refs #478: Rich text editor — GTK4 stub replaced with `GtkTextView` + `GtkTextBuffer` + pre-registered bold / italic / underline `GtkTextTag`s in `crates/perry-ui-gtk4/src/widgets/rich_text.rs`. `connect_changed` on the buffer fires onChange with the buffer's plain text. Toggle commands check `selection_bounds()` for a non-collapsed selection and apply / remove the matching tag (toggle behaviour: probe iter at start to test the tag's presence, then `remove_tag` if present else `apply_tag`). HTML round-trip is a v1 placeholder — `set_html` strips tags via a coarse non-regex pass and stores the result as plain text; `get_html` wraps the plain text in `<p>...</p>` with minimal `&` / `<` / `>` escaping. Pango-Markup ↔ HTML conversion is a follow-up.
 

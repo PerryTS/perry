@@ -2,6 +2,7 @@
 //! Each widget has an HWND (on Windows), a kind, children list, and layout info.
 
 pub mod button;
+pub mod calendar;
 pub mod canvas;
 pub mod divider;
 pub mod form;
@@ -61,6 +62,11 @@ pub enum WidgetKind {
     NavStack,
     LazyVStack,
     Image,
+    Calendar,
+    Combobox,
+    TreeView,
+    RichText,
+    Chart,
 }
 
 pub struct WidgetEntry {
