@@ -1109,6 +1109,23 @@ pub extern "C" fn perry_ui_widget_set_enabled(handle: i64, enabled: i64) {
     widgets::set_enabled(handle, enabled != 0);
 }
 
+/// Set a rich tooltip on a widget. The tooltip body is `content_handle`
+/// (any pre-built widget tree) and is presented in a borderless NSPanel
+/// after `hover_delay_ms` of mouse hover. See issue #479.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_rich_tooltip(
+    handle: i64,
+    content_handle: i64,
+    hover_delay_ms: f64,
+) {
+    let delay = if hover_delay_ms.is_nan() || hover_delay_ms < 0.0 {
+        500
+    } else {
+        hover_delay_ms as u32
+    };
+    widgets::rich_tooltip::set_rich_tooltip(handle, content_handle, delay);
+}
+
 /// Set a tooltip on a widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_tooltip(handle: i64, text_ptr: i64) {

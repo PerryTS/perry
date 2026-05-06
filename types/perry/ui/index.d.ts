@@ -482,6 +482,16 @@ export function widgetSetBackgroundGradient(
 export function widgetSetOpacity(widget: Widget, opacity: number): void;
 export function widgetSetEnabled(widget: Widget, enabled: number): void;
 export function widgetSetTooltip(widget: Widget, text: string): void;
+/**
+ * Attach a rich (widget-tree) tooltip to `widget`. The `content` widget
+ * is presented in a borderless floating panel after `hoverDelayMs` of
+ * mouse hover (default 500ms when ≤0). Currently wired on macOS via
+ * `NSPanel` + `NSTrackingArea`; iOS/tvOS/visionOS/watchOS/Android/
+ * Windows/GTK4 stub the FFI so calls compile but produce no overlay
+ * yet — track in issue #479. For plain-text tooltips, prefer
+ * `widgetSetTooltip` so the OS handles VoiceOver / a11y correctly.
+ */
+export function widgetSetRichTooltip(widget: Widget, content: Widget, hoverDelayMs: number): void;
 export function widgetSetControlSize(widget: Widget, size: number): void;
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;

@@ -768,6 +768,12 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         ret: ReturnKind::Void,
     },
     MethodRow {
+        method: "widgetSetRichTooltip",
+        runtime: "perry_ui_widget_set_rich_tooltip",
+        args: &[ArgKind::Widget, ArgKind::Widget, ArgKind::F64],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
         method: "widgetSetControlSize",
         runtime: "perry_ui_widget_set_control_size",
         args: &[ArgKind::Widget, ArgKind::I64Raw],

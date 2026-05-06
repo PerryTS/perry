@@ -994,6 +994,16 @@ pub extern "C" fn perry_ui_widget_set_enabled(handle: i64, enabled: i64) {
     widgets::set_enabled(handle, enabled != 0);
 }
 
+/// Rich tooltip stub (issue #479). iOS has no hover; long-press
+/// presentation is a future iteration.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_rich_tooltip(
+    _handle: i64,
+    _content_handle: i64,
+    _hover_delay_ms: f64,
+) {
+}
+
 /// Set a tooltip on a widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_tooltip(handle: i64, text_ptr: i64) {

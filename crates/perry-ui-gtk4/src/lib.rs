@@ -750,6 +750,16 @@ pub extern "C" fn perry_ui_widget_set_tooltip(handle: i64, text_ptr: i64) {
     widgets::set_tooltip(handle, text_ptr as *const u8);
 }
 
+/// Rich tooltip stub (issue #479). GtkPopover with arbitrary content
+/// tree is a future iteration.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_rich_tooltip(
+    _handle: i64,
+    _content_handle: i64,
+    _hover_delay_ms: f64,
+) {
+}
+
 /// Set hidden state.
 #[no_mangle]
 pub extern "C" fn perry_ui_set_widget_hidden(handle: i64, hidden: i64) {

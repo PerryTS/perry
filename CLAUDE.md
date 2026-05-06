@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.608
+**Current Version:** 0.5.609
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.609** — Refs #479: rich tooltip widget — `widgetSetRichTooltip(widget, content, hoverDelayMs)` exposed in `PERRY_UI_TABLE` and `types/perry/ui/index.d.ts`. macOS implementation in `crates/perry-ui-macos/src/widgets/rich_tooltip.rs`: `PerryHoverTooltipTarget` (NSObject) owns an `NSTrackingArea`, mouseEntered schedules an `NSTimer` for the hover delay (default 500ms) which fires `present_panel` — borderless `NSPanel` containing the user content widget pulled from `WIDGETS`, anchored 8pt below the host (flips above on screen-edge overflow). iOS/tvOS/visionOS/watchOS/Android/Windows/GTK4 ship FFI stubs so calls compile cross-platform; native popover/long-press impls are future iterations.
 
 - **v0.5.608** — Refs #476: watchOS toast platform gap closed — `crates/perry-ui-watchos/src/widgets/toast.rs` registers a `show_toast_handler` with the cross-platform handler registry, exposes `perry_watchos_toast_active_text`/`_seq`/`_dismiss`/`_active_duration_ms` FFI; PerryWatchApp.swift overlays a SwiftUI `ToastBanner` above the root view driven by `bridge.toastSeq`. macOS/iOS/tvOS/visionOS/Android/Windows/GTK4/HarmonyOS already had toast handlers — watchOS was the only platform where `showToast(msg)` produced no visible feedback.
 

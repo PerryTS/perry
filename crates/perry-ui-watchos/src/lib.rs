@@ -827,6 +827,8 @@ pub extern "C" fn perry_ui_canvas_fill_gradient(
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_tooltip(_h: i64, _t: i64) {}
 #[no_mangle]
+pub extern "C" fn perry_ui_widget_set_rich_tooltip(_h: i64, _content: i64, _delay_ms: f64) {}
+#[no_mangle]
 pub extern "C" fn perry_ui_widget_set_control_size(_h: i64, _s: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_on_hover(_h: i64, _cb: f64) {}
