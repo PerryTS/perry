@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.635
+**Current Version:** 0.5.636
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.636** — Refs #474: Chart — iOS stub replaced with `PerryChartViewIOS` (UIView subclass with `drawRect:`) drawing line / bar / pie via CoreGraphics in `crates/perry-ui-ios/src/widgets/chart.rs`. Mirrors the macOS impl; key difference: UIKit's coordinate system is top-left (vs AppKit's bottom-left), so the y-mapping is flipped to keep "bigger value = higher on screen" matching macOS / GTK4 / Windows visual semantics. CG context fetched via `UIGraphicsGetCurrentContext()` (extern "C" FFI). Title rendered via `NSString.drawInRect:withAttributes:` with `UIFont.systemFontOfSize:` and a center-aligned NSMutableParagraphStyle. `setNeedsDisplay` (no colon — UIView vs NSView naming difference) on data mutations triggers redraw.
 
 - **v0.5.635** — Fix iOS phase mod.rs registration — earlier Edits to add `pub mod calendar;`, `pub mod map_view;`, `pub mod pdf_view;`, `pub mod rich_text;` to `crates/perry-ui-ios/src/widgets/mod.rs` failed silently across the v0.5.632 / v0.5.633 / v0.5.634 commits. Without the registrations the lib.rs FFI re-points to `widgets::*::*` would have produced unresolved-symbol errors at link time on iOS targets.
 
