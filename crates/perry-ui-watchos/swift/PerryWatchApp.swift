@@ -68,19 +68,71 @@ import SwiftUI
 @_silgen_name("perry_watchos_node_has_edge_insets") func perry_watchos_node_has_edge_insets(_ id: Int64) -> Bool
 @_silgen_name("perry_watchos_node_edge_inset") func perry_watchos_node_edge_inset(_ id: Int64, _ side: Int32) -> Double
 
+// Toast overlay (issue #476)
+@_silgen_name("perry_watchos_toast_active_text") func perry_watchos_toast_active_text() -> UnsafePointer<CChar>?
+@_silgen_name("perry_watchos_toast_active_duration_ms") func perry_watchos_toast_active_duration_ms() -> UInt32
+@_silgen_name("perry_watchos_toast_seq") func perry_watchos_toast_seq() -> UInt64
+@_silgen_name("perry_watchos_toast_dismiss") func perry_watchos_toast_dismiss()
+
 // MARK: - Observable bridge
 
 class PerryBridge: ObservableObject {
     @Published var version: UInt64 = 0
+    @Published var toastSeq: UInt64 = 0
+    @Published var toastText: String? = nil
     private var timer: Timer?
+    private var toastDismissWork: DispatchWorkItem?
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
             let v = perry_watchos_tree_version()
-            if v != self?.version {
-                self?.version = v
+            if v != self.version {
+                self.version = v
+            }
+            let s = perry_watchos_toast_seq()
+            if s != self.toastSeq {
+                self.toastSeq = s
+                self.refreshActiveToast()
             }
         }
+    }
+
+    private func refreshActiveToast() {
+        if let cstr = perry_watchos_toast_active_text() {
+            let str = String(cString: cstr)
+            self.toastText = str
+            let durationMs = perry_watchos_toast_active_duration_ms()
+            let interval = max(0.5, Double(durationMs) / 1000.0)
+            self.toastDismissWork?.cancel()
+            let work = DispatchWorkItem {
+                perry_watchos_toast_dismiss()
+            }
+            self.toastDismissWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+        } else {
+            self.toastText = nil
+            self.toastDismissWork?.cancel()
+            self.toastDismissWork = nil
+        }
+    }
+}
+
+struct ToastBanner: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundColor(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.black.opacity(0.85))
+            )
+            .padding(.top, 6)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .transition(.move(edge: .top).combined(with: .opacity))
     }
 }
 
@@ -319,13 +371,19 @@ struct PerryApp: App {
 
     var body: some Scene {
         WindowGroup {
-            let rootId = perry_watchos_root_node()
-            if rootId > 0 {
-                NodeView(nodeId: rootId, bridge: bridge)
-                    .onAppear { bridge.start() }
-            } else {
-                Text("Perry watchOS App")
-                    .onAppear { bridge.start() }
+            ZStack(alignment: .top) {
+                let rootId = perry_watchos_root_node()
+                if rootId > 0 {
+                    NodeView(nodeId: rootId, bridge: bridge)
+                        .onAppear { bridge.start() }
+                } else {
+                    Text("Perry watchOS App")
+                        .onAppear { bridge.start() }
+                }
+                if let msg = bridge.toastText {
+                    ToastBanner(text: msg)
+                        .animation(.easeInOut(duration: 0.2), value: bridge.toastSeq)
+                }
             }
         }
     }

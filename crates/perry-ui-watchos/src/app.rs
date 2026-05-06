@@ -32,7 +32,21 @@ pub fn app_run(_app_handle: i64) {
     //
     // perry_main_init() is called from Swift before the app body is rendered,
     // so by the time SwiftUI queries the tree, it's fully built.
+    register_cross_platform_text_handlers();
     install_test_mode_exit_timer();
+}
+
+extern "C" {
+    /// Defined in `perry-runtime/src/ui_text_registry.rs`. Stores the
+    /// passed handler in an AtomicPtr that `perry_arkts_show_toast`
+    /// consults on each call. No-op when `ohos-napi` is on.
+    fn js_register_show_toast_handler(f: extern "C" fn(msg_ptr: *const u8, msg_len: usize));
+}
+
+fn register_cross_platform_text_handlers() {
+    unsafe {
+        js_register_show_toast_handler(crate::widgets::toast::show_toast_handler);
+    }
 }
 
 /// If `PERRY_UI_TEST_MODE=1`, schedule a background thread that exits the
