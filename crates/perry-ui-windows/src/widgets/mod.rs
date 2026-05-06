@@ -4,6 +4,7 @@
 pub mod button;
 pub mod calendar;
 pub mod canvas;
+pub mod combobox;
 pub mod divider;
 pub mod form;
 pub mod hstack;
@@ -700,6 +701,32 @@ pub fn handle_command(control_id: u16, notify_code: u16, _lparam: LPARAM) {
             });
             if matches!(kind, Some(WidgetKind::Picker)) {
                 picker::handle_selchange(handle);
+            } else if matches!(kind, Some(WidgetKind::Combobox)) {
+                combobox::handle_dropdown_pick(handle);
+            }
+        }
+    }
+    // CBN_EDITCHANGE = 5 — fired on every edit-field keystroke for
+    // CBS_DROPDOWN-style comboboxes (the editable variant). Routes to
+    // the combobox `handle_change` so user code sees as-you-type updates
+    // without waiting for a dropdown pick.
+    if notify_code == 5 {
+        let handle = find_handle_by_control_id(control_id);
+        if handle > 0 {
+            let kind = WIDGETS.with(|w| {
+                let widgets = match w.try_borrow() {
+                    Ok(w) => w,
+                    Err(_) => return None,
+                };
+                let idx = (handle - 1) as usize;
+                if idx < widgets.len() {
+                    Some(widgets[idx].kind.clone())
+                } else {
+                    None
+                }
+            });
+            if matches!(kind, Some(WidgetKind::Combobox)) {
+                combobox::handle_change(handle);
             }
         }
     }

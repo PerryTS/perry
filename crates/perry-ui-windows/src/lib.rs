@@ -1224,21 +1224,22 @@ pub extern "C" fn perry_ui_tree_view_get_selected_id(_handle: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 
-/// Combobox stub (#475). Win32 has a `ComboBox` control with
-/// `CBS_DROPDOWN | CBS_AUTOHSCROLL` that's a natural fit; native
-/// implementation is a future iteration. Falls back to text field for
-/// now.
+/// Combobox (#475) — real Win32 impl via CBS_DROPDOWN ComboBox.
 #[no_mangle]
 pub extern "C" fn perry_ui_combobox_create(initial_ptr: i64, on_change: f64) -> i64 {
-    perry_ui_textfield_create(initial_ptr, on_change)
+    widgets::combobox::create(initial_ptr as *const u8, on_change)
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_combobox_add_item(_handle: i64, _value_ptr: i64) {}
+pub extern "C" fn perry_ui_combobox_add_item(handle: i64, value_ptr: i64) {
+    widgets::combobox::add_item(handle, value_ptr as *const u8)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_combobox_set_value(_handle: i64, _value_ptr: i64) {}
+pub extern "C" fn perry_ui_combobox_set_value(handle: i64, value_ptr: i64) {
+    widgets::combobox::set_value(handle, value_ptr as *const u8)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_combobox_get_value(_handle: i64) -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
+pub extern "C" fn perry_ui_combobox_get_value(handle: i64) -> f64 {
+    widgets::combobox::get_value(handle)
 }
 
 #[no_mangle]

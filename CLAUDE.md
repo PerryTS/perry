@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.626
+**Current Version:** 0.5.627
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.627** — Refs #475: Combobox — Windows stub replaced with real `COMBOBOX` (`CBS_DROPDOWN | CBS_AUTOHSCROLL`) impl in `crates/perry-ui-windows/src/widgets/combobox.rs`. The picker widget already used `CBS_DROPDOWNLIST` (read-only); this is the editable variant. `add_item` sends `CB_ADDSTRING`; `set_value` / `get_value` use `SetWindowTextW` / `GetWindowTextW` against the edit-field portion. WM_COMMAND router extended: `CBN_SELCHANGE` (1) routes to `combobox::handle_dropdown_pick` (writes the picked item back into the edit field then fires onChange), and a new `CBN_EDITCHANGE` (5) arm routes to `combobox::handle_change` for as-you-type updates. Both fire onChange with the current edit-text NaN-boxed STRING.
 
 - **v0.5.626** — Refs #481: Calendar widget — Windows stub replaced with real `SysMonthCal32` (MonthCalendar control) impl in `crates/perry-ui-windows/src/widgets/calendar.rs`. CreateWindowExW with the standard `SysMonthCal32` class name; `MCM_SETCURSEL` / `MCM_GETCURSEL` round-trip through a `#[repr(C)]` `SystemTime` struct (year/month/day/hour/minute/second/millis + day_of_week). Selection callback wired via a new `WM_NOTIFY` (0x004E) router added to `app.rs::wnd_proc` — the router parses `*const NMHDR { hwnd_from, id_from, code }` from lparam, looks up the perry handle by `id_from`, and dispatches `MCN_SELCHANGE` (-749) to `calendar::handle_selection_change`. The router also reserves a `TVN_SELCHANGEDW` (-411) slot for TreeView (next iteration). Five new `WidgetKind` variants added: `Calendar`, `Combobox`, `TreeView`, `RichText`, `Chart`.
 
