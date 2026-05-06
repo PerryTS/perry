@@ -899,6 +899,28 @@ pub extern "C" fn perry_ui_image_set_tint(handle: i64, r: f64, g: f64, b: f64, a
 
 /// Create a Picker (dropdown). style: 0=dropdown, 1=segmented. Returns widget handle.
 #[no_mangle]
+// Issue #478 — Rich text editor stubs.
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_create(_w: f64, _h: f64, _cb: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_set_string(_h: i64, _t: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_get_string(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_set_html(_h: i64, _html: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_get_html(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_bold(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_italic(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_underline(_h: i64) {}
+
 // Issue #516 — PdfView stubs.
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 { 0 }

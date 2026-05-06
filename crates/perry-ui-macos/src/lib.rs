@@ -1090,6 +1090,48 @@ pub extern "C" fn perry_ui_combobox_get_value(handle: i64) -> f64 {
     widgets::combobox::get_value(handle)
 }
 
+// ---- Rich text editor (issue #478) ----
+
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_create(width: f64, height: f64, on_change: f64) -> i64 {
+    widgets::rich_text::create(width, height, on_change)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_set_string(handle: i64, text_ptr: i64) {
+    widgets::rich_text::set_string(handle, text_ptr as *const u8);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_get_string(handle: i64) -> f64 {
+    widgets::rich_text::get_string(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_set_html(handle: i64, html_ptr: i64) -> i64 {
+    widgets::rich_text::set_html(handle, html_ptr as *const u8)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_get_html(handle: i64) -> f64 {
+    widgets::rich_text::get_html(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_bold(handle: i64) {
+    widgets::rich_text::toggle_bold(handle);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_italic(handle: i64) {
+    widgets::rich_text::toggle_italic(handle);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_underline(handle: i64) {
+    widgets::rich_text::toggle_underline(handle);
+}
+
 // ---- PdfView (issue #516) ----
 
 #[no_mangle]

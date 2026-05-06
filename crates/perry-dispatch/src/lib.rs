@@ -990,6 +990,55 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::F64],
         ret: ReturnKind::Void,
     },
+    // ---- Rich text editor (issue #478) ----
+    MethodRow {
+        method: "RichTextEditor",
+        runtime: "perry_ui_rich_text_create",
+        args: &[ArgKind::F64, ArgKind::F64, ArgKind::Closure],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "richTextSetString",
+        runtime: "perry_ui_rich_text_set_string",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "richTextGetString",
+        runtime: "perry_ui_rich_text_get_string",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Str,
+    },
+    MethodRow {
+        method: "richTextSetHtml",
+        runtime: "perry_ui_rich_text_set_html",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::I64AsF64,
+    },
+    MethodRow {
+        method: "richTextGetHtml",
+        runtime: "perry_ui_rich_text_get_html",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Str,
+    },
+    MethodRow {
+        method: "richTextToggleBold",
+        runtime: "perry_ui_rich_text_toggle_bold",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "richTextToggleItalic",
+        runtime: "perry_ui_rich_text_toggle_italic",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "richTextToggleUnderline",
+        runtime: "perry_ui_rich_text_toggle_underline",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "widgetSetControlSize",
         runtime: "perry_ui_widget_set_control_size",

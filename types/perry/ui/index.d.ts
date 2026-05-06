@@ -625,6 +625,30 @@ export function pdfViewGetPageCount(widget: Widget): number;
 export function pdfViewGoToPage(widget: Widget, pageIndex: number): void;
 export function pdfViewGetCurrentPage(widget: Widget): number;
 export function pdfViewSetScale(widget: Widget, scale: number): void;
+
+// ---------------------------------------------------------------------------
+// Rich text editor (issue #478, v1) — NSTextView with NSAttributedString
+// storage. Plain-text + HTML round-trip cover persistence; bold/italic/
+// underline cover inline formatting via NSResponder actions. Markdown
+// round-trip, block formatting (headings/lists/blockquotes/code blocks),
+// configurable toolbar, paste handling are #478 follow-ups.
+// macOS: native NSTextView. iOS / tvOS / visionOS / watchOS / Android /
+// Windows / GTK4 stub the FFI today.
+// `setHtml` returns 1 on success, 0 on failure (e.g. malformed HTML).
+// ---------------------------------------------------------------------------
+
+export function RichTextEditor(
+    width: number,
+    height: number,
+    onChange: (text: string) => void,
+): Widget;
+export function richTextSetString(widget: Widget, text: string): void;
+export function richTextGetString(widget: Widget): string;
+export function richTextSetHtml(widget: Widget, html: string): number;
+export function richTextGetHtml(widget: Widget): string;
+export function richTextToggleBold(widget: Widget): void;
+export function richTextToggleItalic(widget: Widget): void;
+export function richTextToggleUnderline(widget: Widget): void;
 export function widgetSetControlSize(widget: Widget, size: number): void;
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;

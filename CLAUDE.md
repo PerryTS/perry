@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.617
+**Current Version:** 0.5.618
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.618** — Refs #478: Rich text editor widget v1. macOS impl in `crates/perry-ui-macos/src/widgets/rich_text.rs` wraps `NSTextView` (with `setRichText:true`, `setAllowsUndo:true`, `setAutomaticLinkDetectionEnabled:true`) inside an `NSScrollView`. The handle returned to user code is the scroll view; the inner text view is cached in `TEXT_VIEWS: HashMap<i64, Retained<AnyObject>>` so per-handle commands (set/get string, toggle bold/italic/underline) reach it directly. `PerryRichTextDelegate` (NSObject) handles `textDidChange:` and fires the user's onChange closure with the current plain-text value. HTML round-trip via `NSAttributedString` document-attributes machinery — `setHtml` builds an `{DocumentType: NSHTMLTextDocumentType}` options dict + `dataUsingEncoding:NSUTF8StringEncoding` and calls `initWithData:options:documentAttributes:error:`; `getHtml` mirrors with `dataFromRange:documentAttributes:`. Bold/italic/underline are wired through `performSelector:` on `toggleBold:` / `toggleItalic:` / `underline:` (NSResponder actions). 8 new dispatch rows. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 8 FFI symbols. Out of scope v1: markdown round-trip, block formatting (headings / lists / blockquotes / code blocks), configurable toolbar, paste handling for HTML / code blocks, tables, inline images, collaborative editing.
 
 - **v0.5.617** — Refs #516: PDF viewer widget. macOS impl in `crates/perry-ui-macos/src/widgets/pdf_view.rs` wraps `PDFView` from PDFKit via raw `objc_msgSend` (no `objc2-pdf-kit` dep). PDFKit linked from `crates/perry/src/commands/compile/link.rs:1460`. Loads documents via `PDFDocument.initWithURL:` against an `NSURL.fileURLWithPath:`, navigates pages via `pageAtIndex:` + `goToPage:`, exposes `pageCount` / `currentPage` / `setScaleFactor:` / `setDisplayMode:1` (single-page-continuous) / `setAutoScales:true`. 6 new dispatch rows: `PdfView(width, height)`, `pdfViewLoadFile(path) → 1/0`, `pdfViewGetPageCount`, `pdfViewGoToPage(idx)`, `pdfViewGetCurrentPage`, `pdfViewSetScale(scale)`. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 6 FFI symbols. Out of scope: programmatic PDF generation (CGPDFContext drawing API), text-search highlighting, annotation editing, print-friendly rendering.
 

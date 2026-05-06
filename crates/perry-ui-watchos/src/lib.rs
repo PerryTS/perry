@@ -842,6 +842,28 @@ pub extern "C" fn perry_ui_combobox_get_value(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 
+// Issue #478 — Rich text editor stubs.
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_create(_w: f64, _h: f64, _cb: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_set_string(_h: i64, _t: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_get_string(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_set_html(_h: i64, _html: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_get_html(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_bold(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_italic(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_rich_text_toggle_underline(_h: i64) {}
+
 // Issue #516 — PdfView stubs (watchOS not a realistic PDF target).
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 { 0 }
