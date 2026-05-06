@@ -758,6 +758,41 @@ pub fn handle_command(control_id: u16, notify_code: u16, _lparam: LPARAM) {
 #[cfg(not(target_os = "windows"))]
 pub fn handle_command(_control_id: u16, _notify_code: u16, _lparam: isize) {}
 
+/// Dispatcher for WM_NOTIFY messages. lparam is `*mut NMHDR`.
+/// `MCN_SELCHANGE` (-749) → calendar; `TVN_SELCHANGEDW` (-411) → tree.
+#[cfg(target_os = "windows")]
+pub fn handle_notify(lparam: LPARAM) {
+    if lparam.0 == 0 {
+        return;
+    }
+    #[repr(C)]
+    struct Nmhdr {
+        hwnd_from: HWND,
+        id_from: usize,
+        code: i32,
+    }
+    let hdr = unsafe { &*(lparam.0 as *const Nmhdr) };
+    let control_id = hdr.id_from as u16;
+    let handle = find_handle_by_control_id(control_id);
+    if handle <= 0 {
+        return;
+    }
+    let kind = WIDGETS.with(|w| {
+        w.try_borrow().ok().and_then(|widgets| {
+            let idx = (handle - 1) as usize;
+            widgets.get(idx).map(|e| e.kind.clone())
+        })
+    });
+    if hdr.code == -749 && matches!(kind, Some(WidgetKind::Calendar)) {
+        calendar::handle_selection_change(handle);
+    } else if hdr.code == -411 && matches!(kind, Some(WidgetKind::TreeView)) {
+        tree_view::handle_selection_change(handle);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn handle_notify(_lparam: isize) {}
+
 /// Handle WM_HSCROLL/WM_VSCROLL — dispatch to slider or scrollview.
 #[cfg(target_os = "windows")]
 pub fn handle_scroll(wparam: WPARAM, lparam: LPARAM) {

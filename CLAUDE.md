@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.628
+**Current Version:** 0.5.629
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.629** — Fix #481/#480 followup: actually land the `handle_notify` WM_NOTIFY router on Windows. Earlier calendar (v0.5.626) and tree-view (v0.5.628) commits described the router but the Edit silently failed; `app.rs::wnd_proc`'s `WM_NOTIFY` arm called a missing `crate::widgets::handle_notify`. New `handle_notify(lparam)` in `crates/perry-ui-windows/src/widgets/mod.rs` parses `*const NMHDR { hwnd_from, id_from, code }`, looks up the perry handle by control id, and dispatches `MCN_SELCHANGE` (-749) to calendar / `TVN_SELCHANGEDW` (-411) to tree view. Cross-platform stub `handle_notify(_lparam: isize) {}` for non-Windows builds.
 
 - **v0.5.628** — Refs #480: Tree view — Windows stub replaced with native `SysTreeView32` impl in `crates/perry-ui-windows/src/widgets/tree_view.rs`. Topology built TS-side via `TreeNode` + `treeNodeAddChild`; `TreeView(root, onSelect)` recursively walks the topology and inserts via `TVM_INSERTITEMW` (each node's `lParam` carries its perry handle so `TVN_SELCHANGED` can resolve back to the `id` string without a parallel HTREEITEM→id map). Style flags `TVS_HASLINES | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS` give the standard Windows tree look. `expand_all` / `collapse_all` walk via `TVM_GETNEXTITEM(TVGN_CHILD/TVGN_NEXT)` recursing into siblings + descendants. `TVN_SELCHANGEDW` (-411) WM_NOTIFY arm in `widgets/mod.rs` (pre-reserved last iteration) now routes to `tree_view::handle_selection_change`.
 
