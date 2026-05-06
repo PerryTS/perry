@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.634
+**Current Version:** 0.5.635
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.635** — Fix iOS phase mod.rs registration — earlier Edits to add `pub mod calendar;`, `pub mod map_view;`, `pub mod pdf_view;`, `pub mod rich_text;` to `crates/perry-ui-ios/src/widgets/mod.rs` failed silently across the v0.5.632 / v0.5.633 / v0.5.634 commits. Without the registrations the lib.rs FFI re-points to `widgets::*::*` would have produced unresolved-symbol errors at link time on iOS targets.
 
 - **v0.5.634** — Refs #478: Rich text editor — iOS stub replaced with `UITextView` + `NSAttributedString` impl in `crates/perry-ui-ios/src/widgets/rich_text.rs`. Mirrors macOS impl: `setEditable: true` + `setSelectable: true` + `setAllowsEditingTextAttributes: true`. `PerryRichTextDelegateIOS` (NSObject) wraps `textViewDidChange:` and fires onChange with the buffer's plain text. HTML round-trip via NSAttributedString document-attributes — `setAttributedText:` for set (UITextView's equivalent of NSTextView's `textStorage.setAttributedString:`), `attributedText.dataFromRange:documentAttributes:` for get. Bold / italic / underline use UITextView's UIResponderStandardEditActions: `toggleBoldface:` / `toggleItalics:` / `toggleUnderline:` (vs macOS NSTextView's `toggleBold:` / `toggleItalic:` / `underline:`).
 

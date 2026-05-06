@@ -1,6 +1,10 @@
 pub mod button;
+pub mod calendar;
 pub mod canvas;
 pub mod divider;
+pub mod map_view;
+pub mod pdf_view;
+pub mod rich_text;
 pub mod form;
 pub mod hstack;
 pub mod image;
