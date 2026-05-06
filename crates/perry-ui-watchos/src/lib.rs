@@ -842,6 +842,20 @@ pub extern "C" fn perry_ui_combobox_get_value(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 
+// Issue #516 — PdfView stubs (watchOS not a realistic PDF target).
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_load_file(_h: i64, _p: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_get_page_count(_h: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_go_to_page(_h: i64, _i: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 { -1 }
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_set_scale(_h: i64, _s: f64) {}
+
 // Issue #517 — MapView stubs (watchOS has MKMapView but screen real
 // estate makes a generic widget impractical for now).
 #[no_mangle]

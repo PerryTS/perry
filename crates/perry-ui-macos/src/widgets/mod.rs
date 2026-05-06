@@ -12,6 +12,7 @@ pub mod image;
 pub mod lazyvstack;
 pub mod map_view;
 pub mod navstack;
+pub mod pdf_view;
 pub mod picker;
 pub mod progressview;
 pub mod qrcode;

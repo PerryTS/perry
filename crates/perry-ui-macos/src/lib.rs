@@ -1090,6 +1090,42 @@ pub extern "C" fn perry_ui_combobox_get_value(handle: i64) -> f64 {
     widgets::combobox::get_value(handle)
 }
 
+// ---- PdfView (issue #516) ----
+
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_create(width: f64, height: f64) -> i64 {
+    widgets::pdf_view::create(width, height)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_load_file(handle: i64, path_ptr: i64) -> i64 {
+    if widgets::pdf_view::load_file(handle, path_ptr as *const u8) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_get_page_count(handle: i64) -> i64 {
+    widgets::pdf_view::get_page_count(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_go_to_page(handle: i64, page_index: i64) {
+    widgets::pdf_view::go_to_page(handle, page_index);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_get_current_page(handle: i64) -> i64 {
+    widgets::pdf_view::get_current_page(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_set_scale(handle: i64, scale: f64) {
+    widgets::pdf_view::set_scale(handle, scale);
+}
+
 // ---- MapView (issue #517) ----
 
 #[no_mangle]

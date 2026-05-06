@@ -953,6 +953,43 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::I64Raw],
         ret: ReturnKind::Void,
     },
+    // ---- PdfView (issue #516) ----
+    MethodRow {
+        method: "PdfView",
+        runtime: "perry_ui_pdf_view_create",
+        args: &[ArgKind::F64, ArgKind::F64],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "pdfViewLoadFile",
+        runtime: "perry_ui_pdf_view_load_file",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::I64AsF64,
+    },
+    MethodRow {
+        method: "pdfViewGetPageCount",
+        runtime: "perry_ui_pdf_view_get_page_count",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::I64AsF64,
+    },
+    MethodRow {
+        method: "pdfViewGoToPage",
+        runtime: "perry_ui_pdf_view_go_to_page",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "pdfViewGetCurrentPage",
+        runtime: "perry_ui_pdf_view_get_current_page",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::I64AsF64,
+    },
+    MethodRow {
+        method: "pdfViewSetScale",
+        runtime: "perry_ui_pdf_view_set_scale",
+        args: &[ArgKind::Widget, ArgKind::F64],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "widgetSetControlSize",
         runtime: "perry_ui_widget_set_control_size",

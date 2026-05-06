@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.616
+**Current Version:** 0.5.617
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.617** — Refs #516: PDF viewer widget. macOS impl in `crates/perry-ui-macos/src/widgets/pdf_view.rs` wraps `PDFView` from PDFKit via raw `objc_msgSend` (no `objc2-pdf-kit` dep). PDFKit linked from `crates/perry/src/commands/compile/link.rs:1460`. Loads documents via `PDFDocument.initWithURL:` against an `NSURL.fileURLWithPath:`, navigates pages via `pageAtIndex:` + `goToPage:`, exposes `pageCount` / `currentPage` / `setScaleFactor:` / `setDisplayMode:1` (single-page-continuous) / `setAutoScales:true`. 6 new dispatch rows: `PdfView(width, height)`, `pdfViewLoadFile(path) → 1/0`, `pdfViewGetPageCount`, `pdfViewGoToPage(idx)`, `pdfViewGetCurrentPage`, `pdfViewSetScale(scale)`. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 6 FFI symbols. Out of scope: programmatic PDF generation (CGPDFContext drawing API), text-search highlighting, annotation editing, print-friendly rendering.
 
 - **v0.5.616** — Closes #517: Map widget. macOS impl in `crates/perry-ui-macos/src/widgets/map_view.rs` wraps `MKMapView` via raw `objc_msgSend` (no `objc2-map-kit` dep). MapKit is now linked from `crates/perry/src/commands/compile/link.rs:1457` for macOS / cross-macos targets. `CLLocationCoordinate2D`, `MKCoordinateSpan`, `MKCoordinateRegion` declared `#[repr(C)]` with hand-written `unsafe impl Encode for ...` so `setRegion:animated:` and `setCoordinate:` accept the structs directly. Default red `MKPointAnnotation` for pins; `setMapType:` toggles standard / satellite / hybrid (0/1/2). 5 new dispatch rows: `MapView(width, height)`, `mapViewSetRegion(lat, lon, latSpan, lonSpan)`, `mapViewAddPin(lat, lon, title)`, `mapViewClearPins`, `mapViewSetMapType`. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 5 FFI symbols. Out of scope: user-location tracking, custom annotation views, polylines/polygons, route directions, region-change callbacks.
 

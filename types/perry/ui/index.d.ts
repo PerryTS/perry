@@ -607,6 +607,24 @@ export function mapViewSetRegion(
 export function mapViewAddPin(widget: Widget, lat: number, lon: number, title: string): void;
 export function mapViewClearPins(widget: Widget): void;
 export function mapViewSetMapType(widget: Widget, style: number): void;
+
+// ---------------------------------------------------------------------------
+// PDF viewer widget (issue #516) — wraps `PDFView` from PDFKit on macOS.
+// `loadFile` returns 1 on success, 0 on failure (couldn't open path or
+// PDFKit unavailable). Scale is a multiplier — 1.0 = 100%.
+//
+// Out of scope this iteration: programmatic PDF generation
+// (`Pdf.create({...}).save(path)` style API), text-search highlighting,
+// annotation editing, print-friendly rendering. Filed back into #516
+// for follow-ups.
+// ---------------------------------------------------------------------------
+
+export function PdfView(width: number, height: number): Widget;
+export function pdfViewLoadFile(widget: Widget, path: string): number;
+export function pdfViewGetPageCount(widget: Widget): number;
+export function pdfViewGoToPage(widget: Widget, pageIndex: number): void;
+export function pdfViewGetCurrentPage(widget: Widget): number;
+export function pdfViewSetScale(widget: Widget, scale: number): void;
 export function widgetSetControlSize(widget: Widget, size: number): void;
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;

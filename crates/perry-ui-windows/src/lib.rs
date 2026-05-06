@@ -1103,6 +1103,21 @@ pub extern "C" fn perry_ui_navstack_pop(handle: i64) {
 
 /// Create a Picker (dropdown).
 #[no_mangle]
+// Issue #516 — PdfView stubs. Windows — Windows.Data.Pdf or a third-
+// party renderer is a future iteration.
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_load_file(_h: i64, _p: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_get_page_count(_h: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_go_to_page(_h: i64, _i: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 { -1 }
+#[no_mangle]
+pub extern "C" fn perry_ui_pdf_view_set_scale(_h: i64, _s: f64) {}
+
 // Issue #517 — MapView stubs. Windows — Bing Maps WinRT API is a
 // future iteration.
 #[no_mangle]
