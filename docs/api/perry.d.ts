@@ -1,7 +1,7 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Perry version: 0.5.598
-// Coverage: 397 entries across 45 modules
+// Perry version: 0.5.600
+// Coverage: 673 entries across 68 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -11,6 +11,31 @@ declare module "argon2" {
 }
 
 declare module "async_hooks" {
+}
+
+declare module "axios" {
+  /** stdlib */
+  export function all(...args: any[]): any;
+  /** stdlib */
+  export function create(...args: any[]): any;
+  /** stdlib */
+  export default function (...args: any[]): any;
+  /** stdlib */
+  export function delete(...args: any[]): any;
+  /** stdlib */
+  export function get(...args: any[]): any;
+  /** stdlib */
+  export function head(...args: any[]): any;
+  /** stdlib */
+  export function options(...args: any[]): any;
+  /** stdlib */
+  export function patch(...args: any[]): any;
+  /** stdlib */
+  export function post(...args: any[]): any;
+  /** stdlib */
+  export function put(...args: any[]): any;
+  /** stdlib */
+  export function request(...args: any[]): any;
 }
 
 declare module "bcrypt" {
@@ -25,14 +50,48 @@ declare module "better-sqlite3" {
   export default function (p0: string): any;
 }
 
+declare module "bignumber.js" {
+  /** stdlib */
+  export class BigNumber { [key: string]: any; }
+}
+
 declare module "buffer" {
   /** stdlib */
   export class Buffer { [key: string]: any; }
+  /** stdlib */
+  export function alloc(...args: any[]): any;
+  /** stdlib */
+  export function allocUnsafe(...args: any[]): any;
+  /** stdlib */
+  export function byteLength(...args: any[]): any;
+  /** stdlib */
+  export function concat(...args: any[]): any;
+  /** stdlib */
+  export function from(...args: any[]): any;
+  /** stdlib */
+  export function isBuffer(...args: any[]): any;
 }
 
 declare module "cheerio" {
   /** stdlib */
   export function load(p0: string): any;
+}
+
+declare module "child_process" {
+  /** stdlib */
+  export function exec(...args: any[]): any;
+  /** stdlib */
+  export function execFile(...args: any[]): any;
+  /** stdlib */
+  export function execFileSync(...args: any[]): any;
+  /** stdlib */
+  export function execSync(...args: any[]): any;
+  /** stdlib */
+  export function fork(...args: any[]): any;
+  /** stdlib */
+  export function spawn(...args: any[]): any;
+  /** stdlib */
+  export function spawnSync(...args: any[]): any;
 }
 
 declare module "commander" {
@@ -66,6 +125,33 @@ declare module "crypto" {
   export function randomUUID(...args: any[]): any;
   /** stdlib */
   export function sha256(...args: any[]): any;
+}
+
+declare module "date-fns" {
+  /** stdlib */
+  export function addDays(...args: any[]): any;
+  /** stdlib */
+  export function addMonths(...args: any[]): any;
+  /** stdlib */
+  export function addYears(...args: any[]): any;
+  /** stdlib */
+  export function differenceInDays(...args: any[]): any;
+  /** stdlib */
+  export function differenceInHours(...args: any[]): any;
+  /** stdlib */
+  export function differenceInMinutes(...args: any[]): any;
+  /** stdlib */
+  export function endOfDay(...args: any[]): any;
+  /** stdlib */
+  export function format(...args: any[]): any;
+  /** stdlib */
+  export function isAfter(...args: any[]): any;
+  /** stdlib */
+  export function isBefore(...args: any[]): any;
+  /** stdlib */
+  export function parseISO(...args: any[]): any;
+  /** stdlib */
+  export function startOfDay(...args: any[]): any;
 }
 
 declare module "dayjs" {
@@ -111,6 +197,118 @@ declare module "exponential-backoff" {
 declare module "fastify" {
   /** stdlib */
   export default function (p0: any): any;
+}
+
+declare module "fetch" {
+  /** stdlib */
+  export class Blob { [key: string]: any; }
+  /** stdlib */
+  export class Headers { [key: string]: any; }
+  /** stdlib */
+  export class Request { [key: string]: any; }
+  /** stdlib */
+  export class Response { [key: string]: any; }
+  /** stdlib */
+  export default function (...args: any[]): any;
+}
+
+declare module "fs" {
+  /** stdlib */
+  export const constants: any;
+  /** stdlib */
+  export const promises: any;
+  /** stdlib */
+  export function accessSync(...args: any[]): any;
+  /** stdlib */
+  export function appendFile(...args: any[]): any;
+  /** stdlib */
+  export function appendFileSync(...args: any[]): any;
+  /** stdlib */
+  export function chmodSync(...args: any[]): any;
+  /** stdlib */
+  export function copyFileSync(...args: any[]): any;
+  /** stdlib */
+  export function createReadStream(...args: any[]): any;
+  /** stdlib */
+  export function createWriteStream(...args: any[]): any;
+  /** stdlib */
+  export function existsSync(...args: any[]): any;
+  /** stdlib */
+  export function lstatSync(...args: any[]): any;
+  /** stdlib */
+  export function mkdir(...args: any[]): any;
+  /** stdlib */
+  export function mkdirSync(...args: any[]): any;
+  /** stdlib */
+  export function mkdtempSync(...args: any[]): any;
+  /** stdlib */
+  export function readFile(...args: any[]): any;
+  /** stdlib */
+  export function readFileSync(...args: any[]): any;
+  /** stdlib */
+  export function readdir(...args: any[]): any;
+  /** stdlib */
+  export function readdirSync(...args: any[]): any;
+  /** stdlib */
+  export function realpathSync(...args: any[]): any;
+  /** stdlib */
+  export function renameSync(...args: any[]): any;
+  /** stdlib */
+  export function rm(...args: any[]): any;
+  /** stdlib */
+  export function rmSync(...args: any[]): any;
+  /** stdlib */
+  export function rmdirSync(...args: any[]): any;
+  /** stdlib */
+  export function stat(...args: any[]): any;
+  /** stdlib */
+  export function statSync(...args: any[]): any;
+  /** stdlib */
+  export function unlink(...args: any[]): any;
+  /** stdlib */
+  export function unlinkSync(...args: any[]): any;
+  /** stdlib */
+  export function unwatchFile(...args: any[]): any;
+  /** stdlib */
+  export function watchFile(...args: any[]): any;
+  /** stdlib */
+  export function writeFile(...args: any[]): any;
+  /** stdlib */
+  export function writeFileSync(...args: any[]): any;
+}
+
+declare module "http" {
+  /** stdlib */
+  export class ClientRequest { [key: string]: any; }
+  /** stdlib */
+  export class IncomingMessage { [key: string]: any; }
+  /** stdlib */
+  export class Server { [key: string]: any; }
+  /** stdlib */
+  export class ServerResponse { [key: string]: any; }
+  /** stdlib */
+  export function createServer(...args: any[]): any;
+  /** stdlib */
+  export function get(...args: any[]): any;
+  /** stdlib */
+  export function request(...args: any[]): any;
+}
+
+declare module "https" {
+  /** stdlib */
+  export class ClientRequest { [key: string]: any; }
+  /** stdlib */
+  export class IncomingMessage { [key: string]: any; }
+  /** stdlib */
+  export class Server { [key: string]: any; }
+  /** stdlib */
+  export class ServerResponse { [key: string]: any; }
+  /** stdlib */
+  export function createServer(...args: any[]): any;
+  /** stdlib */
+  export function get(...args: any[]): any;
+  /** stdlib */
+  export function request(...args: any[]): any;
 }
 
 declare module "ioredis" {
@@ -224,6 +422,26 @@ declare module "net" {
   export function createConnection(p0: any, p1: string): any;
 }
 
+declare module "node-cron" {
+  /** stdlib */
+  export function schedule(...args: any[]): any;
+  /** stdlib */
+  export function validate(...args: any[]): any;
+}
+
+declare module "node-fetch" {
+  /** stdlib */
+  export class Blob { [key: string]: any; }
+  /** stdlib */
+  export class Headers { [key: string]: any; }
+  /** stdlib */
+  export class Request { [key: string]: any; }
+  /** stdlib */
+  export class Response { [key: string]: any; }
+  /** stdlib */
+  export default function (...args: any[]): any;
+}
+
 declare module "nodemailer" {
   /** stdlib */
   export function createTransport(p0: any): any;
@@ -291,6 +509,140 @@ declare module "path" {
   export function resolve(...args: any[]): any;
 }
 
+declare module "perry/i18n" {
+  /** stdlib */
+  export function Currency(...args: any[]): any;
+  /** stdlib */
+  export function FormatNumber(...args: any[]): any;
+  /** stdlib */
+  export function FormatTime(...args: any[]): any;
+  /** stdlib */
+  export function LongDate(...args: any[]): any;
+  /** stdlib */
+  export function Percent(...args: any[]): any;
+  /** stdlib */
+  export function Raw(...args: any[]): any;
+  /** stdlib */
+  export function ShortDate(...args: any[]): any;
+  /** stdlib */
+  export function t(...args: any[]): any;
+}
+
+declare module "perry/media" {
+  /** stdlib */
+  export function createPlayer(...args: any[]): any;
+  /** stdlib */
+  export function destroy(...args: any[]): any;
+  /** stdlib */
+  export function getCurrentTime(...args: any[]): any;
+  /** stdlib */
+  export function getDuration(...args: any[]): any;
+  /** stdlib */
+  export function getState(...args: any[]): any;
+  /** stdlib */
+  export function isPlaying(...args: any[]): any;
+  /** stdlib */
+  export function onStateChange(...args: any[]): any;
+  /** stdlib */
+  export function onTimeUpdate(...args: any[]): any;
+  /** stdlib */
+  export function pause(...args: any[]): any;
+  /** stdlib */
+  export function play(...args: any[]): any;
+  /** stdlib */
+  export function seek(...args: any[]): any;
+  /** stdlib */
+  export function setNowPlaying(...args: any[]): any;
+  /** stdlib */
+  export function setRate(...args: any[]): any;
+  /** stdlib */
+  export function setVolume(...args: any[]): any;
+  /** stdlib */
+  export function stop(...args: any[]): any;
+}
+
+declare module "perry/plugin" {
+  /** stdlib */
+  export class PluginApi { [key: string]: any; }
+  /** stdlib */
+  export function discoverPlugins(...args: any[]): any;
+  /** stdlib */
+  export function emitEvent(...args: any[]): any;
+  /** stdlib */
+  export function emitHook(...args: any[]): any;
+  /** stdlib */
+  export function initPlugins(...args: any[]): any;
+  /** stdlib */
+  export function invokeTool(...args: any[]): any;
+  /** stdlib */
+  export function listHooks(...args: any[]): any;
+  /** stdlib */
+  export function listPlugins(...args: any[]): any;
+  /** stdlib */
+  export function listTools(...args: any[]): any;
+  /** stdlib */
+  export function loadPlugin(...args: any[]): any;
+  /** stdlib */
+  export function pluginCount(...args: any[]): any;
+  /** stdlib */
+  export function setPluginConfig(...args: any[]): any;
+  /** stdlib */
+  export function unloadPlugin(...args: any[]): any;
+}
+
+declare module "perry/system" {
+  /** stdlib */
+  export function audioGetLevel(...args: any[]): any;
+  /** stdlib */
+  export function audioGetPeak(...args: any[]): any;
+  /** stdlib */
+  export function audioGetWaveform(...args: any[]): any;
+  /** stdlib */
+  export function audioSetOutputFilename(...args: any[]): any;
+  /** stdlib */
+  export function audioStart(...args: any[]): any;
+  /** stdlib */
+  export function audioStartRecording(...args: any[]): any;
+  /** stdlib */
+  export function audioStop(...args: any[]): any;
+  /** stdlib */
+  export function audioStopRecording(...args: any[]): any;
+  /** stdlib */
+  export function getAppIcon(...args: any[]): any;
+  /** stdlib */
+  export function getDeviceIdiom(...args: any[]): any;
+  /** stdlib */
+  export function getDeviceModel(...args: any[]): any;
+  /** stdlib */
+  export function getLocale(...args: any[]): any;
+  /** stdlib */
+  export function isDarkMode(...args: any[]): any;
+  /** stdlib */
+  export function keychainDelete(...args: any[]): any;
+  /** stdlib */
+  export function keychainGet(...args: any[]): any;
+  /** stdlib */
+  export function keychainSave(...args: any[]): any;
+  /** stdlib */
+  export function notificationCancel(...args: any[]): any;
+  /** stdlib */
+  export function notificationOnBackgroundReceive(...args: any[]): any;
+  /** stdlib */
+  export function notificationOnReceive(...args: any[]): any;
+  /** stdlib */
+  export function notificationOnTap(...args: any[]): any;
+  /** stdlib */
+  export function notificationRegisterRemote(...args: any[]): any;
+  /** stdlib */
+  export function notificationSend(...args: any[]): any;
+  /** stdlib */
+  export function openURL(...args: any[]): any;
+  /** stdlib */
+  export function preferencesGet(...args: any[]): any;
+  /** stdlib */
+  export function preferencesSet(...args: any[]): any;
+}
+
 declare module "perry/thread" {
   /** stdlib */
   export function parallelFilter(p0: any, p1: any): any;
@@ -349,6 +701,191 @@ declare module "perry/tui" {
   export function useInput(p0: any): void;
 }
 
+declare module "perry/ui" {
+  /** stdlib */
+  export function App(...args: any[]): any;
+  /** stdlib */
+  export function Button(...args: any[]): any;
+  /** stdlib */
+  export function CameraView(...args: any[]): any;
+  /** stdlib */
+  export function Canvas(...args: any[]): any;
+  /** stdlib */
+  export function Divider(...args: any[]): any;
+  /** stdlib */
+  export function ForEach(...args: any[]): any;
+  /** stdlib */
+  export function HStack(...args: any[]): any;
+  /** stdlib */
+  export function HStackWithInsets(...args: any[]): any;
+  /** stdlib */
+  export function ImageFile(...args: any[]): any;
+  /** stdlib */
+  export function ImageSymbol(...args: any[]): any;
+  /** stdlib */
+  export function LazyVStack(...args: any[]): any;
+  /** stdlib */
+  export function NavStack(...args: any[]): any;
+  /** stdlib */
+  export function Picker(...args: any[]): any;
+  /** stdlib */
+  export function ProgressView(...args: any[]): any;
+  /** stdlib */
+  export function ScrollView(...args: any[]): any;
+  /** stdlib */
+  export function Section(...args: any[]): any;
+  /** stdlib */
+  export function SecureField(...args: any[]): any;
+  /** stdlib */
+  export function Slider(...args: any[]): any;
+  /** stdlib */
+  export function Spacer(...args: any[]): any;
+  /** stdlib */
+  export function SplitView(...args: any[]): any;
+  /** stdlib */
+  export function State(...args: any[]): any;
+  /** stdlib */
+  export function TabBar(...args: any[]): any;
+  /** stdlib */
+  export function Table(...args: any[]): any;
+  /** stdlib */
+  export function Text(...args: any[]): any;
+  /** stdlib */
+  export function TextArea(...args: any[]): any;
+  /** stdlib */
+  export function TextField(...args: any[]): any;
+  /** stdlib */
+  export function Toggle(...args: any[]): any;
+  /** stdlib */
+  export function VStack(...args: any[]): any;
+  /** stdlib */
+  export function VStackWithInsets(...args: any[]): any;
+  /** stdlib */
+  export function Window(...args: any[]): any;
+  /** stdlib */
+  export function ZStack(...args: any[]): any;
+  /** stdlib */
+  export function addKeyboardShortcut(...args: any[]): any;
+  /** stdlib */
+  export function alert(...args: any[]): any;
+  /** stdlib */
+  export function alertWithButtons(...args: any[]): any;
+  /** stdlib */
+  export function appSetMaxSize(...args: any[]): any;
+  /** stdlib */
+  export function appSetMinSize(...args: any[]): any;
+  /** stdlib */
+  export function appSetTimer(...args: any[]): any;
+  /** stdlib */
+  export function clipboardRead(...args: any[]): any;
+  /** stdlib */
+  export function clipboardWrite(...args: any[]): any;
+  /** stdlib */
+  export function embedNSView(...args: any[]): any;
+  /** stdlib */
+  export function frameSplitAddChild(...args: any[]): any;
+  /** stdlib */
+  export function frameSplitCreate(...args: any[]): any;
+  /** stdlib */
+  export function menuAddItem(...args: any[]): any;
+  /** stdlib */
+  export function menuAddItemWithShortcut(...args: any[]): any;
+  /** stdlib */
+  export function menuAddSeparator(...args: any[]): any;
+  /** stdlib */
+  export function menuAddStandardAction(...args: any[]): any;
+  /** stdlib */
+  export function menuAddSubmenu(...args: any[]): any;
+  /** stdlib */
+  export function menuBarAddMenu(...args: any[]): any;
+  /** stdlib */
+  export function menuBarAttach(...args: any[]): any;
+  /** stdlib */
+  export function menuBarCreate(...args: any[]): any;
+  /** stdlib */
+  export function menuClear(...args: any[]): any;
+  /** stdlib */
+  export function menuCreate(...args: any[]): any;
+  /** stdlib */
+  export function onActivate(...args: any[]): any;
+  /** stdlib */
+  export function onTerminate(...args: any[]): any;
+  /** stdlib */
+  export function openFileDialog(...args: any[]): any;
+  /** stdlib */
+  export function openFolderDialog(...args: any[]): any;
+  /** stdlib */
+  export function pollOpenFile(...args: any[]): any;
+  /** stdlib */
+  export function registerGlobalHotkey(...args: any[]): any;
+  /** stdlib */
+  export function saveFileDialog(...args: any[]): any;
+  /** stdlib */
+  export function setText(...args: any[]): any;
+  /** stdlib */
+  export function sheetCreate(...args: any[]): any;
+  /** stdlib */
+  export function sheetDismiss(...args: any[]): any;
+  /** stdlib */
+  export function sheetPresent(...args: any[]): any;
+  /** stdlib */
+  export function showToast(...args: any[]): any;
+  /** stdlib */
+  export function toolbarAddItem(...args: any[]): any;
+  /** stdlib */
+  export function toolbarAttach(...args: any[]): any;
+  /** stdlib */
+  export function toolbarCreate(...args: any[]): any;
+  /** stdlib */
+  export function trayAttachMenu(...args: any[]): any;
+  /** stdlib */
+  export function trayCreate(...args: any[]): any;
+  /** stdlib */
+  export function trayDestroy(...args: any[]): any;
+  /** stdlib */
+  export function trayOnClick(...args: any[]): any;
+  /** stdlib */
+  export function traySetIcon(...args: any[]): any;
+  /** stdlib */
+  export function traySetTooltip(...args: any[]): any;
+}
+
+declare module "perry/updater" {
+  /** stdlib */
+  export function clearSentinel(...args: any[]): any;
+  /** stdlib */
+  export function compareVersions(...args: any[]): any;
+  /** stdlib */
+  export function computeFileSha256(...args: any[]): any;
+  /** stdlib */
+  export function getBackupPath(...args: any[]): any;
+  /** stdlib */
+  export function getExePath(...args: any[]): any;
+  /** stdlib */
+  export function getSentinelPath(...args: any[]): any;
+  /** stdlib */
+  export function installUpdate(...args: any[]): any;
+  /** stdlib */
+  export function performRollback(...args: any[]): any;
+  /** stdlib */
+  export function readSentinel(...args: any[]): any;
+  /** stdlib */
+  export function relaunch(...args: any[]): any;
+  /** stdlib */
+  export function verifyHash(...args: any[]): any;
+  /** stdlib */
+  export function verifySignature(...args: any[]): any;
+  /** stdlib */
+  export function verifySignatureV2(...args: any[]): any;
+  /** stdlib */
+  export function writeSentinel(...args: any[]): any;
+}
+
+declare module "perry/widget" {
+  /** stdlib */
+  export function Widget(...args: any[]): any;
+}
+
 declare module "pg" {
   /** stdlib */
   export class Client { [key: string]: any; }
@@ -385,9 +922,23 @@ declare module "process" {
   export const versions: any;
 }
 
+declare module "rate-limiter-flexible" {
+  /** stdlib */
+  export class RateLimiterAbstract { [key: string]: any; }
+  /** stdlib */
+  export class RateLimiterMemory { [key: string]: any; }
+}
+
 declare module "readline" {
   /** stdlib */
   export function createInterface(p0: any): any;
+}
+
+declare module "redis" {
+  /** stdlib */
+  export class Redis { [key: string]: any; }
+  /** stdlib */
+  export function createClient(...args: any[]): any;
 }
 
 declare module "sharp" {
@@ -404,9 +955,50 @@ declare module "slugify" {
   export function slugify(p0: string, p1: string, p2: string): string;
 }
 
+declare module "stream" {
+  /** stdlib */
+  export class Duplex { [key: string]: any; }
+  /** stdlib */
+  export class PassThrough { [key: string]: any; }
+  /** stdlib */
+  export class Readable { [key: string]: any; }
+  /** stdlib */
+  export class Transform { [key: string]: any; }
+  /** stdlib */
+  export class Writable { [key: string]: any; }
+  /** stdlib */
+  export function finished(...args: any[]): any;
+  /** stdlib */
+  export function pipeline(...args: any[]): any;
+}
+
+declare module "streams" {
+  /** stdlib */
+  export class DecompressionStream { [key: string]: any; }
+  /** stdlib */
+  export class ReadableStream { [key: string]: any; }
+  /** stdlib */
+  export class TextDecoder { [key: string]: any; }
+  /** stdlib */
+  export class TextEncoder { [key: string]: any; }
+  /** stdlib */
+  export class TransformStream { [key: string]: any; }
+  /** stdlib */
+  export class WritableStream { [key: string]: any; }
+}
+
 declare module "tls" {
   /** stdlib */
   export function connect(p0: string, p1: any, p2: string, p3: any): any;
+}
+
+declare module "tty" {
+  /** stdlib */
+  export class ReadStream { [key: string]: any; }
+  /** stdlib */
+  export class WriteStream { [key: string]: any; }
+  /** stdlib */
+  export function isatty(...args: any[]): any;
 }
 
 declare module "tursodb" {
@@ -419,6 +1011,35 @@ declare module "url" {
   export class URL { [key: string]: any; }
   /** stdlib */
   export class URLSearchParams { [key: string]: any; }
+  /** stdlib */
+  export function fileURLToPath(...args: any[]): any;
+  /** stdlib */
+  export function format(...args: any[]): any;
+  /** stdlib */
+  export function parse(...args: any[]): any;
+  /** stdlib */
+  export function pathToFileURL(...args: any[]): any;
+}
+
+declare module "util" {
+  /** stdlib */
+  export class TextDecoder { [key: string]: any; }
+  /** stdlib */
+  export class TextEncoder { [key: string]: any; }
+  /** stdlib */
+  export function callbackify(...args: any[]): any;
+  /** stdlib */
+  export function deprecate(...args: any[]): any;
+  /** stdlib */
+  export function format(...args: any[]): any;
+  /** stdlib */
+  export function inherits(...args: any[]): any;
+  /** stdlib */
+  export function inspect(...args: any[]): any;
+  /** stdlib */
+  export function isDeepStrictEqual(...args: any[]): any;
+  /** stdlib */
+  export function promisify(...args: any[]): any;
 }
 
 declare module "uuid" {

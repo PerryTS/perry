@@ -127,22 +127,94 @@ fn os_eol_and_path_sep_compile() {
 // (where each invocation is its own process) — see the README/docs
 // added in this PR for the manual verification steps.
 
-/// Modules with zero entries in the manifest fall through to existing
-/// permissive behavior. This lets coverage land incrementally without
-/// breaking unrelated working code.
+/// As of #513, every module in `NATIVE_MODULES` has at least one
+/// manifest entry, so the permissive fall-through is unreachable for
+/// supported modules. `axios.foo` (which used to silently compile under
+/// the pre-#513 zero-entries-permissive shape) now errors.
 ///
-/// `axios` is in `NATIVE_MODULES` but currently has no entries in the
-/// manifest. Reading an arbitrary property must NOT error.
+/// The drift test `every_native_module_has_at_least_one_manifest_entry`
+/// in `crates/perry-codegen/tests/manifest_consistency.rs` makes this
+/// invariant load-bearing — adding a new native module without manifest
+/// entries fails CI before the PR ships.
 #[test]
-fn module_with_no_manifest_entries_is_permissive() {
+fn supported_module_with_unknown_member_is_rejected() {
     let result = lower_result(
         r#"
         import axios from "axios";
         const x = axios.foo;
     "#,
     );
+    let err = result.expect_err("axios.foo should error post-#513");
     assert!(
-        result.is_ok(),
-        "axios.foo must compile while axios has no manifest entries: {result:?}"
+        err.contains("axios.foo") && err.contains("not implemented"),
+        "expected error naming `axios.foo` and `not implemented`, got: {err}"
+    );
+}
+
+/// Coverage sweep for #513: every module in `NATIVE_MODULES` must error
+/// on a known-bogus property. Catches manifest entries that flag a
+/// module as "covered" without actually flipping strictness on.
+///
+/// Side-effect-only sub-paths (`dotenv/config`) are skipped — they have
+/// no value binding to read properties off, so the gate doesn't apply.
+/// `tursodb` and `iroh` are external bindings (live in standalone
+/// `@perryts/*` repos as of v0.5.557) — their manifest entries exist
+/// but the in-tree resolver doesn't recognise them as a `NativeModuleRef`
+/// without `node_modules/<pkg>/package.json` declaring `perry.nativeLibrary`,
+/// so the gate's prerequisite shape never triggers in this isolated
+/// HIR test.
+#[test]
+fn every_supported_module_rejects_bogus_member() {
+    const SKIP: &[&str] = &[
+        // Side-effect-only — no value binding to access.
+        "dotenv/config",
+        // External (non-bundled) bindings — out-of-tree as of v0.5.557.
+        "tursodb",
+        "iroh",
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+    for &module in perry_api_manifest::NATIVE_MODULES {
+        if SKIP.contains(&module) {
+            continue;
+        }
+        // Sanity: prereq for the strict gate to fire.
+        assert!(
+            perry_api_manifest::module_has_any_entries(module),
+            "module {module} has no entries — every_native_module_has_at_least_one_manifest_entry \
+             should have caught this in perry-codegen"
+        );
+
+        // Pick an alias that's a valid TS identifier — `path` and
+        // `events` are reserved-adjacent in some lints, but plain `m`
+        // works for everything. Use namespace import so the binding
+        // lowers to `Expr::NativeModuleRef`.
+        let src = format!(
+            r#"
+            import * as m from "{module}";
+            const x = m.__perry_known_bogus_member_513__;
+        "#
+        );
+        match lower_result(&src) {
+            Ok(_) => {
+                failures.push(format!(
+                    "{module}: bogus member access did not error (strict mode not engaged)"
+                ));
+            }
+            Err(e) => {
+                if !(e.contains("not implemented") && e.contains("#463")) {
+                    failures.push(format!(
+                        "{module}: errored but not via the R005/#463 path — got {e}"
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} module(s) failed the R005 sweep:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
     );
 }

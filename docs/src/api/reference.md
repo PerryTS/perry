@@ -2,21 +2,25 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-**Generated for Perry v0.5.598.**
+**Generated for Perry v0.5.600.**
 
-Total: 397 entries across 45 modules.
+Total: 673 entries across 68 modules.
 
 ## Modules
 
 - [`argon2`](#argon2)
 - [`async_hooks`](#async-hooks)
+- [`axios`](#axios)
 - [`bcrypt`](#bcrypt)
 - [`better-sqlite3`](#better-sqlite3)
+- [`bignumber.js`](#bignumber-js)
 - [`buffer`](#buffer)
 - [`cheerio`](#cheerio)
+- [`child_process`](#child-process)
 - [`commander`](#commander)
 - [`cron`](#cron)
 - [`crypto`](#crypto)
+- [`date-fns`](#date-fns)
 - [`dayjs`](#dayjs)
 - [`decimal.js`](#decimal-js)
 - [`dotenv`](#dotenv)
@@ -24,6 +28,10 @@ Total: 397 entries across 45 modules.
 - [`events`](#events)
 - [`exponential-backoff`](#exponential-backoff)
 - [`fastify`](#fastify)
+- [`fetch`](#fetch)
+- [`fs`](#fs)
+- [`http`](#http)
+- [`https`](#https)
 - [`ioredis`](#ioredis)
 - [`iroh`](#iroh)
 - [`jsonwebtoken`](#jsonwebtoken)
@@ -35,19 +43,34 @@ Total: 397 entries across 45 modules.
 - [`mysql2/promise`](#mysql2-promise)
 - [`nanoid`](#nanoid)
 - [`net`](#net)
+- [`node-cron`](#node-cron)
+- [`node-fetch`](#node-fetch)
 - [`nodemailer`](#nodemailer)
 - [`os`](#os)
 - [`path`](#path)
+- [`perry/i18n`](#perry-i18n)
+- [`perry/media`](#perry-media)
+- [`perry/plugin`](#perry-plugin)
+- [`perry/system`](#perry-system)
 - [`perry/thread`](#perry-thread)
 - [`perry/tui`](#perry-tui)
+- [`perry/ui`](#perry-ui)
+- [`perry/updater`](#perry-updater)
+- [`perry/widget`](#perry-widget)
 - [`pg`](#pg)
 - [`process`](#process)
+- [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
+- [`redis`](#redis)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
+- [`stream`](#stream)
+- [`streams`](#streams)
 - [`tls`](#tls)
+- [`tty`](#tty)
 - [`tursodb`](#tursodb)
 - [`url`](#url)
+- [`util`](#util)
 - [`uuid`](#uuid)
 - [`validator`](#validator)
 - [`worker_threads`](#worker-threads)
@@ -73,6 +96,22 @@ Total: 397 entries across 45 modules.
 - `getStore` — instance
 - `run` — instance
 
+## `axios`
+
+### Methods
+
+- `all` — module
+- `create` — module
+- `default` — module
+- `delete` — module
+- `get` — module
+- `head` — module
+- `options` — module
+- `patch` — module
+- `post` — module
+- `put` — module
+- `request` — module
+
 ## `bcrypt`
 
 ### Methods
@@ -92,11 +131,26 @@ Total: 397 entries across 45 modules.
 - `prepare` — instance
 - `run` — instance
 
+## `bignumber.js`
+
+### Classes
+
+- `BigNumber`
+
 ## `buffer`
 
 ### Classes
 
 - `Buffer`
+
+### Methods
+
+- `alloc` — module
+- `allocUnsafe` — module
+- `byteLength` — module
+- `concat` — module
+- `from` — module
+- `isBuffer` — module
 
 ## `cheerio`
 
@@ -115,6 +169,18 @@ Total: 397 entries across 45 modules.
 - `parent` — instance
 - `select` — instance
 - `text` — instance
+
+## `child_process`
+
+### Methods
+
+- `exec` — module
+- `execFile` — module
+- `execFileSync` — module
+- `execSync` — module
+- `fork` — module
+- `spawn` — module
+- `spawnSync` — module
 
 ## `commander`
 
@@ -155,6 +221,23 @@ Total: 397 entries across 45 modules.
 - `randomBytes` — module
 - `randomUUID` — module
 - `sha256` — module
+
+## `date-fns`
+
+### Methods
+
+- `addDays` — module
+- `addMonths` — module
+- `addYears` — module
+- `differenceInDays` — module
+- `differenceInHours` — module
+- `differenceInMinutes` — module
+- `endOfDay` — module
+- `format` — module
+- `isAfter` — module
+- `isBefore` — module
+- `parseISO` — module
+- `startOfDay` — module
 
 ## `dayjs`
 
@@ -287,6 +370,88 @@ Total: 397 entries across 45 modules.
 - `text` — instance
 - `url` — instance
 - `user` — instance
+
+## `fetch`
+
+### Classes
+
+- `Blob`
+- `Headers`
+- `Request`
+- `Response`
+
+### Methods
+
+- `default` — module
+
+## `fs`
+
+### Methods
+
+- `accessSync` — module
+- `appendFile` — module
+- `appendFileSync` — module
+- `chmodSync` — module
+- `copyFileSync` — module
+- `createReadStream` — module
+- `createWriteStream` — module
+- `existsSync` — module
+- `lstatSync` — module
+- `mkdir` — module
+- `mkdirSync` — module
+- `mkdtempSync` — module
+- `readFile` — module
+- `readFileSync` — module
+- `readdir` — module
+- `readdirSync` — module
+- `realpathSync` — module
+- `renameSync` — module
+- `rm` — module
+- `rmSync` — module
+- `rmdirSync` — module
+- `stat` — module
+- `statSync` — module
+- `unlink` — module
+- `unlinkSync` — module
+- `unwatchFile` — module
+- `watchFile` — module
+- `writeFile` — module
+- `writeFileSync` — module
+
+### Properties
+
+- `constants`
+- `promises`
+
+## `http`
+
+### Classes
+
+- `ClientRequest`
+- `IncomingMessage`
+- `Server`
+- `ServerResponse`
+
+### Methods
+
+- `createServer` — module
+- `get` — module
+- `request` — module
+
+## `https`
+
+### Classes
+
+- `ClientRequest`
+- `IncomingMessage`
+- `Server`
+- `ServerResponse`
+
+### Methods
+
+- `createServer` — module
+- `get` — module
+- `request` — module
 
 ## `ioredis`
 
@@ -463,6 +628,26 @@ Total: 397 entries across 45 modules.
 - `upgradeToTLS` — instance *(class: `Socket`)*
 - `write` — instance *(class: `Socket`)*
 
+## `node-cron`
+
+### Methods
+
+- `schedule` — module
+- `validate` — module
+
+## `node-fetch`
+
+### Classes
+
+- `Blob`
+- `Headers`
+- `Request`
+- `Response`
+
+### Methods
+
+- `default` — module
+
 ## `nodemailer`
 
 ### Methods
@@ -515,6 +700,90 @@ Total: 397 entries across 45 modules.
 - `sep`
 - `win32`
 
+## `perry/i18n`
+
+### Methods
+
+- `Currency` — module
+- `FormatNumber` — module
+- `FormatTime` — module
+- `LongDate` — module
+- `Percent` — module
+- `Raw` — module
+- `ShortDate` — module
+- `t` — module
+
+## `perry/media`
+
+### Methods
+
+- `createPlayer` — module
+- `destroy` — module
+- `getCurrentTime` — module
+- `getDuration` — module
+- `getState` — module
+- `isPlaying` — module
+- `onStateChange` — module
+- `onTimeUpdate` — module
+- `pause` — module
+- `play` — module
+- `seek` — module
+- `setNowPlaying` — module
+- `setRate` — module
+- `setVolume` — module
+- `stop` — module
+
+## `perry/plugin`
+
+### Classes
+
+- `PluginApi`
+
+### Methods
+
+- `discoverPlugins` — module
+- `emitEvent` — module
+- `emitHook` — module
+- `initPlugins` — module
+- `invokeTool` — module
+- `listHooks` — module
+- `listPlugins` — module
+- `listTools` — module
+- `loadPlugin` — module
+- `pluginCount` — module
+- `setPluginConfig` — module
+- `unloadPlugin` — module
+
+## `perry/system`
+
+### Methods
+
+- `audioGetLevel` — module
+- `audioGetPeak` — module
+- `audioGetWaveform` — module
+- `audioSetOutputFilename` — module
+- `audioStart` — module
+- `audioStartRecording` — module
+- `audioStop` — module
+- `audioStopRecording` — module
+- `getAppIcon` — module
+- `getDeviceIdiom` — module
+- `getDeviceModel` — module
+- `getLocale` — module
+- `isDarkMode` — module
+- `keychainDelete` — module
+- `keychainGet` — module
+- `keychainSave` — module
+- `notificationCancel` — module
+- `notificationOnBackgroundReceive` — module
+- `notificationOnReceive` — module
+- `notificationOnTap` — module
+- `notificationRegisterRemote` — module
+- `notificationSend` — module
+- `openURL` — module
+- `preferencesGet` — module
+- `preferencesSet` — module
+
 ## `perry/thread`
 
 ### Methods
@@ -553,6 +822,109 @@ Total: 397 entries across 45 modules.
 - `state` — module
 - `useInput` — module
 
+## `perry/ui`
+
+### Methods
+
+- `App` — module
+- `Button` — module
+- `CameraView` — module
+- `Canvas` — module
+- `Divider` — module
+- `ForEach` — module
+- `HStack` — module
+- `HStackWithInsets` — module
+- `ImageFile` — module
+- `ImageSymbol` — module
+- `LazyVStack` — module
+- `NavStack` — module
+- `Picker` — module
+- `ProgressView` — module
+- `ScrollView` — module
+- `Section` — module
+- `SecureField` — module
+- `Slider` — module
+- `Spacer` — module
+- `SplitView` — module
+- `State` — module
+- `TabBar` — module
+- `Table` — module
+- `Text` — module
+- `TextArea` — module
+- `TextField` — module
+- `Toggle` — module
+- `VStack` — module
+- `VStackWithInsets` — module
+- `Window` — module
+- `ZStack` — module
+- `addKeyboardShortcut` — module
+- `alert` — module
+- `alertWithButtons` — module
+- `appSetMaxSize` — module
+- `appSetMinSize` — module
+- `appSetTimer` — module
+- `clipboardRead` — module
+- `clipboardWrite` — module
+- `embedNSView` — module
+- `frameSplitAddChild` — module
+- `frameSplitCreate` — module
+- `menuAddItem` — module
+- `menuAddItemWithShortcut` — module
+- `menuAddSeparator` — module
+- `menuAddStandardAction` — module
+- `menuAddSubmenu` — module
+- `menuBarAddMenu` — module
+- `menuBarAttach` — module
+- `menuBarCreate` — module
+- `menuClear` — module
+- `menuCreate` — module
+- `onActivate` — module
+- `onTerminate` — module
+- `openFileDialog` — module
+- `openFolderDialog` — module
+- `pollOpenFile` — module
+- `registerGlobalHotkey` — module
+- `saveFileDialog` — module
+- `setText` — module
+- `sheetCreate` — module
+- `sheetDismiss` — module
+- `sheetPresent` — module
+- `showToast` — module
+- `toolbarAddItem` — module
+- `toolbarAttach` — module
+- `toolbarCreate` — module
+- `trayAttachMenu` — module
+- `trayCreate` — module
+- `trayDestroy` — module
+- `trayOnClick` — module
+- `traySetIcon` — module
+- `traySetTooltip` — module
+
+## `perry/updater`
+
+### Methods
+
+- `clearSentinel` — module
+- `compareVersions` — module
+- `computeFileSha256` — module
+- `getBackupPath` — module
+- `getExePath` — module
+- `getSentinelPath` — module
+- `installUpdate` — module
+- `performRollback` — module
+- `readSentinel` — module
+- `relaunch` — module
+- `verifyHash` — module
+- `verifySignature` — module
+- `verifySignatureV2` — module
+- `writeSentinel` — module
+
+## `perry/widget`
+
+### Methods
+
+- `Widget` — module
+
 ## `pg`
 
 ### Classes
@@ -586,6 +958,13 @@ Total: 397 entries across 45 modules.
 - `version`
 - `versions`
 
+## `rate-limiter-flexible`
+
+### Classes
+
+- `RateLimiterAbstract`
+- `RateLimiterMemory`
+
 ## `readline`
 
 ### Methods
@@ -594,6 +973,16 @@ Total: 397 entries across 45 modules.
 - `createInterface` — module
 - `on` — instance
 - `question` — instance
+
+## `redis`
+
+### Classes
+
+- `Redis`
+
+### Methods
+
+- `createClient` — module
 
 ## `sharp`
 
@@ -623,11 +1012,48 @@ Total: 397 entries across 45 modules.
 - `default` — module
 - `slugify` — module
 
+## `stream`
+
+### Classes
+
+- `Duplex`
+- `PassThrough`
+- `Readable`
+- `Transform`
+- `Writable`
+
+### Methods
+
+- `finished` — module
+- `pipeline` — module
+
+## `streams`
+
+### Classes
+
+- `DecompressionStream`
+- `ReadableStream`
+- `TextDecoder`
+- `TextEncoder`
+- `TransformStream`
+- `WritableStream`
+
 ## `tls`
 
 ### Methods
 
 - `connect` — module
+
+## `tty`
+
+### Classes
+
+- `ReadStream`
+- `WriteStream`
+
+### Methods
+
+- `isatty` — module
 
 ## `tursodb`
 
@@ -648,6 +1074,30 @@ Total: 397 entries across 45 modules.
 
 - `URL`
 - `URLSearchParams`
+
+### Methods
+
+- `fileURLToPath` — module
+- `format` — module
+- `parse` — module
+- `pathToFileURL` — module
+
+## `util`
+
+### Classes
+
+- `TextDecoder`
+- `TextEncoder`
+
+### Methods
+
+- `callbackify` — module
+- `deprecate` — module
+- `format` — module
+- `inherits` — module
+- `inspect` — module
+- `isDeepStrictEqual` — module
+- `promisify` — module
 
 ## `uuid`
 

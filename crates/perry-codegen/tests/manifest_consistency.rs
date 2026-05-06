@@ -168,3 +168,121 @@ fn manifest_param_counts_match_dispatch_table() {
         mismatches.join("\n  ")
     );
 }
+
+/// #513 — reverse-direction drift guard.
+///
+/// Every supported native module (entry in
+/// `perry_api_manifest::NATIVE_MODULES`) must have **at least one**
+/// counterpart entry in `API_MANIFEST`. Without this, the
+/// unimplemented-API gate (#463) silently falls through to the old
+/// permissive behavior — `module_has_any_entries(M)` returns false for
+/// any module with zero entries, which keeps the same class of bug
+/// Justin hit in #455 alive on un-enumerated modules.
+///
+/// The test is INTENTIONALLY structural: it does NOT enforce that the
+/// manifest enumerates every method the runtime supports — that would
+/// require shadowing every dispatch table and runtime extern, which is
+/// the opposite direction's drift (already covered by
+/// `every_dispatch_entry_has_manifest_counterpart`). It only asserts
+/// that strict mode is FLIPPED ON for each supported module — the
+/// minimum condition for the unimplemented-API check to fire.
+///
+/// Side-effect-only sub-path imports (`import 'dotenv/config'`, no
+/// value binding, no member access) are allowed-listed below — they
+/// have no user-facing surface to enumerate, and `module_has_any_entries`
+/// returning false for them is benign because no user code ever reads
+/// properties on them.
+#[test]
+fn every_native_module_has_at_least_one_manifest_entry() {
+    /// Modules in NATIVE_MODULES whose import is purely a side-effect
+    /// (no value binding, no property access). Adding these to the
+    /// allowed list documents the exception so a future module that
+    /// genuinely lacks coverage doesn't sneak past CI by being added
+    /// here.
+    const SIDE_EFFECT_ONLY: &[&str] = &["dotenv/config"];
+
+    let mut missing: Vec<&'static str> = Vec::new();
+    for &module in perry_api_manifest::NATIVE_MODULES {
+        if SIDE_EFFECT_ONLY.contains(&module) {
+            continue;
+        }
+        if !perry_api_manifest::module_has_any_entries(module) {
+            missing.push(module);
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "{} module(s) in NATIVE_MODULES have zero entries in API_MANIFEST:\n  {}\n\n\
+         Add at least one entry per module to crates/perry-api-manifest/src/entries.rs — \
+         without it, the unimplemented-API check (#463) silently falls through to the \
+         old permissive behavior on those modules. (#513)",
+        missing.len(),
+        missing.join("\n  ")
+    );
+}
+
+/// #513 — every well-known binding must appear in API_MANIFEST.
+///
+/// The well-known bindings table at `crates/perry/well_known_bindings.toml`
+/// declares which npm packages route to a bundled `perry-ext-*` crate.
+/// Each routed module name must have at least one manifest entry so the
+/// unimplemented-API check covers it. Aliases (`mysql2/promise` → same
+/// crate as `mysql2`) need their own manifest entries — the user
+/// imports the alias directly, so the gate consults the alias name.
+///
+/// Side-effect-only sub-paths (`dotenv/config`) are allowed-listed in
+/// the sibling test above and excluded here too.
+#[test]
+fn every_well_known_binding_has_manifest_entry() {
+    const SIDE_EFFECT_ONLY: &[&str] = &["dotenv/config"];
+
+    // Inline parse of well_known_bindings.toml — small enough that
+    // pulling in `toml` as a dev-dep just for this test would be
+    // overkill, and the format is regular enough to scan with the
+    // standard library. The file is part of the perry crate; resolve
+    // its path relative to CARGO_MANIFEST_DIR (this test runs from
+    // crates/perry-codegen).
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let toml_path = manifest_dir
+        .parent()
+        .expect("CARGO_MANIFEST_DIR has a parent")
+        .join("perry")
+        .join("well_known_bindings.toml");
+    let toml = std::fs::read_to_string(&toml_path)
+        .unwrap_or_else(|e| panic!("read {}: {}", toml_path.display(), e));
+
+    let mut missing: Vec<String> = Vec::new();
+    for line in toml.lines() {
+        let line = line.trim();
+        // `[bindings.<name>]` or `[bindings."<name>">]` (quoted form
+        // used for names with `/` or `.`).
+        let Some(rest) = line.strip_prefix("[bindings.") else {
+            continue;
+        };
+        let Some(name_with_bracket) = rest.strip_suffix(']') else {
+            continue;
+        };
+        // Strip optional surrounding double quotes.
+        let name = name_with_bracket
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(name_with_bracket);
+        if SIDE_EFFECT_ONLY.contains(&name) {
+            continue;
+        }
+        if !perry_api_manifest::module_has_any_entries(name) {
+            missing.push(name.to_string());
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "{} well-known binding(s) have zero entries in API_MANIFEST:\n  {}\n\n\
+         Each entry in crates/perry/well_known_bindings.toml routes a user \
+         import to a bundled perry-ext-* crate. Add at least one manifest \
+         entry per routed module so the unimplemented-API check covers it. (#513)",
+        missing.len(),
+        missing.join("\n  ")
+    );
+}
