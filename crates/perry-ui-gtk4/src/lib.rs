@@ -1474,21 +1474,30 @@ pub extern "C" fn perry_ui_table_get_filter_text(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 
-/// TreeView stubs (#480). GTK4 has `GtkTreeView` + `GtkTreeStore` (or
-/// the newer `GtkColumnView`) — native impl is a future iteration.
+/// TreeView (#480) — real GTK4 impl via GtkTreeView + GtkTreeStore.
 #[no_mangle]
-pub extern "C" fn perry_ui_tree_node_create(_id_ptr: i64, _label_ptr: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_tree_node_create(id_ptr: i64, label_ptr: i64) -> i64 {
+    widgets::tree_view::node_create(id_ptr as *const u8, label_ptr as *const u8)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_tree_node_add_child(_parent: i64, _child: i64) {}
+pub extern "C" fn perry_ui_tree_node_add_child(parent: i64, child: i64) {
+    widgets::tree_view::node_add_child(parent, child)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_tree_view_create(_root: i64, _on_select: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_tree_view_create(root: i64, on_select: f64) -> i64 {
+    widgets::tree_view::create(root, on_select)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_tree_view_expand_all(_handle: i64) {}
+pub extern "C" fn perry_ui_tree_view_expand_all(handle: i64) {
+    widgets::tree_view::expand_all(handle)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_tree_view_collapse_all(_handle: i64) {}
+pub extern "C" fn perry_ui_tree_view_collapse_all(handle: i64) {
+    widgets::tree_view::collapse_all(handle)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_tree_view_get_selected_id(_handle: i64) -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
+pub extern "C" fn perry_ui_tree_view_get_selected_id(handle: i64) -> f64 {
+    widgets::tree_view::get_selected_id(handle)
 }
 
 /// Combobox (#475) — real GTK4 impl via `GtkEntry` + `EntryCompletion`.

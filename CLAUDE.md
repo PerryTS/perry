@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.621
+**Current Version:** 0.5.622
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.622** — Refs #480: Tree / outline view — GTK4 stub replaced with `gtk4::TreeView` + `gtk4::TreeStore` impl in `crates/perry-ui-gtk4/src/widgets/tree_view.rs`. Topology built TS-side via standalone `TreeNode` + `treeNodeAddChild`; `TreeView(root, onSelect)` recursively walks the topology and populates a 2-column TreeStore (col 0 = label, col 1 = id). Selection wired via `tree_view.selection().connect_changed`, fires onChange with the picked node's `id` (NaN-boxed STRING). TreeView wrapped in a `GtkScrolledWindow` and registered as the handle. GTK 4.10+ recommends `GtkColumnView` + `GtkTreeListModel` over the legacy TreeView/TreeStore stack but TreeView still works via gtk4-rs 0.9 + the `v4_6` feature gate this crate uses; ColumnView migration is a follow-up when v4_6 bumps past 4.10.
 
 - **v0.5.621** — Refs #479: Rich tooltip — GTK4 stub replaced with `gtk4::Popover` anchored to the host widget in `crates/perry-ui-gtk4/src/widgets/rich_tooltip.rs`. `GtkEventControllerMotion::connect_enter` schedules a `glib::timeout_add_local_once` for `hover_delay_ms`; on fire, the user content widget is detached from its current parent (if any), parented to the popover via `set_parent` + `set_child`, and shown via `popup()`. `connect_leave` bumps a per-binding token (so the pending show bails out) and `popdown() + unparent()` the active popover. `set_autohide(false)` so the popover doesn't dismiss on the user's first click in the host area; `set_has_arrow(true)` + bottom position match the macOS impl's anchor below the widget.
 
