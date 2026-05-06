@@ -1793,8 +1793,41 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 }
             }
 
+            // Issue #461: when the init is an arrow / function expression
+            // (`const f = (x) => …` or `const f = function() {}`), pre-define
+            // the local BEFORE lowering the init so self-recursive references
+            // inside the closure body resolve to `LocalGet(id)` instead of
+            // falling through to `lookup_imported_func` and lowering as
+            // `ExternFuncRef { name: "f" }` (which then emits a bare unmangled
+            // `_f` symbol at link time). Effect's `internal/stream.ts` hits this:
+            // `import * as pull from "./stream/pull.js"` (namespace import) +
+            // `const pull = (state) => { … pull(...) … }` (local rebinding) —
+            // without pre-registration, the inner closure's `pull` reference
+            // resolves to the namespace import. Function declarations
+            // (`function f() {}`) already have this pre-registration via
+            // `lower_decl.rs`'s `Decl::Fn` arm.
+            //
+            // Gate on function-expr init only: pre-defining for `const x = x + 1`
+            // would silently turn a TDZ violation into a self-reference. For
+            // closures, the body doesn't execute until call time, so the slot
+            // holds the closure value by then.
+            let is_function_expr_init = matches!(
+                decl.init.as_deref(),
+                Some(ast::Expr::Arrow(_)) | Some(ast::Expr::Fn(_))
+            );
+            let pre_id = if is_function_expr_init
+                && !ctx.pre_registered_module_vars.contains(&name)
+                && ctx.lookup_local(&name).is_none()
+            {
+                Some(ctx.define_local(name.clone(), ty.clone()))
+            } else {
+                None
+            };
+
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-            let id = if ctx.pre_registered_module_vars.remove(&name) {
+            let id = if let Some(pid) = pre_id {
+                pid
+            } else if ctx.pre_registered_module_vars.remove(&name) {
                 // Reuse pre-registered LocalId from module-level forward-declaration pass
                 let id = ctx.lookup_local(&name).unwrap();
                 // Update the type now that we have full inference
