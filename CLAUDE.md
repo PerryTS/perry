@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.623
+**Current Version:** 0.5.624
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.624** — Refs #477: Command palette — GTK4 stub replaced with floating `GtkWindow` (`set_decorated(false)` + `set_modal(true)`) hosting a `GtkSearchEntry` + scrolled `GtkListBox` in `crates/perry-ui-gtk4/src/widgets/command_palette.rs`. Single thread-local `STATE { commands, filtered, query, window, listbox }`. `connect_search_changed` updates query + calls `refresh_filter` which rebuilds the listbox children with one `GtkListBoxRow` per filtered command (`cmd_idx` stashed via `set_data` for the activate handler to recover). `connect_activate` on the search entry forwards Enter to row 0 via `emit_by_name<()>("row-activated", &[&row])`; `connect_row_activated` invokes the command's `on_run` closure (`js_closure_call0`) and dismisses. Esc dismiss wired through `GtkEventControllerKey::connect_key_pressed`.
 
 - **v0.5.623** — Refs #474: Chart (line/bar/pie) — GTK4 stub replaced with Cairo drawing on `GtkDrawingArea` in `crates/perry-ui-gtk4/src/widgets/chart.rs`. Mirrors the macOS impl's API and visual conventions (24pt padding, 8-color palette, top-aligned title). Drawing routines: `draw_line` strokes a 2pt path normalised to (min..max) range; `draw_bars` fills 70%/30% bar/gap rects normalised to (0..max) with palette per bar; `draw_pie` strokes 12-o'clock-clockwise wedges via `cr.move_to(cx, cy) + cr.arc + cr.close_path + cr.fill`. Title rendered via `cr.show_text` after `cr.text_extents` gives the centring offset. `queue_draw()` on every data mutation triggers the next display cycle. Coordinate origin is top-left (Cairo) vs bottom-left (CGContext on macOS) so y values are flipped to keep "bigger value = higher on screen" semantics.
 

@@ -1419,17 +1419,27 @@ pub extern "C" fn perry_ui_map_view_clear_pins(_h: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_map_view_set_map_type(_h: i64, _s: i64) {}
 
-// Issue #477 — Command palette stubs.
+// Issue #477 — Command palette — real GTK4 impl via floating GtkWindow.
 #[no_mangle]
-pub extern "C" fn perry_ui_command_palette_register(_id: i64, _l: i64, _s: i64, _cb: f64) {}
+pub extern "C" fn perry_ui_command_palette_register(id: i64, l: i64, s: i64, cb: f64) {
+    widgets::command_palette::register(id as *const u8, l as *const u8, s as *const u8, cb)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_command_palette_unregister(_id: i64) {}
+pub extern "C" fn perry_ui_command_palette_unregister(id: i64) {
+    widgets::command_palette::unregister(id as *const u8)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_command_palette_clear() {}
+pub extern "C" fn perry_ui_command_palette_clear() {
+    widgets::command_palette::clear()
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_command_palette_show() {}
+pub extern "C" fn perry_ui_command_palette_show() {
+    widgets::command_palette::show()
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_command_palette_hide() {}
+pub extern "C" fn perry_ui_command_palette_hide() {
+    widgets::command_palette::hide()
+}
 
 // Issue #474 — Chart widget — real GTK4 impl via Cairo on GtkDrawingArea.
 #[no_mangle]
