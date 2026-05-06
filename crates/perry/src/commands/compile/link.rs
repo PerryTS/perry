@@ -1030,6 +1030,10 @@ pub(super) fn build_and_run_link(
             .arg("CoreLocation") // CLCircularRegion for UNLocationNotificationTrigger (#96)
             .arg("-framework")
             .arg("MediaPlayer") // perry/media — Now Playing + Remote Command Center
+            .arg("-framework")
+            .arg("MapKit") // perry/ui MapView (#517) — MKMapView
+            .arg("-framework")
+            .arg("PDFKit") // perry/ui PdfView (#516) — PDFView
             .arg("-liconv")
             .arg("-lresolv")
             .arg("-lobjc")

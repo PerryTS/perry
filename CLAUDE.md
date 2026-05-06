@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.632
+**Current Version:** 0.5.633
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.633** — Refs #517 + #516: iOS Map + PDF viewer stubs replaced. Both ports of the macOS impls — same `objc_msgSend` against `MKMapView` / `PDFView` classes, same `Encode`-derived `MKCoordinateRegion` / `MKCoordinateSpan` / `CLLocationCoordinate2D` C structs. iOS variant of map_view enables `setShowsCompass(true)` + `setShowsScale(true)` (instead of macOS's `setShowsZoomControls`). MapKit + PDFKit added to the iOS link branch in `crates/perry/src/commands/compile/link.rs:1032+`. `crates/perry-ui-ios/src/widgets/map_view.rs` + `pdf_view.rs` mirror their macOS counterparts API-for-API.
 
 - **v0.5.632** — Refs #481: Calendar — iOS stub replaced with `UIDatePicker.preferredDatePickerStyle = .inline` (mode 3) impl in `crates/perry-ui-ios/src/widgets/calendar.rs`. `UICalendarView` (iOS 16+) is the natural primitive but limits deployment; UIDatePicker inline style works on iOS 14+ and matches the macOS NSDatePicker graphical-mode output. `PerryCalendarTarget` (NSObject) handles the target-action `dateChanged:` selector wired via `addTarget:action:forControlEvents:UIControlEventValueChanged`. ISO date formatting via `NSDateFormatter` with `en_US_POSIX` locale + `yyyy-MM-dd` — same convention as macOS / GTK4 / Windows. Started iOS phase: Windows phase wrapped (rich tooltip / command palette / table extensions deferred — each needs custom-window plumbing or base-table impl first).
 

@@ -929,32 +929,53 @@ pub extern "C" fn perry_ui_rich_text_toggle_italic(_h: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_rich_text_toggle_underline(_h: i64) {}
 
-// Issue #516 — PdfView stubs. iOS has PDFKit too; future iteration.
+// Issue #516 — PdfView (iOS) — real impl via PDFView.
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_create(w: f64, h: f64) -> i64 {
+    widgets::pdf_view::create(w, h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_load_file(_h: i64, _p: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_load_file(h: i64, p: i64) -> i64 {
+    if widgets::pdf_view::load_file(h, p as *const u8) { 1 } else { 0 }
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_get_page_count(_h: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_get_page_count(h: i64) -> i64 {
+    widgets::pdf_view::get_page_count(h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_go_to_page(_h: i64, _i: i64) {}
+pub extern "C" fn perry_ui_pdf_view_go_to_page(h: i64, i: i64) {
+    widgets::pdf_view::go_to_page(h, i)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_pdf_view_get_current_page(h: i64) -> i64 {
+    widgets::pdf_view::get_current_page(h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_set_scale(_h: i64, _s: f64) {}
+pub extern "C" fn perry_ui_pdf_view_set_scale(h: i64, s: f64) {
+    widgets::pdf_view::set_scale(h, s)
+}
 
-// Issue #517 — MapView stubs. iOS — MKMapView via MapKit is a future
-// iteration (would need MapKit linking from compile/link.rs).
+// Issue #517 — MapView (iOS) — real impl via MKMapView.
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_create(_w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_map_view_create(w: f64, h: f64) -> i64 {
+    widgets::map_view::create(w, h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_set_region(_h: i64, _lat: f64, _lon: f64, _ls: f64, _os: f64) {}
+pub extern "C" fn perry_ui_map_view_set_region(h: i64, lat: f64, lon: f64, ls: f64, os: f64) {
+    widgets::map_view::set_region(h, lat, lon, ls, os)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_add_pin(_h: i64, _lat: f64, _lon: f64, _t: i64) {}
+pub extern "C" fn perry_ui_map_view_add_pin(h: i64, lat: f64, lon: f64, t: i64) {
+    widgets::map_view::add_pin(h, lat, lon, t as *const u8)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_clear_pins(_h: i64) {}
+pub extern "C" fn perry_ui_map_view_clear_pins(h: i64) {
+    widgets::map_view::clear_pins(h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_set_map_type(_h: i64, _s: i64) {}
+pub extern "C" fn perry_ui_map_view_set_map_type(h: i64, s: i64) {
+    widgets::map_view::set_map_type(h, s)
+}
 
 // Issue #477 — Command palette stubs.
 #[no_mangle]
