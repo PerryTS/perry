@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.619
+**Current Version:** 0.5.620
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.620** — Refs #475: Combobox — GTK4 stub replaced with real `GtkEntry` + `GtkEntryCompletion` impl in `crates/perry-ui-gtk4/src/widgets/combobox.rs`. Single-column `gtk4::ListStore` (per-handle, kept in `MODELS`) backs the completion model; `set_inline_completion(true)` + `set_popup_completion(true)` + `set_minimum_key_length(0)` give as-you-type filtering with both inline-prefix highlight and the dropdown list. `connect_activate` fires onChange on Enter for free-text commits; `connect_match_selected` fires onChange on dropdown pick (and writes the chosen text back into the entry first). `EntryCompletion` is GTK 4.10+ marked transitional but still usable on the v4_6 feature gate this crate uses; the documented fallback is custom `GtkEntry` + `GtkPopover`.
 
 - **v0.5.619** — Refs #481: Calendar widget — GTK4 stub replaced with real `gtk4::Calendar` impl in `crates/perry-ui-gtk4/src/widgets/calendar.rs`. `connect_day_selected` fires the user's onChange with the selected date in `yyyy-MM-dd` form (matches macOS POSIX-locale output) via `cal.date()` (`glib::DateTime`). `set_date` builds a `glib::DateTime::from_local` and calls `select_day`. Build not verified on macOS dev host (perry-ui-gtk4 needs gstreamer + gtk4 system libs); CI on Linux validates.
 

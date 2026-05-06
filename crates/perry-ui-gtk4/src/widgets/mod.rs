@@ -1,6 +1,7 @@
 pub mod button;
 pub mod calendar;
 pub mod canvas;
+pub mod combobox;
 pub mod divider;
 pub mod form;
 pub mod hstack;
