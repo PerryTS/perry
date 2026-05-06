@@ -10,6 +10,7 @@ pub mod lazyvstack;
 pub mod navstack;
 pub mod picker;
 pub mod progressview;
+pub mod rich_tooltip;
 pub mod scrollview;
 pub mod securefield;
 pub mod slider;

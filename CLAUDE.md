@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.620
+**Current Version:** 0.5.621
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.621** — Refs #479: Rich tooltip — GTK4 stub replaced with `gtk4::Popover` anchored to the host widget in `crates/perry-ui-gtk4/src/widgets/rich_tooltip.rs`. `GtkEventControllerMotion::connect_enter` schedules a `glib::timeout_add_local_once` for `hover_delay_ms`; on fire, the user content widget is detached from its current parent (if any), parented to the popover via `set_parent` + `set_child`, and shown via `popup()`. `connect_leave` bumps a per-binding token (so the pending show bails out) and `popdown() + unparent()` the active popover. `set_autohide(false)` so the popover doesn't dismiss on the user's first click in the host area; `set_has_arrow(true)` + bottom position match the macOS impl's anchor below the widget.
 
 - **v0.5.620** — Refs #475: Combobox — GTK4 stub replaced with real `GtkEntry` + `GtkEntryCompletion` impl in `crates/perry-ui-gtk4/src/widgets/combobox.rs`. Single-column `gtk4::ListStore` (per-handle, kept in `MODELS`) backs the completion model; `set_inline_completion(true)` + `set_popup_completion(true)` + `set_minimum_key_length(0)` give as-you-type filtering with both inline-prefix highlight and the dropdown list. `connect_activate` fires onChange on Enter for free-text commits; `connect_match_selected` fires onChange on dropdown pick (and writes the chosen text back into the entry first). `EntryCompletion` is GTK 4.10+ marked transitional but still usable on the v4_6 feature gate this crate uses; the documented fallback is custom `GtkEntry` + `GtkPopover`.
 
