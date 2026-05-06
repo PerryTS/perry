@@ -1103,6 +1103,19 @@ pub extern "C" fn perry_ui_navstack_pop(handle: i64) {
 
 /// Create a Picker (dropdown).
 #[no_mangle]
+// Issue #517 — MapView stubs. Windows — Bing Maps WinRT API is a
+// future iteration.
+#[no_mangle]
+pub extern "C" fn perry_ui_map_view_create(_w: f64, _h: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_map_view_set_region(_h: i64, _lat: f64, _lon: f64, _ls: f64, _os: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_map_view_add_pin(_h: i64, _lat: f64, _lon: f64, _t: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_map_view_clear_pins(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_map_view_set_map_type(_h: i64, _s: i64) {}
+
 // Issue #477 — Command palette stubs.
 #[no_mangle]
 pub extern "C" fn perry_ui_command_palette_register(_id: i64, _l: i64, _s: i64, _cb: f64) {}

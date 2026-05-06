@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.615
+**Current Version:** 0.5.616
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.616** — Closes #517: Map widget. macOS impl in `crates/perry-ui-macos/src/widgets/map_view.rs` wraps `MKMapView` via raw `objc_msgSend` (no `objc2-map-kit` dep). MapKit is now linked from `crates/perry/src/commands/compile/link.rs:1457` for macOS / cross-macos targets. `CLLocationCoordinate2D`, `MKCoordinateSpan`, `MKCoordinateRegion` declared `#[repr(C)]` with hand-written `unsafe impl Encode for ...` so `setRegion:animated:` and `setCoordinate:` accept the structs directly. Default red `MKPointAnnotation` for pins; `setMapType:` toggles standard / satellite / hybrid (0/1/2). 5 new dispatch rows: `MapView(width, height)`, `mapViewSetRegion(lat, lon, latSpan, lonSpan)`, `mapViewAddPin(lat, lon, title)`, `mapViewClearPins`, `mapViewSetMapType`. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 5 FFI symbols. Out of scope: user-location tracking, custom annotation views, polylines/polygons, route directions, region-change callbacks.
 
 - **v0.5.615** — Refs #477: Command palette widget v1 (⌘K-style fuzzy launcher). macOS impl in `crates/perry-ui-macos/src/widgets/command_palette.rs`: borderless `NSPanel` (level 3 floating, level=floating window) anchored at the screen's visible-frame upper-third with rounded corners + light background. Top: `NSSearchField` with target-action `searchTextChanged:` listener. Bottom: scrolled `NSTableView` (no header) whose data source filters the global `COMMANDS: Vec<Command { id, label, subtitle, on_run }>` registry by case-insensitive substring against the current search query. Double-click on a row → `rowDoubleClicked:` invokes the command's NaN-boxed closure via `js_closure_call0` and dismisses the panel. Commands are upserted by `id` (re-register replaces). 5 new dispatch rows: `commandPaletteRegister(id, label, subtitle, onRun)`, `commandPaletteUnregister(id)`, `commandPaletteClear`, `commandPaletteShow`, `commandPaletteHide`. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 5 FFI symbols. Out of scope v1: fuzzy ranking, recent/frequently-used boost, async command sources, command groups / section headers, native menu-bar integration, default global hotkey wiring (user code binds via `addKeyboardShortcut`).
 

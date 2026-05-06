@@ -582,6 +582,31 @@ export function commandPaletteUnregister(id: string): void;
 export function commandPaletteClear(): void;
 export function commandPaletteShow(): void;
 export function commandPaletteHide(): void;
+
+// ---------------------------------------------------------------------------
+// Map widget (issue #517) — MKMapView on macOS / iOS / visionOS, stubs
+// elsewhere. Pin styling is the default red drop-pin (MKPointAnnotation);
+// custom annotation views are a follow-up.
+//
+// `mapType` enum: 0=standard, 1=satellite, 2=hybrid (matches MKMapType).
+// `latSpan`/`lonSpan` are degrees — smaller = more zoomed in. A 0.05 span
+// is roughly city-block scale; 1.0 span is a whole region.
+//
+// Out of scope this iteration: user-location tracking, custom annotation
+// views, polylines/polygons, route directions, region-change callbacks.
+// ---------------------------------------------------------------------------
+
+export function MapView(width: number, height: number): Widget;
+export function mapViewSetRegion(
+    widget: Widget,
+    lat: number,
+    lon: number,
+    latSpan: number,
+    lonSpan: number,
+): void;
+export function mapViewAddPin(widget: Widget, lat: number, lon: number, title: string): void;
+export function mapViewClearPins(widget: Widget): void;
+export function mapViewSetMapType(widget: Widget, style: number): void;
 export function widgetSetControlSize(widget: Widget, size: number): void;
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;

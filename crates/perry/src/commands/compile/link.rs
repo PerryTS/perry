@@ -1454,6 +1454,8 @@ pub(super) fn build_and_run_link(
                                                                   // MPMediaItemArtwork (lock screen + Touch Bar + Now Playing).
                     cmd.arg("-framework").arg("CoreMedia");
                     cmd.arg("-framework").arg("MediaPlayer");
+                    // perry/ui MapView (#517) — MKMapView lives in MapKit.
+                    cmd.arg("-framework").arg("MapKit");
                 }
             }
 

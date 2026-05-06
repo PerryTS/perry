@@ -916,6 +916,43 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[],
         ret: ReturnKind::Void,
     },
+    // ---- MapView (issue #517) ----
+    MethodRow {
+        method: "MapView",
+        runtime: "perry_ui_map_view_create",
+        args: &[ArgKind::F64, ArgKind::F64],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "mapViewSetRegion",
+        runtime: "perry_ui_map_view_set_region",
+        args: &[
+            ArgKind::Widget,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+        ],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "mapViewAddPin",
+        runtime: "perry_ui_map_view_add_pin",
+        args: &[ArgKind::Widget, ArgKind::F64, ArgKind::F64, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "mapViewClearPins",
+        runtime: "perry_ui_map_view_clear_pins",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "mapViewSetMapType",
+        runtime: "perry_ui_map_view_set_map_type",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "widgetSetControlSize",
         runtime: "perry_ui_widget_set_control_size",

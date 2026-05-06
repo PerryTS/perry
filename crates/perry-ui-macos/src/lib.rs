@@ -1090,6 +1090,44 @@ pub extern "C" fn perry_ui_combobox_get_value(handle: i64) -> f64 {
     widgets::combobox::get_value(handle)
 }
 
+// ---- MapView (issue #517) ----
+
+#[no_mangle]
+pub extern "C" fn perry_ui_map_view_create(width: f64, height: f64) -> i64 {
+    widgets::map_view::create(width, height)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_map_view_set_region(
+    handle: i64,
+    lat: f64,
+    lon: f64,
+    lat_span: f64,
+    lon_span: f64,
+) {
+    widgets::map_view::set_region(handle, lat, lon, lat_span, lon_span);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_map_view_add_pin(
+    handle: i64,
+    lat: f64,
+    lon: f64,
+    title_ptr: i64,
+) {
+    widgets::map_view::add_pin(handle, lat, lon, title_ptr as *const u8);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_map_view_clear_pins(handle: i64) {
+    widgets::map_view::clear_pins(handle);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_map_view_set_map_type(handle: i64, style: i64) {
+    widgets::map_view::set_map_type(handle, style);
+}
+
 // ---- Command palette (issue #477) ----
 
 #[no_mangle]
