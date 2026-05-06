@@ -1431,18 +1431,27 @@ pub extern "C" fn perry_ui_command_palette_show() {}
 #[no_mangle]
 pub extern "C" fn perry_ui_command_palette_hide() {}
 
-// Issue #474 — Chart widget stubs. GTK4 — Cairo drawing on
-// `GtkDrawingArea` is a future iteration.
+// Issue #474 — Chart widget — real GTK4 impl via Cairo on GtkDrawingArea.
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_create(_kind: i64, _w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_chart_create(kind: i64, w: f64, h: f64) -> i64 {
+    widgets::chart::create(kind, w, h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_add_data_point(_h: i64, _l: i64, _v: f64) {}
+pub extern "C" fn perry_ui_chart_add_data_point(h: i64, l: i64, v: f64) {
+    widgets::chart::add_data_point(h, l as *const u8, v)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_clear_data(_h: i64) {}
+pub extern "C" fn perry_ui_chart_clear_data(h: i64) {
+    widgets::chart::clear_data(h)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_set_title(_h: i64, _t: i64) {}
+pub extern "C" fn perry_ui_chart_set_title(h: i64, t: i64) {
+    widgets::chart::set_title(h, t as *const u8)
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_reload(_h: i64) {}
+pub extern "C" fn perry_ui_chart_reload(h: i64) {
+    widgets::chart::reload(h)
+}
 
 // Issue #481 — Calendar widget — real impl on GTK4 via GtkCalendar.
 #[no_mangle]

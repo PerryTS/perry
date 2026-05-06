@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.622
+**Current Version:** 0.5.623
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.623** — Refs #474: Chart (line/bar/pie) — GTK4 stub replaced with Cairo drawing on `GtkDrawingArea` in `crates/perry-ui-gtk4/src/widgets/chart.rs`. Mirrors the macOS impl's API and visual conventions (24pt padding, 8-color palette, top-aligned title). Drawing routines: `draw_line` strokes a 2pt path normalised to (min..max) range; `draw_bars` fills 70%/30% bar/gap rects normalised to (0..max) with palette per bar; `draw_pie` strokes 12-o'clock-clockwise wedges via `cr.move_to(cx, cy) + cr.arc + cr.close_path + cr.fill`. Title rendered via `cr.show_text` after `cr.text_extents` gives the centring offset. `queue_draw()` on every data mutation triggers the next display cycle. Coordinate origin is top-left (Cairo) vs bottom-left (CGContext on macOS) so y values are flipped to keep "bigger value = higher on screen" semantics.
 
 - **v0.5.622** — Refs #480: Tree / outline view — GTK4 stub replaced with `gtk4::TreeView` + `gtk4::TreeStore` impl in `crates/perry-ui-gtk4/src/widgets/tree_view.rs`. Topology built TS-side via standalone `TreeNode` + `treeNodeAddChild`; `TreeView(root, onSelect)` recursively walks the topology and populates a 2-column TreeStore (col 0 = label, col 1 = id). Selection wired via `tree_view.selection().connect_changed`, fires onChange with the picked node's `id` (NaN-boxed STRING). TreeView wrapped in a `GtkScrolledWindow` and registered as the handle. GTK 4.10+ recommends `GtkColumnView` + `GtkTreeListModel` over the legacy TreeView/TreeStore stack but TreeView still works via gtk4-rs 0.9 + the `v4_6` feature gate this crate uses; ColumnView migration is a follow-up when v4_6 bumps past 4.10.
 
