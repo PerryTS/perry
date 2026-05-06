@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.633
+**Current Version:** 0.5.634
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.634** — Refs #478: Rich text editor — iOS stub replaced with `UITextView` + `NSAttributedString` impl in `crates/perry-ui-ios/src/widgets/rich_text.rs`. Mirrors macOS impl: `setEditable: true` + `setSelectable: true` + `setAllowsEditingTextAttributes: true`. `PerryRichTextDelegateIOS` (NSObject) wraps `textViewDidChange:` and fires onChange with the buffer's plain text. HTML round-trip via NSAttributedString document-attributes — `setAttributedText:` for set (UITextView's equivalent of NSTextView's `textStorage.setAttributedString:`), `attributedText.dataFromRange:documentAttributes:` for get. Bold / italic / underline use UITextView's UIResponderStandardEditActions: `toggleBoldface:` / `toggleItalics:` / `toggleUnderline:` (vs macOS NSTextView's `toggleBold:` / `toggleItalic:` / `underline:`).
 
 - **v0.5.633** — Refs #517 + #516: iOS Map + PDF viewer stubs replaced. Both ports of the macOS impls — same `objc_msgSend` against `MKMapView` / `PDFView` classes, same `Encode`-derived `MKCoordinateRegion` / `MKCoordinateSpan` / `CLLocationCoordinate2D` C structs. iOS variant of map_view enables `setShowsCompass(true)` + `setShowsScale(true)` (instead of macOS's `setShowsZoomControls`). MapKit + PDFKit added to the iOS link branch in `crates/perry/src/commands/compile/link.rs:1032+`. `crates/perry-ui-ios/src/widgets/map_view.rs` + `pdf_view.rs` mirror their macOS counterparts API-for-API.
 
