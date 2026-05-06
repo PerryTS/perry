@@ -907,6 +907,22 @@ pub extern "C" fn perry_ui_image_set_tint(handle: i64, r: f64, g: f64, b: f64, a
 
 /// Create a Picker (dropdown). style: 0=dropdown, 1=segmented. Returns widget handle.
 #[no_mangle]
+// Issue #473 — table sort/filter/multi-select stubs.
+#[no_mangle]
+pub extern "C" fn perry_ui_table_set_on_sort_change(_h: i64, _cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_table_set_allows_multiple_selection(_h: i64, _allow: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_table_get_selected_rows_count(_h: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_table_get_selected_row_at(_h: i64, _n: i64) -> i64 { -1 }
+#[no_mangle]
+pub extern "C" fn perry_ui_table_set_filter_text(_h: i64, _t: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_table_get_filter_text(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
 /// TreeView stubs (issue #480). iOS — `UITableView` with hierarchical
 /// indentation is the future custom layout. Stubs return 0 / undefined
 /// so user code compiles cross-platform.

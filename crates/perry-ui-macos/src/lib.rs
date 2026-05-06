@@ -1935,6 +1935,41 @@ pub extern "C" fn perry_ui_table_get_selected_row(handle: i64) -> i64 {
     widgets::table::get_selected_row(handle)
 }
 
+// ---- Issue #473 — sort + filter + multi-select extensions ----
+
+/// Register a `(colIndex, ascending) => void` callback that fires when
+/// the user clicks a column header. Installing the callback also turns
+/// on per-column sort indicators.
+#[no_mangle]
+pub extern "C" fn perry_ui_table_set_on_sort_change(handle: i64, callback: f64) {
+    widgets::table::set_on_sort_change(handle, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_table_set_allows_multiple_selection(handle: i64, allow: i64) {
+    widgets::table::set_allows_multiple_selection(handle, allow != 0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_table_get_selected_rows_count(handle: i64) -> i64 {
+    widgets::table::get_selected_rows_count(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_table_get_selected_row_at(handle: i64, n: i64) -> i64 {
+    widgets::table::get_selected_row_at(handle, n)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_table_set_filter_text(handle: i64, text_ptr: i64) {
+    widgets::table::set_filter_text(handle, text_ptr as *const u8)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_table_get_filter_text(handle: i64) -> f64 {
+    widgets::table::get_filter_text(handle)
+}
+
 // =============================================================================
 // Splitview / VBox stubs — these are iOS-only layout containers.
 // macOS uses NSStackView which handles all layouts fine.

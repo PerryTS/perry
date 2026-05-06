@@ -765,6 +765,40 @@ export function tableSetOnRowSelect(table: Widget, callback: (row: number) => vo
 export function tableGetSelectedRow(table: Widget): number;
 
 // ---------------------------------------------------------------------------
+// Data-table sort + filter + multi-select extensions (issue #473).
+// macOS: NSTableView.sortDescriptors + selectedRowIndexes (real impls);
+// other platforms: stubs returning safe defaults.
+// ---------------------------------------------------------------------------
+
+/**
+ * Register a sort callback fired when the user clicks a column header.
+ * Installing the callback also turns on per-column sort indicators.
+ * `ascending` is `1` for ascending, `0` for descending.
+ */
+export function tableSetOnSortChange(
+    table: Widget,
+    callback: (colIndex: number, ascending: number) => void,
+): void;
+
+/** Toggle multi-row selection (⌘ / ⇧ click). `allow` is `1` to enable. */
+export function tableSetAllowsMultipleSelection(table: Widget, allow: number): void;
+
+/** Number of currently-selected rows in a multi-select table. */
+export function tableGetSelectedRowsCount(table: Widget): number;
+
+/** Index of the n-th selected row (0-based). Returns `-1` for out-of-range. */
+export function tableGetSelectedRowAt(table: Widget, n: number): number;
+
+/**
+ * Store a filter text on the table. Passive — the user's TS code reads
+ * this back via `tableGetFilterText` and adjusts `tableUpdateRowCount`
+ * accordingly. Keeps the active row-hiding logic on the user side so
+ * any reactive store can drive it.
+ */
+export function tableSetFilterText(table: Widget, text: string): void;
+export function tableGetFilterText(table: Widget): string;
+
+// ---------------------------------------------------------------------------
 // Camera (issue #191)
 // ---------------------------------------------------------------------------
 

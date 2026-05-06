@@ -1376,6 +1376,43 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget],
         ret: ReturnKind::I64AsF64,
     },
+    // Issue #473 — sort + filter + multi-select extensions
+    MethodRow {
+        method: "tableSetOnSortChange",
+        runtime: "perry_ui_table_set_on_sort_change",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "tableSetAllowsMultipleSelection",
+        runtime: "perry_ui_table_set_allows_multiple_selection",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "tableGetSelectedRowsCount",
+        runtime: "perry_ui_table_get_selected_rows_count",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::I64AsF64,
+    },
+    MethodRow {
+        method: "tableGetSelectedRowAt",
+        runtime: "perry_ui_table_get_selected_row_at",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
+        ret: ReturnKind::I64AsF64,
+    },
+    MethodRow {
+        method: "tableSetFilterText",
+        runtime: "perry_ui_table_set_filter_text",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "tableGetFilterText",
+        runtime: "perry_ui_table_get_filter_text",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Str,
+    },
     // ---- Camera (issue #191) ----
     // Live camera preview widget. Real implementations live in
     // `perry-ui-ios` (AVCaptureSession) and `perry-ui-android` (Camera2).

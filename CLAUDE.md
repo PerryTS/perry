@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.611
+**Current Version:** 0.5.612
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.612** — Refs #473: Data table sort + filter + multi-select extensions on the existing `Table` widget. macOS impl in `crates/perry-ui-macos/src/widgets/table.rs`: `tableSetOnSortChange(table, cb)` installs `NSSortDescriptor` prototypes (key=`col0`, `col1`, …) on every column and adds `tableView:sortDescriptorsDidChange:` to `PerryTableDelegate` — picks first descriptor's key, parses out the column index, fires `(colIndex, ascending)` to user. `tableSetAllowsMultipleSelection` toggles `setAllowsMultipleSelection:`; `tableGetSelectedRowsCount` + `tableGetSelectedRowAt` walk `selectedRowIndexes` (via NSIndexSet `firstIndex` + `indexGreaterThanIndex:`). Filter text is passive — `tableSetFilterText` / `tableGetFilterText` store + return a string the user reads back to drive their own row-count/visibility logic. Virtualization is NSTableView-native (only visible cells get views). 6 new dispatch rows; iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 6 FFI symbols. Out of scope v1: cell editing, column drag-reorder, frozen columns, grouping/aggregation.
 
 - **v0.5.611** — Refs #480: Tree / outline view widget. macOS impl in `crates/perry-ui-macos/src/widgets/tree_view.rs` wraps `NSOutlineView` (NSScrollView ⊃ NSOutlineView). Topology built TS-side via standalone `TreeNode(id, label)` + `treeNodeAddChild(parent, child)`; mounted via `TreeView(root, onSelect)`. `PerryTreeItem` (NSObject with `node_id` ivar) provides stable opaque identity for outline rows — cached one-per-node so `outlineView:child:ofItem:` always hands back the same instance. `PerryTreeDelegate` implements both data source (numberOfChildrenOfItem / child:ofItem / isItemExpandable / objectValueForTableColumn:byItem) and selection delegate (`outlineViewSelectionDidChange:` → `js_closure_call1` with picked node's `id` STRING-tagged). 6 new dispatch rows (TreeNode + treeNodeAddChild + TreeView + 3 instance setters/getters). iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 6 FFI symbols (return 0 for create, undefined for selection). Out of scope this iteration: drag-and-drop, lazy loading, multi-select, inline rename, icons.
 

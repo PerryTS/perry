@@ -842,6 +842,22 @@ pub extern "C" fn perry_ui_combobox_get_value(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 
+// Issue #473 — table sort/filter/multi-select stubs.
+#[no_mangle]
+pub extern "C" fn perry_ui_table_set_on_sort_change(_h: i64, _cb: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_table_set_allows_multiple_selection(_h: i64, _a: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_table_get_selected_rows_count(_h: i64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_table_get_selected_row_at(_h: i64, _n: i64) -> i64 { -1 }
+#[no_mangle]
+pub extern "C" fn perry_ui_table_set_filter_text(_h: i64, _t: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_table_get_filter_text(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
 // TreeView (#480) — watchOS screen real estate makes hierarchical
 // outline impractical; stubs only.
 #[no_mangle]
