@@ -2073,16 +2073,18 @@ impl WasmModuleEmitter {
         let locals = vec![(extra_locals + 2, ValType::I64), (1, ValType::I32)];
         let mut func = Function::new(locals);
 
-        let has_ret = hir_func.body.iter().any(has_return);
+        // Must match func_section: `main` is always emitted as `()->i64` even when the body has no
+        // `return` statement (HIR doesn't guarantee tail-return lowering yet).
+        let wasm_returns_i64 =
+            hir_func.body.iter().any(has_return) || hir_func.name == "main";
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
 
         for stmt in &hir_func.body {
-            ctx.emit_stmt(&mut func, stmt, has_ret);
+            ctx.emit_stmt(&mut func, stmt, wasm_returns_i64);
         }
 
-        // If function should return but doesn't always, add a default return
-        if has_ret {
-            // Push undefined as default return
+        // If the Wasm signature includes an i64 result, fallthrough must leave one value on stack.
+        if wasm_returns_i64 {
             func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
         }
 
@@ -9729,7 +9731,13 @@ fn has_return(stmt: &Stmt) -> bool {
                     .as_ref()
                     .is_some_and(|eb| eb.iter().any(has_return))
         }
-        Stmt::While { body, .. } | Stmt::For { body, .. } => body.iter().any(has_return),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body.iter().any(has_return),
+        Stmt::For {
+            init,
+            body,
+            ..
+        } => init.as_ref().is_some_and(|b| has_return(b.as_ref())) || body.iter().any(has_return),
+        Stmt::Labeled { body, .. } => has_return(body.as_ref()),
         Stmt::Try {
             body,
             catch,
