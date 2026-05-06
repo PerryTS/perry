@@ -854,6 +854,37 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget],
         ret: ReturnKind::Str,
     },
+    // ---- Chart (issue #474) ----
+    MethodRow {
+        method: "Chart",
+        runtime: "perry_ui_chart_create",
+        args: &[ArgKind::I64Raw, ArgKind::F64, ArgKind::F64],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "chartAddDataPoint",
+        runtime: "perry_ui_chart_add_data_point",
+        args: &[ArgKind::Widget, ArgKind::Str, ArgKind::F64],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "chartClearData",
+        runtime: "perry_ui_chart_clear_data",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "chartSetTitle",
+        runtime: "perry_ui_chart_set_title",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "chartReload",
+        runtime: "perry_ui_chart_reload",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "widgetSetControlSize",
         runtime: "perry_ui_widget_set_control_size",

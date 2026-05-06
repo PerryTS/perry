@@ -842,6 +842,18 @@ pub extern "C" fn perry_ui_combobox_get_value(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 
+// Issue #474 — Chart widget stubs.
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_create(_kind: i64, _w: f64, _h: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_add_data_point(_h: i64, _l: i64, _v: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_clear_data(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_set_title(_h: i64, _t: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_reload(_h: i64) {}
+
 // Issue #481 — Calendar widget stubs (watchOS screen real estate
 // makes a month grid impractical).
 #[no_mangle]

@@ -899,6 +899,18 @@ pub extern "C" fn perry_ui_image_set_tint(handle: i64, r: f64, g: f64, b: f64, a
 
 /// Create a Picker (dropdown). style: 0=dropdown, 1=segmented. Returns widget handle.
 #[no_mangle]
+// Issue #474 — Chart widget stubs.
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_create(_kind: i64, _w: f64, _h: f64) -> i64 { 0 }
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_add_data_point(_h: i64, _l: i64, _v: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_clear_data(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_set_title(_h: i64, _t: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_reload(_h: i64) {}
+
 // Issue #481 — Calendar widget stubs.
 #[no_mangle]
 pub extern "C" fn perry_ui_calendar_create(_year: i64, _month: i64, _on_change: f64) -> i64 { 0 }

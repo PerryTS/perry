@@ -1090,6 +1090,34 @@ pub extern "C" fn perry_ui_combobox_get_value(handle: i64) -> f64 {
     widgets::combobox::get_value(handle)
 }
 
+// ---- Chart (issue #474) ----
+
+/// Create a Chart widget. `kind` is 0=line, 1=bar, 2=pie.
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_create(kind: i64, width: f64, height: f64) -> i64 {
+    widgets::chart::create(kind, width, height)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_add_data_point(handle: i64, label_ptr: i64, value: f64) {
+    widgets::chart::add_data_point(handle, label_ptr as *const u8, value);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_clear_data(handle: i64) {
+    widgets::chart::clear_data(handle);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_set_title(handle: i64, title_ptr: i64) {
+    widgets::chart::set_title(handle, title_ptr as *const u8);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_chart_reload(handle: i64) {
+    widgets::chart::reload(handle);
+}
+
 // ---- Calendar (issue #481) ----
 
 /// Create an `NSDatePicker` calendar in graphical month-grid mode.

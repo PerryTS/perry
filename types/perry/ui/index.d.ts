@@ -541,6 +541,25 @@ export function treeViewGetSelectedId(widget: Widget): string;
 export function Calendar(year: number, month: number, onChange: (isoDate: string) => void): Widget;
 export function calendarSetDate(widget: Widget, year: number, month: number, day: number): void;
 export function calendarGetSelectedDate(widget: Widget): string;
+
+// ---------------------------------------------------------------------------
+// Chart widget (issue #474, v1) — line / bar / pie via CoreGraphics on macOS.
+// `kind` is 0=line, 1=bar, 2=pie. iOS / tvOS / visionOS / watchOS / Android /
+// Windows / GTK4 stub the FFI today (returns 0 on create, no-op on data
+// updates). Apple Charts framework / SwiftUI Charts integration on iOS 16+ is
+// a follow-up.
+//
+// Out of scope v1 (per #474 scope): multi-series line, grouped/stacked bars,
+// donut, area, axis labels, legend, hover/tap tooltips, animated transitions,
+// color theming. The base widget plumbing lands first; richer modes follow
+// once the surface is used in TS apps.
+// ---------------------------------------------------------------------------
+
+export function Chart(kind: number, width: number, height: number): Widget;
+export function chartAddDataPoint(widget: Widget, label: string, value: number): void;
+export function chartClearData(widget: Widget): void;
+export function chartSetTitle(widget: Widget, title: string): void;
+export function chartReload(widget: Widget): void;
 export function widgetSetControlSize(widget: Widget, size: number): void;
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;

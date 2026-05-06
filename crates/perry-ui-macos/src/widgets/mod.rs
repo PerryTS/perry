@@ -2,6 +2,7 @@ pub mod alert;
 pub mod button;
 pub mod calendar;
 pub mod canvas;
+pub mod chart;
 pub mod combobox;
 pub mod divider;
 pub mod form;

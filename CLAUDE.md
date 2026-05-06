@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.613
+**Current Version:** 0.5.614
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.614** — Refs #474: Chart widget v1 (line/bar/pie). macOS impl in `crates/perry-ui-macos/src/widgets/chart.rs` is a `PerryChartView` (NSView subclass with `drawRect:`) that draws via CoreGraphics — `CGContextSetRGBFillColor` / `CGContextFillRect` for bars, `CGContextMoveToPoint` + `CGContextAddLineToPoint` + `CGContextStrokePath` for lines, `CGContextAddArc` + `CGContextFillPath` for pie wedges. Drawing-only (no Apple Charts framework dependency) keeps the widget portable to pre-13 macOS. 8-color palette for series, 24pt padding, optional title via `NSString.drawInRect:withAttributes:` with center-aligned NSParagraphStyle. 5 new dispatch rows: `Chart(kind, width, height)` (kind=0/1/2 for line/bar/pie), `chartAddDataPoint(label, value)`, `chartClearData`, `chartSetTitle`, `chartReload` (`setNeedsDisplay:`). iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 5 FFI symbols. Out of scope v1: multi-series line, grouped/stacked bars, donut, area chart, axis labels, legend, hover/tap tooltips, animated transitions, color theming, native Apple Charts integration.
 
 - **v0.5.613** — Refs #481: Calendar widget v1 (`Calendar(year, month, onChange)` + `calendarSetDate` + `calendarGetSelectedDate`). macOS impl in `crates/perry-ui-macos/src/widgets/calendar.rs` wraps `NSDatePicker` in graphical `NSDatePickerStyleClockAndCalendar` mode (style=1) with elements limited to year/month/day (`0xC0`) so the clock face is hidden. `PerryCalendarTarget` (NSObject) handles the target-action `dateChanged:` selector — formats the `NSDate` via `NSDateFormatter` with `en_US_POSIX` locale + `yyyy-MM-dd` to give the JS callback a stable ISO date regardless of user locale. iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4 stub all 3 FFI symbols (returns 0 / undefined). Out of scope v1 (per #481 scope): event blocks / dot indicators, week / day views, drag-to-create / drag-to-resize, overlap layout, all-day row.
 
