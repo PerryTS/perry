@@ -773,6 +773,31 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::Widget, ArgKind::F64],
         ret: ReturnKind::Void,
     },
+    // ---- Combobox (issue #475) ----
+    MethodRow {
+        method: "Combobox",
+        runtime: "perry_ui_combobox_create",
+        args: &[ArgKind::Str, ArgKind::Closure],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "comboboxAddItem",
+        runtime: "perry_ui_combobox_add_item",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "comboboxSetValue",
+        runtime: "perry_ui_combobox_set_value",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "comboboxGetValue",
+        runtime: "perry_ui_combobox_get_value",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Str,
+    },
     MethodRow {
         method: "widgetSetControlSize",
         runtime: "perry_ui_widget_set_control_size",

@@ -828,6 +828,19 @@ pub extern "C" fn perry_ui_canvas_fill_gradient(
 pub extern "C" fn perry_ui_widget_set_tooltip(_h: i64, _t: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_rich_tooltip(_h: i64, _content: i64, _delay_ms: f64) {}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_create(initial: i64, on_change: f64) -> i64 {
+    perry_ui_textfield_create(initial, on_change)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_add_item(_h: i64, _v: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_set_value(_h: i64, _v: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_get_value(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_control_size(_h: i64, _s: i64) {}
 #[no_mangle]

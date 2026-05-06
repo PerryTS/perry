@@ -1062,6 +1062,34 @@ pub extern "C" fn perry_ui_picker_get_selected(handle: i64) -> i64 {
     widgets::picker::get_selected(handle)
 }
 
+/// Create a Combobox (NSComboBox: editable filterable text field +
+/// dropdown). `initial_ptr` is the starting text (may be null/empty);
+/// `on_change` fires with the current string value when the user picks
+/// from the dropdown or commits free text via Return. See issue #475.
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_create(initial_ptr: i64, on_change: f64) -> i64 {
+    widgets::combobox::create(initial_ptr as *const u8, on_change)
+}
+
+/// Append a suggestion item to a Combobox dropdown.
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_add_item(handle: i64, value_ptr: i64) {
+    widgets::combobox::add_item(handle, value_ptr as *const u8);
+}
+
+/// Replace the editable text content of a Combobox.
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_set_value(handle: i64, value_ptr: i64) {
+    widgets::combobox::set_value(handle, value_ptr as *const u8);
+}
+
+/// Get the current editable text content of a Combobox as a NaN-boxed
+/// string (STRING_TAG-tagged f64).
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_get_value(handle: i64) -> f64 {
+    widgets::combobox::get_value(handle)
+}
+
 /// Create a Form container. Returns widget handle.
 #[no_mangle]
 pub extern "C" fn perry_ui_form_create() -> i64 {

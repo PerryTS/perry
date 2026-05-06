@@ -899,6 +899,22 @@ pub extern "C" fn perry_ui_image_set_tint(handle: i64, r: f64, g: f64, b: f64, a
 
 /// Create a Picker (dropdown). style: 0=dropdown, 1=segmented. Returns widget handle.
 #[no_mangle]
+/// Combobox stub (#475). tvOS focus model + remote-driven picker UI
+/// has no native filterable-dropdown; falls back to text field.
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_create(initial_ptr: i64, on_change: f64) -> i64 {
+    perry_ui_textfield_create(initial_ptr, on_change)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_add_item(_handle: i64, _value_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_set_value(_handle: i64, _value_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_get_value(_handle: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+#[no_mangle]
 pub extern "C" fn perry_ui_picker_create(label_ptr: i64, on_change: f64, style: i64) -> i64 {
     widgets::picker::create(label_ptr as *const u8, on_change, style)
 }

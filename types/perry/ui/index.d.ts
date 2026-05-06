@@ -492,6 +492,20 @@ export function widgetSetTooltip(widget: Widget, text: string): void;
  * `widgetSetTooltip` so the OS handles VoiceOver / a11y correctly.
  */
 export function widgetSetRichTooltip(widget: Widget, content: Widget, hoverDelayMs: number): void;
+
+// ---------------------------------------------------------------------------
+// Combobox (issue #475) — editable text field with a filterable dropdown of
+// suggestions. macOS uses NSComboBox with `setCompletes:YES` for as-you-type
+// completion; iOS / tvOS / visionOS / watchOS / Android / Windows / GTK4
+// stub the FFI today (text field falls back to a plain editable field).
+// `onChange` fires with the current string value when the user picks from
+// the dropdown or commits free text via Return.
+// ---------------------------------------------------------------------------
+
+export function Combobox(initial: string, onChange: (value: string) => void): Widget;
+export function comboboxAddItem(widget: Widget, value: string): void;
+export function comboboxSetValue(widget: Widget, value: string): void;
+export function comboboxGetValue(widget: Widget): string;
 export function widgetSetControlSize(widget: Widget, size: number): void;
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;

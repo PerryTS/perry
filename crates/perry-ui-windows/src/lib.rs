@@ -1103,6 +1103,24 @@ pub extern "C" fn perry_ui_navstack_pop(handle: i64) {
 
 /// Create a Picker (dropdown).
 #[no_mangle]
+/// Combobox stub (#475). Win32 has a `ComboBox` control with
+/// `CBS_DROPDOWN | CBS_AUTOHSCROLL` that's a natural fit; native
+/// implementation is a future iteration. Falls back to text field for
+/// now.
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_create(initial_ptr: i64, on_change: f64) -> i64 {
+    perry_ui_textfield_create(initial_ptr, on_change)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_add_item(_handle: i64, _value_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_set_value(_handle: i64, _value_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_combobox_get_value(_handle: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+#[no_mangle]
 pub extern "C" fn perry_ui_picker_create(label_ptr: i64, on_change: f64, style: i64) -> i64 {
     widgets::picker::create(label_ptr as *const u8, on_change, style)
 }
