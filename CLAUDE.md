@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.631
+**Current Version:** 0.5.632
 
 
 ## TypeScript Parity Status
@@ -152,6 +152,8 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Recent Changes
 
 One-liners only — full detail in CHANGELOG.md.
+
+- **v0.5.632** — Refs #481: Calendar — iOS stub replaced with `UIDatePicker.preferredDatePickerStyle = .inline` (mode 3) impl in `crates/perry-ui-ios/src/widgets/calendar.rs`. `UICalendarView` (iOS 16+) is the natural primitive but limits deployment; UIDatePicker inline style works on iOS 14+ and matches the macOS NSDatePicker graphical-mode output. `PerryCalendarTarget` (NSObject) handles the target-action `dateChanged:` selector wired via `addTarget:action:forControlEvents:UIControlEventValueChanged`. ISO date formatting via `NSDateFormatter` with `en_US_POSIX` locale + `yyyy-MM-dd` — same convention as macOS / GTK4 / Windows. Started iOS phase: Windows phase wrapped (rich tooltip / command palette / table extensions deferred — each needs custom-window plumbing or base-table impl first).
 
 - **v0.5.631** — Refs #474: Chart — Windows stub replaced with custom owner-draw `PerryChart` window class drawing line/bar/pie via GDI in WM_PAINT (`crates/perry-ui-windows/src/widgets/chart.rs`). `Polyline` (move/line) for line strokes, `FillRect` over per-bar rects for the bar variant, native `Pie` GDI primitive for pie wedges (computes radial endpoint vectors from centre + angle). 8-color palette for series, 24px padding, top-aligned title via `DrawTextW(DT_CENTER | DT_SINGLELINE | DT_VCENTER)`. `InvalidateRect` on data mutations triggers WM_PAINT redraw. Mirrors macOS / GTK4 chart visual conventions.
 
