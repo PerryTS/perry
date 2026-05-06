@@ -4666,10 +4666,30 @@ pub unsafe extern "C" fn js_native_call_method(
     // fall-through. Many existing call paths use this dispatcher as
     // a generic shortcut and rely on the silent null-object return
     // for unknown methods; tightening that is tracked separately.
-    // `undefined` / `null` receivers are caught earlier — codegen's
-    // `PropertyGet` lowering throws on the property read
-    // (`js_throw_type_error_property_access`, issue #462) before the
-    // call site ever evaluates.
+    //
+    // Issue #511: `undefined` / `null` receivers must throw a node-shaped
+    // `TypeError: Cannot read properties of <kind> (reading '<method>')`
+    // and exit 1. Codegen's `Expr::PropertyGet` lowering already throws
+    // on the bare property read (`obj.foo`, issue #462), but the
+    // `Call { callee: PropertyGet }` shortcut in `lower_call.rs`
+    // routes `obj.foo()` straight to `js_native_call_method` without
+    // re-evaluating the receiver through PropertyGet — so the codegen
+    // gate never fires for the call form. Without this arm, `x.foo()`
+    // on `undefined` silently returned `NULL_OBJECT_BYTES` and the
+    // process exited 0, breaking CI gates that rely on non-zero exit
+    // for uncaught errors. Earlier toString/bind/push/pop/length match
+    // arms intentionally short-circuit before this point so existing
+    // Perry code that calls those on `undefined`/`null` keeps working
+    // (Perry-ism — Node throws there too, but tightening that breaks
+    // unrelated callers; the typo case below is what we want to surface).
+    if jsval.is_undefined() || jsval.is_null() {
+        let is_null_u32 = if jsval.is_null() { 1u32 } else { 0u32 };
+        crate::error::js_throw_type_error_property_access(
+            is_null_u32,
+            method_name.as_ptr(),
+            method_name.len(),
+        );
+    }
     let primitive_kind: Option<&'static str> = if jsval.is_any_string() {
         Some("string")
     } else if jsval.is_int32() || jsval.is_number() {
