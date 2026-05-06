@@ -1047,7 +1047,28 @@ unsafe fn call_vtable_method(
     // the calling convention. On ARM64 i64 and f64 share registers, so passing i64
     // works by accident; on Windows x64 ABI they use *different* registers (rcx vs
     // xmm0), causing segfaults when the method reads `this` from the wrong register.
-    let this_f64: f64 = f64::from_bits(this as u64);
+    //
+    // Issue #519: all call sites pass `this` as a RAW POINTER (the bottom-48-bit
+    // address from `jsval.as_pointer()`). Bit-casting raw pointer bits to f64
+    // produces a subnormal float (no NaN-box tag), which the method body
+    // interprets as a number — every nested method call inside the body sees
+    // `(number).<method>` and either returns garbage or throws TypeError via
+    // the issue #510 catch-all (e.g. RegExpRouter.match → `this.buildAllMatchers()`
+    // → "(number).buildAllMatchers is not a function" inside SmartRouter's
+    // dispatch chain). NaN-box with POINTER_TAG before passing so the body
+    // sees a real instance pointer.
+    let this_f64: f64 = {
+        let bits = this as u64;
+        const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+        if bits != 0 && bits <= PTR_MASK {
+            // Raw pointer (no NaN-box tag) — wrap with POINTER_TAG so the
+            // method body's `this` arrives as a real instance pointer.
+            f64::from_bits(JSValue::pointer(bits as *mut u8).bits())
+        } else {
+            // Already NaN-boxed (top bits set) or null — pass through.
+            f64::from_bits(bits)
+        }
+    };
 
     match param_count {
         0 => {
@@ -4645,10 +4666,30 @@ pub unsafe extern "C" fn js_native_call_method(
     // fall-through. Many existing call paths use this dispatcher as
     // a generic shortcut and rely on the silent null-object return
     // for unknown methods; tightening that is tracked separately.
-    // `undefined` / `null` receivers are caught earlier — codegen's
-    // `PropertyGet` lowering throws on the property read
-    // (`js_throw_type_error_property_access`, issue #462) before the
-    // call site ever evaluates.
+    //
+    // Issue #511: `undefined` / `null` receivers must throw a node-shaped
+    // `TypeError: Cannot read properties of <kind> (reading '<method>')`
+    // and exit 1. Codegen's `Expr::PropertyGet` lowering already throws
+    // on the bare property read (`obj.foo`, issue #462), but the
+    // `Call { callee: PropertyGet }` shortcut in `lower_call.rs`
+    // routes `obj.foo()` straight to `js_native_call_method` without
+    // re-evaluating the receiver through PropertyGet — so the codegen
+    // gate never fires for the call form. Without this arm, `x.foo()`
+    // on `undefined` silently returned `NULL_OBJECT_BYTES` and the
+    // process exited 0, breaking CI gates that rely on non-zero exit
+    // for uncaught errors. Earlier toString/bind/push/pop/length match
+    // arms intentionally short-circuit before this point so existing
+    // Perry code that calls those on `undefined`/`null` keeps working
+    // (Perry-ism — Node throws there too, but tightening that breaks
+    // unrelated callers; the typo case below is what we want to surface).
+    if jsval.is_undefined() || jsval.is_null() {
+        let is_null_u32 = if jsval.is_null() { 1u32 } else { 0u32 };
+        crate::error::js_throw_type_error_property_access(
+            is_null_u32,
+            method_name.as_ptr(),
+            method_name.len(),
+        );
+    }
     let primitive_kind: Option<&'static str> = if jsval.is_any_string() {
         Some("string")
     } else if jsval.is_int32() || jsval.is_number() {

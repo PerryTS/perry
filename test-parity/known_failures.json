@@ -7,5 +7,6 @@
   "test_net_socket": "Net test passes locally with echo server running, fails on Linux CI (no echo fixture server). Environmental.",
   "test_net_upgrade_tls": "Net test needs a TLS-capable echo server fixture; not available on CI. Environmental.",
   "test_sock_write_map": "Net test passes locally with echo server running, fails on Linux CI (no echo fixture server). Environmental — issue #91 dispatch fix landed in v0.5.581.",
-  "test_issue_446_import_type_method_typeof": "After v0.5.589 surfaces as a parallel-codegen race: consumer_type_only.o and consumer_value.o end up with identical content (consumer_value's symbols), making `_perry_fn_..._consumeTypeOnly` undefined at link. Pre-v0.5.589 the same test was a parity-mismatch (`typeof` returned 'object' instead of 'function'). Tracked separately as #509."
+  "test_issue_446_import_type_method_typeof": "After v0.5.589 surfaces as a parallel-codegen race: consumer_type_only.o and consumer_value.o end up with identical content (consumer_value's symbols), making `_perry_fn_..._consumeTypeOnly` undefined at link. Pre-v0.5.589 the same test was a parity-mismatch (`typeof` returned 'object' instead of 'function'). Tracked separately as #509.",
+  "test_issue_310_namespace_reexport": "Same parallel-codegen race as test_issue_446 — fixture .o files for sibling modules (Foo.ts / Bar.ts) end up with identical bytes, leaving cross-module symbols undefined at link. Tracked under #509."
 }
