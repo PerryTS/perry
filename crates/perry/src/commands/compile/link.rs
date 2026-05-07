@@ -1096,6 +1096,8 @@ pub(super) fn build_and_run_link(
             .arg("-framework")
             .arg("Metal")
             .arg("-framework")
+            .arg("MapKit") // perry/ui MapView (#517) — MKMapView (tvOS)
+            .arg("-framework")
             .arg("MediaPlayer") // perry/media — Now Playing + Siri Remote
             .arg("-liconv")
             .arg("-lresolv")
@@ -1443,6 +1445,41 @@ pub(super) fn build_and_run_link(
                     ] {
                         cmd.arg(lib);
                     }
+                }
+                // libshumate — GNOME's GTK4 vector-tile map widget for the
+                // perry/ui MapView (#517). Same pkg-config → hardcoded
+                // fallback shape as GTK4 / GStreamer above.
+                let mut got_shumate_libs = false;
+                let shumate_pc_out = Command::new("pkg-config")
+                    .args(["--libs", "shumate-1.0"])
+                    .output();
+                if let Ok(ref output) = shumate_pc_out {
+                    if output.status.success() {
+                        let libs = String::from_utf8_lossy(&output.stdout);
+                        for flag in libs.trim().split_whitespace() {
+                            cmd.arg(flag);
+                        }
+                        got_shumate_libs = true;
+                    }
+                }
+                if !got_shumate_libs {
+                    eprintln!(
+                        "Warning: `pkg-config --libs shumate-1.0` did not return \
+                         libshumate linker flags ({}). Falling back to \
+                         `-lshumate-1.0` — install `libshumate-dev` \
+                         (Debian/Ubuntu) or `libshumate-devel` (Fedora/RHEL) to \
+                         silence this warning.",
+                        match &shumate_pc_out {
+                            Err(e) => format!("pkg-config not runnable: {e}"),
+                            Ok(o) if !o.status.success() => format!(
+                                "pkg-config exited {}: {}",
+                                o.status.code().unwrap_or(-1),
+                                String::from_utf8_lossy(&o.stderr).trim()
+                            ),
+                            Ok(_) => "no output".to_string(),
+                        }
+                    );
+                    cmd.arg("-lshumate-1.0");
                 }
             } else if is_windows {
                 // Win32 system libs already linked above

@@ -878,18 +878,61 @@ pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 { -1 }
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_set_scale(_h: i64, _s: f64) {}
 
-// Issue #517 — MapView stubs (watchOS has MKMapView but screen real
-// estate makes a generic widget impractical for now).
+// Issue #517 — MapView via SwiftUI Map(coordinateRegion:annotationItems:)
+// in PerryWatchApp.swift's NodeView. Backed by the data-driven tree model
+// (NodeKind::MapView + map_lat/lon/lat_span/lon_span/type/pins fields).
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_create(_w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_map_view_create(_w: f64, _h: f64) -> i64 {
+    let mut node = NodeData::new(NodeKind::MapView);
+    // Sensible defaults: zoomed all the way out until set_region is called.
+    node.map_lat_span = 180.0;
+    node.map_lon_span = 360.0;
+    tree::register_node(node)
+}
+
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_set_region(_h: i64, _lat: f64, _lon: f64, _ls: f64, _os: f64) {}
+pub extern "C" fn perry_ui_map_view_set_region(
+    handle: i64,
+    lat: f64,
+    lon: f64,
+    lat_span: f64,
+    lon_span: f64,
+) {
+    tree::with_node_mut(handle, |node| {
+        node.map_lat = lat;
+        node.map_lon = lon;
+        node.map_lat_span = lat_span;
+        node.map_lon_span = lon_span;
+    });
+}
+
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_add_pin(_h: i64, _lat: f64, _lon: f64, _t: i64) {}
+pub extern "C" fn perry_ui_map_view_add_pin(
+    handle: i64,
+    lat: f64,
+    lon: f64,
+    title_ptr: i64,
+) {
+    let title = cstring_from_header(title_ptr as *const u8)
+        .unwrap_or_else(|| std::ffi::CString::new("").unwrap());
+    tree::with_node_mut(handle, |node| {
+        node.map_pins.push((lat, lon, title));
+    });
+}
+
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_clear_pins(_h: i64) {}
+pub extern "C" fn perry_ui_map_view_clear_pins(handle: i64) {
+    tree::with_node_mut(handle, |node| {
+        node.map_pins.clear();
+    });
+}
+
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_set_map_type(_h: i64, _s: i64) {}
+pub extern "C" fn perry_ui_map_view_set_map_type(handle: i64, style: i64) {
+    tree::with_node_mut(handle, |node| {
+        node.map_type = style;
+    });
+}
 
 // Issue #477 — Command palette stubs.
 #[no_mangle]

@@ -5,6 +5,7 @@
 // via FFI and renders it as SwiftUI views reactively.
 
 import SwiftUI
+import MapKit
 
 // MARK: - FFI declarations
 
@@ -67,6 +68,17 @@ import SwiftUI
 // Edge insets
 @_silgen_name("perry_watchos_node_has_edge_insets") func perry_watchos_node_has_edge_insets(_ id: Int64) -> Bool
 @_silgen_name("perry_watchos_node_edge_inset") func perry_watchos_node_edge_inset(_ id: Int64, _ side: Int32) -> Double
+
+// MapView (issue #517)
+@_silgen_name("perry_watchos_node_map_lat") func perry_watchos_node_map_lat(_ id: Int64) -> Double
+@_silgen_name("perry_watchos_node_map_lon") func perry_watchos_node_map_lon(_ id: Int64) -> Double
+@_silgen_name("perry_watchos_node_map_lat_span") func perry_watchos_node_map_lat_span(_ id: Int64) -> Double
+@_silgen_name("perry_watchos_node_map_lon_span") func perry_watchos_node_map_lon_span(_ id: Int64) -> Double
+@_silgen_name("perry_watchos_node_map_type") func perry_watchos_node_map_type(_ id: Int64) -> Int64
+@_silgen_name("perry_watchos_node_map_pin_count") func perry_watchos_node_map_pin_count(_ id: Int64) -> Int32
+@_silgen_name("perry_watchos_node_map_pin_lat") func perry_watchos_node_map_pin_lat(_ id: Int64, _ idx: Int32) -> Double
+@_silgen_name("perry_watchos_node_map_pin_lon") func perry_watchos_node_map_pin_lon(_ id: Int64, _ idx: Int32) -> Double
+@_silgen_name("perry_watchos_node_map_pin_title") func perry_watchos_node_map_pin_title(_ id: Int64, _ idx: Int32) -> UnsafePointer<CChar>?
 
 // Toast overlay (issue #476)
 @_silgen_name("perry_watchos_toast_active_text") func perry_watchos_toast_active_text() -> UnsafePointer<CChar>?
@@ -136,6 +148,14 @@ struct ToastBanner: View {
     }
 }
 
+// MARK: - Map annotation model (issue #517)
+
+struct PerryMapPin: Identifiable {
+    let id: Int
+    let coordinate: CLLocationCoordinate2D
+    let title: String
+}
+
 // MARK: - Recursive SwiftUI renderer
 
 struct NodeView: View {
@@ -168,6 +188,7 @@ struct NodeView: View {
         case 12: pickerView
         case 13: List { children }
         case 14: NavigationStack { children }
+        case 16: mapView
         default: EmptyView()
         }
     }
@@ -234,6 +255,47 @@ struct NodeView: View {
 
     var progressView: some View {
         ProgressView(value: perry_watchos_node_progress_value(nodeId))
+    }
+
+    // MARK: MapView (issue #517)
+    //
+    // SwiftUI `Map(coordinateRegion:annotationItems:)` is available on
+    // watchOS 7+. The pin overlays use the deprecated `MapMarker` API
+    // because the newer `Map { Marker(...) }` shape requires watchOS 10;
+    // the deprecated API still ships and runs on every shipping watch.
+    // `set_map_type` is read but ignored — SwiftUI's watchOS Map doesn't
+    // expose the `mapStyle` modifier on watchOS 7-9.
+    @ViewBuilder var mapView: some View {
+        let lat = perry_watchos_node_map_lat(nodeId)
+        let lon = perry_watchos_node_map_lon(nodeId)
+        let latSpan = perry_watchos_node_map_lat_span(nodeId)
+        let lonSpan = perry_watchos_node_map_lon_span(nodeId)
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+            span: MKCoordinateSpan(
+                latitudeDelta: max(latSpan, 0.001),
+                longitudeDelta: max(lonSpan, 0.001)
+            )
+        )
+        let count = Int(perry_watchos_node_map_pin_count(nodeId))
+        let pins: [PerryMapPin] = (0..<count).map { i in
+            let plat = perry_watchos_node_map_pin_lat(nodeId, Int32(i))
+            let plon = perry_watchos_node_map_pin_lon(nodeId, Int32(i))
+            let title: String = {
+                if let p = perry_watchos_node_map_pin_title(nodeId, Int32(i)) {
+                    return String(cString: p)
+                }
+                return ""
+            }()
+            return PerryMapPin(
+                id: i,
+                coordinate: CLLocationCoordinate2D(latitude: plat, longitude: plon),
+                title: title
+            )
+        }
+        Map(coordinateRegion: .constant(region), annotationItems: pins) { item in
+            MapMarker(coordinate: item.coordinate)
+        }
     }
 
     var pickerView: some View {

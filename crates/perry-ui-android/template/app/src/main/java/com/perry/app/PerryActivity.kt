@@ -148,8 +148,24 @@ class PerryActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        PerryBridge.forwardMapsLifecycle("resume")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        PerryBridge.forwardMapsLifecycle("pause")
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        PerryBridge.forwardMapsLifecycle("lowMemory")
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        PerryBridge.forwardMapsLifecycle("destroy")
         PerryBridge.nativeShutdown()
     }
 }

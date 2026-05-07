@@ -13,6 +13,11 @@ perry-runtime = { path = "../perry-runtime" }
 libc = "0.2"
 gtk4 = { version = "0.9", features = ["v4_6"] }
 cairo-rs = "0.20"
+# perry/ui MapView (#517). libshumate is GNOME's GTK4-native vector-tile
+# map widget. 0.6.x tracks gtk4-rs 0.9 (0.5 wants gtk4 0.8, 0.7 wants
+# gtk4 0.10 — both conflict on the gtk-4 `links =` value). OSM tiles by
+# default; no API key required. Pure GtkWidget — no webview.
+libshumate = "0.6"
 # perry/media — GStreamer playbin for streaming audio playback (#351).
 gstreamer = "0.23"
 # perry/media — MPRIS D-Bus exposure for GNOME / KDE / playerctl /

@@ -4,6 +4,7 @@ pub mod divider;
 pub mod form;
 pub mod hstack;
 pub mod image;
+pub mod map_view;
 pub mod navstack;
 pub mod picker;
 pub mod progressview;

@@ -5,6 +5,7 @@ pub mod form;
 pub mod hstack;
 pub mod image;
 pub mod lazyvstack;
+pub mod map_view;
 pub mod navstack;
 pub mod picker;
 pub mod progressview;

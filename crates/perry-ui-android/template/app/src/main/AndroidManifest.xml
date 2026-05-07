@@ -19,6 +19,18 @@
         android:label="Perry App"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
+        <!--
+          Google Maps API key for the perry/ui MapView widget (#517).
+          Replace `__YOUR_GOOGLE_MAPS_API_KEY__` with a real key obtained
+          from Google Cloud Console (Maps SDK for Android enabled). Apps
+          that don't use the MapView widget can leave the placeholder;
+          the SDK only attempts to load tiles when a MapView is actually
+          constructed.
+        -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="__YOUR_GOOGLE_MAPS_API_KEY__" />
+
         <activity
             android:name=".PerryActivity"
             android:exported="true"

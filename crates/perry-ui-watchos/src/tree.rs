@@ -26,6 +26,7 @@ pub enum NodeKind {
     List = 13,
     NavigationStack = 14,
     TextArea = 15,
+    MapView = 16,
 }
 
 /// A single node in the UI tree.
@@ -84,6 +85,16 @@ pub struct NodeData {
     // SwiftUI host applies `.underline()` / `.strikethrough()` modifier when
     // rendering.
     pub text_decoration: i64,
+    // MapView widget (issue #517). Center + lat/lon span (degrees) + map
+    // type (0=standard, 1=satellite, 2=hybrid) + pin annotations. SwiftUI
+    // host renders via `Map(coordinateRegion:annotationItems:)` (watchOS
+    // 7+ API).
+    pub map_lat: f64,
+    pub map_lon: f64,
+    pub map_lat_span: f64,
+    pub map_lon_span: f64,
+    pub map_type: i64,
+    pub map_pins: Vec<(f64, f64, CString)>,
 }
 
 impl NodeData {
@@ -124,6 +135,12 @@ impl NodeData {
             font_family: None,
             text_wraps: false,
             text_decoration: 0,
+            map_lat: 0.0,
+            map_lon: 0.0,
+            map_lat_span: 0.0,
+            map_lon_span: 0.0,
+            map_type: 0,
+            map_pins: Vec::new(),
         }
     }
 }
@@ -575,4 +592,77 @@ pub extern "C" fn perry_watchos_textarea_changed(id: i64, text_ptr: *const std::
             js_closure_call1(closure_ptr, nanboxed);
         }
     }
+}
+
+// =========================================================================
+// MapView node FFI getters (issue #517) — read by PerryWatchApp.swift.
+// =========================================================================
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_map_lat(id: i64) -> f64 {
+    with_node(id, |n| n.map_lat).unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_map_lon(id: i64) -> f64 {
+    with_node(id, |n| n.map_lon).unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_map_lat_span(id: i64) -> f64 {
+    with_node(id, |n| n.map_lat_span).unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_map_lon_span(id: i64) -> f64 {
+    with_node(id, |n| n.map_lon_span).unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_map_type(id: i64) -> i64 {
+    with_node(id, |n| n.map_type).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_map_pin_count(id: i64) -> i32 {
+    with_node(id, |n| n.map_pins.len() as i32).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_map_pin_lat(id: i64, idx: i32) -> f64 {
+    with_node(id, |n| {
+        n.map_pins
+            .get(idx as usize)
+            .map(|(lat, _, _)| *lat)
+            .unwrap_or(0.0)
+    })
+    .unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_map_pin_lon(id: i64, idx: i32) -> f64 {
+    with_node(id, |n| {
+        n.map_pins
+            .get(idx as usize)
+            .map(|(_, lon, _)| *lon)
+            .unwrap_or(0.0)
+    })
+    .unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_map_pin_title(
+    id: i64,
+    idx: i32,
+) -> *const std::ffi::c_char {
+    NODES.with(|n| {
+        let nodes = n.borrow();
+        let node_idx = (id - 1) as usize;
+        if let Some(node) = nodes.get(node_idx) {
+            if let Some((_, _, title)) = node.map_pins.get(idx as usize) {
+                return title.as_ptr();
+            }
+        }
+        std::ptr::null()
+    })
 }

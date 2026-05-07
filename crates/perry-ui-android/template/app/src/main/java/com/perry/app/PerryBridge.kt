@@ -1102,6 +1102,140 @@ object PerryBridge {
     @JvmStatic
     external fun nativeInvokeCallbackWithString(key: Long, text: String)
 
+    // =====================================================================
+    // MapView (issue #517) — Google Maps SDK for Android.
+    // =====================================================================
+    //
+    // MapView has its own activity lifecycle: onCreate / onResume / onPause /
+    // onLowMemory / onDestroy must be called explicitly. PerryActivity forwards
+    // those events via `forwardMapsLifecycle()` below; this object keeps a
+    // list of every MapView constructed so the forwarding hits all of them.
+    //
+    // The GoogleMap object isn't immediately available — it's loaded
+    // asynchronously by `getMapAsync`. We park early `setRegion` / `addPin` /
+    // `clearPins` / `setMapType` calls in a per-MapView pending-ops queue
+    // and replay them once the GoogleMap callback fires.
+
+    private val mapViews = mutableListOf<com.google.android.gms.maps.MapView>()
+    private val mapPending = mutableMapOf<com.google.android.gms.maps.MapView,
+        MutableList<(com.google.android.gms.maps.GoogleMap) -> Unit>>()
+    private val mapReady = mutableMapOf<com.google.android.gms.maps.MapView,
+        com.google.android.gms.maps.GoogleMap>()
+
+    /// Approximate the (lat_span, lon_span) → tile-zoom mapping that
+    /// Google Maps' camera uses (zoom = log2(360 / span_deg)).
+    private fun zoomFromSpan(latSpan: Double, lonSpan: Double): Float {
+        val span = Math.max(latSpan.coerceAtLeast(0.0001), lonSpan.coerceAtLeast(0.0001))
+        return (Math.log(360.0 / span) / Math.log(2.0)).coerceIn(0.0, 21.0).toFloat()
+    }
+
+    @JvmStatic
+    fun mapViewCreate(width: Double, height: Double): com.google.android.gms.maps.MapView {
+        val mapView = com.google.android.gms.maps.MapView(activity)
+        mapView.onCreate(null)
+        mapView.onResume()
+        // Apply requested layout size (the dispatch table converts widget
+        // f64 args to the LinearLayout it gets attached to; we set the
+        // initial layoutParams here so first paint isn't 0×0).
+        mapView.layoutParams = FrameLayout.LayoutParams(
+            width.toInt().coerceAtLeast(80),
+            height.toInt().coerceAtLeast(80)
+        )
+        mapViews.add(mapView)
+        mapPending[mapView] = mutableListOf()
+
+        mapView.getMapAsync { gmap ->
+            mapReady[mapView] = gmap
+            mapPending.remove(mapView)?.forEach { it(gmap) }
+        }
+
+        return mapView
+    }
+
+    private fun runOnMap(
+        mapView: com.google.android.gms.maps.MapView,
+        op: (com.google.android.gms.maps.GoogleMap) -> Unit
+    ) {
+        val ready = mapReady[mapView]
+        if (ready != null) {
+            uiHandler.post { op(ready) }
+        } else {
+            mapPending.getOrPut(mapView) { mutableListOf() }.add(op)
+        }
+    }
+
+    @JvmStatic
+    fun mapViewSetRegion(
+        mapView: com.google.android.gms.maps.MapView,
+        latitude: Double,
+        longitude: Double,
+        latSpan: Double,
+        lonSpan: Double
+    ) {
+        val zoom = zoomFromSpan(latSpan, lonSpan)
+        runOnMap(mapView) { gmap ->
+            val pos = com.google.android.gms.maps.model.CameraPosition.Builder()
+                .target(com.google.android.gms.maps.model.LatLng(latitude, longitude))
+                .zoom(zoom)
+                .build()
+            gmap.animateCamera(
+                com.google.android.gms.maps.CameraUpdateFactory.newCameraPosition(pos)
+            )
+        }
+    }
+
+    @JvmStatic
+    fun mapViewAddPin(
+        mapView: com.google.android.gms.maps.MapView,
+        latitude: Double,
+        longitude: Double,
+        title: String
+    ) {
+        runOnMap(mapView) { gmap ->
+            val opts = com.google.android.gms.maps.model.MarkerOptions()
+                .position(com.google.android.gms.maps.model.LatLng(latitude, longitude))
+            if (title.isNotEmpty()) {
+                opts.title(title)
+            }
+            gmap.addMarker(opts)
+        }
+    }
+
+    @JvmStatic
+    fun mapViewClearPins(mapView: com.google.android.gms.maps.MapView) {
+        runOnMap(mapView) { gmap -> gmap.clear() }
+    }
+
+    @JvmStatic
+    fun mapViewSetMapType(mapView: com.google.android.gms.maps.MapView, style: Long) {
+        // Match MapKit's MKMapType enum order: 0=standard, 1=satellite,
+        // 2=hybrid. Google Maps uses MAP_TYPE_NORMAL=1, _SATELLITE=2,
+        // _TERRAIN=3, _HYBRID=4 — translate explicitly.
+        val gmapType = when (style.toInt()) {
+            1 -> com.google.android.gms.maps.GoogleMap.MAP_TYPE_SATELLITE
+            2 -> com.google.android.gms.maps.GoogleMap.MAP_TYPE_HYBRID
+            else -> com.google.android.gms.maps.GoogleMap.MAP_TYPE_NORMAL
+        }
+        runOnMap(mapView) { gmap -> gmap.mapType = gmapType }
+    }
+
+    /// Called by PerryActivity for each lifecycle event. `event` ∈
+    /// `"resume" | "pause" | "destroy" | "lowMemory"`.
+    @JvmStatic
+    fun forwardMapsLifecycle(event: String) {
+        when (event) {
+            "resume" -> mapViews.forEach { it.onResume() }
+            "pause" -> mapViews.forEach { it.onPause() }
+            "lowMemory" -> mapViews.forEach { it.onLowMemory() }
+            "destroy" -> {
+                mapViews.forEach { it.onDestroy() }
+                mapViews.clear()
+                mapPending.clear()
+                mapReady.clear()
+            }
+        }
+    }
+
     // Issue #552 — extra invoke shapes for the geolocation success callback
     // (4 doubles) and the image-picker callback (string array).
     @JvmStatic
