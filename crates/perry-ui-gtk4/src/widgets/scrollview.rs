@@ -95,14 +95,22 @@ pub fn set_offset(scroll_handle: i64, offset: f64) {
 /// user scrolls back up past the threshold. Backed by GtkAdjustment's
 /// `value-changed` signal.
 pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f64) {
-    let Some(scroll_widget) = super::get_widget(scroll_handle) else { return };
-    let Some(scrolled) = scroll_widget.downcast_ref::<ScrolledWindow>() else { return };
+    let Some(scroll_widget) = super::get_widget(scroll_handle) else {
+        return;
+    };
+    let Some(scrolled) = scroll_widget.downcast_ref::<ScrolledWindow>() else {
+        return;
+    };
     SCROLL_END_STATES.with(|s| {
         s.borrow_mut().insert(
             scroll_handle,
             ScrollEndState {
                 closure: callback,
-                threshold_px: if threshold_px > 0.0 { threshold_px } else { 200.0 },
+                threshold_px: if threshold_px > 0.0 {
+                    threshold_px
+                } else {
+                    200.0
+                },
                 armed: true,
             },
         );
@@ -113,7 +121,9 @@ pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: 
         let upper = adj.upper();
         let (closure, in_zone, should_fire) = SCROLL_END_STATES.with(|s| {
             let mut states = s.borrow_mut();
-            let Some(state) = states.get_mut(&h) else { return (0.0, false, false) };
+            let Some(state) = states.get_mut(&h) else {
+                return (0.0, false, false);
+            };
             let in_zone = visible_bottom >= upper - state.threshold_px;
             let mut fire = false;
             if in_zone && state.armed {

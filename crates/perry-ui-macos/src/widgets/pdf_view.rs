@@ -61,15 +61,21 @@ pub fn load_file(handle: i64, path_ptr: *const u8) -> bool {
     if path.is_empty() {
         return false;
     }
-    let Some(view) = super::get_widget(handle) else { return false };
+    let Some(view) = super::get_widget(handle) else {
+        return false;
+    };
     unsafe {
-        let Some(url_cls) = AnyClass::get(c"NSURL") else { return false };
+        let Some(url_cls) = AnyClass::get(c"NSURL") else {
+            return false;
+        };
         let ns_path = NSString::from_str(&path);
         let url: *mut AnyObject = msg_send![url_cls, fileURLWithPath: &*ns_path];
         if url.is_null() {
             return false;
         }
-        let Some(doc_cls) = AnyClass::get(c"PDFDocument") else { return false };
+        let Some(doc_cls) = AnyClass::get(c"PDFDocument") else {
+            return false;
+        };
         let alloc: *mut AnyObject = msg_send![doc_cls, alloc];
         let doc: *mut AnyObject = msg_send![alloc, initWithURL: url];
         if doc.is_null() {
@@ -82,7 +88,9 @@ pub fn load_file(handle: i64, path_ptr: *const u8) -> bool {
 
 /// Number of pages in the loaded document, 0 if none loaded.
 pub fn get_page_count(handle: i64) -> i64 {
-    let Some(view) = super::get_widget(handle) else { return 0 };
+    let Some(view) = super::get_widget(handle) else {
+        return 0;
+    };
     unsafe {
         let doc: *mut AnyObject = msg_send![&*view, document];
         if doc.is_null() {
@@ -98,7 +106,9 @@ pub fn go_to_page(handle: i64, page_index: i64) {
     if page_index < 0 {
         return;
     }
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     unsafe {
         let doc: *mut AnyObject = msg_send![&*view, document];
         if doc.is_null() {
@@ -119,7 +129,9 @@ pub fn go_to_page(handle: i64, page_index: i64) {
 /// Get the index of the currently-displayed page (0-based), -1 if no
 /// document loaded.
 pub fn get_current_page(handle: i64) -> i64 {
-    let Some(view) = super::get_widget(handle) else { return -1 };
+    let Some(view) = super::get_widget(handle) else {
+        return -1;
+    };
     unsafe {
         let doc: *mut AnyObject = msg_send![&*view, document];
         if doc.is_null() {
@@ -136,7 +148,9 @@ pub fn get_current_page(handle: i64) -> i64 {
 
 /// Set the zoom scale factor (1.0 = 100%).
 pub fn set_scale(handle: i64, scale: f64) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     unsafe {
         let _: () = msg_send![&*view, setScaleFactor: scale.max(0.1)];
     }

@@ -56,10 +56,7 @@ pub fn register_task(identifier_ptr: *const u8, handler: f64) {
         bridge_cls,
         "backgroundRegisterTask",
         "(Ljava/lang/String;J)V",
-        &[
-            JValue::Object(&id_jstr),
-            JValue::Long(key),
-        ],
+        &[JValue::Object(&id_jstr), JValue::Long(key)],
     );
     unsafe {
         env.pop_local_frame(&jni::objects::JObject::null());
@@ -78,7 +75,11 @@ pub fn schedule(
         return;
     }
     let kind = str_from_header(kind_ptr);
-    let kind = if kind.is_empty() { "appRefresh".to_string() } else { kind };
+    let kind = if kind.is_empty() {
+        "appRefresh".to_string()
+    } else {
+        kind
+    };
     let req_net = boolean_truthy(requires_network);
     let req_charge = boolean_truthy(requires_charging);
 

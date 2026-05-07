@@ -318,6 +318,45 @@ where
             f(v);
         }
 
+        // ─── Web Crypto (issue #561) ──────────────────────────────────────
+        Expr::WebCryptoDigest { algo, data } => {
+            f(algo);
+            f(data);
+        }
+        Expr::WebCryptoImportKey {
+            format,
+            key,
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            f(format);
+            f(key);
+            f(algorithm);
+            f(extractable);
+            f(usages);
+        }
+        Expr::WebCryptoSign {
+            algorithm,
+            key,
+            data,
+        } => {
+            f(algorithm);
+            f(key);
+            f(data);
+        }
+        Expr::WebCryptoVerify {
+            algorithm,
+            key,
+            signature,
+            data,
+        } => {
+            f(algorithm);
+            f(key);
+            f(signature);
+            f(data);
+        }
+
         // ─── Two-child variants ───────────────────────────────────────────
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
@@ -1394,6 +1433,45 @@ where
         | Expr::ArrayFlat { array: v }
         | Expr::ArrayToReversed { array: v } => {
             f(v);
+        }
+
+        // ─── Web Crypto (issue #561) ──────────────────────────────────────
+        Expr::WebCryptoDigest { algo, data } => {
+            f(algo);
+            f(data);
+        }
+        Expr::WebCryptoImportKey {
+            format,
+            key,
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            f(format);
+            f(key);
+            f(algorithm);
+            f(extractable);
+            f(usages);
+        }
+        Expr::WebCryptoSign {
+            algorithm,
+            key,
+            data,
+        } => {
+            f(algorithm);
+            f(key);
+            f(data);
+        }
+        Expr::WebCryptoVerify {
+            algorithm,
+            key,
+            signature,
+            data,
+        } => {
+            f(algorithm);
+            f(key);
+            f(signature);
+            f(data);
         }
 
         // ─── Multi-child variants — same shape as the mut variant ─────────

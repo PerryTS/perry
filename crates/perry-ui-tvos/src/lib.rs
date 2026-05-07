@@ -1,10 +1,10 @@
 pub mod app;
-pub mod issue_552_stub;
 pub mod audio;
 pub mod background;
 pub mod clipboard;
 pub mod crash_log;
 pub mod file_dialog;
+pub mod issue_552_stub;
 pub mod location;
 pub mod media_playback;
 pub mod menu;
@@ -631,7 +631,9 @@ pub extern "C" fn perry_ui_menubar_attach(bar_handle: i64) {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_tray_create(_icon_path_ptr: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_tray_create(_icon_path_ptr: i64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_tray_set_icon(_tray_handle: i64, _icon_path_ptr: i64) {}
 #[no_mangle]
@@ -903,7 +905,9 @@ pub extern "C" fn perry_ui_image_set_tint(handle: i64, r: f64, g: f64, b: f64, a
 #[no_mangle]
 // Issue #478 — Rich text editor stubs.
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_create(_w: f64, _h: f64, _cb: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_rich_text_create(_w: f64, _h: f64, _cb: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_rich_text_set_string(_h: i64, _t: i64) {}
 #[no_mangle]
@@ -911,7 +915,9 @@ pub extern "C" fn perry_ui_rich_text_get_string(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_rich_text_set_html(_h: i64, _html: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_rich_text_set_html(_h: i64, _html: i64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_rich_text_get_html(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
@@ -925,15 +931,23 @@ pub extern "C" fn perry_ui_rich_text_toggle_underline(_h: i64) {}
 
 // Issue #516 — PdfView stubs.
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 {
+    0
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_load_file(_h: i64, _p: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_load_file(_h: i64, _p: i64) -> i64 {
+    0
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_get_page_count(_h: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_get_page_count(_h: i64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_go_to_page(_h: i64, _i: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 {
+    -1
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_set_scale(_h: i64, _s: f64) {}
 
@@ -979,7 +993,9 @@ pub extern "C" fn perry_ui_command_palette_hide() {}
 
 // Issue #474 — Chart widget stubs.
 #[no_mangle]
-pub extern "C" fn perry_ui_chart_create(_kind: i64, _w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_chart_create(_kind: i64, _w: f64, _h: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_chart_add_data_point(_h: i64, _l: i64, _v: f64) {}
 #[no_mangle]
@@ -991,7 +1007,9 @@ pub extern "C" fn perry_ui_chart_reload(_h: i64) {}
 
 // Issue #481 — Calendar widget stubs.
 #[no_mangle]
-pub extern "C" fn perry_ui_calendar_create(_year: i64, _month: i64, _on_change: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_calendar_create(_year: i64, _month: i64, _on_change: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_calendar_set_date(_h: i64, _y: i64, _m: i64, _d: i64) {}
 #[no_mangle]
@@ -1005,9 +1023,13 @@ pub extern "C" fn perry_ui_table_set_on_sort_change(_h: i64, _cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_allows_multiple_selection(_h: i64, _allow: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_selected_rows_count(_h: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_table_get_selected_rows_count(_h: i64) -> i64 {
+    0
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_selected_row_at(_h: i64, _n: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_table_get_selected_row_at(_h: i64, _n: i64) -> i64 {
+    -1
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_filter_text(_h: i64, _t: i64) {}
 #[no_mangle]
@@ -1017,11 +1039,15 @@ pub extern "C" fn perry_ui_table_get_filter_text(_h: i64) -> f64 {
 
 /// TreeView stubs (#480). tvOS — outline-style focus list is future.
 #[no_mangle]
-pub extern "C" fn perry_ui_tree_node_create(_id_ptr: i64, _label_ptr: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_tree_node_create(_id_ptr: i64, _label_ptr: i64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_tree_node_add_child(_parent: i64, _child: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_tree_view_create(_root: i64, _on_select: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_tree_view_create(_root: i64, _on_select: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_tree_view_expand_all(_handle: i64) {}
 #[no_mangle]
@@ -2353,7 +2379,9 @@ pub extern "C" fn perry_media_destroy(handle: f64) {
 // for tvOS/watchOS/visionOS) is tracked in the same issue.
 
 #[no_mangle]
-pub extern "C" fn perry_ui_bottom_nav_create(_on_select: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_bottom_nav_create(_on_select: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_bottom_nav_add_item(_handle: i64, _icon_ptr: i64, _label_ptr: i64) {}
 #[no_mangle]
@@ -2366,12 +2394,24 @@ pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callbac
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_end_refreshing(_handle: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(_handle: i64, _callback: f64, _threshold_items: i64) {}
+pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(
+    _handle: i64,
+    _callback: f64,
+    _threshold_items: i64,
+) {
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_scrollview_set_scroll_end_callback(_handle: i64, _callback: f64, _threshold_px: f64) {}
+pub extern "C" fn perry_ui_scrollview_set_scroll_end_callback(
+    _handle: i64,
+    _callback: f64,
+    _threshold_px: f64,
+) {
+}
 
 #[no_mangle]
-pub extern "C" fn perry_ui_image_gallery_create(_on_index_change: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_image_gallery_create(_on_index_change: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_image_gallery_add_image(_handle: i64, _url_ptr: i64, _alt_ptr: i64) {}
 #[no_mangle]

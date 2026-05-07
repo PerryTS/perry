@@ -923,7 +923,12 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
     MethodRow {
         method: "calendarSetDate",
         runtime: "perry_ui_calendar_set_date",
-        args: &[ArgKind::Widget, ArgKind::I64Raw, ArgKind::I64Raw, ArgKind::I64Raw],
+        args: &[
+            ArgKind::Widget,
+            ArgKind::I64Raw,
+            ArgKind::I64Raw,
+            ArgKind::I64Raw,
+        ],
         ret: ReturnKind::Void,
     },
     MethodRow {

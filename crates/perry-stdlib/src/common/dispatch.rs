@@ -164,19 +164,14 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // "not us, try the next dispatcher or return undefined".
     #[cfg(feature = "http-client")]
     {
-        if let Some(v) =
-            crate::fetch::dispatch_response_method(handle as usize, method_name, args)
+        if let Some(v) = crate::fetch::dispatch_response_method(handle as usize, method_name, args)
         {
             return v;
         }
-        if let Some(v) =
-            crate::fetch::dispatch_blob_method(handle as usize, method_name, args)
-        {
+        if let Some(v) = crate::fetch::dispatch_blob_method(handle as usize, method_name, args) {
             return v;
         }
-        if let Some(v) =
-            crate::fetch::dispatch_headers_method(handle as usize, method_name, args)
-        {
+        if let Some(v) = crate::fetch::dispatch_headers_method(handle as usize, method_name, args) {
             return v;
         }
     }

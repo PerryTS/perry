@@ -224,7 +224,10 @@ unsafe fn draw_line(
     plot: objc2_core_foundation::CGRect,
     data: &[(String, f64)],
 ) {
-    let max = data.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max);
+    let max = data
+        .iter()
+        .map(|(_, v)| *v)
+        .fold(f64::NEG_INFINITY, f64::max);
     let min = data.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min);
     let range = if (max - min).abs() < 1e-9 {
         1.0
@@ -244,11 +247,7 @@ unsafe fn draw_line(
     CGContextSetLineWidth(ctx, 1.0);
     CGContextBeginPath(ctx);
     CGContextMoveToPoint(ctx, plot.origin.x, plot.origin.y);
-    CGContextAddLineToPoint(
-        ctx,
-        plot.origin.x + plot.size.width,
-        plot.origin.y,
-    );
+    CGContextAddLineToPoint(ctx, plot.origin.x + plot.size.width, plot.origin.y);
     CGContextStrokePath(ctx);
 
     // Series.
@@ -345,8 +344,7 @@ unsafe fn draw_text_centered(text: &str, rect: objc2_core_foundation::CGRect, si
     let _: () = msg_send![attrs, setObject: para, forKey: &*para_key];
 
     let color_cls = AnyClass::get(c"NSColor").unwrap();
-    let color: *mut AnyObject =
-        msg_send![color_cls, colorWithCalibratedRed: 0.10 as CGFloat, green: 0.10 as CGFloat, blue: 0.10 as CGFloat, alpha: 1.0 as CGFloat];
+    let color: *mut AnyObject = msg_send![color_cls, colorWithCalibratedRed: 0.10 as CGFloat, green: 0.10 as CGFloat, blue: 0.10 as CGFloat, alpha: 1.0 as CGFloat];
     let _: () = msg_send![attrs, setObject: color, forKey: &*color_key];
 
     let _: () = msg_send![&*ns_text, drawInRect: rect, withAttributes: attrs];

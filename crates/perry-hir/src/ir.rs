@@ -1256,6 +1256,38 @@ pub enum Expr {
     CryptoSha256(Box<Expr>),      // crypto.sha256(data) -> string (hex)
     CryptoMd5(Box<Expr>),         // crypto.md5(data) -> string (hex)
 
+    // Web Crypto API (issue #561). The async wrapping is decorative —
+    // the SHA / HMAC primitives are CPU-bound and resolve synchronously
+    // inside the returned Promise. CryptoKey is implemented as a Buffer
+    // marked Uint8Array, with `(buf_addr → algo, hash)` recorded in the
+    // perry-stdlib WebCrypto registry at importKey time.
+    /// `crypto.subtle.digest(alg, data)` -> Promise<ArrayBuffer>
+    WebCryptoDigest {
+        algo: Box<Expr>,
+        data: Box<Expr>,
+    },
+    /// `crypto.subtle.importKey(format, key, algorithm, extractable, usages)` -> Promise<CryptoKey>
+    WebCryptoImportKey {
+        format: Box<Expr>,
+        key: Box<Expr>,
+        algorithm: Box<Expr>,
+        extractable: Box<Expr>,
+        usages: Box<Expr>,
+    },
+    /// `crypto.subtle.sign(algorithm, key, data)` -> Promise<ArrayBuffer>
+    WebCryptoSign {
+        algorithm: Box<Expr>,
+        key: Box<Expr>,
+        data: Box<Expr>,
+    },
+    /// `crypto.subtle.verify(algorithm, key, signature, data)` -> Promise<boolean>
+    WebCryptoVerify {
+        algorithm: Box<Expr>,
+        key: Box<Expr>,
+        signature: Box<Expr>,
+        data: Box<Expr>,
+    },
+
     // OS operations
     OsPlatform,          // os.platform() -> string ("darwin", "linux", "win32")
     OsArch,              // os.arch() -> string ("x64", "arm64", etc.)

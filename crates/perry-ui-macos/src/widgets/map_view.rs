@@ -55,10 +55,7 @@ struct MKCoordinateRegion {
 unsafe impl Encode for MKCoordinateRegion {
     const ENCODING: Encoding = Encoding::Struct(
         "MKCoordinateRegion",
-        &[
-            CLLocationCoordinate2D::ENCODING,
-            MKCoordinateSpan::ENCODING,
-        ],
+        &[CLLocationCoordinate2D::ENCODING, MKCoordinateSpan::ENCODING],
     );
 }
 
@@ -92,7 +89,9 @@ pub fn create(width: f64, height: f64) -> i64 {
 
 /// Center the map on (lat, lon) with a span (degrees).
 pub fn set_region(handle: i64, lat: f64, lon: f64, lat_span: f64, lon_span: f64) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     let region = MKCoordinateRegion {
         center: CLLocationCoordinate2D {
             latitude: lat,
@@ -112,7 +111,9 @@ pub fn set_region(handle: i64, lat: f64, lon: f64, lat_span: f64, lon_span: f64)
 /// `MKPointAnnotation` styling — custom annotation views are out of
 /// scope this iteration.
 pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     let title = if title_ptr.is_null() {
         String::new()
     } else {
@@ -124,7 +125,9 @@ pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
         }
     };
     unsafe {
-        let Some(cls) = AnyClass::get(c"MKPointAnnotation") else { return };
+        let Some(cls) = AnyClass::get(c"MKPointAnnotation") else {
+            return;
+        };
         let alloc: *mut AnyObject = msg_send![cls, alloc];
         let pin: *mut AnyObject = msg_send![alloc, init];
         let coord = CLLocationCoordinate2D {
@@ -142,7 +145,9 @@ pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
 
 /// Remove every annotation from the map.
 pub fn clear_pins(handle: i64) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     unsafe {
         let annotations: *mut AnyObject = msg_send![&*view, annotations];
         if annotations.is_null() {
@@ -155,7 +160,9 @@ pub fn clear_pins(handle: i64) {
 /// Swap the visual map style. `style` is 0=standard, 1=satellite,
 /// 2=hybrid (matches `MKMapType`'s enum order).
 pub fn set_map_type(handle: i64, style: i64) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     let map_type = match style {
         1 => 1u64,
         2 => 2u64,

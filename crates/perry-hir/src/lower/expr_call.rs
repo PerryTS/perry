@@ -212,6 +212,107 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                 }
             }
 
+            // Web Crypto API — `crypto.subtle.<method>(args)` (issue #561).
+            // AST shape is the same nested-Member pattern as
+            // `process.hrtime.bigint()` above. We resolve here BEFORE the
+            // generic mod.X.Y() arm so the strict-API gate (#463) doesn't
+            // reject `subtle` (which is a sub-namespace, not a class).
+            if let ast::Expr::Member(outer_member) = expr.as_ref() {
+                if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+                    if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
+                        let root_name = root_ident.sym.as_ref();
+                        let is_crypto_root = root_name == "crypto"
+                            || ctx.lookup_builtin_module_alias(root_name) == Some("crypto")
+                            || ctx
+                                .lookup_native_module(root_name)
+                                .map(|(m, _)| m == "crypto")
+                                .unwrap_or(false);
+                        if is_crypto_root {
+                            if let ast::MemberProp::Ident(inner_prop) = &inner_member.prop {
+                                if inner_prop.sym.as_ref() == "subtle" {
+                                    if let ast::MemberProp::Ident(method_ident) = &outer_member.prop
+                                    {
+                                        let method = method_ident.sym.as_ref();
+                                        match method {
+                                            "digest" if args.len() >= 2 => {
+                                                let mut iter = args.into_iter();
+                                                let algo = iter.next().unwrap();
+                                                let data = iter.next().unwrap();
+                                                return Ok(Expr::WebCryptoDigest {
+                                                    algo: Box::new(algo),
+                                                    data: Box::new(data),
+                                                });
+                                            }
+                                            "importKey" if args.len() >= 5 => {
+                                                let mut iter = args.into_iter();
+                                                let format = iter.next().unwrap();
+                                                let key = iter.next().unwrap();
+                                                let algorithm = iter.next().unwrap();
+                                                let extractable = iter.next().unwrap();
+                                                let usages = iter.next().unwrap();
+                                                return Ok(Expr::WebCryptoImportKey {
+                                                    format: Box::new(format),
+                                                    key: Box::new(key),
+                                                    algorithm: Box::new(algorithm),
+                                                    extractable: Box::new(extractable),
+                                                    usages: Box::new(usages),
+                                                });
+                                            }
+                                            "sign" if args.len() >= 3 => {
+                                                let mut iter = args.into_iter();
+                                                let algorithm = iter.next().unwrap();
+                                                let key = iter.next().unwrap();
+                                                let data = iter.next().unwrap();
+                                                return Ok(Expr::WebCryptoSign {
+                                                    algorithm: Box::new(algorithm),
+                                                    key: Box::new(key),
+                                                    data: Box::new(data),
+                                                });
+                                            }
+                                            "verify" if args.len() >= 4 => {
+                                                let mut iter = args.into_iter();
+                                                let algorithm = iter.next().unwrap();
+                                                let key = iter.next().unwrap();
+                                                let signature = iter.next().unwrap();
+                                                let data = iter.next().unwrap();
+                                                return Ok(Expr::WebCryptoVerify {
+                                                    algorithm: Box::new(algorithm),
+                                                    key: Box::new(key),
+                                                    signature: Box::new(signature),
+                                                    data: Box::new(data),
+                                                });
+                                            }
+                                            _ => {
+                                                // Unsupported subtle method —
+                                                // fail loudly. The supported
+                                                // surface is documented in the
+                                                // d.ts and at #561; asymmetric
+                                                // (RSA-PSS / ECDSA / RSA-OAEP),
+                                                // generateKey, wrap/unwrap,
+                                                // deriveKey, encrypt/decrypt
+                                                // are out of scope per the
+                                                // issue.
+                                                let allow_unimplemented =
+                                                    std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED")
+                                                        .is_some();
+                                                if !allow_unimplemented {
+                                                    crate::lower_bail!(
+                                                        outer_member.span,
+                                                        "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify (HMAC + SHA-1/256/384/512). \
+                                                         See `perry --print-api-manifest` and #561, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore.",
+                                                        method,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check for module.Class.staticMethod() pattern (e.g.,
             // ethers.Wallet.createRandom()). Modelled after the
             // process.hrtime.bigint() handler above.
@@ -3959,24 +4060,26 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                         _ => None,
                                     };
                                     let inner_returns_array = inner_method
-                                        .map(|m| matches!(
-                                            m,
-                                            "map"
-                                                | "filter"
-                                                | "slice"
-                                                | "concat"
-                                                | "flat"
-                                                | "flatMap"
-                                                | "splice"
-                                                | "sort"
-                                                | "reverse"
-                                                | "fill"
-                                                | "copyWithin"
-                                                | "toReversed"
-                                                | "toSorted"
-                                                | "toSpliced"
-                                                | "with"
-                                        ))
+                                        .map(|m| {
+                                            matches!(
+                                                m,
+                                                "map"
+                                                    | "filter"
+                                                    | "slice"
+                                                    | "concat"
+                                                    | "flat"
+                                                    | "flatMap"
+                                                    | "splice"
+                                                    | "sort"
+                                                    | "reverse"
+                                                    | "fill"
+                                                    | "copyWithin"
+                                                    | "toReversed"
+                                                    | "toSorted"
+                                                    | "toSpliced"
+                                                    | "with"
+                                            )
+                                        })
                                         .unwrap_or(false);
                                     // recv_is_class = true means BAIL. Bail when the
                                     // inner call is NOT a known array-producing method.

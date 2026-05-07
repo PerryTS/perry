@@ -132,7 +132,9 @@ pub fn create(on_select: f64) -> i64 {
         );
     });
 
-    unsafe { let _ = env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        let _ = env.pop_local_frame(&JObject::null());
+    }
     handle
 }
 
@@ -152,7 +154,9 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
         }
     });
     let Some(layout_ref) = super::get_widget(layout_handle) else {
-        unsafe { let _ = env.pop_local_frame(&JObject::null()); }
+        unsafe {
+            let _ = env.pop_local_frame(&JObject::null());
+        }
         return;
     };
 
@@ -173,7 +177,12 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
         &tab,
         "setPadding",
         "(IIII)V",
-        &[JValue::Int(dp8), JValue::Int(dp8), JValue::Int(dp8), JValue::Int(dp8)],
+        &[
+            JValue::Int(dp8),
+            JValue::Int(dp8),
+            JValue::Int(dp8),
+            JValue::Int(dp8),
+        ],
     );
 
     // Equal-weight layout params so each tab gets the same width.
@@ -215,7 +224,12 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
     );
     if !icon.is_empty() {
         // Resources.getIdentifier(icon, "drawable", pkg)
-        if let Ok(resources) = env.call_method(&activity, "getResources", "()Landroid/content/res/Resources;", &[]) {
+        if let Ok(resources) = env.call_method(
+            &activity,
+            "getResources",
+            "()Landroid/content/res/Resources;",
+            &[],
+        ) {
             if let Ok(res_obj) = resources.l() {
                 let pkg = env
                     .call_method(&activity, "getPackageName", "()Ljava/lang/String;", &[])
@@ -241,12 +255,8 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
                         .and_then(|v| v.i().ok())
                         .unwrap_or(0);
                     if id != 0 {
-                        let _ = env.call_method(
-                            &iv,
-                            "setImageResource",
-                            "(I)V",
-                            &[JValue::Int(id)],
-                        );
+                        let _ =
+                            env.call_method(&iv, "setImageResource", "(I)V", &[JValue::Int(id)]);
                     }
                 }
             }
@@ -345,7 +355,9 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
     });
     apply_styling(handle);
 
-    unsafe { let _ = env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        let _ = env.pop_local_frame(&JObject::null());
+    }
 }
 
 /// Set or clear the badge string on a tab. Empty clears the badge.
@@ -362,7 +374,9 @@ pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
         }
     });
     if item_container == 0 {
-        unsafe { let _ = env.pop_local_frame(&JObject::null()); }
+        unsafe {
+            let _ = env.pop_local_frame(&JObject::null());
+        }
         return;
     }
 
@@ -430,7 +444,12 @@ pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
             &tv,
             "setPadding",
             "(IIII)V",
-            &[JValue::Int(dp4), JValue::Int(0), JValue::Int(dp4), JValue::Int(0)],
+            &[
+                JValue::Int(dp4),
+                JValue::Int(0),
+                JValue::Int(dp4),
+                JValue::Int(0),
+            ],
         );
         let _ = env.call_method(&tv, "setGravity", "(I)V", &[JValue::Int(17)]);
 
@@ -455,7 +474,9 @@ pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
         }
     });
 
-    unsafe { let _ = env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        let _ = env.pop_local_frame(&JObject::null());
+    }
 }
 
 pub fn set_selected(handle: i64, index: i64) {
@@ -472,7 +493,10 @@ fn apply_styling(handle: i64) {
         let map = s.borrow();
         match map.get(&handle) {
             Some(st) => (
-                st.items.iter().map(|i| (i.icon, i.label)).collect::<Vec<_>>(),
+                st.items
+                    .iter()
+                    .map(|i| (i.icon, i.label))
+                    .collect::<Vec<_>>(),
                 st.selected,
             ),
             None => (Vec::new(), 0),
@@ -503,5 +527,7 @@ fn apply_styling(handle: i64) {
             );
         }
     }
-    unsafe { let _ = env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        let _ = env.pop_local_frame(&JObject::null());
+    }
 }

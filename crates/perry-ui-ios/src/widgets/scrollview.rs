@@ -316,19 +316,30 @@ impl PerryScrollEndDelegate {
 }
 
 pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f64) {
-    let Some(scroll_view) = super::get_widget(scroll_handle) else { return };
+    let Some(scroll_view) = super::get_widget(scroll_handle) else {
+        return;
+    };
     SCROLL_END_STATES.with(|s| {
-        s.borrow_mut().insert(scroll_handle, ScrollEndState {
-            closure: callback,
-            threshold_px: if threshold_px > 0.0 { threshold_px } else { 200.0 },
-            armed: true,
-        });
+        s.borrow_mut().insert(
+            scroll_handle,
+            ScrollEndState {
+                closure: callback,
+                threshold_px: if threshold_px > 0.0 {
+                    threshold_px
+                } else {
+                    200.0
+                },
+                armed: true,
+            },
+        );
     });
     unsafe {
         let delegate = PerryScrollEndDelegate::new();
         let key = Retained::as_ptr(&delegate) as usize;
         delegate.ivars().key.set(key);
-        SCROLL_DELEGATE_TO_HANDLE.with(|m| { m.borrow_mut().insert(key, scroll_handle); });
+        SCROLL_DELEGATE_TO_HANDLE.with(|m| {
+            m.borrow_mut().insert(key, scroll_handle);
+        });
         let _: () = msg_send![&*scroll_view, setDelegate: &*delegate];
         std::mem::forget(delegate);
     }

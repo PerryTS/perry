@@ -105,8 +105,7 @@ pub fn schedule(
                 .unwrap_or(0.0))
                 + 1800.0
         };
-        let date: *mut AnyObject =
-            msg_send![class!(NSDate), dateWithTimeIntervalSince1970: secs];
+        let date: *mut AnyObject = msg_send![class!(NSDate), dateWithTimeIntervalSince1970: secs];
 
         // Build userInfo = @{ @"perry_id": <id> }. NSDictionary with NSString
         // keys + values conforms to NSSecureCoding so WKApplication accepts it.

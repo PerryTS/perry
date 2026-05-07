@@ -154,14 +154,17 @@ unsafe fn dispatch_rest_bundled(
     // Read fixed args, padding with undefined when caller under-supplied.
     macro_rules! a {
         ($i:expr) => {
-            if $i < provided { args[$i] } else { undef }
+            if $i < provided {
+                args[$i]
+            } else {
+                undef
+            }
         };
     }
 
     match k {
         0 => {
-            let f: extern "C" fn(*const ClosureHeader, f64) -> f64 =
-                std::mem::transmute(func_ptr);
+            let f: extern "C" fn(*const ClosureHeader, f64) -> f64 = std::mem::transmute(func_ptr);
             f(closure, rest_double)
         }
         1 => {
@@ -192,7 +195,16 @@ unsafe fn dispatch_rest_bundled(
         6 => {
             let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64 =
                 std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), a!(5), rest_double)
+            f(
+                closure,
+                a!(0),
+                a!(1),
+                a!(2),
+                a!(3),
+                a!(4),
+                a!(5),
+                rest_double,
+            )
         }
         7 => {
             let f: extern "C" fn(
@@ -206,7 +218,17 @@ unsafe fn dispatch_rest_bundled(
                 f64,
                 f64,
             ) -> f64 = std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), a!(5), a!(6), rest_double)
+            f(
+                closure,
+                a!(0),
+                a!(1),
+                a!(2),
+                a!(3),
+                a!(4),
+                a!(5),
+                a!(6),
+                rest_double,
+            )
         }
         _ => {
             // Unsupported arity — fall back to undefined so we don't
@@ -244,7 +266,11 @@ unsafe fn dispatch_with_arity(
     let provided = args.len();
     macro_rules! a {
         ($i:expr) => {
-            if $i < provided { args[$i] } else { undef }
+            if $i < provided {
+                args[$i]
+            } else {
+                undef
+            }
         };
     }
     match k {
@@ -298,7 +324,17 @@ unsafe fn dispatch_with_arity(
                 f64,
                 f64,
             ) -> f64 = std::mem::transmute(func_ptr);
-            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), a!(5), a!(6), a!(7))
+            f(
+                closure,
+                a!(0),
+                a!(1),
+                a!(2),
+                a!(3),
+                a!(4),
+                a!(5),
+                a!(6),
+                a!(7),
+            )
         }
         _ => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
@@ -672,7 +708,9 @@ pub extern "C" fn js_closure_call3(
     }
     if let Some(declared) = lookup_closure_arity(func_ptr) {
         if declared > 3 {
-            return unsafe { dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2], declared) };
+            return unsafe {
+                dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2], declared)
+            };
         }
     }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
@@ -743,12 +781,7 @@ pub extern "C" fn js_closure_call5(
     if let Some(declared) = lookup_closure_arity(func_ptr) {
         if declared > 5 {
             return unsafe {
-                dispatch_with_arity(
-                    closure,
-                    func_ptr,
-                    &[arg0, arg1, arg2, arg3, arg4],
-                    declared,
-                )
+                dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2, arg3, arg4], declared)
             };
         }
     }
@@ -1385,7 +1418,6 @@ pub unsafe extern "C" fn js_native_call_value(
         ),
     }
 }
-
 
 use std::sync::{Mutex, OnceLock};
 

@@ -651,10 +651,7 @@ pub extern "C" fn perry_watchos_node_map_pin_lon(id: i64, idx: i32) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_watchos_node_map_pin_title(
-    id: i64,
-    idx: i32,
-) -> *const std::ffi::c_char {
+pub extern "C" fn perry_watchos_node_map_pin_title(id: i64, idx: i32) -> *const std::ffi::c_char {
     NODES.with(|n| {
         let nodes = n.borrow();
         let node_idx = (id - 1) as usize;

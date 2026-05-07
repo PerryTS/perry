@@ -704,15 +704,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // parent's cross-module ctor's `this.field = ...` writes overflow
         // the object header — making `f.field` read undefined on the
         // importing side even though the parent's ctor "ran".
-        let lookup_class_chain_link = |name: &str| -> Option<(Vec<perry_hir::ClassField>, Option<String>)> {
-            if let Some(parent) = hir.classes.iter().find(|cls| cls.name == name) {
-                return Some((parent.fields.clone(), parent.extends_name.clone()));
-            }
-            if let Some(stub) = imported_class_stubs.iter().find(|cls| cls.name == name) {
-                return Some((stub.fields.clone(), stub.extends_name.clone()));
-            }
-            None
-        };
+        let lookup_class_chain_link =
+            |name: &str| -> Option<(Vec<perry_hir::ClassField>, Option<String>)> {
+                if let Some(parent) = hir.classes.iter().find(|cls| cls.name == name) {
+                    return Some((parent.fields.clone(), parent.extends_name.clone()));
+                }
+                if let Some(stub) = imported_class_stubs.iter().find(|cls| cls.name == name) {
+                    return Some((stub.fields.clone(), stub.extends_name.clone()));
+                }
+                None
+            };
         let mut p = c.extends_name.clone();
         while let Some(parent_name) = p {
             if let Some((parent_fields, parent_extends)) = lookup_class_chain_link(&parent_name) {
@@ -791,8 +792,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let mut parent_chain: Vec<String> = Vec::new();
         let mut p = c.extends_name.clone();
         while let Some(parent_name) = p {
-            if let Some(parent) =
-                imported_class_stubs.iter().find(|cls| cls.name == parent_name)
+            if let Some(parent) = imported_class_stubs
+                .iter()
+                .find(|cls| cls.name == parent_name)
             {
                 parent_chain.push(parent_name.clone());
                 total_field_count += parent.fields.len() as u32;
@@ -806,16 +808,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
         }
         for parent_name in parent_chain.iter().rev() {
-            if let Some(parent) =
-                imported_class_stubs.iter().find(|cls| cls.name == *parent_name)
+            if let Some(parent) = imported_class_stubs
+                .iter()
+                .find(|cls| cls.name == *parent_name)
             {
                 for f in &parent.fields {
                     packed_keys.push_str(&f.name);
                     packed_keys.push('\0');
                 }
-            } else if let Some(parent) =
-                hir.classes.iter().find(|cls| cls.name == *parent_name)
-            {
+            } else if let Some(parent) = hir.classes.iter().find(|cls| cls.name == *parent_name) {
                 for f in &parent.fields {
                     packed_keys.push_str(&f.name);
                     packed_keys.push('\0');
@@ -1388,10 +1389,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let class_prefix = imported_class_prefix.get(&c.name).unwrap_or(&module_prefix);
         for m in &c.methods {
             let llvm_name = scoped_method_name(class_prefix, &c.name, &m.name);
-            method_names.insert(
-                (c.name.clone(), m.name.clone()),
-                llvm_name.clone(),
-            );
+            method_names.insert((c.name.clone(), m.name.clone()), llvm_name.clone());
             // Refs #486: also register self-binding aliases (e.g. `_X` from
             // `var X = class _X`) so static method dispatch on a receiver typed
             // as `_X` (the inner name) finds the same LLVM symbol as the
@@ -2066,9 +2064,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                             break;
                         }
                         cur = pclass.extends_name.clone();
-                    } else if let Some(stub) = imported_class_stubs
-                        .iter()
-                        .find(|c| c.name == pname)
+                    } else if let Some(stub) = imported_class_stubs.iter().find(|c| c.name == pname)
                     {
                         // Imported stub — params not in HIR; use its ctor
                         // param count as a synthetic count of unnamed args.
@@ -3387,47 +3383,43 @@ fn compile_method(
                 // Resolve the standalone-ctor symbol name. Prefer the
                 // local class table (same module) for an inline call;
                 // fall back to imported_class_ctors for cross-module.
-                let (ctor_sym, param_count) =
-                    if let Some(pclass) = ctx.classes.get(&pname_owned).copied() {
-                        if pclass.constructor.is_some() {
-                            // Local class with own ctor — use the per-module-prefix
-                            // standalone symbol, same one compile_method emits.
-                            let module_prefix = ctx.strings.module_prefix().to_string();
-                            let sym = format!("{}__{}_constructor", module_prefix, pname_owned);
-                            let pcount = pclass
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.len())
-                                .unwrap_or(0);
-                            (sym, pcount)
-                        } else if let Some((sym, n)) =
-                            ctx.imported_class_ctors.get(&pname_owned).cloned()
-                        {
-                            (sym, n)
-                        } else {
-                            // No callable ctor symbol — bail.
-                            stmt::lower_stmts(&mut ctx, &method.body).with_context(|| {
-                                format!(
-                                    "lowering body of method '{}::{}'",
-                                    class.name, method.name
-                                )
-                            })?;
-                            // Fall through to the default ret-void at end.
-                            if !ctx.block().is_terminated() {
-                                ctx.block().ret(DOUBLE, "0.0");
-                            }
-                            let _ = std::mem::take(&mut ctx.ic_globals);
-                            let _ = std::mem::take(&mut ctx.typed_parse_rodata);
-                            let _ = std::mem::take(&mut ctx.pending_declares);
-                            return Ok(());
-                        }
+                let (ctor_sym, param_count) = if let Some(pclass) =
+                    ctx.classes.get(&pname_owned).copied()
+                {
+                    if pclass.constructor.is_some() {
+                        // Local class with own ctor — use the per-module-prefix
+                        // standalone symbol, same one compile_method emits.
+                        let module_prefix = ctx.strings.module_prefix().to_string();
+                        let sym = format!("{}__{}_constructor", module_prefix, pname_owned);
+                        let pcount = pclass
+                            .constructor
+                            .as_ref()
+                            .map(|c| c.params.len())
+                            .unwrap_or(0);
+                        (sym, pcount)
                     } else if let Some((sym, n)) =
                         ctx.imported_class_ctors.get(&pname_owned).cloned()
                     {
                         (sym, n)
                     } else {
-                        ("".to_string(), 0)
-                    };
+                        // No callable ctor symbol — bail.
+                        stmt::lower_stmts(&mut ctx, &method.body).with_context(|| {
+                            format!("lowering body of method '{}::{}'", class.name, method.name)
+                        })?;
+                        // Fall through to the default ret-void at end.
+                        if !ctx.block().is_terminated() {
+                            ctx.block().ret(DOUBLE, "0.0");
+                        }
+                        let _ = std::mem::take(&mut ctx.ic_globals);
+                        let _ = std::mem::take(&mut ctx.typed_parse_rodata);
+                        let _ = std::mem::take(&mut ctx.pending_declares);
+                        return Ok(());
+                    }
+                } else if let Some((sym, n)) = ctx.imported_class_ctors.get(&pname_owned).cloned() {
+                    (sym, n)
+                } else {
+                    ("".to_string(), 0)
+                };
                 if !ctor_sym.is_empty() {
                     let undef_lit =
                         crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
@@ -3464,8 +3456,11 @@ fn compile_method(
                     for la in &forwarded {
                         ctor_args.push((DOUBLE, la.as_str()));
                     }
-                    ctx.pending_declares
-                        .push((ctor_sym.clone(), crate::types::VOID, ctor_param_types));
+                    ctx.pending_declares.push((
+                        ctor_sym.clone(),
+                        crate::types::VOID,
+                        ctor_param_types,
+                    ));
                     ctx.block().call_void(&ctor_sym, &ctor_args);
                 }
             }

@@ -60,7 +60,9 @@ pub fn create(on_index_change: f64) -> i64 {
             let value = adj.value();
             STATES.with(|s| {
                 let mut states = s.borrow_mut();
-                let Some(state) = states.get_mut(&h_handle) else { return };
+                let Some(state) = states.get_mut(&h_handle) else {
+                    return;
+                };
                 let new_index = ((value + PAGE_PX as f64 / 2.0) / PAGE_PX as f64).floor() as i64;
                 let count = state.pages.len() as i64;
                 let new_index = new_index.max(0).min(count.saturating_sub(1));
@@ -98,7 +100,9 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
     let alt = str_from_header(alt_ptr);
     STATES.with(|s| {
         let mut states = s.borrow_mut();
-        let Some(state) = states.get_mut(&handle) else { return };
+        let Some(state) = states.get_mut(&handle) else {
+            return;
+        };
 
         let pic = gtk4::Picture::new();
         pic.set_size_request(PAGE_PX, PAGE_PX);
@@ -130,7 +134,9 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
 pub fn set_index(handle: i64, index: i64) {
     STATES.with(|s| {
         let mut states = s.borrow_mut();
-        let Some(state) = states.get_mut(&handle) else { return };
+        let Some(state) = states.get_mut(&handle) else {
+            return;
+        };
         if (index as usize) >= state.pages.len() {
             return;
         }

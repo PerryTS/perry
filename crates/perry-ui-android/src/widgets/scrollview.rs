@@ -210,7 +210,9 @@ pub fn end_refreshing(_scroll_handle: i64) {
 /// `setOnScrollEndCallback` helper (which wraps `View.OnScrollChangeListener`
 /// with the same backpressure logic the macOS / iOS impls use).
 pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f32) {
-    let Some(scroll_ref) = super::get_widget(scroll_handle) else { return };
+    let Some(scroll_ref) = super::get_widget(scroll_handle) else {
+        return;
+    };
     let cb_key = callback::register(callback);
 
     let mut env = jni_bridge::get_env();

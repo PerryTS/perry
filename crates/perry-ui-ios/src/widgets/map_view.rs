@@ -45,10 +45,7 @@ struct MKCoordinateRegion {
 unsafe impl Encode for MKCoordinateRegion {
     const ENCODING: Encoding = Encoding::Struct(
         "MKCoordinateRegion",
-        &[
-            CLLocationCoordinate2D::ENCODING,
-            MKCoordinateSpan::ENCODING,
-        ],
+        &[CLLocationCoordinate2D::ENCODING, MKCoordinateSpan::ENCODING],
     );
 }
 
@@ -77,9 +74,14 @@ pub fn create(width: f64, height: f64) -> i64 {
 }
 
 pub fn set_region(handle: i64, lat: f64, lon: f64, lat_span: f64, lon_span: f64) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     let region = MKCoordinateRegion {
-        center: CLLocationCoordinate2D { latitude: lat, longitude: lon },
+        center: CLLocationCoordinate2D {
+            latitude: lat,
+            longitude: lon,
+        },
         span: MKCoordinateSpan {
             latitude_delta: lat_span.max(0.001),
             longitude_delta: lon_span.max(0.001),
@@ -91,7 +93,9 @@ pub fn set_region(handle: i64, lat: f64, lon: f64, lat_span: f64, lon_span: f64)
 }
 
 pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     let title = if title_ptr.is_null() {
         String::new()
     } else {
@@ -103,10 +107,15 @@ pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
         }
     };
     unsafe {
-        let Some(cls) = AnyClass::get(c"MKPointAnnotation") else { return };
+        let Some(cls) = AnyClass::get(c"MKPointAnnotation") else {
+            return;
+        };
         let alloc: *mut AnyObject = msg_send![cls, alloc];
         let pin: *mut AnyObject = msg_send![alloc, init];
-        let coord = CLLocationCoordinate2D { latitude: lat, longitude: lon };
+        let coord = CLLocationCoordinate2D {
+            latitude: lat,
+            longitude: lon,
+        };
         let _: () = msg_send![pin, setCoordinate: coord];
         if !title.is_empty() {
             let ns = NSString::from_str(&title);
@@ -117,7 +126,9 @@ pub fn add_pin(handle: i64, lat: f64, lon: f64, title_ptr: *const u8) {
 }
 
 pub fn clear_pins(handle: i64) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     unsafe {
         let annotations: *mut AnyObject = msg_send![&*view, annotations];
         if annotations.is_null() {
@@ -128,7 +139,9 @@ pub fn clear_pins(handle: i64) {
 }
 
 pub fn set_map_type(handle: i64, style: i64) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     let map_type = match style {
         1 => 1u64,
         2 => 2u64,

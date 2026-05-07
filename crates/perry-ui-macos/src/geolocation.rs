@@ -16,13 +16,7 @@ extern "C" {
     fn js_promise_run_microtasks() -> i32;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_closure_call4(
-        closure: *const u8,
-        arg0: f64,
-        arg1: f64,
-        arg2: f64,
-        arg3: f64,
-    ) -> f64;
+    fn js_closure_call4(closure: *const u8, arg0: f64, arg1: f64, arg2: f64, arg3: f64) -> f64;
     fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut u8;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
@@ -202,7 +196,9 @@ unsafe extern "C" fn did_fail_with_error(
             if !desc.is_null() {
                 let utf8: *const i8 = msg_send![desc, UTF8String];
                 if !utf8.is_null() {
-                    msg = std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned();
+                    msg = std::ffi::CStr::from_ptr(utf8)
+                        .to_string_lossy()
+                        .into_owned();
                 }
             }
         }
@@ -250,8 +246,7 @@ fn register_delegate_class() {
         *reg.borrow_mut() = true;
         unsafe {
             let superclass = objc_getClass(c"NSObject".as_ptr());
-            let cls =
-                objc_allocateClassPair(superclass, c"PerryGeolocationDelegate".as_ptr(), 0);
+            let cls = objc_allocateClassPair(superclass, c"PerryGeolocationDelegate".as_ptr(), 0);
             if cls.is_null() {
                 return;
             }

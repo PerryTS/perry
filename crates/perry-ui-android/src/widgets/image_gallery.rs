@@ -97,7 +97,9 @@ pub fn create(on_index_change: f64) -> i64 {
         );
     });
 
-    unsafe { let _ = env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        let _ = env.pop_local_frame(&JObject::null());
+    }
     scroll_handle
 }
 
@@ -116,7 +118,9 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
         }
     });
     let Some(inner_ref) = super::get_widget(inner_handle) else {
-        unsafe { let _ = env.pop_local_frame(&JObject::null()); }
+        unsafe {
+            let _ = env.pop_local_frame(&JObject::null());
+        }
         return;
     };
 
@@ -132,7 +136,11 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
     // through setScaleType(ImageView.ScaleType) reflection for simplicity.
     // Easier: use FIT_CENTER which is index 3 in the enum's natural order.
     if let Ok(scaletype_cls) = env.find_class("android/widget/ImageView$ScaleType") {
-        if let Ok(field) = env.get_static_field(scaletype_cls, "FIT_CENTER", "Landroid/widget/ImageView$ScaleType;") {
+        if let Ok(field) = env.get_static_field(
+            scaletype_cls,
+            "FIT_CENTER",
+            "Landroid/widget/ImageView$ScaleType;",
+        ) {
             if let Ok(field_obj) = field.l() {
                 let _ = env.call_method(
                     &iv,
@@ -213,7 +221,9 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
         }
     });
 
-    unsafe { let _ = env.pop_local_frame(&JObject::null()); }
+    unsafe {
+        let _ = env.pop_local_frame(&JObject::null());
+    }
 }
 
 pub fn set_index(handle: i64, index: i64) {
@@ -224,7 +234,9 @@ pub fn set_index(handle: i64, index: i64) {
             None => (0, false),
         }
     });
-    if !valid { return; }
+    if !valid {
+        return;
+    }
     if let Some(scroll_ref) = super::get_widget(handle) {
         let mut env = jni_bridge::get_env();
         let _ = env.push_local_frame(8);
@@ -234,7 +246,9 @@ pub fn set_index(handle: i64, index: i64) {
             "(II)V",
             &[JValue::Int(page_px * index as i32), JValue::Int(0)],
         );
-        unsafe { let _ = env.pop_local_frame(&JObject::null()); }
+        unsafe {
+            let _ = env.pop_local_frame(&JObject::null());
+        }
         STATES.with(|s| {
             if let Some(state) = s.borrow_mut().get_mut(&handle) {
                 state.current_index = index;

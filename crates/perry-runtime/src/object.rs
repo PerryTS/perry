@@ -2853,8 +2853,9 @@ pub extern "C" fn js_object_get_field_by_name(
                                     // Getters take `this` as f64 (NaN-boxed
                                     // POINTER_TAG), matching the codegen
                                     // calling convention for class methods.
-                                    let this_f64: f64 =
-                                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                                    let this_f64: f64 = f64::from_bits(
+                                        crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+                                    );
                                     let f: extern "C" fn(f64) -> f64 =
                                         std::mem::transmute(getter_ptr);
                                     return JSValue::from_bits(f(this_f64).to_bits());
@@ -4005,13 +4006,7 @@ pub unsafe extern "C" fn js_native_call_method_apply(
     } else {
         (buf.as_ptr(), buf.len())
     };
-    js_native_call_method(
-        object,
-        method_name_ptr,
-        method_name_len,
-        args_ptr,
-        args_len,
-    )
+    js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
 #[no_mangle]
@@ -4205,8 +4200,7 @@ pub unsafe extern "C" fn js_native_call_method(
                         if !regex_jsval.is_pointer() {
                             return f64::from_bits(JSValue::null().bits());
                         }
-                        let regex_ptr =
-                            regex_jsval.as_pointer::<crate::regex::RegExpHeader>();
+                        let regex_ptr = regex_jsval.as_pointer::<crate::regex::RegExpHeader>();
                         let result_ptr = if method_name == "match" {
                             crate::regex::js_string_match(s_ptr, regex_ptr)
                         } else {
@@ -4215,9 +4209,7 @@ pub unsafe extern "C" fn js_native_call_method(
                         if result_ptr.is_null() {
                             return f64::from_bits(JSValue::null().bits());
                         }
-                        return f64::from_bits(
-                            JSValue::pointer(result_ptr as *mut u8).bits(),
-                        );
+                        return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
                     }
                     return f64::from_bits(JSValue::null().bits());
                 }
@@ -4228,8 +4220,7 @@ pub unsafe extern "C" fn js_native_call_method(
                         if !regex_jsval.is_pointer() {
                             return f64::from_bits(JSValue::int32(-1).bits());
                         }
-                        let regex_ptr =
-                            regex_jsval.as_pointer::<crate::regex::RegExpHeader>();
+                        let regex_ptr = regex_jsval.as_pointer::<crate::regex::RegExpHeader>();
                         let i32_v = crate::regex::js_string_search_regex(s_ptr, regex_ptr);
                         return f64::from_bits(JSValue::int32(i32_v).bits());
                     }
@@ -4246,8 +4237,7 @@ pub unsafe extern "C" fn js_native_call_method(
                 // helper. Static call sites for typed string receivers keep
                 // their inline paths in `lower_string_method.rs` and don't
                 // come through this dispatcher.
-                "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith"
-                | "concat" => {
+                "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith" | "concat" => {
                     let arg_str = |i: usize| -> *const crate::StringHeader {
                         if i < args_len && !args_ptr.is_null() {
                             let v = unsafe { *args_ptr.add(i) };
@@ -4276,7 +4266,9 @@ pub unsafe extern "C" fn js_native_call_method(
                             "includes" | "startsWith" | "endsWith" => {
                                 f64::from_bits(JSValue::bool(false).bits())
                             }
-                            "concat" => f64::from_bits(JSValue::string_ptr(s_ptr as *mut crate::StringHeader).bits()),
+                            "concat" => f64::from_bits(
+                                JSValue::string_ptr(s_ptr as *mut crate::StringHeader).bits(),
+                            ),
                             _ => f64::from_bits(JSValue::undefined().bits()),
                         };
                     }
@@ -4349,8 +4341,7 @@ pub unsafe extern "C" fn js_native_call_method(
                 "split" => {
                     let sep = if args_len >= 1 && !args_ptr.is_null() {
                         let v = unsafe { *args_ptr };
-                        crate::value::js_get_string_pointer_unified(v)
-                            as *const crate::StringHeader
+                        crate::value::js_get_string_pointer_unified(v) as *const crate::StringHeader
                     } else {
                         std::ptr::null()
                     };
@@ -4364,15 +4355,13 @@ pub unsafe extern "C" fn js_native_call_method(
                     // closure dispatch and aren't on hono's hot path.
                     let pat_str = if args_len >= 1 && !args_ptr.is_null() {
                         let v = unsafe { *args_ptr };
-                        crate::value::js_get_string_pointer_unified(v)
-                            as *const crate::StringHeader
+                        crate::value::js_get_string_pointer_unified(v) as *const crate::StringHeader
                     } else {
                         std::ptr::null()
                     };
                     let repl_str = if args_len >= 2 && !args_ptr.is_null() {
                         let v = unsafe { *args_ptr.add(1) };
-                        crate::value::js_get_string_pointer_unified(v)
-                            as *const crate::StringHeader
+                        crate::value::js_get_string_pointer_unified(v) as *const crate::StringHeader
                     } else {
                         std::ptr::null()
                     };
@@ -4387,8 +4376,7 @@ pub unsafe extern "C" fn js_native_call_method(
                             // returns the original string unchanged. The
                             // global flag on the RegExp determines whether
                             // it replaces all or just the first.
-                            let regex_ptr =
-                                jsv.as_pointer::<crate::regex::RegExpHeader>();
+                            let regex_ptr = jsv.as_pointer::<crate::regex::RegExpHeader>();
                             // Heuristic: a non-null POINTER_TAG that's not a
                             // string/array (those have different GC type tags)
                             // is treated as a RegExp here. The runtime helper
@@ -4656,8 +4644,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                     // RegExpRouter.match (imported function
                                     // assigned as a class field) hit this.
                                     let recv_bits = jsval.bits();
-                                    let prev_this =
-                                        IMPLICIT_THIS.with(|c| c.replace(recv_bits));
+                                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv_bits));
                                     let result = crate::closure::js_native_call_value(
                                         f64::from_bits(field_val.bits()),
                                         args_ptr,

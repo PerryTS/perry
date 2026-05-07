@@ -84,9 +84,7 @@ fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Option<&'a st
         // compile_module entry. Without this, the call falls through to the
         // empty-object placeholder path with class_id=0 and method dispatch
         // breaks on the resulting instance.
-        Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name) => {
-            Some(name.as_str())
-        }
+        Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name) => Some(name.as_str()),
         Expr::PropertyGet { object, property } => {
             if matches!(object.as_ref(), Expr::GlobalGet(_)) {
                 return Some(property.as_str());
@@ -2844,7 +2842,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 blk.call_void(
                     "js_object_set_index_polymorphic",
-                    &[(I64, &obj_handle), (DOUBLE, &idx_box), (DOUBLE, &val_double)],
+                    &[
+                        (I64, &obj_handle),
+                        (DOUBLE, &idx_box),
+                        (DOUBLE, &val_double),
+                    ],
                 );
             }
             ctx.block().br(&merge_lbl);
@@ -4292,8 +4294,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if has_local_body || has_real_imported_ctor {
                     break;
                 }
-                let Some(grandparent_name) =
-                    effective_parent_class.extends_name.as_deref().map(|s| s.to_string())
+                let Some(grandparent_name) = effective_parent_class
+                    .extends_name
+                    .as_deref()
+                    .map(|s| s.to_string())
                 else {
                     break;
                 };
@@ -4325,8 +4329,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
                 ctx.locals = saved_locals;
                 ctx.local_types = saved_local_types;
-            } else if let Some((ctor_name, param_count)) =
-                ctx.imported_class_ctors.get(&effective_parent_name).cloned()
+            } else if let Some((ctor_name, param_count)) = ctx
+                .imported_class_ctors
+                .get(&effective_parent_name)
+                .cloned()
             {
                 // Issue #485: parent class is imported (stub with `constructor: None`)
                 // and has no inlineable body in this module. Call the cross-module
@@ -4357,8 +4363,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 for la in &lowered_args {
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
-                ctx.pending_declares
-                    .push((ctor_name.clone(), crate::types::VOID, ctor_param_types));
+                ctx.pending_declares.push((
+                    ctor_name.clone(),
+                    crate::types::VOID,
+                    ctor_param_types,
+                ));
                 ctx.block().call_void(&ctor_name, &ctor_args);
             }
 
@@ -6805,6 +6814,88 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &result))
         }
 
+        // -------- Web Crypto API (issue #561) --------
+        // Each helper takes the JS values as f64 (NaN-boxed) and returns
+        // a *mut Promise that codegen NaN-boxes with POINTER_TAG. The
+        // runtime resolves synchronously inside the Promise body since
+        // SHA / HMAC are CPU-bound — the await is decorative.
+        Expr::WebCryptoDigest { algo, data } => {
+            let algo_box = lower_expr(ctx, algo)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_digest",
+                &[(DOUBLE, &algo_box), (DOUBLE, &data_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoImportKey {
+            format,
+            key,
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            let format_box = lower_expr(ctx, format)?;
+            let key_box = lower_expr(ctx, key)?;
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let extractable_box = lower_expr(ctx, extractable)?;
+            let usages_box = lower_expr(ctx, usages)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_import_key",
+                &[
+                    (DOUBLE, &format_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &algo_box),
+                    (DOUBLE, &extractable_box),
+                    (DOUBLE, &usages_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoSign {
+            algorithm,
+            key,
+            data,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, key)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_sign",
+                &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoVerify {
+            algorithm,
+            key,
+            signature,
+            data,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, key)?;
+            let sig_box = lower_expr(ctx, signature)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_verify",
+                &[
+                    (DOUBLE, &algo_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &sig_box),
+                    (DOUBLE, &data_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+
         // -------- arr.indexOf(value) -> number --------
         // Issue #214: route through `_jsvalue` so string elements
         // match by content (handles SSO + heap-string mixed arrays).
@@ -8336,7 +8427,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let cid_str = class_id.to_string();
                 ctx.block().call_void(
                     "js_class_register_static_symbol",
-                    &[(crate::types::I32, &cid_str), (DOUBLE, &key_v), (DOUBLE, &val_v)],
+                    &[
+                        (crate::types::I32, &cid_str),
+                        (DOUBLE, &key_v),
+                        (DOUBLE, &val_v),
+                    ],
                 );
             }
             Ok(val_v)

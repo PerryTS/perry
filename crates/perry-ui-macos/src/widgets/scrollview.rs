@@ -251,7 +251,9 @@ impl PerryScrollEndObserver {
 }
 
 fn check_scroll_end(handle: i64) {
-    let Some(scroll_view) = super::get_widget(handle) else { return };
+    let Some(scroll_view) = super::get_widget(handle) else {
+        return;
+    };
     let (closure, in_zone) = unsafe {
         let sv: &NSScrollView = &*(Retained::as_ptr(&scroll_view) as *const NSScrollView);
         let content_view = sv.contentView();
@@ -276,7 +278,9 @@ fn check_scroll_end(handle: i64) {
     }
     let should_fire = SCROLL_END_STATES.with(|s| {
         let mut states = s.borrow_mut();
-        let Some(state) = states.get_mut(&handle) else { return false };
+        let Some(state) = states.get_mut(&handle) else {
+            return false;
+        };
         if in_zone && state.armed {
             state.armed = false;
             true
@@ -300,13 +304,19 @@ fn check_scroll_end(handle: i64) {
 /// threshold so the callback can fire repeatedly across pagination loads.
 pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: f64) {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
-    let Some(scroll_view) = super::get_widget(scroll_handle) else { return };
+    let Some(scroll_view) = super::get_widget(scroll_handle) else {
+        return;
+    };
     SCROLL_END_STATES.with(|s| {
         s.borrow_mut().insert(
             scroll_handle,
             ScrollEndState {
                 closure: callback,
-                threshold_px: if threshold_px > 0.0 { threshold_px } else { 200.0 },
+                threshold_px: if threshold_px > 0.0 {
+                    threshold_px
+                } else {
+                    200.0
+                },
                 armed: true,
             },
         );

@@ -866,6 +866,20 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_pbkdf2_bytes", I64, &[I64, I64, DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_uuid", I64, &[]);
+    // Web Crypto (issue #561): crypto.subtle.{digest,importKey,sign,verify}.
+    // Each takes NaN-boxed JS values as f64 and returns a *mut Promise.
+    module.declare_function("js_webcrypto_digest", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_webcrypto_import_key",
+        I64,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_webcrypto_sign", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_webcrypto_verify",
+        I64,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     // Hash-handle form (issue #86): `const h = crypto.createHash(alg);
     // h.update(x); h.digest()`. Returns a NaN-boxed POINTER_TAG handle id;
     // subsequent method dispatch flows through HANDLE_METHOD_DISPATCH.
@@ -1267,11 +1281,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         VOID,
         &[I64, DOUBLE, DOUBLE],
     );
-    module.declare_function(
-        "js_object_get_index_polymorphic",
-        DOUBLE,
-        &[I64, DOUBLE],
-    );
+    module.declare_function("js_object_get_index_polymorphic", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_object_get_field_by_name_f64", DOUBLE, &[I64, I64]);
     module.declare_function("js_object_get_field_ic_miss", DOUBLE, &[I64, I64, PTR]);
     // Object rest destructuring: copy all properties from src except excluded keys.

@@ -78,7 +78,11 @@ pub fn create(year: i64, month: i64, on_change: f64) -> i64 {
                 None,
             );
             let Ok(hwnd) = hwnd else {
-                return register_widget(HWND(std::ptr::null_mut()), WidgetKind::Calendar, control_id);
+                return register_widget(
+                    HWND(std::ptr::null_mut()),
+                    WidgetKind::Calendar,
+                    control_id,
+                );
             };
 
             let handle = register_widget(hwnd, WidgetKind::Calendar, control_id);
@@ -91,7 +95,11 @@ pub fn create(year: i64, month: i64, on_change: f64) -> i64 {
             // pick day=1 when the caller didn't specify one.
             let mut st = SystemTime::default();
             st.year = if year > 0 { year as u16 } else { 2026 };
-            st.month = if (1..=12).contains(&month) { month as u16 } else { 1 };
+            st.month = if (1..=12).contains(&month) {
+                month as u16
+            } else {
+                1
+            };
             st.day = 1;
             st.day_of_week = 0;
             let _ = SendMessageW(
@@ -114,7 +122,9 @@ pub fn create(year: i64, month: i64, on_change: f64) -> i64 {
 pub fn set_date(handle: i64, year: i64, month: i64, day: i64) {
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return;
+        };
         let mut st = SystemTime::default();
         st.year = year.clamp(1, 9999) as u16;
         st.month = month.clamp(1, 12) as u16;
@@ -138,7 +148,9 @@ pub fn get_selected_date(handle: i64) -> f64 {
     let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return undefined };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return undefined;
+        };
         let mut st = SystemTime::default();
         unsafe {
             SendMessageW(
@@ -167,7 +179,9 @@ pub fn get_selected_date(handle: i64) -> f64 {
 /// callback with `yyyy-MM-dd`.
 #[cfg(target_os = "windows")]
 pub fn handle_selection_change(handle: i64) {
-    let Some(hwnd) = super::get_hwnd(handle) else { return };
+    let Some(hwnd) = super::get_hwnd(handle) else {
+        return;
+    };
     let on = CALENDAR_CALLBACKS.with(|m| m.borrow().get(&handle).copied().unwrap_or(0.0));
     if on == 0.0 {
         return;

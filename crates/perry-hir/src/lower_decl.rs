@@ -2595,10 +2595,7 @@ pub(crate) fn lower_class_prop(
             // HIR's field-list iterators that key on `name` will still see
             // distinct entries because each computed-key field lowers in its
             // own call.
-            let synth = format!(
-                "__computed_field_{}_{}",
-                c.span.lo.0, c.span.hi.0
-            );
+            let synth = format!("__computed_field_{}_{}", c.span.lo.0, c.span.hi.0);
             (synth, Some(key))
         }
         _ => return Err(anyhow!("Unsupported property key")),
@@ -3812,9 +3809,8 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             // is morally `Map<K, V>` but perry doesn't propagate the narrow
             // through the union type, so `for (const [k, v] of m)` would fall
             // through to array iteration and read garbage from MapHeader bytes.
-            let type_contains_map = |ty: &Type| -> bool {
-                matches!(ty, Type::Generic { base, .. } if base == "Map")
-            };
+            let type_contains_map =
+                |ty: &Type| -> bool { matches!(ty, Type::Generic { base, .. } if base == "Map") };
             let is_iterable_map = match &iterable_type {
                 Some(Type::Generic { base, .. }) if base == "Map" => true,
                 Some(Type::Union(variants)) => variants.iter().any(type_contains_map),
@@ -3847,9 +3843,8 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             // via `SetValueAt` (→ `js_set_value_at`) instead of materializing
             // the buffer with `js_set_to_array`.
             // Issue #542/#543: also accept `Type::Union([Generic{Set}, Void])`.
-            let type_contains_set = |ty: &Type| -> bool {
-                matches!(ty, Type::Generic { base, .. } if base == "Set")
-            };
+            let type_contains_set =
+                |ty: &Type| -> bool { matches!(ty, Type::Generic { base, .. } if base == "Set") };
             let is_iterable_set = match &iterable_type {
                 Some(Type::Generic { base, .. }) if base == "Set" => true,
                 Some(Type::Union(variants)) => variants.iter().any(type_contains_set),
@@ -4199,11 +4194,9 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                                                 ast::PropName::Ident(ident) => {
                                                     ident.sym.to_string()
                                                 }
-                                                ast::PropName::Str(s) => s
-                                                    .value
-                                                    .as_str()
-                                                    .unwrap_or("")
-                                                    .to_string(),
+                                                ast::PropName::Str(s) => {
+                                                    s.value.as_str().unwrap_or("").to_string()
+                                                }
                                                 _ => continue,
                                             };
                                             let key_source = Expr::PropertyGet {

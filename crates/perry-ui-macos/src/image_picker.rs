@@ -27,7 +27,11 @@ pub fn pick(max_count: f64, allow_multiple: f64, callback: f64) {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     let allow_multi = !allow_multiple.is_nan() && allow_multiple != 0.0
         || allow_multiple.to_bits() == 0x7FFC_0000_0000_0004; // TAG_TRUE
-    let max = if max_count > 0.0 { max_count as usize } else { 0 };
+    let max = if max_count > 0.0 {
+        max_count as usize
+    } else {
+        0
+    };
 
     unsafe {
         let panel: objc2::rc::Retained<NSOpenPanel> = msg_send![
@@ -40,7 +44,9 @@ pub fn pick(max_count: f64, allow_multiple: f64, callback: f64) {
 
         // Restrict to common image extensions. Keeps the impl simple and
         // avoids the deprecated NSImage.imageTypes (UTType) ladder.
-        let extensions = ["jpg", "jpeg", "png", "gif", "heic", "heif", "webp", "tiff", "bmp"];
+        let extensions = [
+            "jpg", "jpeg", "png", "gif", "heic", "heif", "webp", "tiff", "bmp",
+        ];
         let ns_strings: Vec<objc2::rc::Retained<NSString>> =
             extensions.iter().map(|s| NSString::from_str(s)).collect();
         let refs: Vec<&NSString> = ns_strings.iter().map(|s| s.as_ref()).collect();

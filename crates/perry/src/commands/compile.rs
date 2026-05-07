@@ -27,13 +27,13 @@ mod targets;
 pub mod well_known;
 use collect_modules::collect_modules;
 pub use library_search::find_library;
-pub(crate) use library_search::{host_target_triple, locate_native_lib_artifact};
 use library_search::{
     build_geisterhand_libs, find_geisterhand_library, find_geisterhand_runtime,
     find_geisterhand_ui, find_harmonyos_sdk, find_jsruntime_library, find_lld_link, find_llvm_tool,
     find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_runtime_library,
     find_stdlib_library, find_ui_library, windows_pe_subsystem_flag,
 };
+pub(crate) use library_search::{host_target_triple, locate_native_lib_artifact};
 use link::build_and_run_link;
 use object_cache::compute_object_cache_key;
 pub use object_cache::{djb2_hash, ObjectCache};
@@ -1756,8 +1756,10 @@ pub fn run_with_parse_cache(
                 if local == exported {
                     continue;
                 }
-                if let Some(class) =
-                    hir_module.classes.iter().find(|c| c.name == *local && c.is_exported)
+                if let Some(class) = hir_module
+                    .classes
+                    .iter()
+                    .find(|c| c.name == *local && c.is_exported)
                 {
                     exported_classes
                         .entry((path_str.clone(), exported.clone()))
@@ -1870,8 +1872,12 @@ pub fn run_with_parse_cache(
     // (their perry_fn_<…> symbol IS the function body).
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
-        let is_function_decl: std::collections::HashSet<&String> =
-            hir_module.functions.iter().filter(|f| f.is_exported).map(|f| &f.name).collect();
+        let is_function_decl: std::collections::HashSet<&String> = hir_module
+            .functions
+            .iter()
+            .filter(|f| f.is_exported)
+            .map(|f| &f.name)
+            .collect();
         for obj_name in &hir_module.exported_objects {
             if is_function_decl.contains(obj_name) {
                 continue;

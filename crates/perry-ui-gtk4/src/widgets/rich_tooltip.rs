@@ -28,7 +28,11 @@ thread_local! {
 }
 
 pub fn set_rich_tooltip(widget_handle: i64, content_handle: i64, hover_delay_ms: u32) {
-    let delay = if hover_delay_ms == 0 { 500 } else { hover_delay_ms };
+    let delay = if hover_delay_ms == 0 {
+        500
+    } else {
+        hover_delay_ms
+    };
     let popover_slot: Rc<RefCell<Option<gtk4::Popover>>> = Rc::new(RefCell::new(None));
     let show_token: Rc<Cell<u64>> = Rc::new(Cell::new(0));
 
@@ -44,7 +48,9 @@ pub fn set_rich_tooltip(widget_handle: i64, content_handle: i64, hover_delay_ms:
         );
     });
 
-    let Some(widget) = super::get_widget(widget_handle) else { return };
+    let Some(widget) = super::get_widget(widget_handle) else {
+        return;
+    };
     let motion = gtk4::EventControllerMotion::new();
 
     let widget_for_enter = widget.clone();
@@ -56,32 +62,29 @@ pub fn set_rich_tooltip(widget_handle: i64, content_handle: i64, hover_delay_ms:
         let widget_inner = widget_for_enter.clone();
         let popover_slot_inner = popover_slot_enter.clone();
         let show_token_inner = show_token_enter.clone();
-        glib::timeout_add_local_once(
-            std::time::Duration::from_millis(delay as u64),
-            move || {
-                if show_token_inner.get() != token {
-                    return;
+        glib::timeout_add_local_once(std::time::Duration::from_millis(delay as u64), move || {
+            if show_token_inner.get() != token {
+                return;
+            }
+            let content = super::get_widget(content_handle);
+            let Some(content) = content else { return };
+            // Detach from any previous parent so we can hand it to
+            // the popover; safe because the WIDGETS table keeps
+            // the strong reference alive.
+            if let Some(parent) = content.parent() {
+                if let Some(b) = parent.downcast_ref::<gtk4::Box>() {
+                    b.remove(&content);
                 }
-                let content = super::get_widget(content_handle);
-                let Some(content) = content else { return };
-                // Detach from any previous parent so we can hand it to
-                // the popover; safe because the WIDGETS table keeps
-                // the strong reference alive.
-                if let Some(parent) = content.parent() {
-                    if let Some(b) = parent.downcast_ref::<gtk4::Box>() {
-                        b.remove(&content);
-                    }
-                }
-                let popover = gtk4::Popover::new();
-                popover.set_parent(&widget_inner);
-                popover.set_autohide(false);
-                popover.set_has_arrow(true);
-                popover.set_position(gtk4::PositionType::Bottom);
-                popover.set_child(Some(&content));
-                popover.popup();
-                *popover_slot_inner.borrow_mut() = Some(popover);
-            },
-        );
+            }
+            let popover = gtk4::Popover::new();
+            popover.set_parent(&widget_inner);
+            popover.set_autohide(false);
+            popover.set_has_arrow(true);
+            popover.set_position(gtk4::PositionType::Bottom);
+            popover.set_child(Some(&content));
+            popover.popup();
+            *popover_slot_inner.borrow_mut() = Some(popover);
+        });
     });
 
     let popover_slot_leave = popover_slot.clone();

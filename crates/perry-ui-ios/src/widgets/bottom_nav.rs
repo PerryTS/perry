@@ -115,9 +115,17 @@ pub fn create(on_select: f64) -> i64 {
         let view: Retained<UIView> = Retained::retain(bar as *mut UIView).unwrap();
         let handle = super::register_widget(view);
 
-        DELEGATE_TO_HANDLE.with(|m| { m.borrow_mut().insert(key, handle); });
+        DELEGATE_TO_HANDLE.with(|m| {
+            m.borrow_mut().insert(key, handle);
+        });
         STATES.with(|s| {
-            s.borrow_mut().insert(handle, BottomNavState { items: Vec::new(), on_select });
+            s.borrow_mut().insert(
+                handle,
+                BottomNavState {
+                    items: Vec::new(),
+                    on_select,
+                },
+            );
         });
         handle
     }
@@ -130,7 +138,10 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     let tab_index = STATES.with(|s| {
-        s.borrow().get(&handle).map(|st| st.items.len() as i64).unwrap_or(0)
+        s.borrow()
+            .get(&handle)
+            .map(|st| st.items.len() as i64)
+            .unwrap_or(0)
     });
 
     unsafe {
@@ -153,7 +164,8 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
                 state.items.push(item);
                 if let Some(bar) = super::get_widget(handle) {
                     let arr_cls = objc2::runtime::AnyClass::get(c"NSMutableArray").unwrap();
-                    let arr: *mut AnyObject = msg_send![arr_cls, arrayWithCapacity: state.items.len()];
+                    let arr: *mut AnyObject =
+                        msg_send![arr_cls, arrayWithCapacity: state.items.len()];
                     for &it in &state.items {
                         let _: () = msg_send![arr, addObject: it];
                     }
@@ -170,8 +182,12 @@ pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     STATES.with(|s| {
         let state_ref = s.borrow();
-        let Some(state) = state_ref.get(&handle) else { return };
-        let Some(&item) = state.items.get(index as usize) else { return };
+        let Some(state) = state_ref.get(&handle) else {
+            return;
+        };
+        let Some(&item) = state.items.get(index as usize) else {
+            return;
+        };
         unsafe {
             let badge_value: *const AnyObject = if badge.is_empty() {
                 std::ptr::null()
@@ -188,8 +204,12 @@ pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
 pub fn set_selected(handle: i64, index: i64) {
     STATES.with(|s| {
         let state_ref = s.borrow();
-        let Some(state) = state_ref.get(&handle) else { return };
-        let Some(&item) = state.items.get(index as usize) else { return };
+        let Some(state) = state_ref.get(&handle) else {
+            return;
+        };
+        let Some(&item) = state.items.get(index as usize) else {
+            return;
+        };
         if let Some(bar) = super::get_widget(handle) {
             unsafe {
                 let _: () = msg_send![&*bar, setSelectedItem: item];

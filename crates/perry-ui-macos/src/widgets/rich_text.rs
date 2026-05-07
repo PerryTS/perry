@@ -195,7 +195,9 @@ pub fn set_html(handle: i64, html_ptr: *const u8) -> i64 {
         if data.is_null() {
             return 0;
         }
-        let Some(astr_cls) = AnyClass::get(c"NSAttributedString") else { return 0 };
+        let Some(astr_cls) = AnyClass::get(c"NSAttributedString") else {
+            return 0;
+        };
         let alloc: *mut AnyObject = msg_send![astr_cls, alloc];
         let key = NSString::from_str("DocumentType");
         let value = NSString::from_str("NSHTMLTextDocumentType");
@@ -259,7 +261,8 @@ pub fn get_html(handle: i64) -> f64 {
 unsafe fn invoke_responder(handle: i64, sel: Sel) {
     let tv = TEXT_VIEWS.with(|m| m.borrow().get(&handle).cloned());
     let Some(tv) = tv else { return };
-    let _: () = msg_send![&*tv, performSelector: sel, withObject: std::ptr::null_mut::<AnyObject>()];
+    let _: () =
+        msg_send![&*tv, performSelector: sel, withObject: std::ptr::null_mut::<AnyObject>()];
 }
 
 pub fn toggle_bold(handle: i64) {

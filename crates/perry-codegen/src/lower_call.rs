@@ -1908,15 +1908,18 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                         // emits a newline to stdout (matches Node/bun). The
                         // *_spread runtime fns already print just `\n` when
                         // their arg is null, so pass i64 0 directly.
-                        ctx.block().call_void("js_console_log_spread", &[(I64, "0")]);
+                        ctx.block()
+                            .call_void("js_console_log_spread", &[(I64, "0")]);
                         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
                     "warn" => {
-                        ctx.block().call_void("js_console_warn_spread", &[(I64, "0")]);
+                        ctx.block()
+                            .call_void("js_console_warn_spread", &[(I64, "0")]);
                         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
                     "error" => {
-                        ctx.block().call_void("js_console_error_spread", &[(I64, "0")]);
+                        ctx.block()
+                            .call_void("js_console_error_spread", &[(I64, "0")]);
                         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
                     _ => {
@@ -2913,7 +2916,9 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             ctx.pending_declares
                 .push((ctor_name.clone(), crate::types::VOID, ctor_param_types));
             ctx.block().call_void(&ctor_name, &ctor_args);
-        } else if let Some((ctor_name, param_count)) = ctx.imported_class_ctors.get(class_name).cloned() {
+        } else if let Some((ctor_name, param_count)) =
+            ctx.imported_class_ctors.get(class_name).cloned()
+        {
             // Pad missing optional args with TAG_UNDEFINED so the constructor
             // doesn't read garbage from stale registers.
             let undef_lit =
@@ -3758,14 +3763,20 @@ pub(super) fn lower_fetch_native_method(
             }
             "status" => {
                 let blk = ctx.block();
-                let status =
-                    blk.call(DOUBLE, "js_fetch_response_status", &[(DOUBLE, &recv_handle)]);
+                let status = blk.call(
+                    DOUBLE,
+                    "js_fetch_response_status",
+                    &[(DOUBLE, &recv_handle)],
+                );
                 return Ok(Some(status));
             }
             "statusText" => {
                 let blk = ctx.block();
-                let str_ptr =
-                    blk.call(I64, "js_fetch_response_status_text", &[(DOUBLE, &recv_handle)]);
+                let str_ptr = blk.call(
+                    I64,
+                    "js_fetch_response_status_text",
+                    &[(DOUBLE, &recv_handle)],
+                );
                 return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
             }
             "ok" => {

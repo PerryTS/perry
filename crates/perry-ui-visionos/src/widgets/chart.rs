@@ -108,7 +108,13 @@ unsafe fn current_cg_context() -> *mut AnyObject {
 
 extern "C" {
     fn CGContextSetRGBFillColor(c: *mut AnyObject, r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat);
-    fn CGContextSetRGBStrokeColor(c: *mut AnyObject, r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat);
+    fn CGContextSetRGBStrokeColor(
+        c: *mut AnyObject,
+        r: CGFloat,
+        g: CGFloat,
+        b: CGFloat,
+        a: CGFloat,
+    );
     fn CGContextSetLineWidth(c: *mut AnyObject, width: CGFloat);
     fn CGContextFillRect(c: *mut AnyObject, rect: objc2_core_foundation::CGRect);
     fn CGContextBeginPath(c: *mut AnyObject);
@@ -189,9 +195,16 @@ unsafe fn draw_line(
     plot: objc2_core_foundation::CGRect,
     data: &[(String, f64)],
 ) {
-    let max = data.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max);
+    let max = data
+        .iter()
+        .map(|(_, v)| *v)
+        .fold(f64::NEG_INFINITY, f64::max);
     let min = data.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min);
-    let range = if (max - min).abs() < 1e-9 { 1.0 } else { max - min };
+    let range = if (max - min).abs() < 1e-9 {
+        1.0
+    } else {
+        max - min
+    };
     let n = data.len();
     let dx = if n > 1 {
         plot.size.width / (n as f64 - 1.0)

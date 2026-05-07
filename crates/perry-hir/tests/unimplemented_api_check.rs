@@ -23,38 +23,59 @@ fn lower_result(src: &str) -> Result<perry_hir::Module, String> {
         .expect("lower thread panicked")
 }
 
-/// The motivating example from #463: `crypto.subtle` doesn't exist in
-/// Perry's `crypto` surface, so accessing it must error.
+/// As of #561, the supported `crypto.subtle` surface (digest, importKey,
+/// sign, verify) compiles. Reading the namespace itself also compiles
+/// since `subtle` is registered as a property on `crypto` in the API
+/// manifest.
 #[test]
-fn crypto_subtle_is_rejected() {
+fn crypto_subtle_namespace_compiles() {
     let result = lower_result(
         r#"
         import * as crypto from "crypto";
         const ct = crypto.subtle;
     "#,
     );
-    let err = result.expect_err("expected compile error for crypto.subtle");
     assert!(
-        err.contains("crypto.subtle") && err.contains("not implemented"),
-        "expected error naming `crypto.subtle` and `not implemented`, got: {err}"
-    );
-    // Pointer to the followup machinery / docs.
-    assert!(
-        err.contains("#463") || err.contains("--print-api-manifest"),
-        "expected error to reference issue or escape hatch, got: {err}"
+        result.is_ok(),
+        "crypto.subtle as a namespace read must compile (#561): {result:?}"
     );
 }
 
-/// `node:` prefix doesn't change the answer.
+/// `crypto.subtle.digest(...)` is supported as of #561.
 #[test]
-fn node_prefix_subtle_is_rejected() {
+fn crypto_subtle_digest_compiles() {
     let result = lower_result(
         r#"
-        import * as crypto from "node:crypto";
-        const ct = crypto.subtle;
+        import * as crypto from "crypto";
+        async function go() {
+          return await crypto.subtle.digest("SHA-256", new Uint8Array(8));
+        }
     "#,
     );
-    assert!(result.is_err(), "node:crypto.subtle should error too");
+    assert!(
+        result.is_ok(),
+        "crypto.subtle.digest(...) must compile (#561): {result:?}"
+    );
+}
+
+/// Out-of-scope subtle methods (encrypt/decrypt/generateKey/etc., #561's
+/// "Out of scope" section) must reject with a clear message naming the
+/// supported surface.
+#[test]
+fn crypto_subtle_encrypt_is_rejected() {
+    let result = lower_result(
+        r#"
+        import * as crypto from "crypto";
+        async function go(k: any, d: any) {
+          return await crypto.subtle.encrypt({ name: "AES-CBC" }, k, d);
+        }
+    "#,
+    );
+    let err = result.expect_err("crypto.subtle.encrypt should reject");
+    assert!(
+        err.contains("crypto.subtle.encrypt") && err.contains("not implemented"),
+        "expected #561 rejection message, got: {err}"
+    );
 }
 
 /// Implemented `crypto` methods continue to compile.

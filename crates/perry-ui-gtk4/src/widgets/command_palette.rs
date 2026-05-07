@@ -87,7 +87,9 @@ fn refresh_filter() {
                 listbox.remove(&child);
             }
             for &cmd_idx in &state.filtered {
-                let Some(cmd) = state.commands.get(cmd_idx) else { continue };
+                let Some(cmd) = state.commands.get(cmd_idx) else {
+                    continue;
+                };
                 let row = gtk4::ListBoxRow::new();
                 let label_text = if cmd.subtitle.is_empty() {
                     cmd.label.clone()

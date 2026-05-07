@@ -92,7 +92,11 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
                 None,
             );
             let Ok(hwnd) = hwnd else {
-                return register_widget(HWND(std::ptr::null_mut()), WidgetKind::Combobox, control_id);
+                return register_widget(
+                    HWND(std::ptr::null_mut()),
+                    WidgetKind::Combobox,
+                    control_id,
+                );
             };
 
             let handle = register_widget(hwnd, WidgetKind::Combobox, control_id);
@@ -114,7 +118,9 @@ pub fn add_item(handle: i64, value_ptr: *const u8) {
     let value = str_from_header(value_ptr);
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return;
+        };
         let wide = to_wide(value);
         unsafe {
             SendMessageW(
@@ -135,7 +141,9 @@ pub fn set_value(handle: i64, value_ptr: *const u8) {
     let value = str_from_header(value_ptr);
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return;
+        };
         let wide = to_wide(value);
         unsafe {
             SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr())).ok();
@@ -151,7 +159,9 @@ pub fn get_value(handle: i64) -> f64 {
     let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return undefined };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return undefined;
+        };
         unsafe {
             // Buffer for the edit-text portion. 1024 covers anything a
             // user would reasonably type; truncate cleanly otherwise.
@@ -179,7 +189,9 @@ pub fn handle_change(handle: i64) {
     if on == 0.0 {
         return;
     }
-    let Some(hwnd) = super::get_hwnd(handle) else { return };
+    let Some(hwnd) = super::get_hwnd(handle) else {
+        return;
+    };
     unsafe {
         let mut buf = [0u16; 1024];
         let len = GetWindowTextW(hwnd, &mut buf) as usize;
@@ -197,7 +209,9 @@ pub fn handle_dropdown_pick(handle: i64) {
     // Apply the picked item's text to the edit field and fire the same
     // change callback. CB_GETCURSEL gives the index, CB_GETLBTEXT
     // copies the text.
-    let Some(hwnd) = super::get_hwnd(handle) else { return };
+    let Some(hwnd) = super::get_hwnd(handle) else {
+        return;
+    };
     unsafe {
         let idx = SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
         if idx < 0 {

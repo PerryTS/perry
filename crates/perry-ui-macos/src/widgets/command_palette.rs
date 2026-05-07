@@ -184,9 +184,7 @@ unsafe fn invoke_row(row: i64) {
     }
     let cmd_idx = FILTERED.with(|f| f.borrow().get(row as usize).copied());
     let Some(cmd_idx) = cmd_idx else { return };
-    let on_run = COMMANDS.with(|c| {
-        c.borrow().get(cmd_idx).map(|cmd| cmd.on_run).unwrap_or(0.0)
-    });
+    let on_run = COMMANDS.with(|c| c.borrow().get(cmd_idx).map(|cmd| cmd.on_run).unwrap_or(0.0));
     if on_run != 0.0 {
         let closure_ptr = js_nanbox_get_pointer(on_run) as *const u8;
         js_closure_call0(closure_ptr);

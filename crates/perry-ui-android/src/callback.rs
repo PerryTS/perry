@@ -6,13 +6,7 @@ extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
-    fn js_closure_call4(
-        closure: *const u8,
-        arg0: f64,
-        arg1: f64,
-        arg2: f64,
-        arg3: f64,
-    ) -> f64;
+    fn js_closure_call4(closure: *const u8, arg0: f64, arg1: f64, arg2: f64, arg3: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;

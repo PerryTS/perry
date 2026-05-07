@@ -211,6 +211,15 @@ pub mod crypto;
 #[cfg(feature = "crypto")]
 pub use crypto::*;
 
+// Web Crypto: crypto.subtle.{digest,importKey,sign,verify} — issue #561.
+// Lives alongside the Node `crypto` module since both share the same
+// SHA / HMAC primitives. Always built when `crypto` is on (no
+// well-known flip; the surface is small enough to bundle directly).
+#[cfg(feature = "crypto")]
+pub mod webcrypto;
+#[cfg(feature = "crypto")]
+pub use webcrypto::*;
+
 // === Ethers (blockchain utilities) ===
 // Feature-gated as of v0.5.556 so the well-known flip can route
 // `import { parseUnits } from 'ethers'` to perry-ext-ethers.

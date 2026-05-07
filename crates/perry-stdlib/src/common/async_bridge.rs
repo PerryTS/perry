@@ -310,7 +310,11 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     // `await new Promise(r => sock.on('connect', r))` exit early
     // because perry-stdlib's empty NET_SOCKETS map reported no
     // active handles. Issue #536.
-    #[cfg(all(feature = "bundled-net", not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(all(
+        feature = "bundled-net",
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     {
         let has_net = crate::net::js_net_has_active_handles();
         if has_net != 0 {

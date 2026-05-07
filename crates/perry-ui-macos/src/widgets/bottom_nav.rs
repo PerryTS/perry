@@ -169,7 +169,10 @@ pub fn add_item(bar_handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
         let _: () = msg_send![&*button, setTranslatesAutoresizingMaskIntoConstraints: false];
 
         let item_index = BOTTOM_NAVS.with(|s| {
-            s.borrow().get(&bar_handle).map(|st| st.items.len() as i64).unwrap_or(0)
+            s.borrow()
+                .get(&bar_handle)
+                .map(|st| st.items.len() as i64)
+                .unwrap_or(0)
         });
 
         let target = PerryBottomNavTarget::new(0);
@@ -275,8 +278,12 @@ pub fn set_badge(bar_handle: i64, index: i64, badge_ptr: *const u8) {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     BOTTOM_NAVS.with(|s| {
         let mut nav = s.borrow_mut();
-        let Some(state) = nav.get_mut(&bar_handle) else { return };
-        let Some(item) = state.items.get_mut(index as usize) else { return };
+        let Some(state) = nav.get_mut(&bar_handle) else {
+            return;
+        };
+        let Some(item) = state.items.get_mut(index as usize) else {
+            return;
+        };
         unsafe {
             // Remove old badge, if any.
             if let Some(old) = item.badge_view.take() {
@@ -288,8 +295,7 @@ pub fn set_badge(bar_handle: i64, index: i64, badge_ptr: *const u8) {
 
             let tf_cls = AnyClass::get(c"NSTextField").unwrap();
             let ns_badge = NSString::from_str(badge_str);
-            let badge: Retained<AnyObject> =
-                msg_send![tf_cls, labelWithString: &*ns_badge];
+            let badge: Retained<AnyObject> = msg_send![tf_cls, labelWithString: &*ns_badge];
             let _: () = msg_send![&*badge, setTranslatesAutoresizingMaskIntoConstraints: false];
             let _: () = msg_send![&*badge, setAlignment: 2i64]; // center
             let _: () = msg_send![&*badge, setBordered: false];
@@ -359,7 +365,9 @@ fn select_index(bar_handle: i64, index: i64) {
 fn apply_styling(bar_handle: i64) {
     BOTTOM_NAVS.with(|s| {
         let nav = s.borrow();
-        let Some(state) = nav.get(&bar_handle) else { return };
+        let Some(state) = nav.get(&bar_handle) else {
+            return;
+        };
         unsafe {
             let color_cls = AnyClass::get(c"NSColor").unwrap();
             let selected: Retained<AnyObject> = msg_send![

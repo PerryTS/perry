@@ -42,10 +42,7 @@ fn simple_map_for(handle: i64) -> Option<libshumate::SimpleMap> {
     super::get_widget(handle).and_then(|w| w.downcast::<libshumate::SimpleMap>().ok())
 }
 
-fn ensure_marker_layer(
-    handle: i64,
-    map: &libshumate::SimpleMap,
-) -> libshumate::MarkerLayer {
+fn ensure_marker_layer(handle: i64, map: &libshumate::SimpleMap) -> libshumate::MarkerLayer {
     if let Some(existing) = MARKER_LAYERS.with(|m| m.borrow().get(&handle).cloned()) {
         return existing;
     }

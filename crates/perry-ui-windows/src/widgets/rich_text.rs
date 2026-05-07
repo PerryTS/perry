@@ -145,7 +145,11 @@ pub fn create(width: f64, height: f64, on_change: f64) -> i64 {
                 None,
             );
             let Ok(hwnd) = hwnd else {
-                return register_widget(HWND(std::ptr::null_mut()), WidgetKind::RichText, control_id);
+                return register_widget(
+                    HWND(std::ptr::null_mut()),
+                    WidgetKind::RichText,
+                    control_id,
+                );
             };
             let handle = register_widget(hwnd, WidgetKind::RichText, control_id);
             CALLBACKS.with(|m| {
@@ -166,7 +170,9 @@ pub fn set_string(handle: i64, text_ptr: *const u8) {
     let s = str_from_header(text_ptr);
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return;
+        };
         let wide = to_wide(s);
         unsafe {
             SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr())).ok();
@@ -182,7 +188,9 @@ pub fn get_string(handle: i64) -> f64 {
     let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return undefined };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return undefined;
+        };
         unsafe {
             // 64KB is the practical RichEdit working-set ceiling; above
             // that callers should switch to EM_STREAMOUT.
@@ -276,7 +284,9 @@ pub fn get_html(handle: i64) -> f64 {
 
 #[cfg(target_os = "windows")]
 fn toggle_effect(handle: i64, mask: u32, effect: u32) {
-    let Some(hwnd) = super::get_hwnd(handle) else { return };
+    let Some(hwnd) = super::get_hwnd(handle) else {
+        return;
+    };
     unsafe {
         // First read current format on selection so we can probe whether
         // the effect is already on, then flip it.
@@ -341,7 +351,9 @@ pub fn handle_change(handle: i64) {
     if on == 0.0 {
         return;
     }
-    let Some(hwnd) = super::get_hwnd(handle) else { return };
+    let Some(hwnd) = super::get_hwnd(handle) else {
+        return;
+    };
     unsafe {
         let mut buf = vec![0u16; 64 * 1024];
         let len = GetWindowTextW(hwnd, &mut buf) as usize;

@@ -66,9 +66,7 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
     let icon_name = str_from_header(icon_ptr);
     let label_text = str_from_header(label_ptr);
 
-    let bar = STATES.with(|s| {
-        s.borrow().get(&handle).map(|st| st.bar.clone())
-    });
+    let bar = STATES.with(|s| s.borrow().get(&handle).map(|st| st.bar.clone()));
     let Some(bar) = bar else { return };
 
     let inner = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
@@ -91,7 +89,10 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
     button.set_has_frame(false);
 
     let item_index = STATES.with(|s| {
-        s.borrow().get(&handle).map(|st| st.items.len() as i64).unwrap_or(0)
+        s.borrow()
+            .get(&handle)
+            .map(|st| st.items.len() as i64)
+            .unwrap_or(0)
     });
 
     {
@@ -99,7 +100,10 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
         button.connect_clicked(move |_btn| {
             select_index(bar_handle, item_index);
             let on_select = STATES.with(|s| {
-                s.borrow().get(&bar_handle).map(|st| st.on_select).unwrap_or(0.0)
+                s.borrow()
+                    .get(&bar_handle)
+                    .map(|st| st.on_select)
+                    .unwrap_or(0.0)
             });
             if on_select != 0.0 {
                 unsafe {
@@ -130,8 +134,12 @@ pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
     let badge_text = str_from_header(badge_ptr);
     STATES.with(|s| {
         let mut nav = s.borrow_mut();
-        let Some(state) = nav.get_mut(&handle) else { return };
-        let Some(item) = state.items.get_mut(index as usize) else { return };
+        let Some(state) = nav.get_mut(&handle) else {
+            return;
+        };
+        let Some(item) = state.items.get_mut(index as usize) else {
+            return;
+        };
         if let Some(old) = item.badge.take() {
             item.container.remove(&old);
         }
@@ -163,7 +171,9 @@ fn select_index(handle: i64, index: i64) {
 fn apply_styling(handle: i64) {
     STATES.with(|s| {
         let nav = s.borrow();
-        let Some(state) = nav.get(&handle) else { return };
+        let Some(state) = nav.get(&handle) else {
+            return;
+        };
         for (i, item) in state.items.iter().enumerate() {
             if i as i64 == state.selected {
                 item.button.add_css_class("suggested-action");

@@ -795,8 +795,6 @@ mod tests {
     fn unknown_modules_default_to_workspace_path() {
         // Defensive default: if a module isn't in the allowlist,
         // treat it as CPU-only (existing v0.5.586 behavior).
-        assert!(!binding_needs_shared_tokio(
-            "definitely-not-a-real-package"
-        ));
+        assert!(!binding_needs_shared_tokio("definitely-not-a-real-package"));
     }
 }

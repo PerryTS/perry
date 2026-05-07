@@ -20,8 +20,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 pub fn djb2_hash(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 5381;

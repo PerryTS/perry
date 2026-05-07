@@ -51,7 +51,9 @@ extern "C" {
 fn check_scroll_end(handle: i64) {
     let (closure_to_fire, _) = SCROLL_END_STATES.with(|s| {
         let mut states = s.borrow_mut();
-        let Some(entry) = states.get_mut(&handle) else { return (0.0, false) };
+        let Some(entry) = states.get_mut(&handle) else {
+            return (0.0, false);
+        };
         let (offset, content_height, viewport_height) = SCROLL_STATES.with(|ss| {
             let states = ss.borrow();
             states
@@ -88,7 +90,11 @@ pub fn set_scroll_end_callback(scroll_handle: i64, callback: f64, threshold_px: 
             scroll_handle,
             ScrollEndEntry {
                 closure: callback,
-                threshold_px: if threshold_px > 0.0 { threshold_px as i32 } else { 200 },
+                threshold_px: if threshold_px > 0.0 {
+                    threshold_px as i32
+                } else {
+                    200
+                },
                 armed: true,
             },
         );

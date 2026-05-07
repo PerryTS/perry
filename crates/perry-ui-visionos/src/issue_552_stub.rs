@@ -64,4 +64,3 @@ pub extern "C" fn perry_system_image_picker_pick(
         js_closure_call1(cb, nb);
     }
 }
-

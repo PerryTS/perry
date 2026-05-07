@@ -192,10 +192,8 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
             } else {
                 let img_cls = AnyClass::get(c"NSImage").unwrap();
                 let ns_path = NSString::from_str(url);
-                let image: *mut AnyObject =
-                    msg_send![img_cls, alloc];
-                let image: *mut AnyObject =
-                    msg_send![image, initWithContentsOfFile: &*ns_path];
+                let image: *mut AnyObject = msg_send![img_cls, alloc];
+                let image: *mut AnyObject = msg_send![image, initWithContentsOfFile: &*ns_path];
                 if !image.is_null() {
                     let _: () = msg_send![&*image_view, setImage: image];
                 }
@@ -222,7 +220,9 @@ pub fn set_index(handle: i64, index: i64) {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     GALLERIES.with(|g| {
         let mut galleries = g.borrow_mut();
-        let Some(state) = galleries.get_mut(&handle) else { return };
+        let Some(state) = galleries.get_mut(&handle) else {
+            return;
+        };
         if (index as usize) >= state.image_views.len() {
             return;
         }
@@ -244,14 +244,18 @@ pub fn set_index(handle: i64, index: i64) {
 fn recompute_index(handle: i64) {
     let (closure, new_index) = GALLERIES.with(|g| {
         let mut galleries = g.borrow_mut();
-        let Some(state) = galleries.get_mut(&handle) else { return (0.0, -1i64) };
+        let Some(state) = galleries.get_mut(&handle) else {
+            return (0.0, -1i64);
+        };
         unsafe {
             let scroll = &state.scroll_view;
             let clip: Retained<AnyObject> = msg_send![&**scroll, contentView];
             let bounds: CGRect = msg_send![&*clip, bounds];
             let center_x = bounds.origin.x + bounds.size.width / 2.0;
             let new_index = (center_x / PAGE_WIDTH).floor() as i64;
-            let new_index = new_index.max(0).min((state.image_views.len() as i64).saturating_sub(1));
+            let new_index = new_index
+                .max(0)
+                .min((state.image_views.len() as i64).saturating_sub(1));
             if new_index != state.current_index {
                 state.current_index = new_index;
                 (state.on_index_change, new_index)
@@ -292,7 +296,10 @@ fn load_remote(url: &str, image_view: Retained<AnyObject>) {
         view_box: *mut Retained<AnyObject>,
     }
 
-    let pkg = Box::into_raw(Box::new(WorkPkg { url: url_string, view_box: leaked_view }));
+    let pkg = Box::into_raw(Box::new(WorkPkg {
+        url: url_string,
+        view_box: leaked_view,
+    }));
 
     unsafe extern "C" fn worker(ctx: *mut std::ffi::c_void) {
         let _ = std::panic::catch_unwind(|| {
@@ -318,7 +325,10 @@ fn load_remote(url: &str, image_view: Retained<AnyObject>) {
                 }
                 // Retain the data so it survives until the main-thread block runs.
                 let _: *mut AnyObject = msg_send![data, retain];
-                let apply = Box::into_raw(Box::new(ApplyPkg { data, view_box: pkg.view_box }));
+                let apply = Box::into_raw(Box::new(ApplyPkg {
+                    data,
+                    view_box: pkg.view_box,
+                }));
 
                 unsafe extern "C" fn apply_main(ctx: *mut std::ffi::c_void) {
                     let _ = std::panic::catch_unwind(|| {

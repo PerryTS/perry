@@ -175,13 +175,24 @@ unsafe fn draw_title(hdc: HDC, client: &RECT, title: &str) {
 
 #[cfg(target_os = "windows")]
 unsafe fn draw_line(hdc: HDC, plot: &RECT, data: &[(String, f64)]) {
-    let max = data.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max);
+    let max = data
+        .iter()
+        .map(|(_, v)| *v)
+        .fold(f64::NEG_INFINITY, f64::max);
     let min = data.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min);
-    let range = if (max - min).abs() < 1e-9 { 1.0 } else { max - min };
+    let range = if (max - min).abs() < 1e-9 {
+        1.0
+    } else {
+        max - min
+    };
     let n = data.len();
     let plot_w = (plot.right - plot.left) as f64;
     let plot_h = (plot.bottom - plot.top) as f64;
-    let dx = if n > 1 { plot_w / (n as f64 - 1.0) } else { 0.0 };
+    let dx = if n > 1 {
+        plot_w / (n as f64 - 1.0)
+    } else {
+        0.0
+    };
 
     // Baseline along the bottom of the plot rect.
     let axis_pen = CreatePen(PS_SOLID, 1, rgb(178, 178, 178));
@@ -388,7 +399,9 @@ pub fn reload(handle: i64) {
 fn request_redraw(handle: i64) {
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return;
+        };
         unsafe {
             let _ = InvalidateRect(hwnd, None, true);
         }

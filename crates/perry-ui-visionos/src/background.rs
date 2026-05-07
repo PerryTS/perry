@@ -126,8 +126,7 @@ pub fn schedule(
 
         let id_ns: Retained<NSString> = NSString::from_str(&id);
         let request_alloc: *mut AnyObject = msg_send![request_cls, alloc];
-        let request: *mut AnyObject =
-            msg_send![request_alloc, initWithIdentifier: &*id_ns];
+        let request: *mut AnyObject = msg_send![request_alloc, initWithIdentifier: &*id_ns];
 
         if earliest_start_ms > 0.0 && earliest_start_ms.is_finite() {
             let secs = earliest_start_ms / 1000.0;

@@ -76,17 +76,15 @@ pub fn node_add_child(parent: i64, child: i64) {
 /// Recursively populate `store` rooted at `node_id`. Column 0 is the
 /// node's label (display text); column 1 is the node's `id` string
 /// (used by `get_selected_id`).
-fn populate_store(
-    store: &gtk4::TreeStore,
-    parent_iter: Option<&gtk4::TreeIter>,
-    node_id: i64,
-) {
+fn populate_store(store: &gtk4::TreeStore, parent_iter: Option<&gtk4::TreeIter>, node_id: i64) {
     let snapshot = NODES.with(|n| {
         n.borrow()
             .get((node_id - 1) as usize)
             .map(|node| (node.id.clone(), node.label.clone(), node.children.clone()))
     });
-    let Some((id, label, children)) = snapshot else { return };
+    let Some((id, label, children)) = snapshot else {
+        return;
+    };
     let iter = store.append(parent_iter);
     store.set_value(&iter, 0, &label.to_value());
     store.set_value(&iter, 1, &id.to_value());
@@ -114,22 +112,22 @@ pub fn create(root_node: i64, on_select: f64) -> i64 {
     if on_select != 0.0 {
         let on = on_select;
         let store_clone = store.clone();
-        tree_view
-            .selection()
-            .connect_changed(move |sel| {
-                let Some((_model, iter)) = sel.selected() else { return };
-                let id = match store_clone.get_value(&iter, 1).get::<String>() {
-                    Ok(s) => s,
-                    Err(_) => return,
-                };
-                let bytes = id.as_bytes();
-                unsafe {
-                    let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
-                    let arg = js_nanbox_string(header as i64);
-                    let closure_ptr = js_nanbox_get_pointer(on) as *const u8;
-                    js_closure_call1(closure_ptr, arg);
-                }
-            });
+        tree_view.selection().connect_changed(move |sel| {
+            let Some((_model, iter)) = sel.selected() else {
+                return;
+            };
+            let id = match store_clone.get_value(&iter, 1).get::<String>() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let bytes = id.as_bytes();
+            unsafe {
+                let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+                let arg = js_nanbox_string(header as i64);
+                let closure_ptr = js_nanbox_get_pointer(on) as *const u8;
+                js_closure_call1(closure_ptr, arg);
+            }
+        });
     }
 
     let scroll = gtk4::ScrolledWindow::new();

@@ -145,7 +145,9 @@ unsafe fn insert_node(hwnd: HWND, h_parent: isize, node_id: i64) -> isize {
             .get((node_id - 1) as usize)
             .map(|node| (node.label.clone(), node.children.clone()))
     });
-    let Some((label, children)) = snapshot else { return 0 };
+    let Some((label, children)) = snapshot else {
+        return 0;
+    };
     let mut wide = to_wide(&label);
     let item = TvItemW {
         mask: TVIF_TEXT | TVIF_PARAM,
@@ -209,7 +211,11 @@ pub fn create(root_node: i64, on_select: f64) -> i64 {
                 None,
             );
             let Ok(hwnd) = hwnd else {
-                return register_widget(HWND(std::ptr::null_mut()), WidgetKind::TreeView, control_id);
+                return register_widget(
+                    HWND(std::ptr::null_mut()),
+                    WidgetKind::TreeView,
+                    control_id,
+                );
             };
 
             let handle = register_widget(hwnd, WidgetKind::TreeView, control_id);
@@ -238,29 +244,19 @@ unsafe fn walk_and_apply_expand(hwnd: HWND, h_item: isize, code: u32) {
     }
     SendMessageW(hwnd, TVM_EXPAND, WPARAM(code as usize), LPARAM(h_item));
     // Walk children — TVGN_CHILD = 4.
-    let child = SendMessageW(
-        hwnd,
-        TVM_GETNEXTITEM,
-        WPARAM(4),
-        LPARAM(h_item),
-    )
-    .0;
+    let child = SendMessageW(hwnd, TVM_GETNEXTITEM, WPARAM(4), LPARAM(h_item)).0;
     walk_and_apply_expand(hwnd, child, code);
     // Walk siblings — TVGN_NEXT = 1.
-    let sibling = SendMessageW(
-        hwnd,
-        TVM_GETNEXTITEM,
-        WPARAM(1),
-        LPARAM(h_item),
-    )
-    .0;
+    let sibling = SendMessageW(hwnd, TVM_GETNEXTITEM, WPARAM(1), LPARAM(h_item)).0;
     walk_and_apply_expand(hwnd, sibling, code);
 }
 
 pub fn expand_all(handle: i64) {
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return;
+        };
         unsafe {
             // TVGN_ROOT = 0
             let root = SendMessageW(hwnd, TVM_GETNEXTITEM, WPARAM(0), LPARAM(0)).0;
@@ -276,7 +272,9 @@ pub fn expand_all(handle: i64) {
 pub fn collapse_all(handle: i64) {
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return;
+        };
         unsafe {
             let root = SendMessageW(hwnd, TVM_GETNEXTITEM, WPARAM(0), LPARAM(0)).0;
             walk_and_apply_expand(hwnd, root, TVE_COLLAPSE);
@@ -292,9 +290,17 @@ pub fn get_selected_id(handle: i64) -> f64 {
     let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
     #[cfg(target_os = "windows")]
     {
-        let Some(hwnd) = super::get_hwnd(handle) else { return undefined };
+        let Some(hwnd) = super::get_hwnd(handle) else {
+            return undefined;
+        };
         unsafe {
-            let h_item = SendMessageW(hwnd, TVM_GETNEXTITEM, WPARAM(TVGN_CARET as usize), LPARAM(0)).0;
+            let h_item = SendMessageW(
+                hwnd,
+                TVM_GETNEXTITEM,
+                WPARAM(TVGN_CARET as usize),
+                LPARAM(0),
+            )
+            .0;
             if h_item == 0 {
                 return undefined;
             }
@@ -351,13 +357,23 @@ pub fn handle_selection_change(handle: i64) {
     if on == 0.0 {
         return;
     }
-    let Some(hwnd) = super::get_hwnd(handle) else { return };
+    let Some(hwnd) = super::get_hwnd(handle) else {
+        return;
+    };
     unsafe {
-        let h_item = SendMessageW(hwnd, TVM_GETNEXTITEM, WPARAM(TVGN_CARET as usize), LPARAM(0)).0;
+        let h_item = SendMessageW(
+            hwnd,
+            TVM_GETNEXTITEM,
+            WPARAM(TVGN_CARET as usize),
+            LPARAM(0),
+        )
+        .0;
         if h_item == 0 {
             return;
         }
-        let Some(id) = read_node_id_from_h_item(hwnd, h_item) else { return };
+        let Some(id) = read_node_id_from_h_item(hwnd, h_item) else {
+            return;
+        };
         let bytes = id.as_bytes();
         let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
         let arg = js_nanbox_string(header as i64);

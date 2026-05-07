@@ -4,9 +4,9 @@ pub mod background;
 pub mod clipboard;
 pub mod crash_log;
 pub mod file_dialog;
-pub mod keychain;
 pub mod geolocation;
 pub mod image_picker;
+pub mod keychain;
 pub mod location;
 pub mod media_playback;
 pub mod menu;
@@ -1190,12 +1190,7 @@ pub extern "C" fn perry_ui_map_view_set_region(
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_add_pin(
-    handle: i64,
-    lat: f64,
-    lon: f64,
-    title_ptr: i64,
-) {
+pub extern "C" fn perry_ui_map_view_add_pin(handle: i64, lat: f64, lon: f64, title_ptr: i64) {
     widgets::map_view::add_pin(handle, lat, lon, title_ptr as *const u8);
 }
 
@@ -1949,7 +1944,11 @@ pub extern "C" fn perry_system_geolocation_request_permission(callback: f64) {
     geolocation::request_permission(callback);
 }
 #[no_mangle]
-pub extern "C" fn perry_system_image_picker_pick(max_count: f64, allow_multiple: f64, callback: f64) {
+pub extern "C" fn perry_system_image_picker_pick(
+    max_count: f64,
+    allow_multiple: f64,
+    callback: f64,
+) {
     image_picker::pick(max_count, allow_multiple, callback);
 }
 
@@ -2312,7 +2311,11 @@ pub extern "C" fn perry_ui_scrollview_end_refreshing(_handle: i64) {}
 // --- Issue #553: ScrollView + LazyVStack onScrollEnd, LazyVStack pull-to-refresh ---
 
 #[no_mangle]
-pub extern "C" fn perry_ui_scrollview_set_scroll_end_callback(handle: i64, callback: f64, threshold_px: f64) {
+pub extern "C" fn perry_ui_scrollview_set_scroll_end_callback(
+    handle: i64,
+    callback: f64,
+    threshold_px: f64,
+) {
     widgets::scrollview::set_scroll_end_callback(handle, callback, threshold_px);
 }
 
@@ -2327,7 +2330,11 @@ pub extern "C" fn perry_ui_lazyvstack_end_refreshing(handle: i64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(handle: i64, callback: f64, threshold_items: i64) {
+pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(
+    handle: i64,
+    callback: f64,
+    threshold_items: i64,
+) {
     widgets::lazyvstack::set_scroll_end_callback(handle, callback, threshold_items);
 }
 

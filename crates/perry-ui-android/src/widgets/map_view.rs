@@ -36,12 +36,7 @@ unsafe fn call_bridge_static_object<'a>(
     }
 }
 
-unsafe fn call_bridge_static_void(
-    env: &mut jni::JNIEnv,
-    name: &str,
-    sig: &str,
-    args: &[JValue],
-) {
+unsafe fn call_bridge_static_void(env: &mut jni::JNIEnv, name: &str, sig: &str, args: &[JValue]) {
     let bridge_class =
         jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
     let cls: &jni::objects::JClass = (&bridge_class).into();

@@ -1,8 +1,8 @@
 pub mod app;
-pub mod issue_552_stub;
 pub mod audio;
 #[cfg(target_os = "windows")]
 pub mod dpi_compat;
+pub mod issue_552_stub;
 pub mod media_playback;
 
 // Install a vectored exception handler that prints crash info to stderr.
@@ -1141,22 +1141,32 @@ pub extern "C" fn perry_ui_rich_text_toggle_underline(h: i64) {
 // Issue #516 — PdfView stubs. Windows — Windows.Data.Pdf or a third-
 // party renderer is a future iteration.
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 {
+    0
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_load_file(_h: i64, _p: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_load_file(_h: i64, _p: i64) -> i64 {
+    0
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_get_page_count(_h: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_get_page_count(_h: i64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_go_to_page(_h: i64, _i: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 {
+    -1
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_set_scale(_h: i64, _s: f64) {}
 
 // Issue #517 — MapView stubs. Windows — Bing Maps WinRT API is a
 // future iteration.
 #[no_mangle]
-pub extern "C" fn perry_ui_map_view_create(_w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_map_view_create(_w: f64, _h: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_map_view_set_region(_h: i64, _lat: f64, _lon: f64, _ls: f64, _os: f64) {}
 #[no_mangle]
@@ -1220,9 +1230,13 @@ pub extern "C" fn perry_ui_table_set_on_sort_change(_h: i64, _cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_allows_multiple_selection(_h: i64, _allow: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_selected_rows_count(_h: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_table_get_selected_rows_count(_h: i64) -> i64 {
+    0
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_selected_row_at(_h: i64, _n: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_table_get_selected_row_at(_h: i64, _n: i64) -> i64 {
+    -1
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_filter_text(_h: i64, _t: i64) {}
 #[no_mangle]
@@ -2182,7 +2196,9 @@ pub extern "C" fn perry_media_destroy(handle: f64) {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_bottom_nav_create(_on_select: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_bottom_nav_create(_on_select: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_bottom_nav_add_item(_handle: i64, _icon_ptr: i64, _label_ptr: i64) {}
 #[no_mangle]
@@ -2195,15 +2211,26 @@ pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callbac
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_end_refreshing(_handle: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(_handle: i64, _callback: f64, _threshold_items: i64) {}
+pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(
+    _handle: i64,
+    _callback: f64,
+    _threshold_items: i64,
+) {
+}
 
 #[no_mangle]
-pub extern "C" fn perry_ui_scrollview_set_scroll_end_callback(handle: i64, callback: f64, threshold_px: f64) {
+pub extern "C" fn perry_ui_scrollview_set_scroll_end_callback(
+    handle: i64,
+    callback: f64,
+    threshold_px: f64,
+) {
     widgets::scrollview::set_scroll_end_callback(handle, callback, threshold_px)
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_image_gallery_create(_on_index_change: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_image_gallery_create(_on_index_change: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_image_gallery_add_image(_handle: i64, _url_ptr: i64, _alt_ptr: i64) {}
 #[no_mangle]

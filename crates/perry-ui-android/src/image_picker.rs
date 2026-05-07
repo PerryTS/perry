@@ -22,7 +22,9 @@ pub fn pick(max_count: f64, allow_multiple: f64, callback_f64: f64) {
     // f64 — accept either by treating any non-FALSE non-zero as truthy.
     let multi_bits = allow_multiple.to_bits();
     let allow_multi = multi_bits == 0x7FFC_0000_0000_0004
-        || (multi_bits != 0x7FFC_0000_0000_0003 && allow_multiple != 0.0 && !allow_multiple.is_nan());
+        || (multi_bits != 0x7FFC_0000_0000_0003
+            && allow_multiple != 0.0
+            && !allow_multiple.is_nan());
 
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);

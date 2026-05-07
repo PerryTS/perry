@@ -47,7 +47,11 @@ thread_local! {
 /// reference an already-registered widget. `hover_delay_ms` defaults
 /// to 500 when 0 is passed.
 pub fn set_rich_tooltip(widget_handle: i64, content_handle: i64, hover_delay_ms: u32) {
-    let delay = if hover_delay_ms == 0 { 500 } else { hover_delay_ms };
+    let delay = if hover_delay_ms == 0 {
+        500
+    } else {
+        hover_delay_ms
+    };
     BINDINGS.with(|b| {
         b.borrow_mut().insert(
             widget_handle,
@@ -94,9 +98,7 @@ fn install_tracking(widget_handle: i64, view: &NSView) {
 }
 
 fn schedule_show(widget_handle: i64) {
-    let delay_ms = BINDINGS.with(|b| {
-        b.borrow().get(&widget_handle).map(|x| x.hover_delay_ms)
-    });
+    let delay_ms = BINDINGS.with(|b| b.borrow().get(&widget_handle).map(|x| x.hover_delay_ms));
     let Some(delay_ms) = delay_ms else { return };
 
     cancel_timer(widget_handle);
@@ -186,7 +188,8 @@ fn present_panel(widget_handle: i64) {
         // 8pt below. Caller-side: NSView -> NSWindow -> NSScreen.
         let host_obj: &AnyObject = &*host;
         let host_bounds: CGRect = msg_send![host_obj, bounds];
-        let in_window: CGRect = msg_send![host_obj, convertRect: host_bounds, toView: std::ptr::null::<AnyObject>()];
+        let in_window: CGRect =
+            msg_send![host_obj, convertRect: host_bounds, toView: std::ptr::null::<AnyObject>()];
         let host_window: *mut AnyObject = msg_send![host_obj, window];
         if host_window.is_null() {
             return;
@@ -212,8 +215,14 @@ fn present_panel(widget_handle: i64) {
         }
 
         let frame = CGRect {
-            origin: CGPoint { x: panel_x, y: panel_y },
-            size: CGSize { width: panel_w, height: panel_h },
+            origin: CGPoint {
+                x: panel_x,
+                y: panel_y,
+            },
+            size: CGSize {
+                width: panel_w,
+                height: panel_h,
+            },
         };
 
         let panel_cls = AnyClass::get(c"NSPanel").unwrap();
@@ -225,8 +234,7 @@ fn present_panel(widget_handle: i64) {
             backing: 2u64,
             defer: false
         ];
-        let panel: Retained<AnyObject> =
-            Retained::from_raw(raw_panel).expect("NSPanel init nil");
+        let panel: Retained<AnyObject> = Retained::from_raw(raw_panel).expect("NSPanel init nil");
 
         let _: () = msg_send![&*panel, setLevel: 3i64]; // NSFloatingWindowLevel
         let _: () = msg_send![&*panel, setOpaque: false];

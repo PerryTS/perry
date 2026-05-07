@@ -3693,23 +3693,26 @@ fn lower_module_decl(
                             if let ast::Expr::New(new_expr) = init.as_ref() {
                                 if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
                                     let class_name = class_ident.sym.as_ref();
-                                    let module_name: Option<String> =
-                                        if let Some((m, _)) = ctx.lookup_native_module(class_name) {
-                                            Some(m.to_string())
-                                        } else {
-                                            match class_name {
-                                                "EventEmitter" => Some("events".to_string()),
-                                                "AsyncLocalStorage" => Some("async_hooks".to_string()),
-                                                "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
-                                                "Redis" => Some("ioredis".to_string()),
-                                                "LRUCache" => Some("lru-cache".to_string()),
-                                                "Command" => Some("commander".to_string()),
-                                                "Big" => Some("big.js".to_string()),
-                                                "Decimal" => Some("decimal.js".to_string()),
-                                                "BigNumber" => Some("bignumber.js".to_string()),
-                                                _ => None,
+                                    let module_name: Option<String> = if let Some((m, _)) =
+                                        ctx.lookup_native_module(class_name)
+                                    {
+                                        Some(m.to_string())
+                                    } else {
+                                        match class_name {
+                                            "EventEmitter" => Some("events".to_string()),
+                                            "AsyncLocalStorage" => Some("async_hooks".to_string()),
+                                            "WebSocket" | "WebSocketServer" => {
+                                                Some("ws".to_string())
                                             }
-                                        };
+                                            "Redis" => Some("ioredis".to_string()),
+                                            "LRUCache" => Some("lru-cache".to_string()),
+                                            "Command" => Some("commander".to_string()),
+                                            "Big" => Some("big.js".to_string()),
+                                            "Decimal" => Some("decimal.js".to_string()),
+                                            "BigNumber" => Some("bignumber.js".to_string()),
+                                            _ => None,
+                                        }
+                                    };
                                     if let Some(native_module) = module_name {
                                         ctx.register_native_instance(
                                             name.clone(),
@@ -3733,8 +3736,12 @@ fn lower_module_decl(
                                         } else {
                                             match class_name {
                                                 "EventEmitter" => Some("events".to_string()),
-                                                "AsyncLocalStorage" => Some("async_hooks".to_string()),
-                                                "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
+                                                "AsyncLocalStorage" => {
+                                                    Some("async_hooks".to_string())
+                                                }
+                                                "WebSocket" | "WebSocketServer" => {
+                                                    Some("ws".to_string())
+                                                }
                                                 "Redis" => Some("ioredis".to_string()),
                                                 "LRUCache" => Some("lru-cache".to_string()),
                                                 "Command" => Some("commander".to_string()),
@@ -5221,12 +5228,13 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                                     }
                                     // Lower the class with the binding name so
                                     // `new BindName(...)` works unchanged.
-                                    let mut lowered_class = crate::lower_decl::lower_class_from_ast(
-                                        ctx,
-                                        &class_expr.class,
-                                        &bind_name,
-                                        false,
-                                    )?;
+                                    let mut lowered_class =
+                                        crate::lower_decl::lower_class_from_ast(
+                                            ctx,
+                                            &class_expr.class,
+                                            &bind_name,
+                                            false,
+                                        )?;
                                     if let Some(inner_name) = inner_name_for_register {
                                         lowered_class.aliases.push(inner_name);
                                     }
@@ -5982,9 +5990,8 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
             let mut map_val_type: Option<Type> = None;
             // Issue #542/#543: also accept Type::Union containing Map (the
             // shape produced by `Map<K, V> | undefined` parameters/returns).
-            let type_contains_map = |ty: &Type| -> bool {
-                matches!(ty, Type::Generic { base, .. } if base == "Map")
-            };
+            let type_contains_map =
+                |ty: &Type| -> bool { matches!(ty, Type::Generic { base, .. } if base == "Map") };
             let is_iterable_map = match &iterable_type {
                 Some(Type::Generic { base, .. }) if base == "Map" => true,
                 Some(Type::Union(variants)) => variants.iter().any(type_contains_map),
@@ -6026,9 +6033,8 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
             // `js_set_to_array`. ECS hot paths (changeset.removes, etc.)
             // iterate Sets repeatedly; this saves an Array alloc per loop.
             // Issue #542/#543: also accept Type::Union containing Set.
-            let type_contains_set = |ty: &Type| -> bool {
-                matches!(ty, Type::Generic { base, .. } if base == "Set")
-            };
+            let type_contains_set =
+                |ty: &Type| -> bool { matches!(ty, Type::Generic { base, .. } if base == "Set") };
             let is_iterable_set = match &iterable_type {
                 Some(Type::Generic { base, .. }) if base == "Set" => true,
                 Some(Type::Union(variants)) => variants.iter().any(type_contains_set),
@@ -6405,11 +6411,9 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                                                 ast::PropName::Ident(ident) => {
                                                     ident.sym.to_string()
                                                 }
-                                                ast::PropName::Str(s) => s
-                                                    .value
-                                                    .as_str()
-                                                    .unwrap_or("")
-                                                    .to_string(),
+                                                ast::PropName::Str(s) => {
+                                                    s.value.as_str().unwrap_or("").to_string()
+                                                }
                                                 _ => continue,
                                             };
                                             let key_source = Expr::PropertyGet {

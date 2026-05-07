@@ -635,7 +635,9 @@ pub extern "C" fn perry_ui_menubar_attach(bar_handle: i64) {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_tray_create(_icon_path_ptr: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_tray_create(_icon_path_ptr: i64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_tray_set_icon(_tray_handle: i64, _icon_path_ptr: i64) {}
 #[no_mangle]
@@ -951,7 +953,11 @@ pub extern "C" fn perry_ui_pdf_view_create(w: f64, h: f64) -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_load_file(h: i64, p: i64) -> i64 {
-    if widgets::pdf_view::load_file(h, p as *const u8) { 1 } else { 0 }
+    if widgets::pdf_view::load_file(h, p as *const u8) {
+        1
+    } else {
+        0
+    }
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_get_page_count(h: i64) -> i64 {
@@ -1046,9 +1052,13 @@ pub extern "C" fn perry_ui_table_set_on_sort_change(_h: i64, _cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_allows_multiple_selection(_h: i64, _allow: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_selected_rows_count(_h: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_table_get_selected_rows_count(_h: i64) -> i64 {
+    0
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_selected_row_at(_h: i64, _n: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_table_get_selected_row_at(_h: i64, _n: i64) -> i64 {
+    -1
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_filter_text(_h: i64, _t: i64) {}
 #[no_mangle]
@@ -1060,11 +1070,15 @@ pub extern "C" fn perry_ui_table_get_filter_text(_h: i64) -> f64 {
 /// indentation is the future custom layout. Stubs return 0 / undefined
 /// so user code compiles cross-platform.
 #[no_mangle]
-pub extern "C" fn perry_ui_tree_node_create(_id_ptr: i64, _label_ptr: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_tree_node_create(_id_ptr: i64, _label_ptr: i64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_tree_node_add_child(_parent: i64, _child: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_tree_view_create(_root: i64, _on_select: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_tree_view_create(_root: i64, _on_select: f64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_tree_view_expand_all(_handle: i64) {}
 #[no_mangle]
@@ -1308,7 +1322,11 @@ pub extern "C" fn perry_system_geolocation_request_permission(callback: f64) {
     geolocation::request_permission(callback);
 }
 #[no_mangle]
-pub extern "C" fn perry_system_image_picker_pick(max_count: f64, allow_multiple: f64, callback: f64) {
+pub extern "C" fn perry_system_image_picker_pick(
+    max_count: f64,
+    allow_multiple: f64,
+    callback: f64,
+) {
     image_picker::pick(max_count, allow_multiple, callback);
 }
 
@@ -2257,10 +2275,19 @@ pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callbac
 pub extern "C" fn perry_ui_lazyvstack_end_refreshing(_handle: i64) {}
 
 #[no_mangle]
-pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(_handle: i64, _callback: f64, _threshold_items: i64) {}
+pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(
+    _handle: i64,
+    _callback: f64,
+    _threshold_items: i64,
+) {
+}
 
 #[no_mangle]
-pub extern "C" fn perry_ui_scrollview_set_scroll_end_callback(handle: i64, callback: f64, threshold_px: f64) {
+pub extern "C" fn perry_ui_scrollview_set_scroll_end_callback(
+    handle: i64,
+    callback: f64,
+    threshold_px: f64,
+) {
     widgets::scrollview::set_scroll_end_callback(handle, callback, threshold_px);
 }
 

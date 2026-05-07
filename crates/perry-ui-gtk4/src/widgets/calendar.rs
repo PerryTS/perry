@@ -24,7 +24,12 @@ thread_local! {
 
 fn iso_date(cal: &gtk4::Calendar) -> String {
     let dt: glib::DateTime = cal.date();
-    format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day_of_month())
+    format!(
+        "{:04}-{:02}-{:02}",
+        dt.year(),
+        dt.month(),
+        dt.day_of_month()
+    )
 }
 
 pub fn create(year: i64, month: i64, on_change: f64) -> i64 {

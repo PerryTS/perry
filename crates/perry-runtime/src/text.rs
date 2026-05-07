@@ -172,6 +172,6 @@ fn remember_text_encoder_result(ptr: usize) {
     TEXT_ENCODER_RESULTS.with(|s| s.borrow_mut().insert(ptr));
 }
 
-fn is_text_encoder_result(ptr: usize) -> bool {
+pub fn is_text_encoder_result(ptr: usize) -> bool {
     TEXT_ENCODER_RESULTS.with(|s| s.borrow().contains(&ptr))
 }

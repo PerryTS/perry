@@ -667,6 +667,16 @@ pub(super) fn collect_modules(
             || hir_debug.contains("CryptoRandomUUID")
             || hir_debug.contains("CryptoSha256")
             || hir_debug.contains("CryptoMd5")
+            // Web Crypto API (issue #561). The four WebCrypto* HIR
+            // variants lower to extern calls into perry-stdlib's
+            // webcrypto module, gated behind the `crypto` feature.
+            // Without flipping the gate, auto-optimize would build
+            // perry-stdlib without `crypto` and link would fail with
+            // "_js_webcrypto_digest" undefined.
+            || hir_debug.contains("WebCryptoDigest")
+            || hir_debug.contains("WebCryptoImportKey")
+            || hir_debug.contains("WebCryptoSign")
+            || hir_debug.contains("WebCryptoVerify")
         {
             ctx.needs_stdlib = true;
             ctx.uses_crypto_builtins = true;

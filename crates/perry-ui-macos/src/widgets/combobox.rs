@@ -61,19 +61,24 @@ impl PerryComboboxTarget {
 }
 
 fn fire_callback(target_addr: usize, handle: i64) {
-    crate::catch_callback_panic("combobox callback", std::panic::AssertUnwindSafe(|| {
-        let cb = COMBOBOX_CALLBACKS.with(|cbs| cbs.borrow().get(&target_addr).copied());
-        let Some(callback) = cb else { return };
-        let Some(view) = super::get_widget(handle) else { return };
-        unsafe {
-            let ns_str: Retained<NSString> = msg_send![&*view, stringValue];
-            let bytes = ns_str.to_string();
-            let header_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
-            let arg = js_nanbox_string(header_ptr as i64);
-            let closure_ptr = js_nanbox_get_pointer(callback) as *const u8;
-            js_closure_call1(closure_ptr, arg);
-        }
-    }));
+    crate::catch_callback_panic(
+        "combobox callback",
+        std::panic::AssertUnwindSafe(|| {
+            let cb = COMBOBOX_CALLBACKS.with(|cbs| cbs.borrow().get(&target_addr).copied());
+            let Some(callback) = cb else { return };
+            let Some(view) = super::get_widget(handle) else {
+                return;
+            };
+            unsafe {
+                let ns_str: Retained<NSString> = msg_send![&*view, stringValue];
+                let bytes = ns_str.to_string();
+                let header_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+                let arg = js_nanbox_string(header_ptr as i64);
+                let closure_ptr = js_nanbox_get_pointer(callback) as *const u8;
+                js_closure_call1(closure_ptr, arg);
+            }
+        }),
+    );
 }
 
 /// Create an `NSComboBox` with completion enabled. `initial_ptr` is a
@@ -91,8 +96,7 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
             objc2_core_foundation::CGSize::new(220.0, 25.0),
         );
         let raw: *mut AnyObject = msg_send![alloc, initWithFrame: frame];
-        let combobox: Retained<AnyObject> =
-            Retained::from_raw(raw).expect("NSComboBox init nil");
+        let combobox: Retained<AnyObject> = Retained::from_raw(raw).expect("NSComboBox init nil");
 
         let _: () = msg_send![&*combobox, setCompletes: true];
         let _: () = msg_send![&*combobox, setUsesDataSource: false];

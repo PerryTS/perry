@@ -228,7 +228,10 @@ fn scan_stmt_local_ids(stmt: &Stmt, max_id: &mut LocalId) {
             }
         }
         Stmt::Try {
-            body, catch, finally, ..
+            body,
+            catch,
+            finally,
+            ..
         } => {
             for s in body {
                 scan_stmt_local_ids(s, max_id);
@@ -247,7 +250,10 @@ fn scan_stmt_local_ids(stmt: &Stmt, max_id: &mut LocalId) {
                 }
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             scan_expr_local_ids(discriminant, max_id);
             for case in cases {
                 if let Some(t) = &case.test {
@@ -328,7 +334,10 @@ fn scan_stmt_func_ids(stmt: &Stmt, max_id: &mut FuncId) {
             }
         }
         Stmt::Try {
-            body, catch, finally, ..
+            body,
+            catch,
+            finally,
+            ..
         } => {
             for s in body {
                 scan_stmt_func_ids(s, max_id);
@@ -344,7 +353,10 @@ fn scan_stmt_func_ids(stmt: &Stmt, max_id: &mut FuncId) {
                 }
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             scan_expr_func_ids(discriminant, max_id);
             for case in cases {
                 if let Some(t) = &case.test {
@@ -461,11 +473,7 @@ fn rewrite_stmts(
     }
 }
 
-fn rewrite_stmt(
-    stmt: &mut Stmt,
-    bindings: &HashMap<LocalId, StateBinding>,
-    fresh: &mut FreshIds,
-) {
+fn rewrite_stmt(stmt: &mut Stmt, bindings: &HashMap<LocalId, StateBinding>, fresh: &mut FreshIds) {
     match stmt {
         Stmt::Expr(e) => rewrite_expr(e, bindings, fresh),
         Stmt::Return(Some(e)) => rewrite_expr(e, bindings, fresh),
@@ -516,7 +524,10 @@ fn rewrite_stmt(
                 rewrite_stmts(f, bindings, fresh);
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             rewrite_expr(discriminant, bindings, fresh);
             for case in cases {
                 if let Some(t) = &mut case.test {
@@ -541,11 +552,7 @@ fn rewrite_stmt(
 /// the inner-first walk, the outer `.set` rewrite would clone the arg
 /// expression containing the un-rewritten inner `.get()`, leaving it
 /// as a plain `LocalGet(state).get()` on a holder that's now `undefined`.
-fn rewrite_expr(
-    e: &mut Expr,
-    bindings: &HashMap<LocalId, StateBinding>,
-    fresh: &mut FreshIds,
-) {
+fn rewrite_expr(e: &mut Expr, bindings: &HashMap<LocalId, StateBinding>, fresh: &mut FreshIds) {
     walk_expr_children_mut(e, &mut |child| rewrite_expr(child, bindings, fresh));
 
     if let Expr::Closure { body, .. } = e {
@@ -711,10 +718,7 @@ fn try_rewrite_navstack(
 /// state-bound local. Returns `Some(new_expr)` for a match, `None`
 /// otherwise. Does not recurse into children — the caller does that
 /// after this returns `None`.
-fn try_rewrite_state_access(
-    e: &Expr,
-    bindings: &HashMap<LocalId, StateBinding>,
-) -> Option<Expr> {
+fn try_rewrite_state_access(e: &Expr, bindings: &HashMap<LocalId, StateBinding>) -> Option<Expr> {
     if let Expr::Call { callee, args, .. } = e {
         if let Expr::PropertyGet { object, property } = callee.as_ref() {
             if let Expr::LocalGet(state_id) = object.as_ref() {

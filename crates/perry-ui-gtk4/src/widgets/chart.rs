@@ -85,7 +85,9 @@ pub fn create(kind: i64, width: f64, height: f64) -> i64 {
                 .get(&handle)
                 .map(|e| (e.kind as i64, e.title.clone(), e.data.clone()))
         });
-        let Some((kind, title, data)) = snapshot else { return };
+        let Some((kind, title, data)) = snapshot else {
+            return;
+        };
         draw_chart(cr, kind, &title, &data, w as f64, h as f64);
     });
 
@@ -120,7 +122,10 @@ fn draw_chart(cr: &Context, kind: i64, title: &str, data: &[(String, f64)], w: f
 }
 
 fn draw_line(cr: &Context, x: f64, y: f64, w: f64, h: f64, data: &[(String, f64)]) {
-    let max = data.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max);
+    let max = data
+        .iter()
+        .map(|(_, v)| *v)
+        .fold(f64::NEG_INFINITY, f64::max);
     let min = data.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min);
     let range = if (max - min).abs() < 1e-9 {
         1.0

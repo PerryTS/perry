@@ -1309,6 +1309,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "createHmac", false, None),
     method("crypto", "pbkdf2Sync", false, None),
     method("crypto", "pbkdf2", false, None),
+    // Web Crypto API (issue #561) — `crypto.subtle.*`. The HIR
+    // lowering at `crates/perry-hir/src/lower/expr_call.rs` recognizes
+    // the `crypto.subtle.<method>(args)` chain and emits a
+    // `WebCrypto*` HIR variant. Listing `subtle` here flips the strict
+    // strict-API gate (#463) so unimported `crypto.subtle` reads inside
+    // an import-style binding don't silently return undefined.
+    property("crypto", "subtle"),
     // os — methods mapped to Expr::Os* in expr_call.rs.
     method("os", "platform", false, None),
     method("os", "arch", false, None),

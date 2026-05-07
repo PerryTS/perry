@@ -198,7 +198,9 @@ pub fn get_html(handle: i64) -> f64 {
 fn apply_or_remove_tag(handle: i64, tag_kind: TagKind) {
     EDITORS.with(|m| {
         let map = m.borrow();
-        let Some(entry) = map.get(&handle) else { return };
+        let Some(entry) = map.get(&handle) else {
+            return;
+        };
         let bounds = entry.buffer.selection_bounds();
         let (start, end) = match bounds {
             Some(b) => b,

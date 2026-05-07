@@ -377,7 +377,9 @@ pub fn get_selected_row(handle: i64) -> i64 {
 /// Installing the callback also turns on per-column sort descriptor
 /// prototypes so NSTableView shows the asc/desc indicator.
 pub fn set_on_sort_change(handle: i64, callback: f64) {
-    let Some(idx) = find_entry_idx(handle) else { return };
+    let Some(idx) = find_entry_idx(handle) else {
+        return;
+    };
     let tv_ptr = TABLES.with(|t| {
         let mut tables = t.borrow_mut();
         if let Some(entry) = tables.get_mut(idx) {

@@ -90,8 +90,7 @@ unsafe fn format_iso_date(date_obj: *mut AnyObject) -> String {
     let locale: Retained<AnyObject> =
         Retained::from_raw(msg_send![alloc_l, initWithLocaleIdentifier: &*posix_id]).unwrap();
     let _: () = msg_send![&*fmt, setLocale: &*locale];
-    let str_obj: Retained<objc2_foundation::NSString> =
-        msg_send![&*fmt, stringFromDate: date_obj];
+    let str_obj: Retained<objc2_foundation::NSString> = msg_send![&*fmt, stringFromDate: date_obj];
     str_obj.to_string()
 }
 
@@ -157,7 +156,9 @@ pub fn create(year: i64, month: i64, on_change: f64) -> i64 {
 
 /// Programmatically set the selected date (1-based month + day).
 pub fn set_date(handle: i64, year: i64, month: i64, day: i64) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     unsafe {
         let date = make_date(year, month, day);
         if !date.is_null() {

@@ -110,10 +110,7 @@ pub fn create(on_index_change: f64) -> i64 {
     unsafe {
         let cls = objc2::runtime::AnyClass::get(c"UIScrollView").unwrap();
         let scroll: *mut AnyObject = msg_send![cls, alloc];
-        let frame = CGRect::new(
-            CGPoint::new(0.0, 0.0),
-            CGSize::new(PAGE_WIDTH, PAGE_HEIGHT),
-        );
+        let frame = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(PAGE_WIDTH, PAGE_HEIGHT));
         let scroll: *mut AnyObject = msg_send![scroll, initWithFrame: frame];
         let _: () = msg_send![scroll, setPagingEnabled: true];
         let _: () = msg_send![scroll, setShowsHorizontalScrollIndicator: false];
@@ -129,15 +126,20 @@ pub fn create(on_index_change: f64) -> i64 {
         let view: Retained<UIView> = Retained::retain(scroll as *mut UIView).unwrap();
         let handle = super::register_widget(view);
 
-        DELEGATE_TO_HANDLE.with(|m| { m.borrow_mut().insert(key, handle); });
+        DELEGATE_TO_HANDLE.with(|m| {
+            m.borrow_mut().insert(key, handle);
+        });
         STATES.with(|s| {
-            s.borrow_mut().insert(handle, GalleryState {
-                image_views: Vec::new(),
-                on_index_change,
-                current_index: 0,
-                page_width: PAGE_WIDTH,
-                page_height: PAGE_HEIGHT,
-            });
+            s.borrow_mut().insert(
+                handle,
+                GalleryState {
+                    image_views: Vec::new(),
+                    on_index_change,
+                    current_index: 0,
+                    page_width: PAGE_WIDTH,
+                    page_height: PAGE_HEIGHT,
+                },
+            );
         });
         handle
     }
@@ -149,7 +151,8 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
 
     let (page_width, page_height, count) = STATES.with(|s| {
-        s.borrow().get(&handle)
+        s.borrow()
+            .get(&handle)
             .map(|st| (st.page_width, st.page_height, st.image_views.len() as i64))
             .unwrap_or((PAGE_WIDTH, PAGE_HEIGHT, 0))
     });
@@ -188,10 +191,8 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
                 if let Some(scroll) = super::get_widget(handle) {
                     let _: () = msg_send![&*scroll, addSubview: iv];
                     // Resize content area.
-                    let total = CGSize::new(
-                        state.image_views.len() as f64 * page_width,
-                        page_height,
-                    );
+                    let total =
+                        CGSize::new(state.image_views.len() as f64 * page_width, page_height);
                     let _: () = msg_send![&*scroll, setContentSize: total];
                 }
             }
@@ -202,11 +203,14 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
 pub fn set_index(handle: i64, index: i64) {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     let (page_width, valid) = STATES.with(|s| {
-        s.borrow().get(&handle)
+        s.borrow()
+            .get(&handle)
             .map(|st| (st.page_width, (index as usize) < st.image_views.len()))
             .unwrap_or((PAGE_WIDTH, false))
     });
-    if !valid { return; }
+    if !valid {
+        return;
+    }
     if let Some(scroll) = super::get_widget(handle) {
         unsafe {
             let target = CGPoint::new(index as f64 * page_width, 0.0);
@@ -222,12 +226,18 @@ pub fn set_index(handle: i64, index: i64) {
 
 fn load_remote(url: &str, image_view: *mut AnyObject) {
     let url_str = url.to_string();
-    struct Pkg { url: String, view: *mut AnyObject }
+    struct Pkg {
+        url: String,
+        view: *mut AnyObject,
+    }
     // Retain the view so it survives the async hop; release on completion.
     unsafe {
         let _: *mut AnyObject = msg_send![image_view, retain];
     }
-    let pkg = Box::into_raw(Box::new(Pkg { url: url_str, view: image_view }));
+    let pkg = Box::into_raw(Box::new(Pkg {
+        url: url_str,
+        view: image_view,
+    }));
 
     unsafe extern "C" fn worker(ctx: *mut std::ffi::c_void) {
         let _ = std::panic::catch_unwind(|| {
@@ -247,8 +257,14 @@ fn load_remote(url: &str, image_view: *mut AnyObject) {
                     return;
                 }
                 let _: *mut AnyObject = msg_send![data, retain];
-                struct Apply { data: *mut AnyObject, view: *mut AnyObject }
-                let apply = Box::into_raw(Box::new(Apply { data, view: pkg.view }));
+                struct Apply {
+                    data: *mut AnyObject,
+                    view: *mut AnyObject,
+                }
+                let apply = Box::into_raw(Box::new(Apply {
+                    data,
+                    view: pkg.view,
+                }));
                 unsafe extern "C" fn finish(ctx: *mut std::ffi::c_void) {
                     let _ = std::panic::catch_unwind(|| {
                         let p = Box::from_raw(ctx as *mut Apply);

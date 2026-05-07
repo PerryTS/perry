@@ -1662,7 +1662,8 @@ pub fn dispatch_blob_property(blob_id: usize, prop: &str) -> Option<f64> {
     let bits = match prop {
         "size" => return Some(blob.body.len() as f64),
         "type" => unsafe {
-            let p = js_string_from_bytes(blob.content_type.as_ptr(), blob.content_type.len() as u32);
+            let p =
+                js_string_from_bytes(blob.content_type.as_ptr(), blob.content_type.len() as u32);
             JSValue::string_ptr(p).bits()
         },
         _ => return None,

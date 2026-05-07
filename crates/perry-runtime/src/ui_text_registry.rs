@@ -330,7 +330,9 @@ pub extern "C" fn js_navstack_register_route(
     let synth_id = decode_jsvalue_string(synth_id_handle);
     let route_name = decode_jsvalue_string(route_name_handle);
     {
-        let mut guard = NAVSTACK_REGISTRY.lock().expect("NAVSTACK_REGISTRY poisoned");
+        let mut guard = NAVSTACK_REGISTRY
+            .lock()
+            .expect("NAVSTACK_REGISTRY poisoned");
         let map = guard.get_or_insert_with(std::collections::HashMap::new);
         map.entry(synth_id.clone())
             .or_insert_with(Vec::new)
@@ -350,8 +352,7 @@ pub extern "C" fn js_navstack_register_route(
             {
                 let raw = SET_WIDGET_HIDDEN_HANDLER.load(Ordering::Acquire);
                 if !raw.is_null() {
-                    let func: SetWidgetHiddenHandler =
-                        unsafe { std::mem::transmute(raw) };
+                    let func: SetWidgetHiddenHandler = unsafe { std::mem::transmute(raw) };
                     func(widget_handle, 1);
                 }
             }

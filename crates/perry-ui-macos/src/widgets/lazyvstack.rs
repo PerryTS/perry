@@ -271,10 +271,14 @@ impl PerryLazyVStackScrollObserver {
 }
 
 fn check_scroll_end(handle: i64) {
-    let Some(idx) = find_entry_idx(handle) else { return };
+    let Some(idx) = find_entry_idx(handle) else {
+        return;
+    };
     let (closure, in_zone) = LAZY_VSTACKS.with(|l| {
         let stacks = l.borrow();
-        let Some(entry) = stacks.get(idx) else { return (0.0, false) };
+        let Some(entry) = stacks.get(idx) else {
+            return (0.0, false);
+        };
         unsafe {
             let scroll = &entry.scroll_view;
             let clip: Retained<AnyObject> = msg_send![&**scroll, contentView];
@@ -283,14 +287,16 @@ fn check_scroll_end(handle: i64) {
             let doc_frame: objc2_core_foundation::CGRect = msg_send![&*doc, frame];
 
             let threshold = SCROLL_END_STATES.with(|s| {
-                s.borrow().get(&handle).map(|st| st.threshold_items).unwrap_or(5)
+                s.borrow()
+                    .get(&handle)
+                    .map(|st| st.threshold_items)
+                    .unwrap_or(5)
             });
             let threshold_px = (threshold as f64) * entry.row_height;
             let visible_bottom = bounds.origin.y + bounds.size.height;
             let in_zone = visible_bottom >= doc_frame.size.height - threshold_px;
-            let closure = SCROLL_END_STATES.with(|s| {
-                s.borrow().get(&handle).map(|st| st.closure).unwrap_or(0.0)
-            });
+            let closure = SCROLL_END_STATES
+                .with(|s| s.borrow().get(&handle).map(|st| st.closure).unwrap_or(0.0));
             (closure, in_zone)
         }
     });
@@ -299,7 +305,9 @@ fn check_scroll_end(handle: i64) {
     }
     let should_fire = SCROLL_END_STATES.with(|s| {
         let mut states = s.borrow_mut();
-        let Some(state) = states.get_mut(&handle) else { return false };
+        let Some(state) = states.get_mut(&handle) else {
+            return false;
+        };
         if in_zone && state.armed {
             state.armed = false;
             true
@@ -338,10 +346,15 @@ pub fn end_refreshing(_handle: i64) {
 /// the callback's await completes naturally.
 pub fn set_scroll_end_callback(handle: i64, callback: f64, threshold_items: i64) {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
-    let Some(idx) = find_entry_idx(handle) else { return };
+    let Some(idx) = find_entry_idx(handle) else {
+        return;
+    };
     let scroll_ptr = LAZY_VSTACKS.with(|l| {
         let stacks = l.borrow();
-        stacks.get(idx).map(|e| Retained::as_ptr(&e.scroll_view) as usize).unwrap_or(0)
+        stacks
+            .get(idx)
+            .map(|e| Retained::as_ptr(&e.scroll_view) as usize)
+            .unwrap_or(0)
     });
     if scroll_ptr == 0 {
         return;
@@ -351,7 +364,11 @@ pub fn set_scroll_end_callback(handle: i64, callback: f64, threshold_items: i64)
             handle,
             ScrollEndState {
                 closure: callback,
-                threshold_items: if threshold_items > 0 { threshold_items } else { 5 },
+                threshold_items: if threshold_items > 0 {
+                    threshold_items
+                } else {
+                    5
+                },
                 armed: true,
             },
         );
@@ -382,4 +399,3 @@ pub fn set_scroll_end_callback(handle: i64, callback: f64, threshold_items: i64)
         std::mem::forget(observer);
     }
 }
-

@@ -131,14 +131,17 @@ pub fn create(year: i64, month: i64, on_change: f64) -> i64 {
         let picker_view = super::get_widget(handle).unwrap();
         let sel = Sel::register(c"dateChanged:");
         // UIControlEventValueChanged = 1 << 12 = 4096
-        let _: () = msg_send![&*picker_view, addTarget: &*target, action: sel, forControlEvents: 4096u64];
+        let _: () =
+            msg_send![&*picker_view, addTarget: &*target, action: sel, forControlEvents: 4096u64];
         std::mem::forget(target);
         handle
     }
 }
 
 pub fn set_date(handle: i64, year: i64, month: i64, day: i64) {
-    let Some(view) = super::get_widget(handle) else { return };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
     unsafe {
         let date = make_date(year, month, day);
         if !date.is_null() {

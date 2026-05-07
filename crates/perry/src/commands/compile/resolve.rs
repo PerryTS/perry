@@ -826,8 +826,7 @@ pub(super) fn resolve_import(
             let in_compile_pkg = is_in_compile_package(&canonical, compile_packages)
                 || compile_package_dirs.values().any(|dir| {
                     if canonical.starts_with(dir) {
-                        let relative =
-                            canonical.strip_prefix(dir).unwrap_or(canonical.as_path());
+                        let relative = canonical.strip_prefix(dir).unwrap_or(canonical.as_path());
                         !relative.to_string_lossy().contains("node_modules/")
                     } else {
                         false

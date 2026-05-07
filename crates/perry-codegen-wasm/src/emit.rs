@@ -2075,8 +2075,7 @@ impl WasmModuleEmitter {
 
         // Must match func_section: `main` is always emitted as `()->i64` even when the body has no
         // `return` statement (HIR doesn't guarantee tail-return lowering yet).
-        let wasm_returns_i64 =
-            hir_func.body.iter().any(has_return) || hir_func.name == "main";
+        let wasm_returns_i64 = hir_func.body.iter().any(has_return) || hir_func.name == "main";
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
 
         for stmt in &hir_func.body {
@@ -9732,11 +9731,9 @@ fn has_return(stmt: &Stmt) -> bool {
                     .is_some_and(|eb| eb.iter().any(has_return))
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body.iter().any(has_return),
-        Stmt::For {
-            init,
-            body,
-            ..
-        } => init.as_ref().is_some_and(|b| has_return(b.as_ref())) || body.iter().any(has_return),
+        Stmt::For { init, body, .. } => {
+            init.as_ref().is_some_and(|b| has_return(b.as_ref())) || body.iter().any(has_return)
+        }
         Stmt::Labeled { body, .. } => has_return(body.as_ref()),
         Stmt::Try {
             body,

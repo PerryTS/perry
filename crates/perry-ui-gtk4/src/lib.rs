@@ -1,9 +1,9 @@
 pub mod app;
-pub mod issue_552_stub;
 pub mod audio;
 pub mod clipboard;
 pub mod dialog;
 pub mod file_dialog;
+pub mod issue_552_stub;
 pub mod keychain;
 pub mod location;
 pub mod media_playback;
@@ -1406,15 +1406,23 @@ pub extern "C" fn perry_ui_rich_text_toggle_underline(h: i64) {
 // Issue #516 — PdfView stubs. Linux — Poppler (libpoppler-glib) is a
 // future iteration.
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_create(_w: f64, _h: f64) -> i64 {
+    0
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_load_file(_h: i64, _p: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_load_file(_h: i64, _p: i64) -> i64 {
+    0
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_get_page_count(_h: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_pdf_view_get_page_count(_h: i64) -> i64 {
+    0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_go_to_page(_h: i64, _i: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_pdf_view_get_current_page(_h: i64) -> i64 {
+    -1
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_set_scale(_h: i64, _s: f64) {}
 
@@ -1510,9 +1518,13 @@ pub extern "C" fn perry_ui_table_set_on_sort_change(_h: i64, _cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_allows_multiple_selection(_h: i64, _allow: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_selected_rows_count(_h: i64) -> i64 { 0 }
+pub extern "C" fn perry_ui_table_get_selected_rows_count(_h: i64) -> i64 {
+    0
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_selected_row_at(_h: i64, _n: i64) -> i64 { -1 }
+pub extern "C" fn perry_ui_table_get_selected_row_at(_h: i64, _n: i64) -> i64 {
+    -1
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_filter_text(_h: i64, _t: i64) {}
 #[no_mangle]
@@ -2149,10 +2161,19 @@ pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callbac
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_end_refreshing(_handle: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(_handle: i64, _callback: f64, _threshold_items: i64) {}
+pub extern "C" fn perry_ui_lazyvstack_set_scroll_end_callback(
+    _handle: i64,
+    _callback: f64,
+    _threshold_items: i64,
+) {
+}
 
 #[no_mangle]
-pub extern "C" fn perry_ui_scrollview_set_scroll_end_callback(handle: i64, callback: f64, threshold_px: f64) {
+pub extern "C" fn perry_ui_scrollview_set_scroll_end_callback(
+    handle: i64,
+    callback: f64,
+    threshold_px: f64,
+) {
     widgets::scrollview::set_scroll_end_callback(handle, callback, threshold_px)
 }
 
