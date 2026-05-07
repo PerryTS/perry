@@ -2167,8 +2167,8 @@ pub extern "C" fn perry_ui_table_set_filter_text(handle: i64, text_ptr: i64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_table_get_filter_text(handle: i64) -> f64 {
-    widgets::table::get_filter_text(handle)
+pub extern "C" fn perry_ui_table_get_filter_text(handle: i64) -> i64 {
+    widgets::table::get_filter_text(handle) as i64
 }
 
 // =============================================================================

@@ -502,12 +502,13 @@ pub fn set_filter_text(handle: i64, text_ptr: *const u8) {
     }
 }
 
-/// Get the table's filter text as a NaN-boxed STRING value. Returns the
-/// empty string when no filter has been set.
-pub fn get_filter_text(handle: i64) -> f64 {
+/// Get the table's filter text. Returns a pointer to a `StringHeader` —
+/// the FFI wrapper casts to `i64` and the dispatch table's `ReturnKind::Str`
+/// arranges NaN-boxing on the codegen side. Pinned to survive GC until the
+/// caller consumes it (mirrors `textfield::get_string_value`).
+pub fn get_filter_text(handle: i64) -> *const u8 {
     extern "C" {
         fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
-        fn js_nanbox_string(ptr: i64) -> f64;
     }
     let text = if let Some(idx) = find_entry_idx(handle) {
         TABLES.with(|t| {
@@ -521,7 +522,10 @@ pub fn get_filter_text(handle: i64) -> f64 {
     };
     let bytes = text.as_bytes();
     unsafe {
-        let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
-        js_nanbox_string(header as i64)
+        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+        // Pin the GC allocation: GcHeader sits at ptr-8, gc_flags at offset 1.
+        let gc_flags_ptr = (ptr as *mut u8).sub(8).add(1);
+        *gc_flags_ptr |= 0x04; // GC_FLAG_PINNED
+        ptr
     }
 }
