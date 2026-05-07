@@ -227,6 +227,172 @@ pub extern "C" fn perry_arkts_set_text(id_handle: f64, val_handle: f64) {
     }
 }
 
+// =============================================================================
+// Issue #535 — `perry/ui` `state<T>` runtime registry.
+// =============================================================================
+
+static STATE_VALUES: Mutex<Option<std::collections::HashMap<String, f64>>> = Mutex::new(None);
+
+fn with_state_values<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut std::collections::HashMap<String, f64>) -> R,
+{
+    let mut guard = STATE_VALUES.lock().expect("STATE_VALUES poisoned");
+    let map = guard.get_or_insert_with(std::collections::HashMap::new);
+    f(map)
+}
+
+#[no_mangle]
+pub extern "C" fn js_state_init(id_handle: f64, initial: f64) {
+    let id = decode_jsvalue_string(id_handle);
+    with_state_values(|m| {
+        m.insert(id, initial);
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_state_get(id_handle: f64) -> f64 {
+    let id = decode_jsvalue_string(id_handle);
+    let undefined_bits: u64 = 0x7FFC_0000_0000_0001;
+    with_state_values(|m| m.get(&id).copied()).unwrap_or_else(|| f64::from_bits(undefined_bits))
+}
+
+#[no_mangle]
+pub extern "C" fn js_state_set(id_handle: f64, value: f64) {
+    let id = decode_jsvalue_string(id_handle);
+    with_state_values(|m| {
+        m.insert(id.clone(), value);
+    });
+    #[cfg(not(feature = "ohos-napi"))]
+    perry_arkts_set_text(id_handle, value);
+    #[cfg(feature = "ohos-napi")]
+    crate::arkts_callbacks::perry_arkts_set_text(id_handle, value);
+    navstack_dispatch_state_change(&id, value);
+}
+
+// =============================================================================
+// Issue #535 Layer 2 — `NavStack(state, routes)` runtime registry.
+//
+// Each `NavStack(state, [{name, body}, ...])` registers one entry per route
+// here at App-build time. `js_state_set` walks the entry on every state
+// change and fires the registered "set widget hidden" handler for each
+// route — only the route whose name matches the new state value stays
+// visible. The handler itself lives in the platform UI crate
+// (perry-ui-macos / perry-ui-gtk4 / etc.) and is set via
+// `js_register_widget_hidden_handler` at app startup; before registration
+// the handler stays null and dispatch silently no-ops (the routes are
+// still recorded so a later-registered handler picks up subsequent
+// changes — same shape as `PENDING_*` queues for setText).
+// =============================================================================
+
+#[derive(Clone)]
+struct NavRoute {
+    name: String,
+    handle: i64,
+}
+
+static NAVSTACK_REGISTRY: Mutex<Option<std::collections::HashMap<String, Vec<NavRoute>>>> =
+    Mutex::new(None);
+
+/// Set-widget-hidden handler signature. UI crates implement this on the
+/// main thread (calls AppKit's `NSView.isHidden = ...` etc.).
+pub type SetWidgetHiddenHandler = extern "C" fn(widget_handle: i64, hidden: i32);
+
+#[cfg(not(feature = "ohos-napi"))]
+static SET_WIDGET_HIDDEN_HANDLER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+#[cfg(not(feature = "ohos-napi"))]
+#[no_mangle]
+pub extern "C" fn js_register_widget_hidden_handler(f: SetWidgetHiddenHandler) {
+    SET_WIDGET_HIDDEN_HANDLER.store(f as *mut (), Ordering::Release);
+}
+
+#[cfg(feature = "ohos-napi")]
+#[no_mangle]
+pub extern "C" fn js_register_widget_hidden_handler(_f: SetWidgetHiddenHandler) {
+    // No-op on harmonyos — ArkUI's `@State` decorator owns visibility
+    // through the harvest's `setVisibility` NAPI bridge instead.
+}
+
+/// `__navstack_register_route("synth_id", "route_name", widget_handle)` —
+/// records one route entry for the NavStack bound to `synth_id`. Called
+/// once per route at App-build time (state_desugar's NavStack lowering
+/// emits one call per route after evaluating the route body). Also sets
+/// the route's initial visibility (hides the widget if its name doesn't
+/// match the current value of `state(synth_id)`) so only the active
+/// route is visible at first paint.
+#[no_mangle]
+pub extern "C" fn js_navstack_register_route(
+    synth_id_handle: f64,
+    route_name_handle: f64,
+    widget_handle: i64,
+) {
+    let synth_id = decode_jsvalue_string(synth_id_handle);
+    let route_name = decode_jsvalue_string(route_name_handle);
+    {
+        let mut guard = NAVSTACK_REGISTRY.lock().expect("NAVSTACK_REGISTRY poisoned");
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        map.entry(synth_id.clone())
+            .or_insert_with(Vec::new)
+            .push(NavRoute {
+                name: route_name.clone(),
+                handle: widget_handle,
+            });
+    }
+    // Initial visibility — match current state value (set by __state_init
+    // earlier in the same module init order, so this is always populated
+    // by the time NavStack registration fires).
+    let current_value = with_state_values(|m| m.get(&synth_id).copied());
+    if let Some(value_f64) = current_value {
+        let current_str = decode_jsvalue_string(value_f64);
+        if current_str != route_name {
+            #[cfg(not(feature = "ohos-napi"))]
+            {
+                let raw = SET_WIDGET_HIDDEN_HANDLER.load(Ordering::Acquire);
+                if !raw.is_null() {
+                    let func: SetWidgetHiddenHandler =
+                        unsafe { std::mem::transmute(raw) };
+                    func(widget_handle, 1);
+                }
+            }
+        }
+    }
+}
+
+/// Called by `js_state_set` after every state write. Walks any routes
+/// registered for `synth_id`, toggling each route's visibility so only the
+/// route whose `name` equals the new value stays visible. Compares the
+/// new value against route names by string-decoding the f64 once.
+#[cfg(not(feature = "ohos-napi"))]
+fn navstack_dispatch_state_change(synth_id: &str, new_value: f64) {
+    let routes: Vec<NavRoute> = {
+        let guard = match NAVSTACK_REGISTRY.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        match guard.as_ref().and_then(|m| m.get(synth_id)) {
+            Some(v) => v.clone(),
+            None => return,
+        }
+    };
+    let raw = SET_WIDGET_HIDDEN_HANDLER.load(Ordering::Acquire);
+    if raw.is_null() {
+        return;
+    }
+    let new_value_str = decode_jsvalue_string(new_value);
+    let func: SetWidgetHiddenHandler = unsafe { std::mem::transmute(raw) };
+    for route in &routes {
+        let hidden = if route.name == new_value_str { 0 } else { 1 };
+        func(route.handle, hidden);
+    }
+}
+
+#[cfg(feature = "ohos-napi")]
+fn navstack_dispatch_state_change(_synth_id: &str, _new_value: f64) {
+    // No-op on harmonyos; the arkts harvest does its own setVisibility
+    // dispatch through ArkUI's `@State` mechanism.
+}
+
 /// Cross-platform widget-id registration. Codegen at
 /// `lower_call/native.rs` emits a call to this immediately after
 /// `perry_ui_text_create` when the user wrote `Text("content", "id")`,

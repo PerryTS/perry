@@ -11,6 +11,7 @@ pub mod closure;
 pub mod generator;
 pub mod i18n;
 pub mod inline;
+pub mod state_desugar;
 pub mod unroll;
 
 // Re-export main transformation functions

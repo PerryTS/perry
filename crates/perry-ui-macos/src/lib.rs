@@ -4,6 +4,8 @@ pub mod clipboard;
 pub mod crash_log;
 pub mod file_dialog;
 pub mod keychain;
+pub mod geolocation;
+pub mod image_picker;
 pub mod location;
 pub mod media_playback;
 pub mod menu;
@@ -1926,6 +1928,28 @@ pub extern "C" fn perry_system_notification_on_tap(callback: f64) {
 #[no_mangle]
 pub extern "C" fn perry_system_request_location(callback: f64) {
     location::request_location(callback);
+}
+
+// ---- Geolocation + image picker (issue #552) ----
+#[no_mangle]
+pub extern "C" fn perry_system_geolocation_get_current(on_success: f64, on_error: f64) {
+    geolocation::get_current(on_success, on_error);
+}
+#[no_mangle]
+pub extern "C" fn perry_system_geolocation_watch(callback: f64) -> f64 {
+    geolocation::watch(callback)
+}
+#[no_mangle]
+pub extern "C" fn perry_system_geolocation_stop_watch(id: f64) {
+    geolocation::stop_watch(id);
+}
+#[no_mangle]
+pub extern "C" fn perry_system_geolocation_request_permission(callback: f64) {
+    geolocation::request_permission(callback);
+}
+#[no_mangle]
+pub extern "C" fn perry_system_image_picker_pick(max_count: f64, allow_multiple: f64, callback: f64) {
+    image_picker::pick(max_count, allow_multiple, callback);
 }
 
 // =============================================================================

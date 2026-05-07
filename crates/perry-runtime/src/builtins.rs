@@ -448,6 +448,17 @@ fn format_jsvalue(value: f64, depth: usize) -> String {
                 // would read garbage one word before the BufferHeader).
                 let buf_ptr = ptr as *const crate::buffer::BufferHeader;
                 format_buffer_value(buf_ptr)
+            } else if (ptr as usize) < 0x100000 {
+                // Refs #421: Web Fetch (and other) handles are NaN-boxed
+                // POINTER_TAG values whose unboxed payload is a small
+                // registry id (1, 2, 3, ...) — NOT a real heap pointer.
+                // Reading the GC header at `ptr - 8` would deref unmapped
+                // memory and SIGSEGV. Print a placeholder that distinguishes
+                // the value from "{}". A future enhancement can look up the
+                // specific registry (Request / Response / Headers / Blob /
+                // sockets / DB connections / etc.) and format with the type
+                // name and key fields the way Node does for those classes.
+                "{}".to_string()
             } else {
                 // Use GC header to determine the actual type of the object.
                 // The GC header is located GC_HEADER_SIZE bytes before the user pointer.

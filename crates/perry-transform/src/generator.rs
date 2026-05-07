@@ -305,6 +305,17 @@ fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
             }
         }
         Expr::Yield { value: Some(v), .. } => scan_expr_for_max_local(v, max_id),
+        // Issue #531: ArrayPush/ArrayPushSpread carry a `value`/`source`
+        // expression that frequently nests `Closure { func_id, ... }` —
+        // e.g. `ops.push(await runOp('name', N, async () => ...))` lowers
+        // to `ArrayPush { value: Await(Call { args: [..., Closure {...}] }) }`.
+        // Without these arms the scanner misses the closure's params/captures
+        // (and the matching arm in `scan_expr_for_max_func` misses its
+        // FuncId), and the synthesized async-step closures the next pass
+        // emits collide with them — manifesting as `js_box_set/get: invalid
+        // box pointer 0x0` warnings + silently elided closure bodies.
+        Expr::ArrayPush { value, .. } => scan_expr_for_max_local(value, max_id),
+        Expr::ArrayPushSpread { source, .. } => scan_expr_for_max_local(source, max_id),
         // Array fast-path variants — each has a closure callback whose
         // parameter LocalIds would otherwise be invisible to the scanner.
         Expr::ArrayForEach { array, callback }
@@ -556,6 +567,16 @@ fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
             }
         }
         Expr::Yield { value: Some(v), .. } => scan_expr_for_max_func(v, max_id),
+        // Issue #531: see the matching arm in `scan_expr_for_max_local`.
+        // `ops.push(await runOp(..., async () => ...))` buries the user
+        // closure inside `ArrayPush.value`. Without this arm, its FuncId
+        // is invisible to `compute_max_func_id`, and the generator
+        // transform's synthesized iter `next`/`return`/`throw` closures
+        // get func_ids that collide with it — codegen emits one LLVM
+        // function per func_id, so one definition wins and the other
+        // closure invokes it with mismatched captures (null box pointer).
+        Expr::ArrayPush { value, .. } => scan_expr_for_max_func(value, max_id),
+        Expr::ArrayPushSpread { source, .. } => scan_expr_for_max_func(source, max_id),
         // Array fast-path variants — each carries a `callback` Closure that
         // would otherwise hide its FuncId from the scanner. Without these
         // arms, hoisting a nested `function*` (which my v0.4.146-followup

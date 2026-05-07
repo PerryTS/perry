@@ -2826,6 +2826,53 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
 
+        // Key not found in the keys_array — fall back to the class
+        // vtable's getter map. Refs #486 (hono): cross-module class
+        // getters (e.g. hono Context's `get req()` defined in
+        // `hono/dist/context.js` and read from a user `c.req.url`
+        // expression in main.ts) reach this point because the field
+        // dispatcher only looks for stored fields, not getter accessors.
+        // The getter is registered in `CLASS_VTABLE_REGISTRY` via
+        // `js_register_class_getter` at module init by codegen — invoke
+        // it with the same NaN-boxed `this` the codegen passes for
+        // method dispatch.
+        let class_id = (*obj).class_id;
+        if class_id != 0 {
+            if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+                if let Some(ref reg) = *registry {
+                    // Walk the class -> parent chain so a getter declared
+                    // on a base class is also found when the receiver is
+                    // a subclass instance. `get_parent_class_id` reads
+                    // CLASS_REGISTRY (populated by `js_register_class_parent`).
+                    let mut cid = class_id;
+                    let mut depth = 0usize;
+                    while depth < 32 {
+                        if let Some(vtable) = reg.get(&cid) {
+                            if let Ok(name) = std::str::from_utf8(key_bytes) {
+                                if let Some(&getter_ptr) = vtable.getters.get(name) {
+                                    // Getters take `this` as f64 (NaN-boxed
+                                    // POINTER_TAG), matching the codegen
+                                    // calling convention for class methods.
+                                    let this_f64: f64 =
+                                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                                    let f: extern "C" fn(f64) -> f64 =
+                                        std::mem::transmute(getter_ptr);
+                                    return JSValue::from_bits(f(this_f64).to_bits());
+                                }
+                            }
+                        }
+                        match get_parent_class_id(cid) {
+                            Some(p) if p != 0 && p != cid => {
+                                cid = p;
+                                depth += 1;
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+            }
+        }
+
         // Key not found
         JSValue::undefined()
     }
@@ -3830,6 +3877,15 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return false_val;
     }
 
+    // Refs #421: NaN-boxed POINTER_TAG values whose unboxed payload is a
+    // small registry id (Web Fetch handles, sockets, DB connections, etc.)
+    // are NOT real ObjectHeader pointers — reading the GC header at
+    // `obj_ptr - 8` would SIGSEGV on unmapped memory. They aren't instances
+    // of any user-defined class either, so return false unconditionally.
+    if (obj_ptr as usize) < 0x100000 {
+        return false_val;
+    }
+
     unsafe {
         // Special handling for built-in Error and its subclasses (TypeError, RangeError, etc.).
         // ErrorHeader uses GC_TYPE_ERROR; we match by error_kind against the requested CLASS_ID_*.
@@ -3921,6 +3977,43 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 ///
 /// NOTE: This function is named js_native_call_method to avoid symbol collision
 /// with js_call_method in perry-jsruntime which handles V8 JavaScript values.
+
+/// Apply form for method calls with spread arguments on dynamically-typed
+/// receivers (refs #421). Reads `args_array_handle` (a JS array containing
+/// every regular + spread arg already concatenated by codegen), materialises
+/// the f64 elements into a temporary `Vec<f64>`, and forwards to
+/// `js_native_call_method`. Lets the caller use a single uniform shape for
+/// `recv.method(...args)` without exposing array layout to the dispatcher.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_call_method_apply(
+    object: f64,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_array_handle: i64,
+) -> f64 {
+    let arr = args_array_handle as *const crate::array::ArrayHeader;
+    let len = if arr.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(arr) as usize
+    };
+    let buf: Vec<f64> = (0..len)
+        .map(|i| crate::array::js_array_get_f64(arr, i as u32))
+        .collect();
+    let (args_ptr, args_len) = if buf.is_empty() {
+        (std::ptr::null::<f64>(), 0_usize)
+    } else {
+        (buf.as_ptr(), buf.len())
+    };
+    js_native_call_method(
+        object,
+        method_name_ptr,
+        method_name_len,
+        args_ptr,
+        args_len,
+    )
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,
@@ -4142,6 +4235,180 @@ pub unsafe extern "C" fn js_native_call_method(
                     }
                     return f64::from_bits(JSValue::int32(-1).bits());
                 }
+                // Refs #421 — common string methods on any-typed receivers.
+                // Hono's compiled JS (and most npm packages with stripped TS
+                // types) does `request.url.indexOf("/")` where `url` is in
+                // any-typed position because the type annotation on
+                // `(request) =>` was erased at bundle time. Without these
+                // arms, the v0.5.593 catch-all throws `(string).indexOf is
+                // not a function`. Each arm extracts the search-string
+                // argument and calls the existing `js_string_*` runtime
+                // helper. Static call sites for typed string receivers keep
+                // their inline paths in `lower_string_method.rs` and don't
+                // come through this dispatcher.
+                "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith"
+                | "concat" => {
+                    let arg_str = |i: usize| -> *const crate::StringHeader {
+                        if i < args_len && !args_ptr.is_null() {
+                            let v = unsafe { *args_ptr.add(i) };
+                            crate::value::js_get_string_pointer_unified(v)
+                                as *const crate::StringHeader
+                        } else {
+                            std::ptr::null()
+                        }
+                    };
+                    let needle = arg_str(0);
+                    // Integer-returning methods MUST return raw `i as f64` (not
+                    // NaN-boxed INT32_TAG) — otherwise downstream comparisons
+                    // like `idx < url.length` fail because NaN-boxed values
+                    // are NaN and any comparison with NaN returns false. The
+                    // typed string-method path in `lower_string_method.rs`
+                    // uses `sitofp` (signed-int-to-float) for the same reason.
+                    // Boolean-returning methods stay as TAG_TRUE/FALSE since
+                    // codegen's `js_is_truthy` and explicit `=== true/false`
+                    // checks both unbox these tags correctly (and Node's
+                    // `Array.prototype.includes` etc. on plain values
+                    // already use this representation).
+                    if needle.is_null() {
+                        // Match Node: `s.indexOf(undefined)` → -1, includes → false.
+                        return match method_name {
+                            "indexOf" | "lastIndexOf" => -1.0_f64,
+                            "includes" | "startsWith" | "endsWith" => {
+                                f64::from_bits(JSValue::bool(false).bits())
+                            }
+                            "concat" => f64::from_bits(JSValue::string_ptr(s_ptr as *mut crate::StringHeader).bits()),
+                            _ => f64::from_bits(JSValue::undefined().bits()),
+                        };
+                    }
+                    return match method_name {
+                        "indexOf" => {
+                            let from = if args_len >= 2 { arg_i32(1) } else { 0 };
+                            crate::string::js_string_index_of_from(s_ptr, needle, from) as f64
+                        }
+                        "includes" => {
+                            let from = if args_len >= 2 { arg_i32(1) } else { 0 };
+                            let i = crate::string::js_string_index_of_from(s_ptr, needle, from);
+                            f64::from_bits(JSValue::bool(i >= 0).bits())
+                        }
+                        "lastIndexOf" => {
+                            crate::string::js_string_last_index_of(s_ptr, needle) as f64
+                        }
+                        "startsWith" => {
+                            let at = if args_len >= 2 { arg_i32(1) } else { 0 };
+                            let b = crate::string::js_string_starts_with_at(s_ptr, needle, at);
+                            f64::from_bits(JSValue::bool(b != 0).bits())
+                        }
+                        "endsWith" => {
+                            let len_i32 = unsafe { (*s_ptr).byte_len } as i32;
+                            let at = if args_len >= 2 { arg_i32(1) } else { len_i32 };
+                            let b = crate::string::js_string_ends_with_at(s_ptr, needle, at);
+                            f64::from_bits(JSValue::bool(b != 0).bits())
+                        }
+                        "concat" => {
+                            let r = crate::string::js_string_concat(s_ptr, needle);
+                            f64::from_bits(JSValue::string_ptr(r).bits())
+                        }
+                        _ => f64::from_bits(JSValue::undefined().bits()),
+                    };
+                }
+                "toUpperCase" => {
+                    let r = crate::string::js_string_to_upper_case(s_ptr);
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "toLowerCase" => {
+                    let r = crate::string::js_string_to_lower_case(s_ptr);
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "trim" => {
+                    let r = crate::string::js_string_trim(s_ptr);
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "trimStart" | "trimLeft" => {
+                    let r = crate::string::js_string_trim_start(s_ptr);
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "trimEnd" | "trimRight" => {
+                    let r = crate::string::js_string_trim_end(s_ptr);
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "substring" => {
+                    let len_i32 = unsafe { (*s_ptr).byte_len } as i32;
+                    let start = if args_len >= 1 { arg_i32(0) } else { 0 };
+                    let end = if args_len >= 2 { arg_i32(1) } else { len_i32 };
+                    let r = crate::string::js_string_substring(s_ptr, start, end);
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "repeat" => {
+                    let n = if args_len >= 1 { arg_i32(0) } else { 0 };
+                    let r = crate::string::js_string_repeat(s_ptr, n);
+                    if r.is_null() {
+                        return f64::from_bits(JSValue::undefined().bits());
+                    }
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "split" => {
+                    let sep = if args_len >= 1 && !args_ptr.is_null() {
+                        let v = unsafe { *args_ptr };
+                        crate::value::js_get_string_pointer_unified(v)
+                            as *const crate::StringHeader
+                    } else {
+                        std::ptr::null()
+                    };
+                    let arr = crate::string::js_string_split(s_ptr, sep);
+                    return f64::from_bits(JSValue::pointer(arr as *mut u8).bits());
+                }
+                "replace" | "replaceAll" => {
+                    // Two-arg shape: (pattern, replacement). pattern can be a
+                    // string OR a RegExp; replacement is a string. Function
+                    // replacements aren't supported here yet — they need
+                    // closure dispatch and aren't on hono's hot path.
+                    let pat_str = if args_len >= 1 && !args_ptr.is_null() {
+                        let v = unsafe { *args_ptr };
+                        crate::value::js_get_string_pointer_unified(v)
+                            as *const crate::StringHeader
+                    } else {
+                        std::ptr::null()
+                    };
+                    let repl_str = if args_len >= 2 && !args_ptr.is_null() {
+                        let v = unsafe { *args_ptr.add(1) };
+                        crate::value::js_get_string_pointer_unified(v)
+                            as *const crate::StringHeader
+                    } else {
+                        std::ptr::null()
+                    };
+                    // Detect RegExp pattern: NaN-boxed pointer to a RegExpHeader.
+                    if args_len >= 1 && !args_ptr.is_null() {
+                        let v = unsafe { *args_ptr };
+                        let jsv = JSValue::from_bits(v.to_bits());
+                        if jsv.is_pointer() {
+                            // Probe whether the pointer is a RegExpHeader by
+                            // checking the GC type tag the regex helpers
+                            // already validate; if it's not, the regex helper
+                            // returns the original string unchanged. The
+                            // global flag on the RegExp determines whether
+                            // it replaces all or just the first.
+                            let regex_ptr =
+                                jsv.as_pointer::<crate::regex::RegExpHeader>();
+                            // Heuristic: a non-null POINTER_TAG that's not a
+                            // string/array (those have different GC type tags)
+                            // is treated as a RegExp here. The runtime helper
+                            // already validates internally and falls back
+                            // safely on mismatch.
+                            if !regex_ptr.is_null() {
+                                let r = crate::regex::js_string_replace_regex(
+                                    s_ptr, regex_ptr, repl_str,
+                                );
+                                return f64::from_bits(JSValue::string_ptr(r).bits());
+                            }
+                        }
+                    }
+                    let r = if method_name == "replaceAll" {
+                        crate::regex::js_string_replace_all_string(s_ptr, pat_str, repl_str)
+                    } else {
+                        crate::regex::js_string_replace_string(s_ptr, pat_str, repl_str)
+                    };
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
                 _ => {} // not a handled string method — fall through to TypeError catch-all
             }
         }
@@ -4275,6 +4542,56 @@ pub unsafe extern "C" fn js_native_call_method(
                         let result = crate::array::js_array_with(arr, index, value);
                         return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                     }
+                    // Issue #546 followup: defensive `some` / `every` /
+                    // `find` / `findIndex` / `findLast` / `findLastIndex`
+                    // arms for any-typed receivers that escape the HIR
+                    // fast-path. The `is_class_overlapping_method` guard
+                    // (expr_call.rs ~2621) bails on Any-typed locals — so
+                    // a destructured `const { arr } = entry; arr.some(cb)`
+                    // (where `arr` lost its `EntityId<any>[]` type through
+                    // destructuring) silently fell through to the object
+                    // field-scan and returned the array itself, producing
+                    // `typeof = object` instead of a boolean. The hooks
+                    // module in @codehz/ecs hits this exact pattern in
+                    // `triggerMultiComponentHooks`, so on_set never fired.
+                    "some" if args_len >= 1 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
+                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        return crate::array::js_array_some(arr, cb_ptr);
+                    }
+                    "every" if args_len >= 1 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
+                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        return crate::array::js_array_every(arr, cb_ptr);
+                    }
+                    "find" if args_len >= 1 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
+                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        return crate::array::js_array_find(arr, cb_ptr);
+                    }
+                    "findIndex" if args_len >= 1 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
+                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        let idx = crate::array::js_array_findIndex(arr, cb_ptr);
+                        return idx as f64;
+                    }
+                    "findLast" if args_len >= 1 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
+                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        return crate::array::js_array_find_last(arr, cb_ptr);
+                    }
+                    "findLastIndex" if args_len >= 1 && !args_ptr.is_null() => {
+                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let cb_bits = (*args_ptr).to_bits() & 0x0000_FFFF_FFFF_FFFF;
+                        let cb_ptr = cb_bits as *const crate::closure::ClosureHeader;
+                        let idx = crate::array::js_array_find_last_index(arr, cb_ptr);
+                        return idx as f64;
+                    }
                     _ => {} // not a handled array method — fall through to object dispatch
                 }
             }
@@ -4366,22 +4683,44 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
                     if let Some(ref reg) = *registry {
-                        if let Some(vtable) = reg.get(&class_id) {
-                            if let Some(entry) = vtable.methods.get(method_name) {
-                                vtable_ic_insert(
-                                    class_id,
-                                    method_name_ptr as usize,
-                                    entry.func_ptr,
-                                    entry.param_count,
-                                );
-                                let this_i64 = jsval.as_pointer::<u8>() as i64;
-                                return call_vtable_method(
-                                    entry.func_ptr,
-                                    this_i64,
-                                    args_ptr,
-                                    args_len,
-                                    entry.param_count,
-                                );
+                        // Refs #420: walk the parent chain via the class
+                        // registry. Per JS spec, `subInstance.method()` for
+                        // a method defined on a parent dispatches to the
+                        // parent's implementation — drizzle's
+                        // `serial("id").primaryKey()` where primaryKey is on
+                        // ColumnBuilder (grandparent) but the receiver is a
+                        // PgSerialBuilder (grandchild). The codegen-side
+                        // dispatch tower in `lower_call.rs` only registers
+                        // classes the importing module knows about; for
+                        // not-by-name-imported subclasses (return values of
+                        // imported functions) we depend on this runtime walk.
+                        let mut cur_cid = class_id;
+                        let mut depth = 0u32;
+                        while depth < 32 {
+                            if let Some(vtable) = reg.get(&cur_cid) {
+                                if let Some(entry) = vtable.methods.get(method_name) {
+                                    vtable_ic_insert(
+                                        class_id,
+                                        method_name_ptr as usize,
+                                        entry.func_ptr,
+                                        entry.param_count,
+                                    );
+                                    let this_i64 = jsval.as_pointer::<u8>() as i64;
+                                    return call_vtable_method(
+                                        entry.func_ptr,
+                                        this_i64,
+                                        args_ptr,
+                                        args_len,
+                                        entry.param_count,
+                                    );
+                                }
+                            }
+                            match get_parent_class_id(cur_cid) {
+                                Some(pid) if pid != 0 => {
+                                    cur_cid = pid;
+                                    depth += 1;
+                                }
+                                _ => break,
                             }
                         }
                     }
@@ -4546,22 +4885,35 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
                     if let Some(ref reg) = *registry {
-                        if let Some(vtable) = reg.get(&class_id) {
-                            if let Some(entry) = vtable.methods.get(method_name) {
-                                vtable_ic_insert(
-                                    class_id,
-                                    method_name_ptr as usize,
-                                    entry.func_ptr,
-                                    entry.param_count,
-                                );
-                                let this_i64 = raw_bits as i64;
-                                return call_vtable_method(
-                                    entry.func_ptr,
-                                    this_i64,
-                                    args_ptr,
-                                    args_len,
-                                    entry.param_count,
-                                );
+                        // Refs #420: parent-chain walk (mirror of the path
+                        // above for raw pointer instances).
+                        let mut cur_cid = class_id;
+                        let mut depth = 0u32;
+                        while depth < 32 {
+                            if let Some(vtable) = reg.get(&cur_cid) {
+                                if let Some(entry) = vtable.methods.get(method_name) {
+                                    vtable_ic_insert(
+                                        class_id,
+                                        method_name_ptr as usize,
+                                        entry.func_ptr,
+                                        entry.param_count,
+                                    );
+                                    let this_i64 = raw_bits as i64;
+                                    return call_vtable_method(
+                                        entry.func_ptr,
+                                        this_i64,
+                                        args_ptr,
+                                        args_len,
+                                        entry.param_count,
+                                    );
+                                }
+                            }
+                            match get_parent_class_id(cur_cid) {
+                                Some(pid) if pid != 0 => {
+                                    cur_cid = pid;
+                                    depth += 1;
+                                }
+                                _ => break,
                             }
                         }
                     }
@@ -5969,6 +6321,26 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     unsafe {
+        // Symbol-keyed lookup: route through SYMBOL_PROPERTIES side table.
+        // drizzle's `is(value, type)` checks `entityKind` which is a Symbol;
+        // string-coercion would yield null and the check would always fail.
+        // Refs #420.
+        if crate::symbol::js_is_symbol(key_value) != 0 {
+            // ClassRef receivers are NaN-boxed as INT32_TAG (top16 = 0x7FFE)
+            // with the class_id in the low 32 bits. Consult the
+            // class-static-symbol side table populated by
+            // `js_class_register_static_symbol`. Refs #420 (drizzle's
+            // `Object.prototype.hasOwnProperty.call(Table, entityKind)`).
+            let bits = obj_value.to_bits();
+            if (bits >> 48) == 0x7FFE {
+                let class_id = (bits & 0xFFFF_FFFF) as u32;
+                let present =
+                    crate::symbol::class_static_symbol_lookup(class_id, key_value).is_some();
+                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+            }
+            let present = crate::symbol::js_object_has_own_symbol(obj_value, key_value);
+            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+        }
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() || (obj as usize) < 0x1000000 {
             return f64::from_bits(TAG_FALSE);

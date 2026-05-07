@@ -6,9 +6,19 @@ extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call4(
+        closure: *const u8,
+        arg0: f64,
+        arg1: f64,
+        arg2: f64,
+        arg3: f64,
+    ) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
+    fn js_nanbox_pointer(ptr: i64) -> f64;
+    fn js_array_alloc(capacity: u32) -> *mut std::ffi::c_void;
+    fn js_array_push_f64(arr: *mut std::ffi::c_void, value: f64) -> *mut std::ffi::c_void;
     fn js_promise_run_microtasks() -> i32;
     fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
 }
@@ -132,6 +142,46 @@ pub fn invoke2(key: i64, arg1: f64, arg2: f64) {
     }
 }
 
+/// Invoke a registered callback with 4 arguments. Used by the issue #552
+/// geolocation success callback `(lat, lng, accuracy, timestamp_ms)`.
+pub fn invoke4(key: i64, arg0: f64, arg1: f64, arg2: f64, arg3: f64) {
+    let closure_f64 = {
+        let guard = CALLBACKS.lock().unwrap();
+        guard.as_ref().and_then(|m| m.get(&key).copied())
+    };
+    if let Some(closure_f64) = closure_f64 {
+        let closure_ptr = closure_f64.to_bits() as *const u8;
+        unsafe {
+            js_closure_call4(closure_ptr, arg0, arg1, arg2, arg3);
+        }
+    }
+}
+
+/// Invoke a registered callback with a single string-array argument. Each
+/// path is allocated as a NaN-boxed Perry string and pushed into a fresh
+/// `js_array_alloc` array; the array pointer is then NaN-boxed and passed
+/// as the sole argument. Used by the issue #552 image picker callback.
+pub fn invoke_with_string_array(key: i64, paths: &[String]) {
+    let closure_f64 = {
+        let guard = CALLBACKS.lock().unwrap();
+        guard.as_ref().and_then(|m| m.get(&key).copied())
+    };
+    if let Some(closure_f64) = closure_f64 {
+        let closure_ptr = closure_f64.to_bits() as *const u8;
+        unsafe {
+            let mut arr = js_array_alloc(paths.len() as u32);
+            for p in paths {
+                let bytes = p.as_bytes();
+                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+                let nb_str = js_nanbox_string(str_ptr as i64);
+                arr = js_array_push_f64(arr, nb_str);
+            }
+            let nb_arr = js_nanbox_pointer(arr as i64);
+            js_closure_call1(closure_ptr, nb_arr);
+        }
+    }
+}
+
 /// JNI entry point: called from Java PerryBridge.nativeInvokeCallback0(long key).
 /// This runs on the UI thread. Pumps microtasks after to drive async/await.
 #[no_mangle]
@@ -187,5 +237,46 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallbackWithString(
         js_nanbox_string(str_ptr as i64)
     };
     invoke1(key as i64, nanboxed);
+    pump_microtasks();
+}
+
+/// JNI entry point: called from Java PerryBridge.nativeInvokeCallback4(long key, double, double, double, double).
+/// Issue #552 geolocation success callback: (lat, lng, accuracy, timestamp_ms).
+#[no_mangle]
+pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallback4(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    key: jni::sys::jlong,
+    arg0: jni::sys::jdouble,
+    arg1: jni::sys::jdouble,
+    arg2: jni::sys::jdouble,
+    arg3: jni::sys::jdouble,
+) {
+    invoke4(key as i64, arg0, arg1, arg2, arg3);
+    pump_microtasks();
+}
+
+/// JNI entry point: called from Java PerryBridge.nativeInvokeCallbackWithStringArray(long key, String[] paths).
+/// Issue #552 image picker callback: passes a NaN-boxed Perry array of NaN-boxed Perry strings.
+#[no_mangle]
+pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallbackWithStringArray(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    key: jni::sys::jlong,
+    paths: jni::objects::JObjectArray,
+) {
+    let mut rust_paths: Vec<String> = Vec::new();
+    if let Ok(len) = env.get_array_length(&paths) {
+        for i in 0..len {
+            if let Ok(item) = env.get_object_array_element(&paths, i) {
+                let jstr: jni::objects::JString = item.into();
+                let s: Option<String> = env.get_string(&jstr).map(|j| j.into()).ok();
+                if let Some(s) = s {
+                    rust_paths.push(s);
+                }
+            }
+        }
+    }
+    invoke_with_string_array(key as i64, &rust_paths);
     pump_microtasks();
 }

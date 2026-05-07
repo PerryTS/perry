@@ -57,6 +57,17 @@ object PerryBridge {
     private var pendingLocationCallbackKey: Long = 0
     private const val LOCATION_PERMISSION_REQUEST = 43
 
+    // Issue #552 geolocation + image picker
+    private const val GEOLOCATION_PERMISSION_REQUEST = 45
+    private const val IMAGE_PICK_REQUEST = 46
+    private var pendingGeolocationSuccessKey: Long = 0
+    private var pendingGeolocationErrorKey: Long = 0
+    private var pendingGeolocationPermissionKey: Long = 0
+    private var pendingImagePickerKey: Long = 0
+    private var pendingImagePickerMaxCount: Int = 0
+    private val watchListeners = mutableMapOf<Long, android.location.LocationListener>()
+    private var nextWatchId: Long = 1L
+
     // Audio permission tracking
     private const val AUDIO_PERMISSION_REQUEST = 44
     private var audioPermissionGranted = false
@@ -401,6 +412,288 @@ object PerryBridge {
             fetchLastLocation(pendingLocationCallbackKey)
         } else {
             nativeInvokeCallback2(pendingLocationCallbackKey, Double.NaN, Double.NaN)
+        }
+    }
+
+    // --- Geolocation (issue #552) ---
+
+    @JvmStatic
+    fun requestGeolocationGetCurrent(successKey: Long, errorKey: Long) {
+        pendingGeolocationSuccessKey = successKey
+        pendingGeolocationErrorKey = errorKey
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { requestGeolocationGetCurrent(successKey, errorKey) }
+            return
+        }
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            fetchLocationOnce(successKey, errorKey)
+        } else {
+            ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                GEOLOCATION_PERMISSION_REQUEST
+            )
+        }
+    }
+
+    private fun fetchLocationOnce(successKey: Long, errorKey: Long) {
+        try {
+            val lm = activity.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            // Try last-known position first (cheap, often sufficient).
+            @Suppress("MissingPermission")
+            val cached = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (cached != null) {
+                nativeInvokeCallback4(successKey, cached.latitude, cached.longitude,
+                    cached.accuracy.toDouble(), cached.time.toDouble())
+                return
+            }
+            // No cached fix — request a single update on the network provider
+            // (least battery-hungry; GPS as fallback).
+            val provider = when {
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                else -> {
+                    nativeInvokeCallbackWithString(errorKey, "no-provider-available")
+                    return
+                }
+            }
+            @Suppress("MissingPermission")
+            lm.requestSingleUpdate(provider,
+                object : android.location.LocationListener {
+                    override fun onLocationChanged(location: android.location.Location) {
+                        nativeInvokeCallback4(successKey, location.latitude, location.longitude,
+                            location.accuracy.toDouble(), location.time.toDouble())
+                    }
+                    @Deprecated("Deprecated in Java")
+                    override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+                    override fun onProviderEnabled(provider: String) {}
+                    override fun onProviderDisabled(provider: String) {
+                        nativeInvokeCallbackWithString(errorKey, "provider-disabled")
+                    }
+                },
+                Looper.getMainLooper()
+            )
+        } catch (e: SecurityException) {
+            nativeInvokeCallbackWithString(errorKey, "permission-denied")
+        } catch (e: Exception) {
+            nativeInvokeCallbackWithString(errorKey, e.message ?: "location-error")
+        }
+    }
+
+    @JvmStatic
+    fun requestGeolocationWatch(callbackKey: Long): Long {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            // We need a synchronous return value, so block briefly on the
+            // UI thread to register the listener.
+            val latch = CountDownLatch(1)
+            var result: Long = 0
+            uiHandler.post {
+                result = registerWatchListener(callbackKey)
+                latch.countDown()
+            }
+            latch.await()
+            return result
+        }
+        return registerWatchListener(callbackKey)
+    }
+
+    private fun registerWatchListener(callbackKey: Long): Long {
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            // No permission — return 0 (caller should request permission first).
+            return 0L
+        }
+        val id = nextWatchId++
+        val listener = object : android.location.LocationListener {
+            override fun onLocationChanged(location: android.location.Location) {
+                nativeInvokeCallback4(callbackKey, location.latitude, location.longitude,
+                    location.accuracy.toDouble(), location.time.toDouble())
+            }
+            @Deprecated("Deprecated in Java")
+            override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+        }
+        try {
+            val lm = activity.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val provider = when {
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                else -> return 0L
+            }
+            @Suppress("MissingPermission")
+            lm.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper())
+            watchListeners[id] = listener
+            return id
+        } catch (e: Exception) {
+            return 0L
+        }
+    }
+
+    @JvmStatic
+    fun stopGeolocationWatch(id: Long) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { stopGeolocationWatch(id) }
+            return
+        }
+        val listener = watchListeners.remove(id) ?: return
+        try {
+            val lm = activity.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            lm.removeUpdates(listener)
+        } catch (_: Exception) {}
+    }
+
+    @JvmStatic
+    fun requestGeolocationPermission(callbackKey: Long) {
+        pendingGeolocationPermissionKey = callbackKey
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { requestGeolocationPermission(callbackKey) }
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            nativeInvokeCallbackWithString(callbackKey, "granted")
+        } else {
+            // Request via standard permission flow; result routed through
+            // PerryActivity.onRequestPermissionsResult → onGeolocationPermissionResult.
+            ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                GEOLOCATION_PERMISSION_REQUEST
+            )
+        }
+    }
+
+    /** Routed from PerryActivity.onRequestPermissionsResult. */
+    fun onGeolocationPermissionResult(granted: Boolean) {
+        if (pendingGeolocationPermissionKey != 0L) {
+            nativeInvokeCallbackWithString(
+                pendingGeolocationPermissionKey,
+                if (granted) "granted" else "denied"
+            )
+            pendingGeolocationPermissionKey = 0L
+        }
+        // If a getCurrent was waiting on permission, fulfill it now.
+        if (pendingGeolocationSuccessKey != 0L) {
+            if (granted) {
+                fetchLocationOnce(pendingGeolocationSuccessKey, pendingGeolocationErrorKey)
+            } else {
+                nativeInvokeCallbackWithString(pendingGeolocationErrorKey, "permission-denied")
+            }
+            pendingGeolocationSuccessKey = 0L
+            pendingGeolocationErrorKey = 0L
+        }
+    }
+
+    // --- Image picker (issue #552) ---
+
+    @JvmStatic
+    fun requestImagePickerPick(maxCount: Int, allowMultiple: Boolean, callbackKey: Long) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { requestImagePickerPick(maxCount, allowMultiple, callbackKey) }
+            return
+        }
+        pendingImagePickerKey = callbackKey
+        pendingImagePickerMaxCount = maxCount
+
+        // Build the picker intent. Photo Picker (API 33+) is the modern,
+        // privacy-preserving path. Older devices fall back to ACTION_GET_CONTENT.
+        val intent = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).apply {
+                type = "image/*"
+                if (allowMultiple) {
+                    val extraName = android.provider.MediaStore.EXTRA_PICK_IMAGES_MAX
+                    val limit = if (maxCount in 1..10) maxCount else 10
+                    putExtra(extraName, limit)
+                }
+            }
+        } else {
+            Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+                if (allowMultiple) {
+                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
+            }
+        }
+        try {
+            activity.startActivityForResult(intent, IMAGE_PICK_REQUEST)
+        } catch (e: Exception) {
+            // No suitable activity — return empty array.
+            nativeInvokeCallbackWithStringArray(callbackKey, emptyArray())
+            pendingImagePickerKey = 0L
+        }
+    }
+
+    /**
+     * Routed from PerryActivity.onActivityResult. Copies each selected URI's
+     * content into a fresh file under the app's cache directory and returns
+     * the absolute paths (so the user can fs.readFileSync them or upload).
+     */
+    fun onImagePickerResult(resultCode: Int, data: Intent?) {
+        val key = pendingImagePickerKey
+        val max = pendingImagePickerMaxCount
+        pendingImagePickerKey = 0L
+        if (key == 0L) return
+
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            nativeInvokeCallbackWithStringArray(key, emptyArray())
+            return
+        }
+
+        val uris = mutableListOf<Uri>()
+        val clip = data.clipData
+        if (clip != null) {
+            val count = clip.itemCount
+            for (i in 0 until count) {
+                if (max in 1..uris.size) break
+                clip.getItemAt(i)?.uri?.let { uris.add(it) }
+            }
+        } else {
+            data.data?.let { uris.add(it) }
+        }
+
+        val paths = mutableListOf<String>()
+        val cacheDir = activity.cacheDir
+        for ((i, uri) in uris.withIndex()) {
+            try {
+                val ext = guessImageExtension(uri)
+                val out = java.io.File(cacheDir, "perry_pick_${System.currentTimeMillis()}_$i.$ext")
+                activity.contentResolver.openInputStream(uri)?.use { input ->
+                    java.io.FileOutputStream(out).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                if (out.exists() && out.length() > 0) {
+                    paths.add(out.absolutePath)
+                }
+            } catch (_: Exception) {
+                // skip this URI; user gets the others
+            }
+        }
+        nativeInvokeCallbackWithStringArray(key, paths.toTypedArray())
+    }
+
+    private fun guessImageExtension(uri: Uri): String {
+        val mime = activity.contentResolver.getType(uri) ?: return "jpg"
+        return when (mime) {
+            "image/jpeg" -> "jpg"
+            "image/png" -> "png"
+            "image/gif" -> "gif"
+            "image/webp" -> "webp"
+            "image/heic" -> "heic"
+            "image/heif" -> "heif"
+            "image/bmp" -> "bmp"
+            else -> "jpg"
         }
     }
 
@@ -808,6 +1101,14 @@ object PerryBridge {
 
     @JvmStatic
     external fun nativeInvokeCallbackWithString(key: Long, text: String)
+
+    // Issue #552 — extra invoke shapes for the geolocation success callback
+    // (4 doubles) and the image-picker callback (string array).
+    @JvmStatic
+    external fun nativeInvokeCallback4(key: Long, a0: Double, a1: Double, a2: Double, a3: Double)
+
+    @JvmStatic
+    external fun nativeInvokeCallbackWithStringArray(key: Long, paths: Array<String>)
 
     @JvmStatic
     external fun nativeFileDialogResult(key: Long, content: String?)

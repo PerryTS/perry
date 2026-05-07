@@ -1002,6 +1002,21 @@ pub(crate) fn class_field_global_index(
 ) -> Option<u32> {
     // Walk parent chain to find the field. Parent fields come first in
     // the slot layout, so we sum parent counts as we descend.
+    //
+    // Refs #420: must skip computed-key fields (`[Symbol.X] = init`) when
+    // counting positions — the inline-slot layout in `packed_keys` only
+    // includes string-keyed fields. If we count computed-key fields here,
+    // the index used for `this.config = {...}` writes shifts past where
+    // readers look for "config", and every cross-module access reads from
+    // an uninitialised slot (raw f64 zero, which presents as `number 0`
+    // when treated as a NaN-boxed value). drizzle's `class ColumnBuilder
+    // { config; $default = this.$defaultFn; $onUpdate = this.$onUpdateFn; }`
+    // shape — where the `config;` declaration sits among method-ref class
+    // fields — surfaces this as `column.config = 0` for every column
+    // builder when read from the importing module.
+    fn count_keyable(fields: &[perry_hir::ClassField]) -> u32 {
+        fields.iter().filter(|f| f.key_expr.is_none()).count() as u32
+    }
     fn walk(ctx: &FnCtx<'_>, class_name: &str, property: &str, offset: u32) -> Option<u32> {
         let class = ctx.classes.get(class_name)?;
         // Bail if a getter/setter shadows the field — those need real
@@ -1017,7 +1032,7 @@ pub(crate) fn class_field_global_index(
             let mut p = Some(parent_name.to_string());
             while let Some(name) = p {
                 if let Some(parent) = ctx.classes.get(&name) {
-                    p_count += parent.fields.len() as u32;
+                    p_count += count_keyable(&parent.fields);
                     p = parent.extends_name.clone();
                 } else {
                     return None; // unresolvable parent — no inline path
@@ -1028,9 +1043,18 @@ pub(crate) fn class_field_global_index(
             0
         };
         // Look for the field on this class first (the most-derived
-        // declaration shadows parents in TypeScript).
-        if let Some(idx) = class.fields.iter().position(|f| f.name == property) {
-            return Some(offset + parent_count + idx as u32);
+        // declaration shadows parents in TypeScript). Position within the
+        // own-fields list must skip computed-key entries to match the
+        // packed_keys layout the runtime sees.
+        let mut own_idx: u32 = 0;
+        for f in &class.fields {
+            if f.key_expr.is_some() {
+                continue;
+            }
+            if f.name == property {
+                return Some(offset + parent_count + own_idx);
+            }
+            own_idx += 1;
         }
         // Otherwise walk into the parent chain looking for the field.
         if let Some(parent_name) = class.extends_name.as_deref() {

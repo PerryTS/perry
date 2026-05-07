@@ -1,4 +1,5 @@
 pub mod app;
+pub mod issue_552_stub;
 pub mod audio;
 #[cfg(target_os = "windows")]
 pub mod dpi_compat;

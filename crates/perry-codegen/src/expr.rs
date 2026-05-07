@@ -2946,6 +2946,19 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // (which IS the NaN-boxed value for non-number fields — same bit
         // pattern, runtime callers re-interpret based on context).
         Expr::PropertyGet { object, property } => {
+            // Cross-module static field access. When `Base` is an imported
+            // class, HIR lowering emits `PropertyGet { ExternFuncRef("Base"),
+            // property }` instead of `StaticFieldGet` because the lowering
+            // ctx's `class_statics` registry only sees same-module classes.
+            // Route through the static-field global map populated from
+            // `opts.imported_classes` at codegen entry. Refs #420.
+            if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+                let key = (name.clone(), property.clone());
+                if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
+                    let g_ref = format!("@{}", global_name);
+                    return Ok(ctx.block().load(DOUBLE, &g_ref));
+                }
+            }
             // Scalar replacement fast path: if the receiver is a scalar-replaced
             // local, load directly from the field's alloca — no heap access.
             if let Expr::LocalGet(id) = object.as_ref() {
@@ -4199,7 +4212,55 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
             // Inline the parent constructor with the SAME this and a
             // fresh param scope for the parent's params.
-            if let Some(parent_ctor) = &parent_class.constructor {
+            //
+            // Walk the parent chain when the IMMEDIATE parent has no
+            // constructor of its own — JS spec: an empty class implicitly
+            // forwards args to its super, so `class Mid extends Base {}`
+            // followed by `class Leaf extends Mid {}` calling `super(...)`
+            // must reach Base's constructor body. Without this walk,
+            // perry's super() produced a no-op when Mid had no ctor, and
+            // Base's `this.config = {...}` never ran. Refs #420 (drizzle
+            // PgSerialBuilder → PgColumnBuilder → ColumnBuilder chain
+            // where only ColumnBuilder has a ctor body).
+            // Walk up the parent chain to find the first class with a
+            // local constructor body OR a cross-module ctor stub WITH
+            // declared params. JS spec requires `class Mid extends Base {}`
+            // followed by `class Leaf extends Mid` calling `super(...)` to
+            // reach Base's ctor body (Mid has no ctor → implicit forward).
+            // Refs #420 (drizzle's PgSerialBuilder → PgColumnBuilder →
+            // ColumnBuilder where only ColumnBuilder has a body).
+            //
+            // We must skip past imported ctors with param_count=0 too —
+            // those represent empty-bodied derived classes whose imported
+            // standalone ctor would otherwise eat the incoming args
+            // without forwarding. Walking past them and dispatching
+            // directly to the ancestor-with-real-params standalone ctor
+            // preserves the args end-to-end.
+            let mut effective_parent_name = parent_name.clone();
+            let mut effective_parent_class = parent_class;
+            loop {
+                let has_local_body = effective_parent_class.constructor.is_some();
+                let has_real_imported_ctor = ctx
+                    .imported_class_ctors
+                    .get(&effective_parent_name)
+                    .map(|(_, n)| *n > 0)
+                    .unwrap_or(false);
+                if has_local_body || has_real_imported_ctor {
+                    break;
+                }
+                let Some(grandparent_name) =
+                    effective_parent_class.extends_name.as_deref().map(|s| s.to_string())
+                else {
+                    break;
+                };
+                let Some(gp_class) = ctx.classes.get(&grandparent_name).copied() else {
+                    break;
+                };
+                effective_parent_name = grandparent_name;
+                effective_parent_class = gp_class;
+            }
+
+            if let Some(parent_ctor) = &effective_parent_class.constructor {
                 let saved_locals = ctx.locals.clone();
                 let saved_local_types = ctx.local_types.clone();
 
@@ -4214,14 +4275,14 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.local_types.insert(param.id, param.ty.clone());
                 }
 
-                ctx.class_stack.push(parent_name);
+                ctx.class_stack.push(effective_parent_name);
                 crate::stmt::lower_stmts(ctx, &parent_ctor.body)?;
                 ctx.class_stack.pop();
 
                 ctx.locals = saved_locals;
                 ctx.local_types = saved_local_types;
             } else if let Some((ctor_name, param_count)) =
-                ctx.imported_class_ctors.get(&parent_name).cloned()
+                ctx.imported_class_ctors.get(&effective_parent_name).cloned()
             {
                 // Issue #485: parent class is imported (stub with `constructor: None`)
                 // and has no inlineable body in this module. Call the cross-module
@@ -4256,6 +4317,17 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .push((ctor_name.clone(), crate::types::VOID, ctor_param_types));
                 ctx.block().call_void(&ctor_name, &ctor_args);
             }
+
+            // After the parent body has run (which may have set `this.config`
+            // etc.), apply the CURRENT class's own field initializers — they
+            // may reference state set by the parent body. Per JS spec, field
+            // inits run immediately after super() returns. Refs #420
+            // (drizzle's PgText.enumValues = this.config.enumValues).
+            crate::lower_call::apply_field_initializers_recursive(
+                ctx,
+                &current_class_name,
+                crate::lower_call::FieldInitMode::SelfOnly,
+            )?;
 
             // super() evaluates to undefined in JS.
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
@@ -6308,8 +6380,21 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
-        // -------- ClassRef stub (returns class id 0 as a sentinel) --------
-        Expr::ClassRef(_) => Ok(double_literal(0.0)),
+        // -------- ClassRef --------
+        // Lower to the class's runtime id NaN-boxed with INT32_TAG. The
+        // runtime distinguishes class refs from other values via the tag,
+        // letting `Object.prototype.hasOwnProperty.call(SomeClass, sym)`
+        // route through the class-static-symbol side table for drizzle's
+        // `is(value, type)`. Falls back to `0.0` when the class isn't in
+        // class_ids (legacy callers checking truthiness). Refs #420.
+        Expr::ClassRef(name) => {
+            if let Some(&cid) = ctx.class_ids.get(name) {
+                let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
+                Ok(double_literal(f64::from_bits(bits)))
+            } else {
+                Ok(double_literal(0.0))
+            }
+        }
 
         // -------- CallSpread: function call with spread arguments --------
         // The common shape is `fn(...args)` — single spread, no regular
@@ -6419,6 +6504,71 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
                         return Ok(ctx.block().call(DOUBLE, &fname, &arg_slices));
                     }
+                }
+            }
+
+            // Method-call shape `recv.method(...args)` on an any-typed receiver
+            // (refs #421, hono blocker): without this arm, the closure-callee
+            // path below evaluates `recv.method` via `js_object_get_field_by_name`
+            // which returns undefined for class-prototype methods on dynamically
+            // typed receivers, and `js_closure_call_apply_with_spread` then
+            // silently no-ops. SmartRouter.match's inner `router.add(...routes[i])`
+            // hit exactly this — the inner router never received the route
+            // entries, so match returned empty `[[],[]]` even though the outer
+            // SmartRouter had the routes in #routes. Bundle every arg (regular
+            // + spread) into a single JS array, then dispatch through the new
+            // `js_native_call_method_apply` runtime helper which materialises
+            // the array into a temp buffer and forwards to `js_native_call_method`.
+            //
+            // Skip the same callee shapes the regular-Call path skips: GlobalGet
+            // (e.g. `console.log` — handled by the spread-bundling arm above),
+            // NativeModuleRef (dedicated codegen elsewhere), and ExternFuncRef
+            // (the previous `FuncRef` arm catches the FuncRef case; ExternFuncRef
+            // here means a top-level imported function reference, not a method).
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                let skip = matches!(
+                    object.as_ref(),
+                    Expr::GlobalGet(_) | Expr::NativeModuleRef(_) | Expr::ExternFuncRef { .. }
+                );
+                if !skip {
+                    let recv_box = lower_expr(ctx, object)?;
+                    // Build a single JS array containing every arg in order.
+                    let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
+                    for a in args {
+                        match a {
+                            CallArg::Expr(e) => {
+                                let v = lower_expr(ctx, e)?;
+                                acc_handle = ctx.block().call(
+                                    I64,
+                                    "js_array_push_f64",
+                                    &[(I64, &acc_handle), (DOUBLE, &v)],
+                                );
+                            }
+                            CallArg::Spread(e) => {
+                                let part_box = lower_expr(ctx, e)?;
+                                let part_handle = unbox_to_i64(ctx.block(), &part_box);
+                                acc_handle = ctx.block().call(
+                                    I64,
+                                    "js_array_concat",
+                                    &[(I64, &acc_handle), (I64, &part_handle)],
+                                );
+                            }
+                        }
+                    }
+                    let key_idx = ctx.strings.intern(property);
+                    let entry = ctx.strings.entry(key_idx);
+                    let bytes_global = format!("@{}", entry.bytes_global);
+                    let name_len_str = entry.byte_len.to_string();
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_native_call_method_apply",
+                        &[
+                            (DOUBLE, &recv_box),
+                            (PTR, &bytes_global),
+                            (I64, &name_len_str),
+                            (I64, &acc_handle),
+                        ],
+                    ));
                 }
             }
 
@@ -8129,6 +8279,24 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             Ok(v)
         }
+        // `static [Symbol.for("k")] = "v"` — register in the runtime's
+        // class-static-symbol side table. Refs #420 (drizzle).
+        Expr::ClassStaticSymbolSet {
+            class_name,
+            key,
+            value,
+        } => {
+            let key_v = lower_expr(ctx, key)?;
+            let val_v = lower_expr(ctx, value)?;
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                let cid_str = class_id.to_string();
+                ctx.block().call_void(
+                    "js_class_register_static_symbol",
+                    &[(crate::types::I32, &cid_str), (DOUBLE, &key_v), (DOUBLE, &val_v)],
+                );
+            }
+            Ok(val_v)
+        }
         Expr::NativeModuleRef(_) => Ok(double_literal(0.0)),
 
         // ObjectRest is the `...rest` capture in destructuring:
@@ -9089,6 +9257,19 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // checks work; calling those values via stored references would
         // need a separate runtime path that this commit doesn't add.
         Expr::ExternFuncRef { name, .. } => {
+            // Imported class references (refs #420 / drizzle): when `name`
+            // resolves to a class registered in `ctx.class_ids` (populated
+            // from `opts.imported_classes` for imported classes too), emit
+            // the same INT32-tagged class-id NaN-box that local `Expr::ClassRef`
+            // produces. This is what `js_object_has_own`'s Symbol-key branch
+            // looks for to consult `CLASS_STATIC_SYMBOLS`. Without this,
+            // `Object.prototype.hasOwnProperty.call(ImportedClass, sym)`
+            // always returned false because the receiver was a closure-pointer
+            // NaN-box (POINTER_TAG) rather than a class-ref (INT32_TAG).
+            if let Some(&cid) = ctx.class_ids.get(name) {
+                let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
+                return Ok(double_literal(f64::from_bits(bits)));
+            }
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
                 // Imported VARIABLES (exported consts/lets) need to be
                 // called through their getter to fetch the value, not

@@ -214,7 +214,24 @@ fn is_string_like(bits: u64) -> bool {
     if upper == (crate::value::SHORT_STRING_TAG >> 48) {
         return true;
     }
-    !extract_string_ptr_from_value(bits).is_null()
+    // STRING_TAG always identifies a string pointee — accept without GC check.
+    if upper == 0x7FFF {
+        return !extract_string_ptr_from_value(bits).is_null();
+    }
+    // Issue #549: POINTER_TAG and raw pointers must be GC-validated as strings
+    // before we treat them as string-like. Pre-fix, two distinct `{}` objects
+    // both got POINTER_TAG, both passed `is_string_like`, and `jsvalue_eq`
+    // content-compared them by reinterpreting `ObjectHeader` as `StringHeader`
+    // (class_id became byte_len, etc.) — colliding empty objects in `Set.add`.
+    let ptr = extract_string_ptr_from_value(bits);
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return false;
+    }
+    unsafe {
+        let gc_hdr =
+            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc_hdr).obj_type == crate::gc::GC_TYPE_STRING
+    }
 }
 
 /// Check if two JSValues are equal (for set element comparison).

@@ -2,10 +2,6 @@ package com.perry.app
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlarmManager
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -19,7 +15,6 @@ import android.location.LocationManager
 import android.media.ImageReader
 import android.net.Uri
 import android.view.PixelCopy
-import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -33,8 +28,6 @@ import android.view.TextureView
 import android.view.View
 import android.widget.*
 import androidx.core.app.ActivityCompat
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -63,6 +56,17 @@ object PerryBridge {
     // Location callback tracking
     private var pendingLocationCallbackKey: Long = 0
     private const val LOCATION_PERMISSION_REQUEST = 43
+
+    // Issue #552 geolocation + image picker
+    private const val GEOLOCATION_PERMISSION_REQUEST = 45
+    private const val IMAGE_PICK_REQUEST = 46
+    private var pendingGeolocationSuccessKey: Long = 0
+    private var pendingGeolocationErrorKey: Long = 0
+    private var pendingGeolocationPermissionKey: Long = 0
+    private var pendingImagePickerKey: Long = 0
+    private var pendingImagePickerMaxCount: Int = 0
+    private val watchListeners = mutableMapOf<Long, android.location.LocationListener>()
+    private var nextWatchId: Long = 1L
 
     // Audio permission tracking
     private const val AUDIO_PERMISSION_REQUEST = 44
@@ -411,6 +415,288 @@ object PerryBridge {
         }
     }
 
+    // --- Geolocation (issue #552) ---
+
+    @JvmStatic
+    fun requestGeolocationGetCurrent(successKey: Long, errorKey: Long) {
+        pendingGeolocationSuccessKey = successKey
+        pendingGeolocationErrorKey = errorKey
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { requestGeolocationGetCurrent(successKey, errorKey) }
+            return
+        }
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            fetchLocationOnce(successKey, errorKey)
+        } else {
+            ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                GEOLOCATION_PERMISSION_REQUEST
+            )
+        }
+    }
+
+    private fun fetchLocationOnce(successKey: Long, errorKey: Long) {
+        try {
+            val lm = activity.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            // Try last-known position first (cheap, often sufficient).
+            @Suppress("MissingPermission")
+            val cached = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (cached != null) {
+                nativeInvokeCallback4(successKey, cached.latitude, cached.longitude,
+                    cached.accuracy.toDouble(), cached.time.toDouble())
+                return
+            }
+            // No cached fix — request a single update on the network provider
+            // (least battery-hungry; GPS as fallback).
+            val provider = when {
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                else -> {
+                    nativeInvokeCallbackWithString(errorKey, "no-provider-available")
+                    return
+                }
+            }
+            @Suppress("MissingPermission")
+            lm.requestSingleUpdate(provider,
+                object : android.location.LocationListener {
+                    override fun onLocationChanged(location: android.location.Location) {
+                        nativeInvokeCallback4(successKey, location.latitude, location.longitude,
+                            location.accuracy.toDouble(), location.time.toDouble())
+                    }
+                    @Deprecated("Deprecated in Java")
+                    override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+                    override fun onProviderEnabled(provider: String) {}
+                    override fun onProviderDisabled(provider: String) {
+                        nativeInvokeCallbackWithString(errorKey, "provider-disabled")
+                    }
+                },
+                Looper.getMainLooper()
+            )
+        } catch (e: SecurityException) {
+            nativeInvokeCallbackWithString(errorKey, "permission-denied")
+        } catch (e: Exception) {
+            nativeInvokeCallbackWithString(errorKey, e.message ?: "location-error")
+        }
+    }
+
+    @JvmStatic
+    fun requestGeolocationWatch(callbackKey: Long): Long {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            // We need a synchronous return value, so block briefly on the
+            // UI thread to register the listener.
+            val latch = CountDownLatch(1)
+            var result: Long = 0
+            uiHandler.post {
+                result = registerWatchListener(callbackKey)
+                latch.countDown()
+            }
+            latch.await()
+            return result
+        }
+        return registerWatchListener(callbackKey)
+    }
+
+    private fun registerWatchListener(callbackKey: Long): Long {
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            // No permission — return 0 (caller should request permission first).
+            return 0L
+        }
+        val id = nextWatchId++
+        val listener = object : android.location.LocationListener {
+            override fun onLocationChanged(location: android.location.Location) {
+                nativeInvokeCallback4(callbackKey, location.latitude, location.longitude,
+                    location.accuracy.toDouble(), location.time.toDouble())
+            }
+            @Deprecated("Deprecated in Java")
+            override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+        }
+        try {
+            val lm = activity.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val provider = when {
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                else -> return 0L
+            }
+            @Suppress("MissingPermission")
+            lm.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper())
+            watchListeners[id] = listener
+            return id
+        } catch (e: Exception) {
+            return 0L
+        }
+    }
+
+    @JvmStatic
+    fun stopGeolocationWatch(id: Long) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { stopGeolocationWatch(id) }
+            return
+        }
+        val listener = watchListeners.remove(id) ?: return
+        try {
+            val lm = activity.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            lm.removeUpdates(listener)
+        } catch (_: Exception) {}
+    }
+
+    @JvmStatic
+    fun requestGeolocationPermission(callbackKey: Long) {
+        pendingGeolocationPermissionKey = callbackKey
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { requestGeolocationPermission(callbackKey) }
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            nativeInvokeCallbackWithString(callbackKey, "granted")
+        } else {
+            // Request via standard permission flow; result routed through
+            // PerryActivity.onRequestPermissionsResult → onGeolocationPermissionResult.
+            ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                GEOLOCATION_PERMISSION_REQUEST
+            )
+        }
+    }
+
+    /** Routed from PerryActivity.onRequestPermissionsResult. */
+    fun onGeolocationPermissionResult(granted: Boolean) {
+        if (pendingGeolocationPermissionKey != 0L) {
+            nativeInvokeCallbackWithString(
+                pendingGeolocationPermissionKey,
+                if (granted) "granted" else "denied"
+            )
+            pendingGeolocationPermissionKey = 0L
+        }
+        // If a getCurrent was waiting on permission, fulfill it now.
+        if (pendingGeolocationSuccessKey != 0L) {
+            if (granted) {
+                fetchLocationOnce(pendingGeolocationSuccessKey, pendingGeolocationErrorKey)
+            } else {
+                nativeInvokeCallbackWithString(pendingGeolocationErrorKey, "permission-denied")
+            }
+            pendingGeolocationSuccessKey = 0L
+            pendingGeolocationErrorKey = 0L
+        }
+    }
+
+    // --- Image picker (issue #552) ---
+
+    @JvmStatic
+    fun requestImagePickerPick(maxCount: Int, allowMultiple: Boolean, callbackKey: Long) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            uiHandler.post { requestImagePickerPick(maxCount, allowMultiple, callbackKey) }
+            return
+        }
+        pendingImagePickerKey = callbackKey
+        pendingImagePickerMaxCount = maxCount
+
+        // Build the picker intent. Photo Picker (API 33+) is the modern,
+        // privacy-preserving path. Older devices fall back to ACTION_GET_CONTENT.
+        val intent = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).apply {
+                type = "image/*"
+                if (allowMultiple) {
+                    val extraName = android.provider.MediaStore.EXTRA_PICK_IMAGES_MAX
+                    val limit = if (maxCount in 1..10) maxCount else 10
+                    putExtra(extraName, limit)
+                }
+            }
+        } else {
+            Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+                if (allowMultiple) {
+                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
+            }
+        }
+        try {
+            activity.startActivityForResult(intent, IMAGE_PICK_REQUEST)
+        } catch (e: Exception) {
+            // No suitable activity — return empty array.
+            nativeInvokeCallbackWithStringArray(callbackKey, emptyArray())
+            pendingImagePickerKey = 0L
+        }
+    }
+
+    /**
+     * Routed from PerryActivity.onActivityResult. Copies each selected URI's
+     * content into a fresh file under the app's cache directory and returns
+     * the absolute paths (so the user can fs.readFileSync them or upload).
+     */
+    fun onImagePickerResult(resultCode: Int, data: Intent?) {
+        val key = pendingImagePickerKey
+        val max = pendingImagePickerMaxCount
+        pendingImagePickerKey = 0L
+        if (key == 0L) return
+
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            nativeInvokeCallbackWithStringArray(key, emptyArray())
+            return
+        }
+
+        val uris = mutableListOf<Uri>()
+        val clip = data.clipData
+        if (clip != null) {
+            val count = clip.itemCount
+            for (i in 0 until count) {
+                if (max in 1..uris.size) break
+                clip.getItemAt(i)?.uri?.let { uris.add(it) }
+            }
+        } else {
+            data.data?.let { uris.add(it) }
+        }
+
+        val paths = mutableListOf<String>()
+        val cacheDir = activity.cacheDir
+        for ((i, uri) in uris.withIndex()) {
+            try {
+                val ext = guessImageExtension(uri)
+                val out = java.io.File(cacheDir, "perry_pick_${System.currentTimeMillis()}_$i.$ext")
+                activity.contentResolver.openInputStream(uri)?.use { input ->
+                    java.io.FileOutputStream(out).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                if (out.exists() && out.length() > 0) {
+                    paths.add(out.absolutePath)
+                }
+            } catch (_: Exception) {
+                // skip this URI; user gets the others
+            }
+        }
+        nativeInvokeCallbackWithStringArray(key, paths.toTypedArray())
+    }
+
+    private fun guessImageExtension(uri: Uri): String {
+        val mime = activity.contentResolver.getType(uri) ?: return "jpg"
+        return when (mime) {
+            "image/jpeg" -> "jpg"
+            "image/png" -> "png"
+            "image/gif" -> "gif"
+            "image/webp" -> "webp"
+            "image/heic" -> "heic"
+            "image/heif" -> "heif"
+            "image/bmp" -> "bmp"
+            else -> "jpg"
+        }
+    }
+
     // --- Audio Permission ---
 
     @JvmStatic
@@ -731,6 +1017,7 @@ object PerryBridge {
      * Show an Android Toast message on the UI thread.
      * Called from the Perry native thread via JNI; posts to uiHandler so
      * Toast.makeText runs on the main looper as required by the Android SDK.
+     * Toast.LENGTH_SHORT = 0 (approx 2s), consistent with the macOS 2.5s hold.
      */
     @JvmStatic
     fun showToast(msg: String) {
@@ -815,6 +1102,14 @@ object PerryBridge {
     @JvmStatic
     external fun nativeInvokeCallbackWithString(key: Long, text: String)
 
+    // Issue #552 — extra invoke shapes for the geolocation success callback
+    // (4 doubles) and the image-picker callback (string array).
+    @JvmStatic
+    external fun nativeInvokeCallback4(key: Long, a0: Double, a1: Double, a2: Double, a3: Double)
+
+    @JvmStatic
+    external fun nativeInvokeCallbackWithStringArray(key: Long, paths: Array<String>)
+
     @JvmStatic
     external fun nativeFileDialogResult(key: Long, content: String?)
 
@@ -826,259 +1121,4 @@ object PerryBridge {
 
     @JvmStatic
     external fun nativeMenuItemSelected(menuHandle: Long, index: Int)
-
-    /// Forwarded by `PerryNotificationReceiver.onReceive` when the user taps
-    /// a notification. The Rust side dispatches to the JS closure registered
-    /// via `notificationOnTap` with `(id, undefined)` — `action` will become
-    /// the action-button id once button registration lands (#97 follow-up).
-    @JvmStatic
-    external fun nativeNotificationTap(id: String)
-
-    /// Forwarded by `PerryFirebaseMessagingService.onNewToken` (#95) when
-    /// FCM hands us a registration token. Rust dispatches to the JS closure
-    /// registered via `notificationRegisterRemote`.
-    @JvmStatic
-    external fun nativeNotificationToken(token: String)
-
-    /// Forwarded by `PerryFirebaseMessagingService.onMessageReceived` (#95)
-    /// for foreground push messages. `payloadJson` is a JSON-serialized
-    /// shape of the `RemoteMessage` (data + notification fields) — the Rust
-    /// side `JSON.parse`s it into a Perry object before invoking the JS
-    /// closure registered via `notificationOnReceive`.
-    @JvmStatic
-    external fun nativeNotificationReceive(payloadJson: String)
-
-    /// Forwarded by `PerryFirebaseMessagingService.onMessageReceived` (#98)
-    /// for every push payload that reaches the FCM service — Android's
-    /// equivalent to iOS's
-    /// `application:didReceiveRemoteNotification:fetchCompletionHandler:`
-    /// path. Same JSON-payload shape as `nativeNotificationReceive`. The
-    /// Rust side runs the user's Promise-returning callback and pumps
-    /// microtasks until the synchronously-attached chain quiesces; the FCM
-    /// service then returns and Android's normal background-runtime
-    /// budget governs how much further async work can complete.
-    @JvmStatic
-    external fun nativeNotificationBackgroundReceive(payloadJson: String)
-
-    // --- Notifications (#94) ---
-
-    /**
-     * Show a fire-and-forget local notification. Called from native via JNI:
-     * `sendNotification(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)V`.
-     *
-     * Posts under a single fixed channel id ("perry-default") and a fixed
-     * notification id (`PERRY_DEFAULT_NOTIFICATION_ID = 1`) so subsequent
-     * calls replace the previous notification — matches iOS / macOS where
-     * `notificationSend` reuses the same `requestWithIdentifier:` slot.
-     *
-     * Silently no-ops if `POST_NOTIFICATIONS` (API 33+) isn't granted; the
-     * Rust-side `notificationSend` API doesn't surface a result so there's
-     * nowhere to plumb a "permission denied" signal. Apps that need that
-     * feedback should request the permission explicitly via the upcoming
-     * `notificationRequestPermission` API (#95-area follow-up).
-     */
-    @JvmStatic
-    fun sendNotification(activity: Activity, title: String, body: String) {
-        val notificationManager = NotificationManagerCompat.from(activity)
-
-        // Channel creation: idempotent on API 26+, no-op on older.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                PERRY_DEFAULT_CHANNEL_ID,
-                "Notifications",
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            notificationManager.createNotificationChannel(channel)
-        }
-
-        // POST_NOTIFICATIONS gate (API 33+).
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(
-                    activity,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                Log.w(
-                    "PerryBridge",
-                    "sendNotification: POST_NOTIFICATIONS not granted; notification dropped"
-                )
-                return
-            }
-        }
-
-        // Tap PendingIntent (#97). Targets `PerryNotificationReceiver` which
-        // forwards back to the JS closure registered via `notificationOnTap`.
-        // FLAG_IMMUTABLE is required at API 31+ and harmless before.
-        // FLAG_UPDATE_CURRENT lets the same PendingIntent be reused across
-        // calls (matching the fixed-id replace-by-id semantics on the
-        // notification itself). Request code matches the notify int id
-        // (`"perry_notification".hashCode()`) so `cancelNotification("perry_notification")`
-        // can tear both down (#96).
-        val tapIntent = Intent(activity, PerryNotificationReceiver::class.java).apply {
-            action = "com.perry.app.NOTIFICATION_TAP"
-            putExtra("id", PERRY_DEFAULT_ID)
-        }
-        val intId = PERRY_DEFAULT_ID.hashCode()
-        val tapPending = PendingIntent.getBroadcast(
-            activity,
-            intId,
-            tapIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(activity, PERRY_DEFAULT_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setAutoCancel(true)
-            .setContentIntent(tapPending)
-            .build()
-
-        try {
-            notificationManager.notify(intId, notification)
-        } catch (e: SecurityException) {
-            Log.w(
-                "PerryBridge",
-                "sendNotification: SecurityException (permission revoked or channel disabled)",
-                e
-            )
-        }
-    }
-
-    private const val PERRY_DEFAULT_CHANNEL_ID: String = "perry-default"
-    private const val PERRY_DEFAULT_NOTIFICATION_ID: Int = 1
-    /// String id used by `sendNotification` (no user-supplied id). Same
-    /// value as iOS's `requestWithIdentifier:"perry_notification"`. Hashed
-    /// to an int for `NotificationManager.notify`/`cancel` lookups; that
-    /// hash also serves as the PendingIntent request code so
-    /// `cancelNotification("perry_notification")` finds the registration.
-    private const val PERRY_DEFAULT_ID: String = "perry_notification"
-
-    // --- Scheduled notifications (#96) ---
-
-    /**
-     * Build a `PendingIntent` targeting `PerryScheduledNotificationReceiver`
-     * with the given id/title/body extras. The request code is `id.hashCode()`
-     * so `cancel(id)` later can match the same PendingIntent and tear the
-     * alarm down.
-     */
-    private fun buildScheduledPendingIntent(
-        activity: Activity, id: String, title: String, body: String
-    ): PendingIntent {
-        val intent = Intent(activity, PerryScheduledNotificationReceiver::class.java).apply {
-            action = "com.perry.app.SCHEDULED_FIRE"
-            putExtra("id", id)
-            putExtra("title", title)
-            putExtra("body", body)
-        }
-        return PendingIntent.getBroadcast(
-            activity,
-            id.hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-    }
-
-    /**
-     * Schedule a notification firing after `seconds` (#96, interval trigger).
-     *
-     * `repeats=true` uses `AlarmManager.setRepeating` with `RTC_WAKEUP` —
-     * inexact on API 19+ but acceptable for our semantics. `repeats=false`
-     * uses `setAndAllowWhileIdle` for a one-shot that survives Doze without
-     * the `SCHEDULE_EXACT_ALARM` permission.
-     */
-    @JvmStatic
-    fun scheduleInterval(
-        activity: Activity, id: String, title: String, body: String,
-        seconds: Double, repeats: Boolean
-    ) {
-        val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pi = buildScheduledPendingIntent(activity, id, title, body)
-        val triggerAt = System.currentTimeMillis() + (seconds * 1000.0).toLong().coerceAtLeast(0L)
-        if (repeats) {
-            val intervalMs = (seconds * 1000.0).toLong().coerceAtLeast(60_000L)
-            alarmManager.setRepeating(AlarmManager.RTC_WAKEUP, triggerAt, intervalMs, pi)
-        } else {
-            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
-        }
-    }
-
-    /**
-     * Schedule a notification firing once at `timestampMs` (#96, calendar
-     * trigger). Uses `setAndAllowWhileIdle` — inexact but Doze-safe and
-     * permission-free. Apps that need exact wall-clock fire have to request
-     * the `SCHEDULE_EXACT_ALARM` permission themselves.
-     */
-    @JvmStatic
-    fun scheduleCalendar(
-        activity: Activity, id: String, title: String, body: String,
-        timestampMs: Double
-    ) {
-        val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pi = buildScheduledPendingIntent(activity, id, title, body)
-        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, timestampMs.toLong(), pi)
-    }
-
-    /**
-     * Kick off FCM registration (#95). Calls
-     * `FirebaseMessaging.getInstance().token` to fetch the current cached
-     * token (if any) and forwards it to native via `nativeNotificationToken`.
-     * Future token rotations come through
-     * `PerryFirebaseMessagingService.onNewToken`.
-     *
-     * Catches reflectively because the FCM SDK throws at runtime if no real
-     * `google-services.json` was wired in (the placeholder ships in the
-     * template repo so the build succeeds without breaking — actual FCM
-     * needs the user's real file).
-     */
-    @JvmStatic
-    fun registerForRemoteNotifications(activity: Activity) {
-        try {
-            val fm = com.google.firebase.messaging.FirebaseMessaging.getInstance()
-            fm.token.addOnSuccessListener { token: String ->
-                try {
-                    nativeNotificationToken(token)
-                } catch (e: UnsatisfiedLinkError) {
-                    Log.w("PerryFirebase", "nativeNotificationToken unavailable", e)
-                }
-            }.addOnFailureListener { e ->
-                Log.w(
-                    "PerryFirebase",
-                    "FCM token request failed (likely placeholder google-services.json): ${e.message}"
-                )
-            }
-        } catch (e: Throwable) {
-            Log.w(
-                "PerryFirebase",
-                "registerForRemoteNotifications: FCM init failed (${e.javaClass.simpleName}): ${e.message}"
-            )
-        }
-    }
-
-    /**
-     * Cancel a previously scheduled notification by id (#96). Tears down both
-     * the AlarmManager registration (so future fires don't post anything) and
-     * any already-displayed notification under that id.
-     */
-    @JvmStatic
-    fun cancelNotification(activity: Activity, id: String) {
-        val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        // Build a matching PendingIntent (same intent + same request code) so
-        // alarmManager.cancel can find and remove the registration.
-        val intent = Intent(activity, PerryScheduledNotificationReceiver::class.java).apply {
-            action = "com.perry.app.SCHEDULED_FIRE"
-        }
-        val pi = PendingIntent.getBroadcast(
-            activity,
-            id.hashCode(),
-            intent,
-            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
-        )
-        if (pi != null) {
-            alarmManager.cancel(pi)
-            pi.cancel()
-        }
-        NotificationManagerCompat.from(activity).cancel(id.hashCode())
-    }
 }

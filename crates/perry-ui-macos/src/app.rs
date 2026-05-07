@@ -1691,6 +1691,14 @@ extern "C" {
     fn js_register_text_id_handler(
         f: extern "C" fn(widget_handle: i64, id_ptr: *const u8, id_len: usize),
     );
+    /// Issue #535 Layer 2 — `js_state_set` calls this for every NavStack
+    /// route bound to the changed state's synth id. Defined in
+    /// `perry-runtime/src/ui_text_registry.rs`'s `NAVSTACK_REGISTRY` block.
+    fn js_register_widget_hidden_handler(f: extern "C" fn(widget_handle: i64, hidden: i32));
+}
+
+extern "C" fn navstack_set_widget_hidden(widget_handle: i64, hidden: i32) {
+    widgets::set_hidden(widget_handle, hidden != 0);
 }
 
 fn register_cross_platform_text_handlers() {
@@ -1698,5 +1706,6 @@ fn register_cross_platform_text_handlers() {
         js_register_show_toast_handler(widgets::toast::show_toast_handler);
         js_register_set_text_handler(widgets::text_registry::set_text_handler);
         js_register_text_id_handler(widgets::text_registry::register_text_id_handler);
+        js_register_widget_hidden_handler(navstack_set_widget_hidden);
     }
 }

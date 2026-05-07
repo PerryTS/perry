@@ -1,4 +1,5 @@
 pub mod app;
+pub mod issue_552_stub;
 pub mod audio;
 pub mod camera;
 pub mod clipboard;

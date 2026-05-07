@@ -435,6 +435,69 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
     value_f64
 }
 
+/// Class-id-keyed side table for static Symbol-keyed properties.
+/// drizzle's `static [entityKind] = "Table"` registers
+/// (class_id, sym_ptr) → value here at module init via
+/// `js_class_register_static_symbol`. Consulted by `js_object_has_own`
+/// when the receiver is a class identifier (NaN-boxed INT32_TAG).
+/// Refs #420.
+static CLASS_STATIC_SYMBOLS: Mutex<Option<HashMap<(u32, usize), u64>>> = Mutex::new(None);
+
+/// Register a static Symbol-keyed field on a class. Called once per
+/// class + static computed-key field at module init.
+#[no_mangle]
+pub unsafe extern "C" fn js_class_register_static_symbol(class_id: u32, sym: f64, value: f64) {
+    let sym_key = sym_key_from_f64(sym);
+    if class_id == 0 || sym_key == 0 {
+        return;
+    }
+    let mut guard = CLASS_STATIC_SYMBOLS.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .insert((class_id, sym_key), value.to_bits());
+}
+
+/// Look up a static Symbol-keyed property on a class by class_id.
+/// Returns the stored value bits or `None` if no entry. Refs #420.
+pub fn class_static_symbol_lookup(class_id: u32, sym_f64: f64) -> Option<u64> {
+    unsafe {
+        let sym_key = sym_key_from_f64(sym_f64);
+        if class_id == 0 || sym_key == 0 {
+            return None;
+        }
+        let guard = CLASS_STATIC_SYMBOLS.lock().unwrap();
+        guard
+            .as_ref()
+            .and_then(|m| m.get(&(class_id, sym_key)).copied())
+    }
+}
+
+/// `Object.prototype.hasOwnProperty.call(obj, sym)` for Symbol keys.
+/// Refs #420 — drizzle's `is(value, type)` checks entityKind which is a Symbol.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) -> bool {
+    let obj_key = obj_key_from_f64(obj_f64);
+    let sym_key = sym_key_from_f64(sym_f64);
+    if obj_key == 0 || sym_key == 0 {
+        return false;
+    }
+    let guard = SYMBOL_PROPERTIES.lock().unwrap();
+    if let Some(map) = guard.as_ref() {
+        if let Some(entries) = map.get(&obj_key) {
+            for &(sk, _) in entries.iter() {
+                if sk == sym_key {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// `obj[sym]` where `sym` is a Symbol. Returns NaN-boxed undefined if the
 /// property isn't present.
 #[no_mangle]

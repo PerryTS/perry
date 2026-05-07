@@ -307,14 +307,39 @@ fn string_view_from_bits<'a>(
     }
 }
 
-/// Check if a value looks like it contains a string (heap STRING_TAG / POINTER_TAG
-/// / raw pointer / inline SHORT_STRING_TAG SSO).
+/// Check if a value looks like it contains a string (heap STRING_TAG / inline
+/// SHORT_STRING_TAG SSO, or POINTER_TAG / raw pointer that *actually* points at a
+/// `GC_TYPE_STRING` allocation).
+///
+/// Issue #549: pre-fix, this returned `true` for any POINTER_TAG value because
+/// `extract_string_ptr_from_value` accepts the tag without validating the GC
+/// type at the pointee. That made `jsvalue_eq` content-compare two distinct
+/// objects (or an object and a string, etc.) by reinterpreting the
+/// `ObjectHeader` as a `StringHeader` — `class_id` showed up as `byte_len`,
+/// the comparison read raw memory past the header as "string bytes", and two
+/// empty `{}` literals (same class_id, both empty) ended up colliding inside
+/// `Set.add` / `Map.set`. Validate the GC header here so only real string
+/// pointees enter the content-comparison path; everything else falls back
+/// to the bit-identity check that JS Set/Map `SameValueZero` semantics call
+/// for on object keys.
 fn is_string_like(bits: u64) -> bool {
     let upper = bits >> 48;
     if upper == (crate::value::SHORT_STRING_TAG >> 48) {
         return true;
     }
-    !extract_string_ptr_from_value(bits).is_null()
+    // STRING_TAG always identifies a string pointee — accept without GC check.
+    if upper == 0x7FFF {
+        return !extract_string_ptr_from_value(bits).is_null();
+    }
+    let ptr = extract_string_ptr_from_value(bits);
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return false;
+    }
+    unsafe {
+        let gc_hdr =
+            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc_hdr).obj_type == crate::gc::GC_TYPE_STRING
+    }
 }
 
 /// Check if two JSValues are equal (for map key comparison)

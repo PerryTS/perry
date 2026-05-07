@@ -329,6 +329,10 @@ where
             f(object);
             f(value);
         }
+        Expr::ClassStaticSymbolSet { key, value, .. } => {
+            f(key);
+            f(value);
+        }
         Expr::IndexGet { object, index } => {
             f(object);
             f(index);
@@ -1401,6 +1405,10 @@ where
         }
         Expr::PropertySet { object, value, .. } => {
             f(object);
+            f(value);
+        }
+        Expr::ClassStaticSymbolSet { key, value, .. } => {
+            f(key);
             f(value);
         }
         Expr::IndexGet { object, index } => {

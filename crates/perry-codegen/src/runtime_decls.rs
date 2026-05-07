@@ -209,6 +209,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // (e.g. `obj.cb(a, b, c)` where `cb` is a class field holding an
     // arrow with `...rest`). Called once per closure body at module init.
     module.declare_function("js_register_closure_rest", VOID, &[PTR, I32]);
+    module.declare_function("js_register_closure_arity", VOID, &[PTR, I32]);
     module.declare_function("js_closure_call0", DOUBLE, &[I64]);
     module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_closure_call2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
@@ -756,6 +757,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_typed_array_find_last_index", DOUBLE, &[I64, I64]);
     // Object introspection / mutation (Agent A's accessor-descriptor work).
     module.declare_function("js_object_has_own", DOUBLE, &[DOUBLE, DOUBLE]);
+    // Refs #420: register a static computed-key Symbol field on a class.
+    // Called from `init_static_fields` for each `static [Symbol.X] = init`.
+    module.declare_function(
+        "js_class_register_static_symbol",
+        VOID,
+        &[I32, DOUBLE, DOUBLE],
+    );
     module.declare_function(
         "js_object_define_property",
         DOUBLE,
@@ -956,6 +964,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, PTR, I64, PTR, I64],
     );
+    // Apply form: takes the args as a JS array handle (i64). The runtime
+    // materialises the array elements into a temp f64 buffer and forwards to
+    // js_native_call_method. Used by `Expr::CallSpread` for the
+    // `recv.method(...args)` shape on any-typed receivers.
+    module.declare_function(
+        "js_native_call_method_apply",
+        DOUBLE,
+        &[DOUBLE, PTR, I64, I64],
+    );
     module.declare_function("js_promise_resolve", VOID, &[I64, DOUBLE]);
     module.declare_function("js_promise_reject", VOID, &[I64, DOUBLE]);
     module.declare_function("js_promise_resolved", I64, &[DOUBLE]);
@@ -973,12 +990,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_values", I64, &[I64]);
 
     // ──────────────────────────────────────────────────────────────────
-    // Web Fetch API: Response / Headers / Request constructors +
-    // response body methods + static factories. These are in
-    // `crates/perry-stdlib/src/fetch.rs`. Handles flow as plain numeric
-    // f64 values (not NaN-boxed) so codegen passes them as DOUBLE.
-    // Where the runtime takes i64 (e.g. js_fetch_response_status),
-    // codegen converts via fptosi.
+    // Web Fetch API: Response / Headers / Request / Blob constructors +
+    // body methods + static factories. These are in
+    // `crates/perry-stdlib/src/fetch.rs`. Handles are NaN-boxed POINTER_TAG
+    // f64 values (Phase 1 of the handle-NaN-boxing unification) — codegen
+    // passes them through as DOUBLE arg kinds without conversion. Untyped
+    // property access (`request.url` where `request: any`) routes through
+    // `js_object_get_field_by_name`'s strip-tag path → `HANDLE_PROPERTY_DISPATCH`.
     // ──────────────────────────────────────────────────────────────────
     // new Response(body_ptr, status, status_text_ptr, headers_handle) -> f64
     module.declare_function("js_response_new", DOUBLE, &[I64, DOUBLE, I64, DOUBLE]);
@@ -1001,12 +1019,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_request_get_method", I64, &[DOUBLE]);
     module.declare_function("js_request_get_body", DOUBLE, &[DOUBLE]);
 
-    // Response body getters
-    module.declare_function("js_fetch_response_status", DOUBLE, &[I64]);
-    module.declare_function("js_fetch_response_status_text", I64, &[I64]);
-    module.declare_function("js_fetch_response_ok", DOUBLE, &[I64]);
-    module.declare_function("js_fetch_response_text", I64, &[I64]);
-    module.declare_function("js_fetch_response_json", I64, &[I64]);
+    // Response body getters — handles flow as NaN-boxed POINTER_TAG f64
+    // (Phase 1 unification, refs #421). Accessors call `handle_id` to
+    // unbox on entry; codegen no longer needs the fptosi conversion.
+    module.declare_function("js_fetch_response_status", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fetch_response_status_text", I64, &[DOUBLE]);
+    module.declare_function("js_fetch_response_ok", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_fetch_response_text", I64, &[DOUBLE]);
+    module.declare_function("js_fetch_response_json", I64, &[DOUBLE]);
     // response.headers / .clone() / .arrayBuffer() / .blob() — all take
     // the f64 response handle.
     module.declare_function("js_response_get_headers", DOUBLE, &[DOUBLE]);

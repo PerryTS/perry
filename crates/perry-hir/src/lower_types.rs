@@ -214,7 +214,26 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                     }
                 }
                 match name.as_str() {
-                    "Map" | "Set" | "WeakMap" | "WeakSet" | "Array" | "Promise" => Type::Generic {
+                    // Issue #533: walk the entries arg of `new Map([...])` /
+                    // `new WeakMap([...])` so K/V are populated when no explicit
+                    // <K, V> is given. Without this, downstream `m.get(k)`
+                    // returns Type::Any and `for-of` over the result falls off
+                    // the Map fast path, silently producing zero iterations.
+                    "Map" | "WeakMap" => {
+                        let inferred = infer_map_entries_type(new_expr, ctx);
+                        Type::Generic {
+                            base: name,
+                            type_args: inferred,
+                        }
+                    }
+                    "Set" | "WeakSet" => {
+                        let inferred = infer_set_elements_type(new_expr, ctx);
+                        Type::Generic {
+                            base: name,
+                            type_args: inferred,
+                        }
+                    }
+                    "Array" | "Promise" => Type::Generic {
                         base: name,
                         type_args: Vec::new(),
                     },
@@ -441,6 +460,60 @@ fn collect_return_types(stmts: &[ast::Stmt], ctx: &LoweringContext, out: &mut Ve
 }
 
 /// Infer the return type of a function/method call expression.
+/// Issue #533: walk `new Map([[k1, v1], [k2, v2], ...])` / `new WeakMap(...)`
+/// to recover K, V from the literal entries. Returns an empty vec when the
+/// argument isn't an array literal (e.g. dynamic `new Map(someArr)`) or when
+/// no element parses as a 2-tuple — caller treats that as unknown type args.
+fn infer_map_entries_type(new_expr: &ast::NewExpr, ctx: &LoweringContext) -> Vec<Type> {
+    let Some(args) = new_expr.args.as_ref() else {
+        return Vec::new();
+    };
+    let Some(first_arg) = args.first() else {
+        return Vec::new();
+    };
+    let ast::Expr::Array(arr_lit) = first_arg.expr.as_ref() else {
+        return Vec::new();
+    };
+    for elem_opt in &arr_lit.elems {
+        let Some(elem) = elem_opt else { continue };
+        let ast::Expr::Array(entry) = elem.expr.as_ref() else {
+            continue;
+        };
+        if entry.elems.len() < 2 {
+            continue;
+        }
+        let k = entry.elems[0]
+            .as_ref()
+            .map(|t| infer_type_from_expr(&t.expr, ctx))
+            .unwrap_or(Type::Any);
+        let v = entry.elems[1]
+            .as_ref()
+            .map(|t| infer_type_from_expr(&t.expr, ctx))
+            .unwrap_or(Type::Any);
+        return vec![k, v];
+    }
+    Vec::new()
+}
+
+/// Issue #533 (sibling): infer `T` from `new Set([elem1, elem2, ...])` /
+/// `new WeakSet(...)` based on the first non-elided element.
+fn infer_set_elements_type(new_expr: &ast::NewExpr, ctx: &LoweringContext) -> Vec<Type> {
+    let Some(args) = new_expr.args.as_ref() else {
+        return Vec::new();
+    };
+    let Some(first_arg) = args.first() else {
+        return Vec::new();
+    };
+    let ast::Expr::Array(arr_lit) = first_arg.expr.as_ref() else {
+        return Vec::new();
+    };
+    for elem_opt in &arr_lit.elems {
+        let Some(elem) = elem_opt else { continue };
+        return vec![infer_type_from_expr(&elem.expr, ctx)];
+    }
+    Vec::new()
+}
+
 pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) -> Type {
     match callee {
         // Direct function call: foo()
@@ -478,6 +551,34 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                 if let Type::Named(class_name) = &obj_ty {
                     if let Some(ty) = ctx.lookup_class_method_return_type(class_name, method_name) {
                         return ty.clone();
+                    }
+                }
+
+                // Issue #533: Map<K, V> / WeakMap<K, V> / Set<T> / WeakSet<T>
+                // method-return inference. `m.get(k)` returns V (not V|undef —
+                // matches the pattern Array<T>.pop() uses below) so downstream
+                // type-driven dispatch (for-of fast path, .size resolution,
+                // formatter pretty-printing) sees the right element type
+                // without forcing the user to annotate every `const c =
+                // m.get(k)!` binding.
+                if let Type::Generic { base, type_args } = &obj_ty {
+                    match base.as_str() {
+                        "Map" | "WeakMap" => {
+                            return match method_name {
+                                "get" => type_args.get(1).cloned().unwrap_or(Type::Any),
+                                "has" | "delete" => Type::Boolean,
+                                "set" => obj_ty.clone(),
+                                _ => Type::Any,
+                            };
+                        }
+                        "Set" | "WeakSet" => {
+                            return match method_name {
+                                "has" | "delete" => Type::Boolean,
+                                "add" => obj_ty.clone(),
+                                _ => Type::Any,
+                            };
+                        }
+                        _ => {}
                     }
                 }
 

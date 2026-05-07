@@ -1977,6 +1977,38 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str],
         ret: ReturnKind::Widget,
     },
+    // ---- Geolocation (issue #552) ----
+    MethodRow {
+        method: "geolocationGetCurrent",
+        runtime: "perry_system_geolocation_get_current",
+        args: &[ArgKind::Closure, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "geolocationWatch",
+        runtime: "perry_system_geolocation_watch",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::F64,
+    },
+    MethodRow {
+        method: "geolocationStopWatch",
+        runtime: "perry_system_geolocation_stop_watch",
+        args: &[ArgKind::F64],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "geolocationRequestPermission",
+        runtime: "perry_system_geolocation_request_permission",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    // ---- Photo-library image picker (issue #552) ----
+    MethodRow {
+        method: "imagePickerPick",
+        runtime: "perry_system_image_picker_pick",
+        args: &[ArgKind::F64, ArgKind::F64, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
 ];
 pub static PERRY_I18N_TABLE: &[MethodRow] = &[
     MethodRow {

@@ -56,6 +56,21 @@ pub const CLOSURE_MAGIC: u32 = 0x434C_4F53; // "CLOS" in ASCII
 // supposed to invoke arbitrary user closures across the boundary anyway.
 thread_local! {
     static CLOSURE_REST_REGISTRY: RefCell<HashMap<usize, u32>> = RefCell::new(HashMap::new());
+    /// Side-table mapping closure body `func_ptr` -> declared param count
+    /// (for closures WITHOUT a rest param — those use CLOSURE_REST_REGISTRY).
+    /// Populated at module init by `js_register_closure_arity`. Looked up by
+    /// `js_native_call_value` (the dynamic dispatch path used when a closure is
+    /// stored as a class field and called method-style on an any-typed
+    /// receiver) so the runtime can pad missing args with TAG_UNDEFINED to
+    /// match the closure body's declared arity. Without this, calling a
+    /// 3-param arrow with 1 arg through `js_native_call_method` →
+    /// `js_native_call_value` → `js_closure_call1` transmutes the func_ptr to
+    /// a 1-arg signature and the closure body reads garbage for params 2 and
+    /// 3 (refs #421 — hono's `c.text(text)` / `setDefaultContentType` chain
+    /// hit exactly this; uninit `headers` slot evaluated to a small denormal
+    /// float, slow-path runs, `setDefaultContentType` returns a header object,
+    /// `responseHeaders.set(k, v)` then fails with a #510-class TypeError).
+    static CLOSURE_ARITY_REGISTRY: RefCell<HashMap<usize, u32>> = RefCell::new(HashMap::new());
 }
 
 /// Register that the closure body at `func_ptr` has a rest parameter at index
@@ -75,6 +90,24 @@ pub extern "C" fn js_register_closure_rest(func_ptr: *const u8, fixed_arity: u32
 #[inline(always)]
 fn lookup_closure_rest(func_ptr: *const u8) -> Option<u32> {
     CLOSURE_REST_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
+}
+
+/// Register a closure body's declared param count (for closures WITHOUT a rest
+/// param). Called once per non-rest closure literal at module init time.
+/// See `CLOSURE_ARITY_REGISTRY` doc for rationale.
+#[no_mangle]
+pub extern "C" fn js_register_closure_arity(func_ptr: *const u8, arity: u32) {
+    if func_ptr.is_null() {
+        return;
+    }
+    CLOSURE_ARITY_REGISTRY.with(|r| {
+        r.borrow_mut().insert(func_ptr as usize, arity);
+    });
+}
+
+#[inline(always)]
+fn lookup_closure_arity(func_ptr: *const u8) -> Option<u32> {
+    CLOSURE_ARITY_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
 }
 
 /// Build a JS array from a slice of NaN-boxed f64 values and return it
@@ -181,6 +214,93 @@ unsafe fn dispatch_rest_bundled(
             // bound that lower_call's static-bundling path enforces.
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
+    }
+}
+
+/// Dispatch a closure call where the caller supplied fewer args than the
+/// closure declared. Pad the missing slots with `undefined` and call the
+/// body's actual declared signature so the body's `LocalGet(N)` reads
+/// correctly initialised slots instead of stale registers.
+///
+/// `func_ptr` is already validated and known non-BOUND, non-rest.
+/// `declared_arity` is what `CLOSURE_ARITY_REGISTRY` recorded for this body
+/// at module init time. Callers reach here only when `args.len() < declared_arity`.
+///
+/// Refs #420: drizzle's `pgTable` is `(name, columns, extraConfig) => …`
+/// (3 params); user calls it as `pgTable("users", cols)` (2 args). Without
+/// this padding, the body's `extraConfig` slot reads garbage and downstream
+/// `if (extraConfig)` evaluated truthy on bit patterns that should have been
+/// `undefined`. Symptom: `pgTable("users", {})` returned a malformed table
+/// object, breaking every downstream property read.
+#[inline(never)]
+unsafe fn dispatch_with_arity(
+    closure: *const ClosureHeader,
+    func_ptr: *const u8,
+    args: &[f64],
+    declared_arity: u32,
+) -> f64 {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let k = declared_arity as usize;
+    let provided = args.len();
+    macro_rules! a {
+        ($i:expr) => {
+            if $i < provided { args[$i] } else { undef }
+        };
+    }
+    match k {
+        0 => {
+            let f: extern "C" fn(*const ClosureHeader) -> f64 = std::mem::transmute(func_ptr);
+            f(closure)
+        }
+        1 => {
+            let f: extern "C" fn(*const ClosureHeader, f64) -> f64 = std::mem::transmute(func_ptr);
+            f(closure, a!(0))
+        }
+        2 => {
+            let f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
+                std::mem::transmute(func_ptr);
+            f(closure, a!(0), a!(1))
+        }
+        3 => {
+            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
+                std::mem::transmute(func_ptr);
+            f(closure, a!(0), a!(1), a!(2))
+        }
+        4 => {
+            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
+                std::mem::transmute(func_ptr);
+            f(closure, a!(0), a!(1), a!(2), a!(3))
+        }
+        5 => {
+            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
+                std::mem::transmute(func_ptr);
+            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4))
+        }
+        6 => {
+            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
+                std::mem::transmute(func_ptr);
+            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), a!(5))
+        }
+        7 => {
+            let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64 =
+                std::mem::transmute(func_ptr);
+            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), a!(5), a!(6))
+        }
+        8 => {
+            let f: extern "C" fn(
+                *const ClosureHeader,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+            ) -> f64 = std::mem::transmute(func_ptr);
+            f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), a!(5), a!(6), a!(7))
+        }
+        _ => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
 }
 
@@ -475,6 +595,11 @@ pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
     if let Some(fixed_arity) = lookup_closure_rest(func_ptr) {
         return unsafe { dispatch_rest_bundled(closure, func_ptr, &[], fixed_arity) };
     }
+    if let Some(declared) = lookup_closure_arity(func_ptr) {
+        if declared > 0 {
+            return unsafe { dispatch_with_arity(closure, func_ptr, &[], declared) };
+        }
+    }
     let func: extern "C" fn(*const ClosureHeader) -> f64 = unsafe { std::mem::transmute(func_ptr) };
     func(closure)
 }
@@ -491,6 +616,11 @@ pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> 
     }
     if let Some(fixed_arity) = lookup_closure_rest(func_ptr) {
         return unsafe { dispatch_rest_bundled(closure, func_ptr, &[arg0], fixed_arity) };
+    }
+    if let Some(declared) = lookup_closure_arity(func_ptr) {
+        if declared > 1 {
+            return unsafe { dispatch_with_arity(closure, func_ptr, &[arg0], declared) };
+        }
     }
     let func: extern "C" fn(*const ClosureHeader, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
@@ -509,6 +639,11 @@ pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg
     }
     if let Some(fixed_arity) = lookup_closure_rest(func_ptr) {
         return unsafe { dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1], fixed_arity) };
+    }
+    if let Some(declared) = lookup_closure_arity(func_ptr) {
+        if declared > 2 {
+            return unsafe { dispatch_with_arity(closure, func_ptr, &[arg0, arg1], declared) };
+        }
     }
     let func: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
@@ -535,6 +670,11 @@ pub extern "C" fn js_closure_call3(
             dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1, arg2], fixed_arity)
         };
     }
+    if let Some(declared) = lookup_closure_arity(func_ptr) {
+        if declared > 3 {
+            return unsafe { dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2], declared) };
+        }
+    }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
     func(closure, arg0, arg1, arg2)
@@ -560,6 +700,13 @@ pub extern "C" fn js_closure_call4(
         return unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1, arg2, arg3], fixed_arity)
         };
+    }
+    if let Some(declared) = lookup_closure_arity(func_ptr) {
+        if declared > 4 {
+            return unsafe {
+                dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2, arg3], declared)
+            };
+        }
     }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
@@ -593,6 +740,18 @@ pub extern "C" fn js_closure_call5(
             )
         };
     }
+    if let Some(declared) = lookup_closure_arity(func_ptr) {
+        if declared > 5 {
+            return unsafe {
+                dispatch_with_arity(
+                    closure,
+                    func_ptr,
+                    &[arg0, arg1, arg2, arg3, arg4],
+                    declared,
+                )
+            };
+        }
+    }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
     func(closure, arg0, arg1, arg2, arg3, arg4)
@@ -625,6 +784,18 @@ pub extern "C" fn js_closure_call6(
                 fixed_arity,
             )
         };
+    }
+    if let Some(declared) = lookup_closure_arity(func_ptr) {
+        if declared > 6 {
+            return unsafe {
+                dispatch_with_arity(
+                    closure,
+                    func_ptr,
+                    &[arg0, arg1, arg2, arg3, arg4, arg5],
+                    declared,
+                )
+            };
+        }
     }
     let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
         unsafe { std::mem::transmute(func_ptr) };
@@ -1138,411 +1309,83 @@ pub unsafe extern "C" fn js_native_call_value(
         return f64::from_bits(JSValue::undefined().bits());
     }
 
+    // Refs #421: when the closure body declares more params than the call site
+    // provides, pad with TAG_UNDEFINED before dispatch. Without this, the
+    // dispatch transmutes func_ptr to a lower-arity signature and the closure
+    // body reads garbage for the missing slots — `c.text('hi')` (1 arg)
+    // dispatching to a `(text, arg, headers)` arrow read the `headers` slot
+    // from random stack memory, which evaluated truthy and fell into the
+    // slow-path `#newResponse` chain that ended in `(number).set is not a
+    // function`. Closures with rest params (`(a, ...rest) => …`) have their
+    // own registry path via `lookup_closure_rest` which already pads, so we
+    // skip the arity lookup when the rest registry has an entry.
+    let func_ptr = get_valid_func_ptr(closure);
+    let dispatch_args_len = if !func_ptr.is_null() && lookup_closure_rest(func_ptr).is_none() {
+        match lookup_closure_arity(func_ptr) {
+            Some(declared) if (declared as usize) > args_len => declared as usize,
+            _ => args_len,
+        }
+    } else {
+        args_len
+    };
+
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let arg_at = |i: usize| -> f64 {
+        if i < args_len && !args_ptr.is_null() {
+            unsafe { *args_ptr.add(i) }
+        } else {
+            undef
+        }
+    };
+
     // Call with the appropriate arity
-    match args_len {
+    match dispatch_args_len {
         0 => js_closure_call0(closure),
-        1 => {
-            let arg0 = if args_ptr.is_null() { 0.0 } else { *args_ptr };
-            js_closure_call1(closure, arg0)
-        }
-        2 => {
-            let arg0 = if args_ptr.is_null() { 0.0 } else { *args_ptr };
-            let arg1 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(1)
-            };
-            js_closure_call2(closure, arg0, arg1)
-        }
-        3 => {
-            let arg0 = if args_ptr.is_null() { 0.0 } else { *args_ptr };
-            let arg1 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(1)
-            };
-            let arg2 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(2)
-            };
-            js_closure_call3(closure, arg0, arg1, arg2)
-        }
-        4 => {
-            let arg0 = if args_ptr.is_null() { 0.0 } else { *args_ptr };
-            let arg1 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(1)
-            };
-            let arg2 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(2)
-            };
-            let arg3 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(3)
-            };
-            js_closure_call4(closure, arg0, arg1, arg2, arg3)
-        }
-        5 => {
-            let arg0 = if args_ptr.is_null() { 0.0 } else { *args_ptr };
-            let arg1 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(1)
-            };
-            let arg2 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(2)
-            };
-            let arg3 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(3)
-            };
-            let arg4 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(4)
-            };
-            js_closure_call5(closure, arg0, arg1, arg2, arg3, arg4)
-        }
-        6 => {
-            let arg0 = if args_ptr.is_null() { 0.0 } else { *args_ptr };
-            let arg1 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(1)
-            };
-            let arg2 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(2)
-            };
-            let arg3 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(3)
-            };
-            let arg4 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(4)
-            };
-            let arg5 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(5)
-            };
-            js_closure_call6(closure, arg0, arg1, arg2, arg3, arg4, arg5)
-        }
-        7 => {
-            let arg0 = if args_ptr.is_null() { 0.0 } else { *args_ptr };
-            let arg1 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(1)
-            };
-            let arg2 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(2)
-            };
-            let arg3 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(3)
-            };
-            let arg4 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(4)
-            };
-            let arg5 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(5)
-            };
-            let arg6 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(6)
-            };
-            js_closure_call7(closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6)
-        }
-        8 => {
-            let arg0 = if args_ptr.is_null() { 0.0 } else { *args_ptr };
-            let arg1 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(1)
-            };
-            let arg2 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(2)
-            };
-            let arg3 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(3)
-            };
-            let arg4 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(4)
-            };
-            let arg5 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(5)
-            };
-            let arg6 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(6)
-            };
-            let arg7 = if args_ptr.is_null() {
-                0.0
-            } else {
-                *args_ptr.add(7)
-            };
-            js_closure_call8(closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
-        }
-        9 => {
-            let a = |i: usize| {
-                if args_ptr.is_null() {
-                    0.0
-                } else {
-                    *args_ptr.add(i)
-                }
-            };
-            js_closure_call9(
-                closure,
-                a(0),
-                a(1),
-                a(2),
-                a(3),
-                a(4),
-                a(5),
-                a(6),
-                a(7),
-                a(8),
-            )
-        }
-        10 => {
-            let a = |i: usize| {
-                if args_ptr.is_null() {
-                    0.0
-                } else {
-                    *args_ptr.add(i)
-                }
-            };
-            js_closure_call10(
-                closure,
-                a(0),
-                a(1),
-                a(2),
-                a(3),
-                a(4),
-                a(5),
-                a(6),
-                a(7),
-                a(8),
-                a(9),
-            )
-        }
-        11 => {
-            let a = |i: usize| {
-                if args_ptr.is_null() {
-                    0.0
-                } else {
-                    *args_ptr.add(i)
-                }
-            };
-            js_closure_call11(
-                closure,
-                a(0),
-                a(1),
-                a(2),
-                a(3),
-                a(4),
-                a(5),
-                a(6),
-                a(7),
-                a(8),
-                a(9),
-                a(10),
-            )
-        }
-        12 => {
-            let a = |i: usize| {
-                if args_ptr.is_null() {
-                    0.0
-                } else {
-                    *args_ptr.add(i)
-                }
-            };
-            js_closure_call12(
-                closure,
-                a(0),
-                a(1),
-                a(2),
-                a(3),
-                a(4),
-                a(5),
-                a(6),
-                a(7),
-                a(8),
-                a(9),
-                a(10),
-                a(11),
-            )
-        }
-        13 => {
-            let a = |i: usize| {
-                if args_ptr.is_null() {
-                    0.0
-                } else {
-                    *args_ptr.add(i)
-                }
-            };
-            js_closure_call13(
-                closure,
-                a(0),
-                a(1),
-                a(2),
-                a(3),
-                a(4),
-                a(5),
-                a(6),
-                a(7),
-                a(8),
-                a(9),
-                a(10),
-                a(11),
-                a(12),
-            )
-        }
-        14 => {
-            let a = |i: usize| {
-                if args_ptr.is_null() {
-                    0.0
-                } else {
-                    *args_ptr.add(i)
-                }
-            };
-            js_closure_call14(
-                closure,
-                a(0),
-                a(1),
-                a(2),
-                a(3),
-                a(4),
-                a(5),
-                a(6),
-                a(7),
-                a(8),
-                a(9),
-                a(10),
-                a(11),
-                a(12),
-                a(13),
-            )
-        }
-        15 => {
-            let a = |i: usize| {
-                if args_ptr.is_null() {
-                    0.0
-                } else {
-                    *args_ptr.add(i)
-                }
-            };
-            js_closure_call15(
-                closure,
-                a(0),
-                a(1),
-                a(2),
-                a(3),
-                a(4),
-                a(5),
-                a(6),
-                a(7),
-                a(8),
-                a(9),
-                a(10),
-                a(11),
-                a(12),
-                a(13),
-                a(14),
-            )
-        }
-        16 => {
-            let a = |i: usize| {
-                if args_ptr.is_null() {
-                    0.0
-                } else {
-                    *args_ptr.add(i)
-                }
-            };
-            js_closure_call16(
-                closure,
-                a(0),
-                a(1),
-                a(2),
-                a(3),
-                a(4),
-                a(5),
-                a(6),
-                a(7),
-                a(8),
-                a(9),
-                a(10),
-                a(11),
-                a(12),
-                a(13),
-                a(14),
-                a(15),
-            )
-        }
-        _ => {
-            eprintln!(
-                "Warning: js_native_call_value called with {} args, only supporting up to 16",
-                args_len
-            );
-            let a = |i: usize| {
-                if args_ptr.is_null() {
-                    0.0
-                } else {
-                    *args_ptr.add(i)
-                }
-            };
-            js_closure_call16(
-                closure,
-                a(0),
-                a(1),
-                a(2),
-                a(3),
-                a(4),
-                a(5),
-                a(6),
-                a(7),
-                a(8),
-                a(9),
-                a(10),
-                a(11),
-                a(12),
-                a(13),
-                a(14),
-                a(15),
-            )
-        }
+        1 => js_closure_call1(closure, arg_at(0)),
+        2 => js_closure_call2(closure, arg_at(0), arg_at(1)),
+        3 => js_closure_call3(closure, arg_at(0), arg_at(1), arg_at(2)),
+        4 => js_closure_call4(closure, arg_at(0), arg_at(1), arg_at(2), arg_at(3)),
+        5 => js_closure_call5(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+        ),
+        6 => js_closure_call6(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+        ),
+        7 => js_closure_call7(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+            arg_at(6),
+        ),
+        _ => js_closure_call8(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+            arg_at(6),
+            arg_at(7),
+        ),
     }
 }
+
 
 use std::sync::{Mutex, OnceLock};
 

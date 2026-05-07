@@ -193,6 +193,12 @@ pub struct ImportedClass {
     /// source modules that haven't been updated to populate it — codegen
     /// falls back to the old upper bound when the entry is missing.
     pub method_param_counts: Vec<usize>,
+    /// Static field names defined on this class. Used to declare the foreign
+    /// `@perry_static_<src>__<class>__<field>` global with external linkage
+    /// so cross-module `[Parent.Symbol.X] = …` reads/writes resolve to the
+    /// source module's defining global. Without this, `StaticFieldGet`
+    /// silently produces `0.0` for any imported class. Refs #420.
+    pub static_field_names: Vec<String>,
     /// Static method names defined on this class. Without this, calls like
     /// `MyClass.staticMethod(...)` on an imported class are treated as a
     /// missing method and fall through to `0.0` — turning every
@@ -472,6 +478,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .enumerate()
                 .map(|(i, name)| perry_hir::ClassField {
                     name: name.clone(),
+                    key_expr: None,
                     // Use the real declared type when the source-side
                     // populated `field_types`; fall back to `Any` otherwise.
                     // Real types let `receiver_class_name`'s `PropertyGet`
@@ -655,7 +662,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // first (walking from deepest ancestor down) so the slot
         // order matches `class_field_global_index`'s assumption.
         let mut packed_keys = String::new();
-        let mut total_field_count = c.fields.len() as u32;
+        // Skip computed-key fields (`[Symbol.for("k")] = …`): their key is an
+        // expression evaluated at runtime, not a stable string, so they don't
+        // get an inline slot. Including their synthetic `__computed_field_*`
+        // names in the packed keys would surface them as enumerable own
+        // properties via Object.keys() and inflate the inline-slot count.
+        // Their values are stored via `apply_field_initializers_recursive`'s
+        // IndexSet path → js_object_set_field / js_object_set_symbol_property.
+        let count_keyable = |fields: &[perry_hir::ClassField]| -> u32 {
+            fields.iter().filter(|f| f.key_expr.is_none()).count() as u32
+        };
+        let mut total_field_count = count_keyable(&c.fields);
         let mut parent_chain: Vec<String> = Vec::new();
         // Resolver that finds a parent's `(fields_vec, next_extends)` either
         // in the local HIR or, failing that, in the imported_class_stubs
@@ -680,7 +697,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         while let Some(parent_name) = p {
             if let Some((parent_fields, parent_extends)) = lookup_class_chain_link(&parent_name) {
                 parent_chain.push(parent_name.clone());
-                total_field_count += parent_fields.len() as u32;
+                total_field_count += count_keyable(&parent_fields);
                 p = parent_extends;
             } else {
                 break;
@@ -690,12 +707,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         for parent_name in parent_chain.iter().rev() {
             if let Some((parent_fields, _)) = lookup_class_chain_link(parent_name) {
                 for f in &parent_fields {
+                    if f.key_expr.is_some() {
+                        continue;
+                    }
                     packed_keys.push_str(&f.name);
                     packed_keys.push('\0');
                 }
             }
         }
         for f in &c.fields {
+            if f.key_expr.is_some() {
+                continue;
+            }
             packed_keys.push_str(&f.name);
             packed_keys.push('\0');
         }
@@ -1240,14 +1263,86 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut static_field_globals: HashMap<(String, String), String> = HashMap::new();
     for c in &hir.classes {
         for sf in &c.static_fields {
+            // Computed-key static fields (`static [Symbol.for(...)] = init`)
+            // are stored in a runtime side table by `init_static_fields`;
+            // they don't get a string-named global. Refs #420.
+            if sf.key_expr.is_some() {
+                continue;
+            }
             let name = format!(
                 "perry_static_{}__{}__{}",
                 module_prefix,
                 sanitize(&c.name),
                 sanitize(&sf.name),
             );
-            llmod.add_internal_global(&name, DOUBLE, "0.0");
+            // External linkage so importing modules can reference the same
+            // global. Static class fields are spec-level shared state across
+            // the whole program (same `Symbol.X` value seen everywhere); they
+            // must be a single defining global, not per-module copies.
+            // Refs #420: drizzle's `Sub extends Base` reads `[Base.Symbol.X]`
+            // when Sub is in a different file from Base; without external
+            // linkage, the importing module's `StaticFieldGet { Base, Symbol }`
+            // had no symbol to resolve and silently produced 0.0.
+            llmod.add_global(&name, DOUBLE, "0.0");
             static_field_globals.insert((c.name.clone(), sf.name.clone()), name);
+        }
+    }
+    // Register foreign static-field globals from imported classes. The source
+    // module emits the defining external global (above); the consumer just
+    // declares a reference and adds it to its own `static_field_globals` map
+    // so `Expr::StaticFieldGet/Set` lowering finds it.
+    // Track which globals we've already emitted to avoid double-declarations.
+    let mut external_globals_emitted: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for ic in &opts.imported_classes {
+        let effective_name = ic.local_alias.as_deref().unwrap_or(&ic.name);
+        // Skip imported-class entries whose source matches this module's
+        // prefix — the local-class loop above already emitted the defining
+        // global. Re-declaring as external would produce a duplicate-symbol
+        // error in the LLVM IR (clang rejects `@x = global` next to `@x =
+        // external global`). Same-named local classes also win.
+        if ic.source_prefix == module_prefix {
+            // Still register in the static_field_globals map so HIR lookups
+            // by the imported alias resolve to the local definition.
+            for sf_name in &ic.static_field_names {
+                let key = (effective_name.to_string(), sf_name.clone());
+                if !static_field_globals.contains_key(&key) {
+                    let global_name = format!(
+                        "perry_static_{}__{}__{}",
+                        module_prefix,
+                        sanitize(&ic.name),
+                        sanitize(sf_name),
+                    );
+                    static_field_globals.insert(key, global_name);
+                }
+            }
+            continue;
+        }
+        if hir.classes.iter().any(|c| c.name == ic.name) {
+            continue;
+        }
+        for sf_name in &ic.static_field_names {
+            let global_name = format!(
+                "perry_static_{}__{}__{}",
+                ic.source_prefix,
+                sanitize(&ic.name),
+                sanitize(sf_name),
+            );
+            // Declare external (not define) — the source module owns the
+            // defining global. Skip if already declared (multiple imports of
+            // the same class).
+            if external_globals_emitted.insert(global_name.clone()) {
+                llmod.add_external_global(&global_name, DOUBLE);
+            }
+            // Register under both the alias (if any) and the source name so
+            // either resolves.
+            static_field_globals.insert(
+                (effective_name.to_string(), sf_name.clone()),
+                global_name.clone(),
+            );
+            if effective_name != ic.name {
+                static_field_globals.insert((ic.name.clone(), sf_name.clone()), global_name);
+            }
         }
     }
 
@@ -1615,6 +1710,23 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         })
         .collect();
 
+    // Refs #421: declared param count for every non-rest closure. Used by
+    // `emit_string_pool` to register each closure's arity so the runtime can
+    // pad missing args with TAG_UNDEFINED in the dynamic-dispatch path.
+    let closure_arities: HashMap<u32, u32> = closures
+        .iter()
+        .filter_map(|(fid, expr)| {
+            if let perry_hir::Expr::Closure { params, .. } = expr {
+                if params.iter().any(|p| p.is_rest) {
+                    return None;
+                }
+                Some((*fid, params.len() as u32))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Integer specialization: for pure numeric recursive functions (like
     // fibonacci), emit an i64 variant that uses integer registers and
     // integer arithmetic. The f64 wrapper calls fptosi → i64_fn → sitofp.
@@ -1890,12 +2002,62 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // Compiled like a method: takes (i64 this, double arg0, ...) → void.
         // The constructor name matches the import declaration:
         // `<prefix>__<class>_constructor`.
+        //
+        // Refs #420: when class has no own ctor but extends a parent that
+        // does, JS spec's default ctor is `constructor(...args) { super(...args); }`.
+        // Adopt the closest ancestor-with-ctor's params as the synthesized
+        // ctor's signature, so when this standalone ctor is called via
+        // super() with the args meant for the grandparent, they can be
+        // forwarded correctly. The compile_method post-init step (below)
+        // emits the actual super-call.
         {
-            let ctor_body = class
-                .constructor
-                .as_ref()
-                .map(|c| (c.params.clone(), c.body.clone(), c.captures.clone()))
-                .unwrap_or_else(|| (Vec::new(), Vec::new(), Vec::new()));
+            let ctor_body = if let Some(c) = class.constructor.as_ref() {
+                (c.params.clone(), c.body.clone(), c.captures.clone())
+            } else if class.extends_name.is_some() {
+                // Walk ancestors for the first one with a ctor; adopt its
+                // params (cleared of ids — they'll be fresh).
+                let mut found_params: Vec<perry_hir::Param> = Vec::new();
+                let mut cur = class.extends_name.clone();
+                while let Some(pname) = cur {
+                    if let Some(pclass) = class_table.get(pname.as_str()) {
+                        if let Some(pctor) = &pclass.constructor {
+                            found_params = pctor.params.clone();
+                            break;
+                        }
+                        cur = pclass.extends_name.clone();
+                    } else if let Some(stub) = imported_class_stubs
+                        .iter()
+                        .find(|c| c.name == pname)
+                    {
+                        // Imported stub — params not in HIR; use its ctor
+                        // param count as a synthetic count of unnamed args.
+                        if let Some(ic) = opts
+                            .imported_classes
+                            .iter()
+                            .find(|i| i.local_alias.as_deref().unwrap_or(&i.name) == pname.as_str())
+                        {
+                            // Synthesize N untyped params named arg0..argN-1
+                            // with fresh local ids in a high range to avoid
+                            // collisions.
+                            for i in 0..ic.constructor_param_count {
+                                found_params.push(perry_hir::Param {
+                                    id: 0xFFFF_0000 + i as u32,
+                                    name: format!("__forward_arg{}", i),
+                                    ty: perry_types::Type::Any,
+                                    default: None,
+                                    is_rest: false,
+                                });
+                            }
+                        }
+                        break;
+                    } else {
+                        break;
+                    }
+                }
+                (found_params, Vec::new(), Vec::new())
+            } else {
+                (Vec::new(), Vec::new(), Vec::new())
+            };
             let ctor_as_method = perry_hir::Function {
                 id: 0,
                 name: format!("{}_constructor", class.name),
@@ -2226,6 +2388,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         for method in &class.methods {
             let _ = strings.intern(&method.name);
         }
+        // Refs #486: also intern getter property names so the cross-module
+        // `js_register_class_getter` registration loop in emit_string_pool
+        // can find their bytes_global without re-running through the
+        // string pool's mutable interner.
+        for (prop, _) in &class.getters {
+            let _ = strings.intern(prop);
+        }
     }
 
     // After all user code is lowered, the string pool's contents are final.
@@ -2241,6 +2410,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &class_ids,
         &class_table,
         &closure_rest_params,
+        &closure_arities,
     );
 
     // Emit the buffer alias-scope metadata once per module, covering every
@@ -3131,13 +3301,149 @@ fn compile_method(
     // as uninitialized register values (read as NaN-boxed undefined).
     let is_constructor_method = method.name == format!("{}_constructor", class.name);
     if is_constructor_method {
-        crate::lower_call::apply_field_initializers_recursive_pub(&mut ctx, &class.name)
+        // Stage field initializers around the parent body chain so leaf
+        // fields can read state set by parent body (Refs #420):
+        //   - has extends: apply only ancestors here; self-fields apply
+        //     later (after super() in own-body case, after explicit parent
+        //     ctor call in no-own-body case).
+        //   - no extends: apply all (= just self) here.
+        let init_mode = if class.extends_name.is_some() {
+            crate::lower_call::FieldInitMode::AncestorsOnly
+        } else {
+            crate::lower_call::FieldInitMode::All
+        };
+        crate::lower_call::apply_field_initializers_recursive(&mut ctx, &class.name, init_mode)
             .with_context(|| {
                 format!(
                     "applying field initializers for '{}' constructor",
                     class.name
                 )
             })?;
+        // Refs #420: when a class has no own constructor but extends a parent
+        // that DOES have a body, JS spec requires a default ctor that calls
+        // `super(...args)` — implicit forward. perry's standalone ctor for
+        // such a class previously emitted only field initializers, so the
+        // parent's ctor body (e.g. ColumnBuilder's `this.config = {...}`)
+        // never ran when called via the cross-module dispatch path. Inject a
+        // call to the parent's standalone ctor symbol here, forwarding all
+        // args. The walk skips empty-bodied parents (matching the JS spec
+        // chain semantics).
+        if class.constructor.is_none() && class.extends_name.is_some() {
+            let mut effective_parent: Option<&str> = class.extends_name.as_deref();
+            while let Some(pname) = effective_parent {
+                let Some(pc) = ctx.classes.get(pname).copied() else {
+                    break;
+                };
+                let has_local_body = pc.constructor.is_some();
+                let has_imported_ctor = ctx.imported_class_ctors.contains_key(pname);
+                if has_local_body || has_imported_ctor {
+                    break;
+                }
+                effective_parent = pc.extends_name.as_deref();
+            }
+            if let Some(pname) = effective_parent {
+                let pname_owned = pname.to_string();
+                // Resolve the standalone-ctor symbol name. Prefer the
+                // local class table (same module) for an inline call;
+                // fall back to imported_class_ctors for cross-module.
+                let (ctor_sym, param_count) =
+                    if let Some(pclass) = ctx.classes.get(&pname_owned).copied() {
+                        if pclass.constructor.is_some() {
+                            // Local class with own ctor — use the per-module-prefix
+                            // standalone symbol, same one compile_method emits.
+                            let module_prefix = ctx.strings.module_prefix().to_string();
+                            let sym = format!("{}__{}_constructor", module_prefix, pname_owned);
+                            let pcount = pclass
+                                .constructor
+                                .as_ref()
+                                .map(|c| c.params.len())
+                                .unwrap_or(0);
+                            (sym, pcount)
+                        } else if let Some((sym, n)) =
+                            ctx.imported_class_ctors.get(&pname_owned).cloned()
+                        {
+                            (sym, n)
+                        } else {
+                            // No callable ctor symbol — bail.
+                            stmt::lower_stmts(&mut ctx, &method.body).with_context(|| {
+                                format!(
+                                    "lowering body of method '{}::{}'",
+                                    class.name, method.name
+                                )
+                            })?;
+                            // Fall through to the default ret-void at end.
+                            if !ctx.block().is_terminated() {
+                                ctx.block().ret(DOUBLE, "0.0");
+                            }
+                            let _ = std::mem::take(&mut ctx.ic_globals);
+                            let _ = std::mem::take(&mut ctx.typed_parse_rodata);
+                            let _ = std::mem::take(&mut ctx.pending_declares);
+                            return Ok(());
+                        }
+                    } else if let Some((sym, n)) =
+                        ctx.imported_class_ctors.get(&pname_owned).cloned()
+                    {
+                        (sym, n)
+                    } else {
+                        ("".to_string(), 0)
+                    };
+                if !ctor_sym.is_empty() {
+                    let undef_lit =
+                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    // Forward this method's params, padding with undefined if
+                    // the parent expects more.
+                    let mut forwarded: Vec<String> = Vec::with_capacity(param_count);
+                    for (i, p) in method.params.iter().enumerate() {
+                        if i >= param_count {
+                            break;
+                        }
+                        let slot = ctx.locals.get(&p.id).cloned();
+                        if let Some(slot) = slot {
+                            forwarded.push(ctx.block().load(DOUBLE, &slot));
+                        } else {
+                            forwarded.push(undef_lit.clone());
+                        }
+                    }
+                    while forwarded.len() < param_count {
+                        forwarded.push(undef_lit.clone());
+                    }
+                    // Load `this` from the this_stack.
+                    let this_slot = ctx.this_stack.last().cloned();
+                    let this_box = if let Some(slot) = this_slot {
+                        ctx.block().load(DOUBLE, &slot)
+                    } else {
+                        undef_lit.clone()
+                    };
+                    let ctor_param_types: Vec<crate::types::LlvmType> = std::iter::once(DOUBLE)
+                        .chain(forwarded.iter().map(|_| DOUBLE))
+                        .collect();
+                    let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
+                        Vec::with_capacity(1 + forwarded.len());
+                    ctor_args.push((DOUBLE, &this_box));
+                    for la in &forwarded {
+                        ctor_args.push((DOUBLE, la.as_str()));
+                    }
+                    ctx.pending_declares
+                        .push((ctor_sym.clone(), crate::types::VOID, ctor_param_types));
+                    ctx.block().call_void(&ctor_sym, &ctor_args);
+                }
+            }
+            // Apply self field initializers AFTER the parent body chain has
+            // run, so they can read state set by the parent body (e.g. drizzle's
+            // PgText.enumValues = this.config.enumValues — this.config is set
+            // in Column body via super-chain). Refs #420.
+            crate::lower_call::apply_field_initializers_recursive(
+                &mut ctx,
+                &class.name,
+                crate::lower_call::FieldInitMode::SelfOnly,
+            )
+            .with_context(|| {
+                format!(
+                    "applying self field initializers for '{}' constructor",
+                    class.name
+                )
+            })?;
+        }
     }
 
     stmt::lower_stmts(&mut ctx, &method.body)
@@ -3766,6 +4072,7 @@ fn emit_string_pool(
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
     closure_rest_params: &HashMap<u32, usize>,
+    closure_arities: &HashMap<u32, u32>,
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -3966,6 +4273,66 @@ fn emit_string_pool(
         );
     }
 
+    // Refs #486 (hono logger middleware): also register every class
+    // getter in the runtime VTABLE_REGISTRY. Without this, cross-module
+    // `obj.prop` reads (where `obj` is statically typed `any` so the
+    // codegen has no static dispatch info) fall through `js_get_object_field_by_name`
+    // past the `vtable.getters.get(prop)` lookup at value.rs:2268 — the
+    // map is always empty — and into the field-by-name dispatcher,
+    // which returns `undefined` for properties that exist only as
+    // getters. Hono's `Context.get req()` is the canonical breakage:
+    // the logger middleware reads `c.req.url` from a JS-bundled hono
+    // dist via `compilePackages`, and pre-fix `c.req` always returned
+    // `undefined`.
+    let mut getter_pairs: Vec<(u32, String, String)> = Vec::new();
+    for (class_name, class) in classes.iter() {
+        let cid = match class_ids.get(class_name).copied() {
+            Some(c) if c != 0 => c,
+            _ => continue,
+        };
+        for (prop, getter_fn) in &class.getters {
+            // Skip imported class stubs: their `body` is empty (the
+            // defining module's init registers them).
+            if getter_fn.body.is_empty() {
+                continue;
+            }
+            // The local-emit path at codegen.rs:1858 prepends `__get_`
+            // to the HIR-assigned getter name (`get_<prop>`), giving
+            // the LLVM symbol `perry_method_<modprefix>__<class>__<sanitize(__get_get_<prop>)>`.
+            // Use the same mangling here so the registered func_ptr
+            // matches the actual emitted body.
+            let inner = format!("__get_{}", getter_fn.name);
+            let llvm_name = format!(
+                "perry_method_{}__{}__{}",
+                module_prefix,
+                sanitize(class_name),
+                sanitize(&inner),
+            );
+            getter_pairs.push((cid, prop.clone(), llvm_name));
+        }
+    }
+    getter_pairs.sort_unstable();
+    for (cid, prop_name, llvm_name) in getter_pairs {
+        let entry = match strings.iter().find(|e| e.value == prop_name) {
+            Some(e) => e,
+            None => continue,
+        };
+        let bytes_global = format!("@{}", entry.bytes_global);
+        let len_str = entry.byte_len.to_string();
+        let func_ref = format!("@{}", llvm_name);
+        let func_i64 = blk.ptrtoint(&func_ref, I64);
+        let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+        blk.call_void(
+            "js_register_class_getter",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, &func_i64),
+            ],
+        );
+    }
+
     // Issue #493: register each rest-bearing closure body's func_ptr ->
     // fixed_arity in the runtime's closure-rest side table. `js_closure_callN`
     // consults it to bundle trailing args at call sites where codegen
@@ -3987,6 +4354,26 @@ fn emit_string_pool(
         blk.call_void(
             "js_register_closure_rest",
             &[(PTR, &func_ref), (I32, &fixed_arity.to_string())],
+        );
+    }
+
+    // Refs #421: register every non-rest closure's declared param count so
+    // `js_native_call_value` can pad missing trailing args with TAG_UNDEFINED
+    // when a closure stored as a class field is invoked method-style on an
+    // any-typed receiver with fewer args than declared. Rest-bearing closures
+    // are already handled by the closure-rest registry above (which pads
+    // internally via `dispatch_rest_bundled`).
+    let mut sorted_arities: Vec<(u32, u32)> = closure_arities
+        .iter()
+        .map(|(fid, arity)| (*fid, *arity))
+        .collect();
+    sorted_arities.sort_unstable();
+    for (fid, arity) in sorted_arities {
+        let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
+        let func_ref = format!("@{}", closure_sym);
+        blk.call_void(
+            "js_register_closure_arity",
+            &[(PTR, &func_ref), (I32, &arity.to_string())],
         );
     }
 
@@ -4321,6 +4708,27 @@ fn init_static_fields(ctx: &mut crate::expr::FnCtx<'_>, hir: &HirModule) -> Resu
     }
     for c in &hir.classes {
         for sf in &c.static_fields {
+            // Computed-key static fields go through the class-static-symbol
+            // side table. Refs #420 — drizzle's `static [entityKind] =
+            // "Table"` is consulted by `Object.prototype.hasOwnProperty.call(
+            // type, entityKind)` in drizzle's `is(value, type)`.
+            if let (Some(key_expr), Some(init_expr)) = (sf.key_expr.as_ref(), sf.init.as_ref()) {
+                let Some(&class_id) = ctx.class_ids.get(&c.name) else {
+                    continue;
+                };
+                let key_v = crate::expr::lower_expr(ctx, key_expr)?;
+                let val_v = crate::expr::lower_expr(ctx, init_expr)?;
+                let cid_str = class_id.to_string();
+                ctx.block().call_void(
+                    "js_class_register_static_symbol",
+                    &[
+                        (crate::types::I32, &cid_str),
+                        (DOUBLE, &key_v),
+                        (DOUBLE, &val_v),
+                    ],
+                );
+                continue;
+            }
             let key = (c.name.clone(), sf.name.clone());
             let Some(global_name) = ctx.static_field_globals.get(&key).cloned() else {
                 continue;

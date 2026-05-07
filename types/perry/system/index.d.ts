@@ -200,3 +200,76 @@ export function audioStartRecording(): void;
 
 /** Stop audio recording and save to file. */
 export function audioStopRecording(): void;
+
+// -----------------------------------------------------------------------------
+// Geolocation (issue #552)
+//
+// Callback-based to keep the FFI surface flat. Wrap in `new Promise(r => ...)`
+// at the call site if a Promise-shaped API is preferred.
+//
+// iOS:     CoreLocation / CLLocationManager. The app bundle MUST declare
+//          NSLocationWhenInUseUsageDescription in Info.plist or the system
+//          short-circuits the permission prompt.
+// Android: LocationManager (GPS + NETWORK providers). Requires
+//          ACCESS_FINE_LOCATION (or ACCESS_COARSE_LOCATION) in the manifest.
+// macOS:   CoreLocation. Same Info.plist key as iOS for sandboxed apps.
+// Other targets (tvOS / watchOS / visionOS / GTK4 / Windows / Web): no-op
+//          stubs — `geolocationGetCurrent` invokes `onError` immediately with
+//          `"unsupported-platform"`.
+// -----------------------------------------------------------------------------
+
+/**
+ * Resolve the device's current position. Calls `cb(lat, lng, accuracy, timestamp)`
+ * once on success; calls `onError(message)` once on permission denial, timeout,
+ * or platform unavailability. Exactly one of the two fires per invocation.
+ *
+ * `accuracy` is in meters (horizontal); `timestamp` is Unix epoch milliseconds.
+ */
+export function geolocationGetCurrent(
+    onSuccess: (lat: number, lng: number, accuracy: number, timestamp: number) => void,
+    onError: (message: string) => void,
+): void;
+
+/**
+ * Subscribe to position updates. Returns a numeric watch id; pass it to
+ * `geolocationStopWatch` to cancel. Updates fire whenever the platform reports
+ * a movement greater than the OS's default distance filter.
+ */
+export function geolocationWatch(
+    cb: (lat: number, lng: number, accuracy: number, timestamp: number) => void,
+): number;
+
+/** Cancel a watch started by `geolocationWatch`. No-op on unknown ids. */
+export function geolocationStopWatch(id: number): void;
+
+/**
+ * Request location permission. Calls `cb(status)` where status is one of
+ * `"granted"`, `"denied"`, `"restricted"`, or `"unsupported-platform"`.
+ * Safe to call repeatedly — already-granted permissions return immediately.
+ */
+export function geolocationRequestPermission(
+    cb: (status: string) => void,
+): void;
+
+// -----------------------------------------------------------------------------
+// Photo-library image picker (issue #552)
+//
+// iOS:     PHPickerViewController (no Photos permission required).
+// Android: ACTION_PICK_IMAGES (Photo Picker) on API 33+; ACTION_GET_CONTENT
+//          fallback on older devices.
+// macOS:   NSOpenPanel filtered to image UTIs.
+// Other targets: no-op stubs that invoke `cb([])` immediately.
+//
+// The callback receives an array of absolute filesystem paths. Read bytes
+// via `fs.readFileSync(path)` if needed.
+// -----------------------------------------------------------------------------
+
+/**
+ * Present the native photo-library picker. `cb(paths)` fires once when the
+ * user dismisses the picker. `paths` is empty if the user cancelled.
+ */
+export function imagePickerPick(
+    maxCount: number,
+    allowMultiple: boolean,
+    cb: (paths: string[]) => void,
+): void;

@@ -112,7 +112,9 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
     // The runtime helper consults the class's `Symbol.toStringTag`
     // getter (registered at module init via `__perry_wk_tostringtag_*`)
     // and returns `[object <tag>]` or the default `[object Object]`.
-    if !has_spread && args.len() == 1 {
+    // `Object.prototype.<method>.call(...)` idioms — perry doesn't expose
+    // `Object.prototype` so we rewrite to runtime helpers. Refs #420.
+    if !has_spread && (args.len() == 1 || args.len() == 2) {
         if let ast::Callee::Expr(callee_expr) = &call.callee {
             if let ast::Expr::Member(outer) = callee_expr.as_ref() {
                 if let (ast::MemberProp::Ident(outer_prop), ast::Expr::Member(mid)) =
@@ -122,7 +124,12 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                         if let (ast::MemberProp::Ident(mid_prop), ast::Expr::Member(inner)) =
                             (&mid.prop, mid.obj.as_ref())
                         {
-                            if mid_prop.sym.as_ref() == "toString" {
+                            let runtime_fn = match (mid_prop.sym.as_ref(), args.len()) {
+                                ("toString", 1) => Some("js_object_to_string"),
+                                ("hasOwnProperty", 2) => Some("js_object_has_own"),
+                                _ => None,
+                            };
+                            if let Some(runtime_fn) = runtime_fn {
                                 if let (
                                     ast::MemberProp::Ident(inner_prop),
                                     ast::Expr::Ident(inner_obj),
@@ -131,14 +138,13 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     if inner_obj.sym.as_ref() == "Object"
                                         && inner_prop.sym.as_ref() == "prototype"
                                     {
-                                        let arg = args.into_iter().next().unwrap();
                                         return Ok(Expr::Call {
                                             callee: Box::new(Expr::ExternFuncRef {
-                                                name: "js_object_to_string".to_string(),
+                                                name: runtime_fn.to_string(),
                                                 param_types: Vec::new(),
                                                 return_type: Type::Any,
                                             }),
-                                            args: vec![arg],
+                                            args,
                                             type_args: Vec::new(),
                                         });
                                     }
@@ -2732,10 +2738,21 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                         }
                                     }
                                     "forEach" => {
-                                        // Check if the receiver is a Map or Set - if so, don't use ArrayForEach
-                                        let is_map_or_set = ctx.lookup_local_type(&arr_name)
-                                                .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Map" || base == "Set"))
-                                                .unwrap_or(false);
+                                        // Check if the receiver is a Map or Set - if so, don't use ArrayForEach.
+                                        // Issue #542/#543: also reject `Map | undefined` / `Set | undefined`
+                                        // so the same array/Map mismatch on for-of doesn't recur for
+                                        // forEach calls on optional-Map parameters.
+                                        let recv_ty = ctx.lookup_local_type(&arr_name);
+                                        let is_map_or_set_variant = |ty: &Type| -> bool {
+                                            matches!(ty, Type::Generic { base, .. } if base == "Map" || base == "Set")
+                                        };
+                                        let is_map_or_set = match recv_ty {
+                                            Some(ty) if is_map_or_set_variant(ty) => true,
+                                            Some(Type::Union(variants)) => {
+                                                variants.iter().any(is_map_or_set_variant)
+                                            }
+                                            _ => false,
+                                        };
                                         if !is_map_or_set && !args.is_empty() {
                                             let cb = args.into_iter().next().unwrap();
                                             let cb =
@@ -2982,52 +2999,81 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                             });
                                         }
                                     }
-                                    "entries" => {
-                                        let is_map = ctx.lookup_local_type(&arr_name)
-                                                .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Map"))
-                                                .unwrap_or(false);
-                                        if is_map {
-                                            return Ok(Expr::MapEntries(Box::new(Expr::LocalGet(
-                                                array_id,
-                                            ))));
+                                    "entries" | "keys" | "values" => {
+                                        // Issue #542/#543: `keys()`/`values()`/`entries()` are
+                                        // shared between Array, Map, and Set. When the receiver's
+                                        // static type is Any (e.g. an interface method return
+                                        // whose signature wasn't tracked, or a `JSON.parse`
+                                        // result), the optimistic fall-through to `ArrayKeys`/
+                                        // `ArrayValues`/`ArrayEntries` runs `js_array_*` against
+                                        // a real `MapHeader`. The map's `size` field aliases
+                                        // `ArrayHeader.length`, so an N-entry Map produces
+                                        // `[0..N-1]` for `keys()` and reads garbage from the
+                                        // entries pointer for `values()`/`entries()`. Only fold
+                                        // to the Array variant when the receiver is statically
+                                        // known to be Array/Tuple; otherwise leave as a generic
+                                        // method call so codegen routes through
+                                        // `js_native_call_method`, which does the runtime
+                                        // is_registered_map / is_registered_set check.
+                                        let recv_ty = ctx.lookup_local_type(&arr_name);
+                                        let is_map = matches!(
+                                            recv_ty,
+                                            Some(Type::Generic { base, .. }) if base == "Map" || base == "WeakMap"
+                                        );
+                                        let is_set = matches!(
+                                            recv_ty,
+                                            Some(Type::Generic { base, .. }) if base == "Set" || base == "WeakSet"
+                                        );
+                                        let is_known_array = matches!(
+                                            recv_ty,
+                                            Some(Type::Array(_)) | Some(Type::Tuple(_))
+                                        );
+                                        match method_name {
+                                            "entries" => {
+                                                if is_map {
+                                                    return Ok(Expr::MapEntries(Box::new(
+                                                        Expr::LocalGet(array_id),
+                                                    )));
+                                                }
+                                                if is_known_array {
+                                                    return Ok(Expr::ArrayEntries(Box::new(
+                                                        Expr::LocalGet(array_id),
+                                                    )));
+                                                }
+                                            }
+                                            "keys" => {
+                                                if is_map {
+                                                    return Ok(Expr::MapKeys(Box::new(
+                                                        Expr::LocalGet(array_id),
+                                                    )));
+                                                }
+                                                if is_known_array {
+                                                    return Ok(Expr::ArrayKeys(Box::new(
+                                                        Expr::LocalGet(array_id),
+                                                    )));
+                                                }
+                                            }
+                                            "values" => {
+                                                if is_map {
+                                                    return Ok(Expr::MapValues(Box::new(
+                                                        Expr::LocalGet(array_id),
+                                                    )));
+                                                }
+                                                if is_set {
+                                                    return Ok(Expr::SetValues(Box::new(
+                                                        Expr::LocalGet(array_id),
+                                                    )));
+                                                }
+                                                if is_known_array {
+                                                    return Ok(Expr::ArrayValues(Box::new(
+                                                        Expr::LocalGet(array_id),
+                                                    )));
+                                                }
+                                            }
+                                            _ => unreachable!(),
                                         }
-                                        return Ok(Expr::ArrayEntries(Box::new(Expr::LocalGet(
-                                            array_id,
-                                        ))));
-                                    }
-                                    "keys" => {
-                                        let is_map = ctx.lookup_local_type(&arr_name)
-                                                .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Map"))
-                                                .unwrap_or(false);
-                                        if is_map {
-                                            return Ok(Expr::MapKeys(Box::new(Expr::LocalGet(
-                                                array_id,
-                                            ))));
-                                        }
-                                        return Ok(Expr::ArrayKeys(Box::new(Expr::LocalGet(
-                                            array_id,
-                                        ))));
-                                    }
-                                    "values" => {
-                                        let is_map = ctx.lookup_local_type(&arr_name)
-                                                .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Map"))
-                                                .unwrap_or(false);
-                                        if is_map {
-                                            return Ok(Expr::MapValues(Box::new(Expr::LocalGet(
-                                                array_id,
-                                            ))));
-                                        }
-                                        let is_set = ctx.lookup_local_type(&arr_name)
-                                                .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Set"))
-                                                .unwrap_or(false);
-                                        if is_set {
-                                            return Ok(Expr::SetValues(Box::new(Expr::LocalGet(
-                                                array_id,
-                                            ))));
-                                        }
-                                        return Ok(Expr::ArrayValues(Box::new(Expr::LocalGet(
-                                            array_id,
-                                        ))));
+                                        // Fall through: receiver type unknown — let general
+                                        // dispatch (js_native_call_method) inspect at runtime.
                                     }
                                     // Map methods (only apply to actual Map/Set types)
                                     "set" => {
@@ -3858,6 +3904,85 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     false
                                 }
                             }
+                            // Issue #528: chained `inner_call(...).<overlapping>(...)`.
+                            // The previous catch-all `_ => false` let the array-method
+                            // fold fire on ANY chained call, including ones whose inner
+                            // call returns a user object — `this.col().find({})` got
+                            // rewritten as `Expr::ArrayFind(this.col(), {})` and at
+                            // runtime `js_array_find` read garbage out of the object's
+                            // header (no fallback path: only `map`/`filter`/`forEach`/
+                            // `slice`/`with` have arms in `js_native_call_method`'s
+                            // array dispatch tower; `find`/`findIndex`/`reduce` do not).
+                            //
+                            // For overlapping methods (the same set the Ident arm
+                            // gates on), bail unless the inner call's method name is
+                            // one of the known array-producing builtins. The AST-level
+                            // check is conservative: it doesn't catch every chained-
+                            // array shape (e.g. `Array.from(x).find(p)` — `Array` is
+                            // an Ident, not a method on a Member), but it DOES catch
+                            // the common `arr.filter(p).find(q)` chain whose inner
+                            // call IS a Member-on-something. Non-overlapping methods
+                            // (slice/indexOf/includes/etc.) keep their existing
+                            // positive inner-HIR-shape pattern at lines ~3950+.
+                            ast::Expr::Call(inner_call) => {
+                                let is_overlapping = matches!(
+                                    method_name,
+                                    "find"
+                                        | "findIndex"
+                                        | "findLast"
+                                        | "findLastIndex"
+                                        | "map"
+                                        | "filter"
+                                        | "some"
+                                        | "every"
+                                        | "forEach"
+                                        | "reduce"
+                                        | "reduceRight"
+                                        | "join"
+                                );
+                                if !is_overlapping {
+                                    false
+                                } else {
+                                    // Look up the inner call's method name. If it's
+                                    // one of the known array-producing builtins, the
+                                    // chained fold IS safe — keep the ident-receiver
+                                    // optimistic behaviour for `arr.filter(p).find(q)`
+                                    // shapes.
+                                    let inner_method: Option<&str> = match &inner_call.callee {
+                                        ast::Callee::Expr(e) => match e.as_ref() {
+                                            ast::Expr::Member(m) => match &m.prop {
+                                                ast::MemberProp::Ident(i) => Some(i.sym.as_ref()),
+                                                _ => None,
+                                            },
+                                            _ => None,
+                                        },
+                                        _ => None,
+                                    };
+                                    let inner_returns_array = inner_method
+                                        .map(|m| matches!(
+                                            m,
+                                            "map"
+                                                | "filter"
+                                                | "slice"
+                                                | "concat"
+                                                | "flat"
+                                                | "flatMap"
+                                                | "splice"
+                                                | "sort"
+                                                | "reverse"
+                                                | "fill"
+                                                | "copyWithin"
+                                                | "toReversed"
+                                                | "toSorted"
+                                                | "toSpliced"
+                                                | "with"
+                                        ))
+                                        .unwrap_or(false);
+                                    // recv_is_class = true means BAIL. Bail when the
+                                    // inner call is NOT a known array-producing method.
+                                    !inner_returns_array
+                                }
+                            }
                             _ => false,
                         };
                         match method_name {
@@ -3925,6 +4050,24 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                 let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                 let array_expr = lower_expr(ctx, &member.obj)?;
                                 return Ok(Expr::ArrayFindIndex {
+                                    array: Box::new(array_expr),
+                                    callback: Box::new(cb),
+                                });
+                            }
+                            "some" if !args.is_empty() && !recv_is_class => {
+                                let cb = args.into_iter().next().unwrap();
+                                let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
+                                let array_expr = lower_expr(ctx, &member.obj)?;
+                                return Ok(Expr::ArraySome {
+                                    array: Box::new(array_expr),
+                                    callback: Box::new(cb),
+                                });
+                            }
+                            "every" if !args.is_empty() && !recv_is_class => {
+                                let cb = args.into_iter().next().unwrap();
+                                let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
+                                let array_expr = lower_expr(ctx, &member.obj)?;
+                                return Ok(Expr::ArrayEvery {
                                     array: Box::new(array_expr),
                                     callback: Box::new(cb),
                                 });

@@ -1873,6 +1873,10 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .iter()
             .map(|f| ClassField {
                 name: f.name.clone(),
+                key_expr: f
+                    .key_expr
+                    .as_ref()
+                    .map(|e| substitute_expr(e, &substitutions)),
                 ty: substitute_type(&f.ty, &substitutions),
                 init: f.init.as_ref().map(|e| substitute_expr(e, &substitutions)),
                 is_private: f.is_private,

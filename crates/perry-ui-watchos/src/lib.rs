@@ -1367,3 +1367,5 @@ pub extern "C" fn perry_media_set_now_playing(
 pub extern "C" fn perry_media_destroy(handle: f64) {
     media_playback::destroy(handle);
 }
+
+pub mod issue_552_stub;

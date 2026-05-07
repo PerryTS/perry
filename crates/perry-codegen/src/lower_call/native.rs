@@ -544,6 +544,72 @@ pub(crate) fn lower_native_method_call(
         return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
     }
 
+    // Issue #535 — perry/ui `state<T>` desugar trio. Synthetic methods
+    // emitted only by `crates/perry-transform/src/state_desugar.rs`.
+    if module == "perry/ui"
+        && (method == "__state_init" || method == "__state_set")
+        && object.is_none()
+    {
+        if args.len() != 2 {
+            return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+        }
+        let id_d = lower_expr(ctx, &args[0])?;
+        let val_d = lower_expr(ctx, &args[1])?;
+        let runtime_fn = if method == "__state_init" {
+            "js_state_init"
+        } else {
+            "js_state_set"
+        };
+        ctx.pending_declares.push((
+            runtime_fn.to_string(),
+            crate::types::VOID,
+            vec![DOUBLE, DOUBLE],
+        ));
+        let blk = ctx.block();
+        blk.call_void(runtime_fn, &[(DOUBLE, &id_d), (DOUBLE, &val_d)]);
+        return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+    }
+    if module == "perry/ui" && method == "__state_get" && object.is_none() {
+        if args.len() != 1 {
+            return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+        }
+        let id_d = lower_expr(ctx, &args[0])?;
+        ctx.pending_declares
+            .push(("js_state_get".to_string(), DOUBLE, vec![DOUBLE]));
+        let blk = ctx.block();
+        let result = blk.call(DOUBLE, "js_state_get", &[(DOUBLE, &id_d)]);
+        return Ok(result);
+    }
+
+    // Issue #535 Layer 2 — `__navstack_register_route(synth_id, name, body)`
+    // synthetic method emitted by state_desugar's NavStack(state, routes)
+    // rewrite. Lowers `body` to a widget handle (NaN-boxed pointer →
+    // unbox to i64) and forwards (synth_id, name, handle) to the runtime
+    // registry. The runtime walks this map on every js_state_set for the
+    // matching synth id, toggling each route's NSView.isHidden via the
+    // platform handler registered by perry-ui-macos at app startup.
+    if module == "perry/ui" && method == "__navstack_register_route" && object.is_none() {
+        if args.len() != 3 {
+            return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+        }
+        let synth_id_d = lower_expr(ctx, &args[0])?;
+        let name_d = lower_expr(ctx, &args[1])?;
+        let body_d = lower_expr(ctx, &args[2])?;
+        let body_i64 = unbox_to_i64(ctx.block(), &body_d);
+        ctx.pending_declares.push((
+            "js_navstack_register_route".to_string(),
+            crate::types::VOID,
+            vec![DOUBLE, DOUBLE, I64],
+        ));
+        ctx.block().call_void(
+            "js_navstack_register_route",
+            &[(DOUBLE, &synth_id_d), (DOUBLE, &name_d), (I64, &body_i64)],
+        );
+        // Return the body handle (already NaN-boxed) so the rewrite can
+        // chain by binding the result as the route's host child.
+        return Ok(body_d);
+    }
+
     // perry/arkts: HarmonyOS Phase 2 v2 callback bridge. Synthetic module
     // injected by the harvest pass (`compile.rs::emit_index_ets`) — never
     // user-authored. `registerCallback(idx, closure)` lowers to a call to

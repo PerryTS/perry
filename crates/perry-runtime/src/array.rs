@@ -1215,6 +1215,16 @@ pub extern "C" fn js_array_concat(
         let arr = unsafe { crate::set::js_set_to_array(src as *const crate::set::SetHeader) };
         return js_array_concat(dest, arr);
     }
+    // Same treatment for Maps — `[...map]` materializes [key, value]
+    // pair Arrays. Without this branch, the loop below reads the
+    // MapHeader's `size` field as `length` and pulls keys/values out of
+    // the wrong offsets, producing garbage f64s (issue #540). The
+    // companion `Array.from(map)` path goes through `js_array_clone`
+    // which already has the matching Map arm.
+    if crate::map::is_registered_map(src as usize) {
+        let arr = crate::map::js_map_entries(src as *const crate::map::MapHeader);
+        return js_array_concat(dest, arr);
+    }
     unsafe {
         let src_len = (*src).length;
         if src_len == 0 {

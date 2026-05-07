@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Issue #552: Photo Picker / ACTION_GET_CONTENT for the image picker. -->
+    <!-- Photo Picker (API 33+) does not require READ_MEDIA_IMAGES, but we
+         declare it for the ACTION_GET_CONTENT fallback path on Android 13+. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />

@@ -1606,6 +1606,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perry/system", "audioSetOutputFilename", false, None),
     method("perry/system", "audioStartRecording", false, None),
     method("perry/system", "audioStopRecording", false, None),
+    // --- perry/system geolocation + image picker (issue #552). ---
+    method("perry/system", "geolocationGetCurrent", false, None),
+    method("perry/system", "geolocationWatch", false, None),
+    method("perry/system", "geolocationStopWatch", false, None),
+    method("perry/system", "geolocationRequestPermission", false, None),
+    method("perry/system", "imagePickerPick", false, None),
     // --- perry/i18n — auto-derivable from PERRY_I18N_TABLE. ---
     method("perry/i18n", "t", false, None),
     method("perry/i18n", "Currency", false, None),

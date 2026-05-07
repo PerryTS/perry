@@ -154,6 +154,33 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         }
     }
 
+    // Web Fetch method dispatch (refs #421 — Phase 1 of the handle-NaN-boxing
+    // unification). When user code does `res.text()` / `res.json()` / etc. on
+    // an any-typed Response handle (typical of npm packages with stripped TS
+    // types — hono's `await app.fetch(req)` returns an any-typed value;
+    // user-side `await res.text()` ends up here), the call lands in
+    // `js_native_call_method` → small-handle range check → here. Each helper
+    // does its own registry-membership + property-name gate; `None` means
+    // "not us, try the next dispatcher or return undefined".
+    #[cfg(feature = "http-client")]
+    {
+        if let Some(v) =
+            crate::fetch::dispatch_response_method(handle as usize, method_name, args)
+        {
+            return v;
+        }
+        if let Some(v) =
+            crate::fetch::dispatch_blob_method(handle as usize, method_name, args)
+        {
+            return v;
+        }
+        if let Some(v) =
+            crate::fetch::dispatch_headers_method(handle as usize, method_name, args)
+        {
+            return v;
+        }
+    }
+
     // Unknown handle type - return undefined
     f64::from_bits(0x7FF8_0000_0000_0001)
 }
@@ -608,6 +635,32 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 // follow-up; status / data cover the issue).
                 _ => f64::from_bits(0x7FFC_0000_0000_0001),
             };
+        }
+    }
+
+    // Web Fetch property dispatch (refs #421 — Phase 1 of the handle-NaN-boxing
+    // unification). When user code accesses a property on a Request / Response /
+    // Headers / Blob handle in untyped position (`(r) => r.url` where the static
+    // type is `any` — typical of npm packages whose TS sources have been
+    // type-stripped, like hono's compiled JS), codegen falls through to
+    // `js_object_get_field_by_name` which strips POINTER_TAG and routes here.
+    // Each helper does its own registry-membership check; the order matches the
+    // observed property-name disjointness (`url` / `method` only on Request,
+    // `status` / `ok` only on Response, etc.). First match wins.
+    // Gated on `http-client` because fetch.rs itself is gated on that feature.
+    #[cfg(feature = "http-client")]
+    {
+        if let Some(v) = crate::fetch::dispatch_request_property(handle as usize, property_name) {
+            return v;
+        }
+        if let Some(v) = crate::fetch::dispatch_response_property(handle as usize, property_name) {
+            return v;
+        }
+        if let Some(v) = crate::fetch::dispatch_headers_property(handle as usize, property_name) {
+            return v;
+        }
+        if let Some(v) = crate::fetch::dispatch_blob_property(handle as usize, property_name) {
+            return v;
         }
     }
 

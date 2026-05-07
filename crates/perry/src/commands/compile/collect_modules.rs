@@ -239,6 +239,39 @@ pub(super) fn collect_modules(
             if import.source == "perry/media" {
                 ctx.needs_ui = true;
             }
+            // perry/system: most bindings (preferences, locale, device
+            // info) live in stdlib, but the audio-recording, geolocation,
+            // and image-picker FFIs live in libperry_ui_*.a alongside the
+            // platform-specific OS framework integrations (CoreLocation,
+            // AVAudioEngine, PHPickerViewController, etc.). Trigger UI
+            // lib linking when any of those names is imported. (#552)
+            if import.source == "perry/system" {
+                let triggers_ui = import.specifiers.iter().any(|s| match s {
+                    perry_hir::ImportSpecifier::Named { imported, .. } => matches!(
+                        imported.as_str(),
+                        "audioStart"
+                            | "audioStop"
+                            | "audioGetLevel"
+                            | "audioGetPeak"
+                            | "audioGetWaveform"
+                            | "audioSetOutputFilename"
+                            | "audioStartRecording"
+                            | "audioStopRecording"
+                            | "geolocationGetCurrent"
+                            | "geolocationWatch"
+                            | "geolocationStopWatch"
+                            | "geolocationRequestPermission"
+                            | "imagePickerPick"
+                    ),
+                    // Namespace imports — opt in conservatively (covers
+                    // `import * as system from "perry/system"; system.audioStartRecording()`).
+                    perry_hir::ImportSpecifier::Namespace { .. } => true,
+                    perry_hir::ImportSpecifier::Default { .. } => false,
+                });
+                if triggers_ui {
+                    ctx.needs_ui = true;
+                }
+            }
             if import.source == "perry/plugin" {
                 ctx.needs_plugins = true;
             }
@@ -505,6 +538,12 @@ pub(super) fn collect_modules(
                 }
             }
         }
+    }
+
+    // Issue #535 — `perry/ui` `state<T>` desugar pass.
+    let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
+    if !is_harmonyos {
+        perry_transform::state_desugar::run(&mut hir_module);
     }
 
     // Run HIR transforms AFTER imports/re-exports have been recursively

@@ -812,12 +812,33 @@ pub(super) fn resolve_import(
         let parent = importer_path.parent()?;
         let resolved = parent.join(import_source);
         if let Some(path) = resolve_with_extensions(&resolved) {
-            let kind = if is_js_file(&path) && !is_in_compile_package(&path, compile_packages) {
+            let canonical = path.canonicalize().ok()?;
+            // Refs #486: a relative `import './foo.js'` from inside a compile
+            // package must classify as NativeCompiled even when the resolved
+            // file lives outside the literal `node_modules/<pkg>/` substring
+            // — `file:./lib3` deps and symlinked package roots both canonicalize
+            // away from `node_modules`, but their files are still part of the
+            // compile-package compile scope. Without this, re-exports inside
+            // such packages (e.g. `lib3/index.js` doing `export { C } from
+            // './c.js'`) silently fall through to ModuleKind::Interpreted, the
+            // dependent file never enters `ctx.native_modules`, and importing
+            // modules see `imported_classes=[]` for symbols re-exported from it.
+            let in_compile_pkg = is_in_compile_package(&canonical, compile_packages)
+                || compile_package_dirs.values().any(|dir| {
+                    if canonical.starts_with(dir) {
+                        let relative =
+                            canonical.strip_prefix(dir).unwrap_or(canonical.as_path());
+                        !relative.to_string_lossy().contains("node_modules/")
+                    } else {
+                        false
+                    }
+                });
+            let kind = if is_js_file(&canonical) && !in_compile_pkg {
                 ModuleKind::Interpreted
             } else {
                 ModuleKind::NativeCompiled
             };
-            return Some((path.canonicalize().ok()?, kind));
+            return Some((canonical, kind));
         }
         return None;
     }

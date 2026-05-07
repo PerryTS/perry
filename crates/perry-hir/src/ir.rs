@@ -555,6 +555,11 @@ pub struct Class {
 #[derive(Debug, Clone)]
 pub struct ClassField {
     pub name: String,
+    /// When `Some`, this field's key is the lowered expression evaluated at
+    /// construction time (e.g. `[Symbol.for("k")]` or `[Parent.Symbol.X]`).
+    /// `name` is then a synthetic placeholder used only for HIR identity —
+    /// runtime property writes go through `IndexSet` with this expression.
+    pub key_expr: Option<Expr>,
     pub ty: Type,
     pub init: Option<Expr>,
     pub is_private: bool,
@@ -938,6 +943,16 @@ pub enum Expr {
     StaticFieldSet {
         class_name: String,
         field_name: String,
+        value: Box<Expr>,
+    },
+
+    // Static computed-key Symbol field assignment, e.g.
+    // `class C { static [Symbol.for("k")] = "v" }`. Lowered at runtime
+    // through `js_class_register_static_symbol(class_id, key, value)`.
+    // Refs #420.
+    ClassStaticSymbolSet {
+        class_name: String,
+        key: Box<Expr>,
         value: Box<Expr>,
     },
 

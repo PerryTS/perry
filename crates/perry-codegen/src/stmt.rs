@@ -360,10 +360,29 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         let dummy_this = ctx.func.alloca_entry(DOUBLE);
                         ctx.this_stack.push(dummy_this);
 
-                        // Apply field initializers
-                        crate::lower_call::apply_field_initializers_recursive_pub(ctx, class_name)?;
+                        // Stage field initializers around any parent body chain.
+                        // Refs #420: leaf field inits may reference state set by
+                        // parent body (e.g. drizzle's
+                        // `class PgText extends PgColumn { enumValues = this.config.enumValues }`),
+                        // so apply ancestors' fields first, then run the parent
+                        // body when the leaf has no own ctor, then leaf-self
+                        // fields. For own-ctor case, leaf-self runs at the
+                        // SuperCall site inside the body.
+                        let class_has_extends = ctx
+                            .classes
+                            .get(class_name)
+                            .map(|c| c.extends_name.is_some())
+                            .unwrap_or(false);
+                        let init_mode = if class_has_extends {
+                            crate::lower_call::FieldInitMode::AncestorsOnly
+                        } else {
+                            crate::lower_call::FieldInitMode::All
+                        };
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx, class_name, init_mode,
+                        )?;
 
-                        // Inline constructor body if present
+                        // Inline constructor body if present (own-ctor case).
                         if let Some(ctor) = &ctor {
                             let saved_locals = ctx.locals.clone();
                             let saved_local_types = ctx.local_types.clone();
@@ -376,6 +395,54 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                             crate::stmt::lower_stmts(ctx, &ctor.body)?;
                             ctx.locals = saved_locals;
                             ctx.local_types = saved_local_types;
+                        } else if class_has_extends {
+                            // No own ctor — JS spec defaults to
+                            // `constructor(...args) { super(...args); }`. Walk
+                            // the parent chain to find the first ancestor with
+                            // a body and inline it (forwarding args). Refs #420.
+                            let mut parent_name = ctx
+                                .classes
+                                .get(class_name)
+                                .and_then(|c| c.extends_name.clone());
+                            while let Some(pname) = parent_name {
+                                if let Some(parent_class) = ctx.classes.get(&pname).copied() {
+                                    if let Some(parent_ctor) = &parent_class.constructor {
+                                        let saved_locals = ctx.locals.clone();
+                                        let saved_local_types = ctx.local_types.clone();
+                                        for (i, param) in parent_ctor.params.iter().enumerate() {
+                                            let slot = ctx.func.alloca_entry(DOUBLE);
+                                            if i < lowered_args.len() {
+                                                ctx.block().store(DOUBLE, &lowered_args[i], &slot);
+                                            } else {
+                                                let undef = crate::nanbox::double_literal(
+                                                    f64::from_bits(crate::nanbox::TAG_UNDEFINED),
+                                                );
+                                                ctx.block().store(DOUBLE, &undef, &slot);
+                                            }
+                                            ctx.locals.insert(param.id, slot);
+                                            ctx.local_types.insert(param.id, param.ty.clone());
+                                        }
+                                        ctx.class_stack.pop();
+                                        ctx.class_stack.push(pname.clone());
+                                        crate::stmt::lower_stmts(ctx, &parent_ctor.body)?;
+                                        ctx.class_stack.pop();
+                                        ctx.class_stack.push(class_name.clone());
+                                        ctx.locals = saved_locals;
+                                        ctx.local_types = saved_local_types;
+                                        break;
+                                    }
+                                    parent_name = parent_class.extends_name.clone();
+                                } else {
+                                    break;
+                                }
+                            }
+                            // Apply leaf's own field initializers AFTER the
+                            // parent body chain has run.
+                            crate::lower_call::apply_field_initializers_recursive(
+                                ctx,
+                                class_name,
+                                crate::lower_call::FieldInitMode::SelfOnly,
+                            )?;
                         }
 
                         ctx.this_stack.pop();

@@ -1477,6 +1477,22 @@ unsafe fn write_escaped_string(buf: &mut String, s: &str) {
 
     buf.push('"');
     let mut start = 0;
+    // Issue #548: `s` reaches us via `str_from_header`, which uses
+    // `from_utf8_unchecked` — a misclassified pointer (e.g. an
+    // ArrayHeader interpreted as a StringHeader through the GC-type
+    // fallback heuristic) can produce a `&str` whose bytes are not
+    // valid UTF-8. The original `&s[start..i]` slice operation
+    // panics in `core::str::is_char_boundary` whenever `i` lands
+    // mid-multibyte (or on a stray continuation byte). Switching to
+    // byte-level `extend_from_slice` writes the raw bytes through and
+    // never inspects char boundaries; the JSON output stays
+    // byte-identical for valid UTF-8 inputs and degrades gracefully
+    // (non-UTF-8 bytes pass through verbatim) instead of aborting the
+    // whole process. The String we hand back is technically
+    // ill-formed in the worst case, but every consumer in this
+    // codebase treats stringify output as a byte stream — and an
+    // ill-formed result is strictly preferable to a SIGABRT.
+    let buf_vec = buf.as_mut_vec();
     for (i, &b) in bytes.iter().enumerate() {
         let escape = match b {
             b'"' => Some("\\\""),
@@ -1486,9 +1502,9 @@ unsafe fn write_escaped_string(buf: &mut String, s: &str) {
             b'\t' => Some("\\t"),
             0..=0x1f => {
                 if start < i {
-                    buf.push_str(&s[start..i]);
+                    buf_vec.extend_from_slice(&bytes[start..i]);
                 }
-                let _ = write!(buf, "\\u{:04x}", b);
+                buf_vec.extend_from_slice(format!("\\u{:04x}", b).as_bytes());
                 start = i + 1;
                 continue;
             }
@@ -1496,16 +1512,16 @@ unsafe fn write_escaped_string(buf: &mut String, s: &str) {
         };
         if let Some(esc) = escape {
             if start < i {
-                buf.push_str(&s[start..i]);
+                buf_vec.extend_from_slice(&bytes[start..i]);
             }
-            buf.push_str(esc);
+            buf_vec.extend_from_slice(esc.as_bytes());
             start = i + 1;
         }
     }
     if start < bytes.len() {
-        buf.push_str(&s[start..]);
+        buf_vec.extend_from_slice(&bytes[start..]);
     }
-    buf.push('"');
+    buf_vec.push(b'"');
 }
 
 /// Check if a NaN-boxed value is a closure (function).

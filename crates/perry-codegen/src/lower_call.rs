@@ -1415,15 +1415,36 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 Some(name) => !ctx.classes.contains_key(&name),
             };
         if needs_dynamic_dispatch {
-            // Find all (class, method_name → fn_name) where the
-            // method is defined directly on a class.
+            // Find all (class_id → fn_name) for `property` — including
+            // INHERITED methods. Per JS spec, `subInstance.method()` for a
+            // method defined on a parent dispatches to the parent's
+            // implementation. perry's previous walk only added classes that
+            // DIRECTLY declared `property`; subclasses that inherited the
+            // method weren't represented in the dispatch tower, so the
+            // icmp_eq vs class_id missed and the call fell through to the
+            // runtime's js_native_call_method fallback (which returns an
+            // empty object for unknown receiver class+method combos).
+            // Refs #420 — drizzle's `serial("id").primaryKey()` where
+            // primaryKey is on ColumnBuilder (grandparent) but the
+            // receiver is a PgSerialBuilder (grandchild).
+            //
+            // Algorithm: walk every class C in `class_ids`. For each, walk
+            // C's parent chain and find the FIRST class that has `property`
+            // in `ctx.methods`. Register (C's id → that ancestor's fn_name).
             let mut implementors: Vec<(u32, String)> = Vec::new();
-            for ((cls, mname), fname) in ctx.methods.iter() {
-                if mname != property {
-                    continue;
-                }
-                if let Some(cid) = ctx.class_ids.get(cls).copied() {
-                    implementors.push((cid, fname.clone()));
+            let mut seen_pairs: std::collections::HashSet<(u32, String)> =
+                std::collections::HashSet::new();
+            for (start_cls, &start_cid) in ctx.class_ids.iter() {
+                let mut cur: Option<String> = Some(start_cls.clone());
+                while let Some(c) = cur {
+                    let key = (c.clone(), property.clone());
+                    if let Some(fname) = ctx.methods.get(&key).cloned() {
+                        if seen_pairs.insert((start_cid, fname.clone())) {
+                            implementors.push((start_cid, fname));
+                        }
+                        break;
+                    }
+                    cur = ctx.classes.get(&c).and_then(|cc| cc.extends_name.clone());
                 }
             }
             if !implementors.is_empty() {
@@ -1875,8 +1896,25 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                         // which calls the runtime with the implicit
                         // "default" label.
                     }
+                    "log" | "info" | "debug" => {
+                        // Issue #557: zero-arg console.log()/info()/debug()
+                        // emits a newline to stdout (matches Node/bun). The
+                        // *_spread runtime fns already print just `\n` when
+                        // their arg is null, so pass i64 0 directly.
+                        ctx.block().call_void("js_console_log_spread", &[(I64, "0")]);
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    }
+                    "warn" => {
+                        ctx.block().call_void("js_console_warn_spread", &[(I64, "0")]);
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    }
+                    "error" => {
+                        ctx.block().call_void("js_console_error_spread", &[(I64, "0")]);
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    }
                     _ => {
-                        // log/info/warn/error/debug/etc. — print nothing.
+                        // Other zero-arg console.* methods (dir, assert,
+                        // etc.) — print nothing.
                         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
                 }
@@ -2664,13 +2702,25 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 break;
             }
         }
+        // Skip computed-key fields: their key is an expression evaluated at
+        // construction time, not a stable string, so they don't get an inline
+        // slot. The runtime stores them via IndexSet → js_object_set_field /
+        // js_object_set_symbol_property paths in `apply_field_initializers_recursive`.
+        // Including their synthetic `__computed_field_*` names in packed_keys
+        // would surface them as enumerable own properties on Object.keys().
         for pc in parent_chain.iter().rev() {
             for f in &pc.fields {
+                if f.key_expr.is_some() {
+                    continue;
+                }
                 packed_keys.push_str(&f.name);
                 packed_keys.push('\0');
             }
         }
         for f in &class.fields {
+            if f.key_expr.is_some() {
+                continue;
+            }
             packed_keys.push_str(&f.name);
             packed_keys.push('\0');
         }
@@ -2703,12 +2753,26 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     ctx.this_stack.push(this_slot);
     ctx.class_stack.push(class_name.to_string());
 
-    // Apply field initializers FIRST — TypeScript / ES2022 semantics:
-    // class field initializers run at the start of the constructor body
-    // (after super() for derived classes, before any user ctor code).
-    // Walk the parent chain from the root down so parent fields are
-    // initialized before the child's fields.
-    apply_field_initializers_recursive(ctx, class_name)?;
+    // Apply ANCESTOR field initializers first — they need to be in place
+    // before any parent ctor body runs (parent body may reference its own
+    // declared fields). The leaf class's OWN field initializers are applied
+    // AFTER the parent body completes, because they may read state set by
+    // the parent body (e.g. drizzle's `class PgText extends PgColumn {
+    // enumValues = this.config.enumValues }` — PgColumn's body chain sets
+    // `this.config = config` via super → Column ctor; PgText's field init
+    // must run after that). Refs #420.
+    //
+    // For the own-ctor case (class has its own ctor body), the leaf's own
+    // fields are applied at the SuperCall site after parent body inlined
+    // (see expr.rs Expr::SuperCall handling). For the no-own-ctor case,
+    // they're applied here after the inherited body inline (below).
+    apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AncestorsOnly)?;
+    let has_own_ctor = class.constructor.is_some();
+    let has_extends = class.extends_name.is_some();
+    if !has_extends {
+        // Base class — no super(), apply own fields now (before body).
+        apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
+    }
 
     // If there's a constructor, inline its body. We allocate slots for
     // each constructor parameter and pre-populate them with the lowered
@@ -2791,7 +2855,58 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         }
         // If no parent constructor was found (imported class with no
         // inlineable constructor body), call the cross-module constructor.
-        if let Some((ctor_name, param_count)) = ctx.imported_class_ctors.get(class_name).cloned() {
+        // Refs #420: walk past empty-bodied ancestors with param_count==0
+        // imports too — when `class PgSerial extends PgColumn extends Column`
+        // and Column is imported with the real ctor body, lower_new for
+        // PgSerial needs to dispatch to Column_constructor (forwarding the
+        // ctor args). Without this walk, `new PgSerial(table, config)`
+        // produced an empty object since none of the chain's bodies ran.
+        let lookup_class = class_name.to_string();
+        let mut effective_class_name = lookup_class.clone();
+        let mut effective_extends = class.extends_name.clone();
+        loop {
+            let has_real_ctor = ctx
+                .imported_class_ctors
+                .get(&effective_class_name)
+                .map(|(_, n)| *n > 0)
+                .unwrap_or(false);
+            if has_real_ctor {
+                break;
+            }
+            let Some(parent) = effective_extends.clone() else {
+                break;
+            };
+            let Some(parent_class) = ctx.classes.get(&parent).copied() else {
+                break;
+            };
+            effective_class_name = parent;
+            effective_extends = parent_class.extends_name.clone();
+        }
+        if let Some((ctor_name, param_count)) = ctx
+            .imported_class_ctors
+            .get(&effective_class_name)
+            .cloned()
+            .filter(|(_, _)| effective_class_name != lookup_class)
+        {
+            // Walked to an ancestor — call its ctor with this and forwarded args.
+            let undef_lit =
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            while lowered_args.len() < param_count {
+                lowered_args.push(undef_lit.clone());
+            }
+            let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
+                Vec::with_capacity(1 + lowered_args.len());
+            ctor_args.push((DOUBLE, &obj_box));
+            let ctor_param_types: Vec<crate::types::LlvmType> = std::iter::once(DOUBLE)
+                .chain(lowered_args.iter().map(|_| DOUBLE))
+                .collect();
+            for la in &lowered_args {
+                ctor_args.push((DOUBLE, la.as_str()));
+            }
+            ctx.pending_declares
+                .push((ctor_name.clone(), crate::types::VOID, ctor_param_types));
+            ctx.block().call_void(&ctor_name, &ctor_args);
+        } else if let Some((ctor_name, param_count)) = ctx.imported_class_ctors.get(class_name).cloned() {
             // Pad missing optional args with TAG_UNDEFINED so the constructor
             // doesn't read garbage from stale registers.
             let undef_lit =
@@ -2815,6 +2930,16 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         }
     }
 
+    // Now that the parent body chain has run (setting `this.config`, etc.),
+    // apply the leaf class's own field initializers — they may reference
+    // state set by the parent body. For the own-ctor case, this is handled
+    // at the SuperCall site inside the body. For the no-own-ctor case and
+    // for classes with no extends (already applied above), we skip here.
+    // Refs #420 (drizzle's PgText.enumValues = this.config.enumValues).
+    if !has_own_ctor && has_extends {
+        apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
+    }
+
     ctx.this_stack.pop();
     ctx.class_stack.pop();
     Ok(obj_box)
@@ -2833,10 +2958,28 @@ pub(crate) fn apply_field_initializers_recursive_pub(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
 ) -> Result<()> {
-    apply_field_initializers_recursive(ctx, class_name)
+    apply_field_initializers_recursive(ctx, class_name, FieldInitMode::All)
 }
 
-fn apply_field_initializers_recursive(ctx: &mut FnCtx<'_>, class_name: &str) -> Result<()> {
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FieldInitMode {
+    /// Apply field initializers for the entire chain root → leaf.
+    All,
+    /// Apply only the ancestors' field initializers (skip the leaf class).
+    /// Used to set up parent fields before a parent ctor body runs.
+    AncestorsOnly,
+    /// Apply only the named class's own field initializers (skip ancestors).
+    /// Used after a parent ctor body has run to install the leaf's fields,
+    /// which may reference state set by the parent body (e.g.
+    /// `enumValues = this.config.enumValues` in drizzle's PgText). Refs #420.
+    SelfOnly,
+}
+
+pub(crate) fn apply_field_initializers_recursive(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    mode: FieldInitMode,
+) -> Result<()> {
     // Collect the inheritance chain from root down.
     let mut chain: Vec<String> = Vec::new();
     let mut cur = Some(class_name.to_string());
@@ -2849,6 +2992,28 @@ fn apply_field_initializers_recursive(ctx: &mut FnCtx<'_>, class_name: &str) -> 
     }
     chain.reverse();
 
+    // Apply mode filter:
+    //   All: keep entire chain
+    //   AncestorsOnly: drop the leaf (last entry)
+    //   SelfOnly: keep only the leaf
+    let chain: Vec<String> = match mode {
+        FieldInitMode::All => chain,
+        FieldInitMode::AncestorsOnly => {
+            if chain.len() <= 1 {
+                Vec::new()
+            } else {
+                chain[..chain.len() - 1].to_vec()
+            }
+        }
+        FieldInitMode::SelfOnly => {
+            if let Some(last) = chain.last().cloned() {
+                vec![last]
+            } else {
+                Vec::new()
+            }
+        }
+    };
+
     for class_name_in_chain in chain {
         let class = match ctx.classes.get(&class_name_in_chain).copied() {
             Some(c) => c,
@@ -2856,13 +3021,34 @@ fn apply_field_initializers_recursive(ctx: &mut FnCtx<'_>, class_name: &str) -> 
         };
         // Collect (property_name, init_expr) pairs up-front to avoid
         // holding an immutable borrow of ctx.classes across lower_expr.
+        // Computed-key fields (`[Symbol.for("k")]` etc.) live in a parallel
+        // list since their key is an expression that needs runtime evaluation.
+        //
+        // Fields declared without an initializer (`#x;` / `x: any;`) must
+        // still be written in the constructor as `undefined` — JS semantics
+        // is `new C().x === undefined`, not zero-bytes from the allocator.
+        // Without the explicit write, regular methods see `undefined` (the
+        // field-by-name dispatcher returns undefined for absent fields),
+        // but arrow-class-field bodies that load `this.x` through the
+        // captured-this slot read raw zero bytes — `0 ?? fallback` then
+        // takes the wrong branch (0 is falsy but not nullish), breaking
+        // common patterns like `this.#preparedHeaders ?? new Headers()`
+        // in hono's Context. Lower the missing-init case to
+        // `Expr::Undefined` so the constructor writes the spec-correct
+        // value into the field slot. Refs #486.
         let mut init_pairs: Vec<(String, Expr)> = Vec::new();
+        let mut init_pairs_computed: Vec<(Expr, Expr)> = Vec::new();
         for field in &class.fields {
-            if let Some(init) = &field.init {
-                init_pairs.push((field.name.clone(), init.clone()));
+            let init = match &field.init {
+                Some(e) => e.clone(),
+                None => Expr::Undefined,
+            };
+            match &field.key_expr {
+                Some(key) => init_pairs_computed.push((key.clone(), init)),
+                None => init_pairs.push((field.name.clone(), init)),
             }
         }
-        if init_pairs.is_empty() {
+        if init_pairs.is_empty() && init_pairs_computed.is_empty() {
             continue;
         }
 
@@ -2939,6 +3125,22 @@ fn apply_field_initializers_recursive(ctx: &mut FnCtx<'_>, class_name: &str) -> 
             let set_expr = Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: prop,
+                value: Box::new(init_expr),
+            };
+            let _ = lower_expr(ctx, &set_expr)?;
+        }
+
+        // Computed-key fields: `[Parent.Symbol.X] = init` lowers to
+        // `this[Parent.Symbol.X] = init`. The key expression is evaluated
+        // at construction time per ES spec — `Object.defineProperty(this, k, …)`
+        // semantics through the IndexSet path. arrow-with-this-capture is
+        // unusual on a computed-key field; if it ever surfaces in real code
+        // we extend this branch the same way the string-keyed loop above
+        // does.
+        for (key_expr, init_expr) in init_pairs_computed {
+            let set_expr = Expr::IndexSet {
+                object: Box::new(Expr::This),
+                index: Box::new(key_expr),
                 value: Box::new(init_expr),
             };
             let _ = lower_expr(ctx, &set_expr)?;
@@ -3529,42 +3731,41 @@ pub(super) fn lower_fetch_native_method(
 
     // ── Response methods / property getters ──
     if module == "fetch" {
-        // Lower the receiver once. It may be a Response (f64 handle) or
-        // a chained result from `.headers` / `.clone()` — in the former
-        // case we dispatch the methods here; the chain cases are
-        // recognised at the Call callsite in lower_call.
+        // Lower the receiver once. It's a NaN-boxed POINTER_TAG handle (Phase 1
+        // of the handle-NaN-boxing unification, refs #421) — accessors unbox
+        // via `handle_id` on entry, so codegen passes recv_handle through as
+        // DOUBLE without any fptosi/bitcast conversion. May also be a chained
+        // result from `.headers` / `.clone()` — those cases are recognised at
+        // the Call callsite in lower_call.
         let recv_handle = lower_expr(ctx, recv)?;
         match method {
             "text" => {
                 let blk = ctx.block();
-                let h_i64 = blk.fptosi(DOUBLE, &recv_handle, I64);
-                let promise = blk.call(I64, "js_fetch_response_text", &[(I64, &h_i64)]);
+                let promise = blk.call(I64, "js_fetch_response_text", &[(DOUBLE, &recv_handle)]);
                 return Ok(Some(nanbox_pointer_inline(blk, &promise)));
             }
             "json" => {
                 let blk = ctx.block();
-                let h_i64 = blk.fptosi(DOUBLE, &recv_handle, I64);
-                let promise = blk.call(I64, "js_fetch_response_json", &[(I64, &h_i64)]);
+                let promise = blk.call(I64, "js_fetch_response_json", &[(DOUBLE, &recv_handle)]);
                 return Ok(Some(nanbox_pointer_inline(blk, &promise)));
             }
             "status" => {
                 let blk = ctx.block();
-                let h_i64 = blk.fptosi(DOUBLE, &recv_handle, I64);
-                let status = blk.call(DOUBLE, "js_fetch_response_status", &[(I64, &h_i64)]);
+                let status =
+                    blk.call(DOUBLE, "js_fetch_response_status", &[(DOUBLE, &recv_handle)]);
                 return Ok(Some(status));
             }
             "statusText" => {
                 let blk = ctx.block();
-                let h_i64 = blk.fptosi(DOUBLE, &recv_handle, I64);
-                let str_ptr = blk.call(I64, "js_fetch_response_status_text", &[(I64, &h_i64)]);
+                let str_ptr =
+                    blk.call(I64, "js_fetch_response_status_text", &[(DOUBLE, &recv_handle)]);
                 return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
             }
             "ok" => {
                 // js_fetch_response_ok returns 1.0 or 0.0 as f64. Map to
                 // TAG_TRUE/TAG_FALSE so console.log prints "true"/"false".
                 let blk = ctx.block();
-                let h_i64 = blk.fptosi(DOUBLE, &recv_handle, I64);
-                let raw = blk.call(DOUBLE, "js_fetch_response_ok", &[(I64, &h_i64)]);
+                let raw = blk.call(DOUBLE, "js_fetch_response_ok", &[(DOUBLE, &recv_handle)]);
                 let cmp = blk.fcmp("une", &raw, "0.0");
                 let tagged = blk.select(
                     crate::types::I1,

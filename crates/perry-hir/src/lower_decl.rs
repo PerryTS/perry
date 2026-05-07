@@ -11,7 +11,9 @@ use swc_ecma_ast as ast;
 use crate::analysis::*;
 use crate::destructuring::*;
 use crate::ir::*;
-use crate::lower::{lower_expr, LoweringContext};
+use crate::lower::{
+    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
+};
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
@@ -907,11 +909,14 @@ pub(crate) fn lower_class_decl(
                 }
             }
             ast::ClassMember::ClassProp(prop) => {
-                // Skip computed/Symbol property keys
-                match &prop.key {
-                    ast::PropName::Ident(_) | ast::PropName::Str(_) => {}
-                    _ => continue,
-                }
+                // Computed-key fields (`[Symbol.for("k")] = init`) flow through
+                // here for both instance AND static positions.
+                // `lower_class_prop` captures the key expression in
+                // `ClassField.key_expr` for runtime evaluation. Refs #420 —
+                // drizzle's `static [entityKind] = "Table"` is the canonical
+                // static-computed-key pattern; codegen's `init_static_fields`
+                // detects `key_expr.is_some()` and emits a runtime
+                // registration into the class-static-symbol side table.
                 let field = lower_class_prop(ctx, prop)?;
                 if prop.is_static {
                     static_fields.push(field);
@@ -1021,6 +1026,7 @@ pub(crate) fn lower_class_decl(
                         if !param_name.is_empty() && !declared_field_names.contains(&param_name) {
                             fields.push(ClassField {
                                 name: param_name,
+                                key_expr: None,
                                 ty: param_type,
                                 init: None,
                                 is_private: false,
@@ -1076,6 +1082,7 @@ pub(crate) fn lower_class_decl(
                                             {
                                                 fields.push(ClassField {
                                                     name: fname,
+                                                    key_expr: None,
                                                     ty: Type::Any,
                                                     init: None,
                                                     is_private: false,
@@ -1247,6 +1254,7 @@ pub(crate) fn lower_class_decl(
             }
             fields.push(ClassField {
                 name: format!("__perry_cap_{}", cid),
+                key_expr: None,
                 ty: Type::Any,
                 init: None,
                 is_private: false,
@@ -1571,11 +1579,14 @@ pub(crate) fn lower_class_from_ast(
                 }
             }
             ast::ClassMember::ClassProp(prop) => {
-                // Skip computed/Symbol property keys
-                match &prop.key {
-                    ast::PropName::Ident(_) | ast::PropName::Str(_) => {}
-                    _ => continue,
-                }
+                // Computed-key fields (`[Symbol.for("k")] = init`) flow through
+                // here for both instance AND static positions.
+                // `lower_class_prop` captures the key expression in
+                // `ClassField.key_expr` for runtime evaluation. Refs #420 —
+                // drizzle's `static [entityKind] = "Table"` is the canonical
+                // static-computed-key pattern; codegen's `init_static_fields`
+                // detects `key_expr.is_some()` and emits a runtime
+                // registration into the class-static-symbol side table.
                 let field = lower_class_prop(ctx, prop)?;
                 if prop.is_static {
                     static_fields.push(field);
@@ -2567,9 +2578,27 @@ pub(crate) fn lower_class_prop(
     ctx: &mut LoweringContext,
     prop: &ast::ClassProp,
 ) -> Result<ClassField> {
-    let name = match &prop.key {
-        ast::PropName::Ident(ident) => ident.sym.to_string(),
-        ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+    // Computed property keys (`[Symbol.for("k")]`, `[Parent.Symbol.X]`, etc.)
+    // can't be reduced to a string at compile time — the key expression is
+    // evaluated at construction time. We capture the lowered key expression
+    // in `key_expr` and synthesize a placeholder `name` for HIR identity
+    // (string-keyed lookup paths skip these fields via `key_expr.is_some()`).
+    let (name, key_expr) = match &prop.key {
+        ast::PropName::Ident(ident) => (ident.sym.to_string(), None),
+        ast::PropName::Str(s) => (s.value.as_str().unwrap_or("").to_string(), None),
+        ast::PropName::Computed(c) => {
+            let key = lower_expr(ctx, &c.expr)?;
+            // Synthetic name — uniqueness within a class is enforced by the
+            // caller appending to fields/static_fields in source order; the
+            // HIR's field-list iterators that key on `name` will still see
+            // distinct entries because each computed-key field lowers in its
+            // own call.
+            let synth = format!(
+                "__computed_field_{}_{}",
+                c.span.lo.0, c.span.hi.0
+            );
+            (synth, Some(key))
+        }
         _ => return Err(anyhow!("Unsupported property key")),
     };
 
@@ -2596,6 +2625,7 @@ pub(crate) fn lower_class_prop(
 
     Ok(ClassField {
         name,
+        key_expr,
         ty,
         init,
         is_private: false, // TODO: check accessibility
@@ -2804,6 +2834,7 @@ pub(crate) fn lower_private_prop(
 
     Ok(ClassField {
         name,
+        key_expr: None,
         ty,
         init,
         is_private: true,
@@ -3773,10 +3804,20 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             // Fast path: `for (const [k, v] of mapExpr)` reads flat entries
             // directly via `MapEntryKeyAt` / `MapEntryValueAt` — no pair-Array
             // materialization. Mirrors the same detection in `lower::lower_stmt`.
-            let is_iterable_map = matches!(
-                &iterable_type,
-                Some(Type::Generic { base, .. }) if base == "Map"
-            );
+            // Issue #542/#543: also accept `Type::Union([Generic{Map}, Void])`
+            // (the shape produced by `Map<K, V> | undefined` parameters /
+            // return types). After the `if (!m) return;` narrowing, the type
+            // is morally `Map<K, V>` but perry doesn't propagate the narrow
+            // through the union type, so `for (const [k, v] of m)` would fall
+            // through to array iteration and read garbage from MapHeader bytes.
+            let type_contains_map = |ty: &Type| -> bool {
+                matches!(ty, Type::Generic { base, .. } if base == "Map")
+            };
+            let is_iterable_map = match &iterable_type {
+                Some(Type::Generic { base, .. }) if base == "Map" => true,
+                Some(Type::Union(variants)) => variants.iter().any(type_contains_map),
+                _ => false,
+            };
             // Map fast path also fires for the single-binding shapes
             //   for (const [k] of map)        — only key
             //   for (const [, v] of map)      — only value
@@ -3803,10 +3844,15 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             // Fast path: `for (const x of setExpr)` reads elements directly
             // via `SetValueAt` (→ `js_set_value_at`) instead of materializing
             // the buffer with `js_set_to_array`.
-            let is_iterable_set = matches!(
-                &iterable_type,
-                Some(Type::Generic { base, .. }) if base == "Set"
-            );
+            // Issue #542/#543: also accept `Type::Union([Generic{Set}, Void])`.
+            let type_contains_set = |ty: &Type| -> bool {
+                matches!(ty, Type::Generic { base, .. } if base == "Set")
+            };
+            let is_iterable_set = match &iterable_type {
+                Some(Type::Generic { base, .. }) if base == "Set" => true,
+                Some(Type::Union(variants)) => variants.iter().any(type_contains_set),
+                _ => false,
+            };
             let set_fastpath = is_iterable_set
                 && match &for_of_stmt.left {
                     ast::ForHead::VarDecl(var_decl) => match var_decl.decls.first() {
@@ -3819,22 +3865,23 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             // to materialize it as an array for the index-based loop.
             // Fast-path Map+[k,v] / Set+ident iterables stay unwrapped — the
             // loop reads entries directly via runtime helpers below.
-            let arr_expr = match &iterable_type {
-                Some(Type::Generic { base, .. }) if base == "Map" => {
-                    if map_kv_fastpath {
-                        arr_expr
-                    } else {
-                        Expr::MapEntries(Box::new(arr_expr))
-                    }
+            // Issue #542/#543: handle `Map | undefined` / `Set | undefined`
+            // shapes via the same `is_iterable_map` / `is_iterable_set` flags
+            // (which now Union-aware) instead of a fresh narrow match here.
+            let arr_expr = if is_iterable_map {
+                if map_kv_fastpath {
+                    arr_expr
+                } else {
+                    Expr::MapEntries(Box::new(arr_expr))
                 }
-                Some(Type::Generic { base, .. }) if base == "Set" => {
-                    if set_fastpath {
-                        arr_expr
-                    } else {
-                        Expr::SetValues(Box::new(arr_expr))
-                    }
+            } else if is_iterable_set {
+                if set_fastpath {
+                    arr_expr
+                } else {
+                    Expr::SetValues(Box::new(arr_expr))
                 }
-                _ => arr_expr,
+            } else {
+                arr_expr
             };
 
             // For string iteration the __arr holder is typed as String (so codegen
@@ -3969,6 +4016,15 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                                                 let name = ident.id.sym.to_string();
                                                 let id = ctx.define_local(name.clone(), Type::Any);
                                                 ids.push((name, id));
+                                            } else {
+                                                // Nested pattern (e.g. `key: [a, b]`).
+                                                // Recurse so leaves get pre-defined and the
+                                                // body can reference them. Issue #554 (the
+                                                // function-body counterpart of the lower.rs
+                                                // top-level fix in v0.5.629).
+                                                collect_for_of_pattern_leaves(
+                                                    ctx, &kv.value, &mut ids,
+                                                );
                                             }
                                         }
                                         _ => {}
@@ -4141,7 +4197,16 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                                                 ast::PropName::Ident(ident) => {
                                                     ident.sym.to_string()
                                                 }
+                                                ast::PropName::Str(s) => s
+                                                    .value
+                                                    .as_str()
+                                                    .unwrap_or("")
+                                                    .to_string(),
                                                 _ => continue,
+                                            };
+                                            let key_source = Expr::PropertyGet {
+                                                object: Box::new(Expr::LocalGet(item_id)),
+                                                property: key,
                                             };
                                             if let ast::Pat::Ident(_) = &*kv.value {
                                                 let (name, id) = var_ids[var_idx].clone();
@@ -4151,11 +4216,19 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                                                     name,
                                                     ty: Type::Any,
                                                     mutable: false,
-                                                    init: Some(Expr::PropertyGet {
-                                                        object: Box::new(Expr::LocalGet(item_id)),
-                                                        property: key,
-                                                    }),
+                                                    init: Some(key_source),
                                                 });
+                                            } else {
+                                                // Nested pattern (e.g. `key: [a, b]`).
+                                                // Issue #554 (function-body path).
+                                                emit_for_of_pattern_binding(
+                                                    ctx,
+                                                    &kv.value,
+                                                    key_source,
+                                                    &var_ids,
+                                                    &mut var_idx,
+                                                    &mut stmts,
+                                                )?;
                                             }
                                         }
                                         _ => {}
