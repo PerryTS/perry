@@ -407,16 +407,41 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
         if let Some(module_name) = native_instance {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let property_name = prop_ident.sym.to_string();
-                // For properties that map to FFI functions, generate a NativeMethodCall
-                // with no args (property getter)
-                let object_expr = lower_expr(ctx, &member.obj)?;
-                return Ok(Expr::NativeMethodCall {
-                    module: module_name,
-                    class_name: None,
-                    object: Some(Box::new(object_expr)),
-                    method: property_name,
-                    args: Vec::new(),
-                });
+                // Issue #562: stream subclass instances (e.g.
+                // `class W extends WritableStream`) carry the bare-stream
+                // module/class tag for inherited-method dispatch
+                // (`w.pipeTo(...)` / `w.getWriter()`), but they ALSO
+                // declare their own fields (`w.seenLengths` / `w.config`).
+                // Without this gate, every plain field read would route
+                // through the NativeMethodCall arm in `lower_call.rs`,
+                // miss the streams' known-method match, fall through to
+                // the receiver-less zero-sentinel, and read as 0. Only
+                // route to NativeMethodCall when the property name is a
+                // known stream API method/property — let everything else
+                // fall through to regular object property access.
+                if matches!(
+                    module_name.as_str(),
+                    "readable_stream"
+                        | "writable_stream"
+                        | "transform_stream"
+                        | "readable_stream_reader"
+                        | "writable_stream_writer"
+                ) && !is_stream_api_member(&module_name, &property_name)
+                {
+                    // Fall through — let the regular member access path
+                    // below handle the user-declared subclass field.
+                } else {
+                    // For properties that map to FFI functions, generate a NativeMethodCall
+                    // with no args (property getter)
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::NativeMethodCall {
+                        module: module_name,
+                        class_name: None,
+                        object: Some(Box::new(object_expr)),
+                        method: property_name,
+                        args: Vec::new(),
+                    });
+                }
             }
         }
     }
@@ -585,5 +610,45 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
             let property = format!("#{}", private.name);
             Ok(Expr::PropertyGet { object, property })
         }
+    }
+}
+
+/// Issue #562 — does `prop` name a stream-API method or property on the
+/// given stream module? Used to gate the native-instance property
+/// rerouting so subclass-declared fields fall through to regular object
+/// property access. Mirrors the methods + accessors hardcoded in
+/// `crates/perry-codegen/src/lower_call.rs`'s
+/// `module == "<stream_kind>"` arms.
+fn is_stream_api_member(module: &str, prop: &str) -> bool {
+    match module {
+        "readable_stream" => matches!(
+            prop,
+            "getReader"
+                | "cancel"
+                | "tee"
+                | "pipeTo"
+                | "pipeThrough"
+                | "locked"
+                | "enqueue"
+                | "close"
+                | "error"
+                | "desiredSize"
+        ),
+        "readable_stream_reader" => {
+            matches!(prop, "read" | "releaseLock" | "cancel" | "closed")
+        }
+        "writable_stream" => matches!(prop, "getWriter" | "abort" | "close" | "locked"),
+        "writable_stream_writer" => matches!(
+            prop,
+            "write"
+                | "close"
+                | "abort"
+                | "releaseLock"
+                | "closed"
+                | "ready"
+                | "desiredSize"
+        ),
+        "transform_stream" => matches!(prop, "readable" | "writable"),
+        _ => false,
     }
 }

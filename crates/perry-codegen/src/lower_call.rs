@@ -3917,7 +3917,16 @@ pub(super) fn lower_fetch_native_method(
     // ─────────────────────────────────────────────────────────────────
 
     if module == "readable_stream" {
-        let recv_handle = lower_expr(ctx, recv)?;
+        let recv_handle_raw = lower_expr(ctx, recv)?;
+        // Issue #562: subclass instances stash the handle id under
+        // `__perry_stream_handle__`; bare numeric handles pass through
+        // unchanged. Cheap (one runtime call) and applied uniformly so
+        // the FFIs below see a clean registry id either way.
+        let recv_handle = ctx.block().call(
+            DOUBLE,
+            "js_stream_unwrap_handle",
+            &[(DOUBLE, &recv_handle_raw)],
+        );
         match method {
             "getReader" => {
                 let h = ctx.block().call(
@@ -3948,11 +3957,15 @@ pub(super) fn lower_fetch_native_method(
                 return Ok(Some(h));
             }
             "pipeTo" => {
-                let dest = if !args.is_empty() {
+                let dest_raw = if !args.is_empty() {
                     lower_expr(ctx, &args[0])?
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
+                // Issue #562: `dest` may be a subclass instance — unwrap.
+                let dest = ctx
+                    .block()
+                    .call(DOUBLE, "js_stream_unwrap_handle", &[(DOUBLE, &dest_raw)]);
                 let blk = ctx.block();
                 let promise = blk.call(
                     I64,
@@ -3965,11 +3978,17 @@ pub(super) fn lower_fetch_native_method(
                 // pipeThrough(transform) — transform has .readable / .writable.
                 // We need both sub-handles. Lower the transform once, then
                 // call js_transform_stream_writable / _readable to extract.
-                let transform = if !args.is_empty() {
+                let transform_raw = if !args.is_empty() {
                     lower_expr(ctx, &args[0])?
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
+                // Issue #562: `transform` may be a subclass instance — unwrap.
+                let transform = ctx.block().call(
+                    DOUBLE,
+                    "js_stream_unwrap_handle",
+                    &[(DOUBLE, &transform_raw)],
+                );
                 let writable = ctx.block().call(
                     DOUBLE,
                     "js_transform_stream_writable",
@@ -4084,7 +4103,13 @@ pub(super) fn lower_fetch_native_method(
     }
 
     if module == "writable_stream" {
-        let recv_handle = lower_expr(ctx, recv)?;
+        let recv_handle_raw = lower_expr(ctx, recv)?;
+        // Issue #562: subclass instances unwrap to a numeric handle.
+        let recv_handle = ctx.block().call(
+            DOUBLE,
+            "js_stream_unwrap_handle",
+            &[(DOUBLE, &recv_handle_raw)],
+        );
         match method {
             "getWriter" => {
                 let h = ctx.block().call(
@@ -4188,7 +4213,13 @@ pub(super) fn lower_fetch_native_method(
     }
 
     if module == "transform_stream" {
-        let recv_handle = lower_expr(ctx, recv)?;
+        let recv_handle_raw = lower_expr(ctx, recv)?;
+        // Issue #562: subclass instances unwrap to a numeric handle.
+        let recv_handle = ctx.block().call(
+            DOUBLE,
+            "js_stream_unwrap_handle",
+            &[(DOUBLE, &recv_handle_raw)],
+        );
         match method {
             "readable" => {
                 let v = ctx.block().call(

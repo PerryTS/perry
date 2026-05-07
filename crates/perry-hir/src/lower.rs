@@ -63,6 +63,13 @@ pub struct LoweringContext {
     /// avoiding the creation of shadow fields that cause later index shift bugs after
     /// inheritance resolution in codegen.
     pub(crate) class_field_names: Vec<(String, Vec<String>)>,
+    /// Issue #562: class name → `(module, class)` tuple from
+    /// `native_extends`. Populated when lowering each class, consumed by
+    /// `destructuring.rs` to register `let x = new SubclassOfStream()`
+    /// locals under the parent stream module so subsequent
+    /// `x.pipeTo(...)` / `x.getWriter()` etc. dispatch through the
+    /// streams arms in `lower_call.rs`.
+    pub(crate) class_native_extends: Vec<(String, String, String)>,
     /// Issue #302 (v0.5.388): instance field types per class so the
     /// for-of arm can detect `for (const [k, v] of this.someMap)` —
     /// the iterable is an `ast::Expr::Member { obj: This, prop: "someMap" }`,
@@ -219,6 +226,15 @@ pub struct LoweringContext {
     /// Used to resolve `new.target` to a placeholder object whose `.name`
     /// returns the class name. None outside any constructor.
     pub(crate) in_constructor_class: Option<String>,
+    /// Issue #562 — set to the parent class identifier (e.g. `"WritableStream"`,
+    /// `"ReadableStream"`, `"TransformStream"`, or any ident from `class X
+    /// extends Y`) when lowering inside a class declaration. Used by the
+    /// `super({...})` pre-scan in `expr_call.rs` to register the
+    /// `start`/`pull`/`transform`/`flush` callback's controller param as
+    /// a `readable_stream` native instance — same shape the
+    /// `new TransformStream({...})` pre-scan in `expr_new.rs` does.
+    /// Saved/restored across nested class declarations.
+    pub(crate) current_class_super_ident: Option<String>,
     /// Phase 3 anon-class registry for closed-shape object literals: shape key
     /// (canonical field-name + type-tag joined) -> synthetic class name. Lets
     /// identical-shape literals within the same module share one synthesized
@@ -274,6 +290,7 @@ impl LoweringContext {
             classes: Vec::new(),
             class_statics: Vec::new(),
             class_field_names: Vec::new(),
+            class_native_extends: Vec::new(),
             class_field_types: Vec::new(),
             enums: Vec::new(),
             interfaces: Vec::new(),
@@ -320,6 +337,7 @@ impl LoweringContext {
             proxy_target_classes: HashMap::new(),
             class_expr_aliases: HashMap::new(),
             in_constructor_class: None,
+            current_class_super_ident: None,
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),
             next_anon_shape_id: 0,
@@ -535,6 +553,39 @@ impl LoweringContext {
 
     pub(crate) fn lookup_class(&self, name: &str) -> Option<ClassId> {
         self.classes_index.get(name).map(|&idx| self.classes[idx].1)
+    }
+
+    /// Issue #562: look up the `(module, class)` tuple from a class's
+    /// `native_extends` clause (e.g. `class X extends WritableStream` →
+    /// `Some(("writable_stream", "WritableStream"))`). Used by
+    /// `destructuring.rs`'s `let x = new SubclassOfStream()` arm to
+    /// route the local through the parent stream module's dispatch
+    /// table.
+    pub(crate) fn lookup_class_native_extends(&self, name: &str) -> Option<(&str, &str)> {
+        self.class_native_extends
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, m, c)| (m.as_str(), c.as_str()))
+    }
+
+    /// Companion setter — populated when `lower_class_decl` /
+    /// `lower_class_from_ast` sees a class with `native_extends` set.
+    pub(crate) fn register_class_native_extends(
+        &mut self,
+        class_name: String,
+        module: String,
+        class: String,
+    ) {
+        if let Some(entry) = self
+            .class_native_extends
+            .iter_mut()
+            .find(|(n, _, _)| *n == class_name)
+        {
+            entry.1 = module;
+            entry.2 = class;
+        } else {
+            self.class_native_extends.push((class_name, module, class));
+        }
     }
 
     /// Register declared instance field names for a class. Used by subclasses to skip

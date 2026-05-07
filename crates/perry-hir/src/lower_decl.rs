@@ -600,6 +600,16 @@ pub(crate) fn lower_class_decl(
     let old_class = ctx.current_class.take();
     ctx.current_class = Some(name.clone());
 
+    // Issue #562: track the parent class identifier so the `super({...})`
+    // pre-scan in expr_call.rs can register the controller param as a
+    // readable_stream instance for stream subclass constructors. Set
+    // here BEFORE constructor lowering so the body lowering picks it up.
+    let old_super_ident = ctx.current_class_super_ident.take();
+    ctx.current_class_super_ident = match class_decl.class.super_class.as_deref() {
+        Some(ast::Expr::Ident(ident)) => Some(ident.sym.to_string()),
+        _ => None,
+    };
+
     // Extract type parameters from generic class declaration (e.g., class Box<T>)
     let type_params = class_decl
         .class
@@ -623,10 +633,32 @@ pub(crate) fn lower_class_decl(
                         Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
                     }
                     "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
+                    // Issue #562: user classes extending the Web Streams
+                    // base classes get a runtime-side subclass-init shim
+                    // wired through `Expr::SuperCall` (codegen). The
+                    // `extends_name` is also retained so the existing
+                    // `native_extends.is_some()` branch below still
+                    // populates it for the inheritance walks elsewhere
+                    // (vtable, hasOwn, etc.) that key on the parent name.
+                    "ReadableStream" => {
+                        Some(("readable_stream".to_string(), "ReadableStream".to_string()))
+                    }
+                    "WritableStream" => {
+                        Some(("writable_stream".to_string(), "WritableStream".to_string()))
+                    }
+                    "TransformStream" => {
+                        Some(("transform_stream".to_string(), "TransformStream".to_string()))
+                    }
                     _ => None,
                 };
                 if native_parent.is_some() {
-                    (None, None, native_parent)
+                    // Keep `extends_name` populated alongside `native_extends`
+                    // so SuperCall codegen + downstream chain walks still
+                    // see the parent name (mirrors how stream-class
+                    // dispatch resolves through the existing extends_name
+                    // path while the native_extends carries the (module,
+                    // class) tag for the runtime shim).
+                    (None, Some(parent_name), native_parent)
                 } else {
                     // Always capture the parent name for imported classes that may not have a ClassId
                     (ctx.lookup_class(&parent_name), Some(parent_name), None)
@@ -1127,8 +1159,18 @@ pub(crate) fn lower_class_decl(
     // Exit type parameter scope
     ctx.exit_type_param_scope();
 
+    // Issue #562: stash native_extends so the `let x = new <subclass>()`
+    // path in destructuring.rs can route the local through the parent
+    // stream module. Done here (not at the call site) so the registry
+    // lookup is always available regardless of declaration order.
+    if let Some((module, class)) = native_extends.as_ref() {
+        ctx.register_class_native_extends(name.clone(), module.clone(), class.clone());
+    }
+
     // Restore previous current_class
     ctx.current_class = old_class;
+    // Issue #562: restore the prior super-ident slot.
+    ctx.current_class_super_ident = old_super_ident;
 
     // Issue #212: classes nested inside a function may have method bodies
     // that reference enclosing-fn locals. Walk every instance member
@@ -1478,6 +1520,15 @@ pub(crate) fn lower_class_from_ast(
     let old_class = ctx.current_class.take();
     ctx.current_class = Some(name.to_string());
 
+    // Issue #562: same as the parallel `lower_class_decl` arm — track the
+    // parent class identifier so super({...}) controller-param pre-scan
+    // fires for stream subclasses.
+    let old_super_ident = ctx.current_class_super_ident.take();
+    ctx.current_class_super_ident = match class.super_class.as_deref() {
+        Some(ast::Expr::Ident(ident)) => Some(ident.sym.to_string()),
+        _ => None,
+    };
+
     let type_params = class
         .type_params
         .as_ref()
@@ -1495,10 +1546,21 @@ pub(crate) fn lower_class_from_ast(
                     Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
                 }
                 "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
+                // Issue #562: keep in lockstep with the parallel arm in
+                // `lower_class_decl` above.
+                "ReadableStream" => {
+                    Some(("readable_stream".to_string(), "ReadableStream".to_string()))
+                }
+                "WritableStream" => {
+                    Some(("writable_stream".to_string(), "WritableStream".to_string()))
+                }
+                "TransformStream" => {
+                    Some(("transform_stream".to_string(), "TransformStream".to_string()))
+                }
                 _ => None,
             };
             if native_parent.is_some() {
-                (None, None, native_parent)
+                (None, Some(parent_name), native_parent)
             } else {
                 (ctx.lookup_class(&parent_name), Some(parent_name), None)
             }
@@ -1659,7 +1721,15 @@ pub(crate) fn lower_class_from_ast(
     }
 
     ctx.exit_type_param_scope();
+    // Issue #562: see the parallel site in `lower_class_decl` — register
+    // native_extends so subclass instances of the three Web Stream base
+    // classes route through the parent stream module's dispatch table.
+    if let Some((module, class)) = native_extends.as_ref() {
+        ctx.register_class_native_extends(name.to_string(), module.clone(), class.clone());
+    }
     ctx.current_class = old_class;
+    // Issue #562: restore prior super-ident slot.
+    ctx.current_class_super_ident = old_super_ident;
 
     // Phase 4.1: register method + getter return types — see the parallel
     // site in lower_class_decl.

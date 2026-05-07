@@ -26,8 +26,9 @@
 
 use perry_runtime::{
     js_array_alloc, js_array_push, js_closure_call0, js_closure_call1, js_closure_call2,
-    js_object_alloc, js_object_set_field, js_object_set_keys, js_promise_new, js_promise_reject,
-    js_promise_resolve, js_string_from_bytes, ClosureHeader, JSValue, Promise,
+    js_object_alloc, js_object_get_field_by_name, js_object_set_field, js_object_set_field_by_name,
+    js_object_set_keys, js_promise_new, js_promise_reject, js_promise_resolve, js_string_from_bytes,
+    ClosureHeader, JSValue, ObjectHeader, Promise,
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -1311,6 +1312,139 @@ pub unsafe extern "C" fn js_streams_throw_byte_length_not_implemented() -> f64 {
 // ─────────────────────────────────────────────────────────────────────
 // Public helpers used by other crates / tests
 // ─────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────
+// Subclass support (issue #562)
+//
+// User classes extending `WritableStream` / `ReadableStream` /
+// `TransformStream` get an underlying-stream registry handle allocated
+// at `super({ ... })` time and stashed on `this` under the hidden field
+// `__perry_stream_handle__`. The dispatch arms in `lower_call.rs` route
+// the receiver / destination through `js_stream_unwrap_handle` before
+// the FFI call so subclass instances and bare handles are
+// interchangeable.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Hidden field name used to stash the underlying-stream registry id on
+/// a subclass instance. Read by `js_stream_unwrap_handle`, written by
+/// the three `*_subclass_init` helpers below.
+const SUBCLASS_HANDLE_FIELD: &[u8] = b"__perry_stream_handle__";
+
+unsafe fn subclass_handle_key() -> *const perry_runtime::StringHeader {
+    js_string_from_bytes(SUBCLASS_HANDLE_FIELD.as_ptr(), SUBCLASS_HANDLE_FIELD.len() as u32)
+}
+
+unsafe fn this_object_ptr(this_bits: f64) -> Option<*mut ObjectHeader> {
+    let bits = this_bits.to_bits();
+    let top16 = bits >> 48;
+    if top16 != 0x7FFD {
+        return None;
+    }
+    let raw = (bits & POINTER_MASK) as *mut ObjectHeader;
+    if raw.is_null() || (raw as usize) < 0x10000 {
+        return None;
+    }
+    Some(raw)
+}
+
+unsafe fn attach_handle_to_this(this_bits: f64, handle_id: usize) {
+    if let Some(obj) = this_object_ptr(this_bits) {
+        let key = subclass_handle_key();
+        // Stored as plain f64 numeric — same ABI the rest of the stream
+        // FFIs use for handles. `js_stream_unwrap_handle` reads it back.
+        js_object_set_field_by_name(obj, key, handle_id as f64);
+    }
+}
+
+/// Resolve a stream receiver / argument to a numeric registry handle.
+///
+/// For raw numeric handles (the value `js_writable_stream_new` etc.
+/// return) the input is returned unchanged. For NaN-boxed pointer-tagged
+/// JS objects (subclass instances), reads the hidden
+/// `__perry_stream_handle__` field. Falls back to the input when the
+/// field is missing — caller's downstream FFI will then no-op on a
+/// 0-or-bogus handle exactly as it did pre-#562.
+#[no_mangle]
+pub unsafe extern "C" fn js_stream_unwrap_handle(value: f64) -> f64 {
+    let bits = value.to_bits();
+    let top16 = bits >> 48;
+    if top16 != 0x7FFD {
+        return value;
+    }
+    let Some(obj) = this_object_ptr(value) else {
+        return value;
+    };
+    let key = subclass_handle_key();
+    let result = js_object_get_field_by_name(obj, key);
+    let result_bits = result.bits();
+    if result_bits == TAG_UNDEFINED || result_bits == TAG_NULL {
+        return value;
+    }
+    f64::from_bits(result_bits)
+}
+
+/// `super({ start, pull, cancel })` dispatch for `class X extends ReadableStream`.
+/// Allocates the underlying readable handle, stashes it on `this`, runs
+/// the user `start` callback synchronously (mirrors `js_readable_stream_new`).
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_subclass_init(
+    this_bits: f64,
+    start_bits: f64,
+    pull_bits: f64,
+    cancel_bits: f64,
+    hwm: f64,
+) -> f64 {
+    ensure_gc_registered();
+    let id = alloc_readable(
+        closure_from_bits(start_bits.to_bits()),
+        closure_from_bits(pull_bits.to_bits()),
+        closure_from_bits(cancel_bits.to_bits()),
+        hwm,
+    );
+    attach_handle_to_this(this_bits, id);
+    invoke_start(id);
+    maybe_pull(id);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// `super({ write, close, abort })` dispatch for `class X extends WritableStream`.
+#[no_mangle]
+pub unsafe extern "C" fn js_writable_stream_subclass_init(
+    this_bits: f64,
+    write_bits: f64,
+    close_bits: f64,
+    abort_bits: f64,
+    hwm: f64,
+) -> f64 {
+    ensure_gc_registered();
+    let id = alloc_writable(
+        closure_from_bits(write_bits.to_bits()),
+        closure_from_bits(close_bits.to_bits()),
+        closure_from_bits(abort_bits.to_bits()),
+        hwm,
+    );
+    attach_handle_to_this(this_bits, id);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// `super({ transform, flush })` dispatch for `class X extends TransformStream`.
+/// Allocates the transform-stream pair (readable + writable + the
+/// dispatcher row in `TRANSFORM_PAIRS`) — same shape as
+/// `js_transform_stream_new` — and stashes the transform handle id on
+/// `this`. `pipeThrough(subclass)` then calls `js_transform_stream_writable`
+/// / `_readable` after `js_stream_unwrap_handle`, finding the same
+/// readable / writable sub-handles.
+#[no_mangle]
+pub unsafe extern "C" fn js_transform_stream_subclass_init(
+    this_bits: f64,
+    transform_bits: f64,
+    flush_bits: f64,
+    hwm: f64,
+) -> f64 {
+    let handle = js_transform_stream_new(transform_bits, flush_bits, hwm);
+    attach_handle_to_this(this_bits, handle as usize);
+    f64::from_bits(TAG_UNDEFINED)
+}
 
 /// Read every queued chunk into a Vec<u8>, draining the stream. Used by
 /// `new Response(stream)` / `new Request(url, { body: stream })` — we

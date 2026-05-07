@@ -1135,6 +1135,29 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_transform_stream_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_transform_stream_readable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_transform_stream_writable", DOUBLE, &[DOUBLE]);
+    // Issue #562: stream subclassing (`class X extends WritableStream` etc.).
+    // The unwrap helper is wrapped around every stream-FFI receiver so a
+    // subclass instance (NaN-boxed object pointer with the registry id
+    // stashed under `__perry_stream_handle__`) and a bare numeric
+    // handle are interchangeable. The `*_subclass_init` shims are
+    // invoked from `Expr::SuperCall` codegen for the three Web Stream
+    // base classes.
+    module.declare_function("js_stream_unwrap_handle", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_readable_stream_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_writable_stream_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_transform_stream_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
 
     // ──────────────────────────────────────────────────────────────────
     // AbortController / AbortSignal — perry-runtime/src/url.rs.

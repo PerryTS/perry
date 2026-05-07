@@ -707,6 +707,142 @@ fn emit_write_barrier(ctx: &mut FnCtx<'_>, parent_bits: &str, child_bits: &str) 
         .call_void("js_write_barrier", &[(I64, parent_bits), (I64, child_bits)]);
 }
 
+/// Issue #562 — `super({ ... })` for `class X extends ReadableStream`,
+/// `WritableStream`, or `TransformStream`. Extracts the underlying
+/// source/sink/transformer callbacks from the inline object literal,
+/// lowers each one (TAG_UNDEFINED for missing fields), and calls the
+/// runtime `*_subclass_init` shim — which allocates the stream registry
+/// handle and stashes it on `this` under `__perry_stream_handle__`.
+///
+/// `kind` is one of `"readable"` / `"writable"` / `"transform"` —
+/// matches the SuperCall arm's `parent_name` switch in expr.rs.
+fn lower_stream_super_init(
+    ctx: &mut FnCtx<'_>,
+    kind: &str,
+    super_args: &[Expr],
+) -> Result<String> {
+    let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+
+    // Pre-extract field exprs so we don't hold a borrow across `lower_expr`.
+    let opts_props: Option<Vec<(String, Expr)>> = super_args
+        .first()
+        .and_then(|first| crate::lower_call::extract_options_fields(ctx, first));
+    let qstrat_props: Option<Vec<(String, Expr)>> = super_args
+        .get(1)
+        .and_then(|second| crate::lower_call::extract_options_fields(ctx, second));
+
+    // Lower the canonical callback set per stream kind. Fields not
+    // present (or callable arg shape that isn't an inline literal) fall
+    // back to TAG_UNDEFINED — matches the existing `new ReadableStream
+    // / WritableStream / TransformStream` lowerings in
+    // `lower_call/builtin.rs`.
+    let mut start = undef_lit.clone();
+    let mut pull = undef_lit.clone();
+    let mut cancel = undef_lit.clone();
+    let mut write = undef_lit.clone();
+    let mut close = undef_lit.clone();
+    let mut abort = undef_lit.clone();
+    let mut transform = undef_lit.clone();
+    let mut flush = undef_lit.clone();
+
+    if let Some(props) = opts_props {
+        for (k, vexpr) in &props {
+            match (kind, k.as_str()) {
+                ("readable", "start") => start = lower_expr(ctx, vexpr)?,
+                ("readable", "pull") => pull = lower_expr(ctx, vexpr)?,
+                ("readable", "cancel") => cancel = lower_expr(ctx, vexpr)?,
+                ("writable", "write") => write = lower_expr(ctx, vexpr)?,
+                ("writable", "close") => close = lower_expr(ctx, vexpr)?,
+                ("writable", "abort") => abort = lower_expr(ctx, vexpr)?,
+                ("transform", "transform") => transform = lower_expr(ctx, vexpr)?,
+                ("transform", "flush") => flush = lower_expr(ctx, vexpr)?,
+                _ => {
+                    // Lower for side effects (closure-capture collection,
+                    // string-pool registration, etc.) but discard the value.
+                    let _ = lower_expr(ctx, vexpr)?;
+                }
+            }
+        }
+    } else if let Some(first) = super_args.first() {
+        // Caller passed something that isn't a recognized shape — lower
+        // for side effects so closure analysis stays consistent.
+        let _ = lower_expr(ctx, first)?;
+    }
+
+    let mut hwm = double_literal(1.0);
+    if let Some(qprops) = qstrat_props {
+        for (k, vexpr) in &qprops {
+            if k == "highWaterMark" {
+                hwm = lower_expr(ctx, vexpr)?;
+            } else {
+                let _ = lower_expr(ctx, vexpr)?;
+            }
+        }
+    } else if let Some(second) = super_args.get(1) {
+        let _ = lower_expr(ctx, second)?;
+    }
+
+    // `this` (NaN-boxed pointer) — the runtime shim stashes the handle
+    // on it via `js_object_set_field_by_name`.
+    let this_slot = ctx.this_stack.last().cloned();
+    let this_box = match this_slot {
+        Some(slot) => ctx.block().load(DOUBLE, &slot),
+        None => undef_lit.clone(),
+    };
+
+    let runtime_fn = match kind {
+        "readable" => "js_readable_stream_subclass_init",
+        "writable" => "js_writable_stream_subclass_init",
+        "transform" => "js_transform_stream_subclass_init",
+        _ => unreachable!("lower_stream_super_init: unexpected kind {}", kind),
+    };
+
+    let blk = ctx.block();
+    match kind {
+        "readable" => {
+            blk.call(
+                DOUBLE,
+                runtime_fn,
+                &[
+                    (DOUBLE, &this_box),
+                    (DOUBLE, &start),
+                    (DOUBLE, &pull),
+                    (DOUBLE, &cancel),
+                    (DOUBLE, &hwm),
+                ],
+            );
+        }
+        "writable" => {
+            blk.call(
+                DOUBLE,
+                runtime_fn,
+                &[
+                    (DOUBLE, &this_box),
+                    (DOUBLE, &write),
+                    (DOUBLE, &close),
+                    (DOUBLE, &abort),
+                    (DOUBLE, &hwm),
+                ],
+            );
+        }
+        "transform" => {
+            blk.call(
+                DOUBLE,
+                runtime_fn,
+                &[
+                    (DOUBLE, &this_box),
+                    (DOUBLE, &transform),
+                    (DOUBLE, &flush),
+                    (DOUBLE, &hwm),
+                ],
+            );
+        }
+        _ => unreachable!(),
+    }
+
+    Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+}
+
 pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         // -------- Literals --------
@@ -4179,6 +4315,35 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let parent_class = match ctx.classes.get(&parent_name).copied() {
                 Some(c) => c,
                 None => {
+                    // Issue #562: `class X extends WritableStream/ReadableStream/TransformStream`
+                    // — `super({ ... })` allocates an underlying stream registry handle and
+                    // stashes it on `this` under `__perry_stream_handle__`. Inherited methods
+                    // (`pipeTo`, `getWriter`, etc.) and arguments to `pipeTo`/`pipeThrough`
+                    // route the receiver through `js_stream_unwrap_handle` at the FFI site
+                    // so a subclass instance dispatches to the same FFIs a bare handle does.
+                    let stream_kind = match parent_name.as_str() {
+                        "ReadableStream" => Some("readable"),
+                        "WritableStream" => Some("writable"),
+                        "TransformStream" => Some("transform"),
+                        _ => None,
+                    };
+                    if let Some(kind) = stream_kind {
+                        let result = lower_stream_super_init(ctx, kind, super_args)?;
+                        // Per JS spec field initializers run AFTER super()
+                        // returns. Without this, `this.foo = []` declared
+                        // on the subclass never executes — instance reads
+                        // see uninitialized slots. Mirrors the equivalent
+                        // call in the user-class super branch below
+                        // (line ~4521). Refs #562.
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(result);
+                    }
                     // Built-in parent (Error, TypeError, RangeError, etc.)
                     // — user classes extending them need `super(message)` to
                     // assign `this.message = args[0]` and `this.name = parent_name`

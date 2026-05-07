@@ -1515,7 +1515,34 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 );
                                 ctx.uses_fetch = true;
                             }
-                            _ => {}
+                            other => {
+                                // Issue #562: `let x = new SubclassOfStream()`
+                                // — walk the user class's `native_extends` to
+                                // see if it points at a stream module. If so,
+                                // register `x` under the same module/class
+                                // tag the bare-stream constructor would. The
+                                // codegen FFI sites unwrap the
+                                // `__perry_stream_handle__` field at dispatch
+                                // time, so a subclass instance and a bare
+                                // numeric handle are interchangeable.
+                                if let Some((module, class)) =
+                                    ctx.lookup_class_native_extends(other)
+                                {
+                                    if matches!(
+                                        module,
+                                        "readable_stream"
+                                            | "writable_stream"
+                                            | "transform_stream"
+                                    ) {
+                                        ctx.register_native_instance(
+                                            name.clone(),
+                                            module.to_string(),
+                                            class.to_string(),
+                                        );
+                                        ctx.uses_fetch = true;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
