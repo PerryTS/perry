@@ -539,7 +539,11 @@ fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
     });
     if matches!(expr, Expr::Await(_)) {
         let id = alloc_local(next_id);
-        let original = std::mem::replace(expr, Expr::LocalGet(id));
+        let mut original = std::mem::replace(expr, Expr::LocalGet(id));
+        // Issue #617: hoist a fetchWithAuth/fetchPostWithAuth operand
+        // out of the await BEFORE we push the hoisted let. See the
+        // longer comment in `hoist_awaits_avoiding_top_level`.
+        hoist_fetch_with_auth_inside_await(&mut original, next_id, hoisted);
         hoisted.push(Stmt::Let {
             id,
             name: format!("__await_{}", id),
@@ -550,6 +554,51 @@ fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
     }
 }
 
+/// Issue #617: `await fetchWithAuth(url, auth)` (and the POST variant)
+/// returned `undefined` for the inline form while the explicit two-step
+/// `let p = fetchWithAuth(...); await p;` produced the resolved Response.
+/// The two forms only diverge in HIR shape: the inline form lowers to
+/// `Yield { value: FetchGetWithAuth }` (after the await→yield rewrite),
+/// so the generator transform plants the `js_fetch_get_with_auth` call
+/// inline as the `value` field of the yielded `{value, done}`
+/// iter-result object — i.e. the promise is allocated *while* the
+/// iter-result object literal is being constructed. The two-step form
+/// lowers to `LocalSet(p, FetchGetWithAuth); Yield { value: LocalGet(p) }`
+/// — the promise lands in a dominating stack slot first and the yielded
+/// object reads it back via a plain load.
+///
+/// Mechanize the workaround at the HIR level: when the immediate await
+/// operand is one of the two fetch-with-auth built-ins, hoist it into a
+/// fresh let. The await's operand becomes a LocalGet of that let, which
+/// the generator transform plants in the iter-result — matching the
+/// working two-step path. Preserves call ordering (the temp's init runs
+/// in the same sequence point the inline call would have) and is a
+/// no-op for any other await operand.
+fn hoist_fetch_with_auth_inside_await(
+    await_expr: &mut Expr,
+    next_id: &mut LocalId,
+    hoisted: &mut Vec<Stmt>,
+) {
+    let Expr::Await(inner) = await_expr else {
+        return;
+    };
+    if !matches!(
+        inner.as_ref(),
+        Expr::FetchGetWithAuth { .. } | Expr::FetchPostWithAuth { .. }
+    ) {
+        return;
+    }
+    let id = alloc_local(next_id);
+    let original = std::mem::replace(inner.as_mut(), Expr::LocalGet(id));
+    hoisted.push(Stmt::Let {
+        id,
+        name: format!("__await_fetch_{}", id),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(original),
+    });
+}
+
 /// Hoist nested awaits but leave a top-level await alone. Used for
 /// statement-positioned operands (Let init, Stmt::Expr operand, etc.)
 /// where the outer await is something the generator transform handles.
@@ -558,10 +607,17 @@ fn hoist_awaits_avoiding_top_level(
     next_id: &mut LocalId,
     hoisted: &mut Vec<Stmt>,
 ) {
-    if let Expr::Await(inner) = expr {
+    if let Expr::Await(_) = expr {
         // Outer is an await — keep it but recursively hoist nested awaits
         // inside the operand fully (they are nested, not top-level).
-        hoist_awaits_in_expr_full(inner.as_mut(), next_id, hoisted);
+        if let Expr::Await(inner) = expr {
+            hoist_awaits_in_expr_full(inner.as_mut(), next_id, hoisted);
+        }
+        // Issue #617: hoist fetchWithAuth/fetchPostWithAuth operand into
+        // a let so the generator transform sees a `Yield(LocalGet(...))`
+        // instead of `Yield(FetchGetWithAuth)`. See the comment on
+        // `hoist_fetch_with_auth_inside_await` for the full story.
+        hoist_fetch_with_auth_inside_await(expr, next_id, hoisted);
         return;
     }
     if matches!(expr, Expr::Closure { .. }) {
