@@ -186,6 +186,16 @@ pub(crate) struct FnCtx<'a> {
     /// `compile_module` from `hir.classes`. Used by `Expr::New` to look up
     /// the field count, constructor body, and (eventually) method table.
     pub classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
+    /// Map from interface name → HIR Interface definition. Built once
+    /// from `hir.interfaces` and threaded via `cross_module.interfaces`.
+    /// Consulted by `static_type_of` / `receiver_class_name` so a
+    /// `PropertyGet` whose receiver is interface-typed (e.g.
+    /// `s.pending` where `s: State` and `State` is an interface with
+    /// `pending: number[]`) resolves to the property's declared type.
+    /// Without this, the array fast-path in `lower_array_method` and
+    /// the `arr.length = N` setter path silently fall through to
+    /// generic dispatch — see issue #655.
+    pub interfaces: &'a std::collections::HashMap<String, perry_hir::Interface>,
     /// Stack of `this` slot pointers — set when lowering inside a class
     /// constructor body. `Expr::This` loads from the top entry.
     pub this_stack: Vec<String>,

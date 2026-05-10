@@ -1220,27 +1220,54 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             // If the object is a known class instance, look up the field
             // type from the class definition.
             let receiver_class = receiver_class_name(ctx, object)?;
-            let class = ctx.classes.get(&receiver_class)?;
-            class
-                .fields
-                .iter()
-                .find(|f| f.name == *property)
-                .map(|f| f.ty.clone())
-                .or_else(|| {
-                    // Walk up the inheritance chain.
-                    let mut parent = class.extends_name.as_deref();
-                    while let Some(p) = parent {
-                        if let Some(pc) = ctx.classes.get(p) {
-                            if let Some(field) = pc.fields.iter().find(|f| f.name == *property) {
-                                return Some(field.ty.clone());
+            if let Some(class) = ctx.classes.get(&receiver_class) {
+                return class
+                    .fields
+                    .iter()
+                    .find(|f| f.name == *property)
+                    .map(|f| f.ty.clone())
+                    .or_else(|| {
+                        // Walk up the inheritance chain.
+                        let mut parent = class.extends_name.as_deref();
+                        while let Some(p) = parent {
+                            if let Some(pc) = ctx.classes.get(p) {
+                                if let Some(field) = pc.fields.iter().find(|f| f.name == *property)
+                                {
+                                    return Some(field.ty.clone());
+                                }
+                                parent = pc.extends_name.as_deref();
+                            } else {
+                                break;
                             }
-                            parent = pc.extends_name.as_deref();
-                        } else {
-                            break;
+                        }
+                        None
+                    });
+            }
+            // Issue #655: receiver may be typed against a TS `interface`
+            // rather than a class. The runtime layout is identical to a
+            // plain object literal, so the property's declared type is
+            // the right answer for the array fast-path / `length=` setter
+            // path. Walks the `extends` chain too so chained interfaces
+            // (`interface Sub extends Base { ... }`) resolve.
+            if let Some(iface) = ctx.interfaces.get(&receiver_class) {
+                if let Some(p) = iface.properties.iter().find(|p| p.name == *property) {
+                    return Some(p.ty.clone());
+                }
+                for ext in &iface.extends {
+                    if let HirType::Named(parent_name) = ext {
+                        if let Some(parent_iface) = ctx.interfaces.get(parent_name) {
+                            if let Some(p) = parent_iface
+                                .properties
+                                .iter()
+                                .find(|p| p.name == *property)
+                            {
+                                return Some(p.ty.clone());
+                            }
                         }
                     }
-                    None
-                })
+                }
+            }
+            None
         }
         Expr::This => {
             let cls = ctx.class_stack.last()?.clone();

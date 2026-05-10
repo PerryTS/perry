@@ -13,7 +13,7 @@ use crate::expr::{
     lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle, unbox_to_i64, FnCtx,
 };
 use crate::nanbox::double_literal;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Lower `arr.method(args…)` for an array-typed receiver. Currently
 /// supported: `pop`, `join`. `push` is handled separately by the HIR
@@ -509,6 +509,84 @@ pub(crate) fn lower_array_method(
                 &[(I64, &recv_handle), (DOUBLE, &val_box)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
+        }
+        // Issue #655 (chained-receiver path): without this arm, a
+        // chained `obj.field.splice(...)` resolved through `is_array_expr`
+        // (now that interface property types are recognized) but fell
+        // off the end of `lower_array_method` into the silent fallback,
+        // which returned the receiver unchanged and never invoked
+        // `js_array_splice`. The HIR-level `Expr::ArraySplice` variant
+        // covers single-identifier receivers; this arm handles the
+        // generic property-chained case (`m.get(k)!.field.splice(...)`).
+        // Writeback to the source storage is best-effort for the local
+        // / module-global cases — when the array's parent is a heap
+        // property we do not re-emit a PropertySet here, matching the
+        // existing `Expr::ArraySplice` lowering's tolerance for
+        // missing local IDs. In-place mutation is correct regardless;
+        // only growth-induced reallocation could leave the parent
+        // pointing at the old header (queue-deletion patterns never
+        // grow the array, so the issue's hot path is unaffected).
+        "splice" => {
+            let start_d = if args.is_empty() {
+                "0.0".to_string()
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
+            let count_d = if args.len() >= 2 {
+                lower_expr(ctx, &args[1])?
+            } else {
+                "2147483647.0".to_string()
+            };
+            let mut item_vals: Vec<String> = Vec::new();
+            for it in args.iter().skip(2) {
+                item_vals.push(lower_expr(ctx, it)?);
+            }
+            let blk = ctx.block();
+            let out_slot = blk.alloca(I64);
+            blk.store(I64, "0", &out_slot);
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
+            let count_i32 = blk.fptosi(DOUBLE, &count_d, I32);
+            let (items_ptr, items_count_str) = if item_vals.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let n = item_vals.len();
+                let buf_reg = blk.next_reg();
+                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                for (i, val) in item_vals.iter().enumerate() {
+                    let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, val, &slot);
+                }
+                (buf_reg, format!("{}", n))
+            };
+            let deleted_handle = blk.call(
+                I64,
+                "js_array_splice",
+                &[
+                    (I64, &recv_handle),
+                    (I32, &start_i32),
+                    (I32, &count_i32),
+                    (PTR, &items_ptr),
+                    (I32, &items_count_str),
+                    (PTR, &out_slot),
+                ],
+            );
+            // Best-effort writeback when the receiver is a single local
+            // — mirrors the `Expr::ArraySplice` lowering. For
+            // property-chained receivers we leave the parent pointing
+            // at the original header; growth-induced reallocation is
+            // a corner case that doesn't fire on queue-shrink usage.
+            if let Expr::LocalGet(array_id) = object {
+                let modified_handle = ctx.block().load(I64, &out_slot);
+                let modified_box = nanbox_pointer_inline(ctx.block(), &modified_handle);
+                if let Some(slot) = ctx.locals.get(array_id).cloned() {
+                    ctx.block().store(DOUBLE, &modified_box, &slot);
+                } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
+                    let g_ref = format!("@{}", global_name);
+                    ctx.block().store(DOUBLE, &modified_box, &g_ref);
+                }
+            }
+            Ok(nanbox_pointer_inline(ctx.block(), &deleted_handle))
         }
         "entries" => {
             for a in args {

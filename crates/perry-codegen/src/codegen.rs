@@ -350,6 +350,13 @@ pub(crate) struct CrossModuleCtx {
     /// "Client" arm only fires when the local `Client` was imported from
     /// "pg" (named or default). See issue #602.
     pub imported_class_sources: std::collections::HashMap<String, String>,
+    /// Issue #655: map from interface name → HIR Interface definition.
+    /// Lets `static_type_of` resolve `obj.field` when `obj` is typed
+    /// against a TS `interface` (not a `class`). The `class_table`
+    /// only contains real classes, so without this lookup chained
+    /// access like `m.get(k)!.field.shift()` fell through to generic
+    /// property dispatch and Array methods returned garbage.
+    pub interfaces: std::collections::HashMap<String, perry_hir::Interface>,
 }
 
 /// Compile a Perry HIR module to an object file via LLVM IR.
@@ -1138,6 +1145,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             map
         },
+        interfaces: hir
+            .interfaces
+            .iter()
+            .map(|i| (i.name.clone(), i.clone()))
+            .collect(),
     };
 
     // Module-level globals registry. Pre-walk:
@@ -2801,6 +2813,7 @@ fn compile_function(
         imported_func_return_types: &cross_module.imported_func_return_types,
         ffi_signatures: &cross_module.ffi_signatures,
         imported_class_sources: &cross_module.imported_class_sources,
+        interfaces: &cross_module.interfaces,
         try_depth: 0,
         pending_declares: Vec::new(),
         integer_locals: &integer_locals,
@@ -3177,6 +3190,7 @@ fn compile_closure(
         imported_func_return_types: &cross_module.imported_func_return_types,
         ffi_signatures: &cross_module.ffi_signatures,
         imported_class_sources: &cross_module.imported_class_sources,
+        interfaces: &cross_module.interfaces,
         try_depth: 0,
         pending_declares: Vec::new(),
         integer_locals: &integer_locals,
@@ -3398,6 +3412,7 @@ fn compile_method(
         imported_func_return_types: &cross_module.imported_func_return_types,
         ffi_signatures: &cross_module.ffi_signatures,
         imported_class_sources: &cross_module.imported_class_sources,
+        interfaces: &cross_module.interfaces,
         try_depth: 0,
         pending_declares: Vec::new(),
         integer_locals: &integer_locals,
@@ -3826,6 +3841,7 @@ fn compile_module_entry(
             imported_func_return_types: &cross_module.imported_func_return_types,
             ffi_signatures: &cross_module.ffi_signatures,
             imported_class_sources: &cross_module.imported_class_sources,
+            interfaces: &cross_module.interfaces,
             try_depth: 0,
             pending_declares: Vec::new(),
             integer_locals: &main_integer_locals,
@@ -4084,6 +4100,7 @@ fn compile_module_entry(
             imported_func_return_types: &cross_module.imported_func_return_types,
             ffi_signatures: &cross_module.ffi_signatures,
             imported_class_sources: &cross_module.imported_class_sources,
+            interfaces: &cross_module.interfaces,
             try_depth: 0,
             pending_declares: Vec::new(),
             integer_locals: &init_integer_locals,
@@ -4767,6 +4784,7 @@ fn compile_static_method(
         imported_func_return_types: &cross_module.imported_func_return_types,
         ffi_signatures: &cross_module.ffi_signatures,
         imported_class_sources: &cross_module.imported_class_sources,
+        interfaces: &cross_module.interfaces,
         try_depth: 0,
         pending_declares: Vec::new(),
         integer_locals: &integer_locals,
