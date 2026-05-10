@@ -10863,6 +10863,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             lower_url_string_getter(ctx, u, "js_url_get_search_params")
         }
 
+        // Issue #650: `urlInstance.toString()` and `.toJSON()` both return
+        // the URL's href per WHATWG. Reuses `js_url_get_href` since the
+        // value is identical.
+        Expr::UrlInstanceToString(u) => lower_url_string_getter(ctx, u, "js_url_get_href"),
+        Expr::UrlInstanceToJSON(u) => lower_url_string_getter(ctx, u, "js_url_get_href"),
+
         // Issue #650: URL.canParse(s) -> boolean. Runtime returns 1/0 as i32;
         // we NaN-box to TAG_TRUE / TAG_FALSE to match perry's boolean repr.
         Expr::UrlCanParse(arg) => {

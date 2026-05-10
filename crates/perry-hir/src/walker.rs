@@ -295,6 +295,8 @@ where
         | Expr::UrlGetSearchParams(v)
         | Expr::UrlCanParse(v)
         | Expr::UrlParse(v)
+        | Expr::UrlInstanceToString(v)
+        | Expr::UrlInstanceToJSON(v)
         | Expr::UrlSearchParamsToString(v)
         | Expr::UrlSearchParamsEntries(v)
         | Expr::JsCreateCallback { closure: v, .. }
@@ -1432,6 +1434,8 @@ where
         | Expr::UrlGetSearchParams(v)
         | Expr::UrlCanParse(v)
         | Expr::UrlParse(v)
+        | Expr::UrlInstanceToString(v)
+        | Expr::UrlInstanceToJSON(v)
         | Expr::UrlSearchParamsToString(v)
         | Expr::UrlSearchParamsEntries(v)
         | Expr::JsCreateCallback { closure: v, .. }

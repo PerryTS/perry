@@ -96,6 +96,43 @@ fn build_url_search_params_method_call(
     }
 }
 
+/// Issue #650: classify the static type of a method-call receiver well enough
+/// to decide whether the ambiguous Date method arms (`toJSON`, `toString`,
+/// `toLocaleString`, `valueOf`, `to{Date,Time,LocaleDate,LocaleTime}String`)
+/// should fire. Returns `Some("Date")` for `new Date(...)` and locals typed
+/// as `Date`; `Some("URL")` for `new URL(...)` and locals typed as `URL`;
+/// `None` for everything else (in which case the call falls through to
+/// generic dispatch). Matches receiver shapes by AST first, then by the
+/// caller's `local_types` table — both source-level shapes the user typically
+/// writes for these objects.
+fn static_receiver_class(
+    ctx: &LoweringContext,
+    obj: &ast::Expr,
+) -> Option<&'static str> {
+    if let ast::Expr::New(new_expr) = obj {
+        if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+            return match ident.sym.as_ref() {
+                "Date" => Some("Date"),
+                "URL" => Some("URL"),
+                _ => None,
+            };
+        }
+    }
+    if let ast::Expr::Ident(ident) = obj {
+        let name = ident.sym.as_ref();
+        if let Some(ty) = ctx.lookup_local_type(name) {
+            if let Type::Named(n) = ty {
+                return match n.as_str() {
+                    "Date" => Some("Date"),
+                    "URL" => Some("URL"),
+                    _ => None,
+                };
+            }
+        }
+    }
+    None
+}
+
 pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<Expr> {
     // Check if any argument has spread
     let has_spread = call.args.iter().any(|arg| arg.spread.is_some());
@@ -2548,9 +2585,65 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                     }
                 }
 
+                // Issue #650: URL instance toString / toJSON. Check this
+                // before the Date arms so `urlInstance.toJSON()` doesn't
+                // get rewritten as `DateToJSON(url)` and return a Date
+                // string. Receiver-class detection only matches:
+                //   `new URL(...).toString()` (immediate ctor)
+                //   `let u = new URL(...); u.toString()` (typed local)
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.as_ref();
+                    if static_receiver_class(ctx, member.obj.as_ref()) == Some("URL") {
+                        match method_name {
+                            "toString" => {
+                                let url_expr = lower_expr(ctx, &member.obj)?;
+                                return Ok(Expr::UrlInstanceToString(Box::new(url_expr)));
+                            }
+                            "toJSON" => {
+                                let url_expr = lower_expr(ctx, &member.obj)?;
+                                return Ok(Expr::UrlInstanceToJSON(Box::new(url_expr)));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Issue #650: gate the AMBIGUOUS Date instance method arms
+                // on a receiver-type check. Methods like `toJSON` /
+                // `toString` / `toLocaleString` / `valueOf` exist on every
+                // JS object — pre-fix the arms below fired unconditionally,
+                // so calling any of them on a URL / class instance / array
+                // got silently rewritten as a Date method, returning a Date
+                // string for the URL.toJSON() case the issue tracks.
+                let recv_class = if let ast::MemberProp::Ident(_) = &member.prop {
+                    static_receiver_class(ctx, member.obj.as_ref())
+                } else {
+                    None
+                };
+                let allow_ambiguous_date = recv_class != Some("URL");
+                // Methods we treat as Date-only when the receiver is unambiguously
+                // Date or unknown (current behavior). `toString` / `toJSON` etc.
+                // skip these arms when `recv_class` proves the receiver is NOT a Date.
+
                 // Check for Date instance method calls (date.getTime(), etc.)
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
+                    let ambiguous = matches!(
+                        method_name,
+                        "toJSON"
+                            | "toString"
+                            | "toLocaleString"
+                            | "toDateString"
+                            | "toTimeString"
+                            | "toLocaleDateString"
+                            | "toLocaleTimeString"
+                            | "toISOString"
+                            | "valueOf"
+                    );
+                    if ambiguous && !allow_ambiguous_date {
+                        // Receiver is statically a non-Date class (e.g. URL).
+                        // Skip the Date arms below — fall through to generic.
+                    } else {
                     match method_name {
                         "getTime" => {
                             let date_expr = lower_expr(ctx, &member.obj)?;
@@ -2701,6 +2794,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                         }
                         _ => {} // Fall through to other handling
                     }
+                    } // close `else` of `if ambiguous && !allow_ambiguous_date`
                 }
 
                 // Check for WeakRef.deref() / FinalizationRegistry.register() / .unregister()

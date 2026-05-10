@@ -24,3 +24,13 @@ console.log(u3?.href);
 console.log(u3?.username);
 console.log(u3?.password);
 console.log(u3?.hash);
+
+console.log("--- toString / toJSON ---");
+const u4 = new URL("https://user:pass@example.com:8080/p/q?k=v#frag");
+console.log(u4.toString());
+console.log(u4.toJSON());
+// Inline-ctor case (no intermediate let).
+console.log(new URL("https://example.com/x").toString());
+// Date.toJSON / toISOString still work — Date arm gate must allow them.
+console.log(new Date(0).toJSON());
+console.log(new Date(0).toISOString());
