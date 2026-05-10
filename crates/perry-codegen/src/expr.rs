@@ -10886,6 +10886,31 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::UrlInstanceToString(u) => lower_url_string_getter(ctx, u, "js_url_get_href"),
         Expr::UrlInstanceToJSON(u) => lower_url_string_getter(ctx, u, "js_url_get_href"),
 
+        // Issue #650: URL setters — runtime helper updates the named field
+        // AND re-derives `href` so subsequent .href reads see the new
+        // composed string. Returns the assigned value (matches JS
+        // assignment expression semantics).
+        Expr::UrlSetPathname { url, value }
+        | Expr::UrlSetSearch { url, value }
+        | Expr::UrlSetHash { url, value } => {
+            let runtime_fn = match expr {
+                Expr::UrlSetPathname { .. } => "js_url_set_pathname",
+                Expr::UrlSetSearch { .. } => "js_url_set_search",
+                Expr::UrlSetHash { .. } => "js_url_set_hash",
+                _ => unreachable!(),
+            };
+            let url_v = lower_expr(ctx, url)?;
+            let url_handle = unbox_to_i64(ctx.block(), &url_v);
+            let val_v = lower_expr(ctx, value)?;
+            let val_str_ptr = ctx
+                .block()
+                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val_v)]);
+            ctx.block()
+                .call_void(runtime_fn, &[(I64, &url_handle), (I64, &val_str_ptr)]);
+            // Assignment expression evaluates to the value on the RHS.
+            Ok(val_v)
+        }
+
         // Issue #650: URL.canParse(s) -> boolean. Runtime returns 1/0 as i32;
         // we NaN-box to TAG_TRUE / TAG_FALSE to match perry's boolean repr.
         Expr::UrlCanParse(arg) => {

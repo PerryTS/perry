@@ -54,3 +54,23 @@ console.log(spi.get("a"));
 console.log(spi.get("b"));
 console.log(new URLSearchParams([]).size);
 console.log(new URLSearchParams([["only", "value"]]).toString());
+
+console.log("--- URL setters ---");
+const us = new URL("https://example.com/");
+us.pathname = "/changed";
+console.log(us.href);
+us.search = "?x=1&y=2";
+console.log(us.href);
+us.hash = "#h";
+console.log(us.href);
+// Setter normalization: leading "/" / "?" / "#" added when missing.
+const us2 = new URL("https://example.com/orig");
+us2.pathname = "no-slash";
+us2.search = "no-q";
+us2.hash = "no-hash";
+console.log(us2.href);
+// Empty setters clear.
+const us3 = new URL("https://example.com/x?q=1#h");
+us3.search = "";
+us3.hash = "";
+console.log(us3.href);

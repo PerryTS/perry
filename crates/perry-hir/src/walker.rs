@@ -697,6 +697,12 @@ where
             f(regex);
             f(value);
         }
+        Expr::UrlSetPathname { url, value }
+        | Expr::UrlSetSearch { url, value }
+        | Expr::UrlSetHash { url, value } => {
+            f(url);
+            f(value);
+        }
         Expr::RegExpReplaceFn {
             string,
             regex,
@@ -1820,6 +1826,12 @@ where
         }
         Expr::RegExpSetLastIndex { regex, value } => {
             f(regex);
+            f(value);
+        }
+        Expr::UrlSetPathname { url, value }
+        | Expr::UrlSetSearch { url, value }
+        | Expr::UrlSetHash { url, value } => {
+            f(url);
             f(value);
         }
         Expr::RegExpReplaceFn {

@@ -322,6 +322,48 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 }
             }
 
+            // Issue #650: URL setters — `u.pathname = X` / `u.search = X` /
+            // `u.hash = X` mutate the URL object's stored field AND re-derive
+            // `href` so subsequent reads see the new composed string. Pre-fix
+            // these fell through to generic PropertySet which only updated
+            // the named field — `href` then stayed stale (the issue's exact
+            // symptom: `u2.href` reads the original after `u2.pathname = "/x"`).
+            if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                let prop_name = prop_ident.sym.as_ref();
+                let url_setter = matches!(prop_name, "pathname" | "search" | "hash");
+                if url_setter {
+                    let is_url_recv = match member.obj.as_ref() {
+                        ast::Expr::New(new_expr) => matches!(
+                            new_expr.callee.as_ref(),
+                            ast::Expr::Ident(ident) if ident.sym.as_ref() == "URL"
+                        ),
+                        ast::Expr::Ident(ident) => ctx
+                            .lookup_local_type(ident.sym.as_ref())
+                            .map(|ty| matches!(ty, Type::Named(n) if n == "URL"))
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    if is_url_recv {
+                        let url_expr = lower_expr(ctx, &member.obj)?;
+                        return Ok(match prop_name {
+                            "pathname" => Expr::UrlSetPathname {
+                                url: Box::new(url_expr),
+                                value,
+                            },
+                            "search" => Expr::UrlSetSearch {
+                                url: Box::new(url_expr),
+                                value,
+                            },
+                            "hash" => Expr::UrlSetHash {
+                                url: Box::new(url_expr),
+                                value,
+                            },
+                            _ => unreachable!(),
+                        });
+                    }
+                }
+            }
+
             // regex.lastIndex = N → RegExpSetLastIndex
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 if prop_ident.sym.as_ref() == "lastIndex" {

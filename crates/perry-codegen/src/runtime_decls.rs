@@ -1818,6 +1818,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // Issue #650: URL.canParse / URL.parse static methods (Node 18+ / 22+).
     module.declare_function("js_url_can_parse", I32, &[I64]);
     module.declare_function("js_url_parse", I64, &[I64]);
+    // Issue #650: URL setters — mutate field + re-derive href.
+    module.declare_function("js_url_set_pathname", VOID, &[I64, I64]);
+    module.declare_function("js_url_set_search", VOID, &[I64, I64]);
+    module.declare_function("js_url_set_hash", VOID, &[I64, I64]);
     module.declare_function("js_url_search_params_append", VOID, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_delete", VOID, &[I64, I64]);
     module.declare_function("js_url_search_params_get", I64, &[I64, I64]);
