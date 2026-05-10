@@ -1,0 +1,5 @@
+{
+  "name": "issue-652-probe",
+  "version": "0.0.1",
+  "perry": { "compilePackages": ["minilib"] }
+}
