@@ -743,6 +743,28 @@ pub extern "C" fn js_url_search_params_new_any(init: f64) -> *mut ObjectHeader {
         if ptr_i64 == 0 {
             return create_url_search_params_object(Vec::new());
         }
+        let raw_ptr = ptr_i64 as *const u8;
+
+        // Issue #650 sub-issue: iterable form `new URLSearchParams([['a','1'], ['b','2']])`.
+        // The init is an Array (GC_TYPE_ARRAY), each element a 2-element
+        // pair array. Pre-fix this fell through to `read_record_entries`
+        // which read the array's numeric "keys" (`"0"`, `"1"`) as if they
+        // were string keys and stringified the inner pair-array values
+        // via `[object Object]` — and on some shapes silently exited
+        // mid-construction. Detect via the GC header's obj_type tag and
+        // walk pair-by-pair.
+        unsafe {
+            if !raw_ptr.is_null() && (raw_ptr as usize) >= 0x1000 {
+                let gc_obj_type =
+                    *raw_ptr.sub(crate::gc::GC_HEADER_SIZE);
+                if gc_obj_type == crate::gc::GC_TYPE_ARRAY {
+                    return create_url_search_params_object(
+                        read_iterable_pair_entries(raw_ptr as *const ArrayHeader),
+                    );
+                }
+            }
+        }
+
         let obj_ptr = ptr_i64 as *mut ObjectHeader;
 
         // Detect another URLSearchParams: its `_entries` field holds the
@@ -765,6 +787,53 @@ pub extern "C" fn js_url_search_params_new_any(init: f64) -> *mut ObjectHeader {
     // init values before parsing.
     let s = get_string_content(init);
     create_url_search_params_object(parse_query_string(&s))
+}
+
+/// Issue #650: iterable URLSearchParams init — each element is itself
+/// a 2-element array `[key, value]`. Strings (key + value) are
+/// extracted via `get_string_content`, which handles SSO + heap
+/// strings + INT32 / number coercion so `new URLSearchParams([["n", 1]])`
+/// silently stringifies the value to `"1"` to match Node. Non-array
+/// entries are skipped (Node would throw, but Perry's loose-iter
+/// stance is to accept what we can read and drop garbage rather than
+/// abort the whole construction).
+fn read_iterable_pair_entries(arr: *const ArrayHeader) -> Vec<(String, String)> {
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let len = unsafe { (*arr).length } as usize;
+    let mut out = Vec::with_capacity(len);
+    for i in 0..len {
+        let pair_f64 = crate::array::js_array_get_f64(arr, i as u32);
+        let pair_bits = pair_f64.to_bits();
+        let pair_jsval = crate::value::JSValue::from_bits(pair_bits);
+        if !pair_jsval.is_pointer() {
+            continue;
+        }
+        let pair_ptr_i64 = crate::value::js_nanbox_get_pointer(pair_f64);
+        if pair_ptr_i64 == 0 {
+            continue;
+        }
+        let pair_raw = pair_ptr_i64 as *const u8;
+        unsafe {
+            if (pair_raw as usize) < 0x1000 {
+                continue;
+            }
+            let gc_type = *pair_raw.sub(crate::gc::GC_HEADER_SIZE);
+            if gc_type != crate::gc::GC_TYPE_ARRAY {
+                continue;
+            }
+        }
+        let pair = pair_ptr_i64 as *const ArrayHeader;
+        let pair_len = unsafe { (*pair).length };
+        if pair_len < 2 {
+            continue;
+        }
+        let k = get_string_content(crate::array::js_array_get_f64(pair, 0));
+        let v = get_string_content(crate::array::js_array_get_f64(pair, 1));
+        out.push((k, v));
+    }
+    out
 }
 
 /// Walk an object as if it were a URLSearchParams, returning `Some(entries)`

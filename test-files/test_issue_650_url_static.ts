@@ -45,3 +45,12 @@ console.log(sp.size);
 console.log(new URLSearchParams("").size);
 // Chained URL.searchParams.size (no intermediate let).
 console.log(new URL("https://example.com/?x=1&y=2").searchParams.size);
+
+console.log("--- iterable URLSearchParams ctor ---");
+const spi = new URLSearchParams([["a", "1"], ["b", "2"]]);
+console.log(spi.toString());
+console.log(spi.size);
+console.log(spi.get("a"));
+console.log(spi.get("b"));
+console.log(new URLSearchParams([]).size);
+console.log(new URLSearchParams([["only", "value"]]).toString());
