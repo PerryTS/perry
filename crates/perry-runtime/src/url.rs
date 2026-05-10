@@ -1050,6 +1050,24 @@ pub extern "C" fn js_url_search_params_delete(
     }
 }
 
+/// Issue #650: `URLSearchParams.size` getter — returns the number of
+/// entries (key/value pairs) currently stored. Reads the length of the
+/// `_entries` ArrayHeader directly; null receiver / missing array
+/// returns 0.
+#[no_mangle]
+pub extern "C" fn js_url_search_params_size(params: *mut ObjectHeader) -> i32 {
+    if params.is_null() {
+        return 0;
+    }
+    let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
+    let entries_ptr: *const ArrayHeader =
+        unsafe { f64::to_bits(entries_f64).cast_signed() as *const ArrayHeader };
+    if entries_ptr.is_null() {
+        return 0;
+    }
+    unsafe { (*entries_ptr).length as i32 }
+}
+
 /// Convert to query string
 /// js_url_search_params_to_string(params: *mut ObjectHeader) -> *mut StringHeader (raw string pointer)
 #[no_mangle]

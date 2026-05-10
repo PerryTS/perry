@@ -26,7 +26,8 @@ use crate::nanbox::{
 use crate::strings::StringPool;
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
-    is_numeric_expr, is_set_expr, is_string_expr, receiver_class_name,
+    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr,
+    receiver_class_name,
 };
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
@@ -2817,6 +2818,22 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let i32_v = blk.call(I32, "js_map_size", &[(I64, &recv_handle)]);
+            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+        }
+        // Issue #650: `urlSearchParams.size` property — runtime returns
+        // i32 length of the internal _entries array. Pre-fix the access
+        // fell through to the generic object-field lookup which returned
+        // undefined (URLSearchParams stores entries under "_entries", not
+        // "size"). Routed via `is_url_search_params_expr` so it only
+        // fires on receivers we can prove are URLSearchParams (immediate
+        // ctor, typed locals, `url.searchParams` accessor).
+        Expr::PropertyGet { object, property }
+            if property == "size" && is_url_search_params_expr(ctx, object) =>
+        {
+            let recv_box = lower_expr(ctx, object)?;
+            let blk = ctx.block();
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let i32_v = blk.call(I32, "js_url_search_params_size", &[(I64, &recv_handle)]);
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
 

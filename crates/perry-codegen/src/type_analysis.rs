@@ -674,6 +674,36 @@ pub(crate) fn is_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// Issue #650: detect URLSearchParams receivers for `sp.size` property
+/// access. URLSearchParams is allocated as a generic ObjectHeader; the
+/// type system tracks it as `HirType::Named("URLSearchParams")`. Used by
+/// the codegen `Expr::PropertyGet { property: "size" }` arm to route
+/// through `js_url_search_params_size` instead of returning undefined.
+pub(crate) fn is_url_search_params_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::UrlSearchParamsNew(_) => true,
+        Expr::LocalGet(id) => matches!(
+            ctx.local_types.get(id),
+            Some(HirType::Named(name)) if name == "URLSearchParams"
+        ),
+        Expr::UrlGetSearchParams(_) => true,
+        // `urlInstance.searchParams` — the HIR keeps this as a generic
+        // PropertyGet (the URL HIR variant only fires for direct typed
+        // receivers in `lower_member`). Detect the chained access here
+        // so `url.searchParams.size` works without an intermediate let.
+        Expr::PropertyGet { object, property } if property == "searchParams" => {
+            if let Expr::LocalGet(id) = object.as_ref() {
+                return matches!(
+                    ctx.local_types.get(id),
+                    Some(HirType::Named(name)) if name == "URL"
+                );
+            }
+            matches!(object.as_ref(), Expr::UrlNew { .. })
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::MapNew | Expr::MapNewFromArray(_) => true,

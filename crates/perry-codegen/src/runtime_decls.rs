@@ -1830,6 +1830,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_search_params_new_empty", I64, &[]);
     module.declare_function("js_url_search_params_set", VOID, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_to_string", I64, &[I64]);
+    // Issue #650: URLSearchParams.size getter — returns entries count.
+    module.declare_function("js_url_search_params_size", I32, &[I64]);
     // params.entries() / iteration source — returns an already NaN-boxed
     // POINTER_TAG f64 to ArrayHeader<[k, v]> (refs #575).
     module.declare_function("js_url_search_params_entries_arr", DOUBLE, &[I64]);

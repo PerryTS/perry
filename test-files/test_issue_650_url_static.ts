@@ -34,3 +34,14 @@ console.log(new URL("https://example.com/x").toString());
 // Date.toJSON / toISOString still work — Date arm gate must allow them.
 console.log(new Date(0).toJSON());
 console.log(new Date(0).toISOString());
+
+console.log("--- URLSearchParams.size ---");
+const sp = new URLSearchParams("a=1&b=2&c=3");
+console.log(sp.size);
+sp.append("d", "4");
+console.log(sp.size);
+sp.delete("a");
+console.log(sp.size);
+console.log(new URLSearchParams("").size);
+// Chained URL.searchParams.size (no intermediate let).
+console.log(new URL("https://example.com/?x=1&y=2").searchParams.size);
