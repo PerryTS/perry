@@ -881,7 +881,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::UrlGetSearch(url)
         | Expr::UrlGetHash(url)
         | Expr::UrlGetOrigin(url)
-        | Expr::UrlGetSearchParams(url) => {
+        | Expr::UrlGetSearchParams(url)
+        | Expr::UrlCanParse(url)
+        | Expr::UrlParse(url) => {
             collect_assigned_locals_expr(url, assigned);
         }
         // URLSearchParams operations

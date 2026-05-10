@@ -293,6 +293,8 @@ where
         | Expr::UrlGetHash(v)
         | Expr::UrlGetOrigin(v)
         | Expr::UrlGetSearchParams(v)
+        | Expr::UrlCanParse(v)
+        | Expr::UrlParse(v)
         | Expr::UrlSearchParamsToString(v)
         | Expr::UrlSearchParamsEntries(v)
         | Expr::JsCreateCallback { closure: v, .. }
@@ -1428,6 +1430,8 @@ where
         | Expr::UrlGetHash(v)
         | Expr::UrlGetOrigin(v)
         | Expr::UrlGetSearchParams(v)
+        | Expr::UrlCanParse(v)
+        | Expr::UrlParse(v)
         | Expr::UrlSearchParamsToString(v)
         | Expr::UrlSearchParamsEntries(v)
         | Expr::JsCreateCallback { closure: v, .. }

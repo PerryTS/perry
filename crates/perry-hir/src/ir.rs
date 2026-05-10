@@ -1813,6 +1813,12 @@ pub enum Expr {
     UrlGetOrigin(Box<Expr>),
     /// url.searchParams -> URLSearchParams object
     UrlGetSearchParams(Box<Expr>),
+    /// URL.canParse(input) -> boolean. Issue #650: spec'd static method
+    /// added in Node 18. Returns true if `input` parses as a valid URL.
+    UrlCanParse(Box<Expr>),
+    /// URL.parse(input) -> URL | null. Issue #650: non-throwing variant
+    /// of `new URL()` added in Node 22. Returns null when parsing fails.
+    UrlParse(Box<Expr>),
 
     // URLSearchParams operations
     /// new URLSearchParams(init?)

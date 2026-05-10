@@ -500,15 +500,23 @@ pub(crate) fn lower_array_method(
                     args.len()
                 );
             }
+            // Issue #656: returns the new array length per ECMA-262, not the
+            // (possibly reallocated) array pointer. The generic dispatch path
+            // does not have a local-id to write back to; we just compute the
+            // length on the returned new header. Callers using the bare
+            // form `arr.unshift(x)` for side-effect-only semantics still see
+            // correct mutation; callers using the return value get the spec
+            // value instead of the array.
             let val_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let result = blk.call(
+            let new_handle = blk.call(
                 I64,
                 "js_array_unshift_f64",
                 &[(I64, &recv_handle), (DOUBLE, &val_box)],
             );
-            Ok(nanbox_pointer_inline(blk, &result))
+            let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
+            Ok(blk.sitofp(I32, &len_i32, DOUBLE))
         }
         // Issue #655 (chained-receiver path): without this arm, a
         // chained `obj.field.splice(...)` resolved through `is_array_expr`

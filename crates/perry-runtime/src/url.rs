@@ -362,6 +362,107 @@ pub extern "C" fn js_url_get_href(url: *mut ObjectHeader) -> f64 {
     crate::object::js_object_get_field_f64(url, URL_HREF)
 }
 
+/// Issue #650: `URL.canParse(input)` static method (Node 18+).
+/// Returns 1 if `input` parses as a valid URL, 0 otherwise. Treats absent
+/// scheme + non-`file:` relative inputs as failures, matching Node's
+/// stricter validation than `parse_url`'s liberal accept-anything path
+/// (which the constructor still relies on for backwards compat with
+/// pre-existing test fixtures).
+#[no_mangle]
+pub extern "C" fn js_url_can_parse(input: *mut crate::StringHeader) -> i32 {
+    if input.is_null() {
+        return 0;
+    }
+    let s = unsafe {
+        let len = (*input).byte_len as usize;
+        let data_ptr = (input as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let slice = std::slice::from_raw_parts(data_ptr, len);
+        String::from_utf8_lossy(slice).into_owned()
+    };
+    if is_valid_absolute_url(&s) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Issue #650: `URL.parse(input)` static method (Node 22+) — non-throwing
+/// counterpart to `new URL(input)`. Returns the parsed URL object on
+/// success or null on failure. Wraps `js_url_new` with the same liberal
+/// validation as `URL.canParse` so the two stay in lockstep.
+#[no_mangle]
+pub extern "C" fn js_url_parse(input: *mut crate::StringHeader) -> *mut ObjectHeader {
+    if input.is_null() {
+        return std::ptr::null_mut();
+    }
+    let s = unsafe {
+        let len = (*input).byte_len as usize;
+        let data_ptr = (input as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let slice = std::slice::from_raw_parts(data_ptr, len);
+        String::from_utf8_lossy(slice).into_owned()
+    };
+    if !is_valid_absolute_url(&s) {
+        return std::ptr::null_mut();
+    }
+    create_url_object(&s)
+}
+
+/// Validate that `s` looks like a parseable absolute URL — has a scheme
+/// followed by `:` and either `//` (for hierarchical schemes) or non-empty
+/// scheme-specific data. Used by `URL.canParse` / `URL.parse` to mirror
+/// the validation Node's WHATWG parser performs before constructing.
+fn is_valid_absolute_url(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    // Scheme: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
+    let mut chars = s.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+    let mut scheme_end = 1;
+    for c in chars {
+        if c == ':' {
+            break;
+        }
+        if !(c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
+            return false;
+        }
+        scheme_end += 1;
+        if scheme_end > 64 {
+            // Practical cap; real schemes are short.
+            return false;
+        }
+    }
+    if scheme_end >= s.len() || s.as_bytes()[scheme_end] != b':' {
+        return false;
+    }
+    // For hierarchical schemes (http, https, ws, wss, ftp, file) WHATWG
+    // requires `//` before the authority. For others (mailto:, data:, etc.)
+    // Node accepts anything non-empty after `:`. Match that for ergonomics.
+    let after_scheme = &s[scheme_end + 1..];
+    let scheme = &s[..scheme_end];
+    let needs_authority =
+        matches!(scheme, "http" | "https" | "ws" | "wss" | "ftp" | "file");
+    if needs_authority {
+        if !after_scheme.starts_with("//") {
+            return false;
+        }
+        // file:// is allowed to have an empty host, every other scheme needs one.
+        if scheme != "file" && after_scheme.len() <= 2 {
+            return false;
+        }
+    } else if after_scheme.is_empty() {
+        return false;
+    }
+    true
+}
+
 /// Get the pathname property from a URL
 #[no_mangle]
 pub extern "C" fn js_url_get_pathname(url: *mut ObjectHeader) -> f64 {

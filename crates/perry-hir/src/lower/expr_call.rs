@@ -2499,6 +2499,29 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                             }
                         }
                     }
+
+                    // Issue #650: URL.canParse(s) / URL.parse(s) static
+                    // methods. URL is special-cased at HIR (the `URL`
+                    // identifier resolves to a synthetic `0` value rather
+                    // than a real ClassRef), so the static-method dispatch
+                    // never reached the canonical class-method path. This
+                    // arm intercepts both spellings and routes to dedicated
+                    // HIR variants.
+                    if obj_ident.sym.as_ref() == "URL" {
+                        if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                            let method_name = method_ident.sym.as_ref();
+                            if method_name == "canParse" && !args.is_empty() {
+                                return Ok(Expr::UrlCanParse(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                )));
+                            }
+                            if method_name == "parse" && !args.is_empty() {
+                                return Ok(Expr::UrlParse(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                )));
+                            }
+                        }
+                    }
                 }
 
                 // Chained `new URLSearchParams(init).<method>(args)` — without
@@ -5417,10 +5440,24 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
             // Fill in default arguments if callee is a known function
             let mut args = args;
             if let Expr::FuncRef(func_id) = &callee_expr {
-                if let Some((defaults, param_ids)) = ctx.lookup_func_defaults(*func_id) {
+                if let Some((defaults, param_ids, rest_idx)) =
+                    ctx.lookup_func_defaults(*func_id)
+                {
                     let defaults = defaults.to_vec();
                     let param_ids = param_ids.to_vec();
                     let num_provided = args.len();
+                    // Refs #653 followup to v0.5.789's #645 fix: stop the
+                    // default-fill loop BEFORE the rest param's slot. Pushing
+                    // `Expr::Undefined` for a rest param turns
+                    // `function f(name, ...args)` called as `f('a')` into
+                    // `f('a', undefined)`, which the runtime then spreads into
+                    // `args[0] = undefined`. Real semantics: trailing positional
+                    // args get bundled into the rest array at runtime; missing
+                    // ones produce an empty array, NOT a single-undefined array.
+                    let fill_end = match rest_idx {
+                        Some(i) => i,
+                        None => defaults.len(),
+                    };
                     // Build substitution map: callee param LocalId -> actual arg expression
                     // For provided args, map to the caller's arg expression
                     // For defaulted args, map to the expanded default (built incrementally)
@@ -5441,7 +5478,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                     // The pre-fix loop skipped slot 3 and pushed baseName's
                     // default into slot 3 — so schema got the table name and
                     // rendered SQL became `"users"."users"` instead of `"users"`.
-                    for i in num_provided..defaults.len() {
+                    for i in num_provided..fill_end {
                         let substituted = if let Some(default_expr) = &defaults[i] {
                             LoweringContext::substitute_param_refs_in_default(
                                 default_expr,

@@ -389,7 +389,9 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         let defaults: Vec<Option<Expr>> =
                             params.iter().map(|p| p.default.clone()).collect();
                         let param_ids: Vec<LocalId> = params.iter().map(|p| p.id).collect();
-                        ctx.func_defaults.push((func_id, defaults, param_ids));
+                        let rest_idx = params.iter().position(|p| p.is_rest);
+                        ctx.func_defaults
+                            .push((func_id, defaults, param_ids, rest_idx));
                         ctx.pending_functions.push(Function {
                             id: func_id,
                             name: func_name,

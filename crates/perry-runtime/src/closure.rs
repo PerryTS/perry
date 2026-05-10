@@ -1762,6 +1762,48 @@ pub unsafe extern "C" fn js_closure_call_array(
         throw_not_callable();
     }
     let n = if args_len < 0 { 0 } else { args_len as usize };
+
+    // Issue #653 followup: route through `dispatch_rest_bundled` directly
+    // when the closure body has a registered rest param, before falling
+    // through to the per-arity `js_closure_callN` dispatchers. Pre-fix,
+    // `js_closure_call7` through `js_closure_call16` skipped the
+    // rest-bundling path entirely and trampolined the args list straight
+    // through `mem::transmute`. With a wrapper registered for the rest
+    // param at `fixed_arity = 2` (e.g. `function h(a, b, ...rest)`),
+    // calling with 8 total args matched the call8 arm and called the
+    // wrapper with 9 doubles when the wrapper signature is 4 doubles —
+    // the receiver's `rest` parameter then read whatever happened to be
+    // in the call's overflow registers, which the wrapper passed
+    // through to the underlying user function as the rest array. Result:
+    // `rest.length` came back as 0 because the actual rest array was
+    // never built. Centralizing the dispatch here keeps the `callN`
+    // arity-specific paths sound for direct-callee dispatch (which is
+    // the dominant case for closure literals stored as locals) while
+    // making the spread path correct for arities ≥ 7. The bound-method
+    // routing has its own path inside `js_closure_callN` and isn't
+    // affected here — we never see BOUND_METHOD_FUNC_PTR through this
+    // entry because `js_closure_call_apply_with_spread`'s caller always
+    // resolves a real closure pointer first.
+    let fp_for_rest = get_valid_func_ptr(closure);
+    if let Some(fixed_arity) = lookup_closure_rest(fp_for_rest) {
+        let mut tmp: Vec<f64> = Vec::with_capacity(n);
+        if !args_ptr.is_null() && n > 0 {
+            for i in 0..n {
+                let raw = *args_ptr.add(i);
+                let bits = raw.to_bits();
+                // Same INT32_TAG unboxing the per-arity dispatchers do
+                // below — keep the body's `fadd` arithmetic working when
+                // the args came from `v8_to_native`.
+                let unboxed = if (bits & 0xFFFF_0000_0000_0000) == 0x7FFE_0000_0000_0000 {
+                    ((bits & 0xFFFF_FFFF) as i32) as f64
+                } else {
+                    raw
+                };
+                tmp.push(unboxed);
+            }
+        }
+        return dispatch_rest_bundled(closure, fp_for_rest, &tmp, fixed_arity);
+    }
     // Perry's closure-body arithmetic uses plain `fadd`/`fmul`/etc on
     // f64 inputs and assumes its arguments arrive as plain doubles, not
     // NaN-boxed values. perry-jsruntime's `v8_to_native` (bridge.rs:215)

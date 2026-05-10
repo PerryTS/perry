@@ -1815,6 +1815,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_url_get_search_params", DOUBLE, &[I64]);
     module.declare_function("js_url_new", I64, &[I64]);
     module.declare_function("js_url_new_with_base", I64, &[I64, I64]);
+    // Issue #650: URL.canParse / URL.parse static methods (Node 18+ / 22+).
+    module.declare_function("js_url_can_parse", I32, &[I64]);
+    module.declare_function("js_url_parse", I64, &[I64]);
     module.declare_function("js_url_search_params_append", VOID, &[I64, I64, I64]);
     module.declare_function("js_url_search_params_delete", VOID, &[I64, I64]);
     module.declare_function("js_url_search_params_get", I64, &[I64, I64]);

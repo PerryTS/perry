@@ -7141,6 +7141,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- arr.unshift(value) --------
+        // Issue #656: returns the new length per ECMA-262, not the (possibly
+        // reallocated) array pointer. The runtime helper returns the new
+        // header pointer for writeback purposes; we still need that to
+        // update the local/capture/global slot, but the call's *value* is
+        // the array length read from the new header.
         Expr::ArrayUnshift { array_id, value } => {
             let v = lower_expr(ctx, value)?;
             let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
@@ -7169,7 +7174,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let g_ref = format!("@{}", global_name);
                 ctx.block().store(DOUBLE, &new_box, &g_ref);
             }
-            Ok(new_box)
+            let blk = ctx.block();
+            let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
+            let len_f64 = blk.sitofp(I32, &len_i32, DOUBLE);
+            Ok(len_f64)
         }
 
         // -------- arr.entries() / .keys() / .values() (eager) --------
@@ -7286,7 +7294,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.func_names.get(fid).cloned(),
                         ctx.func_signatures.get(fid).copied(),
                     ) {
-                        let (declared_count, _has_rest, _) = sig;
+                        let (declared_count, has_rest, _) = sig;
 
                         // Find the spread source expression.
                         let spread_expr = args
@@ -7296,6 +7304,24 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 _ => None,
                             })
                             .expect("spread_count == 1 guarantees one Spread");
+
+                        // Issue #653 followup: rest-bearing function. The
+                        // declared "param count" includes the rest param,
+                        // which from the callee's perspective IS the array.
+                        // Spreading `...arr` into `f(...arr)` where `f`
+                        // has shape `(...rest)` should pass `arr` directly
+                        // as the single rest-array param — NOT extract
+                        // element[0] and pass that as a primitive (which
+                        // would set `rest` to a string and `rest.length`
+                        // to that string's char count). The element-extract
+                        // fast path stays correct for non-rest fixed-arity
+                        // callees.
+                        if has_rest && declared_count == 1 {
+                            let arr_box = lower_expr(ctx, spread_expr)?;
+                            return Ok(ctx
+                                .block()
+                                .call(DOUBLE, &fname, &[(DOUBLE, &arr_box)]));
+                        }
 
                         // Lower the spread source as an array.
                         let arr_box = lower_expr(ctx, spread_expr)?;
@@ -10835,6 +10861,45 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the URL object's `searchParams` field (see create_url_object in
             // perry-runtime/src/url.rs).
             lower_url_string_getter(ctx, u, "js_url_get_search_params")
+        }
+
+        // Issue #650: URL.canParse(s) -> boolean. Runtime returns 1/0 as i32;
+        // we NaN-box to TAG_TRUE / TAG_FALSE to match perry's boolean repr.
+        Expr::UrlCanParse(arg) => {
+            let v = lower_expr(ctx, arg)?;
+            let str_ptr = ctx
+                .block()
+                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v)]);
+            let result_i32 = ctx.block().call(I32, "js_url_can_parse", &[(I64, &str_ptr)]);
+            let blk = ctx.block();
+            let is_true = blk.icmp_ne(I32, &result_i32, "0");
+            let tagged = blk.select(
+                I1,
+                &is_true,
+                I64,
+                crate::nanbox::TAG_TRUE_I64,
+                crate::nanbox::TAG_FALSE_I64,
+            );
+            Ok(blk.bitcast_i64_to_double(&tagged))
+        }
+
+        // Issue #650: URL.parse(s) -> URL | null. Runtime returns the same
+        // ObjectHeader* `js_url_new` produces on success, or null when the
+        // input fails to parse.
+        Expr::UrlParse(arg) => {
+            let v = lower_expr(ctx, arg)?;
+            let str_ptr = ctx
+                .block()
+                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v)]);
+            let obj = ctx.block().call(I64, "js_url_parse", &[(I64, &str_ptr)]);
+            // Runtime returns 0 for parse failure; we map that to TAG_NULL so
+            // `URL.parse(bad)?.href` short-circuits via optional-chain semantics.
+            let blk = ctx.block();
+            let is_null = blk.icmp_eq(I64, &obj, "0");
+            let success = nanbox_pointer_inline(blk, &obj);
+            let null_box = blk.bitcast_i64_to_double(crate::nanbox::TAG_NULL_I64);
+            let blk = ctx.block();
+            Ok(blk.select(I1, &is_null, DOUBLE, &null_box, &success))
         }
 
         Expr::UrlSearchParamsNew(init) => {

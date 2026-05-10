@@ -2545,6 +2545,25 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `__perry_init_strings_<prefix>` function that runs once at startup.
     // The function name is scoped by module prefix so multiple modules
     // can each have their own string-pool init without colliding.
+    // Issue #653: build wrapper-rest map for top-level user functions.
+    // Each `__perry_wrap_<name>` was emitted above; if the underlying
+    // function declares a rest param, we tell the runtime to bundle
+    // trailing args into an array before invoking the wrapper. Without
+    // this, calling a function-as-value via the closure-spread path
+    // (`js_closure_call_apply_with_spread`) leaks raw element bits into
+    // the rest-param slot.
+    let user_fn_wrapper_rest: Vec<(String, usize)> = hir
+        .functions
+        .iter()
+        .filter_map(|f| {
+            f.params.iter().position(|p| p.is_rest).and_then(|idx| {
+                func_names
+                    .get(&f.id)
+                    .map(|name| (format!("__perry_wrap_{}", name), idx))
+            })
+        })
+        .collect();
+
     emit_string_pool(
         &mut llmod,
         &strings,
@@ -2554,6 +2573,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &class_table,
         &closure_rest_params,
         &closure_arities,
+        &user_fn_wrapper_rest,
     );
 
     // Emit the buffer alias-scope metadata once per module, covering every
@@ -4243,6 +4263,16 @@ fn emit_string_pool(
     classes: &HashMap<String, &perry_hir::Class>,
     closure_rest_params: &HashMap<u32, usize>,
     closure_arities: &HashMap<u32, u32>,
+    // Issue #653: wrappers (`__perry_wrap_<name>`) for top-level user functions
+    // that declare a rest param. Each entry is `(wrapper_symbol, fixed_arity)`
+    // — the runtime side-table is keyed on the wrapper's func_ptr, NOT the
+    // underlying user function, because that's what `js_closure_alloc_singleton`
+    // stores in the ClosureHeader. Without this registration, calling a user
+    // function as a value through `js_closure_call_apply_with_spread` fed the
+    // raw spread elements into the wrapper's flat `(this, a0, a1)` signature
+    // instead of bundling args[fixed_arity..] into a real array — the rest
+    // param then read a single element's bits as if it were the rest array.
+    user_fn_wrapper_rest: &[(String, usize)],
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -4644,6 +4674,20 @@ fn emit_string_pool(
         blk.call_void(
             "js_register_closure_arity",
             &[(PTR, &func_ref), (I32, &arity.to_string())],
+        );
+    }
+
+    // Issue #653: register `__perry_wrap_<name>` wrappers for top-level user
+    // functions whose source signature includes a rest param. Mirrors the
+    // closure-rest loop above but keyed on the wrapper's symbol rather than
+    // the closure body. See `user_fn_wrapper_rest` doc on this fn's signature.
+    let mut sorted_wrappers: Vec<(String, usize)> = user_fn_wrapper_rest.to_vec();
+    sorted_wrappers.sort();
+    for (wrap_sym, fixed_arity) in sorted_wrappers {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void(
+            "js_register_closure_rest",
+            &[(PTR, &func_ref), (I32, &fixed_arity.to_string())],
         );
     }
 
