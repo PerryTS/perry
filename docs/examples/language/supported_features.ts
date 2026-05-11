@@ -417,6 +417,19 @@ function bigintDemo(): void {
 }
 // ANCHOR_END: bigint
 
+// ANCHOR: symbol
+function symbolDemo(): void {
+    const local = Symbol("local");
+    const shared = Symbol.for("shared");
+    const sharedAgain = Symbol.for("shared");
+    const obj: Record<string | symbol, any> = { name: "Perry" };
+
+    obj[local] = "symbol value";
+
+    console.log(`symbol: type=${typeof local} desc=${local.description} shared=${shared === sharedAgain} own=${Object.getOwnPropertySymbols(obj).length}`)
+}
+// ANCHOR_END: symbol
+
 // ANCHOR: string-methods
 function stringMethodsDemo(): void {
     const s = "Hello, World!";
@@ -516,6 +529,7 @@ errorsDemo()
 jsonDemo()
 typeofInstanceofDemo()
 bigintDemo()
+symbolDemo()
 stringMethodsDemo()
 mathDemo()
 dateDemo()

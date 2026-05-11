@@ -168,6 +168,17 @@ The importing module:
 {{#include ../../examples/language/supported_features.ts:bigint}}
 ```
 
+## Symbol
+
+```typescript
+{{#include ../../examples/language/supported_features.ts:symbol}}
+```
+
+Supported Symbol features include `Symbol()`, `Symbol.for()`,
+`Symbol.keyFor()`, `typeof value === "symbol"`, symbol-keyed properties,
+well-known symbols such as `Symbol.iterator` and `Symbol.toPrimitive`, and
+`Object.getOwnPropertySymbols()`.
+
 ## String Methods
 
 ```typescript

@@ -67,16 +67,6 @@ MyClass.prototype.newMethod = function() {};
 Object.setPrototypeOf(obj, proto);
 ```
 
-## No Symbol Type
-
-The `Symbol` primitive type is not currently supported:
-
-<!-- intentionally-rejects: this snippet documents code Perry refuses to compile -->
-```text
-// Not supported
-const sym = Symbol("description");
-```
-
 ## No WeakMap/WeakRef
 
 Weak references are not implemented:

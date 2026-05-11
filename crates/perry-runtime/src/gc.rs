@@ -2993,6 +2993,7 @@ fn sweep_with_age_bump(do_age_bump: bool) -> u64 {
     // into a single bool test per object. ~1.4 % leaf samples → 0 on
     // the empty-map path, ~80 ms saved on perf-comprehensive.
     let overflow_active = !crate::object::overflow_fields_is_empty();
+    let symbol_properties_active = !crate::symbol::symbol_properties_is_empty();
 
     crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
         let header = header_ptr as *mut GcHeader;
@@ -3016,9 +3017,14 @@ fn sweep_with_age_bump(do_age_bump: bool) -> u64 {
             if flags == 0 {
                 let total_size = (*header).size as usize;
                 freed_bytes += total_size as u64;
-                if overflow_active && (*header).obj_type == GC_TYPE_OBJECT {
+                if (*header).obj_type == GC_TYPE_OBJECT {
                     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-                    crate::object::clear_overflow_for_ptr(user_ptr as usize);
+                    if overflow_active {
+                        crate::object::clear_overflow_for_ptr(user_ptr as usize);
+                    }
+                    if symbol_properties_active {
+                        crate::symbol::clear_symbol_properties_for_ptr(user_ptr as usize);
+                    }
                 }
                 return;
             }
@@ -3065,8 +3071,13 @@ fn sweep_with_age_bump(do_age_bump: bool) -> u64 {
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
 
-                if overflow_active && (*header).obj_type == GC_TYPE_OBJECT {
-                    crate::object::clear_overflow_for_ptr(user_ptr as usize);
+                if (*header).obj_type == GC_TYPE_OBJECT {
+                    if overflow_active {
+                        crate::object::clear_overflow_for_ptr(user_ptr as usize);
+                    }
+                    if symbol_properties_active {
+                        crate::symbol::clear_symbol_properties_for_ptr(user_ptr as usize);
+                    }
                 }
 
                 // Note: We deliberately do NOT zero the dead object's
@@ -3801,6 +3812,7 @@ pub fn gc_init() {
     gc_register_root_scanner(shape_cache_root_scanner);
     gc_register_root_scanner(transition_cache_root_scanner);
     gc_register_root_scanner(overflow_fields_root_scanner);
+    gc_register_root_scanner(crate::symbol::scan_symbol_property_roots);
     gc_register_root_scanner(json_parse_root_scanner);
     gc_register_root_scanner(intern_table_root_scanner);
     gc_register_root_scanner(shadow_stack_root_scanner);

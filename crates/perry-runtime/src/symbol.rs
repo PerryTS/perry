@@ -6,20 +6,16 @@
 //! - `Symbol.keyFor(sym)` — reverse lookup (returns undefined for non-registered)
 //! - `sym.description` — original description string
 //! - `sym.toString()` — "Symbol(description)"
-//! - `Object.getOwnPropertySymbols(obj)` — always returns an empty array (real
-//!   symbol-keyed properties are not yet wired into the object shape system)
+//! - `Object.getOwnPropertySymbols(obj)` — returns symbol keys stored in the
+//!   symbol-property side table
 //!
-//! Symbols are opaque heap objects allocated via `gc_malloc` with
-//! `GC_TYPE_STRING` (treated as leaf objects by the GC — no internal
-//! references). They are NaN-boxed with `POINTER_TAG`, which means they
-//! round-trip through the runtime as regular pointer JSValues.
-//!
-//! Dedicated Symbol support requires a small codegen hook (see report):
-//! intercepting `Symbol(desc)` / `Symbol.for(key)` / `Symbol.keyFor(sym)` /
-//! `Object.getOwnPropertySymbols(obj)` calls and routing them to the
-//! functions in this module.
+//! Symbols are opaque, leaked runtime headers. They are NaN-boxed with
+//! `POINTER_TAG`, which means they round-trip through the runtime as regular
+//! pointer JSValues without depending on a GC header. Symbol descriptions are
+//! copied into the long-lived string arena so `sym.description` and
+//! `sym.toString()` remain valid across collections.
 
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::{js_string_from_bytes, js_string_from_bytes_longlived, StringHeader};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
@@ -29,12 +25,12 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
-/// Magic number distinguishing SymbolHeader from other GC_TYPE_STRING objects.
+/// Magic number distinguishing SymbolHeader from other pointer-shaped values.
 /// Placed at offset 0 so `js_is_symbol` can cheaply detect symbols.
 pub const SYMBOL_MAGIC: u32 = 0x5359_4D42; // "SYMB"
 
-/// Symbol object header. Allocated via `gc_malloc` (or malloc for registered
-/// symbols that need to outlive GC cycles).
+/// Symbol object header. Allocated with `Box::leak` so symbol identity remains
+/// stable even when values only survive via runtime side tables.
 #[repr(C)]
 pub struct SymbolHeader {
     /// Magic number for type discrimination. Always SYMBOL_MAGIC.
@@ -54,11 +50,9 @@ pub struct SymbolHeader {
 // `Symbol.for("x") === Symbol.for("x")` always returns the same pointer.
 static SYMBOL_REGISTRY: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 
-// Side-table tracking ALL allocated symbol pointers (both gc_malloc'd from
-// `Symbol(desc)` and Box::leak'd from `Symbol.for(key)`). Used by
+// Side-table tracking ALL allocated symbol pointers. Used by
 // `is_registered_symbol` so the runtime's property/method dispatch can
-// detect symbol pointers safely without reading the (possibly nonexistent)
-// GcHeader byte.
+// detect symbol pointers safely without reading a GcHeader byte.
 static SYMBOL_POINTERS: Mutex<Option<HashSet<usize>>> = Mutex::new(None);
 
 // Pre-allocated well-known symbols (Symbol.toPrimitive, Symbol.hasInstance,
@@ -90,7 +84,7 @@ pub fn well_known_symbol(short_name: &str) -> *mut SymbolHeader {
     // name as its description. `registered = 0` so `Symbol.keyFor` returns
     // undefined.
     let desc_bytes = short_name.as_bytes();
-    let desc_ptr = unsafe { js_string_from_bytes(desc_bytes.as_ptr(), desc_bytes.len() as u32) };
+    let desc_ptr = js_string_from_bytes_longlived(desc_bytes.as_ptr(), desc_bytes.len() as u32);
     let boxed = Box::new(SymbolHeader {
         magic: SYMBOL_MAGIC,
         registered: 0,
@@ -142,14 +136,46 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
 // Storage is intentionally simple (linear scan per lookup) — symbol-keyed
 // properties on a single object are rare.
 //
-// NOTE: this side table holds raw pointers and is GC-blind. Stored values
-// (symbol pointers and any pointer-shaped JSValues) won't be traced as roots.
-// For the test scenarios this matters: symbols allocated through `Symbol(desc)`
-// hit `gc_malloc` and would be reclaimed if a GC ran while the user code only
-// kept a reference via `obj[sym]`. In practice the test doesn't trigger GC
-// between the `obj[sym] = v` write and the `getOwnPropertySymbols(obj)` read,
-// so this is acceptable for now.
+// Stored value bits are exposed through `scan_symbol_property_roots` so GC does
+// not reclaim values that are only reachable through symbol-keyed properties.
 static SYMBOL_PROPERTIES: Mutex<Option<HashMap<usize, Vec<(usize, u64)>>>> = Mutex::new(None);
+
+pub fn symbol_properties_is_empty() -> bool {
+    let guard = SYMBOL_PROPERTIES.lock().unwrap();
+    guard.as_ref().map_or(true, |m| m.is_empty())
+}
+
+pub fn clear_symbol_properties_for_ptr(obj_ptr: usize) {
+    let mut guard = SYMBOL_PROPERTIES.lock().unwrap();
+    if let Some(map) = guard.as_mut() {
+        map.remove(&obj_ptr);
+    }
+}
+
+pub fn scan_symbol_property_roots(mark: &mut dyn FnMut(f64)) {
+    let guard = SYMBOL_PROPERTIES.lock().unwrap();
+    if let Some(map) = guard.as_ref() {
+        for entries in map.values() {
+            for &(_sym_ptr, value_bits) in entries {
+                let tag = value_bits >> 48;
+                if tag == 0x7FFD || tag == 0x7FFF || tag == 0x7FFA {
+                    mark(f64::from_bits(value_bits));
+                }
+            }
+        }
+    }
+    drop(guard);
+
+    let class_guard = CLASS_STATIC_SYMBOLS.lock().unwrap();
+    if let Some(map) = class_guard.as_ref() {
+        for &value_bits in map.values() {
+            let tag = value_bits >> 48;
+            if tag == 0x7FFD || tag == 0x7FFF || tag == 0x7FFA {
+                mark(f64::from_bits(value_bits));
+            }
+        }
+    }
+}
 
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but
 // Symbol semantics are compatible with coarse locking.
@@ -172,22 +198,36 @@ unsafe fn str_from_header(ptr: *const StringHeader) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
+unsafe fn string_from_jsvalue(value: f64, undefined_as_none: bool) -> Option<String> {
+    if undefined_as_none && value.to_bits() == TAG_UNDEFINED {
+        return None;
+    }
+
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(value, &mut scratch) {
+        if ptr.is_null() || len == 0 {
+            return Some(String::new());
+        }
+        let bytes = std::slice::from_raw_parts(ptr, len as usize);
+        return std::str::from_utf8(bytes).ok().map(|s| s.to_string());
+    }
+
+    let ptr = crate::value::js_jsvalue_to_string(value);
+    str_from_header(ptr)
+}
+
+fn longlived_string_from_str(s: &str) -> *mut StringHeader {
+    js_string_from_bytes_longlived(s.as_ptr(), s.len() as u32)
+}
+
 unsafe fn alloc_symbol(description: *mut StringHeader, registered: bool) -> *mut SymbolHeader {
-    // Allocate via gc_malloc as a leaf (GC_TYPE_STRING treats payload as
-    // opaque, which is what we want — the GC won't try to scan internal
-    // pointers). The description pointer is kept alive through the
-    // SYMBOL_REGISTRY (for registered symbols) or not at all (for fresh
-    // symbols — in practice they live for the duration of the program,
-    // which is fine for test workloads).
-    let raw = crate::gc::gc_malloc(
-        std::mem::size_of::<SymbolHeader>(),
-        crate::gc::GC_TYPE_STRING,
-    );
-    let ptr = raw as *mut SymbolHeader;
-    (*ptr).magic = SYMBOL_MAGIC;
-    (*ptr).registered = if registered { 1 } else { 0 };
-    (*ptr).description = description;
-    (*ptr).id = next_id();
+    let boxed = Box::new(SymbolHeader {
+        magic: SYMBOL_MAGIC,
+        registered: if registered { 1 } else { 0 },
+        description,
+        id: next_id(),
+    });
+    let ptr = Box::into_raw(boxed);
     register_symbol_pointer(ptr as usize);
     ptr
 }
@@ -222,23 +262,13 @@ pub unsafe extern "C" fn js_symbol_new_empty() -> f64 {
     f64::from_bits(POINTER_TAG | (sym as u64 & POINTER_MASK))
 }
 
-/// `Symbol(description)` — allocates a fresh unique symbol with description.
-/// `description_f64` is a NaN-boxed string JSValue.
+/// `Symbol(description)` — allocates a fresh unique symbol with an optional
+/// string-coerced description.
 #[no_mangle]
 pub unsafe extern "C" fn js_symbol_new(description_f64: f64) -> f64 {
-    let bits = description_f64.to_bits();
-    let tag = bits & 0xFFFF_0000_0000_0000;
-    let desc_ptr: *mut StringHeader = if tag == STRING_TAG {
-        (bits & POINTER_MASK) as *mut StringHeader
-    } else if bits == TAG_UNDEFINED {
-        std::ptr::null_mut()
-    } else {
-        // Try to coerce — if it's a raw pointer, trust it.
-        if (0x1000..0x0000_FFFF_FFFF_FFFF).contains(&bits) {
-            bits as *mut StringHeader
-        } else {
-            std::ptr::null_mut()
-        }
+    let desc_ptr = match string_from_jsvalue(description_f64, true) {
+        Some(desc) => longlived_string_from_str(&desc),
+        None => std::ptr::null_mut(),
     };
     let sym = alloc_symbol(desc_ptr, false);
     f64::from_bits(POINTER_TAG | (sym as u64 & POINTER_MASK))
@@ -248,16 +278,7 @@ pub unsafe extern "C" fn js_symbol_new(description_f64: f64) -> f64 {
 /// symbol, or create and register a new one.
 #[no_mangle]
 pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
-    let bits = key_f64.to_bits();
-    let tag = bits & 0xFFFF_0000_0000_0000;
-    let key_ptr = if tag == STRING_TAG {
-        (bits & POINTER_MASK) as *const StringHeader
-    } else if (0x1000..0x0000_FFFF_FFFF_FFFF).contains(&bits) {
-        bits as *const StringHeader
-    } else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    let key = match str_from_header(key_ptr) {
+    let key = match string_from_jsvalue(key_f64, false) {
         Some(s) => s,
         None => return f64::from_bits(TAG_UNDEFINED),
     };
@@ -281,22 +302,9 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
         return f64::from_bits(POINTER_TAG | (ptr_usize as u64 & POINTER_MASK));
     }
 
-    // Not found — allocate a persistent SymbolHeader. We use Box::leak so the
-    // pointer outlives any GC cycle (the registry holds it as a root).
-    // Also leak a persistent StringHeader for the description.
-    let desc_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-
-    // Create a Box-allocated SymbolHeader (not via gc_malloc) so it survives
-    // forever. Registered symbols must be strong roots.
-    let boxed = Box::new(SymbolHeader {
-        magic: SYMBOL_MAGIC,
-        registered: 1,
-        description: desc_ptr,
-        id: next_id(),
-    });
-    let sym_ptr = Box::into_raw(boxed);
+    let desc_ptr = longlived_string_from_str(&key);
+    let sym_ptr = alloc_symbol(desc_ptr, true);
     registry.insert(key, sym_ptr as usize);
-    register_symbol_pointer(sym_ptr as usize);
     f64::from_bits(POINTER_TAG | (sym_ptr as u64 & POINTER_MASK))
 }
 

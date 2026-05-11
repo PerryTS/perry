@@ -1,5 +1,6 @@
-// Test: Symbol features (Perry gap analysis)
-// These features are NOT yet supported by Perry — this file documents the target behavior.
+// Test: Symbol features.
+// This file used to document a parity gap; it now protects the supported
+// Symbol runtime surface.
 // Run: node --experimental-strip-types test-files/test_gap_symbols.ts
 
 // --- Symbol() creation ---
