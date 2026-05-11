@@ -383,6 +383,15 @@ pub(crate) struct CrossModuleCtx {
 }
 
 /// Compile a Perry HIR module to an object file via LLVM IR.
+///
+/// CRITICAL (#686): `hir` MUST be `&HirModule` (shared reference), never
+/// `&mut`. The caller computes `perry_hir::stable_hash::hash_module(hir)`
+/// just before this call to derive the per-module object cache key. If
+/// codegen ever mutated the HIR mid-compile, the cached `.o` would no
+/// longer correspond to the hashed input and stale entries would be
+/// served on subsequent builds. The `&` here is the load-bearing
+/// guarantee — do not change to `&mut` without also moving the cache
+/// hash to AFTER codegen.
 pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
     // Set the per-instruction FMF emission mode for this build before
     // any LlBlock methods run. All modules in a single program build

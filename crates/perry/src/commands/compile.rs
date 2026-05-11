@@ -338,12 +338,6 @@ pub struct CompilationContext {
     /// promise rejections via `catch_unwind` in `perry-runtime/src/thread.rs`
     /// instead of aborting the whole process.
     pub needs_thread: bool,
-    /// Per-module source hash (djb2 over the canonical source bytes).
-    /// Populated during `collect_modules` as each native TS module is read
-    /// and used by V2.2's object cache to key `.perry-cache/objects/<target>/<hash>.o`
-    /// entries without re-reading the source in the codegen loop. Mirrors the
-    /// djb2 scheme already used by `build_optimized_libs` (see prior art).
-    pub module_source_hashes: HashMap<PathBuf, u64>,
     /// Cross-module class field types collected post-order in
     /// `collect_modules`. Each parent module's HIR lowering pre-seeds its
     /// `LoweringContext::class_field_types` from this map so type inference
@@ -406,7 +400,6 @@ impl CompilationContext {
             uses_fetch: false,
             uses_crypto_builtins: false,
             needs_thread: false,
-            module_source_hashes: HashMap::new(),
             cross_module_class_field_types: HashMap::new(),
             min_windows_version: "10".to_string(),
             entry_canonical: None,
@@ -3894,21 +3887,74 @@ pub fn run_with_parse_cache(
                 i18n_table: i18n_snapshot.clone(),
                 fast_math: ctx.fast_math,
             };
-            // V2.2 object cache lookup. The key hashes every codegen-affecting
-            // field of `opts` together with this module's source hash and the
-            // perry version. A hit returns the exact `.o` bytes we emitted
-            // the last time opts + source were identical — cross-run bit
-            // identity, not just semantic equivalence. A miss (no entry,
-            // disabled cache, or IO error) falls through to `compile_module`.
-            let cache_key = if object_cache.is_enabled() {
-                let source_hash = ctx.module_source_hashes.get(path).copied().unwrap_or(0);
-                Some(compute_object_cache_key(&opts, source_hash, perry_version))
+            // V2.2 + #686 object cache lookup. The key hashes every
+            // codegen-affecting field of `opts` together with this
+            // module's post-transform HIR fingerprint and the perry
+            // version. A hit returns the exact `.o` bytes we emitted
+            // the last time opts + HIR were identical — cross-run bit
+            // identity, not just semantic equivalence.
+            //
+            // The HIR fingerprint is computed inside this rayon job
+            // (paralelizes the cost across modules and avoids an extra
+            // serial O(modules) pass). Crucially, every HIR-mutating
+            // pass (inline_functions, unroll_static_loops,
+            // inline_finally_into_returns, transform_async_to_generator,
+            // transform_generators per-module; transform_js_imports,
+            // fix_local_native_instances, fix_cross_module_native_instances,
+            // monomorphize_module, perry_codegen_arkts::emit_index_ets,
+            // perry_transform::i18n::apply_i18n, fix_imported_enums
+            // cross-module) has already run by the time we get here, so
+            // the hash captures the exact tree that `compile_module`
+            // will consume. `compile_module` takes `&Module` (shared
+            // reference) — see crates/perry-codegen/src/codegen.rs:388 —
+            // so it cannot mutate the HIR after the hash is taken.
+            let (cache_key, hir_hash_for_diag) = if object_cache.is_enabled() {
+                let hir_hash = perry_hir::stable_hash::hash_module(hir_module);
+                (
+                    Some(compute_object_cache_key(&opts, hir_hash, perry_version)),
+                    Some(hir_hash),
+                )
             } else {
-                None
+                (None, None)
             };
             let object_code = match cache_key.and_then(|k| object_cache.lookup(k)) {
                 Some(bytes) => bytes,
                 None => {
+                    // PERRY_DEV_VERBOSE=1: report the per-module HIR + cache
+                    // key on every miss, so a user can diff hashes between
+                    // builds and answer "why didn't my cosmetic edit hit?"
+                    // (#686 acceptance criterion).
+                    if let (Some(k), Some(hh)) = (cache_key, hir_hash_for_diag) {
+                        if std::env::var("PERRY_DEV_VERBOSE").as_deref() == Ok("1") {
+                            eprintln!(
+                                "  • cache miss: {} hir={:016x} key={:016x}",
+                                hir_module.name, hh, k
+                            );
+                        }
+                        // PERRY_CACHE_DEBUG_HIR=1: also dump the post-transform
+                        // HIR of misses to .perry-cache/debug/<key>.txt so a
+                        // user can diff two miss-dumps and see exactly what
+                        // differed. Best-effort — IO errors never fail the
+                        // build.
+                        if std::env::var("PERRY_CACHE_DEBUG_HIR").as_deref() == Ok("1") {
+                            let dump_dir = ctx.project_root.join(".perry-cache").join("debug");
+                            if std::fs::create_dir_all(&dump_dir).is_ok() {
+                                let dump_path =
+                                    dump_dir.join(format!("{:016x}.txt", k));
+                                let _ = std::fs::write(
+                                    &dump_path,
+                                    format!(
+                                        "module: {}\npath: {}\nhir_hash: {:016x}\ncache_key: {:016x}\n\n{:#?}\n",
+                                        hir_module.name,
+                                        path.display(),
+                                        hh,
+                                        k,
+                                        hir_module,
+                                    ),
+                                );
+                            }
+                        }
+                    }
                     let bytes = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
                         format!(
                             "Error compiling module '{}' ({}) with --backend llvm: {:#}",

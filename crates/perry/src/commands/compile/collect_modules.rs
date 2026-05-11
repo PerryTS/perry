@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use crate::OutputFormat;
 
 use super::{
-    cached_resolve_import, djb2_hash, extract_compile_package_dir, has_perry_native_library,
+    cached_resolve_import, extract_compile_package_dir, has_perry_native_library,
     is_declaration_file, is_in_compile_package, is_in_perry_native_package, is_js_file,
     parse_cached, parse_native_library_manifest, parse_package_specifier, CompilationContext,
     JsModule, ParseCache,
@@ -129,11 +129,11 @@ pub(super) fn collect_modules(
         raw_source
     };
 
-    // Record the source hash for V2.2's per-module object cache. Computed here
-    // (instead of in the rayon codegen loop) so the cache key doesn't force a
-    // second read of the source bytes — we already have them.
-    ctx.module_source_hashes
-        .insert(canonical.clone(), djb2_hash(source.as_bytes()));
+    // Note (#686): we no longer hash source bytes here. The object cache key
+    // is now keyed on a post-transform HIR fingerprint computed inside the
+    // rayon codegen job (see compile.rs's main per-module closure), so
+    // formatter-only edits hit the cache. Removing the per-source hash also
+    // removes one bytes scan per module from the collect path.
 
     let filename = canonical
         .file_name()

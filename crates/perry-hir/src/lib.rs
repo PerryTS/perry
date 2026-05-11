@@ -15,6 +15,7 @@ pub(crate) mod lower_decl;
 pub(crate) mod lower_patterns;
 pub(crate) mod lower_types;
 pub mod monomorph;
+pub mod stable_hash;
 pub mod walker;
 
 pub use analysis::{collect_local_refs_expr, collect_local_refs_stmt};
