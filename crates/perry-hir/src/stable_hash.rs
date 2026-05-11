@@ -16,9 +16,7 @@
 //! HIR that `perry_codegen::compile_module` actually consumes.
 
 use crate::ir::*;
-use perry_types::{
-    FunctionType, ObjectType, PropertyInfo, Type, TypeParam,
-};
+use perry_types::{FunctionType, ObjectType, PropertyInfo, Type, TypeParam};
 
 /// Streaming hasher — minimal API so any djb2/fnv/blake variant can plug in.
 pub trait StableHasher {
@@ -773,7 +771,10 @@ impl SH for Stmt {
                 catch.hash(h);
                 finally.hash(h);
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 tag(h, 14);
                 discriminant.hash(h);
                 cases.hash(h);
@@ -940,7 +941,11 @@ impl SH for WidgetDecl {
 
 impl SH for WidgetConfigParam {
     fn hash<H: StableHasher>(&self, h: &mut H) {
-        let WidgetConfigParam { name, title, param_type } = self;
+        let WidgetConfigParam {
+            name,
+            title,
+            param_type,
+        } = self;
         name.hash(h);
         title.hash(h);
         param_type.hash(h);
@@ -1037,7 +1042,10 @@ impl SH for WidgetNode {
                 children.hash(h);
                 modifiers.hash(h);
             }
-            WidgetNode::Image { system_name, modifiers } => {
+            WidgetNode::Image {
+                system_name,
+                modifiers,
+            } => {
                 tag(h, 2);
                 system_name.hash(h);
                 modifiers.hash(h);
@@ -1344,13 +1352,21 @@ impl SH for Expr {
                 left.as_ref().hash(h);
                 right.as_ref().hash(h);
             }
-            Expr::Call { callee, args, type_args } => {
+            Expr::Call {
+                callee,
+                args,
+                type_args,
+            } => {
                 tag(h, 18);
                 callee.as_ref().hash(h);
                 args.hash(h);
                 type_args.hash(h);
             }
-            Expr::CallSpread { callee, args, type_args } => {
+            Expr::CallSpread {
+                callee,
+                args,
+                type_args,
+            } => {
                 tag(h, 19);
                 callee.as_ref().hash(h);
                 args.hash(h);
@@ -1393,7 +1409,11 @@ impl SH for Expr {
                 object.as_ref().hash(h);
                 property.hash(h);
             }
-            Expr::PropertySet { object, property, value } => {
+            Expr::PropertySet {
+                object,
+                property,
+                value,
+            } => {
                 tag(h, 25);
                 object.as_ref().hash(h);
                 property.hash(h);
@@ -1416,7 +1436,11 @@ impl SH for Expr {
                 object.as_ref().hash(h);
                 index.as_ref().hash(h);
             }
-            Expr::IndexSet { object, index, value } => {
+            Expr::IndexSet {
+                object,
+                index,
+                value,
+            } => {
                 tag(h, 28);
                 object.as_ref().hash(h);
                 index.as_ref().hash(h);
@@ -1493,7 +1517,11 @@ impl SH for Expr {
                 value.hash(h);
                 delegate.hash(h);
             }
-            Expr::New { class_name, args, type_args } => {
+            Expr::New {
+                class_name,
+                args,
+                type_args,
+            } => {
                 tag(h, 42);
                 class_name.hash(h);
                 args.hash(h);
@@ -1508,12 +1536,18 @@ impl SH for Expr {
                 tag(h, 44);
                 s.hash(h);
             }
-            Expr::EnumMember { enum_name, member_name } => {
+            Expr::EnumMember {
+                enum_name,
+                member_name,
+            } => {
                 tag(h, 45);
                 enum_name.hash(h);
                 member_name.hash(h);
             }
-            Expr::StaticFieldGet { class_name, field_name } => {
+            Expr::StaticFieldGet {
+                class_name,
+                field_name,
+            } => {
                 tag(h, 46);
                 class_name.hash(h);
                 field_name.hash(h);
@@ -1833,7 +1867,11 @@ impl SH for Expr {
                 regex.as_ref().hash(h);
                 value.as_ref().hash(h);
             }
-            Expr::RegExpReplaceFn { string, regex, callback } => {
+            Expr::RegExpReplaceFn {
+                string,
+                regex,
+                callback,
+            } => {
                 tag(h, 131);
                 string.as_ref().hash(h);
                 regex.as_ref().hash(h);
@@ -1845,7 +1883,11 @@ impl SH for Expr {
                 tag(h, 134);
                 e.as_ref().hash(h);
             }
-            Expr::JsonParseTyped { text, ty, ordered_keys } => {
+            Expr::JsonParseTyped {
+                text,
+                ty,
+                ordered_keys,
+            } => {
                 tag(h, 135);
                 text.as_ref().hash(h);
                 ty.hash(h);
@@ -1865,7 +1907,11 @@ impl SH for Expr {
                 tag(h, 138);
                 e.as_ref().hash(h);
             }
-            Expr::JsonStringifyPretty { value, replacer, space } => {
+            Expr::JsonStringifyPretty {
+                value,
+                replacer,
+                space,
+            } => {
                 tag(h, 139);
                 value.as_ref().hash(h);
                 replacer.hash(h);
@@ -2067,7 +2113,10 @@ impl SH for Expr {
             }
             Expr::IterResultGetValue => tag(h, 190),
             Expr::IterResultGetDone => tag(h, 191),
-            Expr::AsyncStepChain { value, step_closure } => {
+            Expr::AsyncStepChain {
+                value,
+                step_closure,
+            } => {
                 tag(h, 192);
                 value.as_ref().hash(h);
                 step_closure.as_ref().hash(h);
@@ -2104,7 +2153,11 @@ impl SH for Expr {
                 extractable.as_ref().hash(h);
                 usages.as_ref().hash(h);
             }
-            Expr::WebCryptoSign { algorithm, key, data } => {
+            Expr::WebCryptoSign {
+                algorithm,
+                key,
+                data,
+            } => {
                 tag(h, 199);
                 algorithm.as_ref().hash(h);
                 key.as_ref().hash(h);
@@ -2218,7 +2271,11 @@ impl SH for Expr {
                 buffer.as_ref().hash(h);
                 index.as_ref().hash(h);
             }
-            Expr::BufferIndexSet { buffer, index, value } => {
+            Expr::BufferIndexSet {
+                buffer,
+                index,
+                value,
+            } => {
                 tag(h, 229);
                 buffer.as_ref().hash(h);
                 index.as_ref().hash(h);
@@ -2241,7 +2298,11 @@ impl SH for Expr {
                 array.as_ref().hash(h);
                 index.as_ref().hash(h);
             }
-            Expr::Uint8ArraySet { array, index, value } => {
+            Expr::Uint8ArraySet {
+                array,
+                index,
+                value,
+            } => {
                 tag(h, 234);
                 array.as_ref().hash(h);
                 index.as_ref().hash(h);
@@ -2523,7 +2584,11 @@ impl SH for Expr {
                 delete_count.as_ref().hash(h);
                 items.hash(h);
             }
-            Expr::ArrayWith { array, index, value } => {
+            Expr::ArrayWith {
+                array,
+                index,
+                value,
+            } => {
                 tag(h, 277);
                 array.as_ref().hash(h);
                 index.as_ref().hash(h);
@@ -3070,7 +3135,10 @@ impl SH for Expr {
                 items.as_ref().hash(h);
                 key_fn.as_ref().hash(h);
             }
-            Expr::ObjectRest { object, exclude_keys } => {
+            Expr::ObjectRest {
+                object,
+                exclude_keys,
+            } => {
                 tag(h, 395);
                 object.as_ref().hash(h);
                 exclude_keys.hash(h);
@@ -3181,7 +3249,10 @@ impl SH for Expr {
                 method_name.hash(h);
                 args.hash(h);
             }
-            Expr::JsGetProperty { object, property_name } => {
+            Expr::JsGetProperty {
+                object,
+                property_name,
+            } => {
                 tag(h, 418);
                 object.as_ref().hash(h);
                 property_name.hash(h);
@@ -3211,7 +3282,10 @@ impl SH for Expr {
                 constructor.as_ref().hash(h);
                 args.hash(h);
             }
-            Expr::JsCreateCallback { closure, param_count } => {
+            Expr::JsCreateCallback {
+                closure,
+                param_count,
+            } => {
                 tag(h, 422);
                 closure.as_ref().hash(h);
                 param_count.hash(h);
@@ -3318,6 +3392,14 @@ impl SH for Expr {
             Expr::ReflectGetPrototypeOf(e) => {
                 tag(h, 441);
                 e.as_ref().hash(h);
+            }
+            Expr::AsyncStepDone {
+                value,
+                step_closure,
+            } => {
+                tag(h, 442);
+                value.as_ref().hash(h);
+                step_closure.as_ref().hash(h);
             }
         }
     }

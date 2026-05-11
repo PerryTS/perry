@@ -47,5 +47,8 @@ fn hash_stable_across_processes() {
          leaked into the hash walk — find it and sort entries before emit."
     );
     // Sanity: the printed hash isn't the empty/initial djb2 state.
-    assert_ne!(a, "0000000000001515", "hash looks suspiciously like djb2 init");
+    assert_ne!(
+        a, "0000000000001515",
+        "hash looks suspiciously like djb2 init"
+    );
 }
