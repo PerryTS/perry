@@ -499,12 +499,6 @@ impl LoweringContext {
         id
     }
 
-    pub(crate) fn fresh_global(&mut self) -> GlobalId {
-        let id = self.next_global_id;
-        self.next_global_id += 1;
-        id
-    }
-
     pub(crate) fn fresh_func(&mut self) -> FuncId {
         let id = self.next_func_id;
         self.next_func_id += 1;

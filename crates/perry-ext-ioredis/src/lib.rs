@@ -102,29 +102,6 @@ async fn get_connection(handle: Handle) -> Result<redis::aio::MultiplexedConnect
     Ok(conn)
 }
 
-/// Helper: run an async Redis op on the spawn_blocking pool with a
-/// `tokio::Handle::current().block_on` bridge, then resolve the
-/// promise via the caller-provided mapper.
-fn run_op<F, Fut, T>(promise: JsPromise, op: F)
-where
-    F: FnOnce(redis::aio::MultiplexedConnection) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = redis::RedisResult<T>> + Send,
-    T: ToJsValue + Send + 'static,
-{
-    spawn_blocking(move || {
-        let result: Result<T, String> = tokio::runtime::Handle::current().block_on(async {
-            // SAFETY: this closure is the body — caller doesn't reach
-            // get_connection. The handle was passed in via the F closure.
-            unreachable!("run_op should not be called directly; use run_op_h instead")
-        });
-        match result {
-            Ok(v) => promise.resolve(v.to_jsvalue()),
-            Err(e) => promise.reject_string(&e),
-        }
-        let _ = op; // silence unused warning
-    });
-}
-
 /// Trait for converting Redis results to perry-ffi `JsValue`.
 trait ToJsValue {
     fn to_jsvalue(self) -> JsValue;

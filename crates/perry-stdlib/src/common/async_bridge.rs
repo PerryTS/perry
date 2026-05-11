@@ -504,12 +504,3 @@ where
         }
     });
 }
-
-/// Create a JSValue representing an error from a string message
-/// NOTE: This must only be called from the main thread!
-fn create_error_value(msg: &str) -> u64 {
-    let str_ptr = perry_runtime::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    // Return the string as bits - use string_ptr for proper type identification
-    // In a full implementation, we'd wrap this in an Error object
-    perry_runtime::JSValue::string_ptr(str_ptr).bits()
-}

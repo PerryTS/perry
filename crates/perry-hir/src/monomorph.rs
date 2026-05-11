@@ -650,7 +650,7 @@ pub enum ConstraintError {
 
 /// Check if a concrete type satisfies a constraint.
 /// Returns Ok(()) if satisfied, Err with details if not.
-pub fn check_constraint(
+fn check_constraint(
     type_param: &str,
     concrete_type: &Type,
     constraint: &Type,
@@ -886,7 +886,7 @@ fn types_satisfy(actual: &Type, expected: &Type) -> bool {
 }
 
 /// Check all type parameter constraints for a function specialization
-pub fn check_function_constraints(
+fn check_function_constraints(
     func: &Function,
     type_args: &[Type],
     module: &Module,
@@ -910,7 +910,7 @@ pub fn check_function_constraints(
 }
 
 /// Check all type parameter constraints for a class specialization
-pub fn check_class_constraints(
+fn check_class_constraints(
     class: &Class,
     type_args: &[Type],
     module: &Module,

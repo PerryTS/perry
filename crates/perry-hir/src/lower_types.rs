@@ -1046,11 +1046,6 @@ pub(crate) fn get_ts_entity_name(entity: &ast::TsEntityName) -> String {
     }
 }
 
-/// Helper to get parameter name and type from TsFnParam
-pub(crate) fn get_fn_param_name_and_type(param: &ast::TsFnParam) -> (String, Type) {
-    get_fn_param_name_and_type_with_ctx(param, None)
-}
-
 /// Helper to get parameter name and type from TsFnParam with context
 pub(crate) fn get_fn_param_name_and_type_with_ctx(
     param: &ast::TsFnParam,
@@ -1091,14 +1086,6 @@ pub(crate) fn get_fn_param_name_and_type_with_ctx(
             ("_obj".to_string(), ty)
         }
     }
-}
-
-/// Extract type from an optional type annotation
-pub(crate) fn extract_type_annotation(type_ann: &Option<Box<ast::TsTypeAnn>>) -> Type {
-    type_ann
-        .as_ref()
-        .map(|ann| extract_ts_type(&ann.type_ann))
-        .unwrap_or(Type::Any)
 }
 
 /// Extract class name from a member expression (e.g., "ethers.JsonRpcProvider" -> "JsonRpcProvider")
@@ -1152,11 +1139,6 @@ pub(crate) fn extract_pattern_type_with_ctx(pat: &ast::Pat, ctx: Option<&Lowerin
         }
         ast::Pat::Invalid(_) | ast::Pat::Expr(_) => Type::Any,
     }
-}
-
-/// Alias for parameter type extraction (same as pattern type)
-pub(crate) fn extract_param_type(pat: &ast::Pat) -> Type {
-    extract_pattern_type(pat)
 }
 
 /// Alias for parameter type extraction with context

@@ -19,8 +19,6 @@ pub struct JsEmitter {
     global_names: BTreeMap<GlobalId, String>,
     /// Mapping from FuncId to generated function name
     func_names: BTreeMap<FuncId, String>,
-    /// Counter for generating unique temp variable names
-    temp_counter: usize,
     /// Set of variable names already used (to avoid collisions)
     used_names: BTreeSet<String>,
     /// Module name (for cross-module references)
@@ -41,7 +39,6 @@ impl JsEmitter {
             local_names: BTreeMap::new(),
             global_names: BTreeMap::new(),
             func_names: BTreeMap::new(),
-            temp_counter: 0,
             used_names: BTreeSet::new(),
             module_name: module_name.to_string(),
             exported_names: BTreeSet::new(),
@@ -260,14 +257,6 @@ impl JsEmitter {
         };
         self.used_names.insert(final_name.clone());
         final_name
-    }
-
-    fn fresh_temp(&mut self) -> String {
-        if self.minify {
-            return self.next_mangled_name();
-        }
-        self.temp_counter += 1;
-        format!("_t{}", self.temp_counter)
     }
 
     /// Generate the next short mangled name, skipping collisions and reserved words.

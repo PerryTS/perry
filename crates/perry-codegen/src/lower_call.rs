@@ -45,33 +45,6 @@ use ui_styling::apply_inline_style;
 // keep resolving — `pub(super)` on the native fn would shadow them.
 pub(crate) use native::lower_native_method_call;
 
-/// Heuristic: is this expression likely an integer handle (pointer value
-/// stored as a number) rather than a real float? Used for extern C FFI
-/// calls to decide whether to pass the arg in an x-register (i64) or
-/// d-register (double).
-///
-/// Returns true for variables, property accesses, casts, function calls —
-/// anything that's likely a handle value obtained from a prior FFI call.
-/// Returns false for number/integer literals and arithmetic — likely
-/// actual float values (width, height, color components, etc.).
-fn is_integer_handle_arg(expr: &Expr) -> bool {
-    match expr {
-        // Literal numbers are real floats (width, height, color, etc.)
-        Expr::Integer(_) | Expr::Number(_) => false,
-        // Unary minus on a literal (e.g. -1) — still a real number
-        Expr::Unary { operand, .. } => {
-            !matches!(operand.as_ref(), Expr::Integer(_) | Expr::Number(_))
-        }
-        // Variables, property access — likely handles
-        Expr::LocalGet(_) | Expr::PropertyGet { .. } => true,
-        // Arithmetic on handles (handle + offset) — still integer
-        Expr::Binary { .. } => true,
-        // Function call results — likely handles from other FFI calls
-        Expr::Call { .. } => true,
-        // Everything else — default to double (safer for floats)
-        _ => false,
-    }
-}
 use crate::lower_string_method::lower_string_method;
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{
@@ -3771,14 +3744,6 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
 /// child, matching JavaScript / TypeScript class semantics where fields
 /// are initialized before user-written constructor code executes (field
 /// initializers are conceptually prepended to the constructor body).
-/// Public entry point for scalar-replacement path in stmt.rs.
-pub(crate) fn apply_field_initializers_recursive_pub(
-    ctx: &mut FnCtx<'_>,
-    class_name: &str,
-) -> Result<()> {
-    apply_field_initializers_recursive(ctx, class_name, FieldInitMode::All)
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FieldInitMode {
     /// Apply field initializers for the entire chain root → leaf.
