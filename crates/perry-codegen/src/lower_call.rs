@@ -808,6 +808,21 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 ctx.block().call_void("js_gc_collect", &[]);
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
+            "getAppVersion" if args.is_empty() => {
+                let version = ctx.app_metadata.version.clone();
+                let idx = ctx.strings.intern(&version);
+                let handle_global = format!("@{}", ctx.strings.entry(idx).handle_global);
+                return Ok(ctx.block().load(DOUBLE, &handle_global));
+            }
+            "getAppBuildNumber" if args.is_empty() => {
+                return Ok(double_literal(ctx.app_metadata.build_number as f64));
+            }
+            "getBundleId" if args.is_empty() => {
+                let bundle_id = ctx.app_metadata.bundle_id.clone();
+                let idx = ctx.strings.intern(&bundle_id);
+                let handle_global = format!("@{}", ctx.strings.entry(idx).handle_global);
+                return Ok(ctx.block().load(DOUBLE, &handle_global));
+            }
             // JSX runtime calls: `jsx(type, props)` and `jsxs(type, props)`.
             // The HIR lowers <div>…</div> to ExternFuncRef { name: "jsx" } and
             // <div><a/><b/></div> (multiple children) to "jsxs".  The first arg

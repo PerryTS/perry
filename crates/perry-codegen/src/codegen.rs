@@ -41,6 +41,25 @@ use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I32, I64, I8, PTR, VOID};
 
+/// Per-application metadata read from `perry.toml` by the CLI and baked into
+/// compile-time system APIs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppMetadata {
+    pub version: String,
+    pub build_number: i64,
+    pub bundle_id: String,
+}
+
+impl Default for AppMetadata {
+    fn default() -> Self {
+        Self {
+            version: "1.0.0".to_string(),
+            build_number: 1,
+            bundle_id: "com.perry.app".to_string(),
+        }
+    }
+}
+
 /// Options controlling code generation for a single module.
 #[derive(Debug, Clone, Default)]
 pub struct CompileOptions {
@@ -186,6 +205,8 @@ pub struct CompileOptions {
     /// Drives `crate::block::FAST_MATH`; included in the object cache
     /// key so toggling it invalidates cached `.o` bytes.
     pub fast_math: bool,
+    /// App metadata backing `perry/system` compile-time introspection APIs.
+    pub app_metadata: AppMetadata,
 }
 
 /// A class imported from another native module.
@@ -342,6 +363,8 @@ pub(crate) struct CrossModuleCtx {
     /// dead branches (which may reference FFI functions that don't exist on
     /// the current target).
     pub compile_time_constants: std::collections::HashMap<u32, f64>,
+    /// App metadata backing compile-time `perry/system` introspection APIs.
+    pub app_metadata: AppMetadata,
     /// Functions with a 3-param clamp pattern: fid → true. Call sites
     /// emit `@llvm.smax.i32` + `@llvm.smin.i32` instead of a function call.
     pub clamp3_functions: std::collections::HashSet<u32>,
@@ -1054,6 +1077,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         geisterhand_port: opts.geisterhand_port,
         needs_js_runtime: opts.needs_js_runtime,
         compile_time_constants,
+        app_metadata: opts.app_metadata.clone(),
         clamp3_functions: hir
             .functions
             .iter()
@@ -2894,6 +2918,7 @@ fn compile_function(
         local_id_to_name: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         compile_time_constants: &cross_module.compile_time_constants,
+        app_metadata: &cross_module.app_metadata,
         scalar_replaced: std::collections::HashMap::new(),
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
@@ -3272,6 +3297,7 @@ fn compile_closure(
         local_id_to_name: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         compile_time_constants: &cross_module.compile_time_constants,
+        app_metadata: &cross_module.app_metadata,
         scalar_replaced: std::collections::HashMap::new(),
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
@@ -3495,6 +3521,7 @@ fn compile_method(
         local_id_to_name: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         compile_time_constants: &cross_module.compile_time_constants,
+        app_metadata: &cross_module.app_metadata,
         scalar_replaced: std::collections::HashMap::new(),
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
@@ -3925,6 +3952,7 @@ fn compile_module_entry(
             local_id_to_name: HashMap::new(),
             imported_vars: &cross_module.imported_vars,
             compile_time_constants: &cross_module.compile_time_constants,
+            app_metadata: &cross_module.app_metadata,
             scalar_replaced: std::collections::HashMap::new(),
             scalar_replaced_arrays: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
@@ -4185,6 +4213,7 @@ fn compile_module_entry(
             local_id_to_name: HashMap::new(),
             imported_vars: &cross_module.imported_vars,
             compile_time_constants: &cross_module.compile_time_constants,
+            app_metadata: &cross_module.app_metadata,
             scalar_replaced: std::collections::HashMap::new(),
             scalar_replaced_arrays: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
@@ -4894,6 +4923,7 @@ fn compile_static_method(
         local_id_to_name: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         compile_time_constants: &cross_module.compile_time_constants,
+        app_metadata: &cross_module.app_metadata,
         scalar_replaced: std::collections::HashMap::new(),
         scalar_replaced_arrays: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),

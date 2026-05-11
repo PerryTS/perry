@@ -2161,6 +2161,24 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         ret: ReturnKind::Str,
     },
     MethodRow {
+        method: "getAppVersion",
+        runtime: "perry_system_get_app_version",
+        args: &[],
+        ret: ReturnKind::Str,
+    },
+    MethodRow {
+        method: "getAppBuildNumber",
+        runtime: "perry_system_get_app_build_number",
+        args: &[],
+        ret: ReturnKind::F64,
+    },
+    MethodRow {
+        method: "getBundleId",
+        runtime: "perry_system_get_bundle_id",
+        args: &[],
+        ret: ReturnKind::Str,
+    },
+    MethodRow {
         method: "getAppIcon",
         runtime: "perry_system_get_app_icon",
         args: &[ArgKind::Str],

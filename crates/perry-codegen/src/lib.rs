@@ -25,7 +25,9 @@ pub mod stubs;
 pub(crate) mod type_analysis;
 pub mod types;
 
-pub use codegen::{compile_module, resolve_target_triple, CompileOptions, ImportedClass};
+pub use codegen::{
+    compile_module, resolve_target_triple, AppMetadata, CompileOptions, ImportedClass,
+};
 
 /// One row of the native-module dispatch table, projected to just
 /// the manifest-relevant fields (module / method / has_receiver /

@@ -18,6 +18,15 @@ export function getDeviceModel(): string;
 /** Returns the BCP 47 locale tag for the device's primary language (e.g. "en-US", "fr-FR"). */
 export function getLocale(): string;
 
+/** Returns `perry.toml :: project.version` (e.g. "1.2.6"). */
+export function getAppVersion(): string;
+
+/** Returns `perry.toml :: project.build_number` as a number. */
+export function getAppBuildNumber(): number;
+
+/** Returns the effective app bundle identifier from `perry.toml`. */
+export function getBundleId(): string;
+
 /**
  * Returns a Widget handle rendering the application's icon at the given path,
  * or 0 on platforms where app-icon retrieval is not supported.

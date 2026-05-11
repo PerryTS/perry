@@ -1,0 +1,3 @@
+version 1.0.0
+build 1
+bundle com.perry.test_issue_673_app_metadata

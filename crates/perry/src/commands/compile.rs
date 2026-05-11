@@ -67,6 +67,109 @@ pub struct CompileResult {
     pub codegen_cache_stats: Option<(usize, usize, usize, usize)>,
 }
 
+fn target_bundle_section(target: Option<&str>) -> Option<&'static str> {
+    match target {
+        Some("ios") | Some("ios-simulator") => Some("ios"),
+        Some("visionos") | Some("visionos-simulator") => Some("visionos"),
+        Some("watchos") | Some("watchos-simulator") => Some("watchos"),
+        Some("tvos") | Some("tvos-simulator") => Some("tvos"),
+        Some("android") => Some("android"),
+        Some("macos") => Some("macos"),
+        Some("windows") => Some("windows"),
+        Some("linux") => Some("linux"),
+        None if cfg!(target_os = "macos") => Some("macos"),
+        None if cfg!(target_os = "windows") => Some("windows"),
+        None if cfg!(target_os = "linux") => Some("linux"),
+        _ => None,
+    }
+}
+
+fn toml_string(table: &toml::Table, section: &str, key: &str) -> Option<String> {
+    table
+        .get(section)
+        .and_then(|v| v.as_table())
+        .and_then(|s| s.get(key))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+fn toml_build_number(table: &toml::Table) -> Option<i64> {
+    let value = table
+        .get("project")
+        .and_then(|v| v.as_table())
+        .and_then(|project| project.get("build_number"))?;
+    value
+        .as_integer()
+        .or_else(|| value.as_str().and_then(|s| s.parse::<i64>().ok()))
+}
+
+fn package_bundle_id_from_input(input: &Path) -> Option<String> {
+    let mut dir = input.canonicalize().ok()?;
+    if dir.is_file() {
+        dir = dir.parent()?.to_path_buf();
+    }
+    loop {
+        let pkg = dir.join("package.json");
+        if pkg.exists() {
+            let data = fs::read_to_string(pkg).ok()?;
+            let json: serde_json::Value = serde_json::from_str(&data).ok()?;
+            if let Some(bundle_id) = json.get("bundleId").and_then(|v| v.as_str()) {
+                return Some(bundle_id.to_string());
+            }
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+fn read_app_metadata(
+    toml_root: Option<&Path>,
+    input: &Path,
+    target: Option<&str>,
+    cli_bundle_id: Option<&str>,
+) -> perry_codegen::AppMetadata {
+    let mut metadata = perry_codegen::AppMetadata::default();
+    let mut table: Option<toml::Table> = None;
+    if let Some(root) = toml_root {
+        let path = root.join("perry.toml");
+        if let Ok(data) = fs::read_to_string(path) {
+            table = data.parse::<toml::Table>().ok();
+        }
+    }
+
+    if let Some(ref doc) = table {
+        if let Some(version) = toml_string(doc, "project", "version") {
+            metadata.version = version;
+        }
+        if let Some(build_number) = toml_build_number(doc) {
+            metadata.build_number = build_number;
+        }
+    }
+
+    metadata.bundle_id = cli_bundle_id
+        .map(str::to_string)
+        .or_else(|| {
+            let doc = table.as_ref()?;
+            target_bundle_section(target)
+                .and_then(|section| toml_string(doc, section, "bundle_id"))
+                .or_else(|| toml_string(doc, "app", "bundle_id"))
+                .or_else(|| toml_string(doc, "project", "bundle_id"))
+                .or_else(|| {
+                    doc.get("bundle_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
+        })
+        .or_else(|| package_bundle_id_from_input(input))
+        .unwrap_or_else(|| {
+            let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
+            format!("com.perry.{stem}")
+        });
+
+    metadata
+}
+
 /// In-memory TypeScript AST cache used by `perry dev` to skip reparsing
 /// unchanged files across rebuilds in a single dev session.
 ///
@@ -883,6 +986,12 @@ pub fn run_with_parse_cache(
             }
         }
     };
+    let app_metadata = read_app_metadata(
+        toml_root.as_deref(),
+        &args.input,
+        args.target.as_deref(),
+        args.app_bundle_id.as_deref(),
+    );
     if let Some(ref toml_dir) = toml_root {
         let toml_path = toml_dir.join("perry.toml");
         if toml_path.exists() {
@@ -3893,6 +4002,7 @@ pub fn run_with_parse_cache(
                 native_library_functions: ffi_functions.clone(),
                 i18n_table: i18n_snapshot.clone(),
                 fast_math: ctx.fast_math,
+                app_metadata: app_metadata.clone(),
             };
             // V2.2 object cache lookup. The key hashes every codegen-affecting
             // field of `opts` together with this module's source hash and the
@@ -6137,5 +6247,64 @@ mod windows_link_tests {
     fn unknown_min_windows_falls_through_to_default() {
         assert_eq!(windows_pe_subsystem_flag(false, "11"), "/SUBSYSTEM:CONSOLE");
         assert_eq!(windows_pe_subsystem_flag(true, ""), "/SUBSYSTEM:WINDOWS");
+    }
+}
+
+#[cfg(test)]
+mod app_metadata_tests {
+    use super::read_app_metadata;
+
+    #[test]
+    fn reads_project_metadata_and_target_bundle_id() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("perry.toml"),
+            r#"
+[project]
+version = "2.4.6"
+build_number = 42
+bundle_id = "com.example.project"
+
+[ios]
+bundle_id = "com.example.ios"
+"#,
+        )
+        .unwrap();
+        let input = dir.path().join("src").join("main.ts");
+        std::fs::create_dir_all(input.parent().unwrap()).unwrap();
+        std::fs::write(&input, "console.log('x')").unwrap();
+
+        let metadata = read_app_metadata(Some(dir.path()), &input, Some("ios-simulator"), None);
+
+        assert_eq!(metadata.version, "2.4.6");
+        assert_eq!(metadata.build_number, 42);
+        assert_eq!(metadata.bundle_id, "com.example.ios");
+    }
+
+    #[test]
+    fn cli_bundle_id_overrides_toml_bundle_id() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("perry.toml"),
+            r#"
+[project]
+version = "1.0.0"
+build_number = "7"
+bundle_id = "com.example.project"
+"#,
+        )
+        .unwrap();
+        let input = dir.path().join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+
+        let metadata = read_app_metadata(
+            Some(dir.path()),
+            &input,
+            Some("ios"),
+            Some("com.example.cli"),
+        );
+
+        assert_eq!(metadata.build_number, 7);
+        assert_eq!(metadata.bundle_id, "com.example.cli");
     }
 }

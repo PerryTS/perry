@@ -1057,6 +1057,26 @@ pub(crate) fn lower_native_method_call(
         if method == "notificationSchedule" {
             return lower_notification_schedule(ctx, args);
         }
+        if args.is_empty() {
+            match method {
+                "getAppVersion" => {
+                    let version = ctx.app_metadata.version.clone();
+                    let idx = ctx.strings.intern(&version);
+                    let handle_global = format!("@{}", ctx.strings.entry(idx).handle_global);
+                    return Ok(ctx.block().load(DOUBLE, &handle_global));
+                }
+                "getAppBuildNumber" => {
+                    return Ok(double_literal(ctx.app_metadata.build_number as f64));
+                }
+                "getBundleId" => {
+                    let bundle_id = ctx.app_metadata.bundle_id.clone();
+                    let idx = ctx.strings.intern(&bundle_id);
+                    let handle_global = format!("@{}", ctx.strings.entry(idx).handle_global);
+                    return Ok(ctx.block().load(DOUBLE, &handle_global));
+                }
+                _ => {}
+            }
+        }
         if let Some(sig) = perry_system_table_lookup(method) {
             return lower_perry_ui_table_call(ctx, sig, args);
         }

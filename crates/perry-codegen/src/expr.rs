@@ -13,6 +13,7 @@ use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 use perry_types::Type as HirType;
 
 use crate::block::LlBlock;
+use crate::codegen::AppMetadata;
 use crate::function::LlFunction;
 use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
 use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
@@ -556,6 +557,8 @@ pub(crate) struct FnCtx<'a> {
     /// may reference extern FFI functions that don't exist on the current
     /// target (e.g., iOS-only `hone_get_documents_dir` on macOS).
     pub compile_time_constants: &'a std::collections::HashMap<u32, f64>,
+    /// App metadata backing compile-time `perry/system` introspection APIs.
+    pub app_metadata: &'a AppMetadata,
 
     /// Scalar-replaced non-escaping objects. When `let p = new Point(x, y)`
     /// and `p` never escapes, instead of heap-allocating, each field gets a
