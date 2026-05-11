@@ -5381,6 +5381,83 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // we'd link in; sentinel keeps the compile-pass count up.
         Expr::MathRandom => Ok(ctx.block().call(DOUBLE, "js_math_random", &[])),
 
+        // ── WebAssembly host (issue #76) ──────────────────────────────
+        // The runtime shims (perry-runtime/src/webassembly.rs) handle
+        // bytes extraction, instance handles, and error reporting. The
+        // wasmi engine itself is in the optional `perry-wasm-host`
+        // crate, only linked when the user passes
+        // `--enable-wasm-runtime`. Programs that never call these
+        // builtins never reference the runtime shims, so the linker
+        // dead-strips them and `perry_wasm_host_*` is never demanded.
+        Expr::WebAssemblyValidate(bytes) => {
+            let v = lower_expr(ctx, bytes)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_webassembly_validate", &[(DOUBLE, &v)]))
+        }
+        Expr::WebAssemblyInstantiate(bytes) => {
+            let v = lower_expr(ctx, bytes)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_webassembly_instantiate", &[(DOUBLE, &v)]))
+        }
+        Expr::WebAssemblyCallExport {
+            instance,
+            name,
+            args,
+        } => {
+            let inst = lower_expr(ctx, instance)?;
+            let name_v = lower_expr(ctx, name)?;
+            let lowered_args: Vec<String> =
+                args.iter().map(|a| lower_expr(ctx, a)).collect::<Result<Vec<_>>>()?;
+            let blk = ctx.block();
+            match lowered_args.len() {
+                0 => Ok(blk.call(
+                    DOUBLE,
+                    "js_webassembly_call_export_0",
+                    &[(DOUBLE, &inst), (DOUBLE, &name_v)],
+                )),
+                1 => Ok(blk.call(
+                    DOUBLE,
+                    "js_webassembly_call_export_1",
+                    &[(DOUBLE, &inst), (DOUBLE, &name_v), (DOUBLE, &lowered_args[0])],
+                )),
+                2 => Ok(blk.call(
+                    DOUBLE,
+                    "js_webassembly_call_export_2",
+                    &[
+                        (DOUBLE, &inst),
+                        (DOUBLE, &name_v),
+                        (DOUBLE, &lowered_args[0]),
+                        (DOUBLE, &lowered_args[1]),
+                    ],
+                )),
+                3 => Ok(blk.call(
+                    DOUBLE,
+                    "js_webassembly_call_export_3",
+                    &[
+                        (DOUBLE, &inst),
+                        (DOUBLE, &name_v),
+                        (DOUBLE, &lowered_args[0]),
+                        (DOUBLE, &lowered_args[1]),
+                        (DOUBLE, &lowered_args[2]),
+                    ],
+                )),
+                _ => Ok(blk.call(
+                    DOUBLE,
+                    "js_webassembly_call_export_4",
+                    &[
+                        (DOUBLE, &inst),
+                        (DOUBLE, &name_v),
+                        (DOUBLE, &lowered_args[0]),
+                        (DOUBLE, &lowered_args[1]),
+                        (DOUBLE, &lowered_args[2]),
+                        (DOUBLE, &lowered_args[3]),
+                    ],
+                )),
+            }
+        }
+
         // `JSON.stringify(value, replacer, indent)` — full form via
         // runtime `js_json_stringify_full` which handles array/function
         // replacers, indent spaces, circular detection (throws

@@ -22,6 +22,36 @@ use crate::lower_types::*;
 /// cross-module callers that pad missing args with `undefined` still observe
 /// the intended default. Rest params are skipped (they're handled by the
 /// call-site array bundling, not by scalar default substitution).
+/// Recognise `WebAssembly.instantiate(...)` call shapes used as a var-decl
+/// initializer. Used to populate `ctx.wasm_instance_locals` so the
+/// standard `inst.exports.<method>(...)` syntactic match in
+/// `lower/expr_call.rs` doesn't fire on unrelated `obj.exports.method()`
+/// calls (notably CJS aggregator output). Issue #76.
+pub(crate) fn init_is_webassembly_instantiate(expr: &ast::Expr) -> bool {
+    let call = match expr {
+        ast::Expr::Call(c) => c,
+        ast::Expr::Await(a) => return init_is_webassembly_instantiate(&a.arg),
+        _ => return false,
+    };
+    let callee = match &call.callee {
+        ast::Callee::Expr(e) => e.as_ref(),
+        _ => return false,
+    };
+    let member = match callee {
+        ast::Expr::Member(m) => m,
+        _ => return false,
+    };
+    let obj = match member.obj.as_ref() {
+        ast::Expr::Ident(i) => i,
+        _ => return false,
+    };
+    let prop = match &member.prop {
+        ast::MemberProp::Ident(i) => i,
+        _ => return false,
+    };
+    obj.sym.as_ref() == "WebAssembly" && prop.sym.as_ref() == "instantiate"
+}
+
 pub(crate) fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
     let mut out: Vec<Stmt> = Vec::new();
     for param in params {
@@ -3665,6 +3695,21 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             let mutable = var_decl.kind != ast::VarDeclKind::Const;
             let is_var = var_decl.kind == ast::VarDeclKind::Var;
             for decl in &var_decl.decls {
+                // Issue #76 — pre-tag locals that hold the result of
+                // `WebAssembly.instantiate(...)` so the standard
+                // `inst.exports.<method>(...)` syntactic match in
+                // `lower/expr_call.rs` only fires for genuine wasm
+                // instances (not CJS-style `module.exports.foo()`).
+                if let (
+                    ast::Pat::Ident(binding),
+                    Some(init_expr),
+                ) = (&decl.name, decl.init.as_deref())
+                {
+                    if init_is_webassembly_instantiate(init_expr) {
+                        ctx.wasm_instance_locals
+                            .insert(binding.id.sym.as_ref().to_string());
+                    }
+                }
                 let stmts = lower_var_decl_with_destructuring(ctx, decl, mutable)?;
                 // `var` is function-scoped: mark each defined local so
                 // `pop_block_scope` preserves it when leaving an inner block.

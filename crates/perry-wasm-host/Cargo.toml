@@ -1,0 +1,19 @@
+[package]
+name = "perry-wasm-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WebAssembly host runtime for Perry (wasmi engine, isolated so the default build does not pull wasmi)"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+# wasmi: pure-Rust WebAssembly interpreter. Default-features off so we don't pull
+# the std-only "string-interner" extras that bloat binary size — the issue
+# measured ~1.1 MB delta with default-features=false.
+wasmi = { version = "0.50", default-features = false }
+
+[features]
+default = []

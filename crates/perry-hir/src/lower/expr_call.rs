@@ -258,6 +258,50 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
         }
     }
 
+    // Issue #76 — `embedWasm("./file.wasm")` from `perry/build` is a
+    // compile-time intrinsic that bakes the file's bytes directly into the
+    // produced binary. Resolves the path relative to the current source
+    // file (matches the maintainer's preferred MVP shape vs. the in-flight
+    // import-attributes proposal). The argument MUST be a string literal —
+    // dynamic paths defeat the whole purpose. Unknown failure (file not
+    // found, etc.) bails the compile with a clear error.
+    if let ast::Callee::Expr(callee_expr) = &call.callee {
+        if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
+            if ident.sym.as_ref() == "embedWasm"
+                && ctx.lookup_local("embedWasm").is_none()
+                && ctx.lookup_func("embedWasm").is_none()
+                && call.args.len() == 1
+                && call.args[0].spread.is_none()
+            {
+                if let ast::Expr::Lit(ast::Lit::Str(s)) = call.args[0].expr.as_ref() {
+                    let rel: String = s.value.as_str().unwrap_or("").to_string();
+                    let base_dir = std::path::Path::new(&ctx.source_file_path)
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                    let resolved = base_dir.join(&rel);
+                    let bytes = std::fs::read(&resolved).map_err(|e| {
+                        anyhow::anyhow!(
+                            "embedWasm(\"{}\") failed to read {}: {}",
+                            rel,
+                            resolved.display(),
+                            e
+                        )
+                    })?;
+                    let elems: Vec<Expr> = bytes
+                        .iter()
+                        .map(|b| Expr::Number(*b as f64))
+                        .collect();
+                    return Ok(Expr::Uint8ArrayNew(Some(Box::new(Expr::Array(elems)))));
+                }
+                crate::lower_bail!(
+                    call.span,
+                    "embedWasm(...) requires a string-literal path argument so the bytes can be embedded at compile time"
+                );
+            }
+        }
+    }
+
     let mut args = call
         .args
         .iter()
@@ -1518,6 +1562,39 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                 }
             }
 
+            // Issue #76 — standard `<inst>.exports.<method>(args...)` shape
+            // from the WebAssembly JS API. Sits OUTSIDE the Ident-receiver
+            // gate below because `<inst>.exports` is itself a Member, not
+            // an Ident. Only routes when `<inst>` resolves to a tagged
+            // wasm-instance local (populated at var-decl time when the
+            // initializer is `WebAssembly.instantiate(...)`) — this avoids
+            // stealing `module.exports.foo()` etc. from the generic dispatch.
+            if let ast::Expr::Member(outer_member) = expr.as_ref() {
+                if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
+                    if let ast::Expr::Member(inner) = outer_member.obj.as_ref() {
+                        if let ast::MemberProp::Ident(inner_prop) = &inner.prop {
+                            if inner_prop.sym.as_ref() == "exports" {
+                                if let ast::Expr::Ident(inst_ident) = inner.obj.as_ref() {
+                                    let inst_name = inst_ident.sym.as_ref();
+                                    if ctx.wasm_instance_locals.contains(inst_name) {
+                                        let instance_lowered =
+                                            lower_expr(ctx, inner.obj.as_ref())?;
+                                        ctx.uses_webassembly = true;
+                                        return Ok(Expr::WebAssemblyCallExport {
+                                            instance: Box::new(instance_lowered),
+                                            name: Box::new(Expr::String(
+                                                method_ident.sym.as_ref().to_string(),
+                                            )),
+                                            args,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check for fs.methodName() calls (including require('fs') aliases)
             if let ast::Expr::Member(member) = expr.as_ref() {
                 if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
@@ -1841,6 +1918,57 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                             }
                         }
                     }
+
+                    // WebAssembly.* host runtime (issue #76). MVP surface:
+                    // - `WebAssembly.validate(bytes)`
+                    // - `WebAssembly.instantiate(bytes)` (sync, Perry-shape)
+                    // - `WebAssembly.callExport(inst, name, ...args)` (legacy
+                    //   helper kept for compatibility with the first PoC pass)
+                    // The standard `inst.exports.<method>(...)` shape is
+                    // recognised separately below as a syntactic pattern.
+                    if obj_ident.sym.as_ref() == "WebAssembly" {
+                        if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                            let method_name = method_ident.sym.as_ref();
+                            match method_name {
+                                "validate" => {
+                                    if !args.is_empty() {
+                                        ctx.uses_webassembly = true;
+                                        return Ok(Expr::WebAssemblyValidate(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                }
+                                "instantiate" => {
+                                    if !args.is_empty() {
+                                        ctx.uses_webassembly = true;
+                                        return Ok(Expr::WebAssemblyInstantiate(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                }
+                                "callExport" => {
+                                    if args.len() >= 2 {
+                                        ctx.uses_webassembly = true;
+                                        let mut it = args.into_iter();
+                                        let instance = it.next().unwrap();
+                                        let name = it.next().unwrap();
+                                        let rest: Vec<Expr> = it.collect();
+                                        return Ok(Expr::WebAssemblyCallExport {
+                                            instance: Box::new(instance),
+                                            name: Box::new(name),
+                                            args: rest,
+                                        });
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    // (Standard `<inst>.exports.<method>` shape moved to a
+                    // dedicated block above — see `// Issue #76` near the
+                    // fs-method dispatch — so it can match Member receivers
+                    // without being gated on the Ident-receiver wrapper.)
 
                     // Check for Math.methodName() calls
                     if obj_ident.sym.as_ref() == "Math" {

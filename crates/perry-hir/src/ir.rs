@@ -157,6 +157,10 @@ pub struct Module {
     pub widgets: Vec<WidgetDecl>,
     /// Whether this module uses fetch() — requires perry-stdlib for js_fetch_with_options
     pub uses_fetch: bool,
+    /// Whether this module references `WebAssembly.*` (issue #76). Drives
+    /// auto-link of `libperry_wasm_host.a` so users don't have to remember
+    /// `--enable-wasm-runtime` when they actually use the API.
+    pub uses_webassembly: bool,
     /// External FFI function declarations (name, param_types, return_type)
     /// Populated from `declare function` statements with no body.
     pub extern_funcs: Vec<(String, Vec<Type>, Type)>,
@@ -1251,6 +1255,21 @@ pub enum Expr {
 
     /// performance.now() -> number (high-resolution time in ms)
     PerformanceNow,
+
+    // WebAssembly host (issue #76). MVP surface — see
+    // `crates/perry-runtime/src/webassembly.rs` for the FFI shape.
+    /// `WebAssembly.validate(bytes)` -> boolean
+    WebAssemblyValidate(Box<Expr>),
+    /// `WebAssembly.instantiate(bytes)` -> opaque instance handle (Perry
+    /// MVP shape — sync, no Promise, no `{module, instance}` pair).
+    WebAssemblyInstantiate(Box<Expr>),
+    /// `WebAssembly.callExport(instance, name, ...args)` — Perry-specific
+    /// helper for invoking numeric exports (see issue #76 PoC scope).
+    WebAssemblyCallExport {
+        instance: Box<Expr>,
+        name: Box<Expr>,
+        args: Vec<Expr>,
+    },
     /// atob(base64) -> string
     Atob(Box<Expr>),
     /// btoa(string) -> string
@@ -2352,6 +2371,7 @@ impl Module {
             exported_functions: Vec::new(),
             widgets: Vec::new(),
             uses_fetch: false,
+            uses_webassembly: false,
             extern_funcs: Vec::new(),
             init_was_unrolled: false,
         }

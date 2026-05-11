@@ -712,6 +712,15 @@ pub(super) fn collect_modules(
         ctx.uses_fetch = true;
     }
 
+    // Issue #76 — auto-link the wasmi host runtime when any module
+    // references `WebAssembly.*`. Without this the user has to remember
+    // `--enable-wasm-runtime`; with it the flag is only needed when they
+    // want to override the auto-detection (e.g. force-link for plugins
+    // they'll dlopen later).
+    if hir_module.uses_webassembly {
+        ctx.needs_wasm_runtime = true;
+    }
+
     // Detect crypto.* builtin usage (randomBytes/randomUUID/sha256/md5 used
     // without `import crypto`). The runtime symbols live behind the
     // perry-stdlib `crypto` Cargo feature, so we need to flip that on for

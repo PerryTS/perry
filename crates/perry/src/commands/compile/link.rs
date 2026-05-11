@@ -52,6 +52,12 @@ pub(super) fn build_and_run_link(
     // copy of each `_js_<package>_*` symbol — no duplicates.
     well_known_libs: &[PathBuf],
     jsruntime_lib: &Option<PathBuf>,
+    // Issue #76 — `libperry_wasm_host.a` (wasmi-backed WebAssembly host
+    // runtime). Only `Some(...)` when the user passed `--enable-wasm-runtime`
+    // and the archive was located. Appended to the link command after the
+    // jsruntime/stdlib block so the linker resolves `perry_wasm_host_*`
+    // symbols referenced by `js_webassembly_*` shims in `perry-runtime`.
+    wasm_host_lib: &Option<PathBuf>,
     exe_path: &Path,
     format: OutputFormat,
 ) -> Result<()> {
@@ -921,6 +927,14 @@ pub(super) fn build_and_run_link(
         } else {
             eprintln!("Warning: stdlib required but libperry_stdlib.a not found");
         }
+    }
+
+    // Issue #76 — wasmi host runtime, opt-in via `--enable-wasm-runtime`.
+    // Append after stdlib/jsruntime so the linker can resolve `perry_wasm_host_*`
+    // symbols referenced by the always-present `js_webassembly_*` FFIs in
+    // perry-runtime.
+    if let Some(ref wasm_host) = wasm_host_lib {
+        cmd.arg(wasm_host);
     }
 
     if is_windows {

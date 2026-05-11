@@ -171,6 +171,8 @@ pub struct LoweringContext {
     pub(crate) module_native_instances: Vec<(String, String, String)>,
     /// Whether this module uses fetch() — requires perry-stdlib
     pub(crate) uses_fetch: bool,
+    /// Issue #76 — set when any `WebAssembly.*` HIR variant is lowered.
+    pub(crate) uses_webassembly: bool,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
@@ -211,6 +213,12 @@ pub struct LoweringContext {
     /// HIR variants which read the runtime's thread-local exec metadata.
     pub(crate) regex_exec_locals: HashSet<String>,
     pub(crate) proxy_locals: HashSet<String>,
+    /// Issue #76 — locals known to hold a WebAssembly instance handle (i.e.
+    /// `const x = WebAssembly.instantiate(...)`). Used to route
+    /// `x.exports.<method>(...)` to `Expr::WebAssemblyCallExport` only when
+    /// the receiver is a tracked instance, avoiding false matches against
+    /// CJS-style `module.exports.foo()` patterns.
+    pub(crate) wasm_instance_locals: HashSet<String>,
     pub(crate) proxy_revoke_locals: HashMap<String, String>,
     /// For `const p = new Proxy(ClassName, handler)`, record the class name
     /// so `new p(args)` can fold to `new ClassName(args)` (pragmatic — lets
@@ -332,6 +340,7 @@ impl LoweringContext {
             current_namespace: None,
             module_native_instances: Vec::new(),
             uses_fetch: false,
+            uses_webassembly: false,
             var_hoisted_ids: HashSet::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),
@@ -346,6 +355,7 @@ impl LoweringContext {
             iterator_func_for_class: std::collections::HashMap::new(),
             regex_exec_locals: HashSet::new(),
             proxy_locals: HashSet::new(),
+            wasm_instance_locals: HashSet::new(),
             proxy_revoke_locals: HashMap::new(),
             proxy_target_classes: HashMap::new(),
             class_expr_aliases: HashMap::new(),
@@ -2187,6 +2197,7 @@ pub fn lower_module_full(
     }
 
     module.uses_fetch = ctx.uses_fetch;
+    module.uses_webassembly = ctx.uses_webassembly;
     module.extern_funcs = ctx.extern_func_types.clone();
 
     // Post-pass: widen `mutable_captures` across sibling closures. When two
@@ -7176,6 +7187,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     && name != "atob"
                     && name != "btoa"
                     && name != "BigInt"
+                    && name != "WebAssembly"
                 {
                     eprintln!(
                         "  Warning: unknown identifier '{}' — assuming global; member access will dispatch by name at runtime, bare reads lower to 0",

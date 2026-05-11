@@ -30,6 +30,7 @@ pub use library_search::find_library;
 use library_search::{
     build_geisterhand_libs, find_geisterhand_library, find_geisterhand_runtime,
     find_geisterhand_ui, find_harmonyos_sdk, find_jsruntime_library, find_lld_link, find_llvm_tool,
+    find_wasm_host_library,
     find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_runtime_library,
     find_stdlib_library, find_ui_library, windows_pe_subsystem_flag,
 };
@@ -102,6 +103,12 @@ pub struct CompileArgs {
     /// WARNING: This significantly increases binary size (~10-15MB).
     #[arg(long)]
     pub enable_js_runtime: bool,
+
+    /// Enable WebAssembly host runtime so the produced binary can load .wasm
+    /// modules at runtime via `WebAssembly.instantiate(bytes)`. Engine: wasmi
+    /// (pure-Rust interpreter). Adds ~1MB to the binary. Issue #76.
+    #[arg(long)]
+    pub enable_wasm_runtime: bool,
 
     /// Target platform: ios-simulator, ios, android, ios-widget, ios-widget-simulator (default: native host)
     #[arg(long)]
@@ -277,6 +284,10 @@ pub struct CompilationContext {
     pub import_map: BTreeMap<String, PathBuf>,
     /// Whether JS runtime is needed
     pub needs_js_runtime: bool,
+    /// Whether the WebAssembly host runtime is needed (codegen detected
+    /// `WebAssembly.*` usage OR the user passed `--enable-wasm-runtime`).
+    /// Issue #76.
+    pub needs_wasm_runtime: bool,
     /// Whether perry/ui module is imported (needs UI library linking).
     /// On the harmonyos target this is forced back to false after the
     /// destructive Phase-2 ArkUI harvest (see `harmonyos_index_ets`) — UI
@@ -387,6 +398,7 @@ impl CompilationContext {
             js_modules: BTreeMap::new(),
             import_map: BTreeMap::new(),
             needs_js_runtime: false,
+            needs_wasm_runtime: false,
             needs_ui: false,
             harmonyos_index_ets: None,
             needs_plugins: false,
@@ -4132,6 +4144,16 @@ pub fn run_with_parse_cache(
         } else {
             None
         };
+        // Issue #76 — same logic as jsruntime above: when the wasm host is
+        // being linked, scan its archive so the `perry_wasm_host_*` symbols
+        // are recognised as defined and we don't synthesise empty stubs that
+        // would shadow the real implementations.
+        let use_wasm_host = ctx.needs_wasm_runtime || args.enable_wasm_runtime;
+        let wasm_host_lib_path = if use_wasm_host {
+            find_wasm_host_library(target.as_deref())
+        } else {
+            None
+        };
         let mut all_scan_paths: Vec<PathBuf> = obj_paths.clone();
         if let Some(ref p) = runtime_lib_path {
             all_scan_paths.push(p.clone());
@@ -4142,6 +4164,9 @@ pub fn run_with_parse_cache(
             }
         }
         if let Some(ref p) = jsruntime_lib_path {
+            all_scan_paths.push(p.clone());
+        }
+        if let Some(ref p) = wasm_host_lib_path {
             all_scan_paths.push(p.clone());
         }
         // Scan UI library for defined symbols so we don't generate stubs for
@@ -4617,6 +4642,32 @@ pub fn run_with_parse_cache(
         None
     };
 
+    // Issue #76 — locate the wasmi-based host library when WebAssembly runtime
+    // support is requested. Mirrors the jsruntime resolution above; absence is
+    // a hard error when codegen detected `WebAssembly.*` usage, otherwise the
+    // flag-only case silently degrades to None (the user will hit a link
+    // error on first use, with the symbol name as the breadcrumb).
+    let wasm_host_lib = if ctx.needs_wasm_runtime || args.enable_wasm_runtime {
+        match find_wasm_host_library(target.as_deref()) {
+            Some(lib) => {
+                if let OutputFormat::Text = format {
+                    println!("Using wasmi WebAssembly host runtime");
+                }
+                Some(lib)
+            }
+            None => {
+                if ctx.needs_wasm_runtime {
+                    return Err(anyhow!(
+                        "WebAssembly.* used but libperry_wasm_host.a not found. Build it with: cargo build --release -p perry-wasm-host"
+                    ));
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Build & run the per-platform link command. Tier 2.1 final extraction
     // (v0.5.342) — see crates/perry/src/commands/compile/link.rs.
     build_and_run_link(
@@ -4629,6 +4680,7 @@ pub fn run_with_parse_cache(
         &stdlib_lib,
         &optimized_libs.well_known_libs,
         &jsruntime_lib,
+        &wasm_host_lib,
         &exe_path,
         format,
     )?;

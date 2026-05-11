@@ -283,6 +283,7 @@ fn build_once(
         print_hir: false,
         no_link: false,
         enable_js_runtime: false,
+        enable_wasm_runtime: false,
         target: None,
         app_bundle_id: None,
         output_type: "executable".to_string(),

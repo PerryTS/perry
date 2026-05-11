@@ -73,6 +73,7 @@ Minification strips comments, collapses whitespace, and mangles local variable/p
 | Flag | Description |
 |------|-------------|
 | `--enable-js-runtime` | Enable V8 JavaScript runtime for unsupported npm packages |
+| `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime (auto-detected when `WebAssembly.*` is referenced; needed only when loading via dlopen / FFI without a static reference) |
 | `--type-check` | Enable type checking via tsgo IPC |
 
 ## Environment Variables

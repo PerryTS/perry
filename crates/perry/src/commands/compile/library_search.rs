@@ -811,6 +811,18 @@ pub(super) fn find_jsruntime_library(target: Option<&str>) -> Option<PathBuf> {
     find_library(lib_name, target)
 }
 
+/// Find the wasmi-based WebAssembly host library (optional — only needed
+/// when `--enable-wasm-runtime` is set, see issue #76).
+pub(super) fn find_wasm_host_library(target: Option<&str>) -> Option<PathBuf> {
+    let lib_name = match target {
+        Some("windows") => "perry_wasm_host.lib",
+        #[cfg(target_os = "windows")]
+        None => "perry_wasm_host.lib",
+        _ => "libperry_wasm_host.a",
+    };
+    find_library(lib_name, target)
+}
+
 /// Find the UI library for linking (optional - only needed when perry/ui is imported).
 ///
 /// HarmonyOS is intentionally absent: there is no `perry-ui-harmonyos`

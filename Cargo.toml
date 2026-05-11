@@ -46,6 +46,7 @@ members = [
     "crates/perry-ext-streams",
     "crates/perry-ext-fastify",
     "crates/perry-jsruntime",
+    "crates/perry-wasm-host",
     "crates/perry-stdlib",
     "crates/perry-diagnostics",
     "crates/perry-ui",
@@ -119,6 +120,7 @@ default-members = [
     "crates/perry-ext-streams",
     "crates/perry-ext-fastify",
     "crates/perry-jsruntime",
+    "crates/perry-wasm-host",
     "crates/perry-stdlib",
     "crates/perry-diagnostics",
     "crates/perry-ui",
@@ -291,6 +293,7 @@ perry-ext-fastify = { path = "crates/perry-ext-fastify" }
 perry-stdlib = { path = "crates/perry-stdlib" }
 perry-diagnostics = { path = "crates/perry-diagnostics" }
 perry-jsruntime = { path = "crates/perry-jsruntime" }
+perry-wasm-host = { path = "crates/perry-wasm-host" }
 perry-codegen-js = { path = "crates/perry-codegen-js" }
 perry-codegen-swiftui = { path = "crates/perry-codegen-swiftui" }
 perry-codegen-arkts = { path = "crates/perry-codegen-arkts" }

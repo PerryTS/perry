@@ -25,6 +25,9 @@ const PERRY_I18N_DTS: &str = include_str!("../../../../types/perry/i18n/index.d.
 const PERRY_SYSTEM_DTS: &str = include_str!("../../../../types/perry/system/index.d.ts");
 const PERRY_MEDIA_DTS: &str = include_str!("../../../../types/perry/media/index.d.ts");
 const PERRY_TUI_DTS: &str = include_str!("../../../../types/perry/tui/index.d.ts");
+const PERRY_WEBASSEMBLY_DTS: &str =
+    include_str!("../../../../types/perry/webassembly/index.d.ts");
+const PERRY_BUILD_DTS: &str = include_str!("../../../../types/perry/build/index.d.ts");
 
 // Auto-generated stdlib `.d.ts` from the API manifest (#465's
 // "stretch" deliverable: editor `.d.ts` shipped alongside the
@@ -46,6 +49,14 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
         ("system", PERRY_SYSTEM_DTS),
         ("media", PERRY_MEDIA_DTS),
         ("tui", PERRY_TUI_DTS),
+        // Issue #76 — WebAssembly host runtime ambient declarations.
+        // The file declares `WebAssembly` on the global scope, so it
+        // doesn't need to be imported. Lives under `perry/webassembly`
+        // alongside the other built-in modules for discoverability.
+        ("webassembly", PERRY_WEBASSEMBLY_DTS),
+        // Issue #76 — `perry/build` compile-time intrinsics
+        // (`embedWasm`). Imported via `import { embedWasm } from "perry/build"`.
+        ("build", PERRY_BUILD_DTS),
     ];
 
     // Each sub-module gets index.d.ts
@@ -66,7 +77,7 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
 
     if !quiet {
         println!(
-            "  Created .perry/types/ type stubs (ui, thread, i18n, system, media, tui, stdlib)"
+            "  Created .perry/types/ type stubs (ui, thread, i18n, system, media, tui, webassembly, build, stdlib)"
         );
     }
 

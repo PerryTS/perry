@@ -435,6 +435,30 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_compare", I32, &[I64, I64]);
     module.declare_function("js_jsvalue_to_string_radix", I64, &[DOUBLE, I32]);
     module.declare_function("js_math_random", DOUBLE, &[]);
+    // WebAssembly host runtime (issue #76). All take/return NaN-boxed
+    // doubles (JSValues). Implementations live in
+    // `perry-runtime/src/webassembly.rs` and forward to
+    // `perry-wasm-host`'s C ABI; the wasmi engine is only linked when
+    // the user passes `--enable-wasm-runtime`.
+    module.declare_function("js_webassembly_validate", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_webassembly_instantiate", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_webassembly_call_export_0", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_webassembly_call_export_1", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_webassembly_call_export_2",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_webassembly_call_export_3",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_webassembly_call_export_4",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_console_log_spread", VOID, &[I64]);
     module.declare_function("js_console_error_spread", VOID, &[I64]);
     module.declare_function("js_console_warn_spread", VOID, &[I64]);

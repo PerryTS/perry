@@ -23,6 +23,7 @@ perry main.ts -o app
 | `--no-link` | Produce object file only, skip linking |
 | `--keep-intermediates` | Keep `.o` and `.asm` files |
 | `--enable-js-runtime` | Enable V8 JavaScript runtime fallback |
+| `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime (auto-detected on `WebAssembly.*` use) |
 | `--type-check` | Enable type checking via tsgo |
 | `--minify` | Minify and obfuscate output (auto-enabled for `--target web`) |
 | `--app-bundle-id <ID>` | Bundle ID (required for widget targets) |
@@ -69,6 +70,7 @@ perry run -- --port 3000           # Forward args to your program
 | `--local` | Force local compilation (no remote fallback) |
 | `--remote` | Force remote build via Perry Hub |
 | `--enable-js-runtime` | Enable V8 JavaScript runtime |
+| `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime |
 | `--type-check` | Enable type checking via tsgo |
 | `--` | Separator for program arguments |
 
