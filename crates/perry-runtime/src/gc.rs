@@ -1535,8 +1535,7 @@ impl ValidPointerSet {
         // `maybe_contains` still prefilters correctly for malloc
         // pointers (closures/promises) that fall outside the
         // arena address span.
-        if let (Some(&first), Some(&last)) =
-            (self.merged_sorted.first(), self.merged_sorted.last())
+        if let (Some(&first), Some(&last)) = (self.merged_sorted.first(), self.merged_sorted.last())
         {
             if first < self.range_min {
                 self.range_min = first;
@@ -2789,6 +2788,42 @@ unsafe fn trace_promise(
             }
         }
     }
+
+    let all_result = (*promise).all_result;
+    if !all_result.is_null() {
+        let ptr_usize = all_result as usize;
+        if valid_ptrs.contains(&ptr_usize) {
+            let header = header_from_user_ptr(all_result as *const u8);
+            if (*header).gc_flags & GC_FLAG_MARKED == 0 {
+                (*header).gc_flags |= GC_FLAG_MARKED;
+                worklist.push(header);
+            }
+        }
+    }
+
+    let all_results_arr = (*promise).all_results_arr;
+    if !all_results_arr.is_null() {
+        let ptr_usize = all_results_arr as usize;
+        if valid_ptrs.contains(&ptr_usize) {
+            let header = header_from_user_ptr(all_results_arr as *const u8);
+            if (*header).gc_flags & GC_FLAG_MARKED == 0 {
+                (*header).gc_flags |= GC_FLAG_MARKED;
+                worklist.push(header);
+            }
+        }
+    }
+
+    let all_state_arr = (*promise).all_state_arr;
+    if !all_state_arr.is_null() {
+        let ptr_usize = all_state_arr as usize;
+        if valid_ptrs.contains(&ptr_usize) {
+            let header = header_from_user_ptr(all_state_arr as *const u8);
+            if (*header).gc_flags & GC_FLAG_MARKED == 0 {
+                (*header).gc_flags |= GC_FLAG_MARKED;
+                worklist.push(header);
+            }
+        }
+    }
 }
 
 /// Trace error fields (message, name, stack are StringHeader pointers; cause is f64; errors is array)
@@ -3480,6 +3515,15 @@ unsafe fn rewrite_promise_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet
     rewrite_slot(&(*promise).on_fulfilled as *const _ as *mut u64, valid_ptrs);
     rewrite_slot(&(*promise).on_rejected as *const _ as *mut u64, valid_ptrs);
     rewrite_slot(&(*promise).next as *const _ as *mut u64, valid_ptrs);
+    rewrite_slot(&(*promise).all_result as *const _ as *mut u64, valid_ptrs);
+    rewrite_slot(
+        &(*promise).all_results_arr as *const _ as *mut u64,
+        valid_ptrs,
+    );
+    rewrite_slot(
+        &(*promise).all_state_arr as *const _ as *mut u64,
+        valid_ptrs,
+    );
 }
 
 unsafe fn rewrite_error_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet) {

@@ -2612,7 +2612,7 @@ pub extern "C" fn js_array_join(
         };
 
         // Build result string
-        let mut result = String::new();
+        let mut result = String::with_capacity(join_initial_capacity(length, sep_str.len()));
         for i in 0..length as usize {
             if i > 0 {
                 result.push_str(sep_str);
@@ -2700,6 +2700,14 @@ pub extern "C" fn js_array_join(
         drop(result);
         ret
     }
+}
+
+#[inline]
+fn join_initial_capacity(length: u32, sep_len: usize) -> usize {
+    let len = length as usize;
+    sep_len
+        .saturating_mul(len.saturating_sub(1))
+        .saturating_add(len.saturating_mul(8))
 }
 
 /// Check if a value is an array (Array.isArray)

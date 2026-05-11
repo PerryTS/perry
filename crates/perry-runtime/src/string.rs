@@ -2428,72 +2428,80 @@ pub extern "C" fn js_string_split_n(
         string_as_str(delimiter)
     };
 
-    const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
-    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
     let header_size = std::mem::size_of::<StringHeader>();
+    let src_is_ascii = is_ascii_string(s);
 
     if delim.is_empty() {
-        // Empty delimiter: split into individual characters (single pass)
-        let mut parts: Vec<*mut StringHeader> = str_data
-            .chars()
-            .map(|c| {
+        let char_count = str_data.chars().count();
+        let n = if limit > 0 {
+            char_count.min(limit as usize)
+        } else {
+            char_count
+        };
+
+        let arr = crate::array::js_array_alloc(n as u32);
+        unsafe {
+            (*arr).length = n as u32;
+            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            for (i, c) in str_data.chars().take(n).enumerate() {
                 let mut buf = [0u8; 4];
                 let char_str = c.encode_utf8(&mut buf);
-                js_string_from_bytes(char_str.as_ptr(), char_str.len() as u32)
-            })
-            .collect();
-        if limit > 0 && (parts.len() as i64) > (limit as i64) {
-            parts.truncate(limit as usize);
-        }
-
-        let arr = crate::array::js_array_alloc(parts.len() as u32);
-        unsafe {
-            (*arr).length = parts.len() as u32;
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-            for (i, p) in parts.iter().enumerate() {
-                let nanboxed = STRING_TAG | (*p as u64 & POINTER_MASK);
-                std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
+                write_split_part(elements_ptr, i, char_str, true, header_size);
             }
         }
         return arr;
     }
 
-    // Non-empty delimiter: arena-allocate parts (bump-pointer, no tracking overhead)
     let mut part_slices: Vec<&str> = str_data.split(delim).collect();
-    if limit > 0 && (part_slices.len() as i64) > (limit as i64) {
+    if limit > 0 && part_slices.len() > limit as usize {
         part_slices.truncate(limit as usize);
     }
     let n = part_slices.len();
-
-    let src_is_ascii = is_ascii_string(s);
 
     let arr = crate::array::js_array_alloc(n as u32);
     unsafe {
         (*arr).length = n as u32;
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         for (i, part) in part_slices.iter().enumerate() {
-            let byte_len = part.len() as u32;
-            let alloc_size = header_size + byte_len as usize;
-            let raw = crate::arena::arena_alloc_gc(alloc_size, 8, crate::gc::GC_TYPE_STRING);
-            let sh = raw as *mut StringHeader;
-            (*sh).byte_len = byte_len;
-            (*sh).capacity = byte_len;
-            (*sh).refcount = 0;
-            (*sh).utf16_len = if src_is_ascii {
-                byte_len
-            } else {
-                compute_utf16_len(part.as_ptr(), byte_len)
-            };
-            if byte_len > 0 {
-                let data_ptr = (sh as *mut u8).add(header_size);
-                ptr::copy_nonoverlapping(part.as_ptr(), data_ptr, byte_len as usize);
-            }
-            let nanboxed = STRING_TAG | (raw as u64 & POINTER_MASK);
-            std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
+            write_split_part(elements_ptr, i, part, src_is_ascii, header_size);
         }
     }
 
     arr
+}
+
+#[inline]
+unsafe fn write_split_part(
+    elements_ptr: *mut f64,
+    index: usize,
+    part: &str,
+    src_is_ascii: bool,
+    header_size: usize,
+) {
+    if let Some(value) = crate::value::JSValue::try_short_string(part.as_bytes()) {
+        std::ptr::write(elements_ptr.add(index), f64::from_bits(value.bits()));
+        return;
+    }
+
+    let byte_len = part.len() as u32;
+    let alloc_size = header_size + byte_len as usize;
+    let raw = crate::arena::arena_alloc_gc(alloc_size, 8, crate::gc::GC_TYPE_STRING);
+    let sh = raw as *mut StringHeader;
+    (*sh).byte_len = byte_len;
+    (*sh).capacity = byte_len;
+    (*sh).refcount = 0;
+    (*sh).flags = 0;
+    (*sh).utf16_len = if src_is_ascii {
+        byte_len
+    } else {
+        compute_utf16_len(part.as_ptr(), byte_len)
+    };
+    if byte_len > 0 {
+        let data_ptr = (sh as *mut u8).add(header_size);
+        ptr::copy_nonoverlapping(part.as_ptr(), data_ptr, byte_len as usize);
+    }
+    let nanboxed = crate::value::STRING_TAG | (raw as u64 & crate::value::POINTER_MASK);
+    std::ptr::write(elements_ptr.add(index), f64::from_bits(nanboxed));
 }
 
 /// Allocate a string containing a single space character " "
@@ -2820,6 +2828,23 @@ pub fn scan_intern_table_roots(mark: &mut dyn FnMut(f64)) {
 mod tests {
     use super::*;
 
+    fn split_value_to_string(value: f64) -> String {
+        let jsvalue = crate::value::JSValue::from_bits(value.to_bits());
+        if jsvalue.is_short_string() {
+            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            let n = jsvalue.short_string_to_buf(&mut scratch);
+            return std::str::from_utf8(&scratch[..n]).unwrap().to_string();
+        }
+        if jsvalue.is_string() {
+            let ptr = jsvalue.as_pointer() as *const StringHeader;
+            return string_as_str(ptr).to_string();
+        }
+        panic!(
+            "split returned non-string value: 0x{:016x}",
+            value.to_bits()
+        );
+    }
+
     #[test]
     fn test_string_create() {
         let data = b"hello";
@@ -2866,21 +2891,9 @@ mod tests {
 
         assert_eq!(js_array_length(arr), 3);
 
-        // Get the string pointers from the array and verify their contents
-        // Note: split() stores NaN-boxed string pointers with STRING_TAG
-        const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
-        const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-
-        unsafe {
-            // Extract pointer from NaN-boxed value by masking off STRING_TAG
-            let ptr0 = (js_array_get_f64(arr, 0).to_bits() & POINTER_MASK) as *const StringHeader;
-            let ptr1 = (js_array_get_f64(arr, 1).to_bits() & POINTER_MASK) as *const StringHeader;
-            let ptr2 = (js_array_get_f64(arr, 2).to_bits() & POINTER_MASK) as *const StringHeader;
-
-            assert_eq!(string_as_str(ptr0), "a");
-            assert_eq!(string_as_str(ptr1), "b");
-            assert_eq!(string_as_str(ptr2), "c");
-        }
+        assert_eq!(split_value_to_string(js_array_get_f64(arr, 0)), "a");
+        assert_eq!(split_value_to_string(js_array_get_f64(arr, 1)), "b");
+        assert_eq!(split_value_to_string(js_array_get_f64(arr, 2)), "c");
     }
 
     #[test]

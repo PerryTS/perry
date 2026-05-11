@@ -1208,19 +1208,30 @@ fn transform_generator_function(
         // into the step closure body — eliminating the per-call
         // `__next` allocation, the closure dispatch, and the captures-
         // box re-lookup that the separate closure-call path required.
-        // The throw path stays as a separate closure (cold), since its
-        // catch routing is tangled with state-machine post-catch
-        // transitions and the fusion benefit there is marginal.
+        // The throw path only stays as a separate closure when it has
+        // real catch-routing work. The common no-catch shape is just
+        // `throw(value)`, so the step closure can emit that directly
+        // and skip one closure allocation per async invocation.
         let mut throw_closure_for_step = throw_closure;
         rewrite_iter_results_to_scratch(&mut throw_closure_for_step);
+        let direct_throw = is_simple_rethrow_closure(&throw_closure_for_step);
         let mut next_body_for_step = next_body;
         rewrite_iter_results_in_stmts(&mut next_body_for_step);
+        let await_fetch_ids: Vec<LocalId> = hoisted
+            .iter()
+            .filter_map(|(id, name, _)| name.starts_with("__await_fetch_").then_some(*id))
+            .collect();
+        rewrite_await_promise_resolve(&mut next_body_for_step, &await_fetch_ids);
         let wrapper_stmts = build_async_step_driver_direct(
             next_body_for_step,
             next_param_id,
             captures.clone(),
             mutable_captures.clone(),
-            throw_closure_for_step,
+            if direct_throw {
+                None
+            } else {
+                Some(throw_closure_for_step)
+            },
             next_local_id,
             next_func_id,
         );
@@ -1531,6 +1542,138 @@ fn build_async_step_driver(
     ]
 }
 
+fn is_simple_rethrow_closure(expr: &Expr) -> bool {
+    let Expr::Closure { params, body, .. } = expr else {
+        return false;
+    };
+    if params.len() != 1 || body.len() != 1 {
+        return false;
+    }
+    matches!(&body[0], Stmt::Throw(Expr::LocalGet(id)) if *id == params[0].id)
+}
+
+fn rewrite_await_promise_resolve(stmts: &mut Vec<Stmt>, await_fetch_ids: &[LocalId]) {
+    for stmt in stmts.iter_mut() {
+        match stmt {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                rewrite_await_promise_resolve(then_branch, await_fetch_ids);
+                if let Some(else_branch) = else_branch {
+                    rewrite_await_promise_resolve(else_branch, await_fetch_ids);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                rewrite_await_promise_resolve(body, await_fetch_ids);
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init) = init.as_mut() {
+                    rewrite_await_promise_resolve_stmt(init, await_fetch_ids);
+                }
+                rewrite_await_promise_resolve(body, await_fetch_ids);
+            }
+            Stmt::Labeled { body, .. } => rewrite_await_promise_resolve_stmt(body, await_fetch_ids),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                rewrite_await_promise_resolve(body, await_fetch_ids);
+                if let Some(catch) = catch {
+                    rewrite_await_promise_resolve(&mut catch.body, await_fetch_ids);
+                }
+                if let Some(finally) = finally {
+                    rewrite_await_promise_resolve(finally, await_fetch_ids);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    rewrite_await_promise_resolve(&mut case.body, await_fetch_ids);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let len = stmts.len();
+    for i in 0..len {
+        let Some((target_id, resolved_arg)) = await_resolve_assignment(&stmts[i]) else {
+            continue;
+        };
+        if await_fetch_ids.contains(&target_id)
+            && block_yields_local_before_rewrite(stmts, i + 1, target_id)
+        {
+            if let Stmt::Expr(Expr::LocalSet(_, rhs)) = &mut stmts[i] {
+                **rhs = resolved_arg;
+            }
+        }
+    }
+}
+
+fn rewrite_await_promise_resolve_stmt(stmt: &mut Stmt, await_fetch_ids: &[LocalId]) {
+    let mut one = vec![stmt.clone()];
+    rewrite_await_promise_resolve(&mut one, await_fetch_ids);
+    if let Some(updated) = one.pop() {
+        *stmt = updated;
+    }
+}
+
+fn await_resolve_assignment(stmt: &Stmt) -> Option<(LocalId, Expr)> {
+    let Stmt::Expr(Expr::LocalSet(target_id, rhs)) = stmt else {
+        return None;
+    };
+    promise_resolve_arg(rhs).map(|arg| (*target_id, arg))
+}
+
+fn promise_resolve_arg(expr: &Expr) -> Option<Expr> {
+    let Expr::Call {
+        callee,
+        args,
+        type_args,
+    } = expr
+    else {
+        return None;
+    };
+    if !type_args.is_empty() || args.len() != 1 {
+        return None;
+    }
+    match callee.as_ref() {
+        Expr::PropertyGet { object, property }
+            if property == "resolve" && matches!(object.as_ref(), Expr::GlobalGet(0)) =>
+        {
+            Some(args[0].clone())
+        }
+        _ => None,
+    }
+}
+
+fn block_yields_local_before_rewrite(stmts: &[Stmt], start: usize, target_id: LocalId) -> bool {
+    for stmt in &stmts[start..] {
+        if iter_result_yields_local(stmt, target_id) {
+            return true;
+        }
+        if stmt_writes_local(stmt, target_id) {
+            return false;
+        }
+    }
+    false
+}
+
+fn iter_result_yields_local(stmt: &Stmt, target_id: LocalId) -> bool {
+    let value = match stmt {
+        Stmt::Expr(Expr::IterResultSet(value, false)) => value.as_ref(),
+        Stmt::Return(Some(Expr::IterResultSet(value, false))) => value.as_ref(),
+        _ => return false,
+    };
+    matches!(value, Expr::LocalGet(id) if *id == target_id)
+}
+
+fn stmt_writes_local(stmt: &Stmt, target_id: LocalId) -> bool {
+    matches!(stmt, Stmt::Expr(Expr::LocalSet(id, _)) if *id == target_id)
+}
+
 /// Like `build_async_step_driver` but skips the `__iter` object
 /// allocation entirely. Used for `was_plain_async = true` generators
 /// where the iter object is never observable from user code (the
@@ -1546,11 +1689,13 @@ fn build_async_step_driver_direct(
     next_param_id: LocalId,
     next_captures: Vec<LocalId>,
     next_mutable_captures: Vec<LocalId>,
-    throw_closure_expr: Expr,
+    throw_closure_expr: Option<Expr>,
     next_local_id: &mut u32,
     next_func_id: &mut u32,
 ) -> Vec<Stmt> {
-    let throw_id = alloc_local(next_local_id);
+    let throw_id = throw_closure_expr
+        .as_ref()
+        .map(|_| alloc_local(next_local_id));
     let step_id = alloc_local(next_local_id);
 
     // Step closure params + locals
@@ -1568,14 +1713,6 @@ fn build_async_step_driver_direct(
     let bool_ty = Type::Boolean;
 
     let promise_global = || Expr::GlobalGet(0);
-    let promise_resolve = |arg: Expr| Expr::Call {
-        callee: Box::new(Expr::PropertyGet {
-            object: Box::new(promise_global()),
-            property: "resolve".to_string(),
-        }),
-        args: vec![arg],
-        type_args: vec![],
-    };
     let promise_reject = |arg: Expr| Expr::Call {
         callee: Box::new(Expr::PropertyGet {
             object: Box::new(promise_global()),
@@ -1617,13 +1754,18 @@ fn build_async_step_driver_direct(
     //   }
     //   if (js_iter_result_get_done()) return Promise.resolve(js_iter_result_get_value());
     //   return AsyncStepChain(js_iter_result_get_value(), __step);
-    let dispatch_inner = Stmt::If {
-        condition: Expr::LocalGet(is_error_param_id),
-        then_branch: vec![Stmt::Expr(Expr::Call {
+    let throw_branch = if let Some(throw_id) = throw_id {
+        vec![Stmt::Expr(Expr::Call {
             callee: Box::new(Expr::LocalGet(throw_id)),
             args: vec![Expr::LocalGet(value_param_id)],
             type_args: vec![],
-        })],
+        })]
+    } else {
+        vec![Stmt::Throw(Expr::LocalGet(value_param_id))]
+    };
+    let dispatch_inner = Stmt::If {
+        condition: Expr::LocalGet(is_error_param_id),
+        then_branch: throw_branch,
         else_branch: Some(else_branch),
     };
 
@@ -1681,9 +1823,11 @@ fn build_async_step_driver_direct(
         })),
     ];
 
-    // step closure captures = next_captures + [throw_id, step_id]
+    // step closure captures = next_captures + [optional throw_id, step_id]
     let mut step_captures: Vec<LocalId> = next_captures;
-    step_captures.push(throw_id);
+    if let Some(throw_id) = throw_id {
+        step_captures.push(throw_id);
+    }
     step_captures.push(step_id);
     step_captures.sort();
     step_captures.dedup();
@@ -1720,18 +1864,21 @@ fn build_async_step_driver_direct(
     };
 
     // Outer wrapper:
-    //   let __throw = <throw_closure>;
+    //   let __throw = <throw_closure>; // only when catch routing needs it
     //   let __step;
     //   __step = <step_closure>;
     //   return __step(undefined, false);
-    vec![
-        Stmt::Let {
+    let mut out = Vec::with_capacity(if throw_closure_expr.is_some() { 4 } else { 3 });
+    if let (Some(throw_id), Some(throw_closure_expr)) = (throw_id, throw_closure_expr) {
+        out.push(Stmt::Let {
             id: throw_id,
             name: "__async_throw".to_string(),
             ty: any_ty.clone(),
             mutable: false,
             init: Some(throw_closure_expr),
-        },
+        });
+    }
+    out.extend([
         Stmt::Let {
             id: step_id,
             name: "__async_step".to_string(),
@@ -1745,7 +1892,8 @@ fn build_async_step_driver_direct(
             args: vec![Expr::Undefined, Expr::Bool(false)],
             type_args: vec![],
         })),
-    ]
+    ]);
+    out
 }
 
 struct State {

@@ -76,6 +76,7 @@ pub static MT_STEP_CHAIN_REUSE_MISS: AtomicU64 = AtomicU64::new(0);
 /// `Promise.resolve(value)` would have done.
 pub static MT_STEP_DONE_REUSE_HIT: AtomicU64 = AtomicU64::new(0);
 pub static MT_STEP_DONE_REUSE_MISS: AtomicU64 = AtomicU64::new(0);
+pub static MT_PROMISE_ALL_DIRECT_FULFILL: AtomicU64 = AtomicU64::new(0);
 
 extern "C" fn mt_profile_atexit() {
     if std::env::var_os("PERRY_MT_PROFILE").is_none() {
@@ -119,6 +120,10 @@ extern "C" fn mt_profile_atexit() {
         "[mt-profile] step_done_reuse: hit={} miss={}",
         MT_STEP_DONE_REUSE_HIT.load(Ordering::Relaxed),
         MT_STEP_DONE_REUSE_MISS.load(Ordering::Relaxed),
+    );
+    eprintln!(
+        "[mt-profile] promise_all_direct_fulfill={}",
+        MT_PROMISE_ALL_DIRECT_FULFILL.load(Ordering::Relaxed),
     );
 }
 
@@ -236,6 +241,14 @@ pub struct Promise {
     pub(crate) on_rejected: ClosurePtr,
     /// Next promise in the chain (for .then())
     pub(crate) next: *mut Promise,
+    /// Promise.all direct-fulfill target promise.
+    pub(crate) all_result: *mut Promise,
+    /// Promise.all direct-fulfill result array.
+    pub(crate) all_results_arr: *mut crate::array::ArrayHeader,
+    /// Promise.all direct-fulfill shared state array.
+    pub(crate) all_state_arr: *mut crate::array::ArrayHeader,
+    /// Promise.all direct-fulfill result index.
+    pub(crate) all_index: u32,
 }
 
 impl Promise {
@@ -247,8 +260,32 @@ impl Promise {
             on_fulfilled: ptr::null(),
             on_rejected: ptr::null(),
             next: ptr::null_mut(),
+            all_result: ptr::null_mut(),
+            all_results_arr: ptr::null_mut(),
+            all_state_arr: ptr::null_mut(),
+            all_index: 0,
         }
     }
+}
+
+#[inline(always)]
+fn promise_all_fulfill_sentinel() -> ClosurePtr {
+    promise_all_fulfill_marker as *const () as usize as ClosurePtr
+}
+
+#[inline(always)]
+fn is_promise_all_fulfill_sentinel(callback: ClosurePtr) -> bool {
+    callback as usize == promise_all_fulfill_marker as *const () as usize
+}
+
+extern "C" fn promise_all_fulfill_marker() {}
+
+#[inline(always)]
+unsafe fn clear_promise_all_link(promise: *mut Promise) {
+    (*promise).all_result = ptr::null_mut();
+    (*promise).all_results_arr = ptr::null_mut();
+    (*promise).all_state_arr = ptr::null_mut();
+    (*promise).all_index = 0;
 }
 
 /// One entry in the microtask queue. Two shapes:
@@ -515,6 +552,7 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
                 (*inner).on_fulfilled = resolve_closure;
                 (*inner).on_rejected = reject_closure;
                 (*inner).next = ptr::null_mut(); // Don't chain, we handle resolution ourselves
+                clear_promise_all_link(inner);
             }
         }
     }
@@ -585,6 +623,7 @@ pub extern "C" fn js_promise_then(
         (*promise).on_fulfilled = on_fulfilled;
         (*promise).on_rejected = on_rejected;
         (*promise).next = next;
+        clear_promise_all_link(promise);
 
         // If already settled, schedule callback immediately. Same propagation
         // rule as `js_promise_resolve`/`js_promise_reject` (#236): push to the
@@ -633,6 +672,7 @@ pub(crate) fn js_promise_attach_handlers(
     unsafe {
         (*promise).on_fulfilled = on_fulfilled;
         (*promise).on_rejected = on_rejected;
+        clear_promise_all_link(promise);
         // No next — caller doesn't want a chained promise.
 
         match (*promise).state {
@@ -643,6 +683,46 @@ pub(crate) fn js_promise_attach_handlers(
                             .push_back(Task::Promise(promise, (*promise).value, true));
                     });
                 }
+            }
+            PromiseState::Rejected => {
+                if !on_rejected.is_null() {
+                    TASK_QUEUE.with(|q| {
+                        q.borrow_mut()
+                            .push_back(Task::Promise(promise, (*promise).reason, false));
+                    });
+                }
+            }
+            PromiseState::Pending => {}
+        }
+    }
+}
+
+fn js_promise_attach_all_fulfill(
+    promise: *mut Promise,
+    result_promise: *mut Promise,
+    results_arr: *mut crate::array::ArrayHeader,
+    state_arr: *mut crate::array::ArrayHeader,
+    index: u32,
+    on_rejected: ClosurePtr,
+) {
+    if promise.is_null() {
+        return;
+    }
+    unsafe {
+        (*promise).on_fulfilled = promise_all_fulfill_sentinel();
+        (*promise).on_rejected = on_rejected;
+        (*promise).next = ptr::null_mut();
+        (*promise).all_result = result_promise;
+        (*promise).all_results_arr = results_arr;
+        (*promise).all_state_arr = state_arr;
+        (*promise).all_index = index;
+
+        match (*promise).state {
+            PromiseState::Fulfilled => {
+                TASK_QUEUE.with(|q| {
+                    q.borrow_mut()
+                        .push_back(Task::Promise(promise, (*promise).value, true));
+                });
             }
             PromiseState::Rejected => {
                 if !on_rejected.is_null() {
@@ -710,6 +790,7 @@ pub extern "C" fn js_promise_finally(
         (*promise).on_fulfilled = fulfill_wrap;
         (*promise).on_rejected = reject_wrap;
         (*promise).next = ptr::null_mut(); // wrappers own next; runner must not touch it
+        clear_promise_all_link(promise);
 
         // If the promise is already settled, push its task now.
         match (*promise).state {
@@ -1002,6 +1083,12 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                                 js_promise_reject((*promise).next, value);
                             }
                         }
+                        ran += 1;
+                        continue;
+                    }
+
+                    if is_fulfilled && is_promise_all_fulfill_sentinel(callback) {
+                        promise_all_fulfill_direct(promise, value);
                         ran += 1;
                         continue;
                     }
@@ -1886,9 +1973,7 @@ extern "C" fn promise_reject_fn(closure: *const crate::closure::ClosureHeader, r
 #[no_mangle]
 pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
     use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_set_f64};
-    use crate::closure::{
-        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    };
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
     use crate::value::js_nanbox_get_pointer;
 
     // Create the result promise
@@ -1966,19 +2051,17 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
 
         let promise_ptr = js_nanbox_get_pointer(promise_f64) as *mut Promise;
 
-        // Create fulfill closure for this promise
-        // Captures: [result_promise, results_arr, state_arr, index]
-        let fulfill_closure = js_closure_alloc(promise_all_fulfill_handler as *const u8, 4);
-        js_closure_set_capture_ptr(fulfill_closure, 0, result_promise as i64);
-        js_closure_set_capture_ptr(fulfill_closure, 1, results_arr as i64);
-        js_closure_set_capture_ptr(fulfill_closure, 2, state_arr as i64);
-        js_closure_set_capture_f64(fulfill_closure, 3, i as f64);
-
-        // Attach handlers to the promise WITHOUT allocating a `next`
-        // Promise — the return of `then` is unused here. Saves one
-        // promise alloc per input on Promise.all (50k for the
-        // 1000-batch × 50-input bench).
-        js_promise_attach_handlers(promise_ptr, fulfill_closure, shared_reject_closure);
+        // Attach a direct Promise.all fulfillment continuation without a
+        // per-input Closure allocation. Rejections still share one closure
+        // across the whole Promise.all call because they do not carry an index.
+        js_promise_attach_all_fulfill(
+            promise_ptr,
+            result_promise,
+            results_arr,
+            state_arr,
+            i,
+            shared_reject_closure,
+        );
     }
 
     // Check if all were non-promises (already resolved)
@@ -1991,42 +2074,38 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
     result_promise
 }
 
-/// Internal handler called when a promise in Promise.all fulfills
-extern "C" fn promise_all_fulfill_handler(
-    closure: *const crate::closure::ClosureHeader,
-    value: f64,
-) -> f64 {
-    use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
+#[inline(always)]
+unsafe fn promise_all_fulfill_direct(promise: *mut Promise, value: f64) {
+    use crate::array::js_array_set_f64;
 
-    let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let results_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
-    let state_arr = js_closure_get_capture_ptr(closure, 2) as *mut ArrayHeader;
+    bump(&MT_PROMISE_ALL_DIRECT_FULFILL);
+
+    let result_promise = (*promise).all_result;
+    let results_arr = (*promise).all_results_arr;
+    let state_arr = (*promise).all_state_arr;
+    let index = (*promise).all_index;
     if result_promise.is_null() || results_arr.is_null() || state_arr.is_null() {
-        return 0.0;
+        return;
     }
-    let index = js_closure_get_capture_f64(closure, 3) as u32;
 
-    // Check if already rejected
-    let rejected = js_array_get_f64(state_arr, 1);
+    // Check if already rejected.
+    let rejected = crate::array::js_array_get_f64(state_arr, 1);
     if rejected != 0.0 {
-        return 0.0;
+        clear_promise_all_link(promise);
+        return;
     }
 
-    // Store the resolved value
     js_array_set_f64(results_arr, index, value);
 
-    // Decrement remaining count
-    let remaining = js_array_get_f64(state_arr, 0) - 1.0;
+    let remaining = crate::array::js_array_get_f64(state_arr, 0) - 1.0;
     js_array_set_f64(state_arr, 0, remaining);
 
-    // If all promises have resolved, resolve the result promise with the array
     if remaining == 0.0 {
         let arr_f64 = crate::value::js_nanbox_pointer(results_arr as i64);
         js_promise_resolve(result_promise, arr_f64);
     }
 
-    0.0
+    clear_promise_all_link(promise);
 }
 
 /// Internal handler called when a promise in Promise.all rejects
