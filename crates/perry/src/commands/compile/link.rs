@@ -1521,6 +1521,46 @@ pub(super) fn build_and_run_link(
                     );
                     cmd.arg("-lshumate-1.0");
                 }
+                // WebKitGTK 6.0 + libsoup-3.0 — perry/ui WebView (#658, v0.5.864).
+                // perry-ui-gtk4's webkit6/soup3 deps reference symbols like
+                // `soup_check_version` from libsoup-3.0 transitively; without
+                // explicit `-lsoup-3.0` ld errors with `DSO missing from
+                // command line`. Same pkg-config → hardcoded-fallback shape
+                // as GTK4 / GStreamer / shumate above.
+                let mut got_webkit_libs = false;
+                let webkit_pc_out = Command::new("pkg-config")
+                    .args(["--libs", "webkitgtk-6.0", "libsoup-3.0"])
+                    .output();
+                if let Ok(ref output) = webkit_pc_out {
+                    if output.status.success() {
+                        let libs = String::from_utf8_lossy(&output.stdout);
+                        for flag in libs.trim().split_whitespace() {
+                            cmd.arg(flag);
+                        }
+                        got_webkit_libs = true;
+                    }
+                }
+                if !got_webkit_libs {
+                    eprintln!(
+                        "Warning: `pkg-config --libs webkitgtk-6.0 libsoup-3.0` \
+                         did not return WebKitGTK linker flags ({}). Falling \
+                         back to a hardcoded set — install `libwebkitgtk-6.0-dev` \
+                         (Debian/Ubuntu) which pulls libsoup-3.0-dev + \
+                         libjavascriptcoregtk-6.0-dev to silence this warning.",
+                        match &webkit_pc_out {
+                            Err(e) => format!("pkg-config not runnable: {e}"),
+                            Ok(o) if !o.status.success() => format!(
+                                "pkg-config exited {}: {}",
+                                o.status.code().unwrap_or(-1),
+                                String::from_utf8_lossy(&o.stderr).trim()
+                            ),
+                            Ok(_) => "no output".to_string(),
+                        }
+                    );
+                    for lib in ["-lwebkitgtk-6.0", "-ljavascriptcoregtk-6.0", "-lsoup-3.0"] {
+                        cmd.arg(lib);
+                    }
+                }
             } else if is_windows {
                 // Win32 system libs already linked above
             } else {

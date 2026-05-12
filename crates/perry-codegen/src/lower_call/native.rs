@@ -1161,6 +1161,11 @@ pub(crate) fn lower_native_method_call(
         && method != "App"
         && method != "VStack"
         && method != "HStack"
+        // Image + WebView have option-bag handlers further down that
+        // do their own arg destructuring; they're not in perry_ui_table
+        // so they must skip this catch-all bail.
+        && method != "Image"
+        && method != "WebView"
     {
         if let Some(sig) = perry_ui_table_lookup(method) {
             return lower_perry_ui_table_call(ctx, sig, args);
