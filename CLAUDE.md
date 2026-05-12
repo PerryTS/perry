@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.866
+**Current Version:** 0.5.867
 
 
 ## TypeScript Parity Status
@@ -21,7 +21,13 @@ Tracked via the gap test suite (`test-files/test_gap_*.ts`, 28 tests). Compared 
 
 ## Workflow Requirements
 
-**IMPORTANT:** Follow these practices for every code change made directly on `main` (maintainer workflow):
+**Default flow is PR-based.** `main` is protected: pushes require a pull request, CI must pass (`lint`, `cargo-test`, `parity`, `compile-smoke`, `api-docs-drift`, `security-audit`), and only squash or rebase merges are allowed (no merge commits, linear history enforced). Admins can bypass for hotfixes/version bumps, but the standard path is:
+
+1. Branch from `main`, push, open a PR.
+2. Wait for required checks to go green.
+3. Squash- or rebase-merge. The PR branch auto-deletes on merge.
+
+**For every change that lands on `main`** (whether via PR or admin bypass):
 
 1. **Bump version**: Increment patch in `[workspace.package].version` in `Cargo.toml` and the `**Current Version:**` line above. That is the ONLY metadata edit CLAUDE.md needs.
 2. **Add changelog entry**: Prepend a new `## v0.5.x — <one-line summary>` block at the top of `CHANGELOG.md`. Detail can go below in the same block — long-form root-cause writeups, file paths, validation notes, etc. all belong here, NOT in CLAUDE.md.
