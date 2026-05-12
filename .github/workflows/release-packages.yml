@@ -27,7 +27,11 @@ jobs:
   # ---------------------------------------------------------------------------
   await-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Job-level timeout must match the bash `deadline=$(( SECONDS + 90 * 60 ))`
+    # below. v0.5.876 bumped the bash deadline to 90 but missed this — the
+    # job got cancelled at the 60-min wall on v0.5.878 even though macOS
+    # doc-tests succeeded 2 minutes later. Both must move together.
+    timeout-minutes: 90
     steps:
       - name: Wait for Tests + Simulator Tests (iOS) to pass
         env:
@@ -54,13 +58,13 @@ jobs:
           # of burning the 45-min budget.
           for wf_file in "test.yml" "simctl-tests.yml"; do
             echo "::group::Waiting for $wf_file"
-            # 60-min budget per workflow. Bumped from 45 → 60 after v0.5.386's
-            # release-packages run timed out at the 45-min wall while the
-            # newer Tests run on the same SHA was still in its doc-tests
-            # leg (40-50 min total). Tests on macos-14 routinely takes 50+
-            # min wall, so 45 min was always cutting it close. 60 min still
-            # well under the GitHub workflow-level 6h timeout.
-            deadline=$(( SECONDS + 60 * 60 ))
+            # 90-min budget per workflow. v0.5.875 timed out at the 60-min
+            # wall while Tests was still in its macOS doc-tests leg — Tests
+            # wall-time has grown past 60 min as the doc-tests suite + cargo
+            # rebuild costs add up. 90 still well under GitHub's 6h cap, and
+            # ~20 min headroom over typical Tests finish absorbs cold-cache
+            # variance.
+            deadline=$(( SECONDS + 90 * 60 ))
             retry_on_error=1
             while :; do
               set +e
