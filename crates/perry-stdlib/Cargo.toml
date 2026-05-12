@@ -296,7 +296,7 @@ md-5 = { version = "0.10", optional = true }
 hex = { version = "0.4", optional = true }
 hmac = { version = "0.12", optional = true }
 bcrypt = { version = "0.15", optional = true }
-jsonwebtoken = { version = "10.3", optional = true, default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "10.4", optional = true, default-features = false, features = ["rust_crypto", "use_pem"] }
 aes = { version = "0.8", optional = true }
 cbc = { version = "0.1", optional = true }
 scrypt = { version = "0.11", optional = true }

@@ -20,7 +20,7 @@ perry-ffi.workspace = true
 # `from_rsa_pem` (used by APNs / FCM signing flows). `rust_crypto`
 # keeps the deps tree small relative to `aws_lc_rs`; users who
 # need FIPS validation can fork.
-jsonwebtoken = { version = "10.3", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "10.4", default-features = false, features = ["rust_crypto", "use_pem"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = "0.22"
