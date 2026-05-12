@@ -34,7 +34,7 @@ jobs:
         run: |
           ./docs/i18n.sh build-all
           cp docs/CNAME docs/book/CNAME
-      - uses: actions/configure-pages@v4
+      - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/book
