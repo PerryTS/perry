@@ -2,6 +2,12 @@
 // docs/src/ui/tray.md
 // docs: docs/src/ui/tray.md
 // platforms: macos, linux, windows
+// run: false
+//
+// `run: false` because headless macOS CI runners hit a
+// CGSConnectionByID assertion (window-server not available without
+// a logged-in session). Compile-link is enough to certify the FFI
+// surface, which is the contract this file guards.
 
 import {
     App,
