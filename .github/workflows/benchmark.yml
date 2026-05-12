@@ -136,7 +136,7 @@ jobs:
 
       - name: Upload benchmark results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-results-${{ github.sha }}
           path: |
@@ -236,7 +236,7 @@ jobs:
 
       - name: Upload binary size results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-sizes-${{ github.sha }}
           path: .bench-results/binary-sizes.json
@@ -286,7 +286,7 @@ jobs:
 
       - name: Upload compile-time results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compile-time-${{ github.sha }}
           path: .bench-results/compile-time.json

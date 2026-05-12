@@ -246,7 +246,7 @@ jobs:
 
       - name: Upload parity report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: parity-report
           path: test-parity/reports/latest.json
@@ -258,7 +258,7 @@ jobs:
       # error message rather than inferring from the test family.
       - name: Upload compile-error logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: parity-compile-errors-${{ runner.os }}
           path: test-parity/output/*.compile_error.log
@@ -489,7 +489,7 @@ jobs:
 
       - name: Upload compile-smoke error logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compile-smoke-error-logs
           path: /tmp/perry_smoke_logs/*.compile_error.log
@@ -812,14 +812,14 @@ jobs:
 
       - name: Upload doc-tests report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: doc-tests-report-${{ matrix.os }}
           path: docs/examples/_reports/latest.json
 
       - name: Upload gallery screenshot + diff artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gallery-screenshots-${{ matrix.os }}
           path: |
@@ -855,7 +855,7 @@ jobs:
           cat /tmp/sizes.md
 
       - name: Upload size report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-sizes
           path: /tmp/sizes.md
