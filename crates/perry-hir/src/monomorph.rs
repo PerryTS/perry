@@ -1872,6 +1872,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
         extends: class.extends,  // TODO: Handle generic extends
         extends_name: class.extends_name.clone(),
         native_extends: class.native_extends.clone(),
+        extends_expr: class.extends_expr.clone(),
         fields: class
             .fields
             .iter()

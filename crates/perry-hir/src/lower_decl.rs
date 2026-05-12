@@ -643,7 +643,7 @@ pub(crate) fn lower_class_decl(
     ctx.enter_type_param_scope(&type_params);
 
     // Handle extends clause
-    let (extends, extends_name, native_extends) =
+    let (extends, extends_name, native_extends, extends_expr) =
         if let Some(ref super_class) = class_decl.class.super_class {
             if let ast::Expr::Ident(ident) = super_class.as_ref() {
                 let parent_name = ident.sym.to_string();
@@ -680,10 +680,10 @@ pub(crate) fn lower_class_decl(
                     // dispatch resolves through the existing extends_name
                     // path while the native_extends carries the (module,
                     // class) tag for the runtime shim).
-                    (None, Some(parent_name), native_parent)
+                    (None, Some(parent_name), native_parent, None)
                 } else {
                     // Always capture the parent name for imported classes that may not have a ClassId
-                    (ctx.lookup_class(&parent_name), Some(parent_name), None)
+                    (ctx.lookup_class(&parent_name), Some(parent_name), None, None)
                 }
             } else if let ast::Expr::Member(member) = super_class.as_ref() {
                 // Handle member expression like ethers.JsonRpcProvider or module.ClassName
@@ -697,12 +697,28 @@ pub(crate) fn lower_class_decl(
                 // Class names are unique enough in practice that `lookup_class`
                 // resolves; if it doesn't, we fall back to the prior
                 // name-only behavior (no regression for unknown parents).
-                (ctx.lookup_class(&parent_name), Some(parent_name), None)
+                (ctx.lookup_class(&parent_name), Some(parent_name), None, None)
             } else {
-                (None, None, None)
+                // Issue #711: `class X extends fn(...)` / `class X extends
+                // new Foo(...)` etc. The super-class expression isn't
+                // statically resolvable to a known class. Lower the
+                // expression so codegen can evaluate it at the class
+                // declaration site and call
+                // `js_register_class_parent_dynamic` to wire the parent
+                // edge into CLASS_REGISTRY at runtime. Both `extends` and
+                // `extends_name` stay None — the parent class_id is only
+                // known once the expression evaluates. Lowering errors
+                // here are non-fatal: fall back to a parentless class so
+                // the rest of the program still compiles (the
+                // method-dispatch catch-all in object.rs surfaces the
+                // missing-method case clearly enough).
+                match lower_expr(ctx, super_class) {
+                    Ok(expr) => (None, None, None, Some(Box::new(expr))),
+                    Err(_) => (None, None, None, None),
+                }
             }
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
 
     // First pass: collect static field/method names for early registration
@@ -1567,6 +1583,7 @@ pub(crate) fn lower_class_decl(
         extends,
         extends_name,
         native_extends,
+        extends_expr,
         fields,
         constructor,
         methods,
@@ -1617,7 +1634,7 @@ pub(crate) fn lower_class_from_ast(
 
     ctx.enter_type_param_scope(&type_params);
 
-    let (extends, extends_name, native_extends) = if let Some(ref super_class) = class.super_class {
+    let (extends, extends_name, native_extends, extends_expr) = if let Some(ref super_class) = class.super_class {
         if let ast::Expr::Ident(ident) = super_class.as_ref() {
             let parent_name = ident.sym.to_string();
             let native_parent = match parent_name.as_str() {
@@ -1641,9 +1658,9 @@ pub(crate) fn lower_class_from_ast(
                 _ => None,
             };
             if native_parent.is_some() {
-                (None, Some(parent_name), native_parent)
+                (None, Some(parent_name), native_parent, None)
             } else {
-                (ctx.lookup_class(&parent_name), Some(parent_name), None)
+                (ctx.lookup_class(&parent_name), Some(parent_name), None, None)
             }
         } else if let ast::Expr::Member(member) = super_class.as_ref() {
             // Refs #488 drizzle-sqlite: try cross-module class lookup. See
@@ -1651,12 +1668,20 @@ pub(crate) fn lower_class_from_ast(
             // rationale — without this, the parent link is lost and
             // inherited methods don't reach instances.
             let parent_name = extract_member_class_name(member);
-            (ctx.lookup_class(&parent_name), Some(parent_name), None)
+            (ctx.lookup_class(&parent_name), Some(parent_name), None, None)
         } else {
-            (None, None, None)
+            // Issue #711: see the matching arm in `lower_class_decl` above
+            // for the full rationale. Capture the lowered extends
+            // expression so codegen can evaluate it at the class
+            // declaration site and call
+            // `js_register_class_parent_dynamic` at runtime.
+            match lower_expr(ctx, super_class) {
+                Ok(expr) => (None, None, None, Some(Box::new(expr))),
+                Err(_) => (None, None, None, None),
+            }
         }
     } else {
-        (None, None, None)
+        (None, None, None, None)
     };
 
     let mut static_field_names = Vec::new();
@@ -1844,6 +1869,7 @@ pub(crate) fn lower_class_from_ast(
         extends,
         extends_name,
         native_extends,
+        extends_expr,
         fields,
         constructor,
         methods,

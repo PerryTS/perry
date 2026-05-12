@@ -9603,6 +9603,33 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             Ok(v)
         }
+        // Issue #711: dynamic parent-class registration for `class X
+        // extends fn(...)` shapes. Evaluate the extends expression and
+        // call `js_register_class_parent_dynamic(child_cid, value)`,
+        // which extracts a class_id from the value (ClassRef payload
+        // for INT32-tagged, ObjectHeader.class_id for POINTER-tagged)
+        // and wires the parent edge into CLASS_REGISTRY. No-op if the
+        // value carries no class_id — preserves the parentless
+        // baseline rather than throwing during module init.
+        Expr::RegisterClassParentDynamic {
+            class_name,
+            parent_expr,
+        } => {
+            let val = lower_expr(ctx, parent_expr)?;
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                if class_id != 0 {
+                    let cid_str = class_id.to_string();
+                    ctx.block().call_void(
+                        "js_register_class_parent_dynamic",
+                        &[(crate::types::I32, &cid_str), (DOUBLE, &val)],
+                    );
+                }
+            }
+            // Yield undefined — this expression is always wrapped in
+            // `Stmt::Expr` for its side effect; the return value isn't
+            // observable to user code.
+            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        }
         // `static [Symbol.for("k")] = "v"` — register in the runtime's
         // class-static-symbol side table. Refs #420 (drizzle).
         Expr::ClassStaticSymbolSet {

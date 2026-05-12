@@ -398,6 +398,9 @@ where
             f(key);
             f(value);
         }
+        Expr::RegisterClassParentDynamic { parent_expr, .. } => {
+            f(parent_expr);
+        }
         Expr::IndexGet { object, index } => {
             f(object);
             f(index);
@@ -1570,6 +1573,9 @@ where
         Expr::ClassStaticSymbolSet { key, value, .. } => {
             f(key);
             f(value);
+        }
+        Expr::RegisterClassParentDynamic { parent_expr, .. } => {
+            f(parent_expr);
         }
         Expr::IndexGet { object, index } => {
             f(object);

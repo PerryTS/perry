@@ -1566,6 +1566,61 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
     }
 }
 
+/// Issue #711: dynamic parent-class registration for
+/// `class X extends fn(...)` shapes where the parent class_id is only
+/// known at runtime. Called from codegen-emitted module-init code at
+/// the source-order position of the class declaration (so the
+/// extends expression's free variables — imports, top-level `let`s,
+/// factory functions — are already initialized by the time we
+/// evaluate the parent).
+///
+/// `parent_value` is the evaluated extends expression as a Perry
+/// NaN-boxed value. We resolve a parent class_id from it via:
+///   1. INT32-tagged ClassRef (the value `String$` produces) — the
+///      payload IS the class_id, verified against REGISTERED_CLASS_IDS.
+///   2. POINTER-tagged Object instance (the value a `make<T>(...)`
+///      factory might return when it constructs and returns an
+///      object) — read `class_id` from the ObjectHeader.
+/// Anything else (closures, primitives, null/undefined) is a no-op:
+/// the class stays parentless, identical to the pre-#711 behavior.
+/// Self-registration (`parent_cid == class_id`) is rejected so a
+/// recursive helper that returns its receiver can't create a cycle.
+#[no_mangle]
+pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: f64) {
+    let bits = parent_value.to_bits();
+    let tag = bits & 0xFFFF_0000_0000_0000;
+    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+
+    let parent_cid: u32 = if tag == INT32_TAG {
+        // ClassRef: lower 32 bits are the class id. Verify it's
+        // actually a registered class id before trusting it.
+        let payload = bits as u32;
+        if payload == 0 {
+            0
+        } else {
+            let guard = REGISTERED_CLASS_IDS.read().unwrap();
+            match guard.as_ref() {
+                Some(set) if set.contains(&payload) => payload,
+                _ => 0,
+            }
+        }
+    } else if tag == POINTER_TAG {
+        // Object instance: read class_id from the ObjectHeader.
+        let ptr = crate::value::js_nanbox_get_pointer(parent_value) as *const ObjectHeader;
+        // `js_object_get_class_id` guards against null / non-object
+        // pointers (Set/Map/Regex headers, small handles) and
+        // returns 0 for invalid receivers — no further check needed.
+        js_object_get_class_id(ptr)
+    } else {
+        0
+    };
+
+    if parent_cid != 0 && parent_cid != class_id {
+        register_class(class_id, parent_cid);
+    }
+}
+
 /// Look up parent class ID from the registry
 fn get_parent_class_id(class_id: u32) -> Option<u32> {
     let registry = CLASS_REGISTRY.read().unwrap();

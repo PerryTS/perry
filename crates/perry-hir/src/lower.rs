@@ -1017,6 +1017,7 @@ impl LoweringContext {
             extends: None,
             extends_name: None,
             native_extends: None,
+            extends_expr: None,
             fields,
             constructor: Some(constructor),
             methods: Vec::new(),
@@ -4350,6 +4351,15 @@ fn lower_module_decl(
                 ast::Decl::Class(class_decl) => {
                     let class = lower_class_decl(ctx, class_decl, true)?;
                     let class_name = class.name.clone();
+                    // Issue #711: dynamic parent-class registration at the
+                    // source position (see non-export class arm below for
+                    // rationale).
+                    if let Some(extends_expr) = &class.extends_expr {
+                        module.init.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                            class_name: class_name.clone(),
+                            parent_expr: extends_expr.clone(),
+                        }));
+                    }
                     // Inject static-field-init statements in source order
                     // (see non-export class arm below for rationale).
                     for sf in &class.static_fields {
@@ -4781,6 +4791,7 @@ fn lower_namespace_as_class(
                 extends: None,
                 extends_name: None,
                 native_extends: None,
+                extends_expr: None,
                 fields: Vec::new(),
                 constructor: None,
                 methods: Vec::new(),
@@ -4961,6 +4972,7 @@ fn lower_namespace_as_class(
         extends: None,
         extends_name: None,
         native_extends: None,
+        extends_expr: None,
         fields: Vec::new(),
         constructor: None,
         methods: Vec::new(),
@@ -5721,6 +5733,19 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                 }
                 ast::Decl::Class(class_decl) => {
                     let class = lower_class_decl(ctx, class_decl, false)?;
+                    // Issue #711: emit dynamic parent-class registration
+                    // at the source-order position of the class declaration
+                    // BEFORE the static-field-init stmts. Static field
+                    // initializers may reference inherited static methods,
+                    // and method dispatch reads the parent chain — wiring
+                    // the parent edge first keeps the inherited lookup
+                    // path consistent for those inits.
+                    if let Some(extends_expr) = &class.extends_expr {
+                        module.init.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                            class_name: class.name.clone(),
+                            parent_expr: extends_expr.clone(),
+                        }));
+                    }
                     // Inject static-field-init statements at the source
                     // position of the class declaration. Per ES spec, a
                     // class declaration's static initializers run when the

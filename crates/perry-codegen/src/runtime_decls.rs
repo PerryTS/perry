@@ -660,6 +660,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // allocators register on every alloc; the inline allocator skips
     // the alloc-site call and relies on this one-time registration.
     module.declare_function("js_register_class_parent", VOID, &[I32, I32]);
+    // Issue #711: dynamic parent registration for `class X extends fn(...)`
+    // shapes. Codegen emits at the class-declaration source position in
+    // module.init (lower.rs); the runtime helper extracts the parent
+    // class_id from the value (ClassRef payload or ObjectHeader.class_id)
+    // and wires the (child, parent) edge into CLASS_REGISTRY.
+    module.declare_function("js_register_class_parent_dynamic", VOID, &[I32, DOUBLE]);
     module.declare_function("js_typeerror_new", I64, &[I64]);
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);

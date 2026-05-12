@@ -550,6 +550,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             extends: None,
             extends_name: ic.parent_name.clone(),
             native_extends: None,
+            extends_expr: None,
             fields: ic
                 .field_names
                 .iter()
