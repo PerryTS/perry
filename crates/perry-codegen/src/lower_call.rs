@@ -488,6 +488,33 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         }
     }
 
+    // #691 Phase 2: calling the current step closure via TLS.
+    // `build_async_step_driver_direct` emits this for the catch arm's
+    // `__step(e, true)` recursive re-entry — there's no captured
+    // local to refer to anymore, so the callee is read out of TLS.
+    // Dispatches through the same `js_closure_call<N>` family.
+    if matches!(callee, Expr::CurrentStepClosure) {
+        let recv_box = lower_expr(ctx, callee)?;
+        let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+        for a in args {
+            lowered_args.push(lower_expr(ctx, a)?);
+        }
+        if lowered_args.len() > 16 {
+            bail!(
+                "perry-codegen Phase D.1: CurrentStepClosure call with {} args (max 16)",
+                lowered_args.len()
+            );
+        }
+        let blk = ctx.block();
+        let closure_handle = unbox_to_i64(blk, &recv_box);
+        let runtime_fn = format!("js_closure_call{}", lowered_args.len());
+        let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
+        for v in &lowered_args {
+            call_args.push((DOUBLE, v.as_str()));
+        }
+        return Ok(blk.call(DOUBLE, &runtime_fn, &call_args));
+    }
+
     // Closure-typed local call: `counter()` where `counter` is a
     // local of `Type::Function(...)`. Dispatch through the runtime
     // `js_closure_call<N>` family — the runtime extracts the function

@@ -56,6 +56,24 @@ pub(super) fn is_commonjs(source: &str) -> bool {
 /// being wrapped — used to resolve `require('./relative')` targets when
 /// peeking at re-export wrappers' transitive named exports.
 pub(super) fn wrap_commonjs(source: &str, source_path: &Path) -> String {
+    // Issue #665 (fifth pass): rewrite `module.exports = class X { ... };`
+    // expressions into declaration form + bare-identifier assignment so the
+    // existing hoist + direct-default-export machinery surfaces the class.
+    // Without this, the leaf `module.exports = class Abstract { ... };` shape
+    // (rate-limiter-flexible/lib/RateLimiterAbstract.js) leaves `_cjs` as the
+    // module's default — opaque to compile.rs's class-identity tracking, so
+    // a downstream `class Memory extends RateLimiterAbstract { constructor(o){
+    // super(o); ... } }` silently no-ops the parent constructor. The fix
+    // mirrors the declaration-form path that v0.5.839 already wired up.
+    let owned_source;
+    let source: &str = match rewrite_module_exports_class_expression(source) {
+        Some(rewritten) => {
+            owned_source = rewritten;
+            &owned_source
+        }
+        None => source,
+    };
+
     let require_specs = extract_require_specifiers(source);
 
     // Issue #652: hoist top-level `class X { ... }` declarations OUT of the
@@ -712,6 +730,210 @@ fn extract_require_aliases_with_ranges(source: &str) -> Vec<(String, String, (us
         }
     }
     out
+}
+
+/// Issue #665 (fifth pass): rewrite the leaf-file shape
+/// `module.exports = class Name { ... };` into declaration form
+/// `class Name { ... }\nmodule.exports = Name;` so the existing
+/// `extract_top_level_class_decls` + `extract_single_module_exports_assignment`
+/// pipeline can surface the class as a module-scope binding. Returns the
+/// rewritten source on success; `None` when the input does not match the
+/// pattern (rest of the pipeline runs unchanged in that case).
+///
+/// This is the class-expression counterpart to the v0.5.839 fix, which
+/// only handled the declaration form. Real-world packages like
+/// rate-limiter-flexible (`lib/RateLimiterAbstract.js`) ship the
+/// expression form, which made `super(opts)` calls from child classes
+/// silently no-op the parent constructor — the consumer's `import X` saw
+/// only the opaque `_cjs` IIFE result, never registered class identity
+/// in compile.rs, and codegen's super-call dispatch fell through to the
+/// no-parent-in-ctx branch.
+///
+/// Defensive constraints (returns `None` if any fails):
+///   - exactly one top-level `module.exports = ...` assignment exists
+///   - that assignment is anchored at column 0 (no leading whitespace)
+///   - the RHS starts with `class\b`
+///   - the class body is brace-balanced (with string/template/comment skip)
+///   - the chosen class name does not collide with any existing top-level
+///     `class <Name>` declaration in the source
+fn rewrite_module_exports_class_expression(source: &str) -> Option<String> {
+    // Find every `module.exports = ...` assignment at column 0. Multiple
+    // (possibly conflicting) targets disqualify the rewrite — the IIFE's
+    // last-assignment-wins semantics must keep running through `_cjs`.
+    let any_assign_re = regex::Regex::new(r#"(?m)^module\.exports[\t ]*="#).ok()?;
+    let assigns: Vec<_> = any_assign_re.find_iter(source).collect();
+    if assigns.len() != 1 {
+        return None;
+    }
+    let assign = &assigns[0];
+    let assign_start = assign.start();
+    let assign_end_byte = assign.end();
+
+    let bytes = source.as_bytes();
+
+    // Locate the `class` keyword after `module.exports =` (with optional
+    // intervening spaces / tabs — we don't cross newlines into the RHS).
+    let mut p = assign_end_byte;
+    while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
+        p += 1;
+    }
+    let class_kw_start = p;
+    if class_kw_start + "class".len() > bytes.len() {
+        return None;
+    }
+    if &bytes[class_kw_start..class_kw_start + "class".len()] != b"class" {
+        return None;
+    }
+    // `class` must be followed by a non-identifier character (whitespace,
+    // `{`, etc.) so we don't match `classify` or similar.
+    let after_kw = class_kw_start + "class".len();
+    if after_kw >= bytes.len() {
+        return None;
+    }
+    let next = bytes[after_kw];
+    let is_ident_cont = next.is_ascii_alphanumeric() || next == b'_' || next == b'$';
+    if is_ident_cont {
+        return None;
+    }
+    p = after_kw;
+
+    // Skip whitespace (including newlines — the class body can span lines,
+    // and the optional name may sit on the next line in rare formatting).
+    while p < bytes.len() && bytes[p].is_ascii_whitespace() {
+        p += 1;
+    }
+
+    // Optional class name.
+    let name_start = p;
+    while p < bytes.len()
+        && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] == b'$')
+    {
+        p += 1;
+    }
+    let name_end = p;
+    let parsed_name = if name_end > name_start {
+        Some(
+            std::str::from_utf8(&bytes[name_start..name_end])
+                .ok()?
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    // Scan forward to the opening `{` of the class body. `extends X`
+    // clauses live here and may include member access / call expressions,
+    // but not newlines that exit the declaration head — class bodies
+    // always open with `{` before any executable statement.
+    while p < bytes.len() && bytes[p] != b'{' {
+        p += 1;
+    }
+    if p >= bytes.len() {
+        return None;
+    }
+    let body_start = p;
+
+    // Brace-balanced scan, skipping string / template / line-comment /
+    // block-comment contents. Mirrors the logic in
+    // `extract_top_level_class_decls`.
+    let mut depth: i32 = 0;
+    let mut r = body_start;
+    while r < bytes.len() {
+        match bytes[r] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    r += 1;
+                    break;
+                }
+            }
+            b'"' | b'\'' => {
+                let quote = bytes[r];
+                r += 1;
+                while r < bytes.len() && bytes[r] != quote {
+                    if bytes[r] == b'\\' && r + 1 < bytes.len() {
+                        r += 2;
+                        continue;
+                    }
+                    r += 1;
+                }
+            }
+            b'`' => {
+                r += 1;
+                while r < bytes.len() && bytes[r] != b'`' {
+                    if bytes[r] == b'\\' && r + 1 < bytes.len() {
+                        r += 2;
+                        continue;
+                    }
+                    r += 1;
+                }
+            }
+            b'/' if r + 1 < bytes.len() && bytes[r + 1] == b'/' => {
+                r += 2;
+                while r < bytes.len() && bytes[r] != b'\n' {
+                    r += 1;
+                }
+            }
+            b'/' if r + 1 < bytes.len() && bytes[r + 1] == b'*' => {
+                r += 2;
+                while r + 1 < bytes.len() && !(bytes[r] == b'*' && bytes[r + 1] == b'/') {
+                    r += 1;
+                }
+                if r + 1 < bytes.len() {
+                    r += 2;
+                }
+            }
+            _ => {}
+        }
+        r += 1;
+    }
+    if depth != 0 {
+        return None;
+    }
+    let body_end = r;
+
+    // Optional trailing whitespace + optional `;` to consume.
+    let mut q = body_end;
+    while q < bytes.len() && (bytes[q] == b' ' || bytes[q] == b'\t') {
+        q += 1;
+    }
+    if q < bytes.len() && bytes[q] == b';' {
+        q += 1;
+    }
+
+    // Pick the name to use in the rewritten declaration. Anonymous gets
+    // a synthetic name. Reject if a top-level `class <ChosenName>`
+    // declaration already exists — we don't want to emit duplicates.
+    let chosen_name = parsed_name
+        .clone()
+        .unwrap_or_else(|| "__perry_cjs_default__".to_string());
+    let collision_pattern = format!(r#"(?m)^class[\t ]+{}\b"#, regex::escape(&chosen_name));
+    let collision_re = regex::Regex::new(&collision_pattern).ok()?;
+    if collision_re.is_match(source) {
+        return None;
+    }
+
+    // Build the replacement. Use the original class head when named
+    // (`class Foo extends Bar `) so any extends clause survives byte-for-byte.
+    // For anonymous, inject the synthetic name between `class` and the rest.
+    let class_head = if parsed_name.is_some() {
+        std::str::from_utf8(&bytes[class_kw_start..body_start])
+            .ok()?
+            .to_string()
+    } else {
+        let after_class_kw = std::str::from_utf8(&bytes[after_kw..body_start]).ok()?;
+        format!("class {}{}", chosen_name, after_class_kw)
+    };
+    let class_body = std::str::from_utf8(&bytes[body_start..body_end]).ok()?;
+    let replacement = format!(
+        "{}{}\nmodule.exports = {};",
+        class_head, class_body, chosen_name
+    );
+
+    let mut s = source.to_string();
+    s.replace_range(assign_start..q, &replacement);
+    Some(s)
 }
 
 /// Issue #652: extract top-level `class X { ... }` declarations from the CJS
@@ -1413,6 +1635,126 @@ mod tests {
         assert!(
             wrapped.contains("export { RateLimiterRedis as RateLimiterRedis };"),
             "expected direct re-export of RateLimiterRedis, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_rewrites_module_exports_class_expression_named() {
+        // Issue #665 (fifth pass): `module.exports = class Abstract { ... };`
+        // (rate-limiter-flexible/lib/RateLimiterAbstract.js shape). The
+        // expression is rewritten to declaration form so the existing
+        // hoist + direct-default-export pipeline surfaces the class as a
+        // module-scope binding, restoring class identity for the
+        // consumer's `import RateLimiterAbstract from "..."`.
+        let src = "module.exports = class Abstract {\n  hello() { return 1; }\n};";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/abstract.js"));
+        assert!(
+            wrapped.contains("export default Abstract;"),
+            "expected direct default export of Abstract, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("export { Abstract };"),
+            "expected named re-export of Abstract for class identity, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("export default _cjs;"),
+            "should bypass _cjs for class-expression default export, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_rewrites_module_exports_class_expression_with_extends() {
+        // Class expressions with extends — the extends clause must survive
+        // the rewrite so the consumer's class-identity propagation works
+        // through the IIFE-emitted parent binding.
+        let src = "var Base = require('./base');\n\
+                   module.exports = class Child extends Base {\n  m() { return 2; }\n};";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/child.js"));
+        assert!(
+            wrapped.contains("class Child extends Base {"),
+            "expected hoisted declaration to keep extends clause, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("export default Child;"),
+            "expected direct default export of Child, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("export { Child };"),
+            "expected named re-export of Child, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_rewrites_module_exports_anonymous_class_expression() {
+        // Anonymous class expression — invent a synthetic name. The
+        // important post-condition is that the default export is NOT
+        // `_cjs` (which would hide class identity from compile.rs).
+        let src = "module.exports = class { hello() { return 1; } };";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/anon.js"));
+        assert!(
+            wrapped.contains("export default __perry_cjs_default__;"),
+            "expected synthetic-named default export, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("export default _cjs;"),
+            "should bypass _cjs for anonymous class-expression default, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_leaves_non_class_module_exports_alone() {
+        // Don't fire on non-class RHS — preserves the existing IIFE
+        // routing for `module.exports = <value>` shapes that aren't
+        // classes (object literals, calls, identifiers, primitives, …).
+        let src = "module.exports = 1 + 2;";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/scalar.js"));
+        assert!(
+            wrapped.contains("export default _cjs;"),
+            "should keep _cjs default for non-class RHS, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_skips_class_expression_rewrite_with_conflicting_module_exports() {
+        // Multiple top-level `module.exports = ...` lines defeat the
+        // single-target invariant; fall back to `_cjs` so last-assignment-
+        // wins runtime semantics are preserved.
+        let src = "module.exports = class Foo { m() {} };\n\
+                   module.exports = somethingElse;";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/conflict.js"));
+        assert!(
+            wrapped.contains("export default _cjs;"),
+            "expected _cjs default when conflicting module.exports lines exist, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("export default Foo;"),
+            "should not direct-export the first-assignment class, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_skips_class_expression_rewrite_on_name_collision() {
+        // If a `class <SameName>` declaration already exists at top level,
+        // refuse the rewrite — emitting the declaration form again would
+        // duplicate the binding. Falls back to `_cjs` for default export.
+        let src = "class Foo { existing() {} }\n\
+                   module.exports = class Foo { conflict() {} };";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/collide.js"));
+        assert!(
+            wrapped.contains("export default _cjs;"),
+            "expected _cjs default on name collision, got:\n{}",
             wrapped
         );
     }

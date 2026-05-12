@@ -1124,6 +1124,48 @@ pub(crate) fn lower_class_decl(
             }
         }
 
+        // Issue #665 (sixth pass): collect own + inherited accessor (getter+setter)
+        // property names. Real-world packages like rate-limiter-flexible
+        // declare a `set points(v)` accessor AND write `this.points = opts.points`
+        // from the constructor body. Pre-fix the bare-this scan below
+        // mis-categorised `points` as an own data field, allocating an
+        // inline slot that surfaced via `Object.keys` and shadowed the
+        // accessor when a subclass instance's `.points` was read across
+        // modules (the runtime's setter dispatch walks the class vtable
+        // chain correctly, but the spurious own-data slot wins lookup).
+        let mut accessor_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for member in &class_decl.class.body {
+            match member {
+                ast::ClassMember::Method(m)
+                    if matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
+                {
+                    let key = match &m.key {
+                        ast::PropName::Ident(i) => i.sym.to_string(),
+                        ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                        _ => continue,
+                    };
+                    accessor_names.insert(key);
+                }
+                ast::ClassMember::PrivateMethod(m)
+                    if matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
+                {
+                    accessor_names.insert(format!("#{}", m.key.name));
+                }
+                _ => {}
+            }
+        }
+        // Pull in accessor names from the parent chain. The parent's
+        // registration stored the own+inherited union, so a single lookup
+        // on the direct parent suffices.
+        if let Some(ref parent_name) = extends_name {
+            if let Some(parent_accessors) = ctx.lookup_class_accessor_names(parent_name) {
+                for a in parent_accessors {
+                    accessor_names.insert(a.clone());
+                }
+            }
+        }
+
         let declared_field_names: std::collections::HashSet<String> =
             fields.iter().map(|f| f.name.clone()).collect();
         for member in &class_decl.class.body {
@@ -1141,6 +1183,7 @@ pub(crate) fn lower_class_decl(
                                             let fname = prop_ident.sym.to_string();
                                             if !declared_field_names.contains(&fname)
                                                 && !inherited_field_names.contains(&fname)
+                                                && !accessor_names.contains(&fname)
                                             {
                                                 fields.push(ClassField {
                                                     name: fname,
@@ -1173,6 +1216,13 @@ pub(crate) fn lower_class_decl(
             }
         }
         ctx.register_class_field_names(name.clone(), complete_field_names);
+
+        // Issue #665: register own+inherited accessor names so subclasses
+        // lowered after this one can also skip them when scanning ctor
+        // bodies. `accessor_names` already contains the union from the
+        // parent-chain lookup above.
+        let accessor_list: Vec<String> = accessor_names.into_iter().collect();
+        ctx.register_class_accessor_names(name.clone(), accessor_list);
 
         // Issue #302: also register field TYPES so the for-of arm can
         // detect `for (... of this.someMap)` patterns. Only own fields are

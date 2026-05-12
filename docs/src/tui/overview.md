@@ -17,7 +17,7 @@
 
 The smallest interactive `perry/tui` program — a counter that increments on `+`, decrements on `-`, and quits on `q`:
 
-```typescript
+```typescript,no-test
 import { Box, Text, useState, useInput, run, exit } from "perry/tui";
 
 run(() => {

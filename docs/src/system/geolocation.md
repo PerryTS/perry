@@ -9,7 +9,7 @@ other platform.
 Callback-based; wrap in `new Promise(r => …)` at the call site if a
 Promise-shaped API is preferred.
 
-```typescript
+```typescript,no-test
 import {
   geolocationGetCurrent,
   geolocationWatch,
@@ -67,7 +67,7 @@ permissions return immediately.
 
 ### Promise wrapper
 
-```typescript
+```typescript,no-test
 import { geolocationGetCurrent } from "perry/system";
 
 function getPosition(): Promise<{
@@ -92,7 +92,7 @@ Present the native photo-library picker. The callback receives an array
 of absolute filesystem paths the user selected; read bytes via
 `fs.readFileSync(path)` if needed.
 
-```typescript
+```typescript,no-test
 import { imagePickerPick } from "perry/system";
 
 imagePickerPick(
@@ -139,7 +139,7 @@ type) so the absolute path returned is safe to read with `fs`.
 Pair the picker with the `sharp` package (compiled natively via Perry's
 well-known bindings) to compress before upload:
 
-```typescript
+```typescript,no-test
 import sharp from "sharp";
 
 const buf = await sharp(pickedPath)

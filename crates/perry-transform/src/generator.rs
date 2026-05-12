@@ -1566,7 +1566,15 @@ fn build_async_step_driver_direct(
     // try/catch so the throw path is a plain rethrow — we inline it
     // directly into the step body and skip the per-invocation
     // `__async_throw` allocation entirely.
-    let throw_id = throw_closure_expr.as_ref().map(|_| alloc_local(next_local_id));
+    let throw_id = throw_closure_expr
+        .as_ref()
+        .map(|_| alloc_local(next_local_id));
+    // #691 Phase 2: step closure no longer captures itself. Body
+    // uses `Expr::CurrentStepClosure` (reads INLINE_TRAP.current_step
+    // TLS) wherever it previously did `LocalGet(step_id)`. The
+    // wrapper still needs a local to hand the freshly-constructed
+    // closure to `Expr::AsyncFirstCall`, but it's a regular immutable
+    // let (no `js_box_alloc`).
     let step_id = alloc_local(next_local_id);
 
     // Step closure params + locals
@@ -1683,8 +1691,14 @@ fn build_async_step_driver_direct(
                         ))))],
                         else_branch: None,
                     },
+                    // #691 Phase 2: recursive `__step(catch_e, true)`
+                    // re-entry now resolves the callee through TLS
+                    // instead of a captured local. lower_call
+                    // recognizes CurrentStepClosure as a callee and
+                    // dispatches via `js_closure_call2` just like the
+                    // captured-local path.
                     Stmt::Return(Some(Expr::Call {
-                        callee: Box::new(Expr::LocalGet(step_id)),
+                        callee: Box::new(Expr::CurrentStepClosure),
                         args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
                         type_args: vec![],
                     })),
@@ -1697,31 +1711,32 @@ fn build_async_step_driver_direct(
             // Optimized: AsyncStepDone reuses INLINE_TRAP_NEXT instead
             // of allocating a fresh `Promise.resolve(value)` Promise.
             // Saves one js_promise_resolved alloc per async function
-            // call (50k/run on promise_all_chains).
+            // call (50k/run on promise_all_chains). #691 Phase 2:
+            // step closure ptr now read from TLS.
             then_branch: vec![Stmt::Return(Some(Expr::AsyncStepDone {
                 value: Box::new(Expr::IterResultGetValue),
-                step_closure: Box::new(Expr::LocalGet(step_id)),
+                step_closure: Box::new(Expr::CurrentStepClosure),
             }))],
             else_branch: None,
         },
         Stmt::Return(Some(Expr::AsyncStepChain {
             value: Box::new(Expr::IterResultGetValue),
-            step_closure: Box::new(Expr::LocalGet(step_id)),
+            step_closure: Box::new(Expr::CurrentStepClosure),
         })),
     ];
 
-    // step closure captures = next_captures + [throw_id?, step_id]
+    // step closure captures = next_captures + [throw_id?]
+    // #691 Phase 2: step_id is NOT captured — the body reads its own
+    // pointer via `Expr::CurrentStepClosure` (INLINE_TRAP.current_step
+    // TLS). This saves one capture slot per step closure and removes
+    // the per-invocation `js_box_alloc` for step_id.
     let mut step_captures: Vec<LocalId> = next_captures;
     if let Some(tid) = throw_id {
         step_captures.push(tid);
     }
-    step_captures.push(step_id);
     step_captures.sort();
     step_captures.dedup();
-    let mut step_mut_captures: Vec<LocalId> = next_mutable_captures;
-    step_mut_captures.push(step_id);
-    step_mut_captures.sort();
-    step_mut_captures.dedup();
+    let step_mut_captures: Vec<LocalId> = next_mutable_captures;
 
     let step_closure = Expr::Closure {
         func_id: step_func_id,
@@ -1752,10 +1767,11 @@ fn build_async_step_driver_direct(
 
     // Outer wrapper:
     //   let __throw = <throw_closure>;   // omitted when throw_id is None
-    //   let __step;
-    //   __step = <step_closure>;
-    //   return __step(undefined, false);
-    let mut wrapper: Vec<Stmt> = Vec::with_capacity(4);
+    //   let __step = <step_closure>;     // #691 Phase 2: immutable,
+    //                                    //   no js_box_alloc
+    //   return AsyncFirstCall(__step);   // sets TLS, calls
+    //                                    //   step(undefined, false)
+    let mut wrapper: Vec<Stmt> = Vec::with_capacity(3);
     if let (Some(tid), Some(tc_expr)) = (throw_id, throw_closure_expr) {
         wrapper.push(Stmt::Let {
             id: tid,
@@ -1770,14 +1786,11 @@ fn build_async_step_driver_direct(
             id: step_id,
             name: "__async_step".to_string(),
             ty: any_ty.clone(),
-            mutable: true,
-            init: None,
+            mutable: false,
+            init: Some(step_closure),
         },
-        Stmt::Expr(Expr::LocalSet(step_id, Box::new(step_closure))),
-        Stmt::Return(Some(Expr::Call {
-            callee: Box::new(Expr::LocalGet(step_id)),
-            args: vec![Expr::Undefined, Expr::Bool(false)],
-            type_args: vec![],
+        Stmt::Return(Some(Expr::AsyncFirstCall {
+            step_closure: Box::new(Expr::LocalGet(step_id)),
         })),
     ]);
     wrapper

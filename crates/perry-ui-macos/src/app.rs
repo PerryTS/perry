@@ -650,7 +650,7 @@ pub fn app_set_size(app_handle: i64, width: f64, height: f64) {
             unsafe {
                 let frame: CGRect = msg_send![window, frame];
                 let new_frame = CGRect::new(frame.origin, CGSize::new(width, height));
-                let _: () = msg_send![window, setFrame: new_frame display: true animate: true];
+                let _: () = msg_send![window, setFrame: new_frame, display: true, animate: true];
             }
         }
     });
@@ -1580,7 +1580,7 @@ pub fn window_set_size(window_handle: i64, width: f64, height: f64) {
                         CGSize::new(width, height),
                     );
                     let _: () =
-                        objc2::msg_send![window, setFrame: new_frame display: true animate: false];
+                        objc2::msg_send![window, setFrame: new_frame, display: true, animate: false];
                 }
             }
         });
@@ -1599,7 +1599,7 @@ pub fn window_set_size(window_handle: i64, width: f64, height: f64) {
                     CGSize::new(width, height),
                 );
                 let _: () =
-                    objc2::msg_send![window, setFrame: new_frame display: true animate: true];
+                    objc2::msg_send![window, setFrame: new_frame, display: true, animate: true];
             }
         }
     });
