@@ -4715,9 +4715,26 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
             let binding_stmts = match &for_of_stmt.left {
                 ast::ForHead::VarDecl(var_decl) => {
                     if let Some(decl) = var_decl.decls.first() {
-                        let item_expr = Expr::IndexGet {
+                        // `for await (const x of arr)`: spec ECMA-262 §14.7.5.10
+                        // — each iteration awaits the value yielded by the
+                        // iterator. For plain-array iterables (the common
+                        // shape; the iterator-protocol path above already
+                        // handles `for await ... of asyncGen()`), wrap the
+                        // per-element `arr[i]` access in `Expr::Await` so a
+                        // `Promise.resolve(n)` element is unwrapped to `n`
+                        // before binding. Without this, `for await (const x of
+                        // [Promise.resolve(1), …]) sum += x` binds `x` to a
+                        // raw Promise object and `sum += x` produces NaN.
+                        // Mirrors the same fix in `lower.rs::lower_stmt`'s
+                        // module-init for-of arm.
+                        let raw_item_expr = Expr::IndexGet {
                             object: Box::new(Expr::LocalGet(arr_id)),
                             index: Box::new(Expr::LocalGet(idx_id)),
+                        };
+                        let item_expr = if for_of_stmt.is_await {
+                            Expr::Await(Box::new(raw_item_expr))
+                        } else {
+                            raw_item_expr
                         };
 
                         match &decl.name {
