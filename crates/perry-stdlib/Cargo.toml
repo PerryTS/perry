@@ -356,7 +356,7 @@ rust_decimal = { version = "1.33", features = ["maths"], optional = true }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_Foundation",
 ] }

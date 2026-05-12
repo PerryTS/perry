@@ -5167,7 +5167,7 @@ dependencies = [
  "taffy",
  "thiserror 1.0.69",
  "unicode-normalization",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5234,7 +5234,7 @@ dependencies = [
  "tokio-tungstenite 0.24.0",
  "uuid",
  "validator",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "x25519-dalek",
 ]
 
