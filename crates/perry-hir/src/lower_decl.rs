@@ -718,7 +718,12 @@ pub(crate) fn lower_class_decl(
                 // Class names are unique enough in practice that `lookup_class`
                 // resolves; if it doesn't, we fall back to the prior
                 // name-only behavior (no regression for unknown parents).
-                (ctx.lookup_class(&parent_name), Some(parent_name), None, None)
+                (
+                    ctx.lookup_class(&parent_name),
+                    Some(parent_name),
+                    None,
+                    None,
+                )
             } else {
                 // Issue #711: `class X extends fn(...)` / `class X extends
                 // new Foo(...)` etc. The super-class expression isn't
@@ -1655,68 +1660,74 @@ pub(crate) fn lower_class_from_ast(
 
     ctx.enter_type_param_scope(&type_params);
 
-    let (extends, extends_name, native_extends, extends_expr) = if let Some(ref super_class) = class.super_class {
-        if let ast::Expr::Ident(ident) = super_class.as_ref() {
-            let parent_name = ident.sym.to_string();
-            let native_parent = match parent_name.as_str() {
-                "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
-                "AsyncLocalStorage" => {
-                    Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
-                }
-                "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
-                // Issue #562: keep in lockstep with the parallel arm in
-                // `lower_class_decl` above.
-                "ReadableStream" => {
-                    Some(("readable_stream".to_string(), "ReadableStream".to_string()))
-                }
-                "WritableStream" => {
-                    Some(("writable_stream".to_string(), "WritableStream".to_string()))
-                }
-                "TransformStream" => Some((
-                    "transform_stream".to_string(),
-                    "TransformStream".to_string(),
-                )),
-                _ => None,
-            };
-            if native_parent.is_some() {
-                (None, Some(parent_name), native_parent, None)
-            } else {
-                let parent_cid = ctx.lookup_class(&parent_name);
-                if parent_cid.is_none() {
-                    // Issue #711 part 2: see the parallel arm in
-                    // `lower_class_decl` above. Unknown Ident super-class
-                    // falls through to extends_expr capture so a
-                    // function-with-prototype value can be resolved at
-                    // runtime via `function_class_id`.
-                    match lower_expr(ctx, super_class) {
-                        Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
-                        Err(_) => (None, Some(parent_name), None, None),
+    let (extends, extends_name, native_extends, extends_expr) =
+        if let Some(ref super_class) = class.super_class {
+            if let ast::Expr::Ident(ident) = super_class.as_ref() {
+                let parent_name = ident.sym.to_string();
+                let native_parent = match parent_name.as_str() {
+                    "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
+                    "AsyncLocalStorage" => {
+                        Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
                     }
+                    "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
+                    // Issue #562: keep in lockstep with the parallel arm in
+                    // `lower_class_decl` above.
+                    "ReadableStream" => {
+                        Some(("readable_stream".to_string(), "ReadableStream".to_string()))
+                    }
+                    "WritableStream" => {
+                        Some(("writable_stream".to_string(), "WritableStream".to_string()))
+                    }
+                    "TransformStream" => Some((
+                        "transform_stream".to_string(),
+                        "TransformStream".to_string(),
+                    )),
+                    _ => None,
+                };
+                if native_parent.is_some() {
+                    (None, Some(parent_name), native_parent, None)
                 } else {
-                    (parent_cid, Some(parent_name), None, None)
+                    let parent_cid = ctx.lookup_class(&parent_name);
+                    if parent_cid.is_none() {
+                        // Issue #711 part 2: see the parallel arm in
+                        // `lower_class_decl` above. Unknown Ident super-class
+                        // falls through to extends_expr capture so a
+                        // function-with-prototype value can be resolved at
+                        // runtime via `function_class_id`.
+                        match lower_expr(ctx, super_class) {
+                            Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                            Err(_) => (None, Some(parent_name), None, None),
+                        }
+                    } else {
+                        (parent_cid, Some(parent_name), None, None)
+                    }
+                }
+            } else if let ast::Expr::Member(member) = super_class.as_ref() {
+                // Refs #488 drizzle-sqlite: try cross-module class lookup. See
+                // the matching arm in `lower_class_decl` (above) for the full
+                // rationale — without this, the parent link is lost and
+                // inherited methods don't reach instances.
+                let parent_name = extract_member_class_name(member);
+                (
+                    ctx.lookup_class(&parent_name),
+                    Some(parent_name),
+                    None,
+                    None,
+                )
+            } else {
+                // Issue #711: see the matching arm in `lower_class_decl` above
+                // for the full rationale. Capture the lowered extends
+                // expression so codegen can evaluate it at the class
+                // declaration site and call
+                // `js_register_class_parent_dynamic` at runtime.
+                match lower_expr(ctx, super_class) {
+                    Ok(expr) => (None, None, None, Some(Box::new(expr))),
+                    Err(_) => (None, None, None, None),
                 }
             }
-        } else if let ast::Expr::Member(member) = super_class.as_ref() {
-            // Refs #488 drizzle-sqlite: try cross-module class lookup. See
-            // the matching arm in `lower_class_decl` (above) for the full
-            // rationale — without this, the parent link is lost and
-            // inherited methods don't reach instances.
-            let parent_name = extract_member_class_name(member);
-            (ctx.lookup_class(&parent_name), Some(parent_name), None, None)
         } else {
-            // Issue #711: see the matching arm in `lower_class_decl` above
-            // for the full rationale. Capture the lowered extends
-            // expression so codegen can evaluate it at the class
-            // declaration site and call
-            // `js_register_class_parent_dynamic` at runtime.
-            match lower_expr(ctx, super_class) {
-                Ok(expr) => (None, None, None, Some(Box::new(expr))),
-                Err(_) => (None, None, None, None),
-            }
-        }
-    } else {
-        (None, None, None, None)
-    };
+            (None, None, None, None)
+        };
 
     let mut static_field_names = Vec::new();
     let mut static_method_names = Vec::new();

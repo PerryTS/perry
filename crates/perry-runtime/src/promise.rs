@@ -1177,13 +1177,10 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                         });
                         if !next.is_null() {
                             let msg = b"async step driver detected runaway re-entry (issue #712 guard); rejecting Promise to prevent unbounded loop";
-                            let msg_str = crate::string::js_string_from_bytes(
-                                msg.as_ptr(),
-                                msg.len() as u32,
-                            );
+                            let msg_str =
+                                crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
                             let err = crate::error::js_typeerror_new(msg_str);
-                            let err_val =
-                                crate::value::js_nanbox_pointer(err as i64);
+                            let err_val = crate::value::js_nanbox_pointer(err as i64);
                             js_promise_reject(next, err_val);
                         }
                         ran += 1;

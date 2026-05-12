@@ -1039,8 +1039,7 @@ pub static FUNCTION_CLASS_IDS: RwLock<Option<HashMap<u64, u32>>> = RwLock::new(N
 // pointer is always converted back to `*mut ObjectHeader` at call sites
 // (`class_prototype_object` / the dispatch walk) where single-threaded
 // usage is guaranteed.
-pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> =
-    RwLock::new(None);
+pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
 
 /// Synthetic class id allocator for prototype-object classes. High bit
 /// set (0x8000_0000+) to keep them separate from codegen-assigned ids
@@ -1119,8 +1118,7 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
             }
         }
     }
-    let new_cid = NEXT_SYNTHETIC_CLASS_ID
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let new_cid = NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     {
         let mut write = FUNCTION_CLASS_IDS.write().unwrap();
         if write.is_none() {
@@ -1133,10 +1131,7 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
         if write.is_none() {
             *write = Some(HashMap::new());
         }
-        write
-            .as_mut()
-            .unwrap()
-            .insert(new_cid, proto_ptr as usize);
+        write.as_mut().unwrap().insert(new_cid, proto_ptr as usize);
     }
     // Register the synthetic id so REGISTERED_CLASS_IDS-gated paths
     // (e.g., the #687 ClassRef-as-receiver short-circuit) recognize it.
@@ -1150,10 +1145,7 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
 pub(crate) fn class_prototype_object(class_id: u32) -> *mut ObjectHeader {
     if let Ok(read) = CLASS_PROTOTYPE_OBJECTS.read() {
         if let Some(map) = read.as_ref() {
-            return map
-                .get(&class_id)
-                .copied()
-                .unwrap_or(0) as *mut ObjectHeader;
+            return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;
         }
     }
     std::ptr::null_mut()
@@ -3741,10 +3733,7 @@ pub extern "C" fn js_object_get_field_by_name(
                 while depth < 32 {
                     let proto_obj = class_prototype_object(cid);
                     if !proto_obj.is_null() {
-                        let field_val = js_object_get_field_by_name(
-                            proto_obj as *const _,
-                            key,
-                        );
+                        let field_val = js_object_get_field_by_name(proto_obj as *const _, key);
                         if !field_val.is_undefined() && !field_val.is_null() {
                             return field_val;
                         }
@@ -6251,8 +6240,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                     method_key as *const crate::StringHeader,
                                 );
                                 if !field_val.is_undefined() && !field_val.is_null() {
-                                    let prev_this =
-                                        IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
                                     let result = crate::closure::js_native_call_value(
                                         f64::from_bits(field_val.bits()),
                                         args_ptr,

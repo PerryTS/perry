@@ -4355,10 +4355,12 @@ fn lower_module_decl(
                     // source position (see non-export class arm below for
                     // rationale).
                     if let Some(extends_expr) = &class.extends_expr {
-                        module.init.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
-                            class_name: class_name.clone(),
-                            parent_expr: extends_expr.clone(),
-                        }));
+                        module
+                            .init
+                            .push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                                class_name: class_name.clone(),
+                                parent_expr: extends_expr.clone(),
+                            }));
                     }
                     // Inject static-field-init statements in source order
                     // (see non-export class arm below for rationale).
@@ -5741,10 +5743,12 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                     // the parent edge first keeps the inherited lookup
                     // path consistent for those inits.
                     if let Some(extends_expr) = &class.extends_expr {
-                        module.init.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
-                            class_name: class.name.clone(),
-                            parent_expr: extends_expr.clone(),
-                        }));
+                        module
+                            .init
+                            .push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                                class_name: class.name.clone(),
+                                parent_expr: extends_expr.clone(),
+                            }));
                     }
                     // Inject static-field-init statements at the source
                     // position of the class declaration. Per ES spec, a

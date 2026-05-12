@@ -672,11 +672,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // dispatch into the object's methods. Returns the synthetic
     // class id allocated for the function value (or 0 on validation
     // failure). Codegen discards the return.
-    module.declare_function(
-        "js_set_function_prototype",
-        I32,
-        &[DOUBLE, DOUBLE],
-    );
+    module.declare_function("js_set_function_prototype", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_typeerror_new", I64, &[I64]);
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);

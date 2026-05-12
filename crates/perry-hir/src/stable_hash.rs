@@ -454,6 +454,7 @@ impl SH for Class {
             type_params,
             extends,
             extends_name,
+            extends_expr,
             native_extends,
             fields,
             constructor,
@@ -470,6 +471,7 @@ impl SH for Class {
         type_params.hash(h);
         extends.hash(h);
         extends_name.hash(h);
+        extends_expr.hash(h);
         native_extends.hash(h);
         fields.hash(h);
         constructor.hash(h);
@@ -3415,6 +3417,19 @@ impl SH for Expr {
                 tag(h, 446);
                 e.as_ref().hash(h);
             }
+            Expr::RegisterClassParentDynamic {
+                class_name,
+                parent_expr,
+            } => {
+                tag(h, 447);
+                class_name.hash(h);
+                parent_expr.as_ref().hash(h);
+            }
+            Expr::SetFunctionPrototype { func, proto } => {
+                tag(h, 448);
+                func.as_ref().hash(h);
+                proto.as_ref().hash(h);
+            }
         }
     }
 }
@@ -3544,6 +3559,7 @@ mod tests {
             type_params: vec![],
             extends: None,
             extends_name: None,
+            extends_expr: None,
             native_extends: None,
             fields: vec![],
             constructor: None,
