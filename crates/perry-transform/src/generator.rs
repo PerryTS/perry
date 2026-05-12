@@ -2725,7 +2725,12 @@ fn fix_break_continue_sentinels_in_stmt(
             else_branch,
             ..
         } => {
-            fix_break_continue_sentinels_in_stmts(then_branch, state_id, break_target, continue_target);
+            fix_break_continue_sentinels_in_stmts(
+                then_branch,
+                state_id,
+                break_target,
+                continue_target,
+            );
             if let Some(eb) = else_branch.as_mut() {
                 fix_break_continue_sentinels_in_stmts(eb, state_id, break_target, continue_target);
             }
@@ -2743,7 +2748,12 @@ fn fix_break_continue_sentinels_in_stmt(
         } => {
             fix_break_continue_sentinels_in_stmts(body, state_id, break_target, continue_target);
             if let Some(c) = catch.as_mut() {
-                fix_break_continue_sentinels_in_stmts(&mut c.body, state_id, break_target, continue_target);
+                fix_break_continue_sentinels_in_stmts(
+                    &mut c.body,
+                    state_id,
+                    break_target,
+                    continue_target,
+                );
             }
             if let Some(f) = finally.as_mut() {
                 fix_break_continue_sentinels_in_stmts(f, state_id, break_target, continue_target);
@@ -2751,11 +2761,21 @@ fn fix_break_continue_sentinels_in_stmt(
         }
         Stmt::Switch { cases, .. } => {
             for case in cases.iter_mut() {
-                fix_break_continue_sentinels_in_stmts(&mut case.body, state_id, break_target, continue_target);
+                fix_break_continue_sentinels_in_stmts(
+                    &mut case.body,
+                    state_id,
+                    break_target,
+                    continue_target,
+                );
             }
         }
         Stmt::Labeled { body, .. } => {
-            fix_break_continue_sentinels_in_stmt(body.as_mut(), state_id, break_target, continue_target);
+            fix_break_continue_sentinels_in_stmt(
+                body.as_mut(),
+                state_id,
+                break_target,
+                continue_target,
+            );
         }
         _ => {}
     }
