@@ -6622,9 +6622,25 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
             let binding_stmts = match &for_of_stmt.left {
                 ast::ForHead::VarDecl(var_decl) => {
                     if let Some(decl) = var_decl.decls.first() {
-                        let item_expr = Expr::IndexGet {
+                        // `for await (const x of arr)`: spec ECMA-262 §14.7.5.10
+                        // says each iteration must Await the value yielded by
+                        // the iterator. For a plain-array iterable that means
+                        // `await arr[i]` — unwraps a Promise element into its
+                        // resolved value before binding. Without this, `for
+                        // await (const x of [Promise.resolve(1), …])` would
+                        // bind `x = <Promise object>` and any numeric op would
+                        // see NaN. The iterator-protocol path above already
+                        // wraps the `__iter.next()` call in `Expr::Await` for
+                        // async generators; this brings the array-iteration
+                        // path to parity.
+                        let raw_item_expr = Expr::IndexGet {
                             object: Box::new(Expr::LocalGet(arr_id)),
                             index: Box::new(Expr::LocalGet(idx_id)),
+                        };
+                        let item_expr = if for_of_stmt.is_await {
+                            Expr::Await(Box::new(raw_item_expr))
+                        } else {
+                            raw_item_expr
                         };
 
                         match &decl.name {
