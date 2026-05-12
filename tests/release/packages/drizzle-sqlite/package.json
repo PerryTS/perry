@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Tier-3 fixture: drizzle-orm + better-sqlite3 round-trip — schema declaration, insert, query with where clause, ordered select. SQLite chosen over postgres so the fixture has zero external service dependency. Note: pg-dialect-specific bugs (issue #585 shape) won't surface against sqlite — see drizzle-pg-pgproxy/ for that path (separate fixture).",
   "dependencies": {
-    "drizzle-orm": "^0.36.0",
+    "drizzle-orm": "^0.45.2",
     "better-sqlite3": "^11.0.0"
   },
   "perry": {
