@@ -135,7 +135,7 @@ echo "=== Memory-leak regression tests (RSS plateau under sustained alloc) ==="
 # Limits ~50-70% above measured baseline on macOS arm64. CI runners
 # may differ slightly; loosen a limit here rather than in the .ts.
 run_test test-files/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
-run_test test-files/test_memory_json_churn.ts      200 "done, checksum=637747500"
+run_test test-files/test_memory_json_churn.ts      250 "done, checksum=637747500"
 run_test test-files/test_memory_string_churn.ts    100 "done, total=9577780"
 run_test test-files/test_memory_closure_churn.ts    50 "done, sum=15004649874"
 

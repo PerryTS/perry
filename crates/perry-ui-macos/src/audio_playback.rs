@@ -103,7 +103,7 @@ fn ensure_engine() -> bool {
         // Set category to Playback
         let category = objc2_foundation::NSString::from_str("AVAudioSessionCategoryPlayback");
         let mut error: *mut AnyObject = std::ptr::null_mut();
-        let _: bool = msg_send![session, setCategory: &*category error: &mut error];
+        let _: bool = msg_send![session, setCategory: &*category, error: &mut error];
         if !error.is_null() {
             eprintln!("[audio_playback] failed to set audio session category");
             // Non-fatal on macOS — proceed anyway
@@ -111,7 +111,7 @@ fn ensure_engine() -> bool {
 
         // Activate the session
         error = std::ptr::null_mut();
-        let _: bool = msg_send![session, setActive: true error: &mut error];
+        let _: bool = msg_send![session, setActive: true, error: &mut error];
         if !error.is_null() {
             eprintln!("[audio_playback] failed to activate audio session");
             // Non-fatal on macOS — proceed anyway
@@ -224,7 +224,7 @@ pub fn player_create(filename_ptr: i64) -> f64 {
         };
         let file_alloc: *mut AnyObject = msg_send![file_cls, alloc];
         let mut error: *mut AnyObject = std::ptr::null_mut();
-        let file: *mut AnyObject = msg_send![file_alloc, initForReading: url error: &mut error];
+        let file: *mut AnyObject = msg_send![file_alloc, initForReading: url, error: &mut error];
         if file.is_null() || !error.is_null() {
             eprintln!("[audio_playback] failed to open audio file: {}.{}", name, ext);
             return 0.0;
@@ -728,7 +728,7 @@ unsafe extern "C" fn handle_interruption(
             let session: *mut AnyObject = msg_send![session_cls, sharedInstance];
             if !session.is_null() {
                 let mut error: *mut AnyObject = std::ptr::null_mut();
-                let _: bool = msg_send![session, setActive: true error: &mut error];
+                let _: bool = msg_send![session, setActive: true, error: &mut error];
             }
         }
 

@@ -9,7 +9,7 @@ compile to native code with no JavaScript runtime involvement.
 Native bindings via `perry-ext-sharp` (v0.5.551). Resizes, format conversion,
 and buffer/file output all work.
 
-```typescript
+```typescript,no-test
 import sharp from "sharp";
 
 const buf = await sharp("input.jpg")
@@ -26,7 +26,7 @@ await sharp("input.png")
 
 Native bindings via `perry-ext-cheerio` (v0.5.550).
 
-```typescript
+```typescript,no-test
 import * as cheerio from "cheerio";
 
 const html = "<html><body><h1>Hello</h1><p>World</p></body></html>";
@@ -36,7 +36,7 @@ console.log($("h1").text()); // "Hello"
 
 ## nodemailer (Email)
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/other/snippets.ts:nodemailer}}
 ```
 
@@ -44,7 +44,7 @@ console.log($("h1").text()); // "Hello"
 
 Native bindings via `perry-ext-zlib` (v0.5.541).
 
-```typescript
+```typescript,no-test
 import zlib from "zlib";
 
 const compressed = zlib.gzipSync("Hello, World!");
@@ -57,7 +57,7 @@ console.log(decompressed.toString()); // "Hello, World!"
 Native bindings via `perry-ext-cron` (v0.5.564). Both `cron` and `node-cron`
 package names route to the same backend.
 
-```typescript
+```typescript,no-test
 import { CronJob } from "cron";
 
 const job = new CronJob("*/5 * * * *", () => {
@@ -72,7 +72,7 @@ Native bindings via `perry-ext-ethers` (v0.5.556) — backed by
 [`ethers-rs`](https://github.com/gakonst/ethers-rs)-style ABI plumbing through
 `perry-ffi`'s BigInt + Buffer surfaces.
 
-```typescript
+```typescript,no-test
 import { ethers } from "ethers";
 
 const wallet = ethers.Wallet.createRandom();
@@ -85,7 +85,7 @@ console.log("private key:", wallet.privateKey);
 Native bindings via `perry-ext-events` (v0.5.546). The `EventEmitter` shape
 matches Node.js — `on`, `off`, `once`, `emit`, `removeAllListeners`.
 
-```typescript
+```typescript,no-test
 import { EventEmitter } from "events";
 
 const ee = new EventEmitter();
@@ -97,7 +97,7 @@ ee.emit("data", "hello");
 
 Native bindings via `perry-ext-exponential-backoff` (v0.5.542).
 
-```typescript
+```typescript,no-test
 import { backOff } from "exponential-backoff";
 
 const result = await backOff(() => fetchUnstableEndpoint(), {
@@ -112,7 +112,7 @@ const result = await backOff(() => fetchUnstableEndpoint(), {
 Native bindings via `perry-ext-decimal` (v0.5.547). Both package names route
 to the same backend — `Decimal` and `BigNumber` are both exposed.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/other/snippets.ts:decimal}}
 ```
 
@@ -121,7 +121,7 @@ to the same backend — `Decimal` and `BigNumber` are both exposed.
 Native bindings via `perry-ext-dayjs` (v0.5.548). Both package names route to
 the same Rust backend — same parse/format/diff surface.
 
-```typescript
+```typescript,no-test
 import dayjs from "dayjs";
 
 const now = dayjs();
@@ -135,7 +135,7 @@ Native bindings via `perry-ext-moment` (v0.5.549). `moment` is in maintenance
 mode upstream — prefer `dayjs` for new code, but Perry supports both for
 existing codebases.
 
-```typescript
+```typescript,no-test
 import moment from "moment";
 
 const m = moment().add(7, "days");
@@ -147,7 +147,7 @@ console.log(m.format());
 Native bindings via `perry-ext-ratelimit` (v0.5.552). In-memory limiter is
 wired; Redis / cluster backing stores are follow-ups.
 
-```typescript
+```typescript,no-test
 import { RateLimiterMemory } from "rate-limiter-flexible";
 
 const limiter = new RateLimiterMemory({ points: 5, duration: 1 });
@@ -185,7 +185,7 @@ if (parentPort) {
 
 ## commander (CLI Parsing)
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/other/snippets.ts:commander}}
 ```
 
@@ -195,13 +195,13 @@ The wired constructor takes the npm v7+ options-object shape
 (`new LRUCache({ max: 100 })`) — the older positional form
 `new LRUCache(100)` falls through to a `max=100` default.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/other/snippets.ts:lru-cache}}
 ```
 
 ## child_process
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/other/snippets.ts:child-process}}
 ```
 

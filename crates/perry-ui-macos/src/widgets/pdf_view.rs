@@ -13,7 +13,6 @@
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::AnyThread;
 use objc2_app_kit::NSView;
 use objc2_foundation::NSString;
 

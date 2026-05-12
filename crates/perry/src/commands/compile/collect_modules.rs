@@ -505,9 +505,10 @@ pub(super) fn collect_modules(
             // imports still warn-and-continue per the existing behavior, since
             // those produce more pointed runtime errors at the actual missing
             // binding rather than silently no-op-ing every method call.
-            let has_namespace_specifier = import.specifiers.iter().any(|s| {
-                matches!(s, perry_hir::ImportSpecifier::Namespace { .. })
-            });
+            let has_namespace_specifier = import
+                .specifiers
+                .iter()
+                .any(|s| matches!(s, perry_hir::ImportSpecifier::Namespace { .. }));
             if has_namespace_specifier {
                 return Err(anyhow::anyhow!(
                     "Could not resolve namespace import `import * as ... from \"{source}\"` in {filename}.\n\

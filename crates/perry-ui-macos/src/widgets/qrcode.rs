@@ -92,12 +92,12 @@ unsafe fn generate_qr_image(text: &str, display_size: f64) -> Option<Retained<NS
 
     // Set inputMessage
     let key_msg = NSString::from_str("inputMessage");
-    let _: () = msg_send![filter, setValue: utf8_data forKey: &*key_msg];
+    let _: () = msg_send![filter, setValue: utf8_data, forKey: &*key_msg];
 
     // Set correction level to M (15% recovery)
     let key_corr = NSString::from_str("inputCorrectionLevel");
     let val_corr = NSString::from_str("M");
-    let _: () = msg_send![filter, setValue: &*val_corr forKey: &*key_corr];
+    let _: () = msg_send![filter, setValue: &*val_corr, forKey: &*key_corr];
 
     // 3. Get output CIImage
     let key_output = NSString::from_str("outputImage");

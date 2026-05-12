@@ -1318,6 +1318,32 @@ pub enum Expr {
         step_closure: Box<Expr>,
     },
 
+    /// #691 Phase 2. Returns the currently-running step closure as a
+    /// NaN-boxed pointer (read from `INLINE_TRAP.current_step` TLS).
+    /// Used by `build_async_step_driver_direct` to replace the
+    /// `step_id` self-capture inside the step body — eliminates the
+    /// per-invocation `js_box_alloc` for the self-reference and
+    /// shrinks the step closure by one capture slot. Codegen also
+    /// recognizes it as a callee in `Expr::Call` so the catch arm's
+    /// `__step(e, true)` recursive re-entry works without the
+    /// captured local.
+    /// Only emitted by `build_async_step_driver_direct` — never by
+    /// user code.
+    CurrentStepClosure,
+
+    /// #691 Phase 2. Invokes a freshly-built step closure with
+    /// (undefined, false) and the proper `CURRENT_STEP_CLOSURE` TLS
+    /// setup. Used at the bottom of the async-step wrapper in place
+    /// of a direct `__step(undefined, false)` call so that
+    /// `Expr::CurrentStepClosure` inside the body returns the right
+    /// pointer on the very first state transition. The runtime
+    /// helper saves and restores the previous trap state so nested
+    /// async calls compose.
+    /// Only emitted by `build_async_step_driver_direct`.
+    AsyncFirstCall {
+        step_closure: Box<Expr>,
+    },
+
     // Crypto operations
     CryptoRandomBytes(Box<Expr>), // crypto.randomBytes(size) -> string (hex)
     CryptoRandomUUID,             // crypto.randomUUID() -> string
@@ -2026,6 +2052,24 @@ pub enum Expr {
     /// Array.from(iterable) -> Array
     /// Creates a new array from an iterable (e.g., Map.entries(), Map.keys(), another array)
     ArrayFrom(Box<Expr>),
+
+    /// Tagged-template strings literal — codegen builds the cooked-strings
+    /// array AND a parallel raw-strings array, registers the (cooked, raw)
+    /// pair via `js_tagged_template_register_raw`, and returns the cooked
+    /// pointer (NaN-boxed). The raw entries are always known at compile
+    /// time (each quasi's `.raw` text), so they're stored as `String` rather
+    /// than `Expr`. Used by `lower_tagged_tpl` for the non-`String.raw`
+    /// fast-path tag-function call.
+    TaggedTemplateStrings {
+        cooked: Vec<Expr>,
+        raw: Vec<String>,
+    },
+
+    /// `strings.raw` on a tagged-template strings array — looks up the
+    /// registered raw-strings array via `js_template_raw`. Returns
+    /// undefined for non-tagged-template receivers (matches the JS
+    /// semantics `[].raw === undefined`).
+    TemplateRaw(Box<Expr>),
     IteratorToArray(Box<Expr>), // collect iterator (.next() loop) into array
     /// Array.from(iterable, mapFn) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.

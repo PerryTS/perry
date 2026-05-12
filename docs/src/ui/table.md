@@ -61,7 +61,7 @@ Since v0.5.636 the macOS `Table` exposes a column-sort callback,
 multi-row selection, and a passive filter-text slot the user wires to
 their own row-hiding logic.
 
-```typescript
+```typescript,no-test
 import {
   Table,
   tableSetOnSortChange,

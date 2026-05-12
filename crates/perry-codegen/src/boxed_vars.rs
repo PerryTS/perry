@@ -782,7 +782,21 @@ fn collect_closure_refs_and_writes_in_expr(
                 collect_closure_refs_and_writes_in_expr(init, refs, writes);
             }
         }
-        _ => {}
+        // Fallback: recurse into every child expression. The HIR has
+        // many variants (Await, Yield, TypeOf, Void, InstanceOf, In,
+        // PropertyUpdate, IndexUpdate, ObjectSpread, …) that can carry
+        // a Closure literal as a child. A silent catch-all here would
+        // mark `await Promise.resolve("x").then(() => counter++)`
+        // as not having a closure-captured mutation, leaving `counter`
+        // unboxed — the closure body would write to its own snapshot
+        // and the outer post-await read would see 0. `walk_expr_children`
+        // is the single source of truth for child traversal, so
+        // delegating keeps this resilient to future Expr additions.
+        _ => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_closure_refs_and_writes_in_expr(child, refs, writes);
+            });
+        }
     }
 }
 
@@ -970,7 +984,16 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
             collect_outer_writes_in_expr(object, out);
             collect_outer_writes_in_expr(value, out);
         }
-        _ => {}
+        // Fallback: recurse into every child. `walk_expr_children` does
+        // NOT descend into `Expr::Closure` bodies (only param defaults),
+        // which matches this walker's "only outer-scope writes" contract.
+        // Resilient against future Expr variants and catches outer
+        // writes hiding inside Await/Yield/TypeOf/etc.
+        _ => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_outer_writes_in_expr(child, out);
+            });
+        }
     }
 }
 
@@ -1156,7 +1179,17 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
             collect_write_ids_in_expr(object, out);
             collect_write_ids_in_expr(value, out);
         }
-        _ => {}
+        // Fallback: recurse into every child for resilience against new
+        // Expr variants. `walk_expr_children` skips Closure body — that's
+        // handled explicitly above so writes inside nested closures are
+        // still discovered. Other carrying variants (Await, Yield,
+        // TypeOf, Void, InstanceOf, PropertyUpdate, IndexUpdate, …)
+        // get traversed automatically.
+        _ => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_write_ids_in_expr(child, out);
+            });
+        }
     }
 }
 

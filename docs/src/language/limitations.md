@@ -32,9 +32,9 @@ metadata facilities (`Reflect.metadata`, `Symbol`-keyed metadata,
 DI containers rely on. See [Decorators](decorators.md) for the full
 stance and a worked migration recipe.
 
-## No Reflection
+## No Runtime Metadata Reflection
 
-There is no `Reflect` API or runtime type metadata:
+TypeScript-style runtime metadata is not supported:
 
 <!-- intentionally-rejects: this snippet documents code Perry refuses to compile -->
 ```text
@@ -42,9 +42,9 @@ There is no `Reflect` API or runtime type metadata:
 Reflect.getMetadata("design:type", target, key);
 ```
 
-## No Dynamic require()
+## No User-Space CommonJS require()
 
-Only static imports are supported:
+Use static ESM imports in Perry source:
 
 <!-- intentionally-rejects: the `require` and dynamic-`import` lines are code Perry refuses to compile -->
 ```text
@@ -56,7 +56,10 @@ const mod = require("./module");
 const mod = await import("./module");
 ```
 
-## No Prototype Manipulation
+Perry has internal CommonJS compatibility paths for some npm package wrappers,
+but user-written modules should use static `import` declarations.
+
+## Limited Prototype Manipulation
 
 Perry compiles classes to fixed structures. Dynamic prototype modification is not supported:
 
@@ -67,64 +70,28 @@ MyClass.prototype.newMethod = function() {};
 Object.setPrototypeOf(obj, proto);
 ```
 
-## No Symbol Type
+`Object.getPrototypeOf(...)` and `Reflect.getPrototypeOf(...)` are supported
+for class/prototype inspection patterns, but `Object.setPrototypeOf(...)` /
+`Reflect.setPrototypeOf(...)` do not mutate Perry's fixed class layout.
 
-The `Symbol` primitive type is not currently supported:
+## Weak References Are Not GC-Accurate
 
-<!-- intentionally-rejects: this snippet documents code Perry refuses to compile -->
-```text
-// Not supported
-const sym = Symbol("description");
-```
+`WeakMap`, `WeakSet`, `WeakRef`, and `FinalizationRegistry` expose the expected
+API shape, but their weak-reference semantics are pragmatic, not GC-accurate:
+`WeakRef` keeps a strong reference internally, and `FinalizationRegistry`
+records registrations but does not run cleanup callbacks after collection.
 
-## No WeakMap/WeakRef
+## Limited Proxy Trapping
 
-Weak references are not implemented:
-
-<!-- intentionally-rejects: this snippet documents code Perry refuses to compile -->
-```text
-// Not supported
-const wm = new WeakMap();
-const wr = new WeakRef(obj);
-```
-
-## No Proxy
-
-The `Proxy` object is not supported:
-
-<!-- intentionally-rejects: this snippet documents code Perry refuses to compile -->
-```text
-// Not supported
-const proxy = new Proxy(target, handler);
-```
-
-## Limited Error Types
-
-`Error` and basic `throw`/`catch` work, but custom error subclasses have limited support:
-
-```typescript
-{{#include ../../examples/language/limitations.ts:error-subclass}}
-```
+Proxy support is not a full engine-level trap layer for every possible dynamic
+object access. Prefer plain objects and explicit APIs unless a package only
+needs Perry's supported Proxy surface.
 
 ## Threading Model
 
 Perry supports real multi-threading via `parallelMap` and `spawn` from `perry/thread`. See [Multi-Threading](../threading/overview.md).
 
 Threads do not share mutable state — closures passed to thread primitives cannot capture mutable variables (enforced at compile time). Values are deep-copied across thread boundaries. There is no `SharedArrayBuffer` or `Atomics`.
-
-## No Computed Property Names
-
-Dynamic property keys in object literals are limited:
-
-<!-- intentionally-rejects: the `{ [key]: "value" }` line at the bottom is code Perry refuses to compile -->
-```text
-// Supported
-const key = "name";
-obj[key] = "value";
-
-// Not supported
-const obj = { [key]: "value" };
-```
 
 ## npm Package Compatibility
 

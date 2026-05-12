@@ -1479,6 +1479,56 @@ pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *m
     }
 }
 
+/// #691 Phase 2 helper. Returns the currently-dispatching step
+/// closure as a raw `*mut ClosureHeader`. Codegen NaN-boxes the
+/// result. Lets the async-to-generator transform emit
+/// `Expr::CurrentStepClosure` inside the step body in place of a
+/// captured `step_id` self-reference — saves one `js_box_alloc` per
+/// async-fn invocation and shrinks the step closure by one capture
+/// slot. Safe to call only from inside a step body (or from any code
+/// known to run inside `Task::AsyncStep` dispatch or
+/// `js_async_first_call`); returns null otherwise.
+#[no_mangle]
+pub extern "C" fn js_get_current_step_closure() -> *mut crate::closure::ClosureHeader {
+    let trap = INLINE_TRAP.with(|c| c.get());
+    trap.current_step as *mut crate::closure::ClosureHeader
+}
+
+/// #691 Phase 2 helper. Invoke a freshly-built step closure for the
+/// very first state transition of an async-fn activation. The wrapper
+/// emits this in place of `__step(undefined, false)` so that
+/// `CURRENT_STEP_CLOSURE` TLS is set before the body runs — without
+/// this setup, `js_get_current_step_closure` inside the body would
+/// observe whatever the previous `Task::AsyncStep` left (or null on
+/// cold entry). Saves and restores the previous trap state so nested
+/// async-fn calls compose correctly.
+///
+/// Takes the closure NaN-boxed (the HIR caller passes it via a
+/// regular Expr) and returns the closure's own return value
+/// (typically a Promise pointer NaN-boxed by the step body).
+#[no_mangle]
+pub extern "C" fn js_async_first_call(step_closure_nanbox: f64) -> f64 {
+    let ptr = crate::value::js_nanbox_get_pointer(step_closure_nanbox)
+        as *mut crate::closure::ClosureHeader;
+    let prev = INLINE_TRAP.with(|c| {
+        let old = c.get();
+        c.set(InlineTrap {
+            trap_next: old.trap_next,
+            current_step: ptr as usize,
+        });
+        old
+    });
+    let result = unsafe {
+        crate::closure::js_closure_call2(
+            ptr,
+            f64::from_bits(0x7FFC_0000_0000_0001), // TAG_UNDEFINED
+            f64::from_bits(0x7FFC_0000_0000_0003), // TAG_FALSE
+        )
+    };
+    INLINE_TRAP.with(|c| c.set(prev));
+    result
+}
+
 // Thread-local single-slot cache for async-step thunks. Keyed by the
 // step closure pointer. When the same step closure is used across
 // multiple promise-of-promise awaits (the simple-probe shape), we
@@ -1533,7 +1583,23 @@ extern "C" fn async_step_fulfill_thunk(
     let step = crate::closure::js_closure_get_capture_ptr(closure, 0)
         as *const crate::closure::ClosureHeader;
     let false_bits = f64::from_bits(0x7FFC_0000_0000_0003);
-    crate::closure::js_closure_call2(step, value, false_bits)
+    // #691 Phase 2: when this thunk is invoked from the pending-Promise
+    // fallback in js_async_step_chain (await of a still-pending inner),
+    // the runtime arrives here via Task::Inline dispatch which does NOT
+    // set INLINE_TRAP.current_step. Step bodies now read self from that
+    // TLS via Expr::CurrentStepClosure, so we MUST set it before
+    // entering the step. Save/restore for nested-async composition.
+    let prev = INLINE_TRAP.with(|c| {
+        let old = c.get();
+        c.set(InlineTrap {
+            trap_next: old.trap_next,
+            current_step: step as usize,
+        });
+        old
+    });
+    let result = crate::closure::js_closure_call2(step, value, false_bits);
+    INLINE_TRAP.with(|c| c.set(prev));
+    result
 }
 
 extern "C" fn async_step_reject_thunk(
@@ -1543,7 +1609,19 @@ extern "C" fn async_step_reject_thunk(
     let step = crate::closure::js_closure_get_capture_ptr(closure, 0)
         as *const crate::closure::ClosureHeader;
     let true_bits = f64::from_bits(0x7FFC_0000_0000_0004);
-    crate::closure::js_closure_call2(step, value, true_bits)
+    // #691 Phase 2: see async_step_fulfill_thunk — same TLS-setup
+    // requirement on the rejection path.
+    let prev = INLINE_TRAP.with(|c| {
+        let old = c.get();
+        c.set(InlineTrap {
+            trap_next: old.trap_next,
+            current_step: step as usize,
+        });
+        old
+    });
+    let result = crate::closure::js_closure_call2(step, value, true_bits);
+    INLINE_TRAP.with(|c| c.set(prev));
+    result
 }
 
 /// `Array.fromAsync(input)` — Node 22+ static method.

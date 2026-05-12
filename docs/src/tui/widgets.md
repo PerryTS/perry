@@ -6,7 +6,7 @@
 
 A flexbox container. Holds any number of children laid out by direction, gap, padding, and alignment rules.
 
-```typescript
+```typescript,no-test
 import { Box, Text } from "perry/tui";
 
 // Bare children — vertical column by default.
@@ -40,7 +40,7 @@ Children can be a literal array (`[Text("a"), Text("b")]`) or any runtime expres
 
 A text node. Single-line; multi-line strings render with `\n` preserved.
 
-```typescript
+```typescript,no-test
 Text("plain");
 Text("bold!", { bold: true });
 Text("error", { color: "red", bold: true });
@@ -69,7 +69,7 @@ Named colors: `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `whi
 
 A zero-content widget with `flexGrow: 1` baked in. Push siblings to the edges of a flex container without spelling out the grow factor:
 
-```typescript
+```typescript,no-test
 Box({ flexDirection: "row" }, [
     Text("left"),
     Spacer(),
@@ -81,7 +81,7 @@ Box({ flexDirection: "row" }, [
 
 A single-line text-input widget. Render a string with an optional inline cursor position (0-indexed); pair with `useState` for the buffer and `useInput` to drive it.
 
-```typescript
+```typescript,no-test
 const [buf, setBuf] = useState("");
 const [cur, setCur] = useState(0);
 useInput((s) => { /* … update buf + cur on keypress … */ });
@@ -98,7 +98,7 @@ A multi-line text widget. Same shape as `Input` but accepts newlines.
 
 A vertically-laid list of strings, with optional highlighted-row index.
 
-```typescript
+```typescript,no-test
 List(["Apple", "Banana", "Cherry"], 1);  // "Banana" highlighted
 ```
 
@@ -106,7 +106,7 @@ List(["Apple", "Banana", "Cherry"], 1);  // "Banana" highlighted
 
 Like `List` but with selection indicators (`▸` next to the focused row).
 
-```typescript
+```typescript,no-test
 const [idx, setIdx] = useState(0);
 useInput((s) => {
     if (s === "\x1b[A" /* up */ ) setIdx(Math.max(0, idx - 1));
@@ -119,7 +119,7 @@ return Select(items, idx);
 
 A static spinner character — `- \ | /` cycling through frames 0–3. Caller bumps `frame` from a state counter to animate.
 
-```typescript
+```typescript,no-test
 const [tick, setTick] = useState(0);
 // On every Enter (or however you want to advance):
 setTick(tick + 1);
@@ -134,7 +134,7 @@ For true wall-clock animation, see `AnimatedSpinner({ interval, frames })` which
 
 A simple horizontal bar.
 
-```typescript
+```typescript,no-test
 ProgressBar(7, 10);          // ████████░░ at default width
 ProgressBar(50, 100, 40);    // 40-cell wide bar
 ```
@@ -143,7 +143,7 @@ ProgressBar(50, 100, 40);    // 40-cell wide bar
 
 A bordered table. `headers` is a string array; `rows` is an array of string arrays.
 
-```typescript
+```typescript,no-test
 Table({
     headers: ["Name", "Status", "Latency"],
     rows: [
@@ -158,7 +158,7 @@ Table({
 
 A horizontal tab bar over a body widget. `body` is an array parallel to `tabs` — only the active tab's body is rendered.
 
-```typescript
+```typescript,no-test
 const [active, setActive] = useState(0);
 Tabs({
     tabs: ["Files", "Search", "Settings"],

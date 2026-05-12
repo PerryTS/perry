@@ -13,7 +13,7 @@ use std::fmt::Write;
 /// Render the manifest as a single combined Markdown reference page.
 /// Compiler version is interpolated into the header so consumers can
 /// tell at a glance which Perry release the doc was generated from.
-pub fn emit_markdown(perry_version: &str) -> String {
+pub fn emit_markdown(_perry_version: &str) -> String {
     let mut out = String::new();
     let by_module = group_by_module();
 
@@ -28,8 +28,11 @@ pub fn emit_markdown(perry_version: &str) -> String {
          flagged ⚠ — they link cleanly but no-op at runtime on the chosen target."
     );
     let _ = writeln!(out);
-    let _ = writeln!(out, "**Generated for Perry v{}.**", perry_version);
-    let _ = writeln!(out);
+    // Note: deliberately NOT embedding the Perry version here — pre-fix
+    // the line `**Generated for Perry v{version}.**` made every patch-version
+    // bump trigger the `api-docs-drift` CI gate even when the manifest
+    // itself was unchanged. The artifact is now version-independent;
+    // version info lives in Cargo.toml / CLAUDE.md.
     let _ = writeln!(
         out,
         "Total: {} entries across {} modules.",
@@ -125,7 +128,7 @@ pub fn emit_markdown(perry_version: &str) -> String {
 /// rows. Instance methods and class-filtered rows still hang off
 /// `[key: string]: any;` on their class — narrowing those needs a
 /// follow-up that threads receiver-type info through HIR.
-pub fn emit_dts(perry_version: &str) -> String {
+pub fn emit_dts(_perry_version: &str) -> String {
     let mut out = String::new();
     let by_module = group_by_module();
 
@@ -134,7 +137,10 @@ pub fn emit_dts(perry_version: &str) -> String {
         "// Auto-generated from Perry's API manifest (#465). Do not edit by hand."
     );
     let _ = writeln!(out, "// Source: perry-api-manifest::API_MANIFEST");
-    let _ = writeln!(out, "// Perry version: {}", perry_version);
+    // Note: deliberately NOT embedding the Perry version here — pre-fix
+    // every patch-version bump triggered the `api-docs-drift` CI gate even
+    // when the manifest itself was unchanged. The artifact is now version-
+    // independent; version info lives in Cargo.toml / CLAUDE.md.
     let _ = writeln!(
         out,
         "// Coverage: {} entries across {} modules",

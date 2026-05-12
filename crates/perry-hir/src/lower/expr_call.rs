@@ -1638,10 +1638,8 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     let mut iter = args.into_iter();
                                     let mut result = iter.next().unwrap();
                                     for next_arg in iter {
-                                        result = Expr::PathJoin(
-                                            Box::new(result),
-                                            Box::new(next_arg),
-                                        );
+                                        result =
+                                            Expr::PathJoin(Box::new(result), Box::new(next_arg));
                                     }
                                     return Ok(result);
                                 }
@@ -3358,10 +3356,16 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                         });
                                     }
                                     "flat" => {
-                                        // arr.flat() -> flattened array
-                                        return Ok(Expr::ArrayFlat {
-                                            array: Box::new(Expr::LocalGet(array_id)),
-                                        });
+                                        // arr.flat() folds to depth=1 fast path;
+                                        // arr.flat(depth) falls through so the
+                                        // depth arg can reach the codegen
+                                        // `lower_array_method.rs::flat` arm and
+                                        // route to `js_array_flat_depth`.
+                                        if args.is_empty() {
+                                            return Ok(Expr::ArrayFlat {
+                                                array: Box::new(Expr::LocalGet(array_id)),
+                                            });
+                                        }
                                     }
                                     "reduceRight" => {
                                         if !args.is_empty() {
@@ -3930,9 +3934,12 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                             }
                                         }
                                         "flat" => {
-                                            return Ok(Expr::ArrayFlat {
-                                                array: Box::new(extern_ref),
-                                            });
+                                            // depth-aware calls fall through.
+                                            if args.is_empty() {
+                                                return Ok(Expr::ArrayFlat {
+                                                    array: Box::new(extern_ref),
+                                                });
+                                            }
                                         }
                                         "reduceRight" => {
                                             if !args.is_empty() {
@@ -4108,9 +4115,12 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     }
                                 }
                                 "flat" => {
-                                    return Ok(Expr::ArrayFlat {
-                                        array: Box::new(array_expr),
-                                    });
+                                    // depth-aware calls fall through.
+                                    if args.is_empty() {
+                                        return Ok(Expr::ArrayFlat {
+                                            array: Box::new(array_expr),
+                                        });
+                                    }
                                 }
                                 "reduceRight" => {
                                     if !args.is_empty() {
@@ -5362,8 +5372,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                 let mut iter = args.into_iter();
                                 let mut result = iter.next().unwrap();
                                 for next_arg in iter {
-                                    result =
-                                        Expr::PathJoin(Box::new(result), Box::new(next_arg));
+                                    result = Expr::PathJoin(Box::new(result), Box::new(next_arg));
                                 }
                                 return Ok(result);
                             }

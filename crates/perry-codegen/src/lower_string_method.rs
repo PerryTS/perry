@@ -384,7 +384,13 @@ pub(crate) fn lower_string_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let len_i32 = blk.fptosi(DOUBLE, &len_d, I32);
+            // Pass `target_length` as raw DOUBLE — the runtime does the
+            // ToLength coercion (NaN/negative → 0, Infinity / huge values
+            // clamped to a sane max). Pre-fix the codegen did
+            // `fptosi(DOUBLE → I32)` here, which is undefined behavior on
+            // NaN per LLVM semantics; the resulting i32 then aliased the
+            // runtime's `u32` parameter and a literal `-1` became
+            // `0xFFFFFFFF`, looping to fill 4 GiB of padding before OOM.
             let runtime_fn = if property == "padStart" {
                 "js_string_pad_start"
             } else {
@@ -393,7 +399,7 @@ pub(crate) fn lower_string_method(
             let result = blk.call(
                 I64,
                 runtime_fn,
-                &[(I64, &recv_handle), (I32, &len_i32), (I64, &pad_handle)],
+                &[(I64, &recv_handle), (DOUBLE, &len_d), (I64, &pad_handle)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }

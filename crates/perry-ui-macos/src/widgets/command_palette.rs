@@ -15,7 +15,7 @@
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
-use objc2::{define_class, AnyThread, DefinedClass};
+use objc2::{define_class, AnyThread};
 use objc2_app_kit::NSView;
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSObject, NSString};
