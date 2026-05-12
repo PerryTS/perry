@@ -593,6 +593,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_sort_default", I64, &[I64]);
     module.declare_function("js_array_reverse", I64, &[I64]);
     module.declare_function("js_array_flat", I64, &[I64]);
+    module.declare_function("js_array_flat_depth", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_flatMap", I64, &[I64, I64]);
     module.declare_function("js_array_sort_with_comparator", I64, &[I64, I64]);
     // ES2023 immutable array methods
@@ -877,8 +878,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
     module.declare_function("js_string_locale_compare", DOUBLE, &[I64, I64]);
     module.declare_function("js_string_normalize", I64, &[I64, I64]);
-    module.declare_function("js_string_pad_start", I64, &[I64, I32, I64]);
-    module.declare_function("js_string_pad_end", I64, &[I64, I32, I64]);
+    module.declare_function("js_string_pad_start", I64, &[I64, DOUBLE, I64]);
+    module.declare_function("js_string_pad_end", I64, &[I64, DOUBLE, I64]);
     module.declare_function("js_string_is_well_formed", DOUBLE, &[I64]);
     module.declare_function("js_string_to_well_formed", I64, &[I64]);
     module.declare_function("js_string_match_all", I64, &[I64, I64]);
@@ -1298,6 +1299,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
 ///   our number ABI)
 pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_alloc", I64, &[I32]);
+    // Tagged-template `.raw` side-table helpers (per ECMA-262 §13.2.8.3
+    // TaggedTemplate Evaluation step 5: `template[Symbol.raw]` returns
+    // an array of raw strings).
+    module.declare_function("js_tagged_template_register_raw", I64, &[I64, I64]);
+    module.declare_function("js_template_raw", I64, &[I64]);
     // Convenience alias for `js_array_alloc(0)`; emitted by lower_call's
     // `new Array()` no-arg branch. Issue #432: clang rejected
     // Effect 3.21.2's `internal/fiberRuntime.ts` IR with
@@ -2335,6 +2341,14 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // Promise (INLINE_TRAP_NEXT) when called from inside the microtask
     // runner dispatching this same step closure.
     module.declare_function("js_async_step_done", I64, &[DOUBLE, I64]);
+    // #691 Phase 2: returns the live step closure pointer from
+    // INLINE_TRAP.current_step TLS. Codegen NaN-boxes the result.
+    module.declare_function("js_get_current_step_closure", I64, &[]);
+    // #691 Phase 2: wrap the wrapper's initial step invocation with
+    // TLS setup so `js_get_current_step_closure` inside the body sees
+    // the right pointer on the very first state. Saves/restores
+    // INLINE_TRAP across the call for nested-async composition.
+    module.declare_function("js_async_first_call", DOUBLE, &[DOUBLE]);
 
     // ========== Slugify ==========
     module.declare_function("js_slugify", I64, &[I64]);

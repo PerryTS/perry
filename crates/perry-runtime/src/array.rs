@@ -6,7 +6,73 @@
 //! - Elements array (inline)
 
 use crate::arena::arena_alloc_gc;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ptr;
+
+thread_local! {
+    /// Tagged-template `.raw` side-table — maps a cooked-strings array
+    /// pointer to its corresponding raw-strings array pointer. Populated
+    /// by `js_tagged_template_register_raw` at the tagged-call site; read
+    /// by `js_template_raw` (HIR-folded from `<arg>.raw` on array
+    /// receivers). Untagged arrays naturally miss the map and surface
+    /// `undefined`, matching the JS semantics `[].raw === undefined`.
+    /// Both pointers are GC-rooted via `scan_template_raw_roots`.
+    static TEMPLATE_RAW_MAP: RefCell<HashMap<usize, *mut ArrayHeader>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Register the (cooked, raw) pair for a tagged-template call. Returns
+/// `cooked` (so the codegen can chain it inline into the call args).
+#[no_mangle]
+pub extern "C" fn js_tagged_template_register_raw(
+    cooked: *mut ArrayHeader,
+    raw: *mut ArrayHeader,
+) -> *mut ArrayHeader {
+    if !cooked.is_null() && !raw.is_null() {
+        TEMPLATE_RAW_MAP.with(|m| {
+            m.borrow_mut().insert(cooked as usize, raw);
+        });
+    }
+    cooked
+}
+
+/// Read the raw-strings array for a cooked array, or 0 if not a
+/// tagged-template strings array.
+#[no_mangle]
+pub extern "C" fn js_template_raw(cooked: *const ArrayHeader) -> i64 {
+    let cleaned = clean_arr_ptr(cooked);
+    if cleaned.is_null() {
+        return 0;
+    }
+    TEMPLATE_RAW_MAP.with(|m| {
+        m.borrow()
+            .get(&(cleaned as usize))
+            .map(|&p| p as i64)
+            .unwrap_or(0)
+    })
+}
+
+/// GC root scanner — keeps both cooked and raw arrays in template
+/// pairs reachable. Pruning of dead-cooked entries happens lazily on
+/// next read miss; for now the map grows unbounded but it's tiny in
+/// practice (one entry per distinct tagged-template call site).
+pub fn scan_template_raw_roots(mark: &mut dyn FnMut(f64)) {
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    TEMPLATE_RAW_MAP.with(|m| {
+        for (cooked_addr, raw_ptr) in m.borrow().iter() {
+            mark(f64::from_bits(
+                POINTER_TAG | (*cooked_addr as u64 & POINTER_MASK),
+            ));
+            if !raw_ptr.is_null() {
+                mark(f64::from_bits(
+                    POINTER_TAG | (*raw_ptr as u64 & POINTER_MASK),
+                ));
+            }
+        }
+    });
+}
 
 /// Strip NaN-boxing tags from an array pointer and guard against invalid values.
 ///
@@ -1745,6 +1811,92 @@ pub extern "C" fn js_array_sort_default(arr: *mut ArrayHeader) -> *mut ArrayHead
 
         arr
     }
+}
+
+/// `Array.prototype.flat(depth)` — flatten up to `depth` levels deep
+/// (ECMA-262 §23.1.3.10). `depth == 0` returns a shallow copy; `Infinity`
+/// flattens fully; NaN / negative → 0. Skips Set / Map / non-array
+/// pointer-like values during descent (matches the depth=1 helper's
+/// dispatch). Used by codegen for `arr.flat(d)` with any non-zero arg
+/// count; `flat()` keeps the legacy 1-arg `js_array_flat` fast path.
+#[no_mangle]
+pub extern "C" fn js_array_flat_depth(arr: *const ArrayHeader, depth: f64) -> *mut ArrayHeader {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return js_array_alloc(0);
+    }
+    let levels: u32 = if depth.is_nan() || depth <= 0.0 {
+        0
+    } else if depth.is_infinite() || depth > u32::MAX as f64 {
+        u32::MAX
+    } else {
+        depth as u32
+    };
+    unsafe {
+        let mut result = js_array_alloc(0);
+        result = js_array_flat_into(result, arr, levels);
+        result
+    }
+}
+
+/// Recursive worker for `js_array_flat_depth`. Returns the (possibly
+/// re-grown) `result` pointer so `js_array_push_f64`'s reallocation
+/// stays in sync across recursive calls.
+unsafe fn js_array_flat_into(
+    mut result: *mut ArrayHeader,
+    src: *const ArrayHeader,
+    depth_left: u32,
+) -> *mut ArrayHeader {
+    let len = (*src).length as usize;
+    let elements = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+    for i in 0..len {
+        let element = *elements.add(i);
+        let bits = element.to_bits();
+        let top16 = (bits >> 48) as u16;
+        let maybe_arr_ptr = if top16 >= 0x7FF8 {
+            if top16 == 0x7FFD {
+                let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
+                if (ptr as usize) >= 0x1000 {
+                    Some(ptr)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else if top16 == 0 && bits >= 0x10000 && (bits & 0x7) == 0 {
+            Some(bits as *const ArrayHeader)
+        } else {
+            None
+        };
+        let mut pushed = false;
+        if depth_left > 0 {
+            if let Some(sub_arr) = maybe_arr_ptr {
+                let is_set_or_map = crate::set::is_registered_set(sub_arr as usize)
+                    || crate::map::is_registered_map(sub_arr as usize);
+                if !is_set_or_map {
+                    let obj_type = if (sub_arr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+                        let hdr = (sub_arr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                            as *const crate::gc::GcHeader;
+                        (*hdr).obj_type
+                    } else {
+                        0
+                    };
+                    if obj_type == crate::gc::GC_TYPE_ARRAY {
+                        let sub_len = (*sub_arr).length as usize;
+                        if sub_len <= 1_000_000 {
+                            result = js_array_flat_into(result, sub_arr, depth_left - 1);
+                            pushed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !pushed {
+            result = js_array_push_f64(result, element);
+        }
+    }
+    result
 }
 
 /// Flatten an array of arrays into a single array (depth=1).

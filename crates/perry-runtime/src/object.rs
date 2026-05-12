@@ -2572,14 +2572,26 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         if keys.is_null() {
             return crate::array::js_array_alloc(0);
         }
-        // Fast path: if no descriptors are set for this object, return keys array directly.
+        // Per JS spec, `Object.keys` must return a fresh array — callers
+        // can `.sort()`, `.push()`, etc. without mutating the receiver.
+        // Pre-fix this fast path returned the object's own internal
+        // `keys_array` pointer, so `Object.keys(o).sort()` reordered
+        // `o`'s key→slot mapping and subsequent `o.foo` reads returned
+        // the wrong slot's value. The slow path below already builds a
+        // fresh array; the fast path now mirrors it, just without the
+        // per-key descriptor check.
         let has_descriptors =
             PROPERTY_DESCRIPTORS.with(|m| m.borrow().keys().any(|(ptr, _)| *ptr == obj as usize));
+        let len = crate::array::js_array_length(keys) as usize;
         if !has_descriptors {
-            return keys;
+            let out = crate::array::js_array_alloc(len as u32);
+            for i in 0..len {
+                let key_val = crate::array::js_array_get(keys, i as u32);
+                crate::array::js_array_push_f64(out, f64::from_bits(key_val.bits()));
+            }
+            return out;
         }
         // Slow path: filter out non-enumerable keys.
-        let len = crate::array::js_array_length(keys) as usize;
         let filtered = crate::array::js_array_alloc(len as u32);
         for i in 0..len {
             let key_val = crate::array::js_array_get(keys, i as u32);
@@ -7432,7 +7444,7 @@ unsafe fn get_native_module_constant(
                 "RTLD_NOW" => Some(libc::RTLD_NOW as f64),
                 "RTLD_GLOBAL" => Some(libc::RTLD_GLOBAL as f64),
                 "RTLD_LOCAL" => Some(libc::RTLD_LOCAL as f64),
-                #[cfg(target_os = "linux")]
+                #[cfg(all(target_os = "linux", target_env = "gnu"))]
                 "RTLD_DEEPBIND" => Some(libc::RTLD_DEEPBIND as f64),
                 _ => None,
             }

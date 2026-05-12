@@ -1,6 +1,5 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Perry version: 0.5.827
 // Coverage: 812 entries across 70 modules
 
 declare module "argon2" {

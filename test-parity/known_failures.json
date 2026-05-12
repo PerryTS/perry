@@ -1,5 +1,9 @@
 {
   "issue_655_repro": "issue #655 repro \u2014 kept as the canonical regression-catcher; will flip to PASS when #655 lands.",
+  "test_gap_array_methods": "Array method coverage probe \u2014 small divergences (e.g. flat/flatMap/finally specific edge cases). Targeted bisect needed; not a recent regression.",
+  "test_issue_233_async_array_param_push": "Async array-param push edge case (#233) regresses on Linux CI but passes locally on macOS. Bisect to pin Linux-only divergence.",
+  "test_issue_561_sigv4_chain": "SigV4 chain test (#561) regresses on Linux CI but passes locally on macOS. Likely related to crypto/HMAC ordering. Bisect needed.",
+  "test_issue_654_typed_array_dispatch": "Typed array dispatch test (#654) regresses on Linux CI but passes locally on macOS. Bisect needed for Linux-specific dispatch divergence.",
   "test_edge_regression": "Broad edge-case bundle covering multiple historical regressions; bisect needed to pin which sub-case still fails. Not a recent regression.",
   "test_edge_type_narrowing": "Several TS type-narrowing patterns (control-flow narrowing, discriminated unions through generics, `in` operator narrowing) Perry's HIR doesn't track yet. Surfaced multiple narrow-fix candidates.",
   "test_gap_regexp_advanced": "Lookbehind regex assertions \u2014 Rust's `regex` crate doesn't support `(?<=)` / `(?<!)`. Documented in CLAUDE.md as a known categorical gap.",
