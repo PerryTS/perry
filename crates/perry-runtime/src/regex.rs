@@ -359,9 +359,57 @@ pub extern "C" fn js_string_match(
                         }
                     }
 
+                    // Build groups object for named captures (same shape as
+                    // `regex.exec(str)` does in `js_regexp_exec`). Stored in
+                    // `LAST_EXEC_GROUPS` thread-local so the HIR fold for
+                    // `result.groups` (extended in lower.rs::is_regex_exec_init
+                    // to also recognize `str.match(regex)` results) reads it
+                    // via the existing `Expr::RegExpExecGroups` codegen path.
+                    // Same caveats as exec()'s thread-local: only the most
+                    // recent match's groups are stashed, so `m1.groups` after
+                    // an intervening `m2 = ...match(...)` reads m2's groups —
+                    // acceptable for the common inline `m.groups.x` pattern.
+                    let group_names: Vec<(&str, Option<regex::Match>)> = regex
+                        .capture_names()
+                        .enumerate()
+                        .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
+                        .collect();
+                    if !group_names.is_empty() {
+                        // Use the by-name setter (and a plain `js_object_alloc`)
+                        // so each match's groups object grows its own shape from
+                        // its own keys. Pre-fix this took the
+                        // `js_object_alloc_with_shape(shape_id=const, ...)` path
+                        // — every match's groups object collapsed to the same
+                        // interned shape, so a later match with different named
+                        // captures inherited the prior call's key names (e.g.
+                        // `.match(/(?<year>...)/)` followed by
+                        // `.match(/(?<id>...)/)` made the second result expose
+                        // `.year` instead of `.id`).
+                        let groups_obj = crate::object::js_object_alloc(0, 0);
+                        for (name, m) in &group_names {
+                            let val = if let Some(m) = m {
+                                let str_ptr = js_string_from_str(m.as_str());
+                                js_nanbox_string(str_ptr as i64)
+                            } else {
+                                f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
+                            };
+                            let key_ptr = crate::string::js_string_from_bytes(
+                                name.as_ptr(),
+                                name.len() as u32,
+                            );
+                            crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
+                        }
+                        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
+                    } else {
+                        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
+                    }
+
                     arr
                 }
-                None => ptr::null_mut(),
+                None => {
+                    LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
+                    ptr::null_mut()
+                }
             }
         }
     }
@@ -804,6 +852,25 @@ pub extern "C" fn js_regexp_exec_get_groups() -> i64 {
             ptr as i64
         }
     })
+}
+
+/// GC root scanner for `LAST_EXEC_GROUPS`. The groups object built by
+/// `js_regexp_exec` / `js_string_match` is stashed in this thread-local
+/// for later `m.groups` reads — without scanning it as a root, a GC
+/// firing between the match call and the property read can reclaim the
+/// object, and subsequent reads dereference freed memory. Surfaced when
+/// the `m.groups` fold was extended to cover `str.match(regex)` results
+/// alongside `regex.exec(str)`: a sequence of match calls plus
+/// allocations between them was enough to trigger nursery GC mid-test.
+pub fn scan_last_exec_groups_root(mark: &mut dyn FnMut(f64)) {
+    LAST_EXEC_GROUPS.with(|g| {
+        let ptr = *g.borrow();
+        if !ptr.is_null() {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+            mark(f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK)));
+        }
+    });
 }
 
 /// Get regex.source — returns the pattern string

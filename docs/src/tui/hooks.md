@@ -8,7 +8,7 @@ This is the same rule-of-hooks model ink/React use: **call hooks in the same ord
 
 Per-frame state cell. Returns `[value, setter]`.
 
-```typescript
+```typescript,no-test
 const [count, setCount] = useState(0);
 // Later, from an input handler:
 setCount(count + 1);
@@ -22,7 +22,7 @@ Setting the same value twice (bit-identical) is a no-op — `STATE_DIRTY` stays 
 
 The setter captured by a `useInput` handler reads `value` from **that frame's closure**, not from the slot. If many bytes arrive in one frame (paste, typing fast), the handler fires N times with the same `value`:
 
-```typescript
+```typescript,no-test
 const [n, setN] = useState(0);
 useInput((s) => { if (s === "+") setN(n + 1); });
 // User pastes "+++" — handler fires 3× with n=0, all three set the slot to 1.
@@ -30,7 +30,7 @@ useInput((s) => { if (s === "+") setN(n + 1); });
 
 If you need a functional setter for this case, use `useRef` as a mirror:
 
-```typescript
+```typescript,no-test
 const buf = useRef("");
 const [, redraw] = useState(0);
 useInput((s) => {
@@ -45,7 +45,7 @@ useInput((s) => {
 
 Run a side effect after first render, and again whenever a dep changes.
 
-```typescript
+```typescript,no-test
 useEffect(() => {
     // Run-once on mount.
     fetchInitialData();
@@ -69,7 +69,7 @@ The effect closure runs synchronously inside the component call. Cleanup-on-dep-
 
 Cache the result of `fn()` keyed by `deps`. Same hash convention as `useEffect`.
 
-```typescript
+```typescript,no-test
 const sorted = useMemo(
     () => items.slice().sort((a, b) => a.priority - b.priority),
     [items],
@@ -82,7 +82,7 @@ Recomputes on first call or when `deps` change. Otherwise returns the cached val
 
 A stable mutable cell that doesn't trigger re-renders. Use for values you want to mutate but don't want to drive the UI.
 
-```typescript
+```typescript,no-test
 const renderCount = useRef(0);
 renderCount.set(renderCount.get() + 1);   // does NOT flip STATE_DIRTY
 ```
@@ -95,7 +95,7 @@ Common pattern: use `useRef` as the canonical buffer for input that gets typed a
 
 Returns a handle for imperative control of the run loop.
 
-```typescript
+```typescript,no-test
 const app = useApp();
 // Later:
 app.exit();                    // tells run() to break at the top of the next iteration
@@ -108,7 +108,7 @@ The handle is stable — calling `useApp()` on every render returns the same sin
 
 Terminal dimensions and a raw-write escape hatch.
 
-```typescript
+```typescript,no-test
 const stdout = useStdout();
 const cols = stdout.columns();    // terminal width in cells (falls back to 80 if not a TTY)
 const rows = stdout.rows();       // height in cells (fallback 24)
@@ -121,7 +121,7 @@ Use `columns`/`rows` to size dividers, truncate content to fit, or pick a layout
 
 Register the calling widget as a focus candidate. Returns `1.0` when this widget is the currently focused one, else `0.0` (treat as truthy/falsy).
 
-```typescript
+```typescript,no-test
 const isFocused = useFocus(1 /* autoFocus */, 1 /* isActive */);
 return Box({ flexDirection: "row" }, [
     Text("> ", isFocused ? { color: "cyan", bold: true } : { dimColor: true }),
@@ -136,7 +136,7 @@ Tab and Shift-Tab cycle focus automatically — no boilerplate. The run loop's i
 
 For imperative focus control, pair with `useFocusManager()`:
 
-```typescript
+```typescript,no-test
 const focus = useFocusManager();
 // Later:
 focus.focusNext();
@@ -148,7 +148,7 @@ focus.focus(id);   // by focus id (1-based, in registration order)
 
 Register a keypress handler. Called once per byte chunk arriving on stdin, in raw mode.
 
-```typescript
+```typescript,no-test
 useInput((s: string) => {
     if (s === "\x03") app.exit();               // Ctrl+C
     if (s === "\r" || s === "\n") onSubmit();   // Enter

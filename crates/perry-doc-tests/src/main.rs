@@ -23,9 +23,10 @@ struct Cli {
     #[arg(long)]
     filter: Option<String>,
 
-    /// Skip examples whose relative path contains this substring.
+    /// Skip examples whose relative path contains any of these substrings.
+    /// Repeat the flag to exclude multiple paths.
     #[arg(long)]
-    filter_exclude: Option<String>,
+    filter_exclude: Vec<String>,
 
     /// Write a JSON report to this path.
     #[arg(long)]
@@ -171,10 +172,8 @@ fn run(cli: &Cli) -> Result<i32> {
                 continue;
             }
         }
-        if let Some(f) = &cli.filter_exclude {
-            if rel.contains(f) {
-                continue;
-            }
+        if cli.filter_exclude.iter().any(|f| rel.contains(f)) {
+            continue;
         }
 
         if !cli.xcompile_only {

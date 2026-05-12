@@ -68,6 +68,17 @@ pub struct LoweringContext {
     /// avoiding the creation of shadow fields that cause later index shift bugs after
     /// inheritance resolution in codegen.
     pub(crate) class_field_names: Vec<(String, Vec<String>)>,
+    /// Issue #665 (sixth pass): per-class set of getter+setter property names.
+    /// Used by the "infer fields from ctor body `this.x = ...`" pass to avoid
+    /// mis-categorising a setter assignment as an own data field — the
+    /// rate-limiter-flexible `set points(v)` / `this.points = opts.points`
+    /// shape, where the bare-`this` field-detection block in
+    /// `lower_class_decl` would otherwise allocate an `Object.keys`-visible
+    /// `points` slot that shadows the inherited getter at runtime.
+    /// Populated alongside `register_class_field_names`; looked up via
+    /// `lookup_class_accessor_names` and walked across the parent chain when
+    /// processing a subclass's ctor body.
+    pub(crate) class_accessor_names: Vec<(String, Vec<String>)>,
     /// Issue #562: class name → `(module, class)` tuple from
     /// `native_extends`. Populated when lowering each class, consumed by
     /// `destructuring.rs` to register `let x = new SubclassOfStream()`
@@ -311,6 +322,7 @@ impl LoweringContext {
             classes: Vec::new(),
             class_statics: Vec::new(),
             class_field_names: Vec::new(),
+            class_accessor_names: Vec::new(),
             class_native_extends: Vec::new(),
             class_field_types: Vec::new(),
             enums: Vec::new(),
@@ -634,6 +646,37 @@ impl LoweringContext {
     /// Look up the list of instance field names declared on a class (NOT including inherited).
     pub(crate) fn lookup_class_field_names(&self, class_name: &str) -> Option<&[String]> {
         self.class_field_names
+            .iter()
+            .find(|(n, _)| n == class_name)
+            .map(|(_, f)| f.as_slice())
+    }
+
+    /// Issue #665: register the getter+setter property names for a class.
+    /// Mirrors `register_class_field_names`; consumed by the ctor-body
+    /// field-detection pass to skip names that are accessors. Stored as the
+    /// own+inherited union so a child lookup sees the full chain in one hop.
+    pub(crate) fn register_class_accessor_names(
+        &mut self,
+        class_name: String,
+        accessor_names: Vec<String>,
+    ) {
+        if let Some(entry) = self
+            .class_accessor_names
+            .iter_mut()
+            .find(|(n, _)| *n == class_name)
+        {
+            entry.1 = accessor_names;
+        } else {
+            self.class_accessor_names.push((class_name, accessor_names));
+        }
+    }
+
+    /// Look up the accessor (getter+setter) property names registered for a
+    /// class. The stored list includes inherited accessors (mirroring how
+    /// `class_field_names` stores the own+inherited union), so callers do
+    /// not need to walk the parent chain themselves.
+    pub(crate) fn lookup_class_accessor_names(&self, class_name: &str) -> Option<&[String]> {
+        self.class_accessor_names
             .iter()
             .find(|(n, _)| n == class_name)
             .map(|(_, f)| f.as_slice())
@@ -7643,9 +7686,44 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     let prop_expr = match &member.prop {
                         ast::MemberProp::Ident(ident) => {
                             let prop_name = ident.sym.to_string();
-                            Expr::PropertyGet {
-                                object: Box::new(obj_expr.clone()),
-                                property: prop_name,
+                            // Mirror the eager-fold from
+                            // `expr_member::lower_member` for `m.index` /
+                            // `m.groups` when `m` is a tracked
+                            // regex.exec()/string.match() result. The
+                            // standard `lower_member` fires when the
+                            // AST is `m.groups`; for the optional-chain
+                            // form `m?.groups` SWC routes here, the
+                            // `member.obj` has already been lowered to
+                            // `LocalGet(...)`, so `lower_member`'s
+                            // `ast::Expr::Ident` check fails. Intercept
+                            // here so the optional-chain shape also
+                            // resolves to the thread-local groups
+                            // object instead of a generic property
+                            // read that returns undefined.
+                            if (prop_name == "groups" || prop_name == "index")
+                                && match member.obj.as_ref() {
+                                    ast::Expr::Ident(ident) => {
+                                        ctx.regex_exec_locals.contains(&ident.sym.to_string())
+                                    }
+                                    ast::Expr::TsNonNull(nn) => match nn.expr.as_ref() {
+                                        ast::Expr::Ident(ident) => {
+                                            ctx.regex_exec_locals.contains(&ident.sym.to_string())
+                                        }
+                                        _ => false,
+                                    },
+                                    _ => false,
+                                }
+                            {
+                                if prop_name == "groups" {
+                                    Expr::RegExpExecGroups
+                                } else {
+                                    Expr::RegExpExecIndex
+                                }
+                            } else {
+                                Expr::PropertyGet {
+                                    object: Box::new(obj_expr.clone()),
+                                    property: prop_name,
+                                }
                             }
                         }
                         ast::MemberProp::Computed(comp) => {
@@ -7897,19 +7975,17 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 return Ok(result);
             }
 
-            // General case: desugar to `tag(stringsArray, ...exprs)`
-            // The strings array uses each quasi's COOKED value (with escapes
-            // processed). Per spec it should also have a `.raw` property, but
-            // most user code doesn't read it; if a test exercises that we can
-            // upgrade to a wrapper object later.
+            // General case: desugar to `tag(stringsArray, ...exprs)`. The
+            // strings array carries the cooked text (escapes processed) AS
+            // the array elements AND the raw text (escapes preserved) via
+            // a thread-local side table populated at the call site —
+            // `TaggedTemplateStrings` codegen emits both arrays + a
+            // `js_tagged_template_register_raw` call so `strings.raw` reads
+            // can resolve via the matching `Expr::TemplateRaw` fold below.
             let cooked_strings: Vec<Expr> = tpl
                 .quasis
                 .iter()
                 .map(|q| {
-                    // Each quasi has both `raw` and an optional `cooked` form;
-                    // prefer `cooked` so escapes like `\n` are processed.
-                    // `cooked` is a `Wtf8Atom` whose `as_str()` returns `Option<&str>`
-                    // (None when the original source had non-UTF8 bytes — falls back to raw).
                     let cooked_owned: Option<String> = q
                         .cooked
                         .as_ref()
@@ -7918,7 +7994,15 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     Expr::String(s)
                 })
                 .collect();
-            let strings_array = Expr::Array(cooked_strings);
+            let raw_strings: Vec<String> = tpl
+                .quasis
+                .iter()
+                .map(|q| q.raw.as_ref().to_string())
+                .collect();
+            let strings_array = Expr::TaggedTemplateStrings {
+                cooked: cooked_strings,
+                raw: raw_strings,
+            };
 
             let mut call_args: Vec<Expr> = Vec::with_capacity(tpl.exprs.len() + 1);
             call_args.push(strings_array);
@@ -9800,7 +9884,9 @@ fn is_regex_exec_init(ctx: &LoweringContext, init: &ast::Expr) -> bool {
         if let ast::Callee::Expr(callee) = &call.callee {
             if let ast::Expr::Member(member) = callee.as_ref() {
                 if let ast::MemberProp::Ident(method) = &member.prop {
-                    if method.sym.as_ref() == "exec" {
+                    let name = method.sym.as_ref();
+                    // `regex.exec(str)` — receiver is RegExp.
+                    if name == "exec" {
                         return match member.obj.as_ref() {
                             ast::Expr::Lit(ast::Lit::Regex(_)) => true,
                             ast::Expr::Ident(ident) => ctx
@@ -9809,6 +9895,44 @@ fn is_regex_exec_init(ctx: &LoweringContext, init: &ast::Expr) -> bool {
                                 .unwrap_or(false),
                             _ => false,
                         };
+                    }
+                    // `str.match(regex)` — receiver is String (or
+                    // untyped/Any). The match result has the same
+                    // .index / .groups shape as exec() when the regex
+                    // isn't global, so reuse the same thread-local
+                    // pickup (LAST_EXEC_GROUPS). The match runtime
+                    // stores groups there alongside exec.
+                    if name == "match" {
+                        let recv_ok = match member.obj.as_ref() {
+                            ast::Expr::Lit(ast::Lit::Str(_)) | ast::Expr::Tpl(_) => true,
+                            ast::Expr::Ident(ident) => {
+                                // Accept String OR Any/unknown — false
+                                // positives are limited to user-defined
+                                // `.match()` on Any-typed receivers and
+                                // their `.groups` reads naturally fall
+                                // through to undefined when no string-
+                                // match preceded them.
+                                let ty = ctx.lookup_local_type(ident.sym.as_ref());
+                                matches!(ty, Some(Type::String) | Some(Type::Any) | None)
+                            }
+                            _ => false,
+                        };
+                        // Skip global regex matches — match() with /g
+                        // returns a flat array of full matches with no
+                        // group metadata. Detect via a regex-literal
+                        // arg with `g` flag; an Ident arg (regex stored
+                        // in a variable) is optimistically treated as
+                        // non-global since the common shape is `str.match(/.../)`.
+                        if recv_ok {
+                            let first_arg_is_global_regex =
+                                call.args.first().and_then(|arg| match arg.expr.as_ref() {
+                                    ast::Expr::Lit(ast::Lit::Regex(rx)) => {
+                                        Some(rx.flags.as_ref().contains('g'))
+                                    }
+                                    _ => None,
+                                });
+                            return !matches!(first_arg_is_global_regex, Some(true));
+                        }
                     }
                 }
             }

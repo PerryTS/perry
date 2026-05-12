@@ -144,7 +144,7 @@ fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
             Some(d) => d,
             None => return false,
         };
-        let action = match action_decision.navigation_action() {
+        let mut action = match action_decision.navigation_action() {
             Some(a) => a,
             None => return false,
         };
@@ -220,7 +220,13 @@ fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
         if on_error == 0.0 {
             return false;
         }
-        let code = error.code() as f64;
+        // glib::Error doesn't expose `code()` in glib 0.20+; reach into the
+        // underlying GError struct via ToGlibPtr to read the raw i32 code.
+        let code = unsafe {
+            use gtk4::glib::translate::ToGlibPtr;
+            let ptr: *const gtk4::glib::ffi::GError = error.to_glib_none().0;
+            (*ptr).code as f64
+        };
         let msg = error.message().to_string();
         let msg_nb = nanbox_str(&msg);
         let closure_ptr = unsafe { js_nanbox_get_pointer(on_error) } as *const u8;
@@ -309,10 +315,19 @@ pub fn clear_cookies(handle: i64) {
     WEBVIEW_STATES.with(|s| {
         if let Some(st) = s.borrow().get(&handle) {
             if let Some(session) = st.webview.network_session() {
-                let cookie_mgr = session.cookie_manager();
-                if let Some(mgr) = cookie_mgr {
+                // webkit6 0.4 removed CookieManager::delete_all_cookies in
+                // favor of WebsiteDataManager::clear with a type bitmask.
+                // COOKIES bitflag + duration 0 = "all cookies since epoch".
+                if let Some(dm) = session.website_data_manager() {
                     let cancellable: Option<&gtk4::gio::Cancellable> = None;
-                    mgr.delete_all_cookies(cancellable, |_| {});
+                    // glib::TimeSpan is microseconds. 0 = "from epoch" =
+                    // clear all cookies regardless of age.
+                    dm.clear(
+                        webkit6::WebsiteDataTypes::COOKIES,
+                        gtk4::glib::TimeSpan::from_seconds(0),
+                        cancellable,
+                        |_| {},
+                    );
                 }
             }
         }
@@ -323,7 +338,9 @@ pub fn set_user_agent(handle: i64, ua_ptr: *const u8) {
     let ua = str_from_header(ua_ptr).to_string();
     WEBVIEW_STATES.with(|s| {
         if let Some(st) = s.borrow().get(&handle) {
-            if let Some(settings) = st.webview.settings() {
+            // WidgetExt::settings and WebViewExt::settings collide — fully
+            // qualify to the WebView one.
+            if let Some(settings) = webkit6::prelude::WebViewExt::settings(&st.webview) {
                 settings.set_user_agent(Some(&ua));
             }
         }

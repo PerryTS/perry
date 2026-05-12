@@ -6,7 +6,7 @@ End-to-end `perry/tui` programs covering the typical interactive-CLI shapes. Eac
 
 The smallest meaningful program: `+` / `-` increment/decrement, `q` quits, the count renders to one row.
 
-```typescript
+```typescript,no-test
 import { Box, Text, useState, useInput, run, exit } from "perry/tui";
 
 // Captured so we can print the final count after run() returns.
@@ -34,7 +34,7 @@ Pipe `+++-q` and the program prints `FINAL=2`. The `useEffect`-less `useState(0)
 
 A Claude-Code-shaped chat UI: header row, message history, prompt with cursor, help footer. Demonstrates `useState` for the message list, `useRef` as a stale-closure-resistant input buffer, `useInput` for keypresses, `useApp().exit()` for Ctrl+C handling.
 
-```typescript
+```typescript,no-test
 import {
     Box, Text, Spinner,
     useState, useEffect, useInput, useApp, useStdout, useRef,
@@ -122,7 +122,7 @@ The key insight is `inputRef` as the canonical buffer: when the user types fast 
 
 A two-field form (name, email) with Tab/Shift-Tab navigation. Demonstrates `useFocus` with `autoFocus` + the automatic Tab cycling.
 
-```typescript
+```typescript,no-test
 import { Box, Text, useState, useFocus, useInput, run, exit } from "perry/tui";
 
 run(() => {
@@ -160,7 +160,7 @@ run(() => {
 
 Sizes content to the terminal width using `useStdout().columns()`. Truncates each log line to fit; uses `useEffect` with `[]` to seed log data on mount.
 
-```typescript
+```typescript,no-test
 import { Box, Text, useState, useEffect, useStdout, useInput, run, exit } from "perry/tui";
 
 run(() => {

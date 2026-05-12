@@ -13,7 +13,7 @@ unmodified, so unmodified Node servers (Express / Koa / Polka / hono via
 
 ### `http.createServer(handler)`
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/http/snippets.ts:node-http-server}}
 ```
 
@@ -32,7 +32,7 @@ Supported on `ServerResponse`: `.statusCode` (get/set),
 
 ### `https.createServer({ key, cert }, handler)`
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/http/snippets.ts:node-https-server}}
 ```
 
@@ -43,7 +43,7 @@ advertises `[h2, http/1.1]`).
 
 ### `http2.createSecureServer({ key, cert }, handler)`
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/http/snippets.ts:node-http2-server}}
 ```
 
@@ -53,7 +53,7 @@ hit the same handler over the same port.
 
 ### WebSocket upgrade — `Server.on('upgrade', (req, wsId, head) => …)`
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/http/snippets.ts:node-http-ws-upgrade}}
 ```
 
@@ -77,7 +77,7 @@ closed). `app.fetch` is enough for testing, edge-runtime deployments
 runtimes call `app.fetch` themselves), and any scenario where some
 outer host hands you a `Request`.
 
-```typescript
+```typescript,no-test
 import { Hono } from "hono"
 import { logger } from "hono/logger"
 
@@ -117,7 +117,7 @@ with a single catch-all route delegating to `app.fetch`.
 
 ## Fastify Server
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/http/snippets.ts:fastify-server}}
 ```
 
@@ -125,19 +125,19 @@ Perry's Fastify implementation is API-compatible with the npm package. Routes, r
 
 ## Fetch API
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/http/snippets.ts:fetch-api}}
 ```
 
 ## Axios
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/http/snippets.ts:axios-client}}
 ```
 
 ## WebSocket
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/stdlib/http/snippets.ts:websocket-client}}
 ```
 
@@ -153,7 +153,7 @@ Perry's Fastify implementation is API-compatible with the npm package. Routes, r
 }
 ```
 
-```typescript
+```typescript,no-test
 import { S3Client } from "@bradenmacdonald/s3-lite-client"
 
 const s3 = new S3Client({

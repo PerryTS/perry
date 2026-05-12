@@ -3798,6 +3798,8 @@ pub fn gc_init() {
     gc_register_root_scanner(timer_root_scanner);
     gc_register_root_scanner(exception_root_scanner);
     gc_register_root_scanner(shape_cache_root_scanner);
+    gc_register_root_scanner(crate::regex::scan_last_exec_groups_root);
+    gc_register_root_scanner(crate::array::scan_template_raw_roots);
     gc_register_root_scanner(transition_cache_root_scanner);
     gc_register_root_scanner(overflow_fields_root_scanner);
     gc_register_root_scanner(json_parse_root_scanner);

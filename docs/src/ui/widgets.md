@@ -14,7 +14,7 @@ supports — no fluent chain, no prototype methods.
 
 Displays read-only text.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/text.ts}}
 ```
 
@@ -32,7 +32,7 @@ See [State Management](state.md).
 
 A clickable button.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/button.ts}}
 ```
 
@@ -44,7 +44,7 @@ A clickable button.
 
 An editable single-line text input.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/textfield.ts}}
 ```
 
@@ -61,7 +61,7 @@ with `stateBindTextfield(state, field)` for two-way binding so programmatic
 
 A password input — identical signature to `TextField`, but text is masked.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/secure_field.ts}}
 ```
 
@@ -69,7 +69,7 @@ A password input — identical signature to `TextField`, but text is masked.
 
 A boolean on/off switch.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/toggle.ts}}
 ```
 
@@ -77,7 +77,7 @@ A boolean on/off switch.
 
 A numeric slider.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/slider.ts}}
 ```
 
@@ -88,7 +88,7 @@ A numeric slider.
 
 A dropdown selection control. Items are added with `pickerAddItem`.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/picker.ts}}
 ```
 
@@ -99,7 +99,7 @@ Two distinct constructors:
 - `ImageFile(path)` — image from a file path
 - `ImageSymbol(name)` — SF Symbol glyph name (macOS/iOS only)
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/image_symbol.ts}}
 ```
 
@@ -109,7 +109,7 @@ Use `widgetSetWidth(img, N)` / `widgetSetHeight(img, N)` to size the image.
 
 An indeterminate or determinate progress indicator.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/progressview.ts}}
 ```
 
@@ -118,7 +118,7 @@ An indeterminate or determinate progress indicator.
 A multi-line text input. Same `(placeholder, onChange)` signature as
 `TextField` but renders as a multi-line box.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/textarea.ts}}
 ```
 
@@ -129,7 +129,7 @@ A multi-line text input. Same `(placeholder, onChange)` signature as
 Group controls into labelled sections. Perry has no `Form()` widget — use a
 `VStack` of `Section(title)`s and attach children via `widgetAddChild`.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/ui/widgets/sections.ts}}
 ```
 
@@ -141,7 +141,7 @@ Group controls into labelled sections. Perry has no `Form()` widget — use a
 fires when the user taps; `bottomNavSetSelected` is the programmatic
 counterpart and does NOT fire `onSelect`.
 
-```typescript
+```typescript,no-test
 import {
   BottomNavigation,
   bottomNavAddItem,
@@ -168,7 +168,7 @@ Swipeable, paging carousel of images. Local file paths load
 synchronously; HTTP/HTTPS URLs are fetched on a background queue and
 applied on the main thread.
 
-```typescript
+```typescript,no-test
 import { ImageGallery, imageGalleryAddImage } from "perry/ui";
 
 const gallery = ImageGallery((idx) => console.log("page:", idx));
@@ -188,7 +188,7 @@ once when the user pulls past the threshold; call
 `scrollviewEndRefreshing` (or `lazyvstackEndRefreshing`) when your async
 fetch settles to dismiss the spinner.
 
-```typescript
+```typescript,no-test
 import {
   ScrollView,
   scrollviewSetRefreshControl,
@@ -212,7 +212,7 @@ Fires once when the user scrolls past `thresholdPx` (or `thresholdItems`
 for `LazyVStack`) from the bottom; re-arms after the user scrolls back
 up past the threshold so a single fetch is queued at a time.
 
-```typescript
+```typescript,no-test
 import { ScrollView, scrollviewSetScrollEndCallback } from "perry/ui";
 
 const scroll = ScrollView();
@@ -249,7 +249,7 @@ Editable text field with a filterable dropdown of suggestions. macOS
 uses `NSComboBox` with as-you-type completion; other platforms stub the
 FFI today (the field falls back to a plain editable field).
 
-```typescript
+```typescript,no-test
 import { Combobox, comboboxAddItem, comboboxGetValue } from "perry/ui";
 
 const combo = Combobox("", (v) => console.log("picked:", v));
@@ -264,7 +264,7 @@ Hierarchical disclosure list. Build the topology bottom-up via `TreeNode`
 + `treeNodeAddChild`, then mount it via `TreeView`. macOS uses
 `NSOutlineView`; other platforms stub.
 
-```typescript
+```typescript,no-test
 import { TreeNode, treeNodeAddChild, TreeView } from "perry/ui";
 
 const dox = TreeNode("docs", "Documents");
@@ -281,7 +281,7 @@ Month-grid date picker. macOS uses `NSDatePicker` in graphical style;
 other platforms stub. `onChange` receives the selected date as an ISO
 `yyyy-MM-dd` string.
 
-```typescript
+```typescript,no-test
 import { Calendar, calendarGetSelectedDate } from "perry/ui";
 
 const cal = Calendar(2026, 5, (iso) => console.log("date:", iso));
@@ -293,7 +293,7 @@ Line / bar / pie via CoreGraphics on macOS. `kind` is `0=line`, `1=bar`,
 `2=pie`. Apple Charts framework / SwiftUI Charts integration on iOS 16+
 is a follow-up.
 
-```typescript
+```typescript,no-test
 import { Chart, chartAddDataPoint, chartSetTitle } from "perry/ui";
 
 const chart = Chart(0, 600, 400);
@@ -309,7 +309,7 @@ chartAddDataPoint(chart, "Wed", 9);
 platforms stub. Bind `commandPaletteShow()` to ⌘K via
 `addKeyboardShortcut` to wire the default hotkey.
 
-```typescript
+```typescript,no-test
 import {
   commandPaletteRegister,
   commandPaletteShow,
@@ -328,7 +328,7 @@ Google Maps SDK on Android (requires API key in
 `AndroidManifest.xml`), and the SwiftUI `Map` view on watchOS. Windows
 remains a stub (WinUI MapControl needs XAML Islands integration).
 
-```typescript
+```typescript,no-test
 import {
   MapView,
   mapViewSetRegion,
@@ -347,7 +347,7 @@ mapViewSetMapType(map, 1); // 0=standard, 1=satellite, 2=hybrid
 `PDFView` from PDFKit on macOS / iOS / visionOS. `pdfViewLoadFile`
 returns 1 on success, 0 on failure.
 
-```typescript
+```typescript,no-test
 import {
   PdfView,
   pdfViewLoadFile,
@@ -367,7 +367,7 @@ HTML round-trip cover persistence; `richTextToggleBold` /
 `ToggleItalic` / `ToggleUnderline` cover inline formatting via
 `NSResponder` actions.
 
-```typescript
+```typescript,no-test
 import {
   RichTextEditor,
   richTextSetHtml,

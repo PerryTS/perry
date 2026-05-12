@@ -6,7 +6,73 @@
 //! - Elements array (inline)
 
 use crate::arena::arena_alloc_gc;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ptr;
+
+thread_local! {
+    /// Tagged-template `.raw` side-table — maps a cooked-strings array
+    /// pointer to its corresponding raw-strings array pointer. Populated
+    /// by `js_tagged_template_register_raw` at the tagged-call site; read
+    /// by `js_template_raw` (HIR-folded from `<arg>.raw` on array
+    /// receivers). Untagged arrays naturally miss the map and surface
+    /// `undefined`, matching the JS semantics `[].raw === undefined`.
+    /// Both pointers are GC-rooted via `scan_template_raw_roots`.
+    static TEMPLATE_RAW_MAP: RefCell<HashMap<usize, *mut ArrayHeader>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Register the (cooked, raw) pair for a tagged-template call. Returns
+/// `cooked` (so the codegen can chain it inline into the call args).
+#[no_mangle]
+pub extern "C" fn js_tagged_template_register_raw(
+    cooked: *mut ArrayHeader,
+    raw: *mut ArrayHeader,
+) -> *mut ArrayHeader {
+    if !cooked.is_null() && !raw.is_null() {
+        TEMPLATE_RAW_MAP.with(|m| {
+            m.borrow_mut().insert(cooked as usize, raw);
+        });
+    }
+    cooked
+}
+
+/// Read the raw-strings array for a cooked array, or 0 if not a
+/// tagged-template strings array.
+#[no_mangle]
+pub extern "C" fn js_template_raw(cooked: *const ArrayHeader) -> i64 {
+    let cleaned = clean_arr_ptr(cooked);
+    if cleaned.is_null() {
+        return 0;
+    }
+    TEMPLATE_RAW_MAP.with(|m| {
+        m.borrow()
+            .get(&(cleaned as usize))
+            .map(|&p| p as i64)
+            .unwrap_or(0)
+    })
+}
+
+/// GC root scanner — keeps both cooked and raw arrays in template
+/// pairs reachable. Pruning of dead-cooked entries happens lazily on
+/// next read miss; for now the map grows unbounded but it's tiny in
+/// practice (one entry per distinct tagged-template call site).
+pub fn scan_template_raw_roots(mark: &mut dyn FnMut(f64)) {
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    TEMPLATE_RAW_MAP.with(|m| {
+        for (cooked_addr, raw_ptr) in m.borrow().iter() {
+            mark(f64::from_bits(
+                POINTER_TAG | (*cooked_addr as u64 & POINTER_MASK),
+            ));
+            if !raw_ptr.is_null() {
+                mark(f64::from_bits(
+                    POINTER_TAG | (*raw_ptr as u64 & POINTER_MASK),
+                ));
+            }
+        }
+    });
+}
 
 /// Strip NaN-boxing tags from an array pointer and guard against invalid values.
 ///

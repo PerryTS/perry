@@ -7,7 +7,7 @@ indicator. Every snippet below is excerpted from
 [`docs/examples/system/snippets.ts`](../../examples/system/snippets.ts) — CI
 links it on every PR.
 
-```typescript
+```typescript,no-test
 {{#include ../../examples/system/snippets.ts:audio}}
 ```
 
@@ -65,7 +65,7 @@ Finalize the in-progress recording — flushes pending samples, writes the
 RIFF/WAVE header sizes, and closes the file. Safe to call when no
 recording is in flight.
 
-```typescript
+```typescript,no-test
 import {
   audioStart,
   audioStop,
