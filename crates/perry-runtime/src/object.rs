@@ -1017,6 +1017,161 @@ pub static CLASS_VTABLE_REGISTRY: RwLock<Option<HashMap<u32, ClassVTable>>> = Rw
 /// classes without any methods. Refs #618 / #420 followup.
 pub static REGISTERED_CLASS_IDS: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
 
+/// Issue #711 part 2: `function Base() {}; Base.prototype = obj` pattern.
+/// Effect's `internal/effectable.ts` declares classes via prototype
+/// assignment on a plain function, not via `class` syntax. To make
+/// `class Derived extends Base {}` walk into `obj`'s methods at dispatch
+/// time, we model this as a synthetic class:
+///   - `js_set_function_prototype(func, obj)` allocates a synthetic
+///     class_id (high-bit-set to avoid collision with codegen-assigned
+///     ids), stores `func_bits → synthetic_cid` in `FUNCTION_CLASS_IDS`,
+///     and `synthetic_cid → obj_ptr` in `CLASS_PROTOTYPE_OBJECTS`.
+///   - `js_register_class_parent_dynamic` extends to detect closure
+///     parent values, looks up the synthetic class_id, and registers
+///     the (child, synthetic) edge in CLASS_REGISTRY.
+///   - The method-dispatch chain walk in `js_native_call_method`
+///     consults `CLASS_PROTOTYPE_OBJECTS` when it reaches a synthetic
+///     class_id: it resolves the method as a regular field lookup on
+///     the prototype object and calls it with `this` bound to the
+///     receiver.
+pub static FUNCTION_CLASS_IDS: RwLock<Option<HashMap<u64, u32>>> = RwLock::new(None);
+// Stored as `usize` (raw address) so the map is Send + Sync. The
+// pointer is always converted back to `*mut ObjectHeader` at call sites
+// (`class_prototype_object` / the dispatch walk) where single-threaded
+// usage is guaranteed.
+pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> =
+    RwLock::new(None);
+
+/// Synthetic class id allocator for prototype-object classes. High bit
+/// set (0x8000_0000+) to keep them separate from codegen-assigned ids
+/// (which start from 1 and grow by module). u32 wraparound is not a
+/// concern in practice — would require ~2 billion `Function.prototype = X`
+/// statements at module init.
+pub static NEXT_SYNTHETIC_CLASS_ID: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x8000_0000);
+
+/// Register a function's prototype object. Called by codegen-emitted
+/// init code whenever the HIR detects `<expr>.prototype = <expr>` at
+/// the assignment-statement level (lower_expr_assignment Member arm).
+///
+/// Returns the synthetic class_id allocated for this function (0 if
+/// validation fails). The synthetic id is folded into CLASS_REGISTRY
+/// when a class extends `func` via the #711 dynamic-parent path.
+#[no_mangle]
+pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
+    let func_bits = func.to_bits();
+    let func_tag = func_bits & 0xFFFF_0000_0000_0000;
+    let proto_bits = proto.to_bits();
+    let proto_tag = proto_bits & 0xFFFF_0000_0000_0000;
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    // Both must be heap-allocated pointers. Anything else (primitives,
+    // ClassRef, etc.) is a no-op — preserves the pre-fix baseline
+    // where `<not-a-function>.prototype = X` was just a property write
+    // on a non-function value (effectively no-op in practice).
+    if func_tag != POINTER_TAG || proto_tag != POINTER_TAG {
+        return 0;
+    }
+    // Validate the proto pointer points at a real Object. If it's a
+    // builtin header (Set/Map/Regex) or null, bail — Perry can't
+    // currently model those as prototype sources.
+    let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
+    if proto_ptr.is_null() {
+        return 0;
+    }
+    let proto_addr = proto_ptr as usize;
+    if crate::set::is_registered_set(proto_addr)
+        || crate::map::is_registered_map(proto_addr)
+        || crate::regex::is_regex_pointer(proto_ptr as *const u8)
+    {
+        return 0;
+    }
+    unsafe {
+        if !is_valid_obj_ptr(proto_ptr as *const u8) {
+            return 0;
+        }
+        let gc_header =
+            (proto_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return 0;
+        }
+    }
+
+    // Allocate or reuse a synthetic class id for this function value.
+    // The same `function Base() {}` ident can be assigned a prototype
+    // multiple times in pathological code; we keep the FIRST mapping
+    // and quietly ignore subsequent calls so existing parent edges
+    // don't dangle.
+    {
+        let read = FUNCTION_CLASS_IDS.read().unwrap();
+        if let Some(map) = read.as_ref() {
+            if let Some(&existing) = map.get(&func_bits) {
+                // Update the prototype object (allow re-pointing)
+                // without changing the class_id.
+                let mut proto_write = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
+                if proto_write.is_none() {
+                    *proto_write = Some(HashMap::new());
+                }
+                proto_write
+                    .as_mut()
+                    .unwrap()
+                    .insert(existing, proto_ptr as usize);
+                return existing;
+            }
+        }
+    }
+    let new_cid = NEXT_SYNTHETIC_CLASS_ID
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    {
+        let mut write = FUNCTION_CLASS_IDS.write().unwrap();
+        if write.is_none() {
+            *write = Some(HashMap::new());
+        }
+        write.as_mut().unwrap().insert(func_bits, new_cid);
+    }
+    {
+        let mut write = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
+        if write.is_none() {
+            *write = Some(HashMap::new());
+        }
+        write
+            .as_mut()
+            .unwrap()
+            .insert(new_cid, proto_ptr as usize);
+    }
+    // Register the synthetic id so REGISTERED_CLASS_IDS-gated paths
+    // (e.g., the #687 ClassRef-as-receiver short-circuit) recognize it.
+    unsafe { js_register_class_id(new_cid) };
+    new_cid
+}
+
+/// Lookup helper for the dispatch chain walk: returns the prototype
+/// object pointer for a synthetic class id, or null if none.
+#[inline]
+pub(crate) fn class_prototype_object(class_id: u32) -> *mut ObjectHeader {
+    if let Ok(read) = CLASS_PROTOTYPE_OBJECTS.read() {
+        if let Some(map) = read.as_ref() {
+            return map
+                .get(&class_id)
+                .copied()
+                .unwrap_or(0) as *mut ObjectHeader;
+        }
+    }
+    std::ptr::null_mut()
+}
+
+/// Lookup the synthetic class id for a function value, if one was
+/// registered via `js_set_function_prototype`.
+#[inline]
+pub(crate) fn function_class_id(value: f64) -> u32 {
+    let bits = value.to_bits();
+    if let Ok(read) = FUNCTION_CLASS_IDS.read() {
+        if let Some(map) = read.as_ref() {
+            return map.get(&bits).copied().unwrap_or(0);
+        }
+    }
+    0
+}
+
 /// Register a class id so `js_value_typeof` can distinguish class refs
 /// (INT32-tagged with class_id payload) from real int32 numeric values.
 #[no_mangle]
@@ -1608,10 +1763,19 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
     } else if tag == POINTER_TAG {
         // Object instance: read class_id from the ObjectHeader.
         let ptr = crate::value::js_nanbox_get_pointer(parent_value) as *const ObjectHeader;
-        // `js_object_get_class_id` guards against null / non-object
-        // pointers (Set/Map/Regex headers, small handles) and
-        // returns 0 for invalid receivers — no further check needed.
-        js_object_get_class_id(ptr)
+        let from_obj = js_object_get_class_id(ptr);
+        if from_obj != 0 {
+            from_obj
+        } else {
+            // Issue #711 part 2: the value might be a closure whose
+            // `.prototype` was assigned to an object via the
+            // `function Base() {}; Base.prototype = X` pattern. Look
+            // up the synthetic class id assigned at
+            // `js_set_function_prototype` time. Returns 0 if the
+            // closure has no registered prototype object — falls
+            // through to the parentless baseline.
+            function_class_id(parent_value)
+        }
     } else {
         0
     };
@@ -3562,6 +3726,35 @@ pub extern "C" fn js_object_get_field_by_name(
                             }
                             _ => break,
                         }
+                    }
+                }
+            }
+
+            // Issue #711 part 2: walk the class chain for a registered
+            // prototype object (from `Function.prototype = X`). When
+            // found, the method is an own-property of the proto
+            // object — return its value directly. `pipe`, `[Equal.symbol]`,
+            // etc. on Effect's EffectPrototype reach here.
+            {
+                let mut cid = class_id;
+                let mut depth = 0usize;
+                while depth < 32 {
+                    let proto_obj = class_prototype_object(cid);
+                    if !proto_obj.is_null() {
+                        let field_val = js_object_get_field_by_name(
+                            proto_obj as *const _,
+                            key,
+                        );
+                        if !field_val.is_undefined() && !field_val.is_null() {
+                            return field_val;
+                        }
+                    }
+                    match get_parent_class_id(cid) {
+                        Some(p) if p != 0 && p != cid => {
+                            cid = p;
+                            depth += 1;
+                        }
+                        _ => break,
                     }
                 }
             }
@@ -6037,6 +6230,36 @@ pub unsafe extern "C" fn js_native_call_method(
                                         args_len,
                                         entry.param_count,
                                     );
+                                }
+                            }
+                            // Issue #711 part 2: if this class id has a
+                            // registered prototype object (from
+                            // `Function.prototype = X`), look up the
+                            // method as a regular property of that
+                            // object. Effect's `EffectPrototype.pipe()`
+                            // and friends are own-properties of the
+                            // proto object; the value is a closure that
+                            // expects `this = receiver`.
+                            let proto_obj = class_prototype_object(cur_cid);
+                            if !proto_obj.is_null() {
+                                let method_key = crate::string::js_string_from_bytes(
+                                    method_name.as_ptr(),
+                                    method_name.len() as u32,
+                                );
+                                let field_val = js_object_get_field_by_name(
+                                    proto_obj as *const _,
+                                    method_key as *const crate::StringHeader,
+                                );
+                                if !field_val.is_undefined() && !field_val.is_null() {
+                                    let prev_this =
+                                        IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                                    let result = crate::closure::js_native_call_value(
+                                        f64::from_bits(field_val.bits()),
+                                        args_ptr,
+                                        args_len,
+                                    );
+                                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                                    return result;
                                 }
                             }
                             match get_parent_class_id(cur_cid) {

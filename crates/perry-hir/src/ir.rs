@@ -1017,6 +1017,20 @@ pub enum Expr {
         parent_expr: Box<Expr>,
     },
 
+    // Issue #711 part 2: `<func_expr>.prototype = <obj_expr>` pattern,
+    // used by Effect's effectable.ts to declare prototype-based
+    // classes. Codegen emits a call to `js_set_function_prototype`
+    // which stores `func_value → synthetic_class_id` in a side-table
+    // and binds the object as the synthetic class's prototype source.
+    // When `class Derived extends <func>` evaluates later, the dynamic
+    // parent registration looks up that synthetic class_id and wires
+    // it into CLASS_REGISTRY so method dispatch on Derived instances
+    // walks through to the prototype object's methods.
+    SetFunctionPrototype {
+        func: Box<Expr>,
+        proto: Box<Expr>,
+    },
+
     // Static method call (e.g., Counter.increment())
     StaticMethodCall {
         class_name: String,

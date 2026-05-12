@@ -666,6 +666,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // class_id from the value (ClassRef payload or ObjectHeader.class_id)
     // and wires the (child, parent) edge into CLASS_REGISTRY.
     module.declare_function("js_register_class_parent_dynamic", VOID, &[I32, DOUBLE]);
+    // Issue #711 part 2: prototype-based class declaration via
+    // `<func>.prototype = <obj>`. Binds an object as the function's
+    // prototype source; subsequent `class X extends <func>` lookups
+    // dispatch into the object's methods. Returns the synthetic
+    // class id allocated for the function value (or 0 on validation
+    // failure). Codegen discards the return.
+    module.declare_function(
+        "js_set_function_prototype",
+        I32,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_typeerror_new", I64, &[I64]);
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);

@@ -682,8 +682,29 @@ pub(crate) fn lower_class_decl(
                     // class) tag for the runtime shim).
                     (None, Some(parent_name), native_parent, None)
                 } else {
-                    // Always capture the parent name for imported classes that may not have a ClassId
-                    (ctx.lookup_class(&parent_name), Some(parent_name), None, None)
+                    let parent_cid = ctx.lookup_class(&parent_name);
+                    if parent_cid.is_none() {
+                        // Issue #711 part 2: the Ident doesn't resolve to
+                        // any known class. The common case is Effect's
+                        // `const Base = (function() { function Base(){}; Base.prototype = X; return Base })()` pattern —
+                        // `Base` is a function value with a prototype
+                        // object attached via `js_set_function_prototype`.
+                        // Capture the Ident as `extends_expr` so the
+                        // dynamic parent-registration helper can resolve
+                        // it through `function_class_id` at runtime.
+                        // `extends_name` stays populated for the rare
+                        // cases where downstream code paths key on the
+                        // textual parent name (super-call codegen, etc.)
+                        // but extends_expr takes precedence on the
+                        // method-dispatch path.
+                        match lower_expr(ctx, super_class) {
+                            Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                            Err(_) => (None, Some(parent_name), None, None),
+                        }
+                    } else {
+                        // Always capture the parent name for imported classes that may not have a ClassId
+                        (parent_cid, Some(parent_name), None, None)
+                    }
                 }
             } else if let ast::Expr::Member(member) = super_class.as_ref() {
                 // Handle member expression like ethers.JsonRpcProvider or module.ClassName
@@ -1660,7 +1681,20 @@ pub(crate) fn lower_class_from_ast(
             if native_parent.is_some() {
                 (None, Some(parent_name), native_parent, None)
             } else {
-                (ctx.lookup_class(&parent_name), Some(parent_name), None, None)
+                let parent_cid = ctx.lookup_class(&parent_name);
+                if parent_cid.is_none() {
+                    // Issue #711 part 2: see the parallel arm in
+                    // `lower_class_decl` above. Unknown Ident super-class
+                    // falls through to extends_expr capture so a
+                    // function-with-prototype value can be resolved at
+                    // runtime via `function_class_id`.
+                    match lower_expr(ctx, super_class) {
+                        Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                        Err(_) => (None, Some(parent_name), None, None),
+                    }
+                } else {
+                    (parent_cid, Some(parent_name), None, None)
+                }
             }
         } else if let ast::Expr::Member(member) = super_class.as_ref() {
             // Refs #488 drizzle-sqlite: try cross-module class lookup. See
