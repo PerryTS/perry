@@ -1510,10 +1510,35 @@ pub extern "C" fn js_get_current_step_closure() -> *mut crate::closure::ClosureH
 pub extern "C" fn js_async_first_call(step_closure_nanbox: f64) -> f64 {
     let ptr = crate::value::js_nanbox_get_pointer(step_closure_nanbox)
         as *mut crate::closure::ClosureHeader;
+    // CRITICAL: clear `trap_next` for the inner activation. The previous
+    // implementation preserved `old.trap_next` so the inner step would
+    // "compose correctly" — but that allowed the inner async fn's
+    // `js_async_step_chain` to satisfy `can_reuse = trap_next != null
+    // && current_step == step_closure` (current_step was just set to
+    // `ptr`, the new inner step), causing the inner's first state
+    // transition to reuse and settle the OUTER activation's `trap_next`
+    // promise prematurely with the inner's intermediate value. Visible
+    // symptom: `async function tC() { try { await Promise.reject(e); }
+    // catch (e) { const r = await innerAsync(); return "wrap: " + r; } }`
+    // — tC.then fires with the inner's value (e.g. "helpC") instead of
+    // tC's actual wrapped return value ("wrap: helpC"). Path-dependent:
+    // top-level `await innerAsync()` (no try/catch) happens to work
+    // because the outer step's continuation overwrites the inner's
+    // premature settlement with the correct value; the busy-wait
+    // path used by Expr::Await inside __async_throw catch handlers
+    // doesn't have this overwrite, so the inner's premature settlement
+    // is the final state of tC's promise.
+    //
+    // Forcing `trap_next = null` here makes the inner's
+    // `js_async_step_chain` fail the gate, allocate its own next
+    // Promise, and only chain through that — leaving the outer
+    // `trap_next` untouched. The outer's chain reuse on its OWN
+    // resumption is unaffected (this restore at function exit puts
+    // `prev` back).
     let prev = INLINE_TRAP.with(|c| {
         let old = c.get();
         c.set(InlineTrap {
-            trap_next: old.trap_next,
+            trap_next: std::ptr::null_mut(),
             current_step: ptr as usize,
         });
         old
