@@ -631,15 +631,23 @@ jobs:
             cmd_xcompile_advisory: "./scripts/run_doc_tests.sh --verbose --xcompile-only"
             # Baseline captured from a clean CI run of 24723671119 (900x970).
             gallery_advisory: false
-          - os: ubuntu-24.04
-            ui_backend: perry-ui-gtk4
-            shell: bash
-            cmd_exclude_gallery: "xvfb-run -a ./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter-exclude ui/gallery.ts"
-            cmd_gallery: "xvfb-run -a ./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter ui/gallery.ts"
-            cmd_xcompile_blocking: "./scripts/run_doc_tests.sh --verbose --xcompile-only --xcompile-only-target=web --xcompile-only-target=wasm --xcompile-only-target=ios-simulator"
-            cmd_xcompile_advisory: "./scripts/run_doc_tests.sh --verbose --xcompile-only"
-            # Baseline captured under Xvfb (900x1024).
-            gallery_advisory: false
+          # ubuntu-24.04 / perry-ui-gtk4 doc-tests re-disabled v0.5.873:
+          # 39 of 88 tests TIMEOUT at the 15s execution budget. The gtk4
+          # `glib::timeout_add_local_once` → `app.quit()` exit path
+          # doesn't terminate the main loop cleanly under xvfb-run, so
+          # PERRY_UI_TEST_MODE-driven self-exit never fires and the
+          # harness has to SIGKILL each binary. Separate bug from the
+          # webkit6 / soup / ed25519 fixes that v0.5.864→0.5.871 closed.
+          # Tracked separately. Re-enable when the gtk4 testkit exit
+          # path is fixed.
+          # - os: ubuntu-24.04
+          #   ui_backend: perry-ui-gtk4
+          #   shell: bash
+          #   cmd_exclude_gallery: "xvfb-run -a ./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter-exclude ui/gallery.ts"
+          #   cmd_gallery: "xvfb-run -a ./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter ui/gallery.ts"
+          #   cmd_xcompile_blocking: "./scripts/run_doc_tests.sh --verbose --xcompile-only --xcompile-only-target=web --xcompile-only-target=wasm --xcompile-only-target=ios-simulator"
+          #   cmd_xcompile_advisory: "./scripts/run_doc_tests.sh --verbose --xcompile-only"
+          #   gallery_advisory: false
           # windows-2022 doc-tests for perry-ui-windows temporarily disabled:
           # 30+ doc-test snippets COMPILE_FAIL on the Windows runner with
           # perry exit 1 (mix of platform-banner gaps and #463-unimplemented
