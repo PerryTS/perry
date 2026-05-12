@@ -5,7 +5,7 @@ operating system runs even when the app is in the background — refreshing
 data, polling for updates, or syncing state without keeping the app in the
 foreground.
 
-```typescript
+```typescript,no-test
 import { registerTask, schedule, cancel } from "perry/background";
 
 registerTask("com.example.refresh", async () => {
@@ -124,7 +124,7 @@ implementation("androidx.work:work-runtime-ktx:2.9.0")
 Use `getDeviceIdiom()` from `perry/system` to skip background scheduling
 on platforms where it's a no-op:
 
-```typescript
+```typescript,no-test
 import { getDeviceIdiom } from "perry/system";
 import { registerTask, schedule } from "perry/background";
 

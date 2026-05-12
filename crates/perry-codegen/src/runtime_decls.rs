@@ -1299,6 +1299,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
 ///   our number ABI)
 pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_alloc", I64, &[I32]);
+    // Tagged-template `.raw` side-table helpers (per ECMA-262 §13.2.8.3
+    // TaggedTemplate Evaluation step 5: `template[Symbol.raw]` returns
+    // an array of raw strings).
+    module.declare_function("js_tagged_template_register_raw", I64, &[I64, I64]);
+    module.declare_function("js_template_raw", I64, &[I64]);
     // Convenience alias for `js_array_alloc(0)`; emitted by lower_call's
     // `new Array()` no-arg branch. Issue #432: clang rejected
     // Effect 3.21.2's `internal/fiberRuntime.ts` IR with

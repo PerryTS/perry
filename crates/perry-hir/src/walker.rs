@@ -321,8 +321,15 @@ where
         | Expr::SetNewFromArray(v)
         | Expr::MapNewFromArray(v)
         | Expr::ArrayFlat { array: v }
-        | Expr::ArrayToReversed { array: v } => {
+        | Expr::ArrayToReversed { array: v }
+        | Expr::TemplateRaw(v) => {
             f(v);
+        }
+
+        Expr::TaggedTemplateStrings { cooked, .. } => {
+            for e in cooked {
+                f(e);
+            }
         }
 
         // v0.5.749: InstanceOf has TWO Expr children (expr + optional
@@ -1487,8 +1494,15 @@ where
         | Expr::SetNewFromArray(v)
         | Expr::MapNewFromArray(v)
         | Expr::ArrayFlat { array: v }
-        | Expr::ArrayToReversed { array: v } => {
+        | Expr::ArrayToReversed { array: v }
+        | Expr::TemplateRaw(v) => {
             f(v);
+        }
+
+        Expr::TaggedTemplateStrings { cooked, .. } => {
+            for e in cooked {
+                f(e);
+            }
         }
 
         // v0.5.749: InstanceOf has TWO Expr children (expr + optional

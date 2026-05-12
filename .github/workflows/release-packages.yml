@@ -137,13 +137,13 @@ jobs:
           - os: macos-15
             target: x86_64-apple-darwin
             artifact: perry-macos-x86_64
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact: perry-linux-x86_64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: perry-linux-aarch64
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             artifact: perry-linux-x86_64-musl
           - os: ubuntu-24.04-arm
@@ -206,7 +206,12 @@ jobs:
         # to correct problems" unless libunwind-dev is named explicitly.
         # ubuntu-24.04-arm doesn't have this issue but the explicit name
         # is harmless there.
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libunwind-dev libgstreamer1.0-dev
+        # libwebkitgtk-6.0-dev + libshumate-dev added v0.5.855 — perry-ui-gtk4
+        # builds (via the workflow's `-p perry-ui-gtk4` step) pull in webkit6
+        # (which transitively needs javascriptcoregtk-6.0.pc + webkitgtk-6.0.pc
+        # + libsoup-3.0.pc) and libshumate-sys (#517 MapView). Mirrors the
+        # apt step in test.yml's doc-tests-gtk4 job.
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libwebkitgtk-6.0-dev libshumate-dev
 
       - name: Install musl tools (Linux musl)
         if: endsWith(matrix.target, '-musl')

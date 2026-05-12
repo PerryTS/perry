@@ -1583,7 +1583,23 @@ extern "C" fn async_step_fulfill_thunk(
     let step = crate::closure::js_closure_get_capture_ptr(closure, 0)
         as *const crate::closure::ClosureHeader;
     let false_bits = f64::from_bits(0x7FFC_0000_0000_0003);
-    crate::closure::js_closure_call2(step, value, false_bits)
+    // #691 Phase 2: when this thunk is invoked from the pending-Promise
+    // fallback in js_async_step_chain (await of a still-pending inner),
+    // the runtime arrives here via Task::Inline dispatch which does NOT
+    // set INLINE_TRAP.current_step. Step bodies now read self from that
+    // TLS via Expr::CurrentStepClosure, so we MUST set it before
+    // entering the step. Save/restore for nested-async composition.
+    let prev = INLINE_TRAP.with(|c| {
+        let old = c.get();
+        c.set(InlineTrap {
+            trap_next: old.trap_next,
+            current_step: step as usize,
+        });
+        old
+    });
+    let result = crate::closure::js_closure_call2(step, value, false_bits);
+    INLINE_TRAP.with(|c| c.set(prev));
+    result
 }
 
 extern "C" fn async_step_reject_thunk(
@@ -1593,7 +1609,19 @@ extern "C" fn async_step_reject_thunk(
     let step = crate::closure::js_closure_get_capture_ptr(closure, 0)
         as *const crate::closure::ClosureHeader;
     let true_bits = f64::from_bits(0x7FFC_0000_0000_0004);
-    crate::closure::js_closure_call2(step, value, true_bits)
+    // #691 Phase 2: see async_step_fulfill_thunk — same TLS-setup
+    // requirement on the rejection path.
+    let prev = INLINE_TRAP.with(|c| {
+        let old = c.get();
+        c.set(InlineTrap {
+            trap_next: old.trap_next,
+            current_step: step as usize,
+        });
+        old
+    });
+    let result = crate::closure::js_closure_call2(step, value, true_bits);
+    INLINE_TRAP.with(|c| c.set(prev));
+    result
 }
 
 /// `Array.fromAsync(input)` — Node 22+ static method.

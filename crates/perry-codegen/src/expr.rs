@@ -6205,6 +6205,55 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let result = blk.call(I64, "js_array_clone", &[(I64, &iter_handle)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
+
+        // Tagged-template strings literal — build cooked array, build raw
+        // array, register the (cooked, raw) pair so subsequent `.raw`
+        // reads resolve via `js_template_raw`, return the cooked array.
+        // Same emit shape as the generic `Expr::Array` lowering but with
+        // the side-table registration sandwiched in.
+        Expr::TaggedTemplateStrings { cooked, raw } => {
+            // Materialize cooked array — go through lower_array_literal so
+            // SSO + GC + length-init logic stays in one place.
+            let cooked_box = lower_array_literal(ctx, cooked)?;
+            // Materialize raw array — same path, but all elements are
+            // String literals (built at HIR lowering from each quasi's
+            // `.raw` text), so build a Vec<Expr::String> on the fly.
+            let raw_exprs: Vec<Expr> = raw.iter().map(|s| Expr::String(s.clone())).collect();
+            let raw_box = lower_array_literal(ctx, &raw_exprs)?;
+            let blk = ctx.block();
+            let cooked_handle = unbox_to_i64(blk, &cooked_box);
+            let raw_handle = unbox_to_i64(blk, &raw_box);
+            let registered = blk.call(
+                I64,
+                "js_tagged_template_register_raw",
+                &[(I64, &cooked_handle), (I64, &raw_handle)],
+            );
+            Ok(nanbox_pointer_inline(blk, &registered))
+        }
+
+        // `strings.raw` — look up the registered raw-strings array for a
+        // tagged-template receiver. Non-tagged receivers naturally miss
+        // the side table and the helper returns 0 which we surface as
+        // TAG_UNDEFINED (matches the JS semantics `[].raw === undefined`).
+        Expr::TemplateRaw(obj) => {
+            let obj_box = lower_expr(ctx, obj)?;
+            let blk = ctx.block();
+            let obj_handle = unbox_to_i64(blk, &obj_box);
+            let raw_handle = blk.call(I64, "js_template_raw", &[(I64, &obj_handle)]);
+            // If the side-table missed (raw_handle == 0), return undefined;
+            // otherwise NaN-box as a pointer.
+            let is_zero = blk.icmp_eq(I64, &raw_handle, "0");
+            let ptr_boxed = nanbox_pointer_inline(ctx.block(), &raw_handle);
+            let ptr_bits = ctx.block().bitcast_double_to_i64(&ptr_boxed);
+            let selected = ctx.block().select(
+                I1,
+                &is_zero,
+                I64,
+                crate::nanbox::TAG_UNDEFINED_I64,
+                &ptr_bits,
+            );
+            Ok(ctx.block().bitcast_i64_to_double(&selected))
+        }
         Expr::ArrayFromMapped { iterable, map_fn } => {
             let iter_box = lower_expr(ctx, iterable)?;
             let cb_box = lower_expr(ctx, map_fn)?;

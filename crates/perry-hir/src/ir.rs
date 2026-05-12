@@ -2052,6 +2052,24 @@ pub enum Expr {
     /// Array.from(iterable) -> Array
     /// Creates a new array from an iterable (e.g., Map.entries(), Map.keys(), another array)
     ArrayFrom(Box<Expr>),
+
+    /// Tagged-template strings literal — codegen builds the cooked-strings
+    /// array AND a parallel raw-strings array, registers the (cooked, raw)
+    /// pair via `js_tagged_template_register_raw`, and returns the cooked
+    /// pointer (NaN-boxed). The raw entries are always known at compile
+    /// time (each quasi's `.raw` text), so they're stored as `String` rather
+    /// than `Expr`. Used by `lower_tagged_tpl` for the non-`String.raw`
+    /// fast-path tag-function call.
+    TaggedTemplateStrings {
+        cooked: Vec<Expr>,
+        raw: Vec<String>,
+    },
+
+    /// `strings.raw` on a tagged-template strings array — looks up the
+    /// registered raw-strings array via `js_template_raw`. Returns
+    /// undefined for non-tagged-template receivers (matches the JS
+    /// semantics `[].raw === undefined`).
+    TemplateRaw(Box<Expr>),
     IteratorToArray(Box<Expr>), // collect iterator (.next() loop) into array
     /// Array.from(iterable, mapFn) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.

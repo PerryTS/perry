@@ -551,6 +551,31 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
         }
     }
 
+    // Tagged-template `.raw` — recognize `<strings>.raw` where the
+    // receiver is an Array-typed local (the typical signature is
+    // `function tag(strings: TemplateStringsArray, ...)`, which Perry's
+    // HIR types as a plain `Type::Array(Type::String)` after stripping
+    // the alias). Folds to `Expr::TemplateRaw`, which the codegen
+    // resolves to `js_template_raw(arr)` — a thread-local lookup of the
+    // raw-strings array registered by the matching
+    // `Expr::TaggedTemplateStrings` build at the call site.
+    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+        if prop_ident.sym.as_ref() == "raw" {
+            if let ast::Expr::Ident(ident) = member.obj.as_ref() {
+                let recv_ty = ctx.lookup_local_type(ident.sym.as_ref());
+                let is_array = match recv_ty {
+                    Some(perry_types::Type::Array(_)) | Some(perry_types::Type::Tuple(_)) => true,
+                    Some(perry_types::Type::Named(n)) if n == "TemplateStringsArray" => true,
+                    _ => false,
+                };
+                if is_array {
+                    let arr_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::TemplateRaw(Box::new(arr_expr)));
+                }
+            }
+        }
+    }
+
     let object = Box::new(lower_expr(ctx, &member.obj)?);
 
     // Unimplemented-API gate (#463). When the receiver is a

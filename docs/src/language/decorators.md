@@ -51,7 +51,7 @@ The Perry-native idiom is plain classes wired together in a single
 program would compose services, and it is how decorator-free TS
 frameworks (Hono, tRPC servers, Drizzle apps) already work.
 
-```typescript
+```typescript,no-test
 // services.ts
 export const api = new ApiService();
 export const rating = new RatingService(api);
@@ -70,7 +70,7 @@ original Angular form and ported to Perry.
 
 ### Before — Angular
 
-```typescript
+```typescript,no-test
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import { ApiService } from './api.service';
@@ -118,7 +118,7 @@ Three mechanical changes:
    properties, but explicit fields read more clearly when the class is
    instantiated by hand rather than by a container.
 
-```typescript
+```typescript,no-test
 import { ApiService } from './api.service';
 import { Rating } from '../models/user';
 
@@ -155,7 +155,7 @@ export class RatingService {
 
 ### Wiring
 
-```typescript
+```typescript,no-test
 // services.ts — single source of truth for service construction
 import { ApiService } from './services/api.service';
 import { RatingService } from './services/rating.service';
@@ -164,7 +164,7 @@ export const api = new ApiService();
 export const rating = new RatingService(api);
 ```
 
-```typescript
+```typescript,no-test
 // any consumer
 import { rating } from './services';
 

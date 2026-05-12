@@ -5,9 +5,8 @@
 // Each ANCHOR block below is the exact code that the limitations docs
 // page renders inline (via {{#include ... :NAME}}). Snippets are wrapped
 // in their own functions so top-level identifiers don't collide across
-// anchors. Snippets that demonstrate intentional rejection (eval, Symbol,
-// Proxy, WeakMap, decorators, dynamic require, prototype manipulation,
-// computed property keys in object literals) cannot be compile-verified
+// anchors. Snippets that demonstrate intentional rejection (eval, runtime
+// metadata, dynamic require, prototype mutation) cannot be compile-verified
 // by definition — those stay as `,no-test` in the markdown body.
 
 // ANCHOR: erased-types
