@@ -162,12 +162,21 @@ jobs:
       # version (15.x) than being linked (14.x)` across every stdlib .o.
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      # Cache cargo registry + target/ per (matrix.target, Cargo.lock).
+      # First run on a target is still a cold build, but every subsequent
+      # release-tag on the same Cargo.lock reuses the compiled crates —
+      # webkit6/gstreamer/swc/etc. dominate cold cargo and recompile takes
+      # 10-15 min per matrix entry. Cache hit drops that to ~30s.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-${{ matrix.target }}"
 
       # Closes #394: Homebrew bottle was missing libperry_ui_ios.a so
       # `perry compile foo.ts -o app --target ios[-simulator]` failed at link
@@ -458,14 +467,14 @@ jobs:
 
       - name: Upload build artifact (Unix, for deb + npm-publish jobs)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: staging/
 
       - name: Upload build artifact (Windows, for npm-publish job)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: staging/
@@ -678,7 +687,7 @@ jobs:
             --repo "${{ github.repository }}" --clobber
 
       - name: Upload .deb artifact (for apt-repo job)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: deb-${{ matrix.arch }}
           path: "*.deb"
@@ -887,7 +896,7 @@ jobs:
       contents: read
       id-token: write          # REQUIRED for OIDC + npm --provenance
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v4
         with:

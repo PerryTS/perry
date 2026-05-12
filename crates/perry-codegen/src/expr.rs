@@ -9519,13 +9519,26 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .cond_br(&is_rejected, &reject_label, &done_label);
 
             // === reject ===
+            // Same spec-corner as `Stmt::Throw`: inside an async function
+            // with no enclosing user try-frame, an awaited rejection must
+            // settle the caller's promise as rejected — not unwind. Without
+            // this, `async function f() { await Promise.reject(e); }`
+            // would terminate the process because `js_throw` longjmps
+            // through a non-existent setjmp frame.
             ctx.current_block = reject_idx;
             let promise_handle3 = unbox_to_i64(ctx.block(), &promise_box);
             let reason = ctx
                 .block()
                 .call(DOUBLE, "js_promise_reason", &[(I64, &promise_handle3)]);
-            ctx.block().call_void("js_throw", &[(DOUBLE, &reason)]);
-            ctx.block().unreachable();
+            if ctx.is_async_fn && ctx.try_depth == 0 {
+                let blk = ctx.block();
+                let handle = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &reason)]);
+                let boxed = crate::expr::nanbox_pointer_inline_pub(blk, &handle);
+                blk.ret(DOUBLE, &boxed);
+            } else {
+                ctx.block().call_void("js_throw", &[(DOUBLE, &reason)]);
+                ctx.block().unreachable();
+            }
 
             // === done ===
             ctx.current_block = done_idx;

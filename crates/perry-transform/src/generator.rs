@@ -1149,6 +1149,48 @@ fn transform_generator_function(
                 }
             }
         }
+        // Rewrite every `Expr::Yield(v)` inside the catch body back to
+        // `Expr::Await(v)`. The earlier `transform_async_to_generator`
+        // pass blanket-rewrote every `await` to `yield` across the whole
+        // function body, including inside catch clauses. But catches are
+        // NOT lifted into state-machine states by `linearize_body` — they
+        // get stashed verbatim and inlined into the `__async_throw`
+        // closure (a regular sync closure, `is_async: false`,
+        // `is_generator: false`). Yields in that closure hit the
+        // `Expr::Yield => double_literal(0.0)` codegen arm — the await
+        // operand is evaluated for side effects, the result is discarded,
+        // and `const r = await helperFn()` binds `r = 0`. User code that
+        // relies on the awaited value silently sees `0` (or fails
+        // downstream with `Cannot read properties of 0`). The flip-back
+        // restores the original await semantics; awaits inside the catch
+        // body run via the busy-wait codegen path (which drains
+        // microtasks while polling promise state — safe because
+        // `__async_throw` is invoked from Task::AsyncStep dispatch where
+        // the microtask runner is already on the stack and re-entrant
+        // drains are no-ops on an empty queue). Doesn't recurse into
+        // nested closures (those have their own await/yield context).
+        rewrite_yield_to_await_in_stmts(&mut rewritten);
+        // Rewrite every `Return X` inside the catch body to
+        // `Return make_iter_result(X, true)`. The catch body lives inside
+        // the `__async_throw` closure; its `Return` exits __async_throw
+        // (not the original async function). For the closure's return
+        // value to communicate "done with value X" to the outer step
+        // body, it must hand back an iter-result with done=true so the
+        // step's post-dispatch `IterResultGetDone` check fires and the
+        // step returns `AsyncStepDone(X)` — resolving the function's
+        // returned promise with X. Without this rewrite, the catch's
+        // `return X` exits __async_throw with the raw value, the scratch
+        // slots retain whatever the awaited rejection set them to (the
+        // rejected promise), and the step's post-dispatch re-chains the
+        // same rejected promise — infinite loop, `try { await Promise.
+        // reject(...) } catch { return "caught"; }` hangs forever.
+        // `make_iter_result(X, true)` produces `Expr::Object({value:X,
+        // done:true})`, which the later `rewrite_iter_results_to_scratch`
+        // pass converts to a scratch-slot write + the actual return
+        // value. Recurses through If/While/Try/Switch/Labeled so a
+        // `return` nested under conditional control flow in the catch
+        // body is rewritten too.
+        rewrite_catch_returns_to_iter_result(&mut rewritten);
         throw_body.extend(rewritten);
         // Issue #621: after the catch body runs, transition `__gen_state`
         // to the post-try-catch state and return `{ value: undefined,
@@ -2037,9 +2079,27 @@ fn linearize_body(
                     exit: StateExit::Goto(body_state),
                 });
 
+                // Pre-rewrite the body so any top-level `break` / `continue`
+                // inside (but NOT inside nested loops / switch / closure)
+                // becomes a placeholder state assignment + dispatch-continue.
+                // After body processing we know what the loop's break and
+                // continue targets are; the fix-up pass below replaces the
+                // sentinel numbers. Without this, `for (let i ...) { await
+                // x; if (cond) break; }` lowers the inner `break` as a raw
+                // `Stmt::Break` — the state-machine-emitted while(true) loop
+                // exits early, then the post-dispatch code reads the scratch
+                // iter-result set by the await (done=false), returns
+                // `AsyncStepChain(stale_promise, step)`, and the chain loops
+                // forever on a stale promise. Same shape covers `continue`
+                // skipping the body tail without going through the update.
+                let body_states_before = states.len();
+                let body_current_before = current.len();
+                let mut body_rewritten = body.clone();
+                rewrite_break_continue_in_stmts(&mut body_rewritten, state_id);
+
                 // Process loop body (may contain yields)
                 linearize_body(
-                    body,
+                    &body_rewritten,
                     states,
                     current,
                     state_num,
@@ -2049,13 +2109,37 @@ fn linearize_body(
                     catches,
                 );
 
-                // State for update: run update expression, goto condition check
+                // Body-tail state: contains the user body's residual stmts
+                // (everything after the last yield in the body). On fall-
+                // through it transitions to `update_state` so the for-loop
+                // semantics (run body, run update, re-check cond) hold.
+                let tail_state = *state_num;
+                *state_num += 1;
+                let tail_body = std::mem::take(current);
+
+                // `continue` target: a dedicated state that ONLY runs the
+                // update expression and then jumps back to cond. Distinct
+                // from `tail_state` so a user-`continue` from inside the
+                // body skips the post-continue body residual but still runs
+                // the for-loop's update expression. Without this split, a
+                // user `continue` written inside the post-yield body region
+                // would land back in the tail state, re-execute the body
+                // residual, and (depending on guard placement) loop forever
+                // on the same iteration.
                 let update_state = *state_num;
                 *state_num += 1;
-                let mut update_body = std::mem::take(current);
+                let mut update_body: Vec<Stmt> = Vec::new();
                 if let Some(upd) = update {
                     update_body.push(Stmt::Expr(upd.clone()));
                 }
+
+                // Push tail_state pointing at update_state.
+                states.push(State {
+                    num: tail_state,
+                    body: tail_body,
+                    exit: StateExit::Goto(update_state),
+                });
+                // Push update_state pointing at cond_state.
                 states.push(State {
                     num: update_state,
                     body: update_body,
@@ -2070,6 +2154,22 @@ fn linearize_body(
                         fix_placeholder_state(&mut state.body, state_id, after_loop_state);
                     }
                 }
+                // Fix break / continue placeholders that landed in the
+                // newly-created states (from body and tail_state) or in
+                // the trailing `current` buffer (none for For — tail_state
+                // already drained it, but covered for symmetry).
+                fix_break_continue_sentinels(
+                    &mut states[body_states_before..],
+                    state_id,
+                    after_loop_state,
+                    update_state,
+                );
+                fix_break_continue_sentinels_in_stmts(
+                    &mut current[body_current_before..],
+                    state_id,
+                    after_loop_state,
+                    update_state,
+                );
             }
 
             // While-loop containing yield(s) - similar to for-loop
@@ -2114,9 +2214,17 @@ fn linearize_body(
                     exit: StateExit::Goto(body_state),
                 });
 
+                // Pre-rewrite while body's break/continue sentinels.
+                // For a while-loop, `continue` jumps back to the condition
+                // state (no separate update); `break` jumps to after_loop.
+                let while_states_before = states.len();
+                let while_current_before = current.len();
+                let mut while_body_rewritten = while_body.clone();
+                rewrite_break_continue_in_stmts(&mut while_body_rewritten, state_id);
+
                 // Process body
                 linearize_body(
-                    while_body,
+                    &while_body_rewritten,
                     states,
                     current,
                     state_num,
@@ -2142,6 +2250,21 @@ fn linearize_body(
                         fix_placeholder_state(&mut state.body, state_id, after_loop);
                     }
                 }
+                // Fix break / continue sentinels inside the while-body states
+                // (`continue` here jumps to the cond_state; `break` jumps to
+                // after_loop).
+                fix_break_continue_sentinels(
+                    &mut states[while_states_before..],
+                    state_id,
+                    after_loop,
+                    cond_state,
+                );
+                fix_break_continue_sentinels_in_stmts(
+                    &mut current[while_current_before..],
+                    state_id,
+                    after_loop,
+                    cond_state,
+                );
             }
 
             // Try-catch containing yield(s) — linearize the try body directly and
@@ -2468,6 +2591,176 @@ fn linearize_body(
 }
 
 /// Fix the placeholder `0.0` state number in condition branches.
+/// Sentinel state-number for `Stmt::Break` placeholders. Chosen to fall well
+/// outside any legitimate state count (state numbers grow from 0; even huge
+/// async functions stay in the thousands). After body linearization completes,
+/// `fix_break_continue_sentinels` swaps every occurrence with the loop's
+/// real `after_loop` state number.
+const BREAK_SENTINEL: f64 = 1_000_001.0;
+/// Sentinel for `Stmt::Continue`. Swapped with the loop's `update_state`
+/// (for-loops) or `cond_state` (while-loops) post-linearization.
+const CONTINUE_SENTINEL: f64 = 1_000_002.0;
+
+/// Walk a body and rewrite every top-level `Stmt::Break` / `Stmt::Continue`
+/// into `[LocalSet(state_id, <sentinel>), Stmt::Continue]`. The trailing
+/// `Stmt::Continue` is the state-machine's dispatch-loop continue, which
+/// re-enters the while(true) and re-dispatches on the new state. Stops at
+/// nested loop / switch / closure boundaries — their own break/continue
+/// belong to those constructs, not to us.
+fn rewrite_break_continue_in_stmts(stmts: &mut Vec<Stmt>, state_id: LocalId) {
+    let mut i = 0;
+    while i < stmts.len() {
+        let stmt = std::mem::replace(&mut stmts[i], Stmt::Continue);
+        match stmt {
+            Stmt::Break => {
+                stmts[i] = Stmt::Expr(Expr::LocalSet(
+                    state_id,
+                    Box::new(Expr::Number(BREAK_SENTINEL)),
+                ));
+                stmts.insert(i + 1, Stmt::Continue);
+                i += 2;
+            }
+            Stmt::Continue => {
+                stmts[i] = Stmt::Expr(Expr::LocalSet(
+                    state_id,
+                    Box::new(Expr::Number(CONTINUE_SENTINEL)),
+                ));
+                stmts.insert(i + 1, Stmt::Continue);
+                i += 2;
+            }
+            mut other => {
+                rewrite_break_continue_in_stmt(&mut other, state_id);
+                stmts[i] = other;
+                i += 1;
+            }
+        }
+    }
+}
+
+fn rewrite_break_continue_in_stmt(stmt: &mut Stmt, state_id: LocalId) {
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            rewrite_break_continue_in_stmts(then_branch, state_id);
+            if let Some(eb) = else_branch.as_mut() {
+                rewrite_break_continue_in_stmts(eb, state_id);
+            }
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            rewrite_break_continue_in_stmts(body, state_id);
+            if let Some(c) = catch.as_mut() {
+                rewrite_break_continue_in_stmts(&mut c.body, state_id);
+            }
+            if let Some(f) = finally.as_mut() {
+                rewrite_break_continue_in_stmts(f, state_id);
+            }
+        }
+        // Inside nested loops / switch / labeled / closure expressions, the
+        // user's `break`/`continue` belongs to that construct and not to the
+        // outer loop the state machine is unrolling. Leave them as-is so the
+        // inner linearize_body (if it yields) / regular codegen (if it
+        // doesn't) handles them.
+        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } => {}
+        Stmt::Switch { .. } => {}
+        Stmt::Labeled { .. } => {}
+        _ => {}
+    }
+}
+
+/// Walk a slice of generator states and replace BREAK_SENTINEL /
+/// CONTINUE_SENTINEL with their real target state numbers. Called after a
+/// For/While body has been fully linearized into the state list.
+fn fix_break_continue_sentinels(
+    states: &mut [State],
+    state_id: LocalId,
+    break_target: u32,
+    continue_target: u32,
+) {
+    for state in states.iter_mut() {
+        fix_break_continue_sentinels_in_stmts(
+            &mut state.body,
+            state_id,
+            break_target,
+            continue_target,
+        );
+    }
+}
+
+fn fix_break_continue_sentinels_in_stmts(
+    stmts: &mut [Stmt],
+    state_id: LocalId,
+    break_target: u32,
+    continue_target: u32,
+) {
+    for stmt in stmts.iter_mut() {
+        fix_break_continue_sentinels_in_stmt(stmt, state_id, break_target, continue_target);
+    }
+}
+
+fn fix_break_continue_sentinels_in_stmt(
+    stmt: &mut Stmt,
+    state_id: LocalId,
+    break_target: u32,
+    continue_target: u32,
+) {
+    match stmt {
+        Stmt::Expr(Expr::LocalSet(id, val)) if *id == state_id => {
+            if let Expr::Number(n) = val.as_ref() {
+                if *n == BREAK_SENTINEL {
+                    **val = Expr::Number(break_target as f64);
+                } else if *n == CONTINUE_SENTINEL {
+                    **val = Expr::Number(continue_target as f64);
+                }
+            }
+        }
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            fix_break_continue_sentinels_in_stmts(then_branch, state_id, break_target, continue_target);
+            if let Some(eb) = else_branch.as_mut() {
+                fix_break_continue_sentinels_in_stmts(eb, state_id, break_target, continue_target);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            fix_break_continue_sentinels_in_stmts(body, state_id, break_target, continue_target);
+        }
+        Stmt::For { body, .. } => {
+            fix_break_continue_sentinels_in_stmts(body, state_id, break_target, continue_target);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            fix_break_continue_sentinels_in_stmts(body, state_id, break_target, continue_target);
+            if let Some(c) = catch.as_mut() {
+                fix_break_continue_sentinels_in_stmts(&mut c.body, state_id, break_target, continue_target);
+            }
+            if let Some(f) = finally.as_mut() {
+                fix_break_continue_sentinels_in_stmts(f, state_id, break_target, continue_target);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases.iter_mut() {
+                fix_break_continue_sentinels_in_stmts(&mut case.body, state_id, break_target, continue_target);
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            fix_break_continue_sentinels_in_stmt(body.as_mut(), state_id, break_target, continue_target);
+        }
+        _ => {}
+    }
+}
+
 fn fix_placeholder_state(stmts: &mut [Stmt], state_id: LocalId, target_state: u32) {
     fn fix_branch(branch: &mut [Stmt], state_id: LocalId, target_state: u32) {
         for inner in branch.iter_mut() {
@@ -2831,6 +3124,176 @@ fn is_iter_result(expr: &Expr) -> bool {
 /// the hot path.
 fn rewrite_iter_results_to_scratch(expr: &mut Expr) {
     rewrite_expr(expr);
+}
+
+/// Rewrite every `Expr::Yield { value, .. }` to `Expr::Await(value)` recursively
+/// through statement and expression trees. Does NOT descend into nested closures
+/// (their await/yield context is independent).
+///
+/// Used by the async-step `__async_throw` builder: the global await→yield
+/// rewrite in `transform_async_to_generator` runs on the whole function body
+/// indiscriminately, but catch bodies aren't lifted into state-machine states —
+/// they're inlined into a regular sync closure where yield codegens to
+/// `double_literal(0.0)`. Flipping the yields back to awaits restores the
+/// busy-wait await semantics for awaits inside catch handlers.
+fn rewrite_yield_to_await_in_stmts(stmts: &mut Vec<Stmt>) {
+    for s in stmts.iter_mut() {
+        rewrite_yield_to_await_in_stmt(s);
+    }
+}
+
+fn rewrite_yield_to_await_in_stmt(stmt: &mut Stmt) {
+    match stmt {
+        Stmt::Expr(e) | Stmt::Throw(e) => rewrite_yield_to_await_in_expr(e),
+        Stmt::Let { init: Some(e), .. } => rewrite_yield_to_await_in_expr(e),
+        Stmt::Return(Some(e)) => rewrite_yield_to_await_in_expr(e),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            rewrite_yield_to_await_in_expr(condition);
+            rewrite_yield_to_await_in_stmts(then_branch);
+            if let Some(eb) = else_branch.as_mut() {
+                rewrite_yield_to_await_in_stmts(eb);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            rewrite_yield_to_await_in_expr(condition);
+            rewrite_yield_to_await_in_stmts(body);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init.as_mut() {
+                rewrite_yield_to_await_in_stmt(i.as_mut());
+            }
+            if let Some(c) = condition.as_mut() {
+                rewrite_yield_to_await_in_expr(c);
+            }
+            if let Some(u) = update.as_mut() {
+                rewrite_yield_to_await_in_expr(u);
+            }
+            rewrite_yield_to_await_in_stmts(body);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            rewrite_yield_to_await_in_stmts(body);
+            if let Some(c) = catch.as_mut() {
+                rewrite_yield_to_await_in_stmts(&mut c.body);
+            }
+            if let Some(f) = finally.as_mut() {
+                rewrite_yield_to_await_in_stmts(f);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases.iter_mut() {
+                rewrite_yield_to_await_in_stmts(&mut case.body);
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            rewrite_yield_to_await_in_stmt(body.as_mut());
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_yield_to_await_in_expr(expr: &mut Expr) {
+    if let Expr::Yield { value, .. } = expr {
+        let inner = value.take().map(|b| *b).unwrap_or(Expr::Undefined);
+        let mut new_inner = inner;
+        rewrite_yield_to_await_in_expr(&mut new_inner);
+        *expr = Expr::Await(Box::new(new_inner));
+        return;
+    }
+    // Recurse into child expressions but stop at Closure boundaries —
+    // a nested closure has its own await/yield context.
+    rewrite_yield_to_await_in_expr_children(expr);
+}
+
+fn rewrite_yield_to_await_in_expr_children(expr: &mut Expr) {
+    use perry_hir::walker::walk_expr_children_mut;
+    // Skip Closure bodies — their inner statements have their own
+    // independent semantics (already-rewritten or not as their own
+    // closure-level pass dictates).
+    if matches!(expr, Expr::Closure { .. }) {
+        return;
+    }
+    walk_expr_children_mut(expr, &mut |child: &mut Expr| {
+        rewrite_yield_to_await_in_expr(child);
+    });
+}
+
+/// Rewrite every `Stmt::Return(Some(X))` to `Stmt::Return(Some(make_iter_result(X, true)))`
+/// and `Stmt::Return(None)` to `Stmt::Return(Some(make_iter_result(Undefined, true)))`.
+/// Recurses through If/While/DoWhile/For/Try/Switch/Labeled control flow but
+/// does NOT descend into nested closures — a `return` inside an inner closure
+/// belongs to that closure, not to the catch body.
+///
+/// Used by the async-step `__async_throw` builder: a user-source `return X`
+/// inside a `catch (e) { ... }` block must propagate to the function's
+/// returned Promise (resolved with X), not silently exit `__async_throw`
+/// while leaving the scratch iter-result slots stale.
+fn rewrite_catch_returns_to_iter_result(stmts: &mut Vec<Stmt>) {
+    for stmt in stmts.iter_mut() {
+        rewrite_catch_returns_to_iter_result_in_stmt(stmt);
+    }
+}
+
+fn rewrite_catch_returns_to_iter_result_in_stmt(stmt: &mut Stmt) {
+    match stmt {
+        Stmt::Return(opt) => {
+            let value = opt.take().unwrap_or(Expr::Undefined);
+            *opt = Some(make_iter_result(value, true));
+        }
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            rewrite_catch_returns_to_iter_result(then_branch);
+            if let Some(eb) = else_branch.as_mut() {
+                rewrite_catch_returns_to_iter_result(eb);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            rewrite_catch_returns_to_iter_result(body);
+        }
+        Stmt::For { init, body, .. } => {
+            if let Some(i) = init.as_mut() {
+                rewrite_catch_returns_to_iter_result_in_stmt(i.as_mut());
+            }
+            rewrite_catch_returns_to_iter_result(body);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            rewrite_catch_returns_to_iter_result(body);
+            if let Some(c) = catch.as_mut() {
+                rewrite_catch_returns_to_iter_result(&mut c.body);
+            }
+            if let Some(f) = finally.as_mut() {
+                rewrite_catch_returns_to_iter_result(f);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases.iter_mut() {
+                rewrite_catch_returns_to_iter_result(&mut case.body);
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            rewrite_catch_returns_to_iter_result_in_stmt(body.as_mut());
+        }
+        _ => {}
+    }
 }
 
 /// Apply iter-result-to-scratch rewrites directly to a statement list
