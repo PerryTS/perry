@@ -176,9 +176,25 @@ pub enum ApiSource {
 /// (#463).
 pub fn module_has_symbol(module: &str, name: &str) -> Option<&'static ApiEntry> {
     let module = module.strip_prefix("node:").unwrap_or(module);
-    API_MANIFEST
-        .iter()
-        .find(|e| e.module == module && e.name == name)
+    // Match either:
+    //  - a top-level export by name (`ethers.parseEther` → entry.name = parseEther)
+    //  - any method whose class_filter is the requested name (`ethers.Wallet`
+    //    → some entry has Method { class_filter: Some("Wallet") }). Without
+    //    this branch, `ethers.Wallet.createRandom()` failed the #463
+    //    unimplemented gate even though `createRandom` was registered with
+    //    class_filter=Wallet.
+    API_MANIFEST.iter().find(|e| {
+        if e.module != module {
+            return false;
+        }
+        if e.name == name {
+            return true;
+        }
+        matches!(
+            e.kind,
+            ApiKind::Method { class_filter: Some(c), .. } if c == name
+        )
+    })
 }
 
 /// True if `path` resolves to a Perry-implemented native module.

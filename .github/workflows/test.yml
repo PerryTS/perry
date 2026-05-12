@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -123,7 +123,7 @@ jobs:
     # codegen.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -178,7 +178,7 @@ jobs:
     # 10× billing weight cut.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -246,7 +246,7 @@ jobs:
 
       - name: Upload parity report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: parity-report
           path: test-parity/reports/latest.json
@@ -258,7 +258,7 @@ jobs:
       # error message rather than inferring from the test family.
       - name: Upload compile-error logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: parity-compile-errors-${{ runner.os }}
           path: test-parity/output/*.compile_error.log
@@ -280,7 +280,7 @@ jobs:
     # 10× billing weight cut.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -489,7 +489,7 @@ jobs:
 
       - name: Upload compile-smoke error logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compile-smoke-error-logs
           path: /tmp/perry_smoke_logs/*.compile_error.log
@@ -581,7 +581,7 @@ jobs:
   harmonyos-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -615,14 +615,7 @@ jobs:
           - os: macos-14
             ui_backend: perry-ui-macos
             shell: bash
-            # Excludes beyond ui/gallery.ts: 5 doc-tests that fail on CI
-            # for reasons tracked separately —
-            # - stdlib/crypto/snippets.ts: ethers.Wallet unimplemented (#463)
-            # - ui/state/snippets.ts: TypeError: undefined.slice (real bug)
-            # - ui/tray/snippets.ts: CGSConnectionByID fails on headless CI
-            # - ui/webview/snippets.ts: WebView 1-arg HIR gap
-            # - ui/widgets/textarea.ts: TypeError: undefined.length (real bug)
-            cmd_exclude_gallery: "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/crypto/snippets.ts --filter-exclude ui/state/snippets.ts --filter-exclude ui/tray/snippets.ts --filter-exclude ui/webview/snippets.ts --filter-exclude ui/widgets/textarea.ts"
+            cmd_exclude_gallery: "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter-exclude ui/gallery.ts"
             cmd_gallery: "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter ui/gallery.ts"
             # Repeat `--xcompile-only-target=…` per target rather than a
             # single comma-delimited value because PowerShell splits even
@@ -666,7 +659,7 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # macos-14 ships with ~14 GB free disk after the preinstalled Xcode +
       # iOS/tvOS/watchOS simulator runtime images. Several `cargo build
@@ -812,14 +805,14 @@ jobs:
 
       - name: Upload doc-tests report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: doc-tests-report-${{ matrix.os }}
           path: docs/examples/_reports/latest.json
 
       - name: Upload gallery screenshot + diff artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gallery-screenshots-${{ matrix.os }}
           path: |
@@ -833,7 +826,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -855,7 +848,7 @@ jobs:
           cat /tmp/sizes.md
 
       - name: Upload size report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-sizes
           path: /tmp/sizes.md

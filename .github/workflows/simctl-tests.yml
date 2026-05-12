@@ -29,7 +29,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -60,7 +60,7 @@ jobs:
 
       - name: Upload simctl logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: simctl-logs
           path: target/perry-simctl-tests/*.log

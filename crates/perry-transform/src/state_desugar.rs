@@ -871,6 +871,43 @@ fn try_rewrite_state_access(e: &Expr, bindings: &HashMap<LocalId, StateBinding>)
             }
         }
     }
+    // HIR's "perry/ui state class" lowering routes `state.set(v)` /
+    // `state.value` / `state.get()` / `state.text()` through
+    // `NativeMethodCall { module: "perry/ui", class_name: Some("State"),
+    // object: Some(LocalGet(state_id)), method: ..., args }` instead of
+    // the PropertyGet shape. Recognize that form here so the rewrite
+    // actually fires (otherwise `state.value` stays as a no-op method
+    // call on `undefined` — see textarea / state docs failures).
+    if let Expr::NativeMethodCall {
+        module,
+        class_name,
+        object: Some(obj),
+        method,
+        args,
+        ..
+    } = e
+    {
+        // `.set` carries `class_name: Some("State")`; `.value` / `.get`
+        // come through with `class_name: None`. Accept either as long
+        // as the receiver resolves to one of our bindings.
+        let class_ok = class_name.is_none() || class_name.as_deref() == Some("State");
+        if module == "perry/ui" && class_ok {
+            if let Expr::LocalGet(state_id) = obj.as_ref() {
+                if let Some(binding) = bindings.get(state_id) {
+                    return match method.as_str() {
+                        "get" | "value" if args.is_empty() => {
+                            Some(state_get_call(&binding.synth_id))
+                        }
+                        "set" if args.len() == 1 => {
+                            Some(state_set_call(&binding.synth_id, args[0].clone()))
+                        }
+                        "text" if args.is_empty() => Some(state_text_call(binding)),
+                        _ => None,
+                    };
+                }
+            }
+        }
+    }
     None
 }
 

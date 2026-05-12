@@ -10,5 +10,5 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-nanoid = "0.4"
+nanoid = "0.5"
 rand = "0.9"

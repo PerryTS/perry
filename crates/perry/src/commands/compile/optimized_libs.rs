@@ -342,6 +342,16 @@ pub(super) fn build_optimized_libs(
     if ctx.needs_ui {
         features.insert("async-runtime");
     }
+    // perry-stdlib unconditionally re-bundles perry-updater (so user code
+    // calling `perry/updater` resolves at link time without extra wiring).
+    // perry-updater's `perry_updater_verify_signature_v2` references the
+    // extern `js_crypto_ed25519_verify`, which lives in perry-stdlib's
+    // crypto module — gated by `#[cfg(feature = "crypto")]`. With
+    // --no-default-features the symbol is absent and the link fails on
+    // every program (regardless of whether the user touched crypto APIs).
+    // Force `crypto` on whenever the auto-optimize path rebuilds stdlib
+    // so the bundled updater always has a resolvable target.
+    features.insert("crypto");
     let feature_arg = features_to_cargo_arg(&features);
 
     // panic = "abort" is safe whenever no `catch_unwind` callers are
