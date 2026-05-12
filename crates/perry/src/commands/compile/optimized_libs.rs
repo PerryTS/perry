@@ -72,6 +72,29 @@ pub(super) fn build_optimized_libs(
     format: OutputFormat,
     verbose: u8,
 ) -> OptimizedLibs {
+    // `PERRY_NO_AUTO_OPTIMIZE=1` — opt out of the per-app feature-set
+    // specialization and use the prebuilt `target/release/libperry_*.a`
+    // built with the default `full` feature set. Used by CI doc-tests
+    // (`scripts/run_doc_tests.sh`) where the workspace is pre-built
+    // once and 80+ tests would otherwise re-trigger a multi-minute
+    // cargo rebuild per test (each test's distinct import set hashes
+    // to a different `target/perry-auto-<hash>` cache dir). Trades
+    // binary size for ~80% wall-time reduction on doc-tests.
+    //
+    // Returning `OptimizedLibs::empty()` makes the link path fall
+    // through to `find_runtime_library` / `find_stdlib_library`,
+    // which probe `target/release/` and `target/<target-triple>/release/`
+    // in that order. The workflow's prebuild step is responsible for
+    // making sure those paths exist.
+    if std::env::var_os("PERRY_NO_AUTO_OPTIMIZE").is_some() {
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!(
+                "  auto-optimize: skipped (PERRY_NO_AUTO_OPTIMIZE=1); \
+                 using prebuilt target/release/libperry_*.a"
+            );
+        }
+        return OptimizedLibs::empty();
+    }
     // (compute_required_features + features_to_cargo_arg imported at module top)
     let mut features = compute_required_features(
         &ctx.native_module_imports,
