@@ -27,4 +27,17 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
-        run: cargo audit --deny warnings
+        # Default cargo-audit behavior: fail the run on `vulnerability`
+        # advisories (real CVEs), surface `unmaintained` / `notice` /
+        # `unsound` / `yanked` advisories as warnings in the log.
+        #
+        # Previously this job ran `--deny warnings`, which escalated
+        # every "unmaintained crate" notice into a hard failure. Most
+        # of those are transitive deps from upstream crates with no
+        # in-tree replacement (adler, fxhash, paste, number_prefix,
+        # bincode v1, etc.) — blocking PRs on them stalled merges
+        # without an actionable fix. Vulnerabilities still fail the
+        # job by default, so the high-severity gate (rsa
+        # RUSTSEC-2023-0071, hickory-proto RUSTSEC-2026-0118/0119, etc.)
+        # is preserved.
+        run: cargo audit
