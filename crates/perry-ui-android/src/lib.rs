@@ -513,12 +513,20 @@ pub extern "C" fn perry_ui_text_set_decoration(handle: i64, decoration: i64) {
     widgets::text::set_decoration(handle, decoration);
 }
 
-/// Issue #707 — cap visible lines on a Text widget. Android stub (TextView.setMaxLines).
+/// Issue #707 — cap visible lines on a Text widget (TextView.setMaxLines).
 #[no_mangle]
-pub extern "C" fn perry_ui_text_set_number_of_lines(_handle: i64, _lines: i64) {}
-/// Issue #707 — truncation mode. Android stub (TextView.setEllipsize).
+pub extern "C" fn perry_ui_text_set_number_of_lines(handle: i64, lines: i64) {
+    catch_panic_void("perry_ui_text_set_number_of_lines", || {
+        widgets::text::set_number_of_lines(handle, lines)
+    })
+}
+/// Issue #707 — truncation mode (TextView.setEllipsize).
 #[no_mangle]
-pub extern "C" fn perry_ui_text_set_truncation_mode(_handle: i64, _mode: i64) {}
+pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
+    catch_panic_void("perry_ui_text_set_truncation_mode", || {
+        widgets::text::set_truncation_mode(handle, mode)
+    })
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_bordered(handle: i64, bordered: f64) {
@@ -2513,25 +2521,27 @@ pub extern "C" fn perry_ui_bottom_nav_set_selected(handle: i64, index: i64) {
         widgets::bottom_nav::set_selected(handle, index)
     })
 }
+/// Issue #706 — Android bottom-nav active-tab tint. Stored on
+/// BottomNavState; applied via setColorFilter + setTextColor in
+/// apply_styling.
 #[no_mangle]
-pub extern "C" fn perry_ui_bottom_nav_set_tint_color(
-    _handle: i64,
-    _r: f64,
-    _g: f64,
-    _b: f64,
-    _a: f64,
-) {
-    // Android: BottomNavigationView itemIconTintList. Defer until the
-    // Material binding is wired up — issue #706.
+pub extern "C" fn perry_ui_bottom_nav_set_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    catch_panic_void("perry_ui_bottom_nav_set_tint_color", || {
+        widgets::bottom_nav::set_tint_color(handle, r, g, b, a)
+    })
 }
+/// Issue #706 — Android bottom-nav inactive-tabs tint.
 #[no_mangle]
 pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
-    _handle: i64,
-    _r: f64,
-    _g: f64,
-    _b: f64,
-    _a: f64,
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
 ) {
+    catch_panic_void("perry_ui_bottom_nav_set_unselected_tint_color", || {
+        widgets::bottom_nav::set_unselected_tint_color(handle, r, g, b, a)
+    })
 }
 
 #[no_mangle]
@@ -2671,24 +2681,44 @@ pub extern "C" fn perry_ui_webview_clear_cookies(handle: i64) {
     })
 }
 
-// AttributedText (Issue #710) — Android stub (SpannableString-backed).
+// AttributedText (Issue #710) — Android SpannableStringBuilder-backed.
 #[no_mangle]
 pub extern "C" fn perry_ui_attributed_text_create() -> i64 {
-    0
+    catch_panic("perry_ui_attributed_text_create", || {
+        widgets::attributed_text::create()
+    })
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_attributed_text_append(
-    _h: i64,
-    _t: i64,
-    _bold: i64,
-    _italic: i64,
-    _underline: i64,
-    _font_size: f64,
-    _r: f64,
-    _g: f64,
-    _b: f64,
-    _a: f64,
+    h: i64,
+    t: i64,
+    bold: i64,
+    italic: i64,
+    underline: i64,
+    font_size: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
 ) {
+    catch_panic_void("perry_ui_attributed_text_append", || {
+        widgets::attributed_text::append(
+            h,
+            t as *const u8,
+            bold,
+            italic,
+            underline,
+            font_size,
+            r,
+            g,
+            b,
+            a,
+        )
+    })
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_attributed_text_clear(_h: i64) {}
+pub extern "C" fn perry_ui_attributed_text_clear(h: i64) {
+    catch_panic_void("perry_ui_attributed_text_clear", || {
+        widgets::attributed_text::clear(h)
+    })
+}

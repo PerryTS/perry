@@ -260,3 +260,89 @@ pub fn set_decoration(handle: i64, decoration: i64) {
         }
     }
 }
+
+/// Issue #707 — cap visible lines on an Android TextView.
+/// `lines = 0` is unlimited (passing Integer.MAX_VALUE to setMaxLines).
+pub fn set_number_of_lines(handle: i64, lines: i64) {
+    if let Some(view_ref) = super::get_widget(handle) {
+        let mut env = jni_bridge::get_env();
+        let _ = env.push_local_frame(8);
+        let n: i32 = if lines <= 0 {
+            i32::MAX
+        } else {
+            (lines as i32).max(1)
+        };
+        let _ = env.call_method(view_ref.as_obj(), "setMaxLines", "(I)V", &[JValue::Int(n)]);
+        // When a finite cap is set we also need an ellipsize mode so the
+        // tail of the last visible line gets "…" instead of just being
+        // clipped. Default to TruncateAt.END; users can override via
+        // `set_truncation_mode` afterwards.
+        if lines > 0 {
+            apply_ellipsize(&mut env, view_ref.as_obj(), 3 /* END */);
+        }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
+    }
+}
+
+/// Issue #707 — truncation mode on a TextView. Modes: 0=word-wrap (no
+/// ellipsize), 1=head, 2=middle, 3=tail.
+pub fn set_truncation_mode(handle: i64, mode: i64) {
+    if let Some(view_ref) = super::get_widget(handle) {
+        let mut env = jni_bridge::get_env();
+        let _ = env.push_local_frame(8);
+        apply_ellipsize(&mut env, view_ref.as_obj(), mode);
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
+    }
+}
+
+/// Resolve `mode` to the Android `TextUtils.TruncateAt` enum and call
+/// TextView.setEllipsize. `mode = 0` clears the ellipsize (null).
+fn apply_ellipsize(env: &mut jni::JNIEnv, view: &JObject, mode: i64) {
+    // TextUtils.TruncateAt is an enum: START=1, MIDDLE=2, END=3, MARQUEE=4.
+    // Public ordinal values: START=0, MIDDLE=1, END=2, MARQUEE=3 in the enum
+    // class, but the values() array maps the public API names. We resolve
+    // by name to be robust.
+    let name = match mode {
+        1 => "START",
+        2 => "MIDDLE",
+        3 => "END",
+        _ => "",
+    };
+    if name.is_empty() {
+        // Clear: setEllipsize(null).
+        let null_obj = JObject::null();
+        let _ = env.call_method(
+            view,
+            "setEllipsize",
+            "(Landroid/text/TextUtils$TruncateAt;)V",
+            &[JValue::Object(&null_obj)],
+        );
+        return;
+    }
+    let enum_cls = match env.find_class("android/text/TextUtils$TruncateAt") {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let java_name = match env.new_string(name) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let value = env.call_static_method(
+        &enum_cls,
+        "valueOf",
+        "(Ljava/lang/String;)Landroid/text/TextUtils$TruncateAt;",
+        &[JValue::Object(&java_name)],
+    );
+    let Ok(v) = value else { return };
+    let Ok(enum_obj) = v.l() else { return };
+    let _ = env.call_method(
+        view,
+        "setEllipsize",
+        "(Landroid/text/TextUtils$TruncateAt;)V",
+        &[JValue::Object(&enum_obj)],
+    );
+}

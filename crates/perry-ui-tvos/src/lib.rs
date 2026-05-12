@@ -1725,14 +1725,25 @@ pub extern "C" fn perry_ui_state_bind_textfield(state_handle: i64, textfield_han
 // Alert Dialog
 // =============================================================================
 
+/// Issue #708 — tvOS UIAlertController. Mirrors the iOS implementation
+/// in `widgets::alert`; tvOS has UIAlertController with the same API.
 #[no_mangle]
-pub extern "C" fn perry_ui_alert(_title: i64, _message: i64, _buttons: f64, _callback: f64) {
-    // tvOS: UIAlertController — stub for now
+pub extern "C" fn perry_ui_alert(title_ptr: i64, message_ptr: i64, buttons: f64, callback: f64) {
+    extern "C" {
+        fn js_nanbox_get_pointer(value: f64) -> i64;
+    }
+    let buttons_ptr = unsafe { js_nanbox_get_pointer(buttons) };
+    widgets::alert::show(
+        title_ptr as *const u8,
+        message_ptr as *const u8,
+        buttons_ptr,
+        callback,
+    );
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_alert_simple(_title: i64, _message: i64) {
-    // tvOS: UIAlertController — stub for now
+pub extern "C" fn perry_ui_alert_simple(title_ptr: i64, message_ptr: i64) {
+    widgets::alert::show_simple(title_ptr as *const u8, message_ptr as *const u8);
 }
 
 // =============================================================================
@@ -2399,26 +2410,38 @@ pub extern "C" fn perry_media_destroy(handle: f64) {
 // GTK4, custom XAML-style strip on Windows, UIPageViewController flavors
 // for tvOS/watchOS/visionOS) is tracked in the same issue.
 
+/// Issue #553 + #706 — tvOS BottomNavigation backed by UITabBar.
+/// tvOS supports UITabBar natively; the same widget code as iOS works
+/// (focus-engine navigation is layered on top by UIKit automatically).
 #[no_mangle]
-pub extern "C" fn perry_ui_bottom_nav_create(_on_select: f64) -> i64 {
-    0
+pub extern "C" fn perry_ui_bottom_nav_create(on_select: f64) -> i64 {
+    widgets::bottom_nav::create(on_select)
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_bottom_nav_add_item(_handle: i64, _icon_ptr: i64, _label_ptr: i64) {}
+pub extern "C" fn perry_ui_bottom_nav_add_item(handle: i64, icon_ptr: i64, label_ptr: i64) {
+    widgets::bottom_nav::add_item(handle, icon_ptr as *const u8, label_ptr as *const u8);
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_bottom_nav_set_badge(_handle: i64, _index: i64, _badge_ptr: i64) {}
+pub extern "C" fn perry_ui_bottom_nav_set_badge(handle: i64, index: i64, badge_ptr: i64) {
+    widgets::bottom_nav::set_badge(handle, index, badge_ptr as *const u8);
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_bottom_nav_set_selected(_handle: i64, _index: i64) {}
+pub extern "C" fn perry_ui_bottom_nav_set_selected(handle: i64, index: i64) {
+    widgets::bottom_nav::set_selected(handle, index);
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_bottom_nav_set_tint_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+pub extern "C" fn perry_ui_bottom_nav_set_tint_color(h: i64, r: f64, g: f64, b: f64, a: f64) {
+    widgets::bottom_nav::set_tint_color(h, r, g, b, a);
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
-    _h: i64,
-    _r: f64,
-    _g: f64,
-    _b: f64,
-    _a: f64,
+    h: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
 ) {
+    widgets::bottom_nav::set_unselected_tint_color(h, r, g, b, a);
 }
 
 #[no_mangle]
@@ -2518,24 +2541,38 @@ pub extern "C" fn perry_ui_webview_evaluate_js(_handle: i64, _js_ptr: i64, _call
 #[no_mangle]
 pub extern "C" fn perry_ui_webview_clear_cookies(_handle: i64) {}
 
-// AttributedText (Issue #710) — tvOS stub (UIKit-backed impl can mirror iOS).
+// AttributedText (Issue #710) — tvOS UIKit-backed impl, mirrors iOS.
 #[no_mangle]
 pub extern "C" fn perry_ui_attributed_text_create() -> i64 {
-    0
+    widgets::attributed_text::create()
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_attributed_text_append(
-    _h: i64,
-    _t: i64,
-    _bold: i64,
-    _italic: i64,
-    _underline: i64,
-    _font_size: f64,
-    _r: f64,
-    _g: f64,
-    _b: f64,
-    _a: f64,
+    h: i64,
+    t: i64,
+    bold: i64,
+    italic: i64,
+    underline: i64,
+    font_size: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
 ) {
+    widgets::attributed_text::append(
+        h,
+        t as *const u8,
+        bold,
+        italic,
+        underline,
+        font_size,
+        r,
+        g,
+        b,
+        a,
+    );
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_attributed_text_clear(_h: i64) {}
+pub extern "C" fn perry_ui_attributed_text_clear(h: i64) {
+    widgets::attributed_text::clear(h);
+}

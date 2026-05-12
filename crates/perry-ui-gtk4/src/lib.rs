@@ -566,12 +566,16 @@ pub extern "C" fn perry_ui_text_set_selectable(handle: i64, selectable: f64) {
     widgets::text::set_selectable(handle, selectable != 0.0);
 }
 
-/// Issue #707 — cap visible lines on a Text widget. GTK4 stub.
+/// Issue #707 — cap visible lines on a Text widget (GtkLabel.set_lines).
 #[no_mangle]
-pub extern "C" fn perry_ui_text_set_number_of_lines(_handle: i64, _lines: i64) {}
-/// Issue #707 — truncation mode. GTK4 stub.
+pub extern "C" fn perry_ui_text_set_number_of_lines(handle: i64, lines: i64) {
+    widgets::text::set_number_of_lines(handle, lines);
+}
+/// Issue #707 — truncation mode (GtkLabel.set_ellipsize).
 #[no_mangle]
-pub extern "C" fn perry_ui_text_set_truncation_mode(_handle: i64, _mode: i64) {}
+pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
+    widgets::text::set_truncation_mode(handle, mode);
+}
 
 /// Set the font family.
 #[no_mangle]
@@ -2172,26 +2176,23 @@ pub extern "C" fn perry_ui_bottom_nav_set_selected(handle: i64, index: i64) {
     widgets::bottom_nav::set_selected(handle, index)
 }
 
+/// Issue #706 — GTK4 bottom-nav active-tab tint via Pango AttrColor on
+/// the per-item label.
 #[no_mangle]
-pub extern "C" fn perry_ui_bottom_nav_set_tint_color(
-    _handle: i64,
-    _r: f64,
-    _g: f64,
-    _b: f64,
-    _a: f64,
-) {
-    // GTK4: BottomNavigation is itself stubbed — defer until the real
-    // GtkBox+icon implementation lands.
+pub extern "C" fn perry_ui_bottom_nav_set_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    widgets::bottom_nav::set_tint_color(handle, r, g, b, a);
 }
 
+/// Issue #706 — GTK4 bottom-nav inactive-tabs tint.
 #[no_mangle]
 pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
-    _handle: i64,
-    _r: f64,
-    _g: f64,
-    _b: f64,
-    _a: f64,
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
 ) {
+    widgets::bottom_nav::set_unselected_tint_color(handle, r, g, b, a);
 }
 
 #[no_mangle]
@@ -2386,24 +2387,38 @@ pub extern "C" fn perry_ui_webview_clear_cookies(handle: i64) {
     widgets::webview::clear_cookies(handle)
 }
 
-// AttributedText (Issue #710) — GTK4 stub.
+// AttributedText (Issue #710) — GTK4 GtkLabel + Pango AttrList.
 #[no_mangle]
 pub extern "C" fn perry_ui_attributed_text_create() -> i64 {
-    0
+    widgets::attributed_text::create()
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_attributed_text_append(
-    _h: i64,
-    _t: i64,
-    _bold: i64,
-    _italic: i64,
-    _underline: i64,
-    _font_size: f64,
-    _r: f64,
-    _g: f64,
-    _b: f64,
-    _a: f64,
+    h: i64,
+    t: i64,
+    bold: i64,
+    italic: i64,
+    underline: i64,
+    font_size: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
 ) {
+    widgets::attributed_text::append(
+        h,
+        t as *const u8,
+        bold,
+        italic,
+        underline,
+        font_size,
+        r,
+        g,
+        b,
+        a,
+    );
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_attributed_text_clear(_h: i64) {}
+pub extern "C" fn perry_ui_attributed_text_clear(h: i64) {
+    widgets::attributed_text::clear(h);
+}
