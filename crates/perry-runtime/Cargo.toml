@@ -63,7 +63,7 @@ mimalloc = { version = "0.1", default-features = false }
 # Windows raw-mode for perry/tui input (#406). The Unix path uses
 # libc tcsetattr; Windows uses SetConsoleMode via windows-sys.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_Foundation",
 ] }

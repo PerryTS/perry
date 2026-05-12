@@ -958,10 +958,27 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // `throw expr` evaluates the expression, calls js_throw(value)
         // which longjmps to the most recent try block, and emits an
         // LLVM `unreachable` terminator (js_throw never returns).
+        //
+        // Spec-corner: inside an async function with no enclosing
+        // `try { ... }` frame, a thrown value must reject the returned
+        // promise instead of propagating as an uncaught exception. The
+        // async-to-generator pre-pass bails out on functions whose body
+        // contains a capturing closure (very common — any `.then(cb)`,
+        // `forEach`, etc.), leaving them as `is_async: true` with no
+        // state-machine wrapper. Without this guard, `async function f() {
+        // throw new Error("x"); }` would terminate the process instead
+        // of producing a rejected promise the caller can `.catch()`.
         Stmt::Throw(expr) => {
             let val = lower_expr(ctx, expr)?;
-            ctx.block().call_void("js_throw", &[(DOUBLE, &val)]);
-            ctx.block().unreachable();
+            if ctx.is_async_fn && ctx.try_depth == 0 {
+                let blk = ctx.block();
+                let handle = blk.call(crate::types::I64, "js_promise_rejected", &[(DOUBLE, &val)]);
+                let boxed = crate::expr::nanbox_pointer_inline_pub(blk, &handle);
+                blk.ret(DOUBLE, &boxed);
+            } else {
+                ctx.block().call_void("js_throw", &[(DOUBLE, &val)]);
+                ctx.block().unreachable();
+            }
             Ok(())
         }
 
