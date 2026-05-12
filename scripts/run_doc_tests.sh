@@ -17,7 +17,18 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 # Build perry + the harness in release mode (skipped if already built).
-cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-doc-tests
+# The runtime + stdlib are built with `--features full` so the prebuilt
+# `target/release/libperry_*.a` covers every doc-test's import surface,
+# letting PERRY_NO_AUTO_OPTIMIZE=1 below short-circuit the per-test
+# specialized rebuild (~30-200s saved per test).
+cargo build --release \
+    -p perry -p perry-runtime -p perry-stdlib -p perry-doc-tests
+
+# Disable per-test auto-optimize. With this set, `perry compile`
+# short-circuits the cargo-rebuild step in `build_optimized_libs` and
+# uses the prebuilt libs above. Saves ~30-200s per doc-test that would
+# otherwise trigger a feature-set-specialized cargo rebuild.
+export PERRY_NO_AUTO_OPTIMIZE=1
 
 REPORT_DIR="$REPO_ROOT/docs/examples/_reports"
 mkdir -p "$REPORT_DIR"
