@@ -3401,6 +3401,20 @@ impl SH for Expr {
                 value.as_ref().hash(h);
                 step_closure.as_ref().hash(h);
             }
+            Expr::CurrentStepClosure => tag(h, 443),
+            Expr::AsyncFirstCall { step_closure } => {
+                tag(h, 444);
+                step_closure.as_ref().hash(h);
+            }
+            Expr::TaggedTemplateStrings { cooked, raw } => {
+                tag(h, 445);
+                cooked.hash(h);
+                raw.hash(h);
+            }
+            Expr::TemplateRaw(e) => {
+                tag(h, 446);
+                e.as_ref().hash(h);
+            }
         }
     }
 }
