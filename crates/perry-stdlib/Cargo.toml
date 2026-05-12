@@ -333,7 +333,7 @@ regex = { version = "1.10", optional = true }
 
 # IDs
 uuid = { version = "1.11", features = ["v4", "v1", "v7"], optional = true }
-nanoid = { version = "0.4", optional = true }
+nanoid = { version = "0.5", optional = true }
 
 # LRU Cache — optional from v0.5.539 so the well-known flip can
 # strip the perry-stdlib copy when `import 'lru-cache'` resolves
