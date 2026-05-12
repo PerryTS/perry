@@ -348,6 +348,11 @@ pub extern "C" fn perry_ui_text_set_decoration(handle: i64, decoration: i64) {
 pub extern "C" fn perry_ui_text_set_selectable(_handle: i64, _selectable: f64) {}
 
 #[no_mangle]
+pub extern "C" fn perry_ui_text_set_number_of_lines(_handle: i64, _lines: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_truncation_mode(_handle: i64, _mode: i64) {}
+
+#[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
     tree::with_node_mut(handle, |node| {
         node.font_family = cstring_from_header(family_ptr as *const u8);
@@ -1466,6 +1471,17 @@ pub extern "C" fn perry_ui_bottom_nav_add_item(_handle: i64, _icon_ptr: i64, _la
 pub extern "C" fn perry_ui_bottom_nav_set_badge(_handle: i64, _index: i64, _badge_ptr: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_bottom_nav_set_selected(_handle: i64, _index: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_tint_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
+    _h: i64,
+    _r: f64,
+    _g: f64,
+    _b: f64,
+    _a: f64,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callback: f64) {}
@@ -1563,3 +1579,25 @@ pub extern "C" fn perry_ui_webview_can_go_back(_handle: i64) -> i64 {
 pub extern "C" fn perry_ui_webview_evaluate_js(_handle: i64, _js_ptr: i64, _callback: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_webview_clear_cookies(_handle: i64) {}
+
+// AttributedText (Issue #710) — watchOS stub.
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_create() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_append(
+    _h: i64,
+    _t: i64,
+    _bold: i64,
+    _italic: i64,
+    _underline: i64,
+    _font_size: f64,
+    _r: f64,
+    _g: f64,
+    _b: f64,
+    _a: f64,
+) {
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_clear(_h: i64) {}

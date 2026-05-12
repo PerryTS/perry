@@ -518,6 +518,13 @@ pub extern "C" fn perry_ui_text_set_decoration(handle: i64, decoration: i64) {
     widgets::text::set_decoration(handle, decoration);
 }
 
+/// Issue #707 — cap visible lines on a Text widget. Windows stub.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_number_of_lines(_handle: i64, _lines: i64) {}
+/// Issue #707 — truncation mode. Windows stub.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_truncation_mode(_handle: i64, _mode: i64) {}
+
 /// Set the font family.
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
@@ -2291,6 +2298,26 @@ pub extern "C" fn perry_ui_bottom_nav_set_selected(handle: i64, index: i64) {
 }
 
 #[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_tint_color(
+    _handle: i64,
+    _r: f64,
+    _g: f64,
+    _b: f64,
+    _a: f64,
+) {
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
+    _handle: i64,
+    _r: f64,
+    _g: f64,
+    _b: f64,
+    _a: f64,
+) {
+}
+
+#[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callback: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_end_refreshing(_handle: i64) {}
@@ -2389,3 +2416,25 @@ pub extern "C" fn perry_ui_webview_evaluate_js(handle: i64, js_ptr: i64, callbac
 pub extern "C" fn perry_ui_webview_clear_cookies(handle: i64) {
     widgets::webview::clear_cookies(handle)
 }
+
+// AttributedText (Issue #710) — Windows stub.
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_create() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_append(
+    _h: i64,
+    _t: i64,
+    _bold: i64,
+    _italic: i64,
+    _underline: i64,
+    _font_size: f64,
+    _r: f64,
+    _g: f64,
+    _b: f64,
+    _a: f64,
+) {
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_clear(_h: i64) {}

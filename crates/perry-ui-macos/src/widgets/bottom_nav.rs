@@ -50,6 +50,12 @@ struct BottomNavState {
     items: Vec<ItemViews>,
     on_select: f64,
     selected_index: i64,
+    /// Issue #706 — explicit RGBA tint for the selected tab. None means
+    /// keep the iOS-system-blue default that `apply_styling` uses.
+    selected_tint: Option<(f64, f64, f64, f64)>,
+    /// Issue #706 — explicit RGBA tint for unselected tabs. None falls
+    /// back to NSColor.secondaryLabelColor.
+    unselected_tint: Option<(f64, f64, f64, f64)>,
 }
 
 thread_local! {
@@ -141,6 +147,8 @@ pub fn create(on_select: f64) -> i64 {
                     items: Vec::new(),
                     on_select,
                     selected_index: 0,
+                    selected_tint: None,
+                    unselected_tint: None,
                 },
             );
         });
@@ -370,14 +378,32 @@ fn apply_styling(bar_handle: i64) {
         };
         unsafe {
             let color_cls = AnyClass::get(c"NSColor").unwrap();
-            let selected: Retained<AnyObject> = msg_send![
-                color_cls,
-                colorWithRed: 0.000f64,
-                green: 0.478f64,
-                blue: 1.000f64,
-                alpha: 1.0f64
-            ];
-            let muted: Retained<AnyObject> = msg_send![color_cls, secondaryLabelColor];
+            let selected: Retained<AnyObject> = match state.selected_tint {
+                Some((r, g, b, a)) => msg_send![
+                    color_cls,
+                    colorWithRed: r,
+                    green: g,
+                    blue: b,
+                    alpha: a
+                ],
+                None => msg_send![
+                    color_cls,
+                    colorWithRed: 0.000f64,
+                    green: 0.478f64,
+                    blue: 1.000f64,
+                    alpha: 1.0f64
+                ],
+            };
+            let muted: Retained<AnyObject> = match state.unselected_tint {
+                Some((r, g, b, a)) => msg_send![
+                    color_cls,
+                    colorWithRed: r,
+                    green: g,
+                    blue: b,
+                    alpha: a
+                ],
+                None => msg_send![color_cls, secondaryLabelColor],
+            };
             for (i, item) in state.items.iter().enumerate() {
                 let is_selected = i as i64 == state.selected_index;
                 let color: &AnyObject = if is_selected { &*selected } else { &*muted };
@@ -388,6 +414,27 @@ fn apply_styling(bar_handle: i64) {
             }
         }
     });
+}
+
+/// Issue #706 — set the explicit tint applied to the active tab's icon
+/// and label. RGBA values are in 0.0-1.0 range.
+pub fn set_tint_color(bar_handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    BOTTOM_NAVS.with(|s| {
+        if let Some(state) = s.borrow_mut().get_mut(&bar_handle) {
+            state.selected_tint = Some((r, g, b, a));
+        }
+    });
+    apply_styling(bar_handle);
+}
+
+/// Issue #706 — set the explicit tint applied to inactive tabs.
+pub fn set_unselected_tint_color(bar_handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    BOTTOM_NAVS.with(|s| {
+        if let Some(state) = s.borrow_mut().get_mut(&bar_handle) {
+            state.unselected_tint = Some((r, g, b, a));
+        }
+    });
+    apply_styling(bar_handle);
 }
 
 #[allow(dead_code)]

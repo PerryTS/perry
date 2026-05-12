@@ -200,6 +200,44 @@ pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
     });
 }
 
+/// Issue #706 — override the active tab's icon/label tint.
+/// Maps to UITabBar.tintColor (RGBA 0.0-1.0).
+pub fn set_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
+    let Some(bar) = super::get_widget(handle) else {
+        return;
+    };
+    unsafe {
+        let color: Retained<AnyObject> = msg_send![
+            objc2::runtime::AnyClass::get(c"UIColor").unwrap(),
+            colorWithRed: r as objc2_core_foundation::CGFloat,
+            green: g as objc2_core_foundation::CGFloat,
+            blue: b as objc2_core_foundation::CGFloat,
+            alpha: a as objc2_core_foundation::CGFloat
+        ];
+        let _: () = msg_send![&*bar, setTintColor: &*color];
+    }
+}
+
+/// Issue #706 — override the unselected items' tint.
+/// Maps to UITabBar.unselectedItemTintColor (RGBA 0.0-1.0).
+pub fn set_unselected_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
+    let Some(bar) = super::get_widget(handle) else {
+        return;
+    };
+    unsafe {
+        let color: Retained<AnyObject> = msg_send![
+            objc2::runtime::AnyClass::get(c"UIColor").unwrap(),
+            colorWithRed: r as objc2_core_foundation::CGFloat,
+            green: g as objc2_core_foundation::CGFloat,
+            blue: b as objc2_core_foundation::CGFloat,
+            alpha: a as objc2_core_foundation::CGFloat
+        ];
+        let _: () = msg_send![&*bar, setUnselectedItemTintColor: &*color];
+    }
+}
+
 /// Programmatically select a tab. Does NOT fire the on-select callback.
 pub fn set_selected(handle: i64, index: i64) {
     STATES.with(|s| {

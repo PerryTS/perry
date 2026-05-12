@@ -97,6 +97,20 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
         let _: () = msg_send![&*button, setTitle: &*ns_string, forState: 0u64]; // UIControlStateNormal = 0
         let _: () = msg_send![&*button, setAccessibilityLabel: &*ns_string];
 
+        // Issue #709: honor `\n` in button labels. UIButton's titleLabel
+        // defaults to numberOfLines=1 and silently collapses newlines into
+        // spaces. Setting it to 0 (unlimited) + word-wrap + center
+        // alignment matches what an HTML `<button>` does for multi-line
+        // text and is a safe default for single-line labels too.
+        let title_label: *mut AnyObject = msg_send![&*button, titleLabel];
+        if !title_label.is_null() {
+            let _: () = msg_send![title_label, setNumberOfLines: 0i64];
+            // NSLineBreakByWordWrapping = 0
+            let _: () = msg_send![title_label, setLineBreakMode: 0u64];
+            // NSTextAlignmentCenter = 1
+            let _: () = msg_send![title_label, setTextAlignment: 1i64];
+        }
+
         let _: () = msg_send![&*button, setTranslatesAutoresizingMaskIntoConstraints: false];
 
         let target = PerryButtonTarget::new();

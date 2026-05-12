@@ -218,6 +218,48 @@ export function HStack(spacing: number, children: Widget[]): Widget;
  */
 export function Text(content: string, id?: string): Widget;
 
+/**
+ * Issue #710 — empty Text widget that accepts per-range styled appends.
+ * Distinct from #478 (rich-text editor with toolbar/shortcuts) — this is
+ * a static, attributed display surface for inline emphasis inside a
+ * single wrapping paragraph (bold/italic/colored words mixed with
+ * default-styled prose).
+ *
+ * @example
+ *   const w = AttributedText();
+ *   attributedTextAppend(w, "Tap ",   0, 0, 0, 0, 0,    0,    0,    0);
+ *   attributedTextAppend(w, "here",   1, 0, 0, 0, 0.80, 0.07, 0.26, 1);
+ *   attributedTextAppend(w, " to read more.", 0, 0, 0, 0, 0, 0, 0, 0);
+ */
+export function AttributedText(): Widget;
+
+/**
+ * Issue #710 — append one styled run to an AttributedText widget.
+ *
+ * Boolean flags use 0/1. `fontSize = 0` inherits the widget's default
+ * size. Alpha `a = 0` keeps the inherited text color (omits the color
+ * attribute entirely, so theme-aware label colors still apply).
+ *
+ * Maps to NSMutableAttributedString.appendAttributedString: on Apple
+ * platforms; stubbed on GTK4 / Windows / Android / watchOS until the
+ * platform-native attributed surfaces are wired up.
+ */
+export function attributedTextAppend(
+  widget: Widget,
+  text: string,
+  bold: number,
+  italic: number,
+  underline: number,
+  fontSize: number,
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+): void;
+
+/** Issue #710 — reset the buffer to empty. */
+export function attributedTextClear(widget: Widget): void;
+
 /** Clickable button. */
 export function Button(label: string, onPress: () => void): Widget;
 
@@ -586,6 +628,24 @@ export function textSetFontFamily(widget: Widget, family: string): void;
 export function textSetWraps(widget: Widget, maxWidth: number): void;
 export function textSetSelectable(widget: Widget, selectable: number): void;
 /**
+ * Issue #707 — cap visible lines on a Text widget. `lines = 0` means
+ * unlimited (the default). When `lines > 0` and the content overflows,
+ * the runtime picks tail-truncation by default; use
+ * `textSetTruncationMode` to choose head/middle/tail.
+ *
+ * Maps to `UILabel.numberOfLines` on iOS and `NSTextField.maximumNumberOfLines`
+ * (+ cell wrapping/line-break-mode) on macOS. Stubbed on other platforms.
+ */
+export function textSetNumberOfLines(widget: Widget, lines: number): void;
+/**
+ * Issue #707 — control where the ellipsis appears when content overflows
+ * the line cap set via `textSetNumberOfLines`.
+ *
+ * Modes: `0` = word-wrap (no ellipsis), `1` = head ("…foo"),
+ * `2` = middle ("fo…ar"), `3` = tail ("foo…"). Tail is the most common.
+ */
+export function textSetTruncationMode(widget: Widget, mode: number): void;
+/**
  * Set text decoration on a Text widget (issue #185 Phase B).
  * `decoration`: 0 = none, 1 = underline, 2 = strikethrough.
  * Wired on every backend except Windows, which stores the value but
@@ -947,6 +1007,32 @@ export function bottomNavSetBadge(bar: Widget, index: number, badge: string): vo
 
 /** Programmatically select a tab. Does NOT fire `onSelect`. */
 export function bottomNavSetSelected(bar: Widget, index: number): void;
+
+/**
+ * Issue #706 — set the active tab's icon/label tint (RGBA 0.0-1.0).
+ * On iOS this maps to `UITabBar.tintColor`. On macOS this overrides the
+ * iOS-default-blue used in the custom NSStackView styling. Stubbed on
+ * GTK4 / Windows / Android / tvOS / watchOS / visionOS.
+ */
+export function bottomNavSetTintColor(
+  bar: Widget,
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+): void;
+
+/**
+ * Issue #706 — set the inactive tabs' icon/label tint (RGBA 0.0-1.0).
+ * On iOS this maps to `UITabBar.unselectedItemTintColor`.
+ */
+export function bottomNavSetUnselectedTintColor(
+  bar: Widget,
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+): void;
 
 // ---------------------------------------------------------------------------
 // Issue #553 — ImageGallery (swipeable carousel)

@@ -490,6 +490,18 @@ pub extern "C" fn perry_ui_text_set_selectable(handle: i64, selectable: f64) {
     widgets::text::set_selectable(handle, selectable != 0.0);
 }
 
+/// Issue #707 — cap visible lines on a Text widget. `lines = 0` is unlimited.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_number_of_lines(handle: i64, lines: i64) {
+    widgets::text::set_number_of_lines(handle, lines);
+}
+
+/// Issue #707 — 0=word-wrap, 1=head, 2=middle, 3=tail.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
+    widgets::text::set_truncation_mode(handle, mode);
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_bordered(handle: i64, bordered: f64) {
     widgets::button::set_bordered(handle, bordered != 0.0);
@@ -2533,6 +2545,17 @@ pub extern "C" fn perry_ui_bottom_nav_add_item(_handle: i64, _icon_ptr: i64, _la
 pub extern "C" fn perry_ui_bottom_nav_set_badge(_handle: i64, _index: i64, _badge_ptr: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_bottom_nav_set_selected(_handle: i64, _index: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_tint_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
+    _h: i64,
+    _r: f64,
+    _g: f64,
+    _b: f64,
+    _a: f64,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callback: f64) {}
@@ -2587,3 +2610,25 @@ pub extern "C" fn perry_background_schedule(
 pub extern "C" fn perry_background_cancel(identifier_ptr: i64) {
     background::cancel(identifier_ptr as *const u8);
 }
+
+// AttributedText (Issue #710) — visionOS stub.
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_create() -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_append(
+    _h: i64,
+    _t: i64,
+    _bold: i64,
+    _italic: i64,
+    _underline: i64,
+    _font_size: f64,
+    _r: f64,
+    _g: f64,
+    _b: f64,
+    _a: f64,
+) {
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_clear(_h: i64) {}
