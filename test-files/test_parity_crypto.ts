@@ -3,6 +3,21 @@
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
 // `./run_parity_tests.sh --filter test_parity_crypto` to verify.
+//
+// @covers
+// crates/perry-stdlib/src/crypto.rs:
+//   - js_crypto_create_hash
+//   - js_crypto_md5
+//   - js_crypto_pbkdf2_bytes
+//   - js_crypto_sha256
+//   - js_crypto_sha256_bytes
+// crates/perry-stdlib/src/crypto_e2e.rs:
+//   - js_crypto_hkdf_sha256
+// crates/perry-stdlib/src/webcrypto.rs:
+//   - js_webcrypto_digest
+//   - js_webcrypto_import_key
+//   - js_webcrypto_sign
+//   - js_webcrypto_verify
 
 import * as crypto from "node:crypto";
 

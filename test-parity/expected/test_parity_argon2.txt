@@ -1,0 +1,7 @@
+hash starts $argon2id$: true
+hash typeof: string
+verify correct: true
+verify wrong: false
+two hashes differ: true
+verify second: true
+argon2 parity: ok

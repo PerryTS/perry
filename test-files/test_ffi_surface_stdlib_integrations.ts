@@ -6,7 +6,7 @@
 // inventory into behavioral tests as each area gets deeper compatibility
 // coverage.
 //
-// Inventory entries: 156 unique FFI names, 156 declarations.
+// Inventory entries: 138 unique FFI names, 138 declarations.
 
 const testFfiSurfaceStdlibIntegrationsVersion = 1;
 if (testFfiSurfaceStdlibIntegrationsVersion !== 1) {
@@ -17,10 +17,8 @@ console.log("test_ffi_surface_stdlib_integrations: ok");
 /*
 @covers
 crates/perry-stdlib/src/argon2.rs:
-  - js_argon2_hash
   - js_argon2_hash_sync
   - js_argon2_needs_rehash
-  - js_argon2_verify
   - js_argon2_verify_sync
 crates/perry-stdlib/src/bcrypt.rs:
   - js_bcrypt_compare
@@ -50,33 +48,21 @@ crates/perry-stdlib/src/cheerio.rs:
 crates/perry-stdlib/src/crypto.rs:
   - js_crypto_aes256_decrypt
   - js_crypto_aes256_encrypt
-  - js_crypto_create_hash
   - js_crypto_ed25519_verify
   - js_crypto_hmac_sha256
   - js_crypto_hmac_sha256_bytes
-  - js_crypto_md5
-  - js_crypto_pbkdf2
-  - js_crypto_pbkdf2_bytes
   - js_crypto_random_bytes_buffer
   - js_crypto_random_bytes_hex
   - js_crypto_random_uuid
   - js_crypto_scrypt
   - js_crypto_scrypt_custom
-  - js_crypto_sha256
-  - js_crypto_sha256_bytes
 crates/perry-stdlib/src/crypto_e2e.rs:
   - js_crypto_aes256_gcm_decrypt
   - js_crypto_aes256_gcm_encrypt
-  - js_crypto_hkdf_sha256
   - js_crypto_random_nonce
   - js_crypto_x25519_keypair
   - js_crypto_x25519_shared_secret
 crates/perry-stdlib/src/ethers.rs:
-  - js_ethers_format_ether
-  - js_ethers_format_units
-  - js_ethers_get_address
-  - js_ethers_parse_ether
-  - js_ethers_parse_units
   - js_ethers_wallet_create_random
   - js_keccak256_native
   - js_keccak256_native_bytes
@@ -183,9 +169,4 @@ crates/perry-stdlib/src/sharp.rs:
   - js_sharp_to_file
   - js_sharp_webp
   - js_sharp_width
-crates/perry-stdlib/src/webcrypto.rs:
-  - js_webcrypto_digest
-  - js_webcrypto_import_key
-  - js_webcrypto_sign
-  - js_webcrypto_verify
 */
