@@ -3012,8 +3012,7 @@ fn collect_mutations_in_expr(
                 _ => {
                     push_mut(
                         Mutation::Comment(
-                            "chartAddDataPoint: non-literal label/value, point dropped"
-                                .to_string(),
+                            "chartAddDataPoint: non-literal label/value, point dropped".to_string(),
                         ),
                         out,
                         cond,
@@ -6505,7 +6504,7 @@ for (let i = 0; i < data.length; i++) {\n\
     const cx = padL + step * (i + 0.5);\n\
     ctx.fillText(data[i].label, cx, ch - padB + 18);\n\
 }\n"
-        .replace('\n', "\n        ")
+    .replace('\n', "\n        ")
 }
 
 fn chart_draw_line() -> String {
@@ -6550,7 +6549,7 @@ for (let i = 0; i < data.length; i++) {\n\
     const cx = padL + step * i;\n\
     ctx.fillText(data[i].label, cx, ch - padB + 18);\n\
 }\n"
-        .replace('\n', "\n        ")
+    .replace('\n', "\n        ")
 }
 
 fn chart_draw_pie() -> String {
@@ -11252,11 +11251,7 @@ mod tests {
             "c",
             nmc(
                 "Chart",
-                vec![
-                    Expr::Integer(1),
-                    Expr::Number(200.0),
-                    Expr::Number(150.0),
-                ],
+                vec![Expr::Integer(1), Expr::Number(200.0), Expr::Number(150.0)],
             ),
         ));
         m.init.push(mutator_stmt(
@@ -11348,11 +11343,7 @@ mod tests {
             "c",
             nmc(
                 "Chart",
-                vec![
-                    Expr::Integer(0),
-                    Expr::Number(100.0),
-                    Expr::Number(100.0),
-                ],
+                vec![Expr::Integer(0), Expr::Number(100.0), Expr::Number(100.0)],
             ),
         ));
         m.init.push(mutator_stmt(
@@ -11380,11 +11371,7 @@ mod tests {
             "c",
             nmc(
                 "Chart",
-                vec![
-                    Expr::Integer(2),
-                    Expr::Number(120.0),
-                    Expr::Number(120.0),
-                ],
+                vec![Expr::Integer(2), Expr::Number(120.0), Expr::Number(120.0)],
             ),
         ));
         m.init.push(mutator_stmt(
@@ -11421,11 +11408,7 @@ mod tests {
             "c",
             nmc(
                 "Chart",
-                vec![
-                    Expr::Integer(1),
-                    Expr::Number(100.0),
-                    Expr::Number(100.0),
-                ],
+                vec![Expr::Integer(1), Expr::Number(100.0), Expr::Number(100.0)],
             ),
         ));
         m.init.push(mutator_stmt(
@@ -11487,10 +11470,7 @@ mod tests {
             "child",
             nmc(
                 "TreeNode",
-                vec![
-                    Expr::String("c1".into()),
-                    Expr::String("Child 1".into()),
-                ],
+                vec![Expr::String("c1".into()), Expr::String("Child 1".into())],
             ),
         ));
         m.init.push(mutator_stmt(
@@ -11500,10 +11480,7 @@ mod tests {
         m.init.push(let_widget(
             12,
             "tv",
-            nmc(
-                "TreeView",
-                vec![Expr::LocalGet(10), closure_stub()],
-            ),
+            nmc("TreeView", vec![Expr::LocalGet(10), closure_stub()]),
         ));
         m.init.push(app_with_body(Expr::LocalGet(12)));
 
