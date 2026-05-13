@@ -9,7 +9,22 @@ use deno_core::{
     ModuleSourceCode, ModuleSpecifier, ModuleType, ResolutionKind,
 };
 use deno_error::JsErrorBox;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::path::{Path, PathBuf};
+
+// CJS heuristics regex set. These are tight, hot path on every loaded JS
+// module (called once per import); compiling them once amortizes the cost.
+static EXPORTS_WORD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bexports\b").unwrap());
+static REQUIRE_CALL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
+static EXPORTS_ASSIGN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"exports\.(\w+)\s*=").unwrap());
+static EXPORT_STAR_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"__exportStar\s*\(\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*,\s*exports\s*\)"#)
+        .unwrap()
+});
+static BLOCK_COMMENT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
+static LINE_COMMENT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)//.*$").unwrap());
 
 /// Node.js-compatible module loader
 pub struct NodeModuleLoader {
@@ -509,7 +524,7 @@ fn is_commonjs(code: &str) -> bool {
     // Quick heuristics for CommonJS detection
     code.contains("module.exports")
         || code.contains("exports.")
-        || regex::Regex::new(r"\bexports\b").unwrap().is_match(&code)
+        || EXPORTS_WORD_RE.is_match(&code)
         || code.contains("Object.defineProperty(exports,")
         || (code.contains("require(") && !code.contains("import "))
 }
@@ -526,10 +541,9 @@ fn looks_like_esm(code: &str) -> bool {
 /// Wrap CommonJS code as ESM
 fn wrap_commonjs(code: &str) -> String {
     // Extract all require() specifiers so we can convert them to ESM imports
-    let require_re = regex::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap();
     let code_without_comments = strip_js_comments(code);
     let mut require_specs: Vec<String> = Vec::new();
-    for cap in require_re.captures_iter(&code_without_comments) {
+    for cap in REQUIRE_CALL_RE.captures_iter(&code_without_comments) {
         if let Some(spec) = cap.get(1) {
             let spec_str = spec.as_str().to_string();
             if !require_specs.contains(&spec_str) {
@@ -576,10 +590,7 @@ fn wrap_commonjs(code: &str) -> String {
     let mut export_star_specs = Vec::new();
 
     // Find exports.X = assignments
-    for cap in regex::Regex::new(r"exports\.(\w+)\s*=")
-        .unwrap()
-        .captures_iter(code)
-    {
+    for cap in EXPORTS_ASSIGN_RE.captures_iter(code) {
         if let Some(name) = cap.get(1) {
             let name = name.as_str();
             if name != "__esModule"
@@ -592,12 +603,7 @@ fn wrap_commonjs(code: &str) -> String {
     }
 
     // Find tslib __exportStar(require("..."), exports) barrel re-exports.
-    for cap in regex::Regex::new(
-        r#"__exportStar\s*\(\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*,\s*exports\s*\)"#,
-    )
-    .unwrap()
-    .captures_iter(code)
-    {
+    for cap in EXPORT_STAR_RE.captures_iter(code) {
         if let Some(spec) = cap.get(1) {
             let spec = spec.as_str().to_string();
             if !export_star_specs.contains(&spec) {
@@ -671,10 +677,8 @@ export const __perry_commonjs = true;
 }
 
 fn strip_js_comments(code: &str) -> String {
-    let block_re = regex::Regex::new(r"(?s)/\*.*?\*/").unwrap();
-    let without_blocks = block_re.replace_all(code, "");
-    let line_re = regex::Regex::new(r"(?m)//.*$").unwrap();
-    line_re.replace_all(&without_blocks, "").into_owned()
+    let without_blocks = BLOCK_COMMENT_RE.replace_all(code, "");
+    LINE_COMMENT_RE.replace_all(&without_blocks, "").into_owned()
 }
 
 fn is_safe_js_binding_name(name: &str) -> bool {

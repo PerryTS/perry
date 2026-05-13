@@ -525,13 +525,14 @@ pub(crate) fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) ->
     })
 }
 
-/// Validate the v1 legacy TypeScript decorator surface. Perry currently lowers
-/// class, method, property, and parameter decorators, which is enough for
-/// Nest-style DI metadata canaries. Accessor (getter/setter) decorators and
-/// private decoration points still fail loudly instead of being dropped — the
-/// runtime path for descriptor replacement on accessors is not implemented and
-/// silently ignoring them would mask real bugs in user code.
-fn validate_legacy_decorators_v1(class: &ast::Class, class_name: &str) -> Result<()> {
+/// Validate the legacy TypeScript decorator surface Perry implements. Perry
+/// currently lowers class, method, property, and parameter decorators, which
+/// is enough for Nest-style DI metadata canaries. Accessor (getter/setter)
+/// decorators and private decoration points still fail loudly instead of
+/// being dropped — the runtime path for descriptor replacement on accessors
+/// is not implemented and silently ignoring them would mask real bugs in
+/// user code.
+fn validate_legacy_decorator_surface(class: &ast::Class, class_name: &str) -> Result<()> {
     for member in &class.body {
         match member {
             ast::ClassMember::Method(m) => {
@@ -607,7 +608,7 @@ pub(crate) fn lower_class_decl(
     is_exported: bool,
 ) -> Result<Class> {
     let name = class_decl.ident.sym.to_string();
-    validate_legacy_decorators_v1(&class_decl.class, &name)?;
+    validate_legacy_decorator_surface(&class_decl.class, &name)?;
     let class_id = match ctx.lookup_class(&name) {
         Some(id) => id,
         None => {
@@ -1637,7 +1638,7 @@ pub(crate) fn lower_class_from_ast(
     name: &str,
     is_exported: bool,
 ) -> Result<Class> {
-    validate_legacy_decorators_v1(class, name)?;
+    validate_legacy_decorator_surface(class, name)?;
     let class_id = match ctx.lookup_class(name) {
         Some(id) => id,
         None => {

@@ -888,12 +888,14 @@ pub unsafe extern "C" fn js_call_value(
                             .get_script_resource_name(tc_scope)
                             .map(|s| s.to_rust_string_lossy(tc_scope))
                             .unwrap_or_default();
-                        eprintln!(
+                        log::error!(
                             "[JS-INTEROP] Function value threw: {} ({}:{})",
-                            msg_str, script, line
+                            msg_str,
+                            script,
+                            line
                         );
                     } else if let Some(exception) = tc_scope.exception() {
-                        eprintln!(
+                        log::error!(
                             "[JS-INTEROP] Function value threw: {}",
                             exception.to_rust_string_lossy(tc_scope)
                         );

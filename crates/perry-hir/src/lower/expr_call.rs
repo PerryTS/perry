@@ -1191,11 +1191,8 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     return Ok(Expr::ReflectGetPrototypeOf(Box::new(target)));
                                 }
                                 "defineMetadata" => {
-                                    let mut it = args.into_iter();
-                                    let key = it.next().unwrap_or(Expr::Undefined);
-                                    let value = it.next().unwrap_or(Expr::Undefined);
-                                    let target = it.next().unwrap_or(Expr::Undefined);
-                                    let property_key = it.next().map(Box::new);
+                                    let (key, value, target, property_key) =
+                                        take_reflect_kvtp_args(args);
                                     return Ok(Expr::ReflectDefineMetadata {
                                         key: Box::new(key),
                                         value: Box::new(value),
@@ -1204,10 +1201,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     });
                                 }
                                 "getMetadata" => {
-                                    let mut it = args.into_iter();
-                                    let key = it.next().unwrap_or(Expr::Undefined);
-                                    let target = it.next().unwrap_or(Expr::Undefined);
-                                    let property_key = it.next().map(Box::new);
+                                    let (key, target, property_key) = take_reflect_ktp_args(args);
                                     return Ok(Expr::ReflectGetMetadata {
                                         key: Box::new(key),
                                         target: Box::new(target),
@@ -1215,10 +1209,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     });
                                 }
                                 "getOwnMetadata" => {
-                                    let mut it = args.into_iter();
-                                    let key = it.next().unwrap_or(Expr::Undefined);
-                                    let target = it.next().unwrap_or(Expr::Undefined);
-                                    let property_key = it.next().map(Box::new);
+                                    let (key, target, property_key) = take_reflect_ktp_args(args);
                                     return Ok(Expr::ReflectGetOwnMetadata {
                                         key: Box::new(key),
                                         target: Box::new(target),
@@ -1226,10 +1217,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     });
                                 }
                                 "hasMetadata" => {
-                                    let mut it = args.into_iter();
-                                    let key = it.next().unwrap_or(Expr::Undefined);
-                                    let target = it.next().unwrap_or(Expr::Undefined);
-                                    let property_key = it.next().map(Box::new);
+                                    let (key, target, property_key) = take_reflect_ktp_args(args);
                                     return Ok(Expr::ReflectHasMetadata {
                                         key: Box::new(key),
                                         target: Box::new(target),
@@ -1237,10 +1225,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     });
                                 }
                                 "hasOwnMetadata" => {
-                                    let mut it = args.into_iter();
-                                    let key = it.next().unwrap_or(Expr::Undefined);
-                                    let target = it.next().unwrap_or(Expr::Undefined);
-                                    let property_key = it.next().map(Box::new);
+                                    let (key, target, property_key) = take_reflect_ktp_args(args);
                                     return Ok(Expr::ReflectHasOwnMetadata {
                                         key: Box::new(key),
                                         target: Box::new(target),
@@ -1248,28 +1233,21 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     });
                                 }
                                 "getMetadataKeys" => {
-                                    let mut it = args.into_iter();
-                                    let target = it.next().unwrap_or(Expr::Undefined);
-                                    let property_key = it.next().map(Box::new);
+                                    let (target, property_key) = take_reflect_tp_args(args);
                                     return Ok(Expr::ReflectGetMetadataKeys {
                                         target: Box::new(target),
                                         property_key,
                                     });
                                 }
                                 "getOwnMetadataKeys" => {
-                                    let mut it = args.into_iter();
-                                    let target = it.next().unwrap_or(Expr::Undefined);
-                                    let property_key = it.next().map(Box::new);
+                                    let (target, property_key) = take_reflect_tp_args(args);
                                     return Ok(Expr::ReflectGetOwnMetadataKeys {
                                         target: Box::new(target),
                                         property_key,
                                     });
                                 }
                                 "deleteMetadata" => {
-                                    let mut it = args.into_iter();
-                                    let key = it.next().unwrap_or(Expr::Undefined);
-                                    let target = it.next().unwrap_or(Expr::Undefined);
-                                    let property_key = it.next().map(Box::new);
+                                    let (key, target, property_key) = take_reflect_ktp_args(args);
                                     return Ok(Expr::ReflectDeleteMetadata {
                                         key: Box::new(key),
                                         target: Box::new(target),
@@ -6120,4 +6098,34 @@ fn register_super_stream_controller_params(
             _ => {}
         }
     }
+}
+
+/// (key, value, target, propertyKey?) — `Reflect.defineMetadata`'s 3-or-4 arg
+/// shape. Defaults missing leading args to `undefined`; `property_key` stays
+/// `None` when omitted so the runtime can distinguish class-level metadata
+/// from a property-level one.
+fn take_reflect_kvtp_args(args: Vec<Expr>) -> (Expr, Expr, Expr, Option<Box<Expr>>) {
+    let mut it = args.into_iter();
+    let key = it.next().unwrap_or(Expr::Undefined);
+    let value = it.next().unwrap_or(Expr::Undefined);
+    let target = it.next().unwrap_or(Expr::Undefined);
+    let property_key = it.next().map(Box::new);
+    (key, value, target, property_key)
+}
+
+/// (key, target, propertyKey?) — `Reflect.{get,getOwn,has,hasOwn,delete}Metadata`.
+fn take_reflect_ktp_args(args: Vec<Expr>) -> (Expr, Expr, Option<Box<Expr>>) {
+    let mut it = args.into_iter();
+    let key = it.next().unwrap_or(Expr::Undefined);
+    let target = it.next().unwrap_or(Expr::Undefined);
+    let property_key = it.next().map(Box::new);
+    (key, target, property_key)
+}
+
+/// (target, propertyKey?) — `Reflect.{get,getOwn}MetadataKeys`.
+fn take_reflect_tp_args(args: Vec<Expr>) -> (Expr, Option<Box<Expr>>) {
+    let mut it = args.into_iter();
+    let target = it.next().unwrap_or(Expr::Undefined);
+    let property_key = it.next().map(Box::new);
+    (target, property_key)
 }
