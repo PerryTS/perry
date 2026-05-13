@@ -1383,6 +1383,26 @@ impl JsEmitter {
             Expr::PathDelimiter => {
                 self.output.push_str("__perry.path.delimiter");
             }
+            Expr::PathToNamespacedPath(p) => {
+                self.output.push_str("__perry.path.toNamespacedPath(");
+                self.emit_expr(p);
+                self.output.push(')');
+            }
+            Expr::PathMatchesGlob(p, pat) => {
+                self.output.push_str("__perry.path.matchesGlob(");
+                self.emit_expr(p);
+                self.output.push_str(", ");
+                self.emit_expr(pat);
+                self.output.push(')');
+            }
+            Expr::PathResolveJoin(a, b) => {
+                // Match Node's path.resolve(a, b) two-arg behavior.
+                self.output.push_str("__perry.path.resolve(");
+                self.emit_expr(a);
+                self.output.push_str(", ");
+                self.emit_expr(b);
+                self.output.push(')');
+            }
 
             // --- WeakRef and FinalizationRegistry ---
             Expr::WeakRefNew(target) => {

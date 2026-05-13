@@ -7063,6 +7063,39 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let result = blk.call(I64, "js_path_format", &[(DOUBLE, &obj_box)]);
             Ok(nanbox_string_inline(blk, &result))
         }
+        Expr::PathToNamespacedPath(p) => {
+            let p_box = lower_expr(ctx, p)?;
+            let blk = ctx.block();
+            let p_handle = unbox_to_i64(blk, &p_box);
+            let result = blk.call(I64, "js_path_to_namespaced_path", &[(I64, &p_handle)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
+        Expr::PathMatchesGlob(p, pat) => {
+            let p_box = lower_expr(ctx, p)?;
+            let pat_box = lower_expr(ctx, pat)?;
+            let blk = ctx.block();
+            let p_handle = unbox_to_i64(blk, &p_box);
+            let pat_handle = unbox_to_i64(blk, &pat_box);
+            let i32_v = blk.call(
+                I32,
+                "js_path_matches_glob",
+                &[(I64, &p_handle), (I64, &pat_handle)],
+            );
+            Ok(i32_bool_to_nanbox(blk, &i32_v))
+        }
+        Expr::PathResolveJoin(a, b) => {
+            let a_box = lower_expr(ctx, a)?;
+            let b_box = lower_expr(ctx, b)?;
+            let blk = ctx.block();
+            let a_handle = unbox_to_i64(blk, &a_box);
+            let b_handle = unbox_to_i64(blk, &b_box);
+            let result = blk.call(
+                I64,
+                "js_path_resolve_join",
+                &[(I64, &a_handle), (I64, &b_handle)],
+            );
+            Ok(nanbox_string_inline(blk, &result))
+        }
         Expr::ProcessVersion => {
             let blk = ctx.block();
             let handle = blk.call(I64, "js_process_version", &[]);

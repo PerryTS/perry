@@ -21,9 +21,10 @@ fn string_to_js(s: &str) -> *mut StringHeader {
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
 
-/// Join two path segments. Node's `path.join` normalizes the result, so we
-/// run the joined path through the same normalization helper as
-/// `path.normalize`.
+/// Join two path segments. Node's `path.join` concatenates with `/` and
+/// normalizes — it does NOT reset on an absolute segment (that's
+/// `path.resolve`'s job). We can't use Rust's `Path::join` because it
+/// resets on absolute segments.
 #[no_mangle]
 pub extern "C" fn js_path_join(
     a_ptr: *const StringHeader,
@@ -33,25 +34,49 @@ pub extern "C" fn js_path_join(
         let a = string_from_header(a_ptr).unwrap_or_default();
         let b = string_from_header(b_ptr).unwrap_or_default();
 
-        let joined = Path::new(&a).join(&b);
-        let normalized = normalize_str(&joined.to_string_lossy());
+        let joined = if a.is_empty() {
+            b
+        } else if b.is_empty() {
+            a
+        } else {
+            format!("{}/{}", a, b)
+        };
+        let normalized = normalize_str(&joined);
         string_to_js(&normalized)
     }
 }
 
-/// Get directory name from path
+/// Get directory name from path. Per Node spec, the root's dirname is the
+/// root itself (`/` → `/`), not an empty string — Rust's `Path::parent`
+/// returns `None` there, which we treat as "stay at root".
 #[no_mangle]
 pub extern "C" fn js_path_dirname(path_ptr: *const StringHeader) -> *mut StringHeader {
     unsafe {
         let path_str = match string_from_header(path_ptr) {
             Some(s) => s,
-            None => return string_to_js(""),
+            None => return string_to_js("."),
         };
+
+        if path_str.is_empty() {
+            return string_to_js(".");
+        }
+
+        // POSIX root: dirname("/") = "/", dirname("///") = "/"
+        if path_str.chars().all(|c| c == '/') {
+            return string_to_js("/");
+        }
 
         let path = Path::new(&path_str);
         match path.parent() {
-            Some(parent) => string_to_js(&parent.to_string_lossy()),
-            None => string_to_js(""),
+            Some(parent) => {
+                let s = parent.to_string_lossy();
+                if s.is_empty() {
+                    string_to_js(".")
+                } else {
+                    string_to_js(&s)
+                }
+            }
+            None => string_to_js("."),
         }
     }
 }
@@ -347,4 +372,113 @@ pub extern "C" fn js_path_sep_get() -> *mut StringHeader {
 #[no_mangle]
 pub extern "C" fn js_path_delimiter_get() -> *mut StringHeader {
     string_to_js(":")
+}
+
+/// Internal helper for `path.resolve(a, b)` — like `js_path_join` but with
+/// reset-on-absolute semantics (Node's `path.resolve` rule: when a later
+/// segment is absolute, prior segments are discarded). Normalizes the
+/// result. Used by the multi-arg `path.resolve` lowering to chain pairs.
+#[no_mangle]
+pub extern "C" fn js_path_resolve_join(
+    a_ptr: *const StringHeader,
+    b_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    unsafe {
+        let a = string_from_header(a_ptr).unwrap_or_default();
+        let b = string_from_header(b_ptr).unwrap_or_default();
+
+        let joined = if b.starts_with('/') {
+            b
+        } else if a.is_empty() {
+            b
+        } else if b.is_empty() {
+            a
+        } else {
+            format!("{}/{}", a, b)
+        };
+        string_to_js(&normalize_str(&joined))
+    }
+}
+
+/// `path.toNamespacedPath(path)` — Windows-only effect on Node. On POSIX
+/// it is a no-op that returns the input unchanged. Perry's path module
+/// is POSIX-shaped, so we match that.
+#[no_mangle]
+pub extern "C" fn js_path_to_namespaced_path(path_ptr: *const StringHeader) -> *mut StringHeader {
+    unsafe {
+        let s = string_from_header(path_ptr).unwrap_or_default();
+        string_to_js(&s)
+    }
+}
+
+/// Convert a glob pattern (`*`, `?`, `[abc]`, `**`) into a regex, anchored
+/// at both ends. Mirrors Node's `path.matchesGlob` semantics, which Node
+/// documents as identical to `picomatch` defaults: `*` matches any chars
+/// except `/`, `**` matches across `/`, `?` matches a single char except
+/// `/`, character classes `[...]` work like regex.
+fn glob_to_regex(pattern: &str) -> String {
+    let mut out = String::from("^");
+    let bytes = pattern.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        match c {
+            '*' => {
+                if i + 1 < bytes.len() && bytes[i + 1] as char == '*' {
+                    out.push_str(".*");
+                    i += 2;
+                    continue;
+                } else {
+                    out.push_str("[^/]*");
+                }
+            }
+            '?' => out.push_str("[^/]"),
+            '[' => {
+                out.push('[');
+                i += 1;
+                while i < bytes.len() && bytes[i] as char != ']' {
+                    let ch = bytes[i] as char;
+                    if ch == '!' && out.ends_with('[') {
+                        out.push('^');
+                    } else {
+                        out.push(ch);
+                    }
+                    i += 1;
+                }
+                out.push(']');
+            }
+            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+        i += 1;
+    }
+    out.push('$');
+    out
+}
+
+/// `path.matchesGlob(path, pattern)` — Node 22.5+ API. Returns whether the
+/// given path matches the given glob pattern.
+#[no_mangle]
+pub extern "C" fn js_path_matches_glob(
+    path_ptr: *const StringHeader,
+    pattern_ptr: *const StringHeader,
+) -> i32 {
+    unsafe {
+        let path_str = string_from_header(path_ptr).unwrap_or_default();
+        let pattern = string_from_header(pattern_ptr).unwrap_or_default();
+        let regex_src = glob_to_regex(&pattern);
+        match regex::Regex::new(&regex_src) {
+            Ok(re) => {
+                if re.is_match(&path_str) {
+                    1
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
+        }
+    }
 }

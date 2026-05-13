@@ -732,6 +732,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_path_join", I64, &[I64, I64]);
     module.declare_function("js_path_dirname", I64, &[I64]);
     module.declare_function("js_path_relative", I64, &[I64, I64]);
+    module.declare_function("js_path_to_namespaced_path", I64, &[I64]);
+    module.declare_function("js_path_matches_glob", I32, &[I64, I64]);
+    module.declare_function("js_path_resolve_join", I64, &[I64, I64]);
     module.declare_function("js_object_from_entries", DOUBLE, &[DOUBLE]);
     module.declare_function("js_string_match", I64, &[I64, I64]);
     module.declare_function("js_string_match_all", I64, &[I64, I64]);

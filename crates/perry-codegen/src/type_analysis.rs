@@ -768,6 +768,8 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PathExtname(_)
         | Expr::PathResolve(_)
         | Expr::PathNormalize(_)
+        | Expr::PathToNamespacedPath(_)
+        | Expr::PathResolveJoin(..)
         | Expr::ProcessVersion
         | Expr::ProcessCwd
         | Expr::OsArch
@@ -871,7 +873,9 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PathBasename(_)
         | Expr::PathExtname(_)
         | Expr::PathResolve(_)
-        | Expr::PathNormalize(_) => true,
+        | Expr::PathNormalize(_)
+        | Expr::PathToNamespacedPath(_)
+        | Expr::PathResolveJoin(..) => true,
         // String.fromCodePoint(...) / String.fromCharCode(...) / str.at(i)
         // / RegExp.source|flags — all produce string handles.
         Expr::StringFromCodePoint(_)

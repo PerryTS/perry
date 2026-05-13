@@ -1255,6 +1255,17 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
         Expr::PathIsAbsolute(path) => {
             Expr::PathIsAbsolute(Box::new(substitute_expr(path, substitutions)))
         }
+        Expr::PathToNamespacedPath(path) => {
+            Expr::PathToNamespacedPath(Box::new(substitute_expr(path, substitutions)))
+        }
+        Expr::PathMatchesGlob(a, b) => Expr::PathMatchesGlob(
+            Box::new(substitute_expr(a, substitutions)),
+            Box::new(substitute_expr(b, substitutions)),
+        ),
+        Expr::PathResolveJoin(a, b) => Expr::PathResolveJoin(
+            Box::new(substitute_expr(a, substitutions)),
+            Box::new(substitute_expr(b, substitutions)),
+        ),
 
         // Array methods
         Expr::ArrayPush { array_id, value } => Expr::ArrayPush {
@@ -2398,7 +2409,7 @@ fn collect_instantiations_in_expr(
             collect_instantiations_in_expr(path, ctx, module, idx);
             collect_instantiations_in_expr(content, ctx, module, idx);
         }
-        Expr::PathJoin(a, b) => {
+        Expr::PathJoin(a, b) | Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) => {
             collect_instantiations_in_expr(a, ctx, module, idx);
             collect_instantiations_in_expr(b, ctx, module, idx);
         }
@@ -2406,7 +2417,8 @@ fn collect_instantiations_in_expr(
         | Expr::PathBasename(p)
         | Expr::PathExtname(p)
         | Expr::PathResolve(p)
-        | Expr::PathIsAbsolute(p) => {
+        | Expr::PathIsAbsolute(p)
+        | Expr::PathToNamespacedPath(p) => {
             collect_instantiations_in_expr(p, ctx, module, idx);
         }
         Expr::ArrayPush { value, .. }
@@ -2916,7 +2928,7 @@ fn update_call_sites_in_expr(
             update_call_sites_in_expr(path, ctx, lookup);
             update_call_sites_in_expr(content, ctx, lookup);
         }
-        Expr::PathJoin(a, b) => {
+        Expr::PathJoin(a, b) | Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) => {
             update_call_sites_in_expr(a, ctx, lookup);
             update_call_sites_in_expr(b, ctx, lookup);
         }
@@ -2924,7 +2936,8 @@ fn update_call_sites_in_expr(
         | Expr::PathBasename(p)
         | Expr::PathExtname(p)
         | Expr::PathResolve(p)
-        | Expr::PathIsAbsolute(p) => {
+        | Expr::PathIsAbsolute(p)
+        | Expr::PathToNamespacedPath(p) => {
             update_call_sites_in_expr(p, ctx, lookup);
         }
         Expr::ArrayPush { value, .. }

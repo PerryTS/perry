@@ -1745,6 +1745,20 @@ impl SH for Expr {
             }
             Expr::PathSep => tag(h, 101),
             Expr::PathDelimiter => tag(h, 102),
+            Expr::PathToNamespacedPath(e) => {
+                tag(h, 449);
+                e.as_ref().hash(h);
+            }
+            Expr::PathMatchesGlob(a, b) => {
+                tag(h, 450);
+                a.as_ref().hash(h);
+                b.as_ref().hash(h);
+            }
+            Expr::PathResolveJoin(a, b) => {
+                tag(h, 451);
+                a.as_ref().hash(h);
+                b.as_ref().hash(h);
+            }
             Expr::WeakRefNew(e) => {
                 tag(h, 103);
                 e.as_ref().hash(h);

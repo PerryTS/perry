@@ -442,7 +442,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(h, assigned);
         }
         // Path operations
-        Expr::PathJoin(a, b) => {
+        Expr::PathJoin(a, b) | Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) => {
             collect_assigned_locals_expr(a, assigned);
             collect_assigned_locals_expr(b, assigned);
         }
@@ -451,6 +451,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::PathExtname(path)
         | Expr::PathResolve(path)
         | Expr::PathIsAbsolute(path)
+        | Expr::PathToNamespacedPath(path)
         | Expr::FileURLToPath(path) => {
             collect_assigned_locals_expr(path, assigned);
         }

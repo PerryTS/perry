@@ -8075,19 +8075,23 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 type_args: vec![],
             })
         }
-        // Class expression used as a value (not in `new` context)
+        // Class expression used as a value (not in `new` context) —
+        // refs #740. JS semantics: a class expression evaluates to the
+        // class constructor itself. Previously we emitted an empty `new`
+        // here, which bound the local to a zero-arg instance instead of
+        // the class — so `const C = class { ... }; new C(args)` ran the
+        // ctor with no args, and `O.Inner` inside an object literal held
+        // a stillborn instance instead of a constructor. Lower to a
+        // `ClassRef` so the constructor identity survives the value path
+        // and `new` site rerouting (via `local_class_aliases`) picks it
+        // back up.
         ast::Expr::Class(class_expr) => {
             let ident_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
             let synthetic_name =
                 ident_name.unwrap_or_else(|| format!("__anon_class_{}", ctx.fresh_class()));
             let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
             ctx.pending_classes.push(class);
-            // Return as a New expression with no args (creates the class object reference)
-            Ok(Expr::New {
-                class_name: synthetic_name,
-                args: vec![],
-                type_args: vec![],
-            })
+            Ok(Expr::ClassRef(synthetic_name))
         }
         ast::Expr::JSXElement(jsx) => lower_jsx_element(ctx, jsx),
         ast::Expr::JSXFragment(jsx) => lower_jsx_fragment(ctx, jsx),
