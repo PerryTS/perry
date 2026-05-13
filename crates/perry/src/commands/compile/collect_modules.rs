@@ -265,8 +265,7 @@ pub(super) fn collect_modules(
                 // Already resolved (e.g. a second pass on the same module).
                 return;
             }
-            let mut visiting: std::collections::HashSet<u32> =
-                std::collections::HashSet::new();
+            let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
             match perry_hir::resolve_import_path_with_consts(
                 arg,
                 &module_const_locals,

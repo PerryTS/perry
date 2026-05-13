@@ -4176,9 +4176,7 @@ fn compile_module_entry(
         // event-loop turns). For the entry-module case this is the
         // unusual scenario where some other module dynamic-imports
         // the entry itself — uncommon but supported.
-        if !cross_module.namespace_entries.is_empty()
-            && !ctx.block().is_terminated()
-        {
+        if !cross_module.namespace_entries.is_empty() && !ctx.block().is_terminated() {
             emit_namespace_populator(
                 &mut ctx,
                 &cross_module.namespace_entries,
@@ -4454,9 +4452,7 @@ fn compile_module_entry(
         // exports' bindings are also set because `lower_stmts` ran
         // above. The dispatcher in `Expr::DynamicImport` loads
         // `@__perry_ns_<prefix>` and wraps it in `js_promise_resolved`.
-        if !cross_module.namespace_entries.is_empty()
-            && !ctx.block().is_terminated()
-        {
+        if !cross_module.namespace_entries.is_empty() && !ctx.block().is_terminated() {
             emit_namespace_populator(
                 &mut ctx,
                 &cross_module.namespace_entries,
@@ -5527,8 +5523,7 @@ fn emit_namespace_populator(
                 // imports the function the regular way. We can re-emit
                 // it inline here (DCE removes duplicates if the same
                 // import is also referenced by `import { x } from`).
-                let target_name =
-                    format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
+                let target_name = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
                 let param_types: Vec<crate::types::LlvmType> =
                     std::iter::repeat_n(DOUBLE, *param_count).collect();
                 ctx.pending_declares
@@ -5545,7 +5540,9 @@ fn emit_namespace_populator(
                 // own internal wrapper here under a unique name.
                 let wrapper_name = format!(
                     "__perry_wrap_ns_extern_{}__{}__{}",
-                    module_prefix, source_prefix, sanitize(source_local)
+                    module_prefix,
+                    source_prefix,
+                    sanitize(source_local)
                 );
                 // Lazy-add the wrapper to pending_declares so we don't
                 // try to define it twice if the namespace populates
@@ -5558,13 +5555,12 @@ fn emit_namespace_populator(
                 // wrapper-returning getter; undefined otherwise). For
                 // proper function-value re-export, the static-import
                 // path already covers it.
-                ctx.pending_declares
-                    .push((wrapper_name, DOUBLE, vec![]));
+                ctx.pending_declares.push((wrapper_name, DOUBLE, vec![]));
                 ctx.block().call(DOUBLE, &target_name, &[])
             }
-            NamespaceEntryKind::NestedNamespace { source_prefix } => {
-                ctx.block().load(DOUBLE, &format!("@__perry_ns_{}", source_prefix))
-            }
+            NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
+                .block()
+                .load(DOUBLE, &format!("@__perry_ns_{}", source_prefix)),
         };
 
         let blk = ctx.block();
@@ -5583,7 +5579,12 @@ fn emit_namespace_populator(
     let result = blk.call(
         DOUBLE,
         "js_create_namespace",
-        &[(I32, &n_str), (PTR, &keys_buf), (PTR, &lens_buf), (PTR, &vals_buf)],
+        &[
+            (I32, &n_str),
+            (PTR, &keys_buf),
+            (PTR, &lens_buf),
+            (PTR, &vals_buf),
+        ],
     );
     let ns_name = format!("__perry_ns_{}", module_prefix);
     blk.store(DOUBLE, &result, &format!("@{}", ns_name));

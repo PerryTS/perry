@@ -521,8 +521,7 @@ pub(crate) struct FnCtx<'a> {
     /// dispatcher must load. Empty if this module performs no dynamic
     /// imports — the empty-map branch keeps codegen safe against a
     /// stray `DynamicImport` node leaking past the resolver.
-    pub dynamic_import_path_to_prefix:
-        &'a std::collections::HashMap<String, String>,
+    pub dynamic_import_path_to_prefix: &'a std::collections::HashMap<String, String>,
 
     /// Local-variable class aliases: `let_name → class_name` for any
     /// `Stmt::Let { name, init: Some(Expr::ClassRef(class_name)) }`
@@ -10817,18 +10816,14 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // function calls); the result is discarded.
                 let _ = lower_expr(ctx, arg)?;
                 let path = &paths[0];
-                let target_prefix = ctx
-                    .dynamic_import_path_to_prefix
-                    .get(path)
-                    .cloned();
+                let target_prefix = ctx.dynamic_import_path_to_prefix.get(path).cloned();
                 let blk = ctx.block();
                 let ns_val = match target_prefix {
                     Some(prefix) => blk.load(DOUBLE, &format!("@__perry_ns_{}", prefix)),
                     None => {
                         // Driver didn't resolve this path to a target
                         // module — surface a rejected promise.
-                        let undef =
-                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                         let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &undef)]);
                         return Ok(nanbox_pointer_inline(blk, &p));
                     }
@@ -10851,9 +10846,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let join_block_idx = ctx.new_block("dynamic_import_join");
 
             // Unbox the path argument once into an i64 StringHeader*.
-            let path_handle = ctx
-                .block()
-                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &path_val)]);
+            let path_handle =
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &path_val)]);
 
             // Pre-resolve target prefixes so we can skip paths that
             // don't have a known target (driver dropped them).
@@ -10876,11 +10871,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
                 let blk = ctx.block();
                 let key_box = blk.load(DOUBLE, &key_handle_global);
-                let key_handle = blk.call(
-                    I64,
-                    "js_get_string_pointer_unified",
-                    &[(DOUBLE, &key_box)],
-                );
+                let key_handle =
+                    blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &key_box)]);
                 let eq_i32 = blk.call(
                     I32,
                     "js_string_equals",

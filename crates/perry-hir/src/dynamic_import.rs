@@ -17,7 +17,7 @@
 //! `resolved_path` is the driver's job (it owns the module resolver).
 //! Here we only fold the JS-level path *string*.
 
-use crate::ir::{BinaryOp, Expr, Export, Function, Module, Stmt};
+use crate::ir::{BinaryOp, Export, Expr, Function, Module, Stmt};
 use crate::walker::{walk_expr_children, walk_expr_children_mut};
 use std::collections::HashSet;
 
@@ -164,7 +164,10 @@ fn visit_stmt_for_dyn_imports<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
                 }
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             visit_expr_for_dyn_imports(discriminant, f);
             for c in cases {
                 if let Some(t) = &mut c.test {
@@ -489,7 +492,10 @@ fn scan_mutations_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<u32>) {
                 }
             }
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             scan_mutations_expr(discriminant, out);
             for c in cases {
                 if let Some(t) = &c.test {
@@ -575,8 +581,7 @@ pub fn resolve_import_path_with_consts(
         // `DYNAMIC_IMPORT_PATH_CAP`; doing it again here would
         // duplicate the error message.
         Expr::Binary {
-            op: BinaryOp::Add,
-            ..
+            op: BinaryOp::Add, ..
         } => {
             let mut parts: Vec<&Expr> = Vec::new();
             flatten_concat(arg, &mut parts);
@@ -726,7 +731,10 @@ fn stmt_has_top_level_await(stmt: &Stmt) -> bool {
                     .as_ref()
                     .is_some_and(|f| f.iter().any(stmt_has_top_level_await))
         }
-        Stmt::Switch { discriminant, cases } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
             expr_has_top_level_await(discriminant)
                 || cases.iter().any(|c| {
                     c.test.as_ref().is_some_and(expr_has_top_level_await)
@@ -812,7 +820,8 @@ mod tests {
     #[test]
     fn tla_detects_module_init_await() {
         let mut m = Module::new("t");
-        m.init.push(Stmt::Expr(Expr::Await(Box::new(Expr::Undefined))));
+        m.init
+            .push(Stmt::Expr(Expr::Await(Box::new(Expr::Undefined))));
         detect_top_level_await(&mut m);
         assert!(m.has_top_level_await);
     }
@@ -912,8 +921,10 @@ mod tests {
             mutable: false,
             init: Some(Expr::String("./b.ts".into())),
         });
-        m.init
-            .push(Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::String("./c.ts".into())))));
+        m.init.push(Stmt::Expr(Expr::LocalSet(
+            2,
+            Box::new(Expr::String("./c.ts".into())),
+        )));
         let consts = collect_module_const_locals(&m);
         assert!(consts.contains_key(&1));
         assert!(!consts.contains_key(&2));

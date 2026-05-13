@@ -2842,9 +2842,20 @@ pub fn run_with_parse_cache(
     let sanitize_module_name = |s: &str| -> String {
         let mut out: String = s
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
-        if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if out
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
             out.insert(0, '_');
         }
         out
@@ -2960,9 +2971,7 @@ pub fn run_with_parse_cache(
                         sanitize_module_name(&target_hir.name),
                         global.id
                     );
-                    perry_codegen::NamespaceEntryKind::LocalVar {
-                        global_name: gname,
-                    }
+                    perry_codegen::NamespaceEntryKind::LocalVar { global_name: gname }
                 } else {
                     // Best-effort: treat unknown locals as Var sourced
                     // by getter. This covers re-export shapes that the
