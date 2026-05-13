@@ -1,13 +1,13 @@
 # Perry FFI Test Coverage
 
-Generated: 2026-05-11T17:05:37Z
+Generated: 2026-05-13T16:03:36Z
 
 ## Summary
 
-- **Total FFI functions:** 1771
-- **Covered by TypeScript fixtures:** 1771 (100.0%)
-- **Covered by Rust tests:** 1430 (80.7%)
-- **Covered by either TS or Rust:** 1771 (100.0%)
+- **Total FFI functions:** 1790
+- **Covered by TypeScript fixtures:** 1790 (100.0%)
+- **Covered by Rust tests:** 1437 (80.3%)
+- **Covered by either TS or Rust:** 1790 (100.0%)
 - **Uncovered by either TS or Rust:** 0
 
 ## Coverage by File
@@ -16,7 +16,7 @@ Generated: 2026-05-11T17:05:37Z
 |------|-------|------------|--------------|----------|-------------|-------------------|
 | `crates/perry-runtime/src/arena.rs` | 4 | 4 | 4 | 4 | 100% | 100% |
 | `crates/perry-runtime/src/arkts_callbacks.rs` | 8 | 8 | 3 | 8 | 100% | 100% |
-| `crates/perry-runtime/src/array.rs` | 74 | 74 | 74 | 74 | 100% | 100% |
+| `crates/perry-runtime/src/array.rs` | 77 | 77 | 77 | 77 | 100% | 100% |
 | `crates/perry-runtime/src/bigint.rs` | 28 | 28 | 28 | 28 | 100% | 100% |
 | `crates/perry-runtime/src/box.rs` | 3 | 3 | 0 | 3 | 100% | 100% |
 | `crates/perry-runtime/src/buffer.rs` | 77 | 77 | 77 | 77 | 100% | 100% |
@@ -41,12 +41,12 @@ Generated: 2026-05-11T17:05:37Z
 | `crates/perry-runtime/src/media_playback.rs` | 15 | 15 | 0 | 15 | 100% | 100% |
 | `crates/perry-runtime/src/net.rs` | 11 | 11 | 11 | 11 | 100% | 100% |
 | `crates/perry-runtime/src/node_stream.rs` | 6 | 6 | 1 | 6 | 100% | 100% |
-| `crates/perry-runtime/src/object.rs` | 77 | 77 | 77 | 77 | 100% | 100% |
+| `crates/perry-runtime/src/object.rs` | 80 | 80 | 80 | 80 | 100% | 100% |
 | `crates/perry-runtime/src/os.rs` | 29 | 29 | 29 | 29 | 100% | 100% |
-| `crates/perry-runtime/src/path.rs` | 13 | 13 | 6 | 13 | 100% | 100% |
+| `crates/perry-runtime/src/path.rs` | 16 | 16 | 6 | 16 | 100% | 100% |
 | `crates/perry-runtime/src/plugin.rs` | 22 | 22 | 22 | 22 | 100% | 100% |
 | `crates/perry-runtime/src/process.rs` | 4 | 4 | 0 | 4 | 100% | 100% |
-| `crates/perry-runtime/src/promise.rs` | 34 | 34 | 22 | 34 | 100% | 100% |
+| `crates/perry-runtime/src/promise.rs` | 36 | 36 | 22 | 36 | 100% | 100% |
 | `crates/perry-runtime/src/proxy.rs` | 19 | 19 | 1 | 19 | 100% | 100% |
 | `crates/perry-runtime/src/regex.rs` | 19 | 19 | 19 | 19 | 100% | 100% |
 | `crates/perry-runtime/src/set.rs` | 11 | 11 | 11 | 11 | 100% | 100% |
@@ -56,7 +56,7 @@ Generated: 2026-05-11T17:05:37Z
 | `crates/perry-runtime/src/symbol.rs` | 16 | 16 | 8 | 16 | 100% | 100% |
 | `crates/perry-runtime/src/text.rs` | 4 | 4 | 0 | 4 | 100% | 100% |
 | `crates/perry-runtime/src/thread.rs` | 5 | 5 | 3 | 5 | 100% | 100% |
-| `crates/perry-runtime/src/timer.rs` | 17 | 17 | 9 | 17 | 100% | 100% |
+| `crates/perry-runtime/src/timer.rs` | 18 | 18 | 10 | 18 | 100% | 100% |
 | `crates/perry-runtime/src/tty.rs` | 8 | 8 | 8 | 8 | 100% | 100% |
 | `crates/perry-runtime/src/tui/ffi.rs` | 32 | 32 | 30 | 32 | 100% | 100% |
 | `crates/perry-runtime/src/tui/hooks.rs` | 26 | 26 | 26 | 26 | 100% | 100% |
@@ -69,6 +69,7 @@ Generated: 2026-05-11T17:05:37Z
 | `crates/perry-runtime/src/value.rs` | 54 | 54 | 54 | 54 | 100% | 100% |
 | `crates/perry-runtime/src/watchos_game_loop.rs` | 2 | 2 | 1 | 2 | 100% | 100% |
 | `crates/perry-runtime/src/weakref.rs` | 15 | 15 | 1 | 15 | 100% | 100% |
+| `crates/perry-runtime/src/webassembly.rs` | 7 | 7 | 0 | 7 | 100% | 100% |
 | `crates/perry-stdlib/src/argon2.rs` | 5 | 5 | 2 | 5 | 100% | 100% |
 | `crates/perry-stdlib/src/async_local_storage.rs` | 6 | 6 | 5 | 6 | 100% | 100% |
 | `crates/perry-stdlib/src/axios.rs` | 8 | 8 | 8 | 8 | 100% | 100% |
