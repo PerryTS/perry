@@ -17,7 +17,7 @@
 //! `resolved_path` is the driver's job (it owns the module resolver).
 //! Here we only fold the JS-level path *string*.
 
-use crate::ir::{Expr, Export, Function, Module, Stmt};
+use crate::ir::{BinaryOp, Expr, Export, Function, Module, Stmt};
 use crate::walker::{walk_expr_children, walk_expr_children_mut};
 use std::collections::HashSet;
 
@@ -358,19 +358,204 @@ fn flatten_into<'a, F>(
     }
 }
 
+/// Issue #100: collect every `Stmt::Let { mutable: false, init: Some(_), .. }`
+/// declared at the module's top level into a `local_id → init_expr`
+/// map. Function-local consts are NOT included — the dynamic-import
+/// argument is always evaluated in module-init scope, so only module-
+/// level consts can flow into it via the standard scope rules.
+///
+/// Mutable bindings (`let`, `var`, reassigned-anywhere consts) are
+/// excluded — only `const x = <single_init>` shapes participate. This
+/// matches the spec's "single SSA def to a resolvable expression"
+/// constraint without needing a full SSA pass: TypeScript-style `const`
+/// already guarantees a single assignment by the type system, and an
+/// occasional later `LocalSet` (e.g. an erased TS reassignment that
+/// somehow survived to HIR) is treated as Unresolved.
+pub fn collect_module_const_locals(module: &Module) -> std::collections::HashMap<u32, Expr> {
+    use std::collections::HashMap;
+    let mut consts: HashMap<u32, Expr> = HashMap::new();
+    for stmt in &module.init {
+        if let Stmt::Let {
+            id,
+            init: Some(expr),
+            mutable: false,
+            ..
+        } = stmt
+        {
+            consts.insert(*id, expr.clone());
+        }
+    }
+    // Any later mutation invalidates the entry. Walk the entire module
+    // (top-level + every function/method body) and remove ids that get
+    // reassigned.
+    let mut mutated: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for stmt in &module.init {
+        scan_mutations_stmt(stmt, &mut mutated);
+    }
+    for func in &module.functions {
+        for s in &func.body {
+            scan_mutations_stmt(s, &mut mutated);
+        }
+    }
+    for cls in &module.classes {
+        if let Some(ctor) = &cls.constructor {
+            for s in &ctor.body {
+                scan_mutations_stmt(s, &mut mutated);
+            }
+        }
+        for m in &cls.methods {
+            for s in &m.body {
+                scan_mutations_stmt(s, &mut mutated);
+            }
+        }
+    }
+    for id in mutated {
+        consts.remove(&id);
+    }
+    consts
+}
+
+fn scan_mutations_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<u32>) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                scan_mutations_expr(e, out);
+            }
+        }
+        Stmt::Expr(e) => scan_mutations_expr(e, out),
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                scan_mutations_expr(e, out);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            scan_mutations_expr(condition, out);
+            for s in then_branch {
+                scan_mutations_stmt(s, out);
+            }
+            if let Some(eb) = else_branch {
+                for s in eb {
+                    scan_mutations_stmt(s, out);
+                }
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            scan_mutations_expr(condition, out);
+            for s in body {
+                scan_mutations_stmt(s, out);
+            }
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                scan_mutations_stmt(i, out);
+            }
+            if let Some(c) = condition {
+                scan_mutations_expr(c, out);
+            }
+            if let Some(u) = update {
+                scan_mutations_expr(u, out);
+            }
+            for s in body {
+                scan_mutations_stmt(s, out);
+            }
+        }
+        Stmt::Labeled { body, .. } => scan_mutations_stmt(body, out),
+        Stmt::Throw(e) => scan_mutations_expr(e, out),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                scan_mutations_stmt(s, out);
+            }
+            if let Some(c) = catch {
+                for s in &c.body {
+                    scan_mutations_stmt(s, out);
+                }
+            }
+            if let Some(fb) = finally {
+                for s in fb {
+                    scan_mutations_stmt(s, out);
+                }
+            }
+        }
+        Stmt::Switch { discriminant, cases } => {
+            scan_mutations_expr(discriminant, out);
+            for c in cases {
+                if let Some(t) = &c.test {
+                    scan_mutations_expr(t, out);
+                }
+                for s in &c.body {
+                    scan_mutations_stmt(s, out);
+                }
+            }
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => {}
+    }
+}
+
+fn scan_mutations_expr(expr: &Expr, out: &mut std::collections::HashSet<u32>) {
+    match expr {
+        Expr::LocalSet(id, _) => {
+            out.insert(*id);
+        }
+        Expr::Update { id, .. } => {
+            out.insert(*id);
+        }
+        _ => {}
+    }
+    walk_expr_children(expr, &mut |child| scan_mutations_expr(child, out));
+}
+
 /// Const-fold a dynamic `import()` path argument.
 ///
 /// Supported forms (D1, issue #100):
 ///   - String literal:                    `import('./foo.ts')`
 ///   - Ternary of two resolvable args:    `import(cond ? a : b)`
-///   - Parenthesized / `as` wrapper:      not represented in HIR (already
-///     elided during lowering)
+///   - Template literal:                  ``import(`./locale_${lang}.ts`)``
+///     (expanded to Cartesian product of every interpolation's
+///     resolvable set; over the path cap surfaces as Unresolved with a
+///     clear message via the caller).
+///   - Module-level `const` local:        `const x = './foo.ts'; await
+///     import(x)` — resolved transitively against the `consts` map
+///     built by [`collect_module_const_locals`]. Inside the local's
+///     initializer, the same const-folding rules apply, so consts can
+///     reference other consts.
+///   - Parenthesized / `as` / `satisfies` wrapper: not represented in
+///     HIR (already elided during lowering).
 ///
-/// Local SSA-tracking and template-literal expansion are intentionally
-/// out of scope for this pass — they need a flow-sensitive analyzer
-/// that doesn't exist yet. Those shapes fall through to `Unresolved`
-/// with an actionable hint.
+/// The `consts` map is `LocalId → init_expr` for every module-level
+/// non-mutated `const`. Pass an empty map to disable the local-tracking
+/// branch (matches the original signature semantics).
 pub fn resolve_import_path(arg: &Expr) -> Resolution {
+    let empty: std::collections::HashMap<u32, Expr> = std::collections::HashMap::new();
+    resolve_import_path_with_consts(arg, &empty, &mut std::collections::HashSet::new())
+}
+
+/// Like [`resolve_import_path`] but threaded through a `consts` map so
+/// const-propagated locals can resolve transitively. `visiting` is a
+/// per-call cycle-breaker — a const initializer that references its
+/// own id (impossible in well-formed TS, but defensive) returns
+/// Unresolved instead of recursing infinitely.
+pub fn resolve_import_path_with_consts(
+    arg: &Expr,
+    consts: &std::collections::HashMap<u32, Expr>,
+    visiting: &mut std::collections::HashSet<u32>,
+) -> Resolution {
     match arg {
         Expr::String(s) => Resolution::Set(vec![s.clone()]),
         Expr::Conditional {
@@ -378,16 +563,101 @@ pub fn resolve_import_path(arg: &Expr) -> Resolution {
             else_expr,
             ..
         } => {
-            let a = resolve_import_path(then_expr);
-            let b = resolve_import_path(else_expr);
+            let a = resolve_import_path_with_consts(then_expr, consts, visiting);
+            let b = resolve_import_path_with_consts(else_expr, consts, visiting);
             a.merge(b)
         }
+        // Template literal — desugared to `Binary(Add, ...)` chains by
+        // `expr_misc::lower_tpl`. We re-flatten the chain into the
+        // ordered list of parts, then take the Cartesian product of
+        // each part's resolved set. Cap-enforcement happens at the
+        // call site (`collect_modules`) which already gates on
+        // `DYNAMIC_IMPORT_PATH_CAP`; doing it again here would
+        // duplicate the error message.
+        Expr::Binary {
+            op: BinaryOp::Add,
+            ..
+        } => {
+            let mut parts: Vec<&Expr> = Vec::new();
+            flatten_concat(arg, &mut parts);
+            // Each part resolves to a finite set of strings; the result
+            // is the Cartesian product. Short-circuit if any part is
+            // Unresolved.
+            let mut sets: Vec<Vec<String>> = Vec::with_capacity(parts.len());
+            for p in &parts {
+                match resolve_import_path_with_consts(p, consts, visiting) {
+                    Resolution::Set(v) => sets.push(v),
+                    Resolution::Unresolved(r) => return Resolution::Unresolved(r),
+                }
+            }
+            // Cartesian product.
+            let mut acc: Vec<String> = vec![String::new()];
+            for part_set in sets {
+                let mut next: Vec<String> = Vec::with_capacity(acc.len() * part_set.len());
+                for prefix in &acc {
+                    for suffix in &part_set {
+                        next.push(format!("{}{}", prefix, suffix));
+                    }
+                }
+                acc = next;
+                // Bail early if cardinality exceeds the cap — the
+                // caller's gate also catches this but reporting it
+                // here avoids worst-case quadratic growth.
+                if acc.len() > DYNAMIC_IMPORT_PATH_CAP {
+                    return Resolution::Set(acc); // caller emits cap error
+                }
+            }
+            // Dedup while preserving first-occurrence order.
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            acc.retain(|s| seen.insert(s.clone()));
+            Resolution::Set(acc)
+        }
+        // Module-level `const x = '...'` reference. Recurse into the
+        // const's init expression; cycle-break via `visiting`.
+        Expr::LocalGet(id) => {
+            if !visiting.insert(*id) {
+                return Resolution::Unresolved(
+                    "circular const reference in path argument".to_string(),
+                );
+            }
+            let resolved = if let Some(init) = consts.get(id) {
+                resolve_import_path_with_consts(init, consts, visiting)
+            } else {
+                Resolution::Unresolved(
+                    "path argument references a binding that is not a module-level \
+                     const initialized to a literal (only string literals, ternaries, \
+                     template literals over const locals, and the module-level consts \
+                     themselves are supported)"
+                        .to_string(),
+                )
+            };
+            visiting.remove(id);
+            resolved
+        }
         _ => Resolution::Unresolved(
-            "path argument is not statically resolvable (only string literals and \
-             ternary expressions of literals are supported); consider enumerating \
-             with a ternary or registry object"
+            "path argument is not statically resolvable (supported: string literals, \
+             ternaries of resolvable arms, template literals with const-local \
+             interpolations, and references to module-level const string locals)"
                 .to_string(),
         ),
+    }
+}
+
+/// Flatten a left-leaning `Add` chain — produced by
+/// `expr_misc::lower_tpl` for a template literal — into the ordered
+/// list of leaf parts. e.g. `(("./locale_" + lang) + ".ts")` flattens
+/// to `["./locale_", lang, ".ts"]`. Non-`Add` nodes are leaves.
+fn flatten_concat<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    if let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = expr
+    {
+        flatten_concat(left, out);
+        flatten_concat(right, out);
+    } else {
+        out.push(expr);
     }
 }
 
@@ -545,6 +815,108 @@ mod tests {
         m.init.push(Stmt::Expr(Expr::Await(Box::new(Expr::Undefined))));
         detect_top_level_await(&mut m);
         assert!(m.has_top_level_await);
+    }
+
+    #[test]
+    fn resolve_template_literal_with_const_local() {
+        // Simulate the HIR shape produced by `lower_tpl` for
+        // `./locale_${lang}.ts` where lang is a module-level const.
+        // The Add chain is `("./locale_" + lang) + ".ts"`.
+        let arg = Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::String("./locale_".into())),
+                right: Box::new(Expr::LocalGet(7)),
+            }),
+            right: Box::new(Expr::String(".ts".into())),
+        };
+        let mut consts = std::collections::HashMap::new();
+        consts.insert(7u32, Expr::String("es".into()));
+        let mut visiting = std::collections::HashSet::new();
+        let r = resolve_import_path_with_consts(&arg, &consts, &mut visiting);
+        match r {
+            Resolution::Set(v) => assert_eq!(v, vec!["./locale_es.ts"]),
+            _ => panic!("expected Set"),
+        }
+    }
+
+    #[test]
+    fn resolve_template_literal_with_ternary_interpolation() {
+        // `./locale_${cond ? 'en' : 'es'}.ts` — Cartesian product.
+        let interp = Expr::Conditional {
+            condition: Box::new(Expr::Bool(true)),
+            then_expr: Box::new(Expr::String("en".into())),
+            else_expr: Box::new(Expr::String("es".into())),
+        };
+        let arg = Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::String("./locale_".into())),
+                right: Box::new(interp),
+            }),
+            right: Box::new(Expr::String(".ts".into())),
+        };
+        let consts = std::collections::HashMap::new();
+        let mut visiting = std::collections::HashSet::new();
+        let r = resolve_import_path_with_consts(&arg, &consts, &mut visiting);
+        match r {
+            Resolution::Set(v) => {
+                assert_eq!(v.len(), 2);
+                assert!(v.contains(&"./locale_en.ts".to_string()));
+                assert!(v.contains(&"./locale_es.ts".to_string()));
+            }
+            _ => panic!("expected Set"),
+        }
+    }
+
+    #[test]
+    fn resolve_local_const_propagation() {
+        // `const p = './foo.ts'; import(p)`
+        let arg = Expr::LocalGet(3);
+        let mut consts = std::collections::HashMap::new();
+        consts.insert(3u32, Expr::String("./foo.ts".into()));
+        let mut visiting = std::collections::HashSet::new();
+        let r = resolve_import_path_with_consts(&arg, &consts, &mut visiting);
+        match r {
+            Resolution::Set(v) => assert_eq!(v, vec!["./foo.ts"]),
+            _ => panic!("expected Set"),
+        }
+    }
+
+    #[test]
+    fn resolve_unresolved_param_local() {
+        // `function f(p) { import(p) }` — p isn't in the const map.
+        let arg = Expr::LocalGet(42);
+        let consts = std::collections::HashMap::new();
+        let mut visiting = std::collections::HashSet::new();
+        let r = resolve_import_path_with_consts(&arg, &consts, &mut visiting);
+        assert!(matches!(r, Resolution::Unresolved(_)));
+    }
+
+    #[test]
+    fn collect_consts_skips_mutated() {
+        let mut m = Module::new("t");
+        m.init.push(Stmt::Let {
+            id: 1,
+            name: "stable".into(),
+            ty: perry_types::Type::String,
+            mutable: false,
+            init: Some(Expr::String("./a.ts".into())),
+        });
+        m.init.push(Stmt::Let {
+            id: 2,
+            name: "mutated".into(),
+            ty: perry_types::Type::String,
+            mutable: false,
+            init: Some(Expr::String("./b.ts".into())),
+        });
+        m.init
+            .push(Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::String("./c.ts".into())))));
+        let consts = collect_module_const_locals(&m);
+        assert!(consts.contains_key(&1));
+        assert!(!consts.contains_key(&2));
     }
 
     #[test]

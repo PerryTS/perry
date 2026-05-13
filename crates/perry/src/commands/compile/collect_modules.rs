@@ -255,13 +255,23 @@ pub(super) fn collect_modules(
     perry_hir::detect_top_level_await(&mut hir_module);
     let mut dyn_errors: Vec<String> = Vec::new();
     let mut new_dyn_imports: Vec<String> = Vec::new();
+    // Issue #100: collect the module's top-level `const` locals once so
+    // the resolver can follow `import(localStringVar)` and
+    // `` import(`./prefix_${localStringVar}.ts`) `` paths transitively.
+    let module_const_locals = perry_hir::collect_module_const_locals(&hir_module);
     perry_hir::for_each_dynamic_import_mut(&mut hir_module, &mut |expr| {
         if let perry_hir::Expr::DynamicImport { paths, arg } = expr {
             if !paths.is_empty() {
                 // Already resolved (e.g. a second pass on the same module).
                 return;
             }
-            match perry_hir::resolve_import_path(arg) {
+            let mut visiting: std::collections::HashSet<u32> =
+                std::collections::HashSet::new();
+            match perry_hir::resolve_import_path_with_consts(
+                arg,
+                &module_const_locals,
+                &mut visiting,
+            ) {
                 perry_hir::Resolution::Set(set) => {
                     if set.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
                         dyn_errors.push(format!(
