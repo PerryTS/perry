@@ -45,6 +45,14 @@ extern "C" {
     /// chance to advance.
     fn js_promise_run_microtasks() -> i32;
 
+    /// Dispatch the registered stdlib pump (perry-stdlib registers
+    /// `js_stdlib_process_pending` here at startup, which fans out to
+    /// `js_ws_process_pending`, `js_net_process_pending`,
+    /// `js_http_process_pending`, etc.). Called from the fastify
+    /// event loop so perry-ext-{ws,net,http,fetch} events accumulated
+    /// on tokio workers get dispatched on the JS main thread. See #747.
+    fn js_run_stdlib_pump();
+
     /// True if `ptr` is a Promise (NaN-boxed pointer to a runtime
     /// `Promise` struct).
     fn js_is_promise(ptr: *mut Promise) -> i32;
@@ -331,6 +339,17 @@ async fn handle_request(
 /// handlers (and lifecycle hooks) synchronously.
 fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPendingRequest>) {
     loop {
+        // Pump stdlib so perry-ext-{ws,net,http,fetch} events that
+        // accumulated on tokio workers get dispatched on the JS main
+        // thread. Without this, listeners registered before
+        // `app.listen()` (e.g. `wss.on('connection', ...)` against a
+        // separate WebSocketServer) never see incoming traffic. See
+        // #747 — and #746, whose symptom is the same in any program
+        // that combines `fastify` with `ws` / `net` / `http`.
+        unsafe {
+            js_run_stdlib_pump();
+        }
+
         // Drain microtasks queued by previous handler runs.
         unsafe {
             js_promise_run_microtasks();
@@ -506,12 +525,20 @@ fn call_hook_awaiting(hook: ClosurePtr, ctx_f64: f64, ctx_handle: Handle) -> boo
 }
 
 /// Spin until a promise resolves — bounded to avoid infinite loops if
-/// the handler chain stalls. Polls microtasks every iteration so
-/// awaited values get a chance to settle.
+/// the handler chain stalls. Polls microtasks and the stdlib pump every
+/// iteration so awaited values get a chance to settle. The codegen-
+/// emitted `await` body already pumps stdlib inside compiled functions
+/// (`perry-codegen/src/expr.rs:9500`), so the common case is covered
+/// without this — but a route handler that returns a Promise resolved
+/// directly by an external mechanism (no inner `await` loop pumping
+/// stdlib) would otherwise stall here. Matches `perry-stdlib/src/
+/// fastify/server.rs:432`, which has had this call all along; the
+/// perry-ext-fastify port (v0.5.572) dropped it.
 fn wait_for_promise(promise_ptr: *mut Promise) {
     use std::time::Duration;
     for _ in 0..10000 {
         unsafe {
+            js_run_stdlib_pump();
             js_promise_run_microtasks();
         }
         let state = unsafe { js_promise_state(promise_ptr) };

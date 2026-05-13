@@ -7377,7 +7377,39 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
         return val;
     }
+    // For native modules whose surface includes known callable methods or
+    // class exports, return a bound-method closure so `typeof` and property
+    // capture (`const f = tty.isatty`) match Node's "function" shape. The
+    // closure routes back through js_native_call_method when invoked. Kept
+    // narrow to specific (module, property) pairs so a typo'd access still
+    // returns undefined.
+    if is_native_module_callable_export(module_name, property_name) {
+        let heap_name = {
+            let layout = std::alloc::Layout::from_size_align(property_name_len.max(1), 1).unwrap();
+            let ptr = std::alloc::alloc(layout);
+            std::ptr::copy_nonoverlapping(property_name_ptr, ptr, property_name_len);
+            ptr
+        };
+        let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
+        let ns = js_create_native_module_namespace(module_name_ptr, module_name_len);
+        crate::closure::js_closure_set_capture_f64(closure, 0, ns);
+        crate::closure::js_closure_set_capture_ptr(closure, 1, heap_name as i64);
+        crate::closure::js_closure_set_capture_ptr(closure, 2, property_name_len as i64);
+        return crate::value::js_nanbox_pointer(closure as i64);
+    }
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Whitelist of (module, property) pairs for which property-read should
+/// produce a callable handle (a bound-method closure) rather than undefined.
+/// Needed so `typeof tty.ReadStream === "function"` matches Node — the
+/// method-call form (`tty.isatty(0)`) is already handled by a dedicated
+/// codegen path, this just keeps the property-read form coherent.
+fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
+    matches!(
+        (module, prop),
+        ("tty", "isatty") | ("tty", "ReadStream") | ("tty", "WriteStream")
+    )
 }
 
 /// Access a property on a native module namespace object.

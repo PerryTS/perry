@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 820 entries across 70 modules
+// Coverage: 822 entries across 70 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -525,6 +525,8 @@ declare module "path" {
   /** stdlib */
   export function join(...args: any[]): any;
   /** stdlib */
+  export function matchesGlob(...args: any[]): any;
+  /** stdlib */
   export function normalize(...args: any[]): any;
   /** stdlib */
   export function parse(...args: any[]): any;
@@ -532,6 +534,8 @@ declare module "path" {
   export function relative(...args: any[]): any;
   /** stdlib */
   export function resolve(...args: any[]): any;
+  /** stdlib */
+  export function toNamespacedPath(...args: any[]): any;
 }
 
 declare module "perry/background" {

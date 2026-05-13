@@ -634,6 +634,7 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
         | Expr::PathNormalize(operand)
         | Expr::PathFormat(operand)
         | Expr::PathParse(operand)
+        | Expr::PathToNamespacedPath(operand)
         | Expr::DateToISOString(operand)
         | Expr::DateParse(operand)
         | Expr::EnvGetDynamic(operand)
@@ -842,7 +843,7 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
             walk(a, out);
             walk(b, out);
         }
-        Expr::PathBasenameExt(a, b) => {
+        Expr::PathBasenameExt(a, b) | Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) => {
             walk(a, out);
             walk(b, out);
         }
@@ -3059,6 +3060,7 @@ fn collect_localset_ids_in_expr_filtered(
         | Expr::PathNormalize(operand)
         | Expr::PathFormat(operand)
         | Expr::PathParse(operand)
+        | Expr::PathToNamespacedPath(operand)
         | Expr::DateToISOString(operand)
         | Expr::DateParse(operand)
         | Expr::EnvGetDynamic(operand)
@@ -3253,7 +3255,7 @@ fn collect_localset_ids_in_expr_filtered(
             walk(a, out);
             walk(b, out);
         }
-        Expr::PathBasenameExt(a, b) => {
+        Expr::PathBasenameExt(a, b) | Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) => {
             walk(a, out);
             walk(b, out);
         }
@@ -4896,7 +4898,9 @@ fn check_escapes_in_expr(
             reviver: b,
         }
         | Expr::JsonParseWithReviver(a, b)
-        | Expr::PathRelative(a, b) => {
+        | Expr::PathRelative(a, b)
+        | Expr::PathMatchesGlob(a, b)
+        | Expr::PathResolveJoin(a, b) => {
             check_escapes_in_expr(a, candidates, classes, escaped);
             check_escapes_in_expr(b, candidates, classes, escaped);
         }

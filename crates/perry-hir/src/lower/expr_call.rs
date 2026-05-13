@@ -1748,13 +1748,15 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                 }
                                 "resolve" => {
                                     if !args.is_empty() {
-                                        // path.resolve(a, b, c) => resolve(join(a, b, c))
-                                        // For single arg, just resolve directly
+                                        // path.resolve(a, b, c): per Node, a later
+                                        // absolute segment resets the accumulation —
+                                        // distinct from path.join. Use PathResolveJoin
+                                        // (reset-on-absolute) for the chain.
                                         let mut iter = args.into_iter();
                                         let first = iter.next().unwrap();
                                         let mut joined = first;
                                         for next_arg in iter {
-                                            joined = Expr::PathJoin(
+                                            joined = Expr::PathResolveJoin(
                                                 Box::new(joined),
                                                 Box::new(next_arg),
                                             );
@@ -1799,6 +1801,24 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                         return Ok(Expr::PathFormat(Box::new(
                                             args.into_iter().next().unwrap(),
                                         )));
+                                    }
+                                }
+                                "toNamespacedPath" => {
+                                    if !args.is_empty() {
+                                        return Ok(Expr::PathToNamespacedPath(Box::new(
+                                            args.into_iter().next().unwrap(),
+                                        )));
+                                    }
+                                }
+                                "matchesGlob" => {
+                                    if args.len() >= 2 {
+                                        let mut iter = args.into_iter();
+                                        let path_arg = iter.next().unwrap();
+                                        let pattern = iter.next().unwrap();
+                                        return Ok(Expr::PathMatchesGlob(
+                                            Box::new(path_arg),
+                                            Box::new(pattern),
+                                        ));
                                     }
                                 }
                                 _ => {} // Fall through to generic handling
@@ -5536,8 +5556,10 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     let first = iter.next().unwrap();
                                     let mut joined = first;
                                     for next_arg in iter {
-                                        joined =
-                                            Expr::PathJoin(Box::new(joined), Box::new(next_arg));
+                                        joined = Expr::PathResolveJoin(
+                                            Box::new(joined),
+                                            Box::new(next_arg),
+                                        );
                                     }
                                     return Ok(Expr::PathResolve(Box::new(joined)));
                                 }
@@ -5576,6 +5598,24 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     return Ok(Expr::PathFormat(Box::new(
                                         args.into_iter().next().unwrap(),
                                     )));
+                                }
+                            }
+                            "toNamespacedPath" => {
+                                if !args.is_empty() {
+                                    return Ok(Expr::PathToNamespacedPath(Box::new(
+                                        args.into_iter().next().unwrap(),
+                                    )));
+                                }
+                            }
+                            "matchesGlob" => {
+                                if args.len() >= 2 {
+                                    let mut iter = args.into_iter();
+                                    let path_arg = iter.next().unwrap();
+                                    let pattern = iter.next().unwrap();
+                                    return Ok(Expr::PathMatchesGlob(
+                                        Box::new(path_arg),
+                                        Box::new(pattern),
+                                    ));
                                 }
                             }
                             _ => {} // Fall through

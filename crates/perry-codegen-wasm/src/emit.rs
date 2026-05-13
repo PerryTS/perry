@@ -8629,6 +8629,23 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::PathDelimiter => {
                 self.emit_memcall(func, "path_delimiter", 0);
             }
+            Expr::PathToNamespacedPath(p) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, p);
+                self.emit_memcall(func, "path_to_namespaced_path", 1);
+            }
+            Expr::PathMatchesGlob(p, pat) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, p);
+                self.emit_store_arg(func, 1, pat);
+                self.emit_memcall(func, "path_matches_glob", 2);
+            }
+            Expr::PathResolveJoin(a, b) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, a);
+                self.emit_store_arg(func, 1, b);
+                self.emit_memcall(func, "path_resolve_join", 2);
+            }
             // --- WeakRef and FinalizationRegistry (stub: routes to host runtime) ---
             Expr::WeakRefNew(target) => {
                 self.emit_frame_begin(func, 1);

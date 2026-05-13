@@ -542,6 +542,15 @@ pub(crate) struct FnCtx<'a> {
     /// binding's scope ends with the function.
     pub local_class_aliases: std::collections::HashMap<String, String>,
 
+    /// Refs #740: when an object literal embeds a class reference in a
+    /// field (`const O = { Inner: class extends Base {…} }`), record
+    /// `local_id_of_O → { "Inner" → "__anon_class_N" }` so subsequent
+    /// `new O.Inner(args)` and `let C = O.Inner; new C(args)` reads can
+    /// resolve back to the underlying class. Without this, both fall
+    /// through to the empty-object placeholder.
+    pub local_class_field_aliases:
+        std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+
     /// `LocalId → name` lookup table for chained class alias
     /// resolution. The HIR's `Stmt::Let { name, .. }` gives us the
     /// (id, name) pair at lowering time, but the rest of FnCtx tracks
@@ -4749,6 +4758,26 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return lower_new(ctx, name, args);
             }
 
+            // Refs #740: `new O.Inner(args)` where `O` is an object
+            // literal whose `Inner` field was initialized from a class
+            // expression. The Stmt::Let lowering populates
+            // `local_class_field_aliases[O_id]["Inner"] = "__anon_class_N"`
+            // when it sees the original literal — read it back here and
+            // dispatch to `lower_new` instead of the empty-object
+            // fallback.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if let Expr::LocalGet(obj_id) = object.as_ref() {
+                    if let Some(class_name) = ctx
+                        .local_class_field_aliases
+                        .get(obj_id)
+                        .and_then(|f| f.get(property))
+                        .cloned()
+                    {
+                        return lower_new(ctx, &class_name, args);
+                    }
+                }
+            }
+
             // Case 3: callee is a ternary. Synthesize a NewDynamic for
             // each branch and emit a runtime if/else with phi. The inner
             // NewDynamics fall through this same handler — if they're
@@ -7070,6 +7099,39 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let obj_box = lower_expr(ctx, o)?;
             let blk = ctx.block();
             let result = blk.call(I64, "js_path_format", &[(DOUBLE, &obj_box)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
+        Expr::PathToNamespacedPath(p) => {
+            let p_box = lower_expr(ctx, p)?;
+            let blk = ctx.block();
+            let p_handle = unbox_to_i64(blk, &p_box);
+            let result = blk.call(I64, "js_path_to_namespaced_path", &[(I64, &p_handle)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
+        Expr::PathMatchesGlob(p, pat) => {
+            let p_box = lower_expr(ctx, p)?;
+            let pat_box = lower_expr(ctx, pat)?;
+            let blk = ctx.block();
+            let p_handle = unbox_to_i64(blk, &p_box);
+            let pat_handle = unbox_to_i64(blk, &pat_box);
+            let i32_v = blk.call(
+                I32,
+                "js_path_matches_glob",
+                &[(I64, &p_handle), (I64, &pat_handle)],
+            );
+            Ok(i32_bool_to_nanbox(blk, &i32_v))
+        }
+        Expr::PathResolveJoin(a, b) => {
+            let a_box = lower_expr(ctx, a)?;
+            let b_box = lower_expr(ctx, b)?;
+            let blk = ctx.block();
+            let a_handle = unbox_to_i64(blk, &a_box);
+            let b_handle = unbox_to_i64(blk, &b_box);
+            let result = blk.call(
+                I64,
+                "js_path_resolve_join",
+                &[(I64, &a_handle), (I64, &b_handle)],
+            );
             Ok(nanbox_string_inline(blk, &result))
         }
         Expr::ProcessVersion => {

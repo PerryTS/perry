@@ -127,18 +127,32 @@ pub extern "C" fn js_tty_isatty(fd: f64) -> f64 {
 }
 
 /// `process.stdin.isTTY` / `process.stdout.isTTY` / `process.stderr.isTTY`.
-/// Each takes the corresponding fd implicitly.
+/// Per Node's docs these are `true` when the stream is a TTY and
+/// `undefined` otherwise (intentionally — it's a presence test). This
+/// differs from `tty.isatty(fd)`, which always returns a boolean.
 #[no_mangle]
 pub extern "C" fn js_process_stdin_isatty() -> f64 {
-    js_tty_isatty(0.0)
+    if isatty_impl(0) {
+        f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
+    } else {
+        f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
+    }
 }
 #[no_mangle]
 pub extern "C" fn js_process_stdout_isatty() -> f64 {
-    js_tty_isatty(1.0)
+    if isatty_impl(1) {
+        f64::from_bits(0x7FFC_0000_0000_0004)
+    } else {
+        f64::from_bits(0x7FFC_0000_0000_0001)
+    }
 }
 #[no_mangle]
 pub extern "C" fn js_process_stderr_isatty() -> f64 {
-    js_tty_isatty(2.0)
+    if isatty_impl(2) {
+        f64::from_bits(0x7FFC_0000_0000_0004)
+    } else {
+        f64::from_bits(0x7FFC_0000_0000_0001)
+    }
 }
 
 /// `process.stdout.columns` — terminal width in cells, or `undefined`
