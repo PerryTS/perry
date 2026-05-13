@@ -686,8 +686,22 @@ fn test_inject_chunk(chunk: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
 
-    fn reset() {
+    /// All readline tests share PENDING_LINES / PENDING_DATA / EOF_REACHED
+    /// / CLOSE_FIRED / RAW_MODE / the thread_local callback cells, so
+    /// `cargo test`'s default parallel runner races them — most visibly,
+    /// `has_active_reflects_state`'s `test_inject_line("x")` →
+    /// `assert has_active == 1` window can be observed mid-flight by
+    /// `injected_line_drains_via_test_helper`'s `reset()` (which clears
+    /// PENDING_LINES) and flake. Serialize every state-touching test
+    /// through one process-global lock acquired by `reset()`. Pure-
+    /// function tests (`parse_keypress_*`) don't call `reset()` and
+    /// continue running in parallel.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn reset() -> MutexGuard<'static, ()> {
+        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         QUESTION_CALLBACK.with(|c| *c.borrow_mut() = None);
         LINE_CALLBACK.with(|c| *c.borrow_mut() = None);
         CLOSE_CALLBACK.with(|c| *c.borrow_mut() = None);
@@ -699,11 +713,12 @@ mod tests {
         CLOSE_FIRED.with(|f| *f.borrow_mut() = false);
         RAW_MODE.store(false, Ordering::Release);
         // READER_STARTED stays sticky once set in a test process.
+        guard
     }
 
     #[test]
     fn close_without_callbacks_is_noop() {
-        reset();
+        let _g = reset();
         let h = js_readline_create_interface(0.0);
         assert_eq!(h, READLINE_HANDLE);
         js_readline_close(h);
@@ -713,7 +728,7 @@ mod tests {
 
     #[test]
     fn injected_line_drains_via_test_helper() {
-        reset();
+        let _g = reset();
         test_inject_line("hello");
         // No callback registered → drain consumes the line silently and
         // reports 0 callbacks fired.
@@ -723,7 +738,7 @@ mod tests {
 
     #[test]
     fn has_active_reflects_state() {
-        reset();
+        let _g = reset();
         EOF_REACHED.store(true, Ordering::Release);
         CLOSE_FIRED.with(|f| *f.borrow_mut() = true);
         assert_eq!(js_readline_has_active(), 0);
@@ -735,7 +750,7 @@ mod tests {
 
     #[test]
     fn injected_chunk_drains_via_data_queue() {
-        reset();
+        let _g = reset();
         test_inject_chunk(b"a");
         // No data callback registered → drain consumes silently.
         assert_eq!(js_readline_process_pending(), 0);
@@ -788,7 +803,7 @@ mod tests {
 
     #[test]
     fn raw_mode_toggle_flips_atomic() {
-        reset();
+        let _g = reset();
         assert!(!RAW_MODE.load(Ordering::Acquire));
         // Truthy → enable.
         let _ = js_readline_set_raw_mode(f64::from_bits(JSValue::bool(true).bits()));
