@@ -751,6 +751,42 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 );
                 return Ok(nanbox_pointer_inline(blk, &id));
             }
+            // Refs #665: `setTimeout(fn, delay, ...args)` — JS spec forwards
+            // the trailing args to `fn` when the timer fires. Pack them into
+            // a stack buffer of doubles and hand off to the varargs runtime
+            // entry. Used by Promise-executor patterns like
+            // `setTimeout(resolve, delay, res)` (rate-limiter-flexible's
+            // `RateLimiterMemory.consume` is the discovering call site).
+            "setTimeout" if args.len() >= 3 => {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let delay_box = lower_expr(ctx, &args[1])?;
+                let n = args.len() - 2;
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, a) in args.iter().skip(2).enumerate() {
+                    let v = lower_expr(ctx, a)?;
+                    let blk = ctx.block();
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, &v, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf
+                ));
+                let blk = ctx.block();
+                let cb_handle = unbox_to_i64(blk, &cb_box);
+                let id = blk.call(
+                    I64,
+                    "js_set_timeout_callback_args",
+                    &[
+                        (I64, &cb_handle),
+                        (DOUBLE, &delay_box),
+                        (crate::types::PTR, &ptr_reg),
+                        (I32, &n.to_string()),
+                    ],
+                );
+                return Ok(nanbox_pointer_inline(blk, &id));
+            }
             "setInterval" if args.len() == 2 => {
                 let cb_box = lower_expr(ctx, &args[0])?;
                 let delay_box = lower_expr(ctx, &args[1])?;

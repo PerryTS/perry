@@ -160,6 +160,13 @@ struct CallbackTimer {
     deadline: Instant,
     /// The closure pointer to call
     callback: i64,
+    /// Trailing arguments to forward to the callback when it fires.
+    /// Empty for the standard `setTimeout(fn, delay)` shape; non-empty
+    /// when the call site is `setTimeout(fn, delay, ...args)` (JS spec
+    /// allows trailing args that get passed to the callback — used in
+    /// e.g. `setTimeout(resolve, delay, res)` inside Promise executors).
+    /// Refs #665.
+    args: Vec<f64>,
     /// Whether this timer has been cleared
     cleared: bool,
 }
@@ -191,6 +198,53 @@ pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
         id,
         deadline,
         callback,
+        args: Vec::new(),
+        cleared: false,
+    });
+
+    id
+}
+
+/// JS-style setTimeout that takes a callback function, delay, and a buffer
+/// of trailing arguments. The callback is invoked as `callback(...args)`
+/// when the timer fires. The args buffer is copied into the timer record
+/// before this function returns (caller may free `args_ptr` immediately).
+///
+/// Refs #665: `setTimeout(resolve, delay, res)` and similar shapes inside
+/// Promise executors couldn't reach codegen because the existing
+/// `js_set_timeout_callback` only handled the 2-arg form; 3+ arg call sites
+/// fell through and emitted a bare `setTimeout` symbol the linker couldn't
+/// resolve.
+#[no_mangle]
+pub unsafe extern "C" fn js_set_timeout_callback_args(
+    callback: i64,
+    delay_ms: f64,
+    args_ptr: *const f64,
+    n_args: i32,
+) -> i64 {
+    ensure_initialized();
+
+    let delay = Duration::from_millis(delay_ms.max(0.0) as u64);
+    let deadline = Instant::now() + delay;
+
+    let args: Vec<f64> = if args_ptr.is_null() || n_args <= 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
+    };
+
+    let id = {
+        let mut next = NEXT_CALLBACK_TIMER_ID.lock().unwrap();
+        let current = *next;
+        *next += 1;
+        current
+    };
+
+    CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
+        id,
+        deadline,
+        callback,
+        args,
         cleared: false,
     });
 
@@ -201,7 +255,10 @@ pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
 /// Returns the number of callbacks that were called
 #[no_mangle]
 pub extern "C" fn js_callback_timer_tick() -> i32 {
-    use crate::closure::js_closure_call0;
+    use crate::closure::{
+        js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3, js_closure_call4,
+        js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
+    };
 
     let now = Instant::now();
 
@@ -223,11 +280,48 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     };
 
     let mut fired = 0;
-    // Call the callbacks
+    // Call the callbacks, forwarding any trailing args captured at
+    // `setTimeout(fn, delay, ...args)` time. Refs #665.
     for timer in expired {
         if !timer.cleared {
+            let cb = timer.callback as *const crate::closure::ClosureHeader;
+            let a = &timer.args;
             unsafe {
-                js_closure_call0(timer.callback as *const crate::closure::ClosureHeader);
+                match a.len() {
+                    0 => {
+                        js_closure_call0(cb);
+                    }
+                    1 => {
+                        js_closure_call1(cb, a[0]);
+                    }
+                    2 => {
+                        js_closure_call2(cb, a[0], a[1]);
+                    }
+                    3 => {
+                        js_closure_call3(cb, a[0], a[1], a[2]);
+                    }
+                    4 => {
+                        js_closure_call4(cb, a[0], a[1], a[2], a[3]);
+                    }
+                    5 => {
+                        js_closure_call5(cb, a[0], a[1], a[2], a[3], a[4]);
+                    }
+                    6 => {
+                        js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]);
+                    }
+                    7 => {
+                        js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+                    }
+                    8 => {
+                        js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+                    }
+                    _ => {
+                        // >= 9 args: clamp to 9. Real-world setTimeout
+                        // rarely exceeds 1-2 trailing args; this is a
+                        // conservative safety net rather than spec coverage.
+                        js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
+                    }
+                }
             }
             fired += 1;
         }

@@ -1078,6 +1078,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // next body iteration's microtask drain.
     module.declare_function("js_microtasks_pending", I32, &[]);
     module.declare_function("js_set_timeout_callback", I64, &[I64, DOUBLE]);
+    // Refs #665: `setTimeout(fn, delay, ...args)` with trailing args. The
+    // args are packed into a stack buffer of doubles at the call site and
+    // forwarded by index when the timer fires. Used by Promise-executor
+    // patterns like `setTimeout(resolve, delay, res)`.
+    module.declare_function(
+        "js_set_timeout_callback_args",
+        I64,
+        &[I64, DOUBLE, crate::types::PTR, I32],
+    );
     module.declare_function("setInterval", I64, &[I64, DOUBLE]);
     module.declare_function("clearTimeout", VOID, &[I64]);
     module.declare_function("clearInterval", VOID, &[I64]);
