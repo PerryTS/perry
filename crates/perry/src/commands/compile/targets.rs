@@ -966,7 +966,20 @@ pub(super) fn compile_for_web(
 
     // Minify by default for web target (--minify flag is auto-enabled)
     let minify = true;
-    let html = perry_codegen_js::compile_modules_to_html(&modules, title, minify)?;
+    // Bake `perry/system` app-metadata getters into the emitted JS so web
+    // builds resolve the same values as native — without this the JS emit
+    // path falls through to a `console.warn` for the new APIs.
+    let js_app_metadata = perry_codegen_js::AppMetadata {
+        version: ctx.app_metadata.version.clone(),
+        build_number: ctx.app_metadata.build_number,
+        bundle_id: ctx.app_metadata.bundle_id.clone(),
+    };
+    let html = perry_codegen_js::compile_modules_to_html_with_metadata(
+        &modules,
+        title,
+        minify,
+        js_app_metadata,
+    )?;
 
     // Determine output path
     let output_path = if let Some(ref out) = args.output {

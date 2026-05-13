@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 812 entries across 70 modules
+// Coverage: 815 entries across 70 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -654,7 +654,13 @@ declare module "perry/system" {
   /** stdlib */
   export function geolocationWatch(...args: any[]): any;
   /** stdlib */
+  export function getAppBuildNumber(...args: any[]): any;
+  /** stdlib */
   export function getAppIcon(...args: any[]): any;
+  /** stdlib */
+  export function getAppVersion(...args: any[]): any;
+  /** stdlib */
+  export function getBundleId(...args: any[]): any;
   /** stdlib */
   export function getDeviceIdiom(...args: any[]): any;
   /** stdlib */

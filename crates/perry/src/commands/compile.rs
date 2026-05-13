@@ -124,21 +124,14 @@ fn package_bundle_id_from_input(input: &Path) -> Option<String> {
 }
 
 fn read_app_metadata(
-    toml_root: Option<&Path>,
+    perry_toml: Option<&toml::Table>,
     input: &Path,
     target: Option<&str>,
     cli_bundle_id: Option<&str>,
 ) -> perry_codegen::AppMetadata {
     let mut metadata = perry_codegen::AppMetadata::default();
-    let mut table: Option<toml::Table> = None;
-    if let Some(root) = toml_root {
-        let path = root.join("perry.toml");
-        if let Ok(data) = fs::read_to_string(path) {
-            table = data.parse::<toml::Table>().ok();
-        }
-    }
 
-    if let Some(ref doc) = table {
+    if let Some(doc) = perry_toml {
         if let Some(version) = toml_string(doc, "project", "version") {
             metadata.version = version;
         }
@@ -150,7 +143,7 @@ fn read_app_metadata(
     metadata.bundle_id = cli_bundle_id
         .map(str::to_string)
         .or_else(|| {
-            let doc = table.as_ref()?;
+            let doc = perry_toml?;
             target_bundle_section(target)
                 .and_then(|section| toml_string(doc, section, "bundle_id"))
                 .or_else(|| toml_string(doc, "app", "bundle_id"))
@@ -411,6 +404,11 @@ pub struct CompilationContext {
     /// hashed into the per-module object cache key so toggling it
     /// invalidates cached `.o` bytes.
     pub fast_math: bool,
+    /// App metadata backing `perry/system` compile-time introspection APIs
+    /// (`getAppVersion`/`getAppBuildNumber`/`getBundleId`). Resolved once
+    /// from `perry.toml` + CLI overrides and reused by every codegen
+    /// backend so native, JS and arkts agree byte-for-byte.
+    pub app_metadata: perry_codegen::AppMetadata,
     /// First-resolved directory for each compile package (deduplication across nested node_modules)
     pub compile_package_dirs: HashMap<String, PathBuf>,
     /// Optional tsgo type checker client (when --type-check is enabled)
@@ -499,6 +497,7 @@ impl CompilationContext {
             package_aliases: HashMap::new(),
             compile_packages: HashSet::new(),
             fast_math: false,
+            app_metadata: perry_codegen::AppMetadata::default(),
             compile_package_dirs: HashMap::new(),
             type_checker: None,
             resolve_cache: HashMap::new(),
@@ -986,101 +985,103 @@ pub fn run_with_parse_cache(
             }
         }
     };
+    // Parse perry.toml once and reuse — app metadata and the i18n block below
+    // both consume it, and a single source-of-truth avoids drift between them.
+    let perry_toml: Option<toml::Table> = toml_root.as_deref().and_then(|dir| {
+        let path = dir.join("perry.toml");
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| s.parse::<toml::Table>().ok())
+    });
     let app_metadata = read_app_metadata(
-        toml_root.as_deref(),
+        perry_toml.as_ref(),
         &args.input,
         args.target.as_deref(),
         args.app_bundle_id.as_deref(),
     );
+    ctx.app_metadata = app_metadata.clone();
     if let Some(ref toml_dir) = toml_root {
-        let toml_path = toml_dir.join("perry.toml");
-        if toml_path.exists() {
-            if let Ok(content) = fs::read_to_string(&toml_path) {
-                if let Ok(doc) = content.parse::<toml::Table>() {
-                    if let Some(i18n) = doc.get("i18n").and_then(|v| v.as_table()) {
-                        let locales: Vec<String> = i18n
-                            .get("locales")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let default_locale = i18n
-                            .get("default_locale")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("en")
-                            .to_string();
-                        let dynamic = i18n
-                            .get("dynamic")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
+        if let Some(ref doc) = perry_toml {
+            if let Some(i18n) = doc.get("i18n").and_then(|v| v.as_table()) {
+                let locales: Vec<String> = i18n
+                    .get("locales")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let default_locale = i18n
+                    .get("default_locale")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("en")
+                    .to_string();
+                let dynamic = i18n
+                    .get("dynamic")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
 
-                        // Parse [i18n.currencies] — locale → currency code
-                        let mut currencies = HashMap::new();
-                        if let Some(curr_table) = i18n.get("currencies").and_then(|v| v.as_table())
-                        {
-                            for (locale, code) in curr_table {
-                                if let Some(code_str) = code.as_str() {
-                                    currencies.insert(locale.clone(), code_str.to_string());
-                                }
-                            }
-                        }
-
-                        if !locales.is_empty() {
-                            match format {
-                                OutputFormat::Text => println!(
-                                    "  i18n: {} locale(s) [{}], default: {}",
-                                    locales.len(),
-                                    locales.join(", "),
-                                    default_locale
-                                ),
-                                OutputFormat::Json => {}
-                            }
-
-                            // Load locale files
-                            let locales_dir = toml_dir.join("locales");
-                            for locale in &locales {
-                                let locale_file = locales_dir.join(format!("{}.json", locale));
-                                if locale_file.exists() {
-                                    if let Ok(json_content) = fs::read_to_string(&locale_file) {
-                                        match serde_json::from_str::<BTreeMap<String, String>>(
-                                            &json_content,
-                                        ) {
-                                            Ok(translations) => {
-                                                match format {
-                                                    OutputFormat::Text => println!(
-                                                        "    Loaded locales/{}.json ({} keys)",
-                                                        locale,
-                                                        translations.len()
-                                                    ),
-                                                    OutputFormat::Json => {}
-                                                }
-                                                i18n_translations
-                                                    .insert(locale.clone(), translations);
-                                            }
-                                            Err(e) => {
-                                                eprintln!("  Warning: Failed to parse locales/{}.json: {}", locale, e);
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    eprintln!(
-                                        "  Warning: Locale file locales/{}.json not found",
-                                        locale
-                                    );
-                                }
-                            }
-
-                            i18n_config = Some(perry_transform::i18n::I18nConfig {
-                                locales,
-                                default_locale,
-                                dynamic,
-                                currencies,
-                            });
+                // Parse [i18n.currencies] — locale → currency code
+                let mut currencies = HashMap::new();
+                if let Some(curr_table) = i18n.get("currencies").and_then(|v| v.as_table()) {
+                    for (locale, code) in curr_table {
+                        if let Some(code_str) = code.as_str() {
+                            currencies.insert(locale.clone(), code_str.to_string());
                         }
                     }
+                }
+
+                if !locales.is_empty() {
+                    match format {
+                        OutputFormat::Text => println!(
+                            "  i18n: {} locale(s) [{}], default: {}",
+                            locales.len(),
+                            locales.join(", "),
+                            default_locale
+                        ),
+                        OutputFormat::Json => {}
+                    }
+
+                    // Load locale files
+                    let locales_dir = toml_dir.join("locales");
+                    for locale in &locales {
+                        let locale_file = locales_dir.join(format!("{}.json", locale));
+                        if locale_file.exists() {
+                            if let Ok(json_content) = fs::read_to_string(&locale_file) {
+                                match serde_json::from_str::<BTreeMap<String, String>>(
+                                    &json_content,
+                                ) {
+                                    Ok(translations) => {
+                                        match format {
+                                            OutputFormat::Text => println!(
+                                                "    Loaded locales/{}.json ({} keys)",
+                                                locale,
+                                                translations.len()
+                                            ),
+                                            OutputFormat::Json => {}
+                                        }
+                                        i18n_translations.insert(locale.clone(), translations);
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "  Warning: Failed to parse locales/{}.json: {}",
+                                            locale, e
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            eprintln!("  Warning: Locale file locales/{}.json not found", locale);
+                        }
+                    }
+
+                    i18n_config = Some(perry_transform::i18n::I18nConfig {
+                        locales,
+                        default_locale,
+                        dynamic,
+                        currencies,
+                    });
                 }
             }
         }
@@ -6254,11 +6255,14 @@ mod windows_link_tests {
 mod app_metadata_tests {
     use super::read_app_metadata;
 
+    fn parse(src: &str) -> toml::Table {
+        src.parse::<toml::Table>().unwrap()
+    }
+
     #[test]
     fn reads_project_metadata_and_target_bundle_id() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("perry.toml"),
+        let doc = parse(
             r#"
 [project]
 version = "2.4.6"
@@ -6268,13 +6272,12 @@ bundle_id = "com.example.project"
 [ios]
 bundle_id = "com.example.ios"
 "#,
-        )
-        .unwrap();
+        );
         let input = dir.path().join("src").join("main.ts");
         std::fs::create_dir_all(input.parent().unwrap()).unwrap();
         std::fs::write(&input, "console.log('x')").unwrap();
 
-        let metadata = read_app_metadata(Some(dir.path()), &input, Some("ios-simulator"), None);
+        let metadata = read_app_metadata(Some(&doc), &input, Some("ios-simulator"), None);
 
         assert_eq!(metadata.version, "2.4.6");
         assert_eq!(metadata.build_number, 42);
@@ -6284,27 +6287,43 @@ bundle_id = "com.example.ios"
     #[test]
     fn cli_bundle_id_overrides_toml_bundle_id() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("perry.toml"),
+        let doc = parse(
             r#"
 [project]
 version = "1.0.0"
 build_number = "7"
 bundle_id = "com.example.project"
 "#,
-        )
-        .unwrap();
+        );
         let input = dir.path().join("main.ts");
         std::fs::write(&input, "console.log('x')").unwrap();
 
-        let metadata = read_app_metadata(
-            Some(dir.path()),
-            &input,
-            Some("ios"),
-            Some("com.example.cli"),
-        );
+        let metadata = read_app_metadata(Some(&doc), &input, Some("ios"), Some("com.example.cli"));
 
+        assert_eq!(metadata.version, "1.0.0");
         assert_eq!(metadata.build_number, 7);
         assert_eq!(metadata.bundle_id, "com.example.cli");
+    }
+
+    #[test]
+    fn package_json_bundle_id_falls_back_when_perry_toml_silent_on_bundle() {
+        // No perry.toml at all — bundle_id should be read from package.json's
+        // `bundleId` field walking up parents from the input file. Version and
+        // build_number stay on defaults (no perry.toml).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"bundleId": "com.example.pkg"}"#,
+        )
+        .unwrap();
+        let input = dir.path().join("src").join("main.ts");
+        std::fs::create_dir_all(input.parent().unwrap()).unwrap();
+        std::fs::write(&input, "console.log('x')").unwrap();
+
+        let metadata = read_app_metadata(None, &input, None, None);
+
+        assert_eq!(metadata.version, "1.0.0");
+        assert_eq!(metadata.build_number, 1);
+        assert_eq!(metadata.bundle_id, "com.example.pkg");
     }
 }

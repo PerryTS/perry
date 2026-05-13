@@ -6,6 +6,8 @@
 pub mod emit;
 pub mod minify;
 
+pub use emit::AppMetadata;
+
 use anyhow::Result;
 use perry_hir::ir::{Module, Stmt};
 use std::collections::BTreeSet;
@@ -16,7 +18,17 @@ const WEB_RUNTIME_JS: &str = include_str!("web_runtime.js");
 /// Compile a single HIR module to JavaScript source code.
 /// Returns (js_source, exported_names).
 pub fn compile_module_to_js(module: &Module, minify_names: bool) -> (String, BTreeSet<String>) {
-    let emitter = emit::JsEmitter::new(&module.name, minify_names);
+    compile_module_to_js_with_metadata(module, minify_names, AppMetadata::default())
+}
+
+/// Compile a single HIR module to JavaScript source code, baking the supplied
+/// app metadata into compile-time `perry/system` introspection APIs.
+pub fn compile_module_to_js_with_metadata(
+    module: &Module,
+    minify_names: bool,
+    app_metadata: AppMetadata,
+) -> (String, BTreeSet<String>) {
+    let emitter = emit::JsEmitter::with_metadata(&module.name, minify_names, app_metadata);
 
     // Collect names that have runtime values (not type-only exports)
     let mut runtime_names = BTreeSet::new();
@@ -62,6 +74,17 @@ pub fn compile_modules_to_html(
     title: &str,
     minify: bool,
 ) -> Result<String> {
+    compile_modules_to_html_with_metadata(modules, title, minify, AppMetadata::default())
+}
+
+/// Same as `compile_modules_to_html` but bakes the supplied app metadata into
+/// compile-time `perry/system` introspection APIs.
+pub fn compile_modules_to_html_with_metadata(
+    modules: &[(String, Module)],
+    title: &str,
+    minify: bool,
+    app_metadata: AppMetadata,
+) -> Result<String> {
     let mut all_js = String::with_capacity(32768);
     let mut declared_names = BTreeSet::new();
 
@@ -71,7 +94,8 @@ pub fn compile_modules_to_html(
     for (i, (mod_name, module)) in modules.iter().enumerate() {
         let is_entry = i == entry_idx;
 
-        let (js, exported_names) = compile_module_to_js(module, minify);
+        let (js, exported_names) =
+            compile_module_to_js_with_metadata(module, minify, app_metadata.clone());
 
         if is_entry {
             // Entry module: emit directly (no IIFE wrapper)

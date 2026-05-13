@@ -7,6 +7,28 @@ use perry_types::{FuncId, GlobalId, LocalId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as FmtWrite;
 
+/// App metadata baked into compile-time `perry/system` introspection APIs
+/// (`getAppVersion`/`getAppBuildNumber`/`getBundleId`) when emitting JS.
+///
+/// Mirrors `perry_codegen::AppMetadata` — duplicated here so this crate
+/// doesn't take a backend dep on perry-codegen.
+#[derive(Debug, Clone)]
+pub struct AppMetadata {
+    pub version: String,
+    pub build_number: i64,
+    pub bundle_id: String,
+}
+
+impl Default for AppMetadata {
+    fn default() -> Self {
+        Self {
+            version: "1.0.0".to_string(),
+            build_number: 1,
+            bundle_id: "com.perry.app".to_string(),
+        }
+    }
+}
+
 /// JavaScript code emitter that translates HIR to JavaScript.
 pub struct JsEmitter {
     /// Output buffer
@@ -31,10 +53,16 @@ pub struct JsEmitter {
     minify: bool,
     /// Counter for generating short mangled names
     mangle_counter: usize,
+    /// App metadata baked into compile-time `perry/system` introspection APIs.
+    app_metadata: AppMetadata,
 }
 
 impl JsEmitter {
     pub fn new(module_name: &str, minify: bool) -> Self {
+        Self::with_metadata(module_name, minify, AppMetadata::default())
+    }
+
+    pub fn with_metadata(module_name: &str, minify: bool, app_metadata: AppMetadata) -> Self {
         Self {
             output: String::with_capacity(8192),
             indent: 0,
@@ -47,6 +75,7 @@ impl JsEmitter {
             exported_names: BTreeSet::new(),
             minify,
             mangle_counter: 0,
+            app_metadata,
         }
     }
 
@@ -3170,6 +3199,17 @@ impl JsEmitter {
             }
             "getDeviceModel" | "get_device_model" => {
                 self.output.push_str("perry_system_get_device_model()");
+            }
+            "getAppVersion" | "get_app_version" => {
+                let s = self.quote_string(&self.app_metadata.version.clone());
+                self.output.push_str(&s);
+            }
+            "getAppBuildNumber" | "get_app_build_number" => {
+                let _ = write!(self.output, "{}", self.app_metadata.build_number);
+            }
+            "getBundleId" | "get_bundle_id" => {
+                let s = self.quote_string(&self.app_metadata.bundle_id.clone());
+                self.output.push_str(&s);
             }
             _ => {
                 let _ = write!(
