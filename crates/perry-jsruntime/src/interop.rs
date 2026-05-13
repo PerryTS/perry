@@ -17,7 +17,7 @@ use std::path::PathBuf;
 /// Convert a NaN-boxed f64 to a V8 value, returning None if the conversion fails
 /// This is specifically for cases where we need to handle the error explicitly
 fn nanbox_to_v8<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     value: f64,
 ) -> Option<v8::Local<'s, v8::Value>> {
     // Check if it's a JS handle first
@@ -56,7 +56,7 @@ pub extern "C" fn js_runtime_init() {
 /// returns `"function"` when `gp` is a V8 callable handle. (Issue #258.)
 unsafe extern "C" fn js_handle_typeof(value: f64) -> i32 {
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
         let v = native_to_v8(scope, value);
         if v.is_function() {
             1
@@ -80,7 +80,7 @@ unsafe extern "C" fn js_new_from_handle_v8_impl(
     };
 
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
 
         let constructor_val = native_to_v8(scope, constructor_handle);
         if !constructor_val.is_function() {
@@ -97,7 +97,7 @@ unsafe extern "C" fn js_new_from_handle_v8_impl(
             })
             .collect();
 
-        let tc_scope = &mut v8::TryCatch::new(scope);
+        v8::tc_scope!(tc_scope, scope);
         match constructor.new_instance(tc_scope, &v8_args) {
             Some(r) => v8_to_native(tc_scope, r.into()),
             None => {
@@ -317,7 +317,7 @@ pub unsafe extern "C" fn js_get_export(
             }
         };
 
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
         let namespace = v8::Local::new(scope, namespace);
 
         // For namespace imports (export_name == "*"), return the entire module namespace object
@@ -389,11 +389,11 @@ fn call_function_impl(
     func_name: &str,
     args: &[f64],
 ) -> f64 {
-    let scope = &mut state.runtime.handle_scope();
+    deno_core::scope!(scope, &mut state.runtime);
     let namespace = v8::Local::new(scope, namespace);
 
     // Use TryCatch to properly handle V8 exceptions
-    let tc_scope = &mut v8::TryCatch::new(scope);
+    v8::tc_scope!(tc_scope, scope);
 
     // Get the function from the namespace
     let key = match v8::String::new(tc_scope, func_name) {
@@ -502,7 +502,7 @@ pub unsafe extern "C" fn js_call_method(
     };
 
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
 
         // Convert the object pointer to a V8 object
         let obj_val = native_to_v8(scope, object_ptr);
@@ -570,7 +570,7 @@ pub unsafe extern "C" fn js_call_value(
     };
 
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
 
         // Extract the function from the NaN-boxed value
         let func_local = match nanbox_to_v8(scope, func_value) {
@@ -646,7 +646,7 @@ pub unsafe extern "C" fn js_register_native_function(
 #[no_mangle]
 pub extern "C" fn js_handle_array_get(array_handle: f64, index: i32) -> f64 {
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
 
         // Convert the handle to a V8 value
         let arr_val = native_to_v8(scope, array_handle);
@@ -673,7 +673,7 @@ pub extern "C" fn js_handle_array_get(array_handle: f64, index: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_handle_array_length(array_handle: f64) -> i32 {
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
 
         // Convert the handle to a V8 value
         let arr_val = native_to_v8(scope, array_handle);
@@ -734,7 +734,7 @@ pub extern "C" fn js_handle_object_get_property(
     }
 
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
         get_property_with_scope(scope, object_ptr, property_name)
     })
 }
@@ -744,7 +744,7 @@ pub extern "C" fn js_handle_object_get_property(
 /// from the runtime) and the trampoline-reuse path (issue #255) share
 /// the same logic.
 fn get_property_with_scope(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     object_ptr: f64,
     property_name: &str,
 ) -> f64 {
@@ -775,7 +775,7 @@ fn get_property_with_scope(
 #[no_mangle]
 pub extern "C" fn js_handle_to_string(handle: f64) -> *mut perry_runtime::string::StringHeader {
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
 
         // Convert the handle to a V8 value
         let v8_val = native_to_v8(scope, handle);
@@ -792,12 +792,7 @@ pub extern "C" fn js_handle_to_string(handle: f64) -> *mut perry_runtime::string
         // Get the UTF-8 bytes
         let len = str_val.utf8_length(scope);
         let mut buffer = vec![0u8; len];
-        str_val.write_utf8(
-            scope,
-            &mut buffer,
-            None,
-            v8::WriteOptions::NO_NULL_TERMINATION,
-        );
+        str_val.write_utf8_v2(scope, &mut buffer, v8::WriteFlags::empty(), None);
 
         // Create a native string
         perry_runtime::string::js_string_from_bytes(buffer.as_ptr(), buffer.len() as u32)
@@ -828,7 +823,7 @@ pub unsafe extern "C" fn js_set_property(
     };
 
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
 
         // Convert the object pointer to a V8 object
         let obj_val = native_to_v8(scope, object_ptr);
@@ -892,7 +887,7 @@ pub unsafe extern "C" fn js_new_instance(
             }
         };
 
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
         let namespace = v8::Local::new(scope, namespace);
 
         // Get the class constructor from the namespace
@@ -960,7 +955,7 @@ pub unsafe extern "C" fn js_new_from_handle(
     };
 
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
 
         // Get the constructor from the handle
         let constructor_val = native_to_v8(scope, constructor_handle);
@@ -980,7 +975,7 @@ pub unsafe extern "C" fn js_new_from_handle(
             .collect();
 
         // Call the constructor with 'new'
-        let tc_scope = &mut v8::TryCatch::new(scope);
+        v8::tc_scope!(tc_scope, scope);
         match constructor.new_instance(tc_scope, &v8_args) {
             Some(r) => v8_to_native(tc_scope, r.into()),
             None => {
@@ -1026,7 +1021,7 @@ pub unsafe extern "C" fn js_create_callback(
     });
 
     with_runtime(|state| {
-        let scope = &mut state.runtime.handle_scope();
+        deno_core::scope!(scope, &mut state.runtime);
 
         // Create external data to store the callback ID and param count
         let data_array = v8::Array::new(scope, 2);
@@ -1055,7 +1050,7 @@ pub unsafe extern "C" fn js_create_callback(
 
 /// Trampoline function that V8 calls when a native callback is invoked
 fn native_callback_trampoline(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
@@ -1187,7 +1182,7 @@ pub extern "C" fn js_await_js_promise(value: f64) -> f64 {
 
             // Check if the value is a Promise and if it's already settled
             {
-                let scope = &mut state.runtime.handle_scope();
+                deno_core::scope!(scope, &mut state.runtime);
                 let v8_val = match get_js_handle(scope, handle_id) {
                     Some(v) => v,
                     None => {
@@ -1219,7 +1214,7 @@ pub extern "C" fn js_await_js_promise(value: f64) -> f64 {
             });
 
             // Now get the resolved value
-            let scope = &mut state.runtime.handle_scope();
+            deno_core::scope!(scope, &mut state.runtime);
             let v8_val = match get_js_handle(scope, handle_id) {
                 Some(v) => v,
                 None => {

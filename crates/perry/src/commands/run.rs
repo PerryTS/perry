@@ -340,7 +340,7 @@ async fn remote_build_and_launch(
     // Read [publish].exclude from perry.toml so `run` excludes the same dirs as `publish`
     let publish_excludes = std::fs::read_to_string(project_root.join("perry.toml"))
         .ok()
-        .and_then(|s| s.parse::<toml::Value>().ok())
+        .and_then(|s| toml::from_str::<toml::Value>(&s).ok())
         .and_then(|v| v.get("publish")?.get("exclude")?.as_array().cloned())
         .map(|arr| {
             arr.into_iter()
@@ -826,7 +826,7 @@ fn find_icon_source(project_root: &Path) -> Option<PathBuf> {
     // Check perry.toml [project].icons.source
     let toml_path = project_root.join("perry.toml");
     if let Ok(content) = std::fs::read_to_string(&toml_path) {
-        if let Ok(config) = content.parse::<toml::Value>() {
+        if let Ok(config) = toml::from_str::<toml::Value>(&content) {
             if let Some(source) = config
                 .get("project")
                 .and_then(|p| p.get("icons"))
@@ -1450,7 +1450,7 @@ fn read_app_metadata(project_root: &Path, input: &Path) -> (String, String) {
     let toml_path = project_root.join("perry.toml");
     let toml_config = std::fs::read_to_string(&toml_path)
         .ok()
-        .and_then(|s| s.parse::<toml::Value>().ok());
+        .and_then(|s| toml::from_str::<toml::Value>(&s).ok());
 
     let toml_name = toml_config
         .as_ref()

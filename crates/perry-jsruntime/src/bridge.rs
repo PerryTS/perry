@@ -40,7 +40,7 @@ thread_local! {
 }
 
 /// Store a V8 value in the handle table and return a handle ID
-pub fn store_js_handle(scope: &mut v8::HandleScope, value: v8::Local<v8::Value>) -> u64 {
+pub fn store_js_handle(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<v8::Value>) -> u64 {
     let handle_id = NEXT_HANDLE_ID.with(|id| {
         let current = id.get();
         id.set(current + 1);
@@ -55,7 +55,7 @@ pub fn store_js_handle(scope: &mut v8::HandleScope, value: v8::Local<v8::Value>)
 
 /// Retrieve a V8 value from the handle table
 pub fn get_js_handle<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     handle: u64,
 ) -> Option<v8::Local<'s, v8::Value>> {
     JS_OBJECT_HANDLES.with(|handles| {
@@ -109,7 +109,7 @@ pub fn fixup_native_for_v8(value: f64) -> f64 {
 }
 
 /// Convert a native NaN-boxed value to a V8 value
-pub fn native_to_v8<'s>(scope: &mut v8::HandleScope<'s>, value: f64) -> v8::Local<'s, v8::Value> {
+pub fn native_to_v8<'s>(scope: &mut v8::PinScope<'s, '_>, value: f64) -> v8::Local<'s, v8::Value> {
     let bits = value.to_bits();
 
     // Check special values
@@ -193,7 +193,7 @@ pub fn native_to_v8<'s>(scope: &mut v8::HandleScope<'s>, value: f64) -> v8::Loca
 /// For complex values (objects, arrays, functions), this stores them in the
 /// handle table and returns a JS handle. This preserves V8 objects for
 /// subsequent method calls.
-pub fn v8_to_native(scope: &mut v8::HandleScope<'_>, value: v8::Local<v8::Value>) -> f64 {
+pub fn v8_to_native(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<v8::Value>) -> f64 {
     if value.is_undefined() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -255,7 +255,7 @@ pub fn v8_to_native(scope: &mut v8::HandleScope<'_>, value: v8::Local<v8::Value>
 /// This variant converts arrays to native Perry arrays instead of JS handles.
 /// Use this when you know the result should be a native array (e.g., for Array operations).
 #[allow(dead_code)]
-pub fn v8_to_native_array(scope: &mut v8::HandleScope<'_>, value: v8::Local<v8::Value>) -> f64 {
+pub fn v8_to_native_array(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<v8::Value>) -> f64 {
     // For arrays, convert to native Perry array
     if value.is_array() {
         let array = v8::Local::<v8::Array>::try_from(value).unwrap();
@@ -301,7 +301,7 @@ fn rust_string_to_native(s: &str) -> *const u8 {
 
 /// Convert a native object pointer to a V8 object
 fn native_object_to_v8<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     ptr: *const u8,
 ) -> v8::Local<'s, v8::Value> {
     if ptr.is_null() {
@@ -432,7 +432,7 @@ fn native_object_to_v8<'s>(
 
 /// Convert a native BigInt pointer to a V8 BigInt
 fn native_bigint_to_v8<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     ptr: *const u8,
 ) -> v8::Local<'s, v8::Value> {
     use perry_runtime::bigint::BigIntHeader;
@@ -492,7 +492,7 @@ fn native_bigint_to_v8<'s>(
 }
 
 /// Convert a V8 object to a native object pointer
-fn v8_object_to_native(scope: &mut v8::HandleScope<'_>, obj: v8::Local<v8::Object>) -> *mut u8 {
+fn v8_object_to_native(scope: &mut v8::PinScope<'_, '_>, obj: v8::Local<v8::Object>) -> *mut u8 {
     use perry_runtime::{js_object_alloc, js_object_set_field};
 
     // Check if this object has a native pointer already
@@ -533,7 +533,7 @@ fn v8_object_to_native(scope: &mut v8::HandleScope<'_>, obj: v8::Local<v8::Objec
 }
 
 /// Convert a V8 array to a native array pointer
-fn v8_array_to_native(scope: &mut v8::HandleScope<'_>, array: v8::Local<v8::Array>) -> *mut u8 {
+fn v8_array_to_native(scope: &mut v8::PinScope<'_, '_>, array: v8::Local<v8::Array>) -> *mut u8 {
     use perry_runtime::js_array_alloc;
 
     let length = array.length();
@@ -560,7 +560,10 @@ fn v8_array_to_native(scope: &mut v8::HandleScope<'_>, array: v8::Local<v8::Arra
 }
 
 /// Convert a V8 BigInt to a native BigInt pointer
-fn v8_bigint_to_native(_scope: &mut v8::HandleScope<'_>, bigint: v8::Local<v8::BigInt>) -> *mut u8 {
+fn v8_bigint_to_native(
+    _scope: &mut v8::PinScope<'_, '_>,
+    bigint: v8::Local<v8::BigInt>,
+) -> *mut u8 {
     use perry_runtime::bigint::BigIntHeader;
     use std::alloc::{alloc, Layout};
 
@@ -618,7 +621,7 @@ fn v8_bigint_to_native(_scope: &mut v8::HandleScope<'_>, bigint: v8::Local<v8::B
 
 /// Convert a native array pointer to a V8 array
 pub fn native_array_to_v8<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     ptr: *const u8,
 ) -> v8::Local<'s, v8::Array> {
     if ptr.is_null() {

@@ -84,50 +84,20 @@ impl JsRuntimeState {
     fn new() -> Self {
         let mut runtime = JsRuntime::new(RuntimeOptions {
             module_loader: Some(std::rc::Rc::new(modules::NodeModuleLoader::new())),
-            extensions: vec![ops::perry_ops::init_ops()],
+            extensions: vec![ops::perry_ops::init()],
             ..Default::default()
         });
 
-        // Set V8 stack limit based on actual thread stack bounds.
-        // Previously set to 0x10000 which disabled V8's stack overflow detection entirely,
-        // causing SIGBUS on arm64 when deep call chains (module init → async → V8 eval)
-        // overflowed past the stack guard page.
-        //
-        // The Rust v8 bindings (v8 0.106) don't expose Isolate::SetStackLimit,
-        // so we call the C++ function directly via its Itanium ABI mangled name.
-        {
-            extern "C" {
-                #[link_name = "_ZN2v87Isolate13SetStackLimitEm"]
-                fn v8_isolate_set_stack_limit(isolate: *mut std::ffi::c_void, stack_limit: usize);
-            }
-            let isolate: &mut deno_core::v8::Isolate = runtime.v8_isolate();
-            let isolate_ptr: *mut std::ffi::c_void =
-                (isolate as *mut deno_core::v8::Isolate).cast();
-
-            // Compute stack limit from actual thread stack bounds
-            #[cfg(target_os = "macos")]
-            let stack_limit = {
-                extern "C" {
-                    fn pthread_self() -> *mut std::ffi::c_void;
-                    fn pthread_get_stackaddr_np(
-                        thread: *mut std::ffi::c_void,
-                    ) -> *mut std::ffi::c_void;
-                    fn pthread_get_stacksize_np(thread: *mut std::ffi::c_void) -> usize;
-                }
-                let thread = unsafe { pthread_self() };
-                let stack_addr = unsafe { pthread_get_stackaddr_np(thread) } as usize;
-                let stack_size = unsafe { pthread_get_stacksize_np(thread) };
-                let stack_bottom = stack_addr - stack_size;
-                // Reserve 64KB above stack bottom as safety margin for V8's stack check
-                stack_bottom + 64 * 1024
-            };
-            #[cfg(not(target_os = "macos"))]
-            let stack_limit: usize = 0x10000;
-
-            unsafe {
-                v8_isolate_set_stack_limit(isolate_ptr, stack_limit);
-            }
-        }
+        // Note: previously this block called `Isolate::SetStackLimit` via the
+        // Itanium ABI mangled name to fix arm64 SIGBUS on deep call chains.
+        // After the v8 0.106 → 147 bump, calling that exported symbol while
+        // the isolate is not "entered" (no `Isolate::Scope` on the stack)
+        // silently exits the process with code 0 — v8 147's stack-guard
+        // internals appear to abort cleanly instead of crashing. The
+        // upstream `deno_core::scope!` macro already pins the isolate
+        // properly for each work scope and v8 147 picks a sane default
+        // stack limit from the calling thread's stack, so this manual
+        // override is no longer required.
 
         // Set up Node.js global polyfills before any modules are loaded
         runtime
@@ -174,9 +144,9 @@ impl Drop for TrampolineScopeGuard {
     }
 }
 
-pub fn stash_trampoline_scope(scope: &mut deno_core::v8::HandleScope) -> TrampolineScopeGuard {
+pub fn stash_trampoline_scope(scope: &mut deno_core::v8::PinScope<'_, '_>) -> TrampolineScopeGuard {
     let prev = REENTRY_SCOPE_PTR.with(|p| p.get());
-    let scope_ptr = scope as *mut deno_core::v8::HandleScope as *mut std::ffi::c_void;
+    let scope_ptr = scope as *mut deno_core::v8::PinScope<'_, '_> as *mut std::ffi::c_void;
     REENTRY_SCOPE_PTR.with(|p| p.set(scope_ptr));
     TrampolineScopeGuard { prev }
 }
@@ -194,16 +164,16 @@ pub fn stash_trampoline_scope(scope: &mut deno_core::v8::HandleScope) -> Trampol
 ///
 /// Caller must ensure the returned reference doesn't outlive the
 /// trampoline frame that stashed it.
-pub unsafe fn try_trampoline_scope<'a>() -> Option<&'a mut deno_core::v8::HandleScope<'a>> {
+pub unsafe fn try_trampoline_scope<'a>() -> Option<&'a mut deno_core::v8::PinScope<'a, 'a>> {
     let stashed = REENTRY_SCOPE_PTR.with(|p| p.get());
     if stashed.is_null() {
         return None;
     }
-    // Cast back to a HandleScope reference. The lifetime 'a is unconstrained
+    // Cast back to a PinScope reference. The lifetime 'a is unconstrained
     // here — it's the caller's responsibility to use the reference only
     // within the trampoline's frame lifetime.
-    let scope: &mut deno_core::v8::HandleScope<'_> =
-        &mut *(stashed as *mut deno_core::v8::HandleScope<'_>);
+    let scope: &mut deno_core::v8::PinScope<'_, '_> =
+        &mut *(stashed as *mut deno_core::v8::PinScope<'_, '_>);
     Some(std::mem::transmute(scope))
 }
 
