@@ -1,13 +1,13 @@
 # Perry FFI Test Coverage
 
-Generated: 2026-05-13T16:03:36Z
+Generated: 2026-05-14T05:05:17Z
 
 ## Summary
 
-- **Total FFI functions:** 1790
-- **Covered by TypeScript fixtures:** 1790 (100.0%)
-- **Covered by Rust tests:** 1437 (80.3%)
-- **Covered by either TS or Rust:** 1790 (100.0%)
+- **Total FFI functions:** 1791
+- **Covered by TypeScript fixtures:** 1791 (100.0%)
+- **Covered by Rust tests:** 1438 (80.3%)
+- **Covered by either TS or Rust:** 1791 (100.0%)
 - **Uncovered by either TS or Rust:** 0
 
 ## Coverage by File
@@ -41,7 +41,7 @@ Generated: 2026-05-13T16:03:36Z
 | `crates/perry-runtime/src/media_playback.rs` | 15 | 15 | 0 | 15 | 100% | 100% |
 | `crates/perry-runtime/src/net.rs` | 11 | 11 | 11 | 11 | 100% | 100% |
 | `crates/perry-runtime/src/node_stream.rs` | 6 | 6 | 1 | 6 | 100% | 100% |
-| `crates/perry-runtime/src/object.rs` | 80 | 80 | 80 | 80 | 100% | 100% |
+| `crates/perry-runtime/src/object.rs` | 81 | 81 | 81 | 81 | 100% | 100% |
 | `crates/perry-runtime/src/os.rs` | 29 | 29 | 29 | 29 | 100% | 100% |
 | `crates/perry-runtime/src/path.rs` | 16 | 16 | 6 | 16 | 100% | 100% |
 | `crates/perry-runtime/src/plugin.rs` | 22 | 22 | 22 | 22 | 100% | 100% |

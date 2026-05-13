@@ -226,3 +226,14 @@ try {
 }
 
 // Coverage: 15 auto-emitted, 76 TODO, 0 skip-listed.
+
+/*
+@covers
+crates/perry-stdlib/src/zlib.rs:
+  - js_zlib_deflate_sync
+  - js_zlib_gunzip
+  - js_zlib_gunzip_sync
+  - js_zlib_gzip
+  - js_zlib_gzip_sync
+  - js_zlib_inflate_sync
+*/

@@ -6,7 +6,7 @@
 // inventory into behavioral tests as each area gets deeper compatibility
 // coverage.
 //
-// Inventory entries: 360 unique FFI names, 379 declarations.
+// Inventory entries: 359 unique FFI names, 378 declarations.
 
 const testFfiSurfaceRuntimeCoreVersion = 1;
 if (testFfiSurfaceRuntimeCoreVersion !== 1) {
@@ -39,7 +39,6 @@ crates/perry-runtime/src/buffer.rs:
   - js_buffer_fill_random
   - js_buffer_print
 crates/perry-runtime/src/builtins.rs:
-  - js_add
   - js_array_print
   - js_console_assert
   - js_console_assert_spread
@@ -88,7 +87,6 @@ crates/perry-runtime/src/builtins.rs:
   - js_queue_microtask
   - js_string_coerce
   - js_structured_clone
-  - js_sub
   - js_text_decoder_decode
   - perry_debug_trace_init
   - perry_debug_trace_init_done
@@ -228,6 +226,7 @@ crates/perry-runtime/src/node_stream.rs:
   - js_node_stream_transform_new
   - js_node_stream_writable_new
 crates/perry-runtime/src/object.rs:
+  - js_create_namespace
   - js_unresolved_default_call
 crates/perry-runtime/src/os.rs:
   - js_os_arch
