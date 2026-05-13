@@ -534,7 +534,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
 
         // Assign a class id for dispatch / instanceof.
-        class_ids.insert(effective_name.to_string(), class_id);
+        //
+        // Refs #665: `or_insert` (first-writer-wins) instead of `insert`
+        // (last-writer-wins). When two different classes are both
+        // default-imported in the same file, both register under
+        // `effective_name = "default"`. `class_table.entry().or_insert()`
+        // below already keeps the first stub for that key; the side maps
+        // must agree, otherwise the method registry builds symbols mixing
+        // the FIRST writer's methods with the LAST writer's prefix +
+        // canonical name, producing fnames the linker can't resolve.
+        class_ids
+            .entry(effective_name.to_string())
+            .or_insert(class_id);
         // Also register the canonical name if aliased.
         if ic.local_alias.is_some() && !class_ids.contains_key(&ic.name) {
             class_ids.insert(ic.name.clone(), class_id);
@@ -708,9 +719,22 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         if hir.classes.iter().any(|c| c.name == *effective_name) {
             continue;
         }
-        imported_class_prefix.insert(effective_name.to_string(), ic.source_prefix.clone());
+        // Refs #665: first-writer-wins to match `class_table`'s
+        // `.or_insert()` semantics (see the class-id loop above). When two
+        // different classes are both default-imported, both register under
+        // `effective_name = "default"`; using `.insert()` would let the
+        // LAST writer's source_prefix / canonical name win, while
+        // `class_table["default"]` keeps the FIRST writer's stub. The
+        // method-registry builder reads both, and the mismatch produces
+        // method symbols mangled under the wrong class — the linker can't
+        // resolve them and the build fails with "undefined value".
+        imported_class_prefix
+            .entry(effective_name.to_string())
+            .or_insert_with(|| ic.source_prefix.clone());
         if effective_name != ic.name {
-            imported_class_source_name.insert(effective_name.to_string(), ic.name.clone());
+            imported_class_source_name
+                .entry(effective_name.to_string())
+                .or_insert_with(|| ic.name.clone());
         }
     }
     for stub in &imported_class_stubs {
