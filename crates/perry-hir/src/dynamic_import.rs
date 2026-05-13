@@ -17,8 +17,9 @@
 //! `resolved_path` is the driver's job (it owns the module resolver).
 //! Here we only fold the JS-level path *string*.
 
-use crate::ir::{Expr, Function, Module, Stmt};
+use crate::ir::{Expr, Export, Function, Module, Stmt};
 use crate::walker::{walk_expr_children, walk_expr_children_mut};
+use std::collections::HashSet;
 
 /// Hard cap on the number of paths a single `import()` site can resolve
 /// to. Over-cap produces a compile error per D2 (issue #100).
@@ -231,6 +232,132 @@ impl Resolution {
     }
 }
 
+/// Issue #100: one entry in the flat-export list of a module that may
+/// be the target of a dynamic `import()`. Returned by [`flatten_exports`]
+/// after resolving `ReExport` / `ExportAll` / `NamespaceReExport` through
+/// the module graph.
+///
+/// The codegen consumes this list to populate the module's
+/// `__perry_ns_<prefix>` global at the end of `__perry_init_<prefix>`.
+/// Each entry maps one exported name (as the consumer sees it) to the
+/// module + local binding that actually holds the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlatExport {
+    /// The key as seen by the consumer of `await import("...")`.
+    pub name: String,
+    /// Module that owns the binding holding the value. For local exports
+    /// this is the same module passed to `flatten_exports`; for re-
+    /// exports it's the upstream module the value transitively came
+    /// from.
+    pub source_module: String,
+    /// The local name in `source_module` that holds the value.
+    pub source_local: String,
+    /// For `NamespaceReExport` — when `Some(nested_source)`, this entry
+    /// represents `name → namespace_of(nested_source)`. Codegen emits a
+    /// nested `js_create_namespace` call sourced from that module's own
+    /// `__perry_ns_<prefix>`. Otherwise `None` (the typical case).
+    pub nested_namespace_of: Option<String>,
+}
+
+/// Issue #100: resolve a module's exports — flattening `ExportAll`,
+/// `ReExport`, and `NamespaceReExport` through the import graph — into
+/// a flat list suitable for namespace materialization.
+///
+/// `modules` is a lookup of every module by `Module::name` (the same
+/// string used in `Import::source` / `Export::*::source` resolution
+/// keys). The caller is responsible for resolving module specifiers
+/// (e.g. `"./foo.ts"` vs `Module::name`) up-front and keying `modules`
+/// consistently — both `Export::ReExport::source` strings and
+/// `Module::name` must use the same form.
+///
+/// Cycle-safe: a `visited` set tracks modules we've already descended
+/// into so an `export * from` cycle terminates without infinite
+/// recursion. The first encounter wins (depth-first).
+///
+/// Returns entries in declaration order with later entries overriding
+/// earlier ones on duplicate names (matches JS semantics for
+/// `export * from`).
+pub fn flatten_exports<'a, F>(target_name: &str, lookup: &F) -> Vec<FlatExport>
+where
+    F: Fn(&str) -> Option<&'a Module>,
+{
+    let mut out: Vec<FlatExport> = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    flatten_into(target_name, lookup, &mut out, &mut visited);
+    // Preserve last-writer-wins on duplicate names while keeping insertion order.
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut dedup: Vec<FlatExport> = Vec::new();
+    for entry in out.into_iter().rev() {
+        if seen.insert(entry.name.clone()) {
+            dedup.push(entry);
+        }
+    }
+    dedup.reverse();
+    dedup
+}
+
+fn flatten_into<'a, F>(
+    module_name: &str,
+    lookup: &F,
+    out: &mut Vec<FlatExport>,
+    visited: &mut HashSet<String>,
+) where
+    F: Fn(&str) -> Option<&'a Module>,
+{
+    if !visited.insert(module_name.to_string()) {
+        return;
+    }
+    let module = match lookup(module_name) {
+        Some(m) => m,
+        None => return,
+    };
+    for export in &module.exports {
+        match export {
+            Export::Named { local, exported } => {
+                out.push(FlatExport {
+                    name: exported.clone(),
+                    source_module: module_name.to_string(),
+                    source_local: local.clone(),
+                    nested_namespace_of: None,
+                });
+            }
+            Export::ReExport {
+                source,
+                imported,
+                exported,
+            } => {
+                // The value lives in `source`; if `source` re-exports it
+                // again, we want to follow that chain so codegen reaches
+                // the ULTIMATE owner. But for the MVP we surface one hop
+                // — the cross-module access pattern works regardless of
+                // how many hops away the value's defining module is, as
+                // long as we name the directly-importing source.
+                out.push(FlatExport {
+                    name: exported.clone(),
+                    source_module: source.clone(),
+                    source_local: imported.clone(),
+                    nested_namespace_of: None,
+                });
+            }
+            Export::ExportAll { source } => {
+                // Recursively flatten the source's exports into ours.
+                // Cycle-safe via `visited`; depth-first so a closer
+                // re-exporter wins on name collision (matches the
+                // dedup pass above).
+                flatten_into(source, lookup, out, visited);
+            }
+            Export::NamespaceReExport { source, name } => {
+                out.push(FlatExport {
+                    name: name.clone(),
+                    source_module: source.clone(),
+                    source_local: String::new(),
+                    nested_namespace_of: Some(source.clone()),
+                });
+            }
+        }
+    }
+}
+
 /// Const-fold a dynamic `import()` path argument.
 ///
 /// Supported forms (D1, issue #100):
@@ -418,6 +545,110 @@ mod tests {
         m.init.push(Stmt::Expr(Expr::Await(Box::new(Expr::Undefined))));
         detect_top_level_await(&mut m);
         assert!(m.has_top_level_await);
+    }
+
+    #[test]
+    fn flatten_local_named_exports() {
+        let mut m = Module::new("foo");
+        m.exports.push(Export::Named {
+            local: "x".into(),
+            exported: "x".into(),
+        });
+        m.exports.push(Export::Named {
+            local: "_g".into(),
+            exported: "greet".into(),
+        });
+        let map = std::collections::HashMap::from([("foo".to_string(), m.clone())]);
+        let lookup = |s: &str| map.get(s);
+        let flat = flatten_exports("foo", &lookup);
+        assert_eq!(flat.len(), 2);
+        assert_eq!(flat[0].name, "x");
+        assert_eq!(flat[0].source_module, "foo");
+        assert_eq!(flat[0].source_local, "x");
+        assert_eq!(flat[1].name, "greet");
+        assert_eq!(flat[1].source_local, "_g");
+    }
+
+    #[test]
+    fn flatten_reexport_one_hop() {
+        let mut barrel = Module::new("barrel");
+        barrel.exports.push(Export::ReExport {
+            source: "inner".into(),
+            imported: "v".into(),
+            exported: "v".into(),
+        });
+        let map = std::collections::HashMap::from([("barrel".to_string(), barrel.clone())]);
+        let lookup = |s: &str| map.get(s);
+        let flat = flatten_exports("barrel", &lookup);
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].name, "v");
+        assert_eq!(flat[0].source_module, "inner");
+        assert_eq!(flat[0].source_local, "v");
+    }
+
+    #[test]
+    fn flatten_export_all_recursive() {
+        let mut inner = Module::new("inner");
+        inner.exports.push(Export::Named {
+            local: "v".into(),
+            exported: "v".into(),
+        });
+        let mut barrel = Module::new("barrel");
+        barrel.exports.push(Export::ExportAll {
+            source: "inner".into(),
+        });
+        let map = std::collections::HashMap::from([
+            ("inner".to_string(), inner.clone()),
+            ("barrel".to_string(), barrel.clone()),
+        ]);
+        let lookup = |s: &str| map.get(s);
+        let flat = flatten_exports("barrel", &lookup);
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].name, "v");
+        assert_eq!(flat[0].source_module, "inner");
+        assert_eq!(flat[0].source_local, "v");
+    }
+
+    #[test]
+    fn flatten_export_all_cycle_safe() {
+        // a -> b -> a — must terminate.
+        let mut a = Module::new("a");
+        a.exports.push(Export::ExportAll { source: "b".into() });
+        a.exports.push(Export::Named {
+            local: "fromA".into(),
+            exported: "fromA".into(),
+        });
+        let mut b = Module::new("b");
+        b.exports.push(Export::ExportAll { source: "a".into() });
+        b.exports.push(Export::Named {
+            local: "fromB".into(),
+            exported: "fromB".into(),
+        });
+        let map = std::collections::HashMap::from([
+            ("a".to_string(), a.clone()),
+            ("b".to_string(), b.clone()),
+        ]);
+        let lookup = |s: &str| map.get(s);
+        let flat = flatten_exports("a", &lookup);
+        // Both names appear; recursion terminates at the back-edge.
+        let names: Vec<String> = flat.iter().map(|e| e.name.clone()).collect();
+        assert!(names.contains(&"fromA".to_string()));
+        assert!(names.contains(&"fromB".to_string()));
+    }
+
+    #[test]
+    fn flatten_namespace_re_export() {
+        let mut m = Module::new("m");
+        m.exports.push(Export::NamespaceReExport {
+            source: "sub".into(),
+            name: "Sub".into(),
+        });
+        let map = std::collections::HashMap::from([("m".to_string(), m.clone())]);
+        let lookup = |s: &str| map.get(s);
+        let flat = flatten_exports("m", &lookup);
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].name, "Sub");
+        assert_eq!(flat[0].nested_namespace_of, Some("sub".to_string()));
     }
 
     #[test]

@@ -21,8 +21,8 @@ pub mod walker;
 
 pub use analysis::{collect_local_refs_expr, collect_local_refs_stmt};
 pub use dynamic_import::{
-    detect_top_level_await, for_each_dynamic_import_mut, resolve_import_path, Resolution,
-    DYNAMIC_IMPORT_PATH_CAP,
+    detect_top_level_await, flatten_exports, for_each_dynamic_import_mut, resolve_import_path,
+    FlatExport, Resolution, DYNAMIC_IMPORT_PATH_CAP,
 };
 pub use enums::fix_imported_enums;
 pub use ir::*;
