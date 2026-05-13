@@ -387,7 +387,8 @@ jobs:
             test_parity_url \
             test_parity_util \
             test_parity_worker_threads \
-            test_parity_zlib "
+            test_parity_zlib \
+            test_gap_dynamic_import_error "
 
           rm -rf "$LOGS_DIR"
           mkdir -p "$LOGS_DIR"
