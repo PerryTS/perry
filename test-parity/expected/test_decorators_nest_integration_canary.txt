@@ -1,0 +1,11 @@
+module providers true
+module provider length 2
+module controllers true
+module controller length 1
+provider injectable true
+controller metadata true /users
+service deps true
+controller deps true
+controller dep length 1
+route metadata /:id 0
+injected handler user:repo
