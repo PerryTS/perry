@@ -678,7 +678,9 @@ export const __perry_commonjs = true;
 
 fn strip_js_comments(code: &str) -> String {
     let without_blocks = BLOCK_COMMENT_RE.replace_all(code, "");
-    LINE_COMMENT_RE.replace_all(&without_blocks, "").into_owned()
+    LINE_COMMENT_RE
+        .replace_all(&without_blocks, "")
+        .into_owned()
 }
 
 fn is_safe_js_binding_name(name: &str) -> bool {
