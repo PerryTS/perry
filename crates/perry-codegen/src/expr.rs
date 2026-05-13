@@ -9680,6 +9680,54 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             Ok(v)
         }
+        // Issue #711: dynamic parent-class registration for `class X
+        // extends fn(...)` shapes. Evaluate the extends expression and
+        // call `js_register_class_parent_dynamic(child_cid, value)`,
+        // which extracts a class_id from the value (ClassRef payload
+        // for INT32-tagged, ObjectHeader.class_id for POINTER-tagged)
+        // and wires the parent edge into CLASS_REGISTRY. No-op if the
+        // value carries no class_id — preserves the parentless
+        // baseline rather than throwing during module init.
+        Expr::RegisterClassParentDynamic {
+            class_name,
+            parent_expr,
+        } => {
+            let val = lower_expr(ctx, parent_expr)?;
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                if class_id != 0 {
+                    let cid_str = class_id.to_string();
+                    ctx.block().call_void(
+                        "js_register_class_parent_dynamic",
+                        &[(crate::types::I32, &cid_str), (DOUBLE, &val)],
+                    );
+                }
+            }
+            // Yield undefined — this expression is always wrapped in
+            // `Stmt::Expr` for its side effect; the return value isn't
+            // observable to user code.
+            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        }
+        // Issue #711 part 2: `<expr>.prototype = <expr>` pattern.
+        // Calls `js_set_function_prototype(func, proto)`, which (when
+        // func is a closure and proto is an object) allocates a
+        // synthetic class id and binds the proto object as that
+        // class's vtable source. Method dispatch later consults
+        // CLASS_PROTOTYPE_OBJECTS to resolve methods.
+        Expr::SetFunctionPrototype { func, proto } => {
+            let func_val = lower_expr(ctx, func)?;
+            let proto_val = lower_expr(ctx, proto)?;
+            // Discard the returned synthetic class id — it's stored in
+            // the runtime side-table keyed by func_val and consulted
+            // later by `js_register_class_parent_dynamic`. User code
+            // gets the assigned value (proto_val) as the expression
+            // result, matching JS semantics for `x.foo = bar`.
+            let _ = ctx.block().call(
+                crate::types::I32,
+                "js_set_function_prototype",
+                &[(DOUBLE, &func_val), (DOUBLE, &proto_val)],
+            );
+            Ok(proto_val)
+        }
         // `static [Symbol.for("k")] = "v"` — register in the runtime's
         // class-static-symbol side table. Refs #420 (drizzle).
         Expr::ClassStaticSymbolSet {

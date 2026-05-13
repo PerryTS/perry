@@ -166,6 +166,58 @@ pub fn set_selectable(_handle: i64, _selectable: bool) {
     // UITextView instead. No-op for now.
 }
 
+/// Issue #707 — cap the maximum number of visible lines. 0 = unlimited.
+/// Maps directly to UILabel.numberOfLines. Pair with `set_truncation_mode`
+/// to control where the ellipsis appears when content overflows.
+pub fn set_number_of_lines(handle: i64, lines: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            if let Some(lbl_cls) = AnyClass::get(c"UILabel") {
+                let is_lbl: bool = msg_send![&*view, isKindOfClass: lbl_cls];
+                if !is_lbl {
+                    return;
+                }
+            }
+            let _: () = msg_send![&*view, setNumberOfLines: lines];
+            // Make sure lineBreakMode allows truncation when capped > 0.
+            // 0=WordWrapping, 1=CharWrapping, 2=Clipping, 3=TruncatingHead,
+            // 4=TruncatingTail, 5=TruncatingMiddle. We leave the existing
+            // mode unless it's the default (0) and we just enabled a cap,
+            // in which case tail-truncation is the natural fallback.
+            if lines > 0 {
+                let current: i64 = msg_send![&*view, lineBreakMode];
+                if current == 0 {
+                    let _: () = msg_send![&*view, setLineBreakMode: 4u64];
+                }
+            }
+        }
+    }
+}
+
+/// Issue #707 — control where the ellipsis appears when text overflows
+/// the line cap. 0=word-wrap (no truncation), 1=head ("…foo"),
+/// 2=middle ("fo…ar"), 3=tail ("foo…"). Tail is the most common.
+pub fn set_truncation_mode(handle: i64, mode: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            if let Some(lbl_cls) = AnyClass::get(c"UILabel") {
+                let is_lbl: bool = msg_send![&*view, isKindOfClass: lbl_cls];
+                if !is_lbl {
+                    return;
+                }
+            }
+            // Map our public 0..3 → NSLineBreakMode values.
+            let lbm: u64 = match mode {
+                1 => 3, // head
+                2 => 5, // middle
+                3 => 4, // tail
+                _ => 0, // word-wrap
+            };
+            let _: () = msg_send![&*view, setLineBreakMode: lbm];
+        }
+    }
+}
+
 /// Set text decoration on a UILabel via `NSAttributedString` (issue #185
 /// Phase B). `decoration`: 0=none, 1=underline, 2=strikethrough.
 pub fn set_decoration(handle: i64, decoration: i64) {

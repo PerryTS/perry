@@ -46,6 +46,16 @@ struct NavEntry {
     items: Vec<NavItem>,
     selected: i64,
     on_select: f64,
+    /// Issue #706 — packed COLORREF (0x00BBGGRR) for the active tab.
+    /// Windows standard BUTTON controls do NOT honor `WM_CTLCOLORBTN`
+    /// text color (the visual style draws them with system colors), so
+    /// the field is wired through and persisted on the entry, ready
+    /// for a follow-up owner-drawn rewrite that respects it. Stored
+    /// state still flows correctly through codegen and back, and
+    /// matches the macOS/iOS/Android impl shape.
+    selected_tint: Option<u32>,
+    /// Issue #706 — packed COLORREF for inactive tabs.
+    unselected_tint: Option<u32>,
 }
 
 thread_local! {
@@ -106,6 +116,8 @@ pub fn create(on_select: f64) -> i64 {
                         items: Vec::new(),
                         selected: -1,
                         on_select,
+                        selected_tint: None,
+                        unselected_tint: None,
                     },
                 );
             });
@@ -125,6 +137,8 @@ pub fn create(on_select: f64) -> i64 {
                     items: Vec::new(),
                     selected: -1,
                     on_select,
+                    selected_tint: None,
+                    unselected_tint: None,
                 },
             );
         });
@@ -279,6 +293,51 @@ pub fn set_selected(handle: i64, index: i64) {
     unsafe {
         js_closure_call1(closure_ptr, index as f64);
     }
+}
+
+fn pack_rgb(r: f64, g: f64, b: f64) -> u32 {
+    // Windows COLORREF is 0x00BBGGRR.
+    let to_u8 = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    to_u8(r) | (to_u8(g) << 8) | (to_u8(b) << 16)
+}
+
+/// Issue #706 — store the active tab tint. Win32 standard BUTTON
+/// controls don't honor WM_CTLCOLORBTN text color (they're rendered by
+/// the theme service), so the visual effect waits on a future
+/// owner-drawn rewrite. The state is persisted on the NavEntry and is
+/// authoritative for that rewrite + introspection.
+pub fn set_tint_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
+    let packed = pack_rgb(r, g, b);
+    NAVS.with(|n| {
+        if let Some(entry) = n.borrow_mut().get_mut(&handle) {
+            entry.selected_tint = Some(packed);
+            // Invalidate so a future owner-draw path picks it up.
+            #[cfg(target_os = "windows")]
+            for item in &entry.items {
+                unsafe {
+                    let _ =
+                        windows::Win32::Graphics::Gdi::InvalidateRect(item.btn_hwnd, None, true);
+                }
+            }
+        }
+    });
+}
+
+/// Issue #706 — store the inactive-tabs tint. See `set_tint_color`.
+pub fn set_unselected_tint_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
+    let packed = pack_rgb(r, g, b);
+    NAVS.with(|n| {
+        if let Some(entry) = n.borrow_mut().get_mut(&handle) {
+            entry.unselected_tint = Some(packed);
+            #[cfg(target_os = "windows")]
+            for item in &entry.items {
+                unsafe {
+                    let _ =
+                        windows::Win32::Graphics::Gdi::InvalidateRect(item.btn_hwnd, None, true);
+                }
+            }
+        }
+    });
 }
 
 /// Called from `handle_command` BN_CLICKED for any control id we own.

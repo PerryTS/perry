@@ -27,7 +27,15 @@ jobs:
   # ---------------------------------------------------------------------------
   await-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Job-level timeout must match the bash `deadline=$(( SECONDS + N * 60 ))`
+    # below. Both must move together.
+    # - v0.5.876: 60 → 90 (Tests had grown past 60 min wall)
+    # - v0.5.883: 90 → 120 (macOS-14 runners queue 30-60+ min during
+    #   busy hours; Tests itself takes ~30 min, but Release Packages
+    #   starts at the same time as Tests and runs out of budget before
+    #   Tests gets dequeued + executes. 120 absorbs typical runner
+    #   queue + Tests wall-time).
+    timeout-minutes: 120
     steps:
       - name: Wait for Tests + Simulator Tests (iOS) to pass
         env:
@@ -54,13 +62,14 @@ jobs:
           # of burning the 45-min budget.
           for wf_file in "test.yml" "simctl-tests.yml"; do
             echo "::group::Waiting for $wf_file"
-            # 60-min budget per workflow. Bumped from 45 → 60 after v0.5.386's
-            # release-packages run timed out at the 45-min wall while the
-            # newer Tests run on the same SHA was still in its doc-tests
-            # leg (40-50 min total). Tests on macos-14 routinely takes 50+
-            # min wall, so 45 min was always cutting it close. 60 min still
-            # well under the GitHub workflow-level 6h timeout.
-            deadline=$(( SECONDS + 60 * 60 ))
+            # 120-min budget per workflow.
+            # - v0.5.876: 60 → 90 (Tests wall-time grew past 60).
+            # - v0.5.883: 90 → 120. v0.5.882 hit 90-min wall because
+            #   macOS-14 runner queue delayed doc-tests start by an
+            #   hour. Tests itself runs ~30 min, but Release Packages
+            #   starts at tag-time and runs out of budget waiting for
+            #   queue + execution. 120 absorbs typical busy-hour queue.
+            deadline=$(( SECONDS + 120 * 60 ))
             retry_on_error=1
             while :; do
               set +e
@@ -271,10 +280,15 @@ jobs:
         run: |
           set -e
           # Format: "<platform>:<device-triple>:<sim-triple>"
+          # watchOS dropped v0.5.888: ring 0.17.14 has a pointer-size
+          # assertion that fails for `arm64_32-apple-watchos` (32-bit
+          # pointers with 64-bit regs). Sim target (aarch64-apple-watchos-sim)
+          # also dropped to keep the matrix simple — re-add both when
+          # ring publishes a fix or we pin to a working pre-0.17.14
+          # version.
           for entry in \
             "tvos:aarch64-apple-tvos:aarch64-apple-tvos-sim" \
-            "visionos:aarch64-apple-visionos:aarch64-apple-visionos-sim" \
-            "watchos:arm64_32-apple-watchos:aarch64-apple-watchos-sim"; do
+            "visionos:aarch64-apple-visionos:aarch64-apple-visionos-sim"; do
             plat="${entry%%:*}"
             rest="${entry#*:}"
             dev="${rest%%:*}"
@@ -337,10 +351,10 @@ jobs:
             # Closes #396 / #397 / #398: same pattern as iOS for the Tier-3
             # Apple platforms. Device triple varies (watchOS = arm64_32) so
             # we drive the staging copy from the explicit triple list above.
+            # watchOS dropped — see the build step above.
             for entry in \
               "tvos:aarch64-apple-tvos:aarch64-apple-tvos-sim" \
-              "visionos:aarch64-apple-visionos:aarch64-apple-visionos-sim" \
-              "watchos:arm64_32-apple-watchos:aarch64-apple-watchos-sim"; do
+              "visionos:aarch64-apple-visionos:aarch64-apple-visionos-sim"; do
               plat="${entry%%:*}"
               rest="${entry#*:}"
               dev_triple="${rest%%:*}"
@@ -631,7 +645,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.artifact }}
           path: staging/
@@ -667,6 +681,18 @@ jobs:
           for lib in libperry_runtime.a libperry_stdlib.a libperry_ui_gtk4.a; do
             if [ -f "staging/$lib" ]; then
               cp "staging/$lib" "${PKG}/usr/lib/perry/"
+              # Strip DWARF debug info but keep the symbol table.
+              # `strip = false` in [profile.release.package.perry-*]
+              # preserves the #[no_mangle] symbols perry-codegen needs
+              # at link time — but it also keeps multi-MB of DWARF that
+              # users don't need. `--strip-debug` removes the debug
+              # sections without touching .text / symbols.
+              #
+              # v0.5.891 fix: amd64 .deb crossed GitHub's 100 MB git
+              # push limit at v0.5.890. Strip drops ~30-50% off each
+              # .a, keeping the .deb under 100 MB so the apt-repo
+              # push doesn't reject.
+              strip --strip-debug "${PKG}/usr/lib/perry/$lib" || true
             fi
           done
 
@@ -715,7 +741,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download .deb packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: deb-*
           merge-multiple: true
@@ -898,7 +924,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
@@ -910,7 +936,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-artifacts/
 

@@ -263,44 +263,6 @@ fn normalize_zero(key: f64) -> f64 {
     }
 }
 
-/// Check if a value looks like a heap pointer (raw pointer stored in f64)
-/// On most systems, heap pointers have small upper bits (0x0000 or close to it)
-fn looks_like_pointer(val: f64) -> bool {
-    let bits = val.to_bits();
-    // Heap pointers on modern systems typically have upper 16 bits as 0x0000
-    // and lower 48 bits as the actual address. Addresses above 0x100000000 are typical.
-    let upper_16 = bits >> 48;
-    let lower_48 = bits & 0x0000_FFFF_FFFF_FFFF;
-    // Check if upper bits are 0 (user-space pointer) and lower bits look like a valid address
-    upper_16 == 0 && lower_48 > 0x10000
-}
-
-/// Extract pointer from raw f64 (for non-NaN-boxed pointers)
-fn as_raw_pointer(val: f64) -> *const u8 {
-    val.to_bits() as *const u8
-}
-
-/// Compare two strings by content
-unsafe fn strings_equal(a: *const StringHeader, b: *const StringHeader) -> bool {
-    if a.is_null() || b.is_null() || (a as usize) < 0x1000 || (b as usize) < 0x1000 {
-        return a == b;
-    }
-    let len_a = (*a).byte_len;
-    let len_b = (*b).byte_len;
-    if len_a != len_b {
-        return false;
-    }
-    // Compare content byte by byte
-    let data_a = (a as *const u8).add(std::mem::size_of::<StringHeader>());
-    let data_b = (b as *const u8).add(std::mem::size_of::<StringHeader>());
-    for i in 0..len_a as usize {
-        if *data_a.add(i) != *data_b.add(i) {
-            return false;
-        }
-    }
-    true
-}
-
 /// Extract a string pointer from a value that might be NaN-boxed with various tags.
 /// Returns the raw pointer if the value looks like it contains a string pointer, or null otherwise.
 /// Does NOT handle SHORT_STRING_TAG (SSO) — those don't carry a heap pointer;

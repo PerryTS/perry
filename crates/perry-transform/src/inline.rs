@@ -1029,6 +1029,7 @@ fn body_references_class_in_set(stmts: &[Stmt], set: &HashSet<String>) -> bool {
             | Expr::StaticFieldGet { class_name, .. }
             | Expr::StaticFieldSet { class_name, .. }
             | Expr::ClassStaticSymbolSet { class_name, .. }
+            | Expr::RegisterClassParentDynamic { class_name, .. }
             | Expr::StaticMethodCall { class_name, .. } => {
                 if set.contains(class_name) {
                     return true;

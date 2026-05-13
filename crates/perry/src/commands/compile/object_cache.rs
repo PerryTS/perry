@@ -6,13 +6,17 @@
 //! cache layout:
 //!
 //! 1. **`djb2_hash`** + **`Djb2Hasher`** — a fast non-crypto hash
-//!    used both for module source content (cache key derivation) and
-//!    by `compute_object_cache_key`'s internal field hasher.
+//!    used both for the cache-key field hasher and by other parts
+//!    of `perry`. Mirrored algorithmically by
+//!    `perry_hir::stable_hash::Djb2Hasher` (issue #686) so the HIR
+//!    fingerprint and the cache key share one hash family.
 //! 2. **`compute_object_cache_key`** — turns
-//!    `(CompileOptions, source_hash, perry_version)` into a stable
-//!    16-hex-digit cache key. The same opts + source + perry version
-//!    produce bit-identical .o files on repeat builds, so a hit
-//!    skips the LLVM pipeline entirely.
+//!    `(CompileOptions, hir_hash, perry_version)` into a stable
+//!    16-hex-digit cache key. As of #686 the second input is a
+//!    deterministic fingerprint of the post-transform HIR (computed
+//!    via `perry_hir::stable_hash::hash_module`) instead of the raw
+//!    source-bytes hash, so formatter-only and comment-only edits
+//!    that lower to identical HIR reuse the cached `.o`.
 //! 3. **`ObjectCache`** — the `lookup` / `store` surface used by the
 //!    rayon codegen workers. Atomic (tmp + rename) writes, silent
 //!    IO-error degradation, lock-free shared `&self` access (each
@@ -94,7 +98,15 @@ impl Djb2Hasher {
 /// codegen reads, sort every map/set so HashMap iteration order doesn't
 /// leak in, preserve declaration order for lists where the order itself
 /// is meaningful (topological init order, FFI wrapper order), and mix
-/// in the module's source hash and the perry version.
+/// in the module's HIR fingerprint (#686) and the perry version.
+///
+/// `hir_hash` is `perry_hir::stable_hash::hash_module(&Module)`, computed
+/// per-module inside the rayon job after every HIR-mutating pass has
+/// run — see compile.rs's main per-module closure for the call site.
+/// Replacing the previous source-bytes hash with the HIR hash means
+/// formatter-only / comment-only / quote-style edits that lower to the
+/// same final HIR reuse the cached `.o`. Behavior changes still produce
+/// a different HIR and miss the cache as before.
 ///
 /// We also mix in three environment variables that `perry-codegen` reads
 /// at compile time but that aren't part of `CompileOptions`:
@@ -114,7 +126,7 @@ impl Djb2Hasher {
 /// itself emits deterministic object code, which it does by default.
 pub fn compute_object_cache_key(
     opts: &perry_codegen::CompileOptions,
-    source_hash: u64,
+    hir_hash: u64,
     perry_version: &str,
 ) -> u64 {
     let mut h = Djb2Hasher::new();
@@ -130,8 +142,12 @@ pub fn compute_object_cache_key(
     h.field("build_id", &format!("{:016x}", perry_build_id()));
     h.field("ir_only", if opts.emit_ir_only { "1" } else { "0" });
 
-    // Module source hash — captures the module's HIR input verbatim.
-    h.field("src", &format!("{:016x}", source_hash));
+    // HIR fingerprint (issue #686). Computed by
+    // `perry_hir::stable_hash::hash_module` over the post-transform HIR
+    // that `compile_module` actually consumes. Replaces the previous
+    // source-bytes hash. Field tag is "hir" (intentionally distinct from
+    // the old "src") so any pre-#686 cache entries cleanly miss.
+    h.field("hir", &format!("{:016x}", hir_hash));
 
     // Target + top-level shape.
     h.field("tgt", opts.target.as_deref().unwrap_or("host"));
@@ -559,7 +575,18 @@ mod object_cache_tests {
     }
 
     #[test]
-    fn key_changes_with_source_hash() {
+    fn key_changes_with_hir_hash() {
+        // The second argument is the post-transform HIR fingerprint
+        // (issue #686), produced by `perry_hir::stable_hash::hash_module`.
+        // Two different HIR hashes — i.e. two semantically different
+        // modules — must produce different cache keys.
+        //
+        // Note: "same source bytes, different HIR" (e.g. a lowering-pass
+        // behavior change between Perry versions that rewrites the same
+        // input into different HIR) is covered by the `build_id` field
+        // mixed in by `perry_build_id()`, NOT by this hash. So a HIR
+        // walk that adds new fields between releases doesn't need a
+        // separate invalidation hook here.
         let opts = empty_opts();
         let a = compute_object_cache_key(&opts, 1, "0.5.156");
         let b = compute_object_cache_key(&opts, 2, "0.5.156");

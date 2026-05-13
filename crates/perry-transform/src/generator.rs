@@ -1341,251 +1341,7 @@ fn transform_generator_function(
 /// ```
 ///
 /// The two-step `let __step; __step = ...;` pattern is required because
-/// Perry's closure-capture analysis silently produces `NaN` for the
-/// `const f = (...)=>f(...)` form (verified at v0.5.362 — see issue #256
-/// background investigation). With the two-step pattern, the closure
-/// captures `__step` mutably; by the time `__step(undefined, false)` is
-/// invoked at the outer return site, the box holds the closure value and
-/// the recursive references inside `.then` callbacks resolve correctly.
-fn build_async_step_driver(
-    iter_obj: Expr,
-    next_local_id: &mut u32,
-    next_func_id: &mut u32,
-) -> Vec<Stmt> {
-    let iter_id = alloc_local(next_local_id);
-    let step_id = alloc_local(next_local_id);
-
-    // Step closure params + locals
-    let value_param_id = alloc_local(next_local_id);
-    let is_error_param_id = alloc_local(next_local_id);
-    let r_id = alloc_local(next_local_id);
-    let catch_e_id = alloc_local(next_local_id);
-
-    // Inner .then arrow params
-    let then_v_param_id = alloc_local(next_local_id);
-    let then_e_param_id = alloc_local(next_local_id);
-
-    let step_func_id = {
-        let id = *next_func_id;
-        *next_func_id += 1;
-        id
-    };
-    let then_v_func_id = {
-        let id = *next_func_id;
-        *next_func_id += 1;
-        id
-    };
-    let then_e_func_id = {
-        let id = *next_func_id;
-        *next_func_id += 1;
-        id
-    };
-
-    let any_ty = Type::Any;
-    let bool_ty = Type::Boolean;
-
-    // Helper builders
-    let promise_global = || Expr::GlobalGet(0);
-    let promise_resolve = |arg: Expr| Expr::Call {
-        callee: Box::new(Expr::PropertyGet {
-            object: Box::new(promise_global()),
-            property: "resolve".to_string(),
-        }),
-        args: vec![arg],
-        type_args: vec![],
-    };
-    let promise_reject = |arg: Expr| Expr::Call {
-        callee: Box::new(Expr::PropertyGet {
-            object: Box::new(promise_global()),
-            property: "reject".to_string(),
-        }),
-        args: vec![arg],
-        type_args: vec![],
-    };
-
-    // Build the two .then arrows: (v) => __step(v, false) and (e) => __step(e, true)
-    let then_v_arrow = Expr::Closure {
-        func_id: then_v_func_id,
-        params: vec![perry_hir::Param {
-            id: then_v_param_id,
-            name: "__step_v".to_string(),
-            ty: any_ty.clone(),
-            is_rest: false,
-            default: None,
-        }],
-        return_type: any_ty.clone(),
-        body: vec![Stmt::Return(Some(Expr::Call {
-            callee: Box::new(Expr::LocalGet(step_id)),
-            args: vec![Expr::LocalGet(then_v_param_id), Expr::Bool(false)],
-            type_args: vec![],
-        }))],
-        captures: vec![step_id],
-        mutable_captures: vec![step_id],
-        captures_this: false,
-        enclosing_class: None,
-        is_async: false,
-    };
-    let then_e_arrow = Expr::Closure {
-        func_id: then_e_func_id,
-        params: vec![perry_hir::Param {
-            id: then_e_param_id,
-            name: "__step_e".to_string(),
-            ty: any_ty.clone(),
-            is_rest: false,
-            default: None,
-        }],
-        return_type: any_ty.clone(),
-        body: vec![Stmt::Return(Some(Expr::Call {
-            callee: Box::new(Expr::LocalGet(step_id)),
-            args: vec![Expr::LocalGet(then_e_param_id), Expr::Bool(true)],
-            type_args: vec![],
-        }))],
-        captures: vec![step_id],
-        mutable_captures: vec![step_id],
-        captures_this: false,
-        enclosing_class: None,
-        is_async: false,
-    };
-
-    // step body
-    //   let r;
-    //   try {
-    //       r = isError ? __iter.throw(value) : __iter.next(value);
-    //   } catch (e) {
-    //       return Promise.reject(e);
-    //   }
-    //   if (r.done) return Promise.resolve(r.value);
-    //   return Promise.resolve(r.value).then(<then_v>, <then_e>);
-    let iter_throw_call = Expr::Call {
-        callee: Box::new(Expr::PropertyGet {
-            object: Box::new(Expr::LocalGet(iter_id)),
-            property: "throw".to_string(),
-        }),
-        args: vec![Expr::LocalGet(value_param_id)],
-        type_args: vec![],
-    };
-    let iter_next_call = Expr::Call {
-        callee: Box::new(Expr::PropertyGet {
-            object: Box::new(Expr::LocalGet(iter_id)),
-            property: "next".to_string(),
-        }),
-        args: vec![Expr::LocalGet(value_param_id)],
-        type_args: vec![],
-    };
-    let dispatch_iter = Expr::Conditional {
-        condition: Box::new(Expr::LocalGet(is_error_param_id)),
-        then_expr: Box::new(iter_throw_call),
-        else_expr: Box::new(iter_next_call),
-    };
-
-    // Perf: the generator's `next()` writes its iter-result into a
-    // thread-local scratch (rewritten by `rewrite_iter_results_to_scratch`)
-    // and returns `undefined`, so we never read `r.done` / `r.value`
-    // off a heap-allocated `{value, done}` object. Drop the local `r`
-    // and replace those PropertyGets with the scratch getters.
-    let _ = r_id; // kept for ABI/local-id parity; unused on the fast path
-    let step_body: Vec<Stmt> = vec![
-        // try { __iter.next(value); } catch (e) {
-        //     if (isError) return Promise.reject(e);
-        //     return __step(e, true);
-        // }
-        Stmt::Try {
-            body: vec![Stmt::Expr(dispatch_iter)],
-            catch: Some(CatchClause {
-                param: Some((catch_e_id, "__step_catch_e".to_string())),
-                body: vec![
-                    Stmt::If {
-                        condition: Expr::LocalGet(is_error_param_id),
-                        then_branch: vec![Stmt::Return(Some(promise_reject(Expr::LocalGet(
-                            catch_e_id,
-                        ))))],
-                        else_branch: None,
-                    },
-                    Stmt::Return(Some(Expr::Call {
-                        callee: Box::new(Expr::LocalGet(step_id)),
-                        args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
-                        type_args: vec![],
-                    })),
-                ],
-            }),
-            finally: None,
-        },
-        // if (js_iter_result_get_done()) return Promise.resolve(js_iter_result_get_value());
-        Stmt::If {
-            condition: Expr::IterResultGetDone,
-            then_branch: vec![Stmt::Return(Some(promise_resolve(
-                Expr::IterResultGetValue,
-            )))],
-            else_branch: None,
-        },
-        // return Promise.resolve(js_iter_result_get_value()).then(<then_v>, <then_e>);
-        Stmt::Return(Some(Expr::Call {
-            callee: Box::new(Expr::PropertyGet {
-                object: Box::new(promise_resolve(Expr::IterResultGetValue)),
-                property: "then".to_string(),
-            }),
-            args: vec![then_v_arrow, then_e_arrow],
-            type_args: vec![],
-        })),
-    ];
-
-    let step_closure = Expr::Closure {
-        func_id: step_func_id,
-        params: vec![
-            perry_hir::Param {
-                id: value_param_id,
-                name: "__step_value".to_string(),
-                ty: any_ty.clone(),
-                is_rest: false,
-                default: None,
-            },
-            perry_hir::Param {
-                id: is_error_param_id,
-                name: "__step_is_error".to_string(),
-                ty: bool_ty.clone(),
-                is_rest: false,
-                default: None,
-            },
-        ],
-        return_type: any_ty.clone(),
-        body: step_body,
-        captures: vec![iter_id, step_id],
-        mutable_captures: vec![step_id],
-        captures_this: false,
-        enclosing_class: None,
-        is_async: false,
-    };
-
-    // Outer wrapper:
-    //   let __iter = <iter_obj>;
-    //   let __step;        // declared, init=undefined
-    //   __step = <step_closure>;
-    //   return __step(undefined, false);
-    vec![
-        Stmt::Let {
-            id: iter_id,
-            name: "__async_iter".to_string(),
-            ty: any_ty.clone(),
-            mutable: false,
-            init: Some(iter_obj),
-        },
-        Stmt::Let {
-            id: step_id,
-            name: "__async_step".to_string(),
-            ty: any_ty.clone(),
-            mutable: true,
-            init: None,
-        },
-        Stmt::Expr(Expr::LocalSet(step_id, Box::new(step_closure))),
-        Stmt::Return(Some(Expr::Call {
-            callee: Box::new(Expr::LocalGet(step_id)),
-            args: vec![Expr::Undefined, Expr::Bool(false)],
-            type_args: vec![],
-        })),
-    ]
-}
-
-/// Like `build_async_step_driver` but skips the `__iter` object
+/// Build the async step driver without allocating the `__iter` object.
 /// allocation entirely. Used for `was_plain_async = true` generators
 /// where the iter object is never observable from user code (the
 /// async-step driver wraps the generator into a Promise-returning
@@ -2079,9 +1835,27 @@ fn linearize_body(
                     exit: StateExit::Goto(body_state),
                 });
 
+                // Pre-rewrite the body so any top-level `break` / `continue`
+                // inside (but NOT inside nested loops / switch / closure)
+                // becomes a placeholder state assignment + dispatch-continue.
+                // After body processing we know what the loop's break and
+                // continue targets are; the fix-up pass below replaces the
+                // sentinel numbers. Without this, `for (let i ...) { await
+                // x; if (cond) break; }` lowers the inner `break` as a raw
+                // `Stmt::Break` — the state-machine-emitted while(true) loop
+                // exits early, then the post-dispatch code reads the scratch
+                // iter-result set by the await (done=false), returns
+                // `AsyncStepChain(stale_promise, step)`, and the chain loops
+                // forever on a stale promise. Same shape covers `continue`
+                // skipping the body tail without going through the update.
+                let body_states_before = states.len();
+                let body_current_before = current.len();
+                let mut body_rewritten = body.clone();
+                rewrite_break_continue_in_stmts(&mut body_rewritten, state_id);
+
                 // Process loop body (may contain yields)
                 linearize_body(
-                    body,
+                    &body_rewritten,
                     states,
                     current,
                     state_num,
@@ -2091,13 +1865,37 @@ fn linearize_body(
                     catches,
                 );
 
-                // State for update: run update expression, goto condition check
+                // Body-tail state: contains the user body's residual stmts
+                // (everything after the last yield in the body). On fall-
+                // through it transitions to `update_state` so the for-loop
+                // semantics (run body, run update, re-check cond) hold.
+                let tail_state = *state_num;
+                *state_num += 1;
+                let tail_body = std::mem::take(current);
+
+                // `continue` target: a dedicated state that ONLY runs the
+                // update expression and then jumps back to cond. Distinct
+                // from `tail_state` so a user-`continue` from inside the
+                // body skips the post-continue body residual but still runs
+                // the for-loop's update expression. Without this split, a
+                // user `continue` written inside the post-yield body region
+                // would land back in the tail state, re-execute the body
+                // residual, and (depending on guard placement) loop forever
+                // on the same iteration.
                 let update_state = *state_num;
                 *state_num += 1;
-                let mut update_body = std::mem::take(current);
+                let mut update_body: Vec<Stmt> = Vec::new();
                 if let Some(upd) = update {
                     update_body.push(Stmt::Expr(upd.clone()));
                 }
+
+                // Push tail_state pointing at update_state.
+                states.push(State {
+                    num: tail_state,
+                    body: tail_body,
+                    exit: StateExit::Goto(update_state),
+                });
+                // Push update_state pointing at cond_state.
                 states.push(State {
                     num: update_state,
                     body: update_body,
@@ -2112,6 +1910,22 @@ fn linearize_body(
                         fix_placeholder_state(&mut state.body, state_id, after_loop_state);
                     }
                 }
+                // Fix break / continue placeholders that landed in the
+                // newly-created states (from body and tail_state) or in
+                // the trailing `current` buffer (none for For — tail_state
+                // already drained it, but covered for symmetry).
+                fix_break_continue_sentinels(
+                    &mut states[body_states_before..],
+                    state_id,
+                    after_loop_state,
+                    update_state,
+                );
+                fix_break_continue_sentinels_in_stmts(
+                    &mut current[body_current_before..],
+                    state_id,
+                    after_loop_state,
+                    update_state,
+                );
             }
 
             // While-loop containing yield(s) - similar to for-loop
@@ -2156,9 +1970,17 @@ fn linearize_body(
                     exit: StateExit::Goto(body_state),
                 });
 
+                // Pre-rewrite while body's break/continue sentinels.
+                // For a while-loop, `continue` jumps back to the condition
+                // state (no separate update); `break` jumps to after_loop.
+                let while_states_before = states.len();
+                let while_current_before = current.len();
+                let mut while_body_rewritten = while_body.clone();
+                rewrite_break_continue_in_stmts(&mut while_body_rewritten, state_id);
+
                 // Process body
                 linearize_body(
-                    while_body,
+                    &while_body_rewritten,
                     states,
                     current,
                     state_num,
@@ -2184,6 +2006,21 @@ fn linearize_body(
                         fix_placeholder_state(&mut state.body, state_id, after_loop);
                     }
                 }
+                // Fix break / continue sentinels inside the while-body states
+                // (`continue` here jumps to the cond_state; `break` jumps to
+                // after_loop).
+                fix_break_continue_sentinels(
+                    &mut states[while_states_before..],
+                    state_id,
+                    after_loop,
+                    cond_state,
+                );
+                fix_break_continue_sentinels_in_stmts(
+                    &mut current[while_current_before..],
+                    state_id,
+                    after_loop,
+                    cond_state,
+                );
             }
 
             // Try-catch containing yield(s) — linearize the try body directly and
@@ -2510,6 +2347,196 @@ fn linearize_body(
 }
 
 /// Fix the placeholder `0.0` state number in condition branches.
+/// Sentinel state-number for `Stmt::Break` placeholders. Chosen to fall well
+/// outside any legitimate state count (state numbers grow from 0; even huge
+/// async functions stay in the thousands). After body linearization completes,
+/// `fix_break_continue_sentinels` swaps every occurrence with the loop's
+/// real `after_loop` state number.
+const BREAK_SENTINEL: f64 = 1_000_001.0;
+/// Sentinel for `Stmt::Continue`. Swapped with the loop's `update_state`
+/// (for-loops) or `cond_state` (while-loops) post-linearization.
+const CONTINUE_SENTINEL: f64 = 1_000_002.0;
+
+/// Walk a body and rewrite every top-level `Stmt::Break` / `Stmt::Continue`
+/// into `[LocalSet(state_id, <sentinel>), Stmt::Continue]`. The trailing
+/// `Stmt::Continue` is the state-machine's dispatch-loop continue, which
+/// re-enters the while(true) and re-dispatches on the new state. Stops at
+/// nested loop / switch / closure boundaries — their own break/continue
+/// belong to those constructs, not to us.
+fn rewrite_break_continue_in_stmts(stmts: &mut Vec<Stmt>, state_id: LocalId) {
+    let mut i = 0;
+    while i < stmts.len() {
+        let stmt = std::mem::replace(&mut stmts[i], Stmt::Continue);
+        match stmt {
+            Stmt::Break => {
+                stmts[i] = Stmt::Expr(Expr::LocalSet(
+                    state_id,
+                    Box::new(Expr::Number(BREAK_SENTINEL)),
+                ));
+                stmts.insert(i + 1, Stmt::Continue);
+                i += 2;
+            }
+            Stmt::Continue => {
+                stmts[i] = Stmt::Expr(Expr::LocalSet(
+                    state_id,
+                    Box::new(Expr::Number(CONTINUE_SENTINEL)),
+                ));
+                stmts.insert(i + 1, Stmt::Continue);
+                i += 2;
+            }
+            mut other => {
+                rewrite_break_continue_in_stmt(&mut other, state_id);
+                stmts[i] = other;
+                i += 1;
+            }
+        }
+    }
+}
+
+fn rewrite_break_continue_in_stmt(stmt: &mut Stmt, state_id: LocalId) {
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            rewrite_break_continue_in_stmts(then_branch, state_id);
+            if let Some(eb) = else_branch.as_mut() {
+                rewrite_break_continue_in_stmts(eb, state_id);
+            }
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            rewrite_break_continue_in_stmts(body, state_id);
+            if let Some(c) = catch.as_mut() {
+                rewrite_break_continue_in_stmts(&mut c.body, state_id);
+            }
+            if let Some(f) = finally.as_mut() {
+                rewrite_break_continue_in_stmts(f, state_id);
+            }
+        }
+        // Inside nested loops / switch / labeled / closure expressions, the
+        // user's `break`/`continue` belongs to that construct and not to the
+        // outer loop the state machine is unrolling. Leave them as-is so the
+        // inner linearize_body (if it yields) / regular codegen (if it
+        // doesn't) handles them.
+        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } => {}
+        Stmt::Switch { .. } => {}
+        Stmt::Labeled { .. } => {}
+        _ => {}
+    }
+}
+
+/// Walk a slice of generator states and replace BREAK_SENTINEL /
+/// CONTINUE_SENTINEL with their real target state numbers. Called after a
+/// For/While body has been fully linearized into the state list.
+fn fix_break_continue_sentinels(
+    states: &mut [State],
+    state_id: LocalId,
+    break_target: u32,
+    continue_target: u32,
+) {
+    for state in states.iter_mut() {
+        fix_break_continue_sentinels_in_stmts(
+            &mut state.body,
+            state_id,
+            break_target,
+            continue_target,
+        );
+    }
+}
+
+fn fix_break_continue_sentinels_in_stmts(
+    stmts: &mut [Stmt],
+    state_id: LocalId,
+    break_target: u32,
+    continue_target: u32,
+) {
+    for stmt in stmts.iter_mut() {
+        fix_break_continue_sentinels_in_stmt(stmt, state_id, break_target, continue_target);
+    }
+}
+
+fn fix_break_continue_sentinels_in_stmt(
+    stmt: &mut Stmt,
+    state_id: LocalId,
+    break_target: u32,
+    continue_target: u32,
+) {
+    match stmt {
+        Stmt::Expr(Expr::LocalSet(id, val)) if *id == state_id => {
+            if let Expr::Number(n) = val.as_ref() {
+                if *n == BREAK_SENTINEL {
+                    **val = Expr::Number(break_target as f64);
+                } else if *n == CONTINUE_SENTINEL {
+                    **val = Expr::Number(continue_target as f64);
+                }
+            }
+        }
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            fix_break_continue_sentinels_in_stmts(
+                then_branch,
+                state_id,
+                break_target,
+                continue_target,
+            );
+            if let Some(eb) = else_branch.as_mut() {
+                fix_break_continue_sentinels_in_stmts(eb, state_id, break_target, continue_target);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            fix_break_continue_sentinels_in_stmts(body, state_id, break_target, continue_target);
+        }
+        Stmt::For { body, .. } => {
+            fix_break_continue_sentinels_in_stmts(body, state_id, break_target, continue_target);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            fix_break_continue_sentinels_in_stmts(body, state_id, break_target, continue_target);
+            if let Some(c) = catch.as_mut() {
+                fix_break_continue_sentinels_in_stmts(
+                    &mut c.body,
+                    state_id,
+                    break_target,
+                    continue_target,
+                );
+            }
+            if let Some(f) = finally.as_mut() {
+                fix_break_continue_sentinels_in_stmts(f, state_id, break_target, continue_target);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases.iter_mut() {
+                fix_break_continue_sentinels_in_stmts(
+                    &mut case.body,
+                    state_id,
+                    break_target,
+                    continue_target,
+                );
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            fix_break_continue_sentinels_in_stmt(
+                body.as_mut(),
+                state_id,
+                break_target,
+                continue_target,
+            );
+        }
+        _ => {}
+    }
+}
+
 fn fix_placeholder_state(stmts: &mut [Stmt], state_id: LocalId, target_state: u32) {
     fn fix_branch(branch: &mut [Stmt], state_id: LocalId, target_state: u32) {
         for inner in branch.iter_mut() {
@@ -2955,10 +2982,7 @@ fn rewrite_yield_to_await_in_stmt(stmt: &mut Stmt) {
 
 fn rewrite_yield_to_await_in_expr(expr: &mut Expr) {
     if let Expr::Yield { value, .. } = expr {
-        let inner = value
-            .take()
-            .map(|b| *b)
-            .unwrap_or(Expr::Undefined);
+        let inner = value.take().map(|b| *b).unwrap_or(Expr::Undefined);
         let mut new_inner = inner;
         rewrite_yield_to_await_in_expr(&mut new_inner);
         *expr = Expr::Await(Box::new(new_inner));

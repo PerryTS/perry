@@ -347,6 +347,25 @@ pub extern "C" fn perry_ui_text_set_decoration(handle: i64, decoration: i64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_selectable(_handle: i64, _selectable: f64) {}
 
+/// Issue #707 — watchOS Text line cap. Persists on the tree NodeData;
+/// SwiftUI host reads it via `perry_watchos_node_text_number_of_lines`
+/// and applies `.lineLimit(n)` when > 0.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_number_of_lines(handle: i64, lines: i64) {
+    tree::with_node_mut(handle, |node| {
+        node.text_number_of_lines = lines.max(0);
+    });
+}
+/// Issue #707 — watchOS Text truncation mode (0=word-wrap, 1=head,
+/// 2=middle, 3=tail). SwiftUI host reads via
+/// `perry_watchos_node_text_truncation_mode`.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
+    tree::with_node_mut(handle, |node| {
+        node.text_truncation_mode = mode;
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
     tree::with_node_mut(handle, |node| {
@@ -1466,6 +1485,17 @@ pub extern "C" fn perry_ui_bottom_nav_add_item(_handle: i64, _icon_ptr: i64, _la
 pub extern "C" fn perry_ui_bottom_nav_set_badge(_handle: i64, _index: i64, _badge_ptr: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_bottom_nav_set_selected(_handle: i64, _index: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_tint_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
+    _h: i64,
+    _r: f64,
+    _g: f64,
+    _b: f64,
+    _a: f64,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callback: f64) {}
@@ -1563,3 +1593,49 @@ pub extern "C" fn perry_ui_webview_can_go_back(_handle: i64) -> i64 {
 pub extern "C" fn perry_ui_webview_evaluate_js(_handle: i64, _js_ptr: i64, _callback: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_webview_clear_cookies(_handle: i64) {}
+
+// AttributedText (Issue #710) — watchOS tree node + run buffer.
+// SwiftUI host iterates `perry_watchos_node_attr_run_*` and emits a
+// concatenated `Text(run).bold().italic().underline().foregroundColor(...)`.
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_create() -> i64 {
+    let node = tree::NodeData::new(tree::NodeKind::AttributedText);
+    tree::register_node(node)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_append(
+    h: i64,
+    t: i64,
+    bold: i64,
+    italic: i64,
+    underline: i64,
+    font_size: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
+    let text = match cstring_from_header(t as *const u8) {
+        Some(s) => s,
+        None => return,
+    };
+    tree::with_node_mut(h, |node| {
+        node.attributed_runs.push((
+            text,
+            bold != 0,
+            italic != 0,
+            underline != 0,
+            font_size,
+            r,
+            g,
+            b,
+            a,
+        ));
+    });
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_clear(h: i64) {
+    tree::with_node_mut(h, |node| {
+        node.attributed_runs.clear();
+    });
+}

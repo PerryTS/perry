@@ -58,17 +58,6 @@ fn handle_id(value: f64) -> usize {
     }
 }
 
-fn nanbox_string(ptr: *mut StringHeader) -> u64 {
-    STRING_TAG | (ptr as u64 & 0x0000_FFFF_FFFF_FFFF)
-}
-
-/// Build a "fetch error" string and pack it for promise rejection.
-/// Returned as raw u64 bits matching perry-stdlib's existing convention.
-fn fetch_error_bits(msg: &str) -> u64 {
-    let ptr = alloc_string(msg).as_raw();
-    nanbox_string(ptr)
-}
-
 // ── Response storage ──────────────────────────────────────────────
 
 #[derive(Clone)]

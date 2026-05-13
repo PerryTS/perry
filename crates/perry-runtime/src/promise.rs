@@ -310,7 +310,45 @@ thread_local! {
     /// collapsed onto its parent's).
     pub(crate) static INLINE_TRAP: std::cell::Cell<InlineTrap>
         = const { std::cell::Cell::new(InlineTrap { trap_next: std::ptr::null_mut(), current_step: 0 }) };
+
+    /// Defensive re-entry guard for the async step driver (issue #712).
+    ///
+    /// Tracks consecutive `is_error=true` AsyncStep dispatches from the
+    /// SAME step closure. The original report (v0.5.836) produced 5.7M
+    /// identical "value is not a function" lines because the throw
+    /// closure's `__gen_state = post_catch_state` transitioned to a
+    /// state that re-evaluated the same failing `await` expression —
+    /// the catch arm re-fired, AsyncStepChain re-enqueued, repeat.
+    ///
+    /// A correct async state machine alternates: on a throwing await
+    /// the runner gets ONE is_error=true entry per throw, immediately
+    /// followed by is_error=false entries that resume the post-catch
+    /// states. Programs that legitimately throw 1M+ times in a loop
+    /// (e.g. `for (i of bigArr) try { await fail() } catch {}`)
+    /// interleave is_error=false steps between the catches, so the
+    /// consecutive count never grows beyond 1.
+    ///
+    /// On exceed: reject `next` with a synthesized TypeError and skip
+    /// the step dispatch. This bounds the worst-case loop at
+    /// `ASYNC_STEP_REENTRY_BOUND` iterations instead of unbounded.
+    pub(crate) static ASYNC_STEP_GUARD: std::cell::Cell<AsyncStepGuard>
+        = const { std::cell::Cell::new(AsyncStepGuard { last_closure: 0, consecutive_error_count: 0 }) };
 }
+
+/// Defensive guard state for the async step driver. See `ASYNC_STEP_GUARD`.
+#[derive(Copy, Clone)]
+pub(crate) struct AsyncStepGuard {
+    pub last_closure: usize,
+    pub consecutive_error_count: u32,
+}
+
+/// Upper bound on consecutive same-closure is_error=true AsyncStep
+/// dispatches before the runner rejects the Promise as a runaway loop.
+/// Picked well above any legitimate throw-in-a-loop pattern (those
+/// interleave is_error=false steps so the count resets each iteration)
+/// and well below the 5.7M observed in #712 — high enough to avoid
+/// false positives, low enough to terminate quickly when the bug fires.
+pub(crate) const ASYNC_STEP_REENTRY_BOUND: u32 = 10_000;
 
 /// Packed thread-local state for the inline-microtask trap. See
 /// `INLINE_TRAP` for the lifecycle and gating discussion.
@@ -1118,6 +1156,49 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     }
                     ran += 1;
                     continue;
+                }
+                // Issue #712 defensive guard. Track consecutive
+                // same-closure is_error=true dispatches; reject the
+                // chain if it crosses ASYNC_STEP_REENTRY_BOUND. See
+                // the `ASYNC_STEP_GUARD` doc comment for the rationale.
+                if is_error {
+                    let prev = ASYNC_STEP_GUARD.with(|c| c.get());
+                    let new_count = if prev.last_closure == step_closure as usize {
+                        prev.consecutive_error_count.saturating_add(1)
+                    } else {
+                        1
+                    };
+                    if new_count > ASYNC_STEP_REENTRY_BOUND {
+                        ASYNC_STEP_GUARD.with(|c| {
+                            c.set(AsyncStepGuard {
+                                last_closure: 0,
+                                consecutive_error_count: 0,
+                            })
+                        });
+                        if !next.is_null() {
+                            let msg = b"async step driver detected runaway re-entry (issue #712 guard); rejecting Promise to prevent unbounded loop";
+                            let msg_str =
+                                crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+                            let err = crate::error::js_typeerror_new(msg_str);
+                            let err_val = crate::value::js_nanbox_pointer(err as i64);
+                            js_promise_reject(next, err_val);
+                        }
+                        ran += 1;
+                        continue;
+                    }
+                    ASYNC_STEP_GUARD.with(|c| {
+                        c.set(AsyncStepGuard {
+                            last_closure: step_closure as usize,
+                            consecutive_error_count: new_count,
+                        })
+                    });
+                } else {
+                    ASYNC_STEP_GUARD.with(|c| {
+                        c.set(AsyncStepGuard {
+                            last_closure: 0,
+                            consecutive_error_count: 0,
+                        })
+                    });
                 }
                 // Stash both trap_next + current_step in a single TLS
                 // write so the hot path doesn't pay two `.with()` calls

@@ -12,9 +12,7 @@ pub const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 // Runtime symbols not yet wrapped by perry-ffi — declared locally.
 extern "C" {
     pub fn js_promise_run_microtasks() -> i32;
-    pub fn js_is_promise(ptr: *mut Promise) -> i32;
     pub fn js_promise_state(ptr: *mut Promise) -> i32;
-    pub fn js_promise_value(ptr: *mut Promise) -> f64;
     pub fn js_promise_reason(ptr: *mut Promise) -> f64;
     pub fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
     pub fn js_gc_enter_unsafe_zone();
@@ -185,25 +183,6 @@ pub(crate) fn read_string_header_bytes(ptr: *mut StringHeader) -> Option<Vec<u8>
         let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let slice = std::slice::from_raw_parts(data, len);
         Some(slice.to_vec())
-    }
-}
-
-/// Bound spin awaiting promise settlement — same shape as
-/// `perry-ext-fastify::server::wait_for_promise`. Promises that
-/// don't settle within ~1s get a fall-through return; the caller
-/// should treat the return value as "promise is still pending"
-/// and use the original handler return.
-pub fn wait_for_promise(promise_ptr: *mut Promise) {
-    use std::time::Duration;
-    for _ in 0..10000 {
-        unsafe {
-            js_promise_run_microtasks();
-        }
-        let state = unsafe { js_promise_state(promise_ptr) };
-        if state != 0 {
-            return;
-        }
-        std::thread::sleep(Duration::from_micros(100));
     }
 }
 

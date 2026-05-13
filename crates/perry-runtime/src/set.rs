@@ -117,20 +117,8 @@ fn normalize_zero(value: f64) -> f64 {
     }
 }
 
-/// Check if a value looks like a heap pointer (raw pointer stored in f64)
-fn looks_like_pointer(val: f64) -> bool {
-    let bits = val.to_bits();
-    let upper_16 = bits >> 48;
-    let lower_48 = bits & 0x0000_FFFF_FFFF_FFFF;
-    upper_16 == 0 && lower_48 > 0x10000
-}
-
-/// Extract pointer from raw f64
-fn as_raw_pointer(val: f64) -> *const u8 {
-    val.to_bits() as *const u8
-}
-
 /// Compare two strings by content
+#[cfg(test)]
 unsafe fn strings_equal(a: *const StringHeader, b: *const StringHeader) -> bool {
     if a.is_null() || b.is_null() || (a as usize) < 0x1000 || (b as usize) < 0x1000 {
         return a == b;

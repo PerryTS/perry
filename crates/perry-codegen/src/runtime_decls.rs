@@ -684,6 +684,19 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // allocators register on every alloc; the inline allocator skips
     // the alloc-site call and relies on this one-time registration.
     module.declare_function("js_register_class_parent", VOID, &[I32, I32]);
+    // Issue #711: dynamic parent registration for `class X extends fn(...)`
+    // shapes. Codegen emits at the class-declaration source position in
+    // module.init (lower.rs); the runtime helper extracts the parent
+    // class_id from the value (ClassRef payload or ObjectHeader.class_id)
+    // and wires the (child, parent) edge into CLASS_REGISTRY.
+    module.declare_function("js_register_class_parent_dynamic", VOID, &[I32, DOUBLE]);
+    // Issue #711 part 2: prototype-based class declaration via
+    // `<func>.prototype = <obj>`. Binds an object as the function's
+    // prototype source; subsequent `class X extends <func>` lookups
+    // dispatch into the object's methods. Returns the synthetic
+    // class id allocated for the function value (or 0 on validation
+    // failure). Codegen discards the return.
+    module.declare_function("js_set_function_prototype", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_typeerror_new", I64, &[I64]);
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);
@@ -835,6 +848,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // cleanly resolves to undefined (instead of TAG_TRUE → "boolean" /
     // "(boolean).method is not a function").
     module.declare_function("js_unresolved_namespace_stub", DOUBLE, &[]);
+    // Issue #692: stub for default-imported callables from unresolved modules —
+    // returns NaN-boxed undefined and prints a one-shot diagnostic, so the
+    // program links instead of failing with `undefined reference to 'default'`.
+    module.declare_function("js_unresolved_default_call", DOUBLE, &[]);
     // Issue #611: real persistent globalThis singleton. Returns a
     // NaN-boxed POINTER to a per-process ObjectHeader so
     // `globalThis[k] = v` then `globalThis[k]` round-trips correctly.
@@ -1085,6 +1102,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // next body iteration's microtask drain.
     module.declare_function("js_microtasks_pending", I32, &[]);
     module.declare_function("js_set_timeout_callback", I64, &[I64, DOUBLE]);
+    // Refs #665: `setTimeout(fn, delay, ...args)` with trailing args. The
+    // args are packed into a stack buffer of doubles at the call site and
+    // forwarded by index when the timer fires. Used by Promise-executor
+    // patterns like `setTimeout(resolve, delay, res)`.
+    module.declare_function(
+        "js_set_timeout_callback_args",
+        I64,
+        &[I64, DOUBLE, crate::types::PTR, I32],
+    );
     module.declare_function("setInterval", I64, &[I64, DOUBLE]);
     module.declare_function("clearTimeout", VOID, &[I64]);
     module.declare_function("clearInterval", VOID, &[I64]);

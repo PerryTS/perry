@@ -139,6 +139,36 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str, ArgKind::Closure],
         ret: ReturnKind::Widget,
     },
+    // ---- Issue #710: AttributedText (per-range styling) ----
+    MethodRow {
+        method: "AttributedText",
+        runtime: "perry_ui_attributed_text_create",
+        args: &[],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "attributedTextAppend",
+        runtime: "perry_ui_attributed_text_append",
+        args: &[
+            ArgKind::Widget,
+            ArgKind::Str,
+            ArgKind::I64Raw,
+            ArgKind::I64Raw,
+            ArgKind::I64Raw,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+        ],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "attributedTextClear",
+        runtime: "perry_ui_attributed_text_clear",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "TextField",
         runtime: "perry_ui_textfield_create",
@@ -369,6 +399,31 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::I64Raw],
         ret: ReturnKind::Void,
     },
+    // ---- Issue #706: BottomNavigation tint customization ----
+    MethodRow {
+        method: "bottomNavSetTintColor",
+        runtime: "perry_ui_bottom_nav_set_tint_color",
+        args: &[
+            ArgKind::Widget,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+        ],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "bottomNavSetUnselectedTintColor",
+        runtime: "perry_ui_bottom_nav_set_unselected_tint_color",
+        args: &[
+            ArgKind::Widget,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+        ],
+        ret: ReturnKind::Void,
+    },
     // ---- Issue #553: ImageGallery (swipeable carousel) ----
     MethodRow {
         method: "ImageGallery",
@@ -436,6 +491,19 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         method: "textSetString",
         runtime: "perry_ui_text_set_string",
         args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    // ---- Issue #707: Text line cap + truncation mode ----
+    MethodRow {
+        method: "textSetNumberOfLines",
+        runtime: "perry_ui_text_set_number_of_lines",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "textSetTruncationMode",
+        runtime: "perry_ui_text_set_truncation_mode",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
         ret: ReturnKind::Void,
     },
     MethodRow {

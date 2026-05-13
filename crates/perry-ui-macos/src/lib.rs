@@ -467,6 +467,18 @@ pub extern "C" fn perry_ui_text_set_selectable(handle: i64, selectable: f64) {
     widgets::text::set_selectable(handle, selectable != 0.0);
 }
 
+/// Issue #707 — cap visible lines on a Text widget. `lines = 0` is unlimited.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_number_of_lines(handle: i64, lines: i64) {
+    widgets::text::set_number_of_lines(handle, lines);
+}
+
+/// Issue #707 — set truncation mode. 0=word-wrap, 1=head, 2=middle, 3=tail.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
+    widgets::text::set_truncation_mode(handle, mode);
+}
+
 /// Set the text color of a Button.
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
@@ -2463,6 +2475,24 @@ pub extern "C" fn perry_ui_bottom_nav_set_selected(handle: i64, index: i64) {
     widgets::bottom_nav::set_selected(handle, index);
 }
 
+/// Issue #706 — set the tint color of the active tab (RGBA 0.0-1.0).
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    widgets::bottom_nav::set_tint_color(handle, r, g, b, a);
+}
+
+/// Issue #706 — set the tint color of inactive tabs (RGBA 0.0-1.0).
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
+    widgets::bottom_nav::set_unselected_tint_color(handle, r, g, b, a);
+}
+
 // --- Issue #553: ImageGallery (swipeable carousel) ---
 
 #[no_mangle]
@@ -2668,4 +2698,45 @@ pub extern "C" fn perry_media_set_now_playing(
 #[no_mangle]
 pub extern "C" fn perry_media_destroy(handle: f64) {
     media_playback::destroy(handle);
+}
+
+// =============================================================================
+// AttributedText (Issue #710)
+// =============================================================================
+
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_create() -> i64 {
+    widgets::attributed_text::create()
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_append(
+    handle: i64,
+    text_ptr: i64,
+    bold: i64,
+    italic: i64,
+    underline: i64,
+    font_size: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
+    widgets::attributed_text::append(
+        handle,
+        text_ptr as *const u8,
+        bold,
+        italic,
+        underline,
+        font_size,
+        r,
+        g,
+        b,
+        a,
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_clear(handle: i64) {
+    widgets::attributed_text::clear(handle);
 }

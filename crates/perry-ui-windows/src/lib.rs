@@ -518,6 +518,18 @@ pub extern "C" fn perry_ui_text_set_decoration(handle: i64, decoration: i64) {
     widgets::text::set_decoration(handle, decoration);
 }
 
+/// Issue #707 — cap visible lines on a Win32 STATIC control via the
+/// SS_*ELLIPSIS style bits.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_number_of_lines(handle: i64, lines: i64) {
+    widgets::text::set_number_of_lines(handle, lines);
+}
+/// Issue #707 — STATIC truncation mode.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
+    widgets::text::set_truncation_mode(handle, mode);
+}
+
 /// Set the font family.
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
@@ -2290,6 +2302,26 @@ pub extern "C" fn perry_ui_bottom_nav_set_selected(handle: i64, index: i64) {
     widgets::bottom_nav::set_selected(handle, index);
 }
 
+/// Issue #706 — Windows bottom-nav active-tab tint. State is persisted
+/// on NavEntry; visual rendering waits on a future owner-drawn button
+/// rewrite (Win32 standard BUTTON controls ignore WM_CTLCOLORBTN).
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    widgets::bottom_nav::set_tint_color(handle, r, g, b, a);
+}
+
+/// Issue #706 — Windows bottom-nav inactive-tabs tint.
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
+    widgets::bottom_nav::set_unselected_tint_color(handle, r, g, b, a);
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callback: f64) {}
 #[no_mangle]
@@ -2388,4 +2420,40 @@ pub extern "C" fn perry_ui_webview_evaluate_js(handle: i64, js_ptr: i64, callbac
 #[no_mangle]
 pub extern "C" fn perry_ui_webview_clear_cookies(handle: i64) {
     widgets::webview::clear_cookies(handle)
+}
+
+// AttributedText (Issue #710) — Windows RichEdit-backed.
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_create() -> i64 {
+    widgets::attributed_text::create()
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_append(
+    h: i64,
+    t: i64,
+    bold: i64,
+    italic: i64,
+    underline: i64,
+    font_size: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
+    widgets::attributed_text::append(
+        h,
+        t as *const u8,
+        bold,
+        italic,
+        underline,
+        font_size,
+        r,
+        g,
+        b,
+        a,
+    );
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_clear(h: i64) {
+    widgets::attributed_text::clear(h);
 }

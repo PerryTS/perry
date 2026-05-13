@@ -2970,11 +2970,6 @@ fn collect_localset_ids_in_stmts_filtered(
     }
 }
 
-fn collect_localset_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
-    let empty = HashSet::new();
-    collect_localset_ids_in_expr_filtered(e, out, None, &empty, &empty, &empty);
-}
-
 fn collect_localset_ids_in_expr_filtered(
     e: &perry_hir::Expr,
     out: &mut HashSet<u32>,

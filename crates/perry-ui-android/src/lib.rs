@@ -513,6 +513,21 @@ pub extern "C" fn perry_ui_text_set_decoration(handle: i64, decoration: i64) {
     widgets::text::set_decoration(handle, decoration);
 }
 
+/// Issue #707 — cap visible lines on a Text widget (TextView.setMaxLines).
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_number_of_lines(handle: i64, lines: i64) {
+    catch_panic_void("perry_ui_text_set_number_of_lines", || {
+        widgets::text::set_number_of_lines(handle, lines)
+    })
+}
+/// Issue #707 — truncation mode (TextView.setEllipsize).
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
+    catch_panic_void("perry_ui_text_set_truncation_mode", || {
+        widgets::text::set_truncation_mode(handle, mode)
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_bordered(handle: i64, bordered: f64) {
     widgets::button::set_bordered(handle, bordered != 0.0);
@@ -2506,6 +2521,28 @@ pub extern "C" fn perry_ui_bottom_nav_set_selected(handle: i64, index: i64) {
         widgets::bottom_nav::set_selected(handle, index)
     })
 }
+/// Issue #706 — Android bottom-nav active-tab tint. Stored on
+/// BottomNavState; applied via setColorFilter + setTextColor in
+/// apply_styling.
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    catch_panic_void("perry_ui_bottom_nav_set_tint_color", || {
+        widgets::bottom_nav::set_tint_color(handle, r, g, b, a)
+    })
+}
+/// Issue #706 — Android bottom-nav inactive-tabs tint.
+#[no_mangle]
+pub extern "C" fn perry_ui_bottom_nav_set_unselected_tint_color(
+    handle: i64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
+    catch_panic_void("perry_ui_bottom_nav_set_unselected_tint_color", || {
+        widgets::bottom_nav::set_unselected_tint_color(handle, r, g, b, a)
+    })
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_lazyvstack_set_refresh_control(_handle: i64, _callback: f64) {}
@@ -2641,5 +2678,47 @@ pub extern "C" fn perry_ui_webview_evaluate_js(handle: i64, js_ptr: i64, callbac
 pub extern "C" fn perry_ui_webview_clear_cookies(handle: i64) {
     catch_panic_void("perry_ui_webview_clear_cookies", || {
         widgets::webview::clear_cookies(handle)
+    })
+}
+
+// AttributedText (Issue #710) — Android SpannableStringBuilder-backed.
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_create() -> i64 {
+    catch_panic("perry_ui_attributed_text_create", || {
+        widgets::attributed_text::create()
+    })
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_append(
+    h: i64,
+    t: i64,
+    bold: i64,
+    italic: i64,
+    underline: i64,
+    font_size: f64,
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+) {
+    catch_panic_void("perry_ui_attributed_text_append", || {
+        widgets::attributed_text::append(
+            h,
+            t as *const u8,
+            bold,
+            italic,
+            underline,
+            font_size,
+            r,
+            g,
+            b,
+            a,
+        )
+    })
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_attributed_text_clear(h: i64) {
+    catch_panic_void("perry_ui_attributed_text_clear", || {
+        widgets::attributed_text::clear(h)
     })
 }

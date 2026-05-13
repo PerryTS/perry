@@ -393,6 +393,23 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
+                    // Issue #711 part 2: route `<expr>.prototype =
+                    // <value>` through SetFunctionPrototype so the
+                    // runtime binds the proto object as the function
+                    // value's class-prototype source. Effect's
+                    // effectable.ts uses this to declare classes via
+                    // prototype assignment on a plain function. The
+                    // runtime helper is a no-op when `object` doesn't
+                    // resolve to a function at runtime (preserves the
+                    // baseline for arbitrary `obj.prototype = X`
+                    // writes — those are rare and meaningless on
+                    // non-functions in practice).
+                    if property == "prototype" {
+                        return Ok(Expr::SetFunctionPrototype {
+                            func: object,
+                            proto: value,
+                        });
+                    }
                     Ok(Expr::PropertySet {
                         object,
                         property,

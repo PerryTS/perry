@@ -3118,6 +3118,7 @@ fn sweep_with_age_bump(do_age_bump: bool) -> u64 {
 }
 
 /// Clear mark bits on all surviving objects
+#[cfg(test)]
 fn clear_marks() {
     // Clear arena objects
     crate::arena::arena_walk_objects(|header_ptr| {
