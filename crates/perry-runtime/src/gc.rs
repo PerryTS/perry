@@ -373,6 +373,35 @@ thread_local! {
     /// See `gc_check_trigger` for the update rule.
     static GC_NEXT_MALLOC_TRIGGER: std::cell::Cell<usize> =
         const { std::cell::Cell::new(100_000) };
+
+    /// Tracks whether `GC_NEXT_TRIGGER_BYTES` was last raised by
+    /// `gc_bump_malloc_trigger` (a post-suppressed-parse rebaseline)
+    /// rather than by a real GC cycle. Cleared in `gc_collect_inner`.
+    ///
+    /// Issue #745: the bytes-bump exists to defer GC after a single
+    /// large parse (e.g. `json_pipeline_full`'s 108 MB tree) so the
+    /// iterate+rebuild that follows isn't punished by mid-walk
+    /// collections. But in a *loop* of `JSON.parse + discard` (the
+    /// `json_polyglot` benchmark — 10 k records × 50 iterations), each
+    /// iteration's bump raises the trigger by another `step` worth.
+    /// After 50 iterations the trigger sits hundreds of MB above the
+    /// live set and GC never fires once; peak RSS climbs to 254-411
+    /// MB on a workload whose live set is ~5 MB.
+    ///
+    /// Limiting to one bump per GC cycle preserves the original
+    /// `json_pipeline_full` optimization (its single large parse
+    /// still gets a full `step` of post-parse headroom) without
+    /// letting consecutive parses accumulate bumps.
+    static GC_TRIGGER_BUMPED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+
+    /// `arena_total_bytes()` snapshot captured at the most recent
+    /// `gc_suppress` call. `gc_bump_malloc_trigger` uses the delta
+    /// (`bytes_now - pre_suppress`) to decide whether the suppressed
+    /// region (typically a JSON.parse) produced enough new arena
+    /// pressure to justify raising the bytes-trigger.
+    static GC_PRE_SUPPRESS_BYTES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// Initial step for the malloc-count-based GC trigger. Adaptive: doubles
@@ -796,6 +825,11 @@ pub extern "C" fn js_gc_register_global_root(ptr: i64) {
 /// Suppress GC triggers. While suppressed, `gc_check_trigger` is a no-op.
 /// Used by JSON.parse to avoid mid-parse GC cycles.
 pub fn gc_suppress() {
+    // Issue #745: snapshot arena_total at suppress-start so the
+    // matching `gc_bump_malloc_trigger` can compute parse growth and
+    // skip the bytes-bump for small parses (the polyglot
+    // parse-and-discard loop).
+    GC_PRE_SUPPRESS_BYTES.with(|c| c.set(crate::arena::arena_total_bytes()));
     GC_FLAGS.with(|f| f.set(f.get() | GC_FLAG_SUPPRESSED));
 }
 
@@ -826,8 +860,37 @@ pub fn gc_bump_malloc_trigger() {
     let step = GC_MALLOC_COUNT_STEP.with(|c| c.get());
     GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(current + step));
 
+    // Issue #745: only raise the bytes-trigger once per GC cycle.
+    // The bump is meant to defer GC for the iterate/rebuild pass that
+    // follows a single large parse — once that headroom has been
+    // granted, repeating the bump on every subsequent suppressed-parse
+    // call (e.g. inside a parse-and-discard loop) ratchets the trigger
+    // arbitrarily high and prevents GC from ever firing. The flag
+    // clears in `gc_collect_inner` whenever a real collection runs.
+    if GC_TRIGGER_BUMPED.with(|c| c.get()) {
+        return;
+    }
+
     use crate::arena::arena_total_bytes;
     let bytes_now = arena_total_bytes();
+
+    // Issue #745: only bump if the suppressed window actually produced
+    // a substantial amount of new arena pressure — i.e. this looks
+    // like the `json_pipeline_full` pattern (single big parse + long
+    // iterate) and not the `json_polyglot` pattern (loop of small
+    // parses, each discarded). For polyglot's ~5 MB per parse the
+    // bump just pushes the trigger out of reach and prevents GC from
+    // ever firing; for pipeline_full's 108 MB parse it's essential.
+    //
+    // Threshold: 32 MB. Comfortably above the polyglot 10 k-record
+    // blob (~5-10 MB of arena growth per parse) and well below the
+    // pipeline_full 108 MB workload.
+    let pre_suppress = GC_PRE_SUPPRESS_BYTES.with(|c| c.get());
+    let parse_growth = bytes_now.saturating_sub(pre_suppress);
+    if parse_growth < 32 * 1024 * 1024 {
+        return;
+    }
+
     let bytes_step = GC_STEP_BYTES.with(|c| c.get());
     let bytes_trigger = bytes_now.saturating_add(bytes_step);
     // Only raise — never lower — so this can't accidentally trip a
@@ -835,6 +898,7 @@ pub fn gc_bump_malloc_trigger() {
     GC_NEXT_TRIGGER_BYTES.with(|c| {
         if bytes_trigger > c.get() {
             c.set(bytes_trigger);
+            GC_TRIGGER_BUMPED.with(|b| b.set(true));
         }
     });
 }
@@ -1343,6 +1407,12 @@ pub fn gen_gc_evacuate_enabled() -> bool {
 }
 
 fn gc_collect_inner() -> u64 {
+    // Issue #745: clear the bytes-bump flag so the next gc-suppressed
+    // parse can rebaseline the trigger again. Done here (rather than
+    // only in gc_check_trigger's post-collection branch) so all entry
+    // points — manual `gc()`, the malloc-count trigger path,
+    // `gc_collect_minor` — keep the flag in sync.
+    GC_TRIGGER_BUMPED.with(|c| c.set(false));
     if gen_gc_enabled() {
         return gc_collect_minor();
     }
