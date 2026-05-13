@@ -236,6 +236,19 @@ pub(super) fn collect_modules(
             import.is_native = perry_hir::is_native_module(&import.source);
         }
 
+        // Refs #665: an opt-in via `perry.compilePackages` overrides the
+        // built-in native binding. HIR lowering set `is_native` based on the
+        // NATIVE_MODULES manifest alone; downgrade it here so the import
+        // falls through to file resolution (cjs_wrap + native codegen) and
+        // the user's `node_modules` copy wins. Mirrors the parallel check in
+        // `resolve::resolve_import`.
+        if import.is_native {
+            let (import_pkg_name, _) = super::resolve::parse_package_specifier(&import.source);
+            if ctx.compile_packages.contains(&import_pkg_name) {
+                import.is_native = false;
+            }
+        }
+
         if import.is_native {
             import.module_kind = ModuleKind::NativeRust;
             if import.source == "perry/ui" {
