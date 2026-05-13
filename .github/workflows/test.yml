@@ -359,15 +359,19 @@ jobs:
             test_parity_crypto \
             test_parity_dgram \
             test_parity_diagnostics_channel \
+            test_parity_decimal \
             test_parity_dns \
             test_parity_dns_promises \
+            test_parity_dotenv \
             test_parity_events \
             test_parity_fs \
             test_parity_fs_promises \
             test_parity_http \
             test_parity_http2 \
             test_parity_https \
+            test_parity_lodash \
             test_parity_module \
+            test_parity_moment \
             test_parity_net \
             test_parity_path \
             test_parity_perf_hooks \
@@ -386,6 +390,7 @@ jobs:
             test_parity_tls \
             test_parity_url \
             test_parity_util \
+            test_parity_validator \
             test_parity_worker_threads \
             test_parity_zlib "
 
