@@ -10709,6 +10709,35 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             lower_expr(ctx, target)
         }
 
+        // Issue #100: compile-time-resolved dynamic `import()`. The
+        // resolver in `collect_modules` already registered each target
+        // as a regular import edge, so the target module's
+        // `__perry_init_<prefix>` runs as part of the eager init chain
+        // and its top-level statements execute before this site fires.
+        //
+        // MVP: return a `Promise<{}>` — a resolved promise holding a
+        // fresh empty object. This is a known limitation tracked in the
+        // PR description: until a per-module namespace global +
+        // `js_create_namespace` runtime primitive lands, the namespace
+        // object the caller awaits has no exports on it. Code that
+        // immediately destructures or reads members will see undefined.
+        // The import graph wiring is still correct: the target module
+        // is compiled, linked, and initialized — only the namespace
+        // surface is empty.
+        Expr::DynamicImport { arg, .. } => {
+            // Evaluate the argument for its side effects (and to ensure
+            // a runtime path string is computed when callers do
+            // something like `import(fn())` — even though such args
+            // would have been rejected by the resolver, this keeps
+            // codegen robust against malformed HIR).
+            let _path_val = lower_expr(ctx, arg)?;
+            let blk = ctx.block();
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let ns_obj = blk.call(DOUBLE, "js_object_create", &[(DOUBLE, &undef)]);
+            let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_obj)]);
+            Ok(nanbox_pointer_inline(blk, &promise_handle))
+        }
+
         // -------- ExternFuncRef as a value --------
         // The Call path in `lower_call.rs` dispatches `Expr::Call { callee:
         // ExternFuncRef, .. }` directly to the cross-module symbol. When
