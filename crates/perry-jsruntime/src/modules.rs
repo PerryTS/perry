@@ -3,11 +3,12 @@
 //! Handles loading JavaScript modules from node_modules and local paths.
 
 use anyhow::{anyhow, Result};
-use deno_core::error::AnyError;
+use deno_core::error::ModuleLoaderError;
 use deno_core::{
-    ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType,
-    RequestedModuleType, ResolutionKind,
+    ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader, ModuleSource,
+    ModuleSourceCode, ModuleSpecifier, ModuleType, ResolutionKind,
 };
+use deno_error::JsErrorBox;
 use std::path::{Path, PathBuf};
 
 /// Node.js-compatible module loader
@@ -340,12 +341,13 @@ impl ModuleLoader for NodeModuleLoader {
         specifier: &str,
         referrer: &str,
         _kind: ResolutionKind,
-    ) -> Result<ModuleSpecifier, AnyError> {
+    ) -> Result<ModuleSpecifier, ModuleLoaderError> {
         // Handle Node.js built-in modules with a special URL scheme
         if Self::is_node_builtin(specifier) {
             let builtin_name = specifier.strip_prefix("node:").unwrap_or(specifier);
             // Use a special URL scheme for built-ins so we can intercept them in load()
-            return Ok(ModuleSpecifier::parse(&format!("node:{}", builtin_name))?);
+            return ModuleSpecifier::parse(&format!("node:{}", builtin_name))
+                .map_err(|e| JsErrorBox::generic(e.to_string()));
         }
 
         let referrer_path = if referrer.starts_with("file://") {
@@ -357,20 +359,25 @@ impl ModuleLoader for NodeModuleLoader {
             PathBuf::from(referrer)
         };
 
-        let resolved_path = self.resolve_module_path(specifier, &referrer_path)?;
+        let resolved_path = self
+            .resolve_module_path(specifier, &referrer_path)
+            .map_err(|e| JsErrorBox::generic(e.to_string()))?;
 
         let canonical = std::fs::canonicalize(&resolved_path).unwrap_or(resolved_path);
 
-        ModuleSpecifier::from_file_path(&canonical)
-            .map_err(|_| anyhow!("Failed to create module specifier for {:?}", canonical))
+        ModuleSpecifier::from_file_path(&canonical).map_err(|_| {
+            JsErrorBox::generic(format!(
+                "Failed to create module specifier for {:?}",
+                canonical
+            ))
+        })
     }
 
     fn load(
         &self,
         module_specifier: &ModuleSpecifier,
-        _maybe_referrer: Option<&ModuleSpecifier>,
-        _is_dyn_import: bool,
-        _requested_module_type: RequestedModuleType,
+        _maybe_referrer: Option<&ModuleLoadReferrer>,
+        _options: ModuleLoadOptions,
     ) -> ModuleLoadResponse {
         // Handle Node.js built-in modules with stubs
         if module_specifier.scheme() == "node" {
@@ -386,13 +393,18 @@ impl ModuleLoader for NodeModuleLoader {
 
         let path = match module_specifier.to_file_path() {
             Ok(p) => p,
-            Err(_) => return ModuleLoadResponse::Sync(Err(anyhow!("Invalid file path"))),
+            Err(_) => {
+                return ModuleLoadResponse::Sync(Err(JsErrorBox::generic("Invalid file path")))
+            }
         };
 
         let code = match std::fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) => {
-                return ModuleLoadResponse::Sync(Err(anyhow!("Failed to read module: {}", e)))
+                return ModuleLoadResponse::Sync(Err(JsErrorBox::generic(format!(
+                    "Failed to read module: {}",
+                    e
+                ))))
             }
         };
 

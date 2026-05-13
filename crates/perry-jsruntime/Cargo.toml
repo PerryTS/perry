@@ -15,7 +15,8 @@ perry-stdlib = { path = "../perry-stdlib" }
 perry-types.workspace = true
 
 # V8 runtime via deno_core
-deno_core = "0.311"
+deno_core = "0.400"
+deno_error = "0.7"
 
 # Async runtime for V8
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
