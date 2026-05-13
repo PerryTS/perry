@@ -3,6 +3,7 @@
 //! These ops allow JavaScript code to call back into native Perry code.
 
 use deno_core::{extension, op2};
+use deno_error::JsErrorBox;
 use std::collections::HashMap;
 
 #[op2]
@@ -33,7 +34,7 @@ fn op_perry_fetch(
     #[string] method: String,
     #[string] body: String,
     #[serde] headers: HashMap<String, String>,
-) -> Result<serde_json::Value, deno_core::error::AnyError> {
+) -> Result<serde_json::Value, JsErrorBox> {
     let agent = ureq::agent();
     let method_upper = method.to_uppercase();
 
@@ -83,7 +84,7 @@ fn op_perry_fetch(
                 "body": resp_body,
             }))
         }
-        Err(e) => Err(anyhow::anyhow!("fetch error: {}", e)),
+        Err(e) => Err(JsErrorBox::generic(format!("fetch error: {}", e))),
     }
 }
 

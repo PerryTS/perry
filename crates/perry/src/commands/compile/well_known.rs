@@ -97,7 +97,14 @@ fn parse_well_known_toml(raw: &str) -> Result<BTreeMap<String, WellKnownBinding>
     // crate is already in the link surface (used by perry's
     // `package.json` discovery elsewhere). Accept the format we
     // ship; refuse anything else loudly.
-    let parsed: toml::Value = raw.parse().map_err(|e: toml::de::Error| e.to_string())?;
+    // toml 1.x: `<Value as FromStr>` is now an inline-value parser
+    // (e.g. `"foo"` / `42` / `{ k = "v" }`), not a document parser
+    // — so `raw.parse::<toml::Value>()` rejects the file's leading
+    // comment with "unexpected content, expected nothing". The
+    // crate-level `toml::from_str` still runs the document parser
+    // and returns a `Value::Table`, which is the shape this code
+    // already expects to walk.
+    let parsed: toml::Value = toml::from_str(raw).map_err(|e: toml::de::Error| e.to_string())?;
 
     let bindings_table = parsed
         .get("bindings")

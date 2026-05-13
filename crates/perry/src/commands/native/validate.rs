@@ -161,7 +161,7 @@ fn read_crate_name(root: &Path) -> Result<String> {
     let cargo_toml = root.join("Cargo.toml");
     let raw = std::fs::read_to_string(&cargo_toml)
         .with_context(|| format!("reading {}", cargo_toml.display()))?;
-    let parsed: toml::Value = raw.parse()?;
+    let parsed: toml::Value = toml::from_str(&raw)?;
     parsed
         .get("package")
         .and_then(|p| p.get("name"))
