@@ -31,6 +31,17 @@ pub struct ProxyEntry {
 thread_local! {
     /// id -> entry. Index 0 is reserved so we never return a null handle.
     static PROXIES: RefCell<Vec<Option<Box<ProxyEntry>>>> = RefCell::new(vec![None]);
+    /// Backing store for `Reflect.{define,get,has,delete}Metadata` and friends.
+    ///
+    /// IMPORTANT: keys are raw NaN-box bits of the target value. For the
+    /// canary scope (Nest-style DI) targets are always `ClassRef`s
+    /// (INT32_TAG | class_id) and method-descriptor `.value` closures, both of
+    /// which have stable bit patterns across the program lifetime. Regular
+    /// heap-pointer targets are NOT GC-tracked here, so under the generational
+    /// evacuating GC their entries become stale if the underlying object
+    /// moves. If/when general object metadata becomes load-bearing, register
+    /// a scanner that rewrites `target_bits` during GC fixup (similar to the
+    /// 9 existing scanners in gc.rs).
     static REFLECT_METADATA: RefCell<HashMap<MetadataKey, f64>> = RefCell::new(HashMap::new());
 }
 
@@ -609,22 +620,29 @@ pub extern "C" fn js_reflect_define_metadata(
     target: f64,
     property_key: f64,
 ) -> f64 {
-    let metadata_key = make_metadata_key(key, target, property_key);
-    REFLECT_METADATA.with(|store| {
-        store.borrow_mut().insert(metadata_key, value);
-    });
+    if let Some(metadata_key) = make_metadata_key(key, target, property_key) {
+        REFLECT_METADATA.with(|store| {
+            store.borrow_mut().insert(metadata_key, value);
+        });
+    }
     f64::from_bits(TAG_UNDEFINED)
 }
 
 #[no_mangle]
 pub extern "C" fn js_reflect_get_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let key_part = metadata_key_part(key);
-    let property_key_part = metadata_property_key_part(property_key);
+    let Some(key_part) = metadata_key_part(key) else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    let Some(property_key_part) = metadata_property_key_part(property_key) else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
     get_metadata_in_prototype_chain(&key_part, target, property_key_part.as_ref())
 }
 
 fn get_own_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let metadata_key = make_metadata_key(key, target, property_key);
+    let Some(metadata_key) = make_metadata_key(key, target, property_key) else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
     REFLECT_METADATA.with(|store| {
         store
             .borrow()
@@ -641,8 +659,12 @@ pub extern "C" fn js_reflect_get_own_metadata(key: f64, target: f64, property_ke
 
 #[no_mangle]
 pub extern "C" fn js_reflect_has_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let key_part = metadata_key_part(key);
-    let property_key_part = metadata_property_key_part(property_key);
+    let Some(key_part) = metadata_key_part(key) else {
+        return f64::from_bits(TAG_FALSE);
+    };
+    let Some(property_key_part) = metadata_property_key_part(property_key) else {
+        return f64::from_bits(TAG_FALSE);
+    };
     let found = get_metadata_in_prototype_chain(&key_part, target, property_key_part.as_ref())
         .to_bits()
         != TAG_UNDEFINED;
@@ -651,7 +673,9 @@ pub extern "C" fn js_reflect_has_metadata(key: f64, target: f64, property_key: f
 
 #[no_mangle]
 pub extern "C" fn js_reflect_has_own_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let metadata_key = make_metadata_key(key, target, property_key);
+    let Some(metadata_key) = make_metadata_key(key, target, property_key) else {
+        return f64::from_bits(TAG_FALSE);
+    };
     let found = REFLECT_METADATA.with(|store| store.borrow().contains_key(&metadata_key));
     f64::from_bits(if found { TAG_TRUE } else { TAG_FALSE })
 }
@@ -668,51 +692,85 @@ pub extern "C" fn js_reflect_get_own_metadata_keys(target: f64, property_key: f6
 
 #[no_mangle]
 pub extern "C" fn js_reflect_delete_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let metadata_key = make_metadata_key(key, target, property_key);
+    let Some(metadata_key) = make_metadata_key(key, target, property_key) else {
+        return f64::from_bits(TAG_FALSE);
+    };
     let deleted = REFLECT_METADATA.with(|store| store.borrow_mut().remove(&metadata_key).is_some());
     f64::from_bits(if deleted { TAG_TRUE } else { TAG_FALSE })
 }
 
-fn make_metadata_key(key: f64, target: f64, property_key: f64) -> MetadataKey {
-    MetadataKey {
+fn make_metadata_key(key: f64, target: f64, property_key: f64) -> Option<MetadataKey> {
+    Some(MetadataKey {
         target_bits: target.to_bits(),
-        key: metadata_key_part(key),
-        property_key: metadata_property_key_part(property_key),
-    }
+        key: metadata_key_part(key)?,
+        property_key: metadata_property_key_part(property_key)?,
+    })
 }
 
-fn metadata_property_key_part(property_key: f64) -> Option<String> {
+/// Resolve the `propertyKey` argument of a `Reflect.*Metadata(…)` call.
+///
+/// Returns:
+/// - `Some(None)` when the argument is `undefined` — class-level metadata.
+/// - `Some(Some(s))` for any value that coerces to a string.
+/// - `None` for values we explicitly refuse to key on (e.g. Symbols). The
+///   caller treats this as "skip the operation" so we never silently store
+///   metadata under an unstable bit-pattern key (#754 review).
+fn metadata_property_key_part(property_key: f64) -> Option<Option<String>> {
     if property_key.to_bits() == TAG_UNDEFINED {
-        None
-    } else {
-        Some(metadata_key_part(property_key))
+        return Some(None);
     }
+    metadata_key_part(property_key).map(Some)
 }
 
-fn metadata_key_part(value: f64) -> String {
+/// Coerce a metadata key to a stable owned String, or return None if the
+/// value cannot be represented as a string key. Returning None makes the
+/// caller treat the op as a no-op rather than fabricating a fake key.
+///
+/// Symbol-keyed metadata is explicitly unsupported (see
+/// docs/src/language/decorators.md) — Symbols flow through here and return
+/// None rather than colliding on `toString()`'s `"Symbol()"` rendering.
+fn metadata_key_part(value: f64) -> Option<String> {
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(value, &mut scratch) {
-        if ptr.is_null() || len == 0 {
-            return String::new();
+        if ptr.is_null() {
+            return None;
+        }
+        if len == 0 {
+            return Some(String::new());
         }
         let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-        return String::from_utf8_lossy(bytes).into_owned();
+        return Some(String::from_utf8_lossy(bytes).into_owned());
     }
     if crate::value::is_js_handle(value) {
         let str_ptr = crate::value::js_jsvalue_to_string(value);
         if !str_ptr.is_null() {
-            let value =
+            let nb =
                 f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & 0x0000_FFFF_FFFF_FFFF));
-            if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(value, &mut scratch) {
-                if ptr.is_null() || len == 0 {
-                    return String::new();
+            if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(nb, &mut scratch) {
+                if !ptr.is_null() {
+                    if len == 0 {
+                        return Some(String::new());
+                    }
+                    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+                    return Some(String::from_utf8_lossy(bytes).into_owned());
                 }
-                let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-                return String::from_utf8_lossy(bytes).into_owned();
             }
         }
     }
-    format!("bits:{:016x}", value.to_bits())
+    // Numbers, booleans, null — coerce through the standard JS path so
+    // e.g. `0`, `true`, etc. produce deterministic string keys.
+    let coerced = crate::builtins::js_string_coerce(value);
+    if !coerced.is_null() {
+        let name_ptr =
+            unsafe { (coerced as *const u8).add(std::mem::size_of::<crate::StringHeader>()) };
+        let name_len = unsafe { (*coerced).byte_len as usize };
+        if let Ok(s) =
+            std::str::from_utf8(unsafe { std::slice::from_raw_parts(name_ptr, name_len) })
+        {
+            return Some(s.to_string());
+        }
+    }
+    None
 }
 
 fn get_metadata_in_prototype_chain(key: &str, target: f64, property_key: Option<&String>) -> f64 {
@@ -743,7 +801,10 @@ fn get_metadata_in_prototype_chain(key: &str, target: f64, property_key: Option<
 }
 
 fn metadata_keys_for(target: f64, property_key: f64, include_prototypes: bool) -> f64 {
-    let wanted_property_key = metadata_property_key_part(property_key);
+    let Some(wanted_property_key) = metadata_property_key_part(property_key) else {
+        let empty = crate::array::js_array_alloc(0);
+        return f64::from_bits(POINTER_TAG | ((empty as u64) & POINTER_MASK));
+    };
 
     let keys = REFLECT_METADATA.with(|store| {
         let mut seen = HashSet::new();

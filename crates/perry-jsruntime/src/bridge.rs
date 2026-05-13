@@ -243,6 +243,16 @@ pub fn native_to_v8<'s>(scope: &mut v8::PinScope<'s, '_>, value: f64) -> v8::Loc
     // Check for int32
     if tag == INT32_TAG {
         let int_val = (bits & 0xFFFF_FFFF) as i32;
+        // Perry encodes class references as INT32_TAG | class_id (see
+        // `Expr::ClassRef` codegen). When such a value crosses into V8 we
+        // surface it as a stable constructor-like function so JS code can use
+        // it as a metadata target. NOTE: this means raw integers that happen
+        // to equal a registered class id (low positive numbers, the common
+        // range) cannot round-trip through the bridge — they materialize as
+        // the class function on the JS side. Decorator metadata is the only
+        // existing caller, where the input is always a real class ref. If a
+        // future caller needs int round-trip, switch class refs to a
+        // dedicated NaN-box tag (see review on #754).
         if int_val > 0 && perry_runtime::object::is_class_id_registered(int_val as u32) {
             return native_class_to_v8(scope, int_val as u32);
         }

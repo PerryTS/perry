@@ -7538,6 +7538,12 @@ fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -> f6
             return f64::from_bits(bits);
         }
 
+        // Bounded leak: `js_class_method_bind` keeps the byte pointer for the
+        // lifetime of the bound closure (it's stashed inside the closure's
+        // capture frame). We leak one allocation per unique
+        // `(class_id, method_name)` pair the program ever asks for, so the
+        // total leak is bounded by the static set of decorated method
+        // descriptors. The cache below short-circuits repeat queries.
         let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
         let class_bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF);
         let class_ref = f64::from_bits(class_bits);

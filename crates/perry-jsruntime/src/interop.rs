@@ -465,8 +465,14 @@ pub unsafe extern "C" fn js_load_module(path_ptr: *const i8, path_len: usize) ->
     let target_specifier_str = target_specifier.to_string();
     let mut hasher = DefaultHasher::new();
     canonical.hash(&mut hasher);
-    let proxy_path = cwd.join(format!("__perry_js_proxy_{:016x}.mjs", hasher.finish()));
-    let specifier = match deno_core::ModuleSpecifier::from_file_path(proxy_path) {
+    // Materialize the proxy in a per-process temp directory rather than the
+    // user's CWD. Deno's recursive loader still resolves the proxy specifier
+    // through our NodeModuleLoader, so the file must exist on disk even
+    // though the source is also supplied via load_side_es_module_from_code.
+    let proxy_dir = std::env::temp_dir().join(format!("perry-js-proxy-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&proxy_dir);
+    let proxy_path = proxy_dir.join(format!("__perry_js_proxy_{:016x}.mjs", hasher.finish()));
+    let specifier = match deno_core::ModuleSpecifier::from_file_path(&proxy_path) {
         Ok(s) => s,
         Err(_) => {
             log::error!(
@@ -484,9 +490,6 @@ export * from {target:?};
 "#,
         target = target_specifier_str
     );
-    // Deno's recursive loader still resolves the root side-module specifier
-    // through our NodeModuleLoader. Materialize the proxy so file resolution
-    // succeeds even though the source is also supplied explicitly below.
     if let Ok(proxy_file_path) = specifier.to_file_path() {
         let _ = std::fs::write(proxy_file_path, &proxy_code);
     }

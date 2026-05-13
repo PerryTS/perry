@@ -4573,6 +4573,12 @@ fn emit_string_pool(
         if *class_name != class.name {
             continue;
         }
+        // Imported class stubs carry id == 0 (they're typed-name
+        // placeholders for cross-module dispatch; the defining module's init
+        // registers their methods). Skip them here so we don't re-emit the
+        // registration. Previously this filter was `method.body.is_empty()`;
+        // the id check is equivalent for stubs and also catches getter/setter
+        // and property-decorator init that legitimately has an empty body.
         if class.id == 0 {
             continue;
         }
@@ -4672,6 +4678,12 @@ fn emit_string_pool(
         if *class_name != class.name {
             continue;
         }
+        // Imported class stubs carry id == 0 (they're typed-name
+        // placeholders for cross-module dispatch; the defining module's init
+        // registers their methods). Skip them here so we don't re-emit the
+        // registration. Previously this filter was `method.body.is_empty()`;
+        // the id check is equivalent for stubs and also catches getter/setter
+        // and property-decorator init that legitimately has an empty body.
         if class.id == 0 {
             continue;
         }
@@ -4731,6 +4743,12 @@ fn emit_string_pool(
         if *class_name != class.name {
             continue;
         }
+        // Imported class stubs carry id == 0 (they're typed-name
+        // placeholders for cross-module dispatch; the defining module's init
+        // registers their methods). Skip them here so we don't re-emit the
+        // registration. Previously this filter was `method.body.is_empty()`;
+        // the id check is equivalent for stubs and also catches getter/setter
+        // and property-decorator init that legitimately has an empty body.
         if class.id == 0 {
             continue;
         }

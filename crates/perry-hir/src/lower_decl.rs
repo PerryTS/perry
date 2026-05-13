@@ -527,13 +527,32 @@ pub(crate) fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) ->
 
 /// Validate the v1 legacy TypeScript decorator surface. Perry currently lowers
 /// class, method, property, and parameter decorators, which is enough for
-/// Nest-style DI metadata canaries. Private decoration points still fail loudly
-/// instead of being dropped.
+/// Nest-style DI metadata canaries. Accessor (getter/setter) decorators and
+/// private decoration points still fail loudly instead of being dropped — the
+/// runtime path for descriptor replacement on accessors is not implemented and
+/// silently ignoring them would mask real bugs in user code.
 fn validate_legacy_decorators_v1(class: &ast::Class, class_name: &str) -> Result<()> {
     for member in &class.body {
         match member {
             ast::ClassMember::Method(m) => {
-                let _ = m;
+                // SWC models getters/setters as Method with kind != Method.
+                // Their decorators would expect descriptor replacement, which
+                // Perry does not implement; reject rather than drop silently.
+                if matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) {
+                    if let Some(dec) = m.function.decorators.first() {
+                        let name = decorator_name_hint(dec);
+                        let key = method_key_hint(&m.key);
+                        let kind = match m.kind {
+                            ast::MethodKind::Getter => "getter",
+                            ast::MethodKind::Setter => "setter",
+                            _ => "accessor",
+                        };
+                        bail!(
+                            "TypeScript {kind} decorators are not supported (found `@{name}` on `{class_name}.{key}`). \
+                             See docs/src/language/decorators.md — accessor descriptor replacement is not implemented.",
+                        );
+                    }
+                }
             }
             ast::ClassMember::PrivateMethod(m) => {
                 if let Some(dec) = m.function.decorators.first() {
@@ -556,6 +575,15 @@ fn validate_legacy_decorators_v1(class: &ast::Class, class_name: &str) -> Result
         }
     }
     Ok(())
+}
+
+fn method_key_hint(key: &ast::PropName) -> String {
+    match key {
+        ast::PropName::Ident(i) => i.sym.to_string(),
+        ast::PropName::Str(s) => format!("{:?}", s.value),
+        ast::PropName::Num(n) => n.value.to_string(),
+        _ => "<method>".to_string(),
+    }
 }
 
 fn decorator_name_hint(dec: &ast::Decorator) -> String {
