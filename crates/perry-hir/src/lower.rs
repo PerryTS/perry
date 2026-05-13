@@ -3,7 +3,7 @@
 //! Converts SWC's TypeScript AST into our HIR representation.
 
 use anyhow::{anyhow, Result};
-use perry_types::{FuncId, GlobalId, LocalId, Type, TypeParam};
+use perry_types::{FuncId, FunctionType, GlobalId, LocalId, Type, TypeParam};
 use std::collections::{HashMap, HashSet};
 use swc_ecma_ast as ast;
 
@@ -554,6 +554,7 @@ impl LoweringContext {
                         name: "__x".to_string(),
                         ty: Type::Any,
                         default: None,
+                        decorators: Vec::new(),
                         is_rest: false,
                     }],
                     return_type: Type::Any,
@@ -973,6 +974,7 @@ impl LoweringContext {
                 init: None,
                 is_private: false,
                 is_readonly: false,
+                decorators: Vec::new(),
             })
             .collect();
 
@@ -991,6 +993,7 @@ impl LoweringContext {
                 name: name.clone(),
                 ty: ty.clone(),
                 default: None,
+                decorators: Vec::new(),
                 is_rest: false,
             });
             ctor_body.push(Stmt::Expr(Expr::PropertySet {
@@ -1035,6 +1038,7 @@ impl LoweringContext {
             setters: Vec::new(),
             static_fields: Vec::new(),
             static_methods: Vec::new(),
+            decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
         });
@@ -3631,6 +3635,286 @@ fn collect_closure_assigned_in_body_expr(
     }
 }
 
+fn append_legacy_decorator_init_for_class(
+    ctx: &mut LoweringContext,
+    init: &mut Vec<Stmt>,
+    class: &Class,
+) {
+    let has_param_decorators = class
+        .constructor
+        .as_ref()
+        .map(|ctor| ctor.params.iter().any(|p| !p.decorators.is_empty()))
+        .unwrap_or(false);
+    let has_method_decorators = class.methods.iter().any(method_has_legacy_decorators)
+        || class
+            .static_methods
+            .iter()
+            .any(method_has_legacy_decorators);
+    let has_property_decorators = class.fields.iter().any(field_has_legacy_decorators)
+        || class.static_fields.iter().any(field_has_legacy_decorators);
+    if class.decorators.is_empty()
+        && !has_param_decorators
+        && !has_method_decorators
+        && !has_property_decorators
+    {
+        return;
+    }
+
+    if let Some(ctor) = &class.constructor {
+        let param_types = ctor
+            .params
+            .iter()
+            .map(|p| type_metadata_expr(&p.ty))
+            .collect();
+        init.push(Stmt::Expr(Expr::ReflectDefineMetadata {
+            key: Box::new(Expr::String("design:paramtypes".to_string())),
+            value: Box::new(Expr::Array(param_types)),
+            target: Box::new(Expr::ClassRef(class.name.clone())),
+            property_key: None,
+        }));
+    }
+
+    if let Some(ctor) = &class.constructor {
+        for (index, param) in ctor.params.iter().enumerate().rev() {
+            append_decorator_invocations(
+                ctx,
+                init,
+                &param.decorators,
+                vec![
+                    Expr::ClassRef(class.name.clone()),
+                    Expr::Undefined,
+                    Expr::Number(index as f64),
+                ],
+            );
+        }
+    }
+
+    for method in &class.methods {
+        append_method_decorator_init(ctx, init, class, method);
+    }
+    for method in &class.static_methods {
+        append_method_decorator_init(ctx, init, class, method);
+    }
+    for field in &class.fields {
+        append_property_decorator_init(ctx, init, class, field);
+    }
+    for field in &class.static_fields {
+        append_property_decorator_init(ctx, init, class, field);
+    }
+
+    append_decorator_invocations(
+        ctx,
+        init,
+        &class.decorators,
+        vec![Expr::ClassRef(class.name.clone())],
+    );
+}
+
+fn method_has_legacy_decorators(method: &Function) -> bool {
+    !method.decorators.is_empty() || method.params.iter().any(|p| !p.decorators.is_empty())
+}
+
+fn field_has_legacy_decorators(field: &ClassField) -> bool {
+    !field.decorators.is_empty()
+}
+
+fn append_property_decorator_init(
+    ctx: &mut LoweringContext,
+    out: &mut Vec<Stmt>,
+    class: &Class,
+    field: &ClassField,
+) {
+    if field.decorators.is_empty() {
+        return;
+    }
+
+    out.push(Stmt::Expr(Expr::ReflectDefineMetadata {
+        key: Box::new(Expr::String("design:type".to_string())),
+        value: Box::new(type_metadata_expr(&field.ty)),
+        target: Box::new(Expr::ClassRef(class.name.clone())),
+        property_key: Some(Box::new(Expr::String(field.name.clone()))),
+    }));
+
+    append_decorator_invocations(
+        ctx,
+        out,
+        &field.decorators,
+        vec![
+            Expr::ClassRef(class.name.clone()),
+            Expr::String(field.name.clone()),
+        ],
+    );
+}
+
+fn append_method_decorator_init(
+    ctx: &mut LoweringContext,
+    out: &mut Vec<Stmt>,
+    class: &Class,
+    method: &Function,
+) {
+    if !method_has_legacy_decorators(method) {
+        return;
+    }
+
+    if method.params.iter().any(|p| !p.decorators.is_empty()) || !method.decorators.is_empty() {
+        let param_types = method
+            .params
+            .iter()
+            .map(|p| type_metadata_expr(&p.ty))
+            .collect();
+        out.push(Stmt::Expr(Expr::ReflectDefineMetadata {
+            key: Box::new(Expr::String("design:paramtypes".to_string())),
+            value: Box::new(Expr::Array(param_types)),
+            target: Box::new(Expr::ClassRef(class.name.clone())),
+            property_key: Some(Box::new(Expr::String(method.name.clone()))),
+        }));
+    }
+
+    for (index, param) in method.params.iter().enumerate().rev() {
+        append_decorator_invocations(
+            ctx,
+            out,
+            &param.decorators,
+            vec![
+                Expr::ClassRef(class.name.clone()),
+                Expr::String(method.name.clone()),
+                Expr::Number(index as f64),
+            ],
+        );
+    }
+
+    let descriptor = Expr::Object(vec![(
+        "value".to_string(),
+        Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "js_class_prototype_method_value".to_string(),
+                param_types: Vec::new(),
+                return_type: Type::Any,
+            }),
+            args: vec![
+                Expr::ClassRef(class.name.clone()),
+                Expr::String(method.name.clone()),
+            ],
+            type_args: Vec::new(),
+        },
+    )]);
+    append_decorator_invocations(
+        ctx,
+        out,
+        &method.decorators,
+        vec![
+            Expr::ClassRef(class.name.clone()),
+            Expr::String(method.name.clone()),
+            descriptor,
+        ],
+    );
+}
+
+fn append_decorator_invocations(
+    ctx: &mut LoweringContext,
+    out: &mut Vec<Stmt>,
+    decorators: &[Decorator],
+    invocation_args: Vec<Expr>,
+) {
+    let mut callees = Vec::with_capacity(decorators.len());
+    for dec in decorators {
+        if dec.is_reflect_metadata {
+            append_reflect_metadata_decorator(out, dec, &invocation_args);
+            continue;
+        }
+        let base = decorator_callee_expr(ctx, &dec.name);
+        if dec.is_factory {
+            let temp_id = ctx.fresh_local();
+            out.push(Stmt::Let {
+                id: temp_id,
+                name: format!("__perry_dec_{}", temp_id),
+                ty: Type::Function(FunctionType {
+                    params: Vec::new(),
+                    return_type: Box::new(Type::Any),
+                    is_async: false,
+                    is_generator: false,
+                }),
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(base),
+                    args: dec.args.clone(),
+                    type_args: Vec::new(),
+                }),
+            });
+            callees.push(Expr::LocalGet(temp_id));
+        } else {
+            callees.push(base);
+        }
+    }
+
+    for callee in callees.into_iter().rev() {
+        out.push(Stmt::Expr(Expr::Call {
+            callee: Box::new(callee),
+            args: invocation_args.clone(),
+            type_args: Vec::new(),
+        }));
+    }
+}
+
+fn append_reflect_metadata_decorator(
+    out: &mut Vec<Stmt>,
+    dec: &Decorator,
+    invocation_args: &[Expr],
+) {
+    let key = dec.args.first().cloned().unwrap_or(Expr::Undefined);
+    let value = dec.args.get(1).cloned().unwrap_or(Expr::Undefined);
+    let target = invocation_args.first().cloned().unwrap_or(Expr::Undefined);
+    let property_key = invocation_args.get(1).cloned().and_then(|arg| {
+        if matches!(arg, Expr::Undefined) {
+            None
+        } else {
+            Some(Box::new(arg))
+        }
+    });
+    out.push(Stmt::Expr(Expr::ReflectDefineMetadata {
+        key: Box::new(key),
+        value: Box::new(value),
+        target: Box::new(target),
+        property_key,
+    }));
+}
+
+fn type_metadata_expr(ty: &Type) -> Expr {
+    match ty {
+        Type::Named(name) => Expr::ClassRef(name.clone()),
+        Type::Generic { base, .. } => Expr::ClassRef(base.clone()),
+        Type::Array(_) | Type::Tuple(_) => Expr::ClassRef("Array".to_string()),
+        Type::String => Expr::ClassRef("String".to_string()),
+        Type::Number | Type::Int32 | Type::BigInt => Expr::ClassRef("Number".to_string()),
+        Type::Boolean => Expr::ClassRef("Boolean".to_string()),
+        Type::Object(_) => Expr::ClassRef("Object".to_string()),
+        Type::Function(_) => Expr::ClassRef("Function".to_string()),
+        _ => Expr::Undefined,
+    }
+}
+
+fn decorator_callee_expr(ctx: &LoweringContext, name: &str) -> Expr {
+    if let Some(id) = ctx.lookup_func(name) {
+        Expr::FuncRef(id)
+    } else if let Some(orig_name) = ctx.lookup_imported_func(name) {
+        let (param_types, return_type) = ctx
+            .lookup_extern_func_types(orig_name)
+            .map(|(p, r)| (p.clone(), r.clone()))
+            .unwrap_or_else(|| (Vec::new(), Type::Any));
+        Expr::ExternFuncRef {
+            name: orig_name.to_string(),
+            param_types,
+            return_type,
+        }
+    } else {
+        Expr::ExternFuncRef {
+            name: name.to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }
+    }
+}
+
 fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -3645,6 +3929,10 @@ fn lower_module_decl(
                 .strip_prefix("node:")
                 .unwrap_or(&raw_source)
                 .to_string();
+
+            if source == "reflect-metadata" {
+                return Ok(());
+            }
 
             // Check if this is a native module import
             let is_native = is_native_module(&source);
@@ -4395,6 +4683,7 @@ fn lower_module_decl(
                             }
                         }
                     }
+                    append_legacy_decorator_init_for_class(ctx, &mut module.init, &class);
                     push_class_dedup(module, class);
                     module.exports.push(Export::Named {
                         local: class_name.clone(),
@@ -4812,6 +5101,7 @@ fn lower_namespace_as_class(
                 setters: Vec::new(),
                 static_fields: Vec::new(),
                 static_methods: Vec::new(),
+                decorators: Vec::new(),
                 is_exported,
                 aliases: Vec::new(),
             });
@@ -4993,6 +5283,7 @@ fn lower_namespace_as_class(
         setters: Vec::new(),
         static_fields: Vec::new(),
         static_methods,
+        decorators: Vec::new(),
         is_exported,
         aliases: Vec::new(),
     })
@@ -5790,6 +6081,7 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                             }
                         }
                     }
+                    append_legacy_decorator_init_for_class(ctx, &mut module.init, &class);
                     push_class_dedup(module, class);
                 }
                 ast::Decl::TsEnum(enum_decl) => {
@@ -8273,6 +8565,7 @@ pub(super) fn try_desugar_reactive_text(
             name: "__v".to_string(),
             ty: Type::Any,
             default: None,
+            decorators: Vec::new(),
             is_rest: false,
         };
         let fresh_concat = lower_tpl_to_concat(ctx, tpl)?;
@@ -8523,6 +8816,7 @@ pub(super) fn try_desugar_reactive_animate(
             name: "__v".to_string(),
             ty: Type::Any,
             default: None,
+            decorators: Vec::new(),
             is_rest: false,
         };
 

@@ -605,6 +605,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     init: None,
                     is_private: false,
                     is_readonly: false,
+                    decorators: Vec::new(),
                 })
                 .collect(),
             constructor: None,
@@ -631,6 +632,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             setters: Vec::new(),
             static_fields: Vec::new(),
             static_methods: Vec::new(),
+            decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
         };
@@ -1750,9 +1752,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // Names are scoped by module prefix to avoid cross-module collisions.
     let mut func_names: HashMap<u32, String> = HashMap::new();
     let mut func_signatures: HashMap<u32, (usize, bool, bool)> = HashMap::new();
+    let mut func_synthetic_arguments: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
     for f in &hir.functions {
         func_names.insert(f.id, scoped_fn_name(&module_prefix, &f.name));
         let has_rest = f.params.iter().any(|p| p.is_rest);
+        if f.params
+            .last()
+            .map(|p| p.is_rest && p.name == "arguments")
+            .unwrap_or(false)
+        {
+            func_synthetic_arguments.insert(f.id);
+        }
         let returns_number = matches!(
             f.return_type,
             perry_types::Type::Number | perry_types::Type::Int32
@@ -2019,6 +2030,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &static_field_globals,
             &class_ids,
             &func_signatures,
+            &func_synthetic_arguments,
             &module_boxed_vars,
             &closure_rest_params,
             &cross_module,
@@ -2132,6 +2144,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &static_field_globals,
             &class_ids,
             &func_signatures,
+            &func_synthetic_arguments,
             &module_prefix,
             &module_boxed_vars,
             &module_local_types,
@@ -2162,6 +2175,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 &static_field_globals,
                 &class_ids,
                 &func_signatures,
+                &func_synthetic_arguments,
                 &module_boxed_vars,
                 &closure_rest_params,
                 &cross_module,
@@ -2189,6 +2203,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 &static_field_globals,
                 &class_ids,
                 &func_signatures,
+                &func_synthetic_arguments,
                 &module_boxed_vars,
                 &closure_rest_params,
                 &cross_module,
@@ -2213,6 +2228,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 &static_field_globals,
                 &class_ids,
                 &func_signatures,
+                &func_synthetic_arguments,
                 &module_boxed_vars,
                 &closure_rest_params,
                 &cross_module,
@@ -2269,6 +2285,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                                     name: format!("__forward_arg{}", i),
                                     ty: perry_types::Type::Any,
                                     default: None,
+                                    decorators: Vec::new(),
                                     is_rest: false,
                                 });
                             }
@@ -2286,6 +2303,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                                     name: format!("__forward_arg{}", i),
                                     ty: perry_types::Type::Any,
                                     default: None,
+                                    decorators: Vec::new(),
                                     is_rest: false,
                                 });
                             }
@@ -2332,6 +2350,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 &static_field_globals,
                 &class_ids,
                 &func_signatures,
+                &func_synthetic_arguments,
                 &module_boxed_vars,
                 &closure_rest_params,
                 &cross_module,
@@ -2356,6 +2375,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 &static_field_globals,
                 &class_ids,
                 &func_signatures,
+                &func_synthetic_arguments,
                 &module_prefix,
                 &module_boxed_vars,
                 &closure_rest_params,
@@ -2606,6 +2626,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &static_field_globals,
         &class_ids,
         &func_signatures,
+        &func_synthetic_arguments,
         &module_prefix,
         opts.is_entry_module,
         &opts.non_entry_module_prefixes,
@@ -2768,6 +2789,7 @@ fn compile_function(
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
     func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_boxed_vars: &std::collections::HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
@@ -2919,6 +2941,7 @@ fn compile_function(
         class_keys_globals: &cross_module.class_keys_globals,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
+        func_synthetic_arguments,
         boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
         closure_rest_params,
@@ -3086,6 +3109,7 @@ fn compile_closure(
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
     func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_prefix: &str,
     module_boxed_vars: &std::collections::HashSet<u32>,
     module_local_types: &HashMap<u32, perry_types::Type>,
@@ -3299,6 +3323,7 @@ fn compile_closure(
         class_keys_globals: &cross_module.class_keys_globals,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
+        func_synthetic_arguments,
         boxed_vars: closure_boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
         closure_rest_params,
@@ -3411,6 +3436,7 @@ fn compile_method(
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
     func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_boxed_vars: &std::collections::HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
@@ -3524,6 +3550,7 @@ fn compile_method(
         class_keys_globals: &cross_module.class_keys_globals,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
+        func_synthetic_arguments,
         boxed_vars: method_boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
         closure_rest_params,
@@ -3788,6 +3815,7 @@ fn compile_module_entry(
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
     func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_prefix: &str,
     is_entry: bool,
     non_entry_module_prefixes: &[String],
@@ -3956,6 +3984,7 @@ fn compile_module_entry(
             class_keys_globals: &cross_module.class_keys_globals,
             imported_class_ctors: &cross_module.imported_class_ctors,
             func_signatures,
+            func_synthetic_arguments,
             boxed_vars: main_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
             closure_rest_params: closure_rest_params,
@@ -4218,6 +4247,7 @@ fn compile_module_entry(
             class_keys_globals: &cross_module.class_keys_globals,
             imported_class_ctors: &cross_module.imported_class_ctors,
             func_signatures,
+            func_synthetic_arguments,
             boxed_vars: init_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
             closure_rest_params: closure_rest_params,
@@ -4543,18 +4573,14 @@ fn emit_string_pool(
         if *class_name != class.name {
             continue;
         }
+        if class.id == 0 {
+            continue;
+        }
         let cid = match class_ids.get(class_name) {
             Some(&c) if c != 0 => c,
             _ => continue,
         };
         for method in &class.methods {
-            // Skip imported class stubs: their `body` is empty
-            // (they're just typed-name placeholders for cross-module
-            // dispatch). The defining module's init registers them.
-            // Local methods always have non-empty bodies.
-            if method.body.is_empty() {
-                continue;
-            }
             let llvm_name = format!(
                 "perry_method_{}__{}__{}",
                 module_prefix,
@@ -4646,16 +4672,14 @@ fn emit_string_pool(
         if *class_name != class.name {
             continue;
         }
+        if class.id == 0 {
+            continue;
+        }
         let cid = match class_ids.get(class_name).copied() {
             Some(c) if c != 0 => c,
             _ => continue,
         };
         for (prop, getter_fn) in &class.getters {
-            // Skip imported class stubs: their `body` is empty (the
-            // defining module's init registers them).
-            if getter_fn.body.is_empty() {
-                continue;
-            }
             // The local-emit path at codegen.rs:1858 prepends `__get_`
             // to the HIR-assigned getter name (`get_<prop>`), giving
             // the LLVM symbol `perry_method_<modprefix>__<class>__<sanitize(__get_get_<prop>)>`.
@@ -4707,16 +4731,14 @@ fn emit_string_pool(
         if *class_name != class.name {
             continue;
         }
+        if class.id == 0 {
+            continue;
+        }
         let cid = match class_ids.get(class_name).copied() {
             Some(c) if c != 0 => c,
             _ => continue,
         };
         for (prop, setter_fn) in &class.setters {
-            // Skip imported class stubs (their body is empty — the defining
-            // module's init registers them).
-            if setter_fn.body.is_empty() {
-                continue;
-            }
             let inner = format!("__set_{}", setter_fn.name);
             let llvm_name = format!(
                 "perry_method_{}__{}__{}",
@@ -4829,6 +4851,7 @@ fn compile_static_method(
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
     func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_prefix: &str,
     module_boxed_vars: &std::collections::HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
@@ -4929,6 +4952,7 @@ fn compile_static_method(
         class_keys_globals: &cross_module.class_keys_globals,
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
+        func_synthetic_arguments,
         boxed_vars: static_boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
         closure_rest_params,

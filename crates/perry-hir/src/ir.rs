@@ -638,6 +638,8 @@ pub struct Class {
     pub static_fields: Vec<ClassField>,
     /// Static methods
     pub static_methods: Vec<Function>,
+    /// Legacy TypeScript decorators applied to the class.
+    pub decorators: Vec<Decorator>,
     /// Whether this class is exported from the module
     pub is_exported: bool,
     /// Self-binding aliases for class-expression bindings:
@@ -659,6 +661,8 @@ pub struct ClassField {
     pub init: Option<Expr>,
     pub is_private: bool,
     pub is_readonly: bool,
+    /// Legacy TypeScript decorators applied to this property.
+    pub decorators: Vec<Decorator>,
 }
 
 /// A global variable
@@ -678,6 +682,10 @@ pub struct Decorator {
     pub name: String,
     /// Arguments if this is a decorator factory call (e.g., @log("prefix") -> args = ["prefix"])
     pub args: Vec<Expr>,
+    /// True for decorator factories (`@dec(...)`), false for bare decorators (`@dec`).
+    pub is_factory: bool,
+    /// True for `@Reflect.metadata(key, value)`, which Perry lowers directly.
+    pub is_reflect_metadata: bool,
 }
 
 /// A function definition
@@ -724,6 +732,8 @@ pub struct Param {
     pub name: String,
     pub ty: Type,
     pub default: Option<Expr>,
+    /// Legacy TypeScript decorators applied to this parameter.
+    pub decorators: Vec<Decorator>,
     /// True if this is a rest parameter (...args)
     pub is_rest: bool,
 }
@@ -2291,6 +2301,14 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    /// Call a V8 JavaScript function value
+    JsCallValue {
+        /// JS handle to the function value
+        callee: Box<Expr>,
+        /// Arguments to pass to the function
+        args: Vec<Expr>,
+    },
+
     /// Get a property from a V8 JavaScript object
     JsGetProperty {
         /// The object to get the property from
@@ -2407,6 +2425,45 @@ pub enum Expr {
         descriptor: Box<Expr>,
     },
     ReflectGetPrototypeOf(Box<Expr>),
+    ReflectDefineMetadata {
+        key: Box<Expr>,
+        value: Box<Expr>,
+        target: Box<Expr>,
+        property_key: Option<Box<Expr>>,
+    },
+    ReflectGetMetadata {
+        key: Box<Expr>,
+        target: Box<Expr>,
+        property_key: Option<Box<Expr>>,
+    },
+    ReflectGetOwnMetadata {
+        key: Box<Expr>,
+        target: Box<Expr>,
+        property_key: Option<Box<Expr>>,
+    },
+    ReflectHasMetadata {
+        key: Box<Expr>,
+        target: Box<Expr>,
+        property_key: Option<Box<Expr>>,
+    },
+    ReflectHasOwnMetadata {
+        key: Box<Expr>,
+        target: Box<Expr>,
+        property_key: Option<Box<Expr>>,
+    },
+    ReflectGetMetadataKeys {
+        target: Box<Expr>,
+        property_key: Option<Box<Expr>>,
+    },
+    ReflectGetOwnMetadataKeys {
+        target: Box<Expr>,
+        property_key: Option<Box<Expr>>,
+    },
+    ReflectDeleteMetadata {
+        key: Box<Expr>,
+        target: Box<Expr>,
+        property_key: Option<Box<Expr>>,
+    },
 }
 
 /// Binary operators

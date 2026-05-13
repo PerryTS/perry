@@ -465,6 +465,7 @@ impl SH for Class {
             setters,
             static_fields,
             static_methods,
+            decorators,
             is_exported,
             aliases,
         } = self;
@@ -482,6 +483,7 @@ impl SH for Class {
         setters.hash(h);
         static_fields.hash(h);
         static_methods.hash(h);
+        decorators.hash(h);
         is_exported.hash(h);
         aliases.hash(h);
     }
@@ -496,6 +498,7 @@ impl SH for ClassField {
             init,
             is_private,
             is_readonly,
+            decorators,
         } = self;
         name.hash(h);
         key_expr.hash(h);
@@ -503,6 +506,7 @@ impl SH for ClassField {
         init.hash(h);
         is_private.hash(h);
         is_readonly.hash(h);
+        decorators.hash(h);
     }
 }
 
@@ -631,9 +635,16 @@ impl SH for Global {
 
 impl SH for Decorator {
     fn hash<H: StableHasher>(&self, h: &mut H) {
-        let Decorator { name, args } = self;
+        let Decorator {
+            name,
+            args,
+            is_factory,
+            is_reflect_metadata,
+        } = self;
         name.hash(h);
         args.hash(h);
+        is_factory.hash(h);
+        is_reflect_metadata.hash(h);
     }
 }
 
@@ -677,12 +688,14 @@ impl SH for Param {
             name,
             ty,
             default,
+            decorators,
             is_rest,
         } = self;
         id.hash(h);
         name.hash(h);
         ty.hash(h);
         default.hash(h);
+        decorators.hash(h);
         is_rest.hash(h);
     }
 }
@@ -3267,6 +3280,11 @@ impl SH for Expr {
                 method_name.hash(h);
                 args.hash(h);
             }
+            Expr::JsCallValue { callee, args } => {
+                tag(h, 452);
+                callee.as_ref().hash(h);
+                args.hash(h);
+            }
             Expr::JsGetProperty {
                 object,
                 property_name,
@@ -3410,6 +3428,84 @@ impl SH for Expr {
             Expr::ReflectGetPrototypeOf(e) => {
                 tag(h, 441);
                 e.as_ref().hash(h);
+            }
+            Expr::ReflectDefineMetadata {
+                key,
+                value,
+                target,
+                property_key,
+            } => {
+                tag(h, 453);
+                key.as_ref().hash(h);
+                value.as_ref().hash(h);
+                target.as_ref().hash(h);
+                property_key.hash(h);
+            }
+            Expr::ReflectGetMetadata {
+                key,
+                target,
+                property_key,
+            } => {
+                tag(h, 454);
+                key.as_ref().hash(h);
+                target.as_ref().hash(h);
+                property_key.hash(h);
+            }
+            Expr::ReflectGetOwnMetadata {
+                key,
+                target,
+                property_key,
+            } => {
+                tag(h, 455);
+                key.as_ref().hash(h);
+                target.as_ref().hash(h);
+                property_key.hash(h);
+            }
+            Expr::ReflectHasMetadata {
+                key,
+                target,
+                property_key,
+            } => {
+                tag(h, 456);
+                key.as_ref().hash(h);
+                target.as_ref().hash(h);
+                property_key.hash(h);
+            }
+            Expr::ReflectHasOwnMetadata {
+                key,
+                target,
+                property_key,
+            } => {
+                tag(h, 457);
+                key.as_ref().hash(h);
+                target.as_ref().hash(h);
+                property_key.hash(h);
+            }
+            Expr::ReflectGetMetadataKeys {
+                target,
+                property_key,
+            } => {
+                tag(h, 458);
+                target.as_ref().hash(h);
+                property_key.hash(h);
+            }
+            Expr::ReflectGetOwnMetadataKeys {
+                target,
+                property_key,
+            } => {
+                tag(h, 459);
+                target.as_ref().hash(h);
+                property_key.hash(h);
+            }
+            Expr::ReflectDeleteMetadata {
+                key,
+                target,
+                property_key,
+            } => {
+                tag(h, 460);
+                key.as_ref().hash(h);
+                target.as_ref().hash(h);
+                property_key.hash(h);
             }
             Expr::AsyncStepDone {
                 value,
@@ -3602,6 +3698,7 @@ mod tests {
             setters: vec![],
             static_fields: vec![],
             static_methods: vec![],
+            decorators: vec![],
             is_exported: false,
             aliases: vec![],
         });
@@ -3679,6 +3776,7 @@ mod tests {
                     ty: Type::Number,
                     default: None,
                     is_rest: false,
+                    decorators: vec![],
                 },
                 Param {
                     id: 1,
@@ -3686,6 +3784,7 @@ mod tests {
                     ty: Type::Number,
                     default: None,
                     is_rest: false,
+                    decorators: vec![],
                 },
             ],
             return_type: Type::Number,

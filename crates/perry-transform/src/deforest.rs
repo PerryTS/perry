@@ -1208,6 +1208,7 @@ fn rewrite_producer_body(
         name: "__deforest_out".to_string(),
         ty: Type::Array(Box::new(info.elem_ty.clone())),
         default: None,
+        decorators: Vec::new(),
         is_rest: false,
     });
 

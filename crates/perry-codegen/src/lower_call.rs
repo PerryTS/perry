@@ -695,7 +695,27 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         let sig = ctx.func_signatures.get(fid).copied();
         let (declared_count, has_rest, _) = sig.unwrap_or((args.len(), false, false));
         let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
-        if has_rest {
+        if has_rest && ctx.func_synthetic_arguments.contains(fid) {
+            let fixed_count = declared_count.saturating_sub(1);
+            let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            for idx in 0..fixed_count {
+                if let Some(arg) = args.get(idx) {
+                    lowered.push(lower_expr(ctx, arg)?);
+                } else {
+                    lowered.push(undef_lit.clone());
+                }
+            }
+
+            let cap = (args.len() as u32).to_string();
+            let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+            for a in args {
+                let v = lower_expr(ctx, a)?;
+                let blk = ctx.block();
+                current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
+            }
+            let arguments_box = nanbox_pointer_inline(ctx.block(), &current);
+            lowered.push(arguments_box);
+        } else if has_rest {
             // Rest is always the LAST declared param. Pass the
             // first (declared_count - 1) args as-is, then bundle
             // the rest into an array.

@@ -256,6 +256,7 @@ pub(crate) fn append_synthetic_arguments_param(ctx: &mut LoweringContext, params
         name: "arguments".to_string(),
         ty: Type::Any,
         default: None,
+        decorators: Vec::new(),
         is_rest: true,
     });
 }
@@ -316,6 +317,7 @@ pub(crate) fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) ->
             name: param_name,
             ty: param_type,
             default: param_default,
+            decorators: lower_decorators(ctx, &param.decorators),
             is_rest,
         });
         // Track destructuring patterns (or an Assign wrapping one) for extraction stmts
@@ -523,82 +525,31 @@ pub(crate) fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) ->
     })
 }
 
-/// Refuse to lower classes that use `@decorator` syntax. Perry parses decorators
-/// into the HIR but has no codegen path — before this check they were silently
-/// dropped, producing executables where the decorator body never ran (issue #144).
-/// Walks every decoration point: the class itself, methods/accessors/private-methods,
-/// class properties, and constructor parameters (TS parameter decorators).
-fn reject_decorators(class: &ast::Class, class_name: &str) -> Result<()> {
-    if let Some(dec) = class.decorators.first() {
-        let name = decorator_name_hint(dec);
-        bail!(
-            "TypeScript decorators are not supported (found `@{name}` on class `{class_name}`). \
-             See docs/src/language/limitations.md#no-decorators. Rewrite as an explicit wrapper \
-             function or remove the annotation.",
-        );
-    }
+/// Validate the v1 legacy TypeScript decorator surface. Perry currently lowers
+/// class, method, property, and parameter decorators, which is enough for
+/// Nest-style DI metadata canaries. Private decoration points still fail loudly
+/// instead of being dropped.
+fn validate_legacy_decorators_v1(class: &ast::Class, class_name: &str) -> Result<()> {
     for member in &class.body {
         match member {
             ast::ClassMember::Method(m) => {
-                if let Some(dec) = m.function.decorators.first() {
-                    let name = decorator_name_hint(dec);
-                    let key = method_key_hint(&m.key);
-                    bail!(
-                        "TypeScript decorators are not supported (found `@{name}` on method `{class_name}.{key}`). \
-                         See docs/src/language/limitations.md#no-decorators.",
-                    );
-                }
-                for param in &m.function.params {
-                    if let Some(dec) = param.decorators.first() {
-                        let name = decorator_name_hint(dec);
-                        let key = method_key_hint(&m.key);
-                        bail!(
-                            "TypeScript parameter decorators are not supported (found `@{name}` on a parameter of `{class_name}.{key}`). \
-                             See docs/src/language/limitations.md#no-decorators.",
-                        );
-                    }
-                }
+                let _ = m;
             }
             ast::ClassMember::PrivateMethod(m) => {
                 if let Some(dec) = m.function.decorators.first() {
                     let name = decorator_name_hint(dec);
                     bail!(
-                        "TypeScript decorators are not supported (found `@{name}` on private method of `{class_name}`). \
-                         See docs/src/language/limitations.md#no-decorators.",
+                        "TypeScript private method decorators are not supported yet (found `@{name}` on private method of `{class_name}`).",
                     );
                 }
             }
-            ast::ClassMember::ClassProp(p) => {
-                if let Some(dec) = p.decorators.first() {
-                    let name = decorator_name_hint(dec);
-                    bail!(
-                        "TypeScript decorators are not supported (found `@{name}` on a property of `{class_name}`). \
-                         See docs/src/language/limitations.md#no-decorators.",
-                    );
-                }
-            }
+            ast::ClassMember::ClassProp(_) => {}
             ast::ClassMember::PrivateProp(p) => {
                 if let Some(dec) = p.decorators.first() {
                     let name = decorator_name_hint(dec);
                     bail!(
-                        "TypeScript decorators are not supported (found `@{name}` on a private property of `{class_name}`). \
-                         See docs/src/language/limitations.md#no-decorators.",
+                        "TypeScript private property decorators are not supported yet (found `@{name}` on a private property of `{class_name}`).",
                     );
-                }
-            }
-            ast::ClassMember::Constructor(c) => {
-                for param in &c.params {
-                    let decs = match param {
-                        ast::ParamOrTsParamProp::Param(p) => &p.decorators,
-                        ast::ParamOrTsParamProp::TsParamProp(tp) => &tp.decorators,
-                    };
-                    if let Some(dec) = decs.first() {
-                        let name = decorator_name_hint(dec);
-                        bail!(
-                            "TypeScript parameter decorators are not supported (found `@{name}` on a constructor parameter of `{class_name}`). \
-                             See docs/src/language/limitations.md#no-decorators.",
-                        );
-                    }
                 }
             }
             _ => {}
@@ -622,22 +573,13 @@ fn decorator_name_hint(dec: &ast::Decorator) -> String {
     }
 }
 
-fn method_key_hint(key: &ast::PropName) -> String {
-    match key {
-        ast::PropName::Ident(i) => i.sym.to_string(),
-        ast::PropName::Str(s) => format!("{:?}", s.value),
-        ast::PropName::Num(n) => n.value.to_string(),
-        _ => "<method>".to_string(),
-    }
-}
-
 pub(crate) fn lower_class_decl(
     ctx: &mut LoweringContext,
     class_decl: &ast::ClassDecl,
     is_exported: bool,
 ) -> Result<Class> {
     let name = class_decl.ident.sym.to_string();
-    reject_decorators(&class_decl.class, &name)?;
+    validate_legacy_decorators_v1(&class_decl.class, &name)?;
     let class_id = match ctx.lookup_class(&name) {
         Some(id) => id,
         None => {
@@ -916,6 +858,7 @@ pub(crate) fn lower_class_decl(
                                     name: "this".to_string(),
                                     ty: Type::Named(name.clone()),
                                     default: None,
+                                    decorators: Vec::new(),
                                     is_rest: false,
                                 });
                                 new_params.extend(getter.params.into_iter());
@@ -1006,6 +949,7 @@ pub(crate) fn lower_class_decl(
                                 name: "this".to_string(),
                                 ty: Type::Named(name.clone()),
                                 default: None,
+                                decorators: Vec::new(),
                                 is_rest: false,
                             });
                             new_params.append(&mut func.params);
@@ -1165,6 +1109,7 @@ pub(crate) fn lower_class_decl(
                                 init: None,
                                 is_private: false,
                                 is_readonly: ts_prop.readonly,
+                                decorators: lower_decorators(ctx, &ts_prop.decorators),
                             });
                         }
                     }
@@ -1264,6 +1209,7 @@ pub(crate) fn lower_class_decl(
                                                     init: None,
                                                     is_private: false,
                                                     is_readonly: false,
+                                                    decorators: Vec::new(),
                                                 });
                                             }
                                         }
@@ -1453,6 +1399,7 @@ pub(crate) fn lower_class_decl(
                 init: None,
                 is_private: false,
                 is_readonly: false,
+                decorators: Vec::new(),
             });
         }
         if let Some(existing) = ctx.lookup_class_field_names(&name) {
@@ -1581,6 +1528,7 @@ pub(crate) fn lower_class_decl(
                 name: format!("__perry_cap_{}", outer_id),
                 ty,
                 default: None,
+                decorators: Vec::new(),
                 is_rest: false,
             });
             assignment_stmts.push(Stmt::Expr(Expr::PropertySet {
@@ -1647,6 +1595,7 @@ pub(crate) fn lower_class_decl(
         setters,
         static_fields,
         static_methods,
+        decorators: lower_decorators(ctx, &class_decl.class.decorators),
         is_exported,
         aliases: Vec::new(),
     })
@@ -1660,7 +1609,7 @@ pub(crate) fn lower_class_from_ast(
     name: &str,
     is_exported: bool,
 ) -> Result<Class> {
-    reject_decorators(class, name)?;
+    validate_legacy_decorators_v1(class, name)?;
     let class_id = match ctx.lookup_class(name) {
         Some(id) => id,
         None => {
@@ -1952,6 +1901,7 @@ pub(crate) fn lower_class_from_ast(
         setters,
         static_fields,
         static_methods,
+        decorators: lower_decorators(ctx, &class.decorators),
         is_exported,
         aliases: Vec::new(),
     })
@@ -2274,6 +2224,7 @@ pub(crate) fn lower_constructor(
                     name: param_name,
                     ty: param_type,
                     default: param_default,
+                    decorators: lower_decorators(ctx, &p.decorators),
                     is_rest,
                 });
                 let inner_pat = if let ast::Pat::Assign(assign) = &p.pat {
@@ -2311,6 +2262,7 @@ pub(crate) fn lower_constructor(
                     name: param_name,
                     ty: param_type,
                     default: None,
+                    decorators: lower_decorators(ctx, &ts_prop.decorators),
                     is_rest: false, // TsParamProp cannot be a rest parameter
                 });
             }
@@ -2654,6 +2606,7 @@ pub(crate) fn lower_class_method(
             name: param_name,
             ty: param_type,
             default: param_default,
+            decorators: lower_decorators(ctx, &param.decorators),
             is_rest,
         });
         // Mirror the lower_fn_decl shape: an `Assign` pattern can wrap a
@@ -2901,6 +2854,7 @@ pub(crate) fn lower_setter_method(
             name: param_name,
             ty: param_type,
             default: None,
+            decorators: Vec::new(),
             is_rest: false,
         });
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
@@ -3004,6 +2958,7 @@ pub(crate) fn lower_class_prop(
         init,
         is_private: false, // TODO: check accessibility
         is_readonly: prop.readonly,
+        decorators: lower_decorators(ctx, &prop.decorators),
     })
 }
 
@@ -3050,6 +3005,7 @@ pub(crate) fn lower_private_method(
             name: param_name,
             ty: param_type,
             default: param_default,
+            decorators: Vec::new(),
             is_rest,
         });
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
@@ -3195,6 +3151,7 @@ pub(crate) fn lower_private_setter(
             name: param_name,
             ty: param_type,
             default: None,
+            decorators: Vec::new(),
             is_rest: false,
         });
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
@@ -3279,6 +3236,7 @@ pub(crate) fn lower_private_prop(
         init,
         is_private: true,
         is_readonly: prop.readonly,
+        decorators: lower_decorators(ctx, &prop.decorators),
     })
 }
 
@@ -3934,6 +3892,7 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                         name: param_name,
                         ty: Type::Any,
                         default: param_default,
+                        decorators: Vec::new(),
                         is_rest,
                     });
                     if is_destructuring_pattern(&param.pat) {

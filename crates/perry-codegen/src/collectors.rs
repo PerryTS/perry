@@ -860,6 +860,63 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
             walk(a, out);
             walk(b, out);
         }
+        Expr::ReflectDefineMetadata {
+            key,
+            value,
+            target,
+            property_key,
+        } => {
+            walk(key, out);
+            walk(value, out);
+            walk(target, out);
+            if let Some(property_key) = property_key {
+                walk(property_key, out);
+            }
+        }
+        Expr::ReflectGetMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectGetOwnMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectHasMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectHasOwnMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectDeleteMetadata {
+            key,
+            target,
+            property_key,
+        } => {
+            walk(key, out);
+            walk(target, out);
+            if let Some(property_key) = property_key {
+                walk(property_key, out);
+            }
+        }
+        Expr::ReflectGetMetadataKeys {
+            target,
+            property_key,
+        }
+        | Expr::ReflectGetOwnMetadataKeys {
+            target,
+            property_key,
+        } => {
+            walk(target, out);
+            if let Some(property_key) = property_key {
+                walk(property_key, out);
+            }
+        }
         Expr::Closure { body, captures, .. } => {
             // Closure literals don't introduce captures into the outer
             // scope, but their explicit captures + body references may

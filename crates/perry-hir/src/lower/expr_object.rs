@@ -345,6 +345,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             name: param_name,
                             ty: param_type,
                             default: param_default,
+                            decorators: Vec::new(),
                             is_rest: is_rest_param(&param.pat),
                         });
                     }
@@ -492,6 +493,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         name: "__perry_obj_iife".to_string(),
         ty: Type::Any,
         default: None,
+        decorators: Vec::new(),
         is_rest: false,
     };
     let mut body: Vec<Stmt> = Vec::with_capacity(computed_post_init.len() + 1);

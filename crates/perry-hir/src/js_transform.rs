@@ -484,6 +484,7 @@ fn is_js_value_expr(expr: &Expr, tracker: &JsValueTracker) -> bool {
         Expr::JsGetExport { .. } => true,
         Expr::JsCallFunction { .. } => true,
         Expr::JsCallMethod { .. } => true,
+        Expr::JsCallValue { .. } => true,
         Expr::JsGetProperty { .. } => true,
         Expr::JsNew { .. } => true,
         Expr::JsNewFromHandle { .. } => true,
@@ -518,6 +519,7 @@ fn is_js_object_expr(
         Expr::JsGetExport { .. } => true,
         Expr::JsCallFunction { .. } => true,
         Expr::JsCallMethod { .. } => true,
+        Expr::JsCallValue { .. } => true,
         Expr::JsGetProperty { .. } => true,
         Expr::JsNew { .. } => true,
         Expr::JsNewFromHandle { .. } => true,
@@ -635,8 +637,45 @@ fn transform_expr(
                 }
             }
 
-            // Not a JS import call, transform normally
+            // Call through a JavaScript function value, e.g. a decorator factory
+            // result from `@nestjs/common` (`const dec = Injectable(); dec(target)`).
             transform_expr(callee, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            if is_js_object_expr(callee, tracker, extern_func_to_js) {
+                let transformed_args: Vec<Expr> = args
+                    .iter_mut()
+                    .map(|arg| {
+                        if let Expr::Closure { params, body, .. } = arg {
+                            let param_count = params.len();
+                            let mut closure_tracker = tracker.clone();
+                            for param in params.iter() {
+                                closure_tracker.mark_js_local(param.id);
+                            }
+                            transform_stmts(
+                                body,
+                                js_imports,
+                                extern_func_to_js,
+                                local_name_to_js,
+                                &mut closure_tracker,
+                            );
+                            Expr::JsCreateCallback {
+                                closure: Box::new(std::mem::replace(arg, Expr::Undefined)),
+                                param_count,
+                            }
+                        } else {
+                            transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
+                            std::mem::replace(arg, Expr::Undefined)
+                        }
+                    })
+                    .collect();
+                let callee_expr = std::mem::replace(callee.as_mut(), Expr::Undefined);
+                *expr = Expr::JsCallValue {
+                    callee: Box::new(callee_expr),
+                    args: transformed_args,
+                };
+                return;
+            }
+
+            // Not a JS import call, transform normally
             for arg in args.iter_mut() {
                 transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
@@ -1095,6 +1134,63 @@ fn transform_expr(
         }
         Expr::JsCreateCallback { closure, .. } => {
             transform_expr(closure, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        }
+        Expr::ReflectDefineMetadata {
+            key,
+            value,
+            target,
+            property_key,
+        } => {
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(target, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            if let Some(property_key) = property_key {
+                transform_expr(property_key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            }
+        }
+        Expr::ReflectGetMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectGetOwnMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectHasMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectHasOwnMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectDeleteMetadata {
+            key,
+            target,
+            property_key,
+        } => {
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(target, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            if let Some(property_key) = property_key {
+                transform_expr(property_key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            }
+        }
+        Expr::ReflectGetMetadataKeys {
+            target,
+            property_key,
+        }
+        | Expr::ReflectGetOwnMetadataKeys {
+            target,
+            property_key,
+        } => {
+            transform_expr(target, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            if let Some(property_key) = property_key {
+                transform_expr(property_key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            }
         }
         // Expressions that don't need transformation
         Expr::Number(_) | Expr::Integer(_) | Expr::BigInt(_) | Expr::String(_) | Expr::Bool(_) |

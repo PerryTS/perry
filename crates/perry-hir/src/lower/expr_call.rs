@@ -327,6 +327,41 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
         }
     }
 
+    // --- Object.hasOwnProperty.call(obj, key) → js_object_has_own(obj, key) ---
+    //
+    // Current NestJS `@Module()` uses this inherited Object.prototype helper
+    // through the `Object` constructor value instead of spelling
+    // `Object.prototype.hasOwnProperty.call(...)`.
+    if !has_spread && args.len() == 2 {
+        if let ast::Callee::Expr(callee_expr) = &call.callee {
+            if let ast::Expr::Member(outer) = callee_expr.as_ref() {
+                if let (ast::MemberProp::Ident(outer_prop), ast::Expr::Member(mid)) =
+                    (&outer.prop, outer.obj.as_ref())
+                {
+                    if outer_prop.sym.as_ref() == "call" {
+                        if let (ast::MemberProp::Ident(mid_prop), ast::Expr::Ident(mid_obj)) =
+                            (&mid.prop, mid.obj.as_ref())
+                        {
+                            if mid_obj.sym.as_ref() == "Object"
+                                && mid_prop.sym.as_ref() == "hasOwnProperty"
+                            {
+                                return Ok(Expr::Call {
+                                    callee: Box::new(Expr::ExternFuncRef {
+                                        name: "js_object_has_own".to_string(),
+                                        param_types: Vec::new(),
+                                        return_type: Type::Any,
+                                    }),
+                                    args,
+                                    type_args: Vec::new(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // --- Object.prototype.toString.call(x) → js_object_to_string(x) ---
     // AST shape is a four-level member expression:
     //   call.call(x)
@@ -1154,6 +1189,92 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                 "getPrototypeOf" => {
                                     let target = args.into_iter().next().unwrap_or(Expr::Undefined);
                                     return Ok(Expr::ReflectGetPrototypeOf(Box::new(target)));
+                                }
+                                "defineMetadata" => {
+                                    let mut it = args.into_iter();
+                                    let key = it.next().unwrap_or(Expr::Undefined);
+                                    let value = it.next().unwrap_or(Expr::Undefined);
+                                    let target = it.next().unwrap_or(Expr::Undefined);
+                                    let property_key = it.next().map(Box::new);
+                                    return Ok(Expr::ReflectDefineMetadata {
+                                        key: Box::new(key),
+                                        value: Box::new(value),
+                                        target: Box::new(target),
+                                        property_key,
+                                    });
+                                }
+                                "getMetadata" => {
+                                    let mut it = args.into_iter();
+                                    let key = it.next().unwrap_or(Expr::Undefined);
+                                    let target = it.next().unwrap_or(Expr::Undefined);
+                                    let property_key = it.next().map(Box::new);
+                                    return Ok(Expr::ReflectGetMetadata {
+                                        key: Box::new(key),
+                                        target: Box::new(target),
+                                        property_key,
+                                    });
+                                }
+                                "getOwnMetadata" => {
+                                    let mut it = args.into_iter();
+                                    let key = it.next().unwrap_or(Expr::Undefined);
+                                    let target = it.next().unwrap_or(Expr::Undefined);
+                                    let property_key = it.next().map(Box::new);
+                                    return Ok(Expr::ReflectGetOwnMetadata {
+                                        key: Box::new(key),
+                                        target: Box::new(target),
+                                        property_key,
+                                    });
+                                }
+                                "hasMetadata" => {
+                                    let mut it = args.into_iter();
+                                    let key = it.next().unwrap_or(Expr::Undefined);
+                                    let target = it.next().unwrap_or(Expr::Undefined);
+                                    let property_key = it.next().map(Box::new);
+                                    return Ok(Expr::ReflectHasMetadata {
+                                        key: Box::new(key),
+                                        target: Box::new(target),
+                                        property_key,
+                                    });
+                                }
+                                "hasOwnMetadata" => {
+                                    let mut it = args.into_iter();
+                                    let key = it.next().unwrap_or(Expr::Undefined);
+                                    let target = it.next().unwrap_or(Expr::Undefined);
+                                    let property_key = it.next().map(Box::new);
+                                    return Ok(Expr::ReflectHasOwnMetadata {
+                                        key: Box::new(key),
+                                        target: Box::new(target),
+                                        property_key,
+                                    });
+                                }
+                                "getMetadataKeys" => {
+                                    let mut it = args.into_iter();
+                                    let target = it.next().unwrap_or(Expr::Undefined);
+                                    let property_key = it.next().map(Box::new);
+                                    return Ok(Expr::ReflectGetMetadataKeys {
+                                        target: Box::new(target),
+                                        property_key,
+                                    });
+                                }
+                                "getOwnMetadataKeys" => {
+                                    let mut it = args.into_iter();
+                                    let target = it.next().unwrap_or(Expr::Undefined);
+                                    let property_key = it.next().map(Box::new);
+                                    return Ok(Expr::ReflectGetOwnMetadataKeys {
+                                        target: Box::new(target),
+                                        property_key,
+                                    });
+                                }
+                                "deleteMetadata" => {
+                                    let mut it = args.into_iter();
+                                    let key = it.next().unwrap_or(Expr::Undefined);
+                                    let target = it.next().unwrap_or(Expr::Undefined);
+                                    let property_key = it.next().map(Box::new);
+                                    return Ok(Expr::ReflectDeleteMetadata {
+                                        key: Box::new(key),
+                                        target: Box::new(target),
+                                        property_key,
+                                    });
                                 }
                                 "setPrototypeOf" => return Ok(Expr::Bool(true)),
                                 "isExtensible" => {
