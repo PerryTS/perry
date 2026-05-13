@@ -2851,11 +2851,42 @@ pub fn run_with_parse_cache(
     };
     let mut path_to_module_name: HashMap<PathBuf, String> = HashMap::new();
     let mut module_name_to_path: HashMap<String, PathBuf> = HashMap::new();
-    let mut module_name_to_module: HashMap<String, perry_hir::Module> = HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         path_to_module_name.insert(path.clone(), hir_module.name.clone());
         module_name_to_path.insert(hir_module.name.clone(), path.clone());
-        module_name_to_module.insert(hir_module.name.clone(), hir_module.clone());
+    }
+    // Build a normalized HIR-by-name map for `flatten_exports`. Each
+    // module's `Export::ReExport::source`, `Export::ExportAll::source`,
+    // and `Export::NamespaceReExport::source` strings hold the raw
+    // specifier as written in source (`"./inner.ts"`); flatten_exports
+    // keys its lookup on `Module::name`. Rewrite the source field of
+    // every export to the target module's `Module::name` (via
+    // `resolve_import` → `path_to_module_name`) so the cross-module
+    // lookup resolves the right HIR.
+    let mut module_name_to_module: HashMap<String, perry_hir::Module> = HashMap::new();
+    for (path, hir_module) in &ctx.native_modules {
+        let mut rewritten = hir_module.clone();
+        for export in rewritten.exports.iter_mut() {
+            match export {
+                perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::NamespaceReExport { source, .. } => {
+                    if let Some((resolved_path, _)) = resolve_import(
+                        source,
+                        path,
+                        &ctx.project_root,
+                        &ctx.compile_packages,
+                        &ctx.compile_package_dirs,
+                    ) {
+                        if let Some(name) = path_to_module_name.get(&resolved_path) {
+                            *source = name.clone();
+                        }
+                    }
+                }
+                perry_hir::Export::Named { .. } => {}
+            }
+        }
+        module_name_to_module.insert(hir_module.name.clone(), rewritten);
     }
     // Set of native-module paths that are dynamic-import targets. We
     // also build a parallel set keyed by Module::name for flatten_exports.

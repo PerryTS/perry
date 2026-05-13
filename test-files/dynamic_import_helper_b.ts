@@ -1,2 +1,2 @@
 // Helper for the dynamic import() gap tests.
-export const y = 100;
+export const label = "b";

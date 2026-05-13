@@ -7,12 +7,15 @@
 // runtime). It exists for manual `perry compile` verification:
 //
 //   $ perry test-files/test_gap_dynamic_import_error.ts -o /tmp/out
-//   Error: dynamic import() in module ...: path argument is not statically
-//          resolvable (only string literals and ternary expressions of literals
-//          are supported); consider enumerating with a ternary or registry
-//          object
+//   Error: dynamic import() in module ...: path argument references a binding
+//          that is not a module-level const initialized to a literal (only
+//          string literals, ternaries, template literals over const locals,
+//          and the module-level consts themselves are supported)
 
 async function main(): Promise<void> {
+  // Function-local const — the resolver only follows MODULE-level
+  // const locals (a module-level `path` would resolve through
+  // `collect_module_const_locals`; a function-local one does not).
   const path: string = "./dynamic_import_helper_a.ts";
   // @ts-ignore — Perry rejects this at compile time per issue #100.
   const m = await import(path);
