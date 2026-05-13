@@ -1985,6 +1985,7 @@ pub fn lower_module_full(
             module_kind: ModuleKind::NativeCompiled,
             resolved_path: None,
             type_only: false,
+            is_dynamic: false,
         });
     }
 
@@ -3773,6 +3774,7 @@ fn lower_module_decl(
                 module_kind,
                 resolved_path: None, // Will be set by compiler driver during module resolution
                 type_only: whole_decl_type_only,
+                is_dynamic: false,
             });
         }
         ast::ModuleDecl::ExportDecl(export) => {

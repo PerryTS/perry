@@ -203,6 +203,8 @@ impl SH for Module {
             uses_webassembly,
             extern_funcs,
             init_was_unrolled,
+            has_top_level_await,
+            init_kind,
         } = self;
         name.hash(h);
         imports.hash(h);
@@ -223,6 +225,17 @@ impl SH for Module {
         uses_webassembly.hash(h);
         extern_funcs.hash(h);
         init_was_unrolled.hash(h);
+        has_top_level_await.hash(h);
+        init_kind.hash(h);
+    }
+}
+
+impl SH for ModuleInitKind {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        match self {
+            ModuleInitKind::Eager => tag(h, 0),
+            ModuleInitKind::Deferred => tag(h, 1),
+        }
     }
 }
 
@@ -247,6 +260,7 @@ impl SH for Import {
             module_kind,
             resolved_path,
             type_only,
+            is_dynamic,
         } = self;
         source.hash(h);
         specifiers.hash(h);
@@ -254,6 +268,7 @@ impl SH for Import {
         module_kind.hash(h);
         resolved_path.hash(h);
         type_only.hash(h);
+        is_dynamic.hash(h);
     }
 }
 
@@ -3450,6 +3465,13 @@ impl SH for Expr {
                 name.as_ref().hash(h);
                 args.hash(h);
             }
+            Expr::DynamicImport { paths, arg } => {
+                tag(h, 452);
+                for p in paths {
+                    p.hash(h);
+                }
+                arg.as_ref().hash(h);
+            }
         }
     }
 }
@@ -3568,6 +3590,7 @@ mod tests {
             module_kind: ModuleKind::NativeCompiled,
             resolved_path: None,
             type_only: false,
+            is_dynamic: false,
         });
         assert_ne!(base_hash, hash_module(&m_imp));
 

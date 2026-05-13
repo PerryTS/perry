@@ -5814,24 +5814,19 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
             }
         }
         ast::Callee::Import(_) => {
-            // Dynamic import: import('module')
-            // Extract the module path from the first argument if available
-            let module_path = if let Some(first_arg) = args.first() {
-                if let Expr::String(s) = first_arg {
-                    s.clone()
-                } else {
-                    "<dynamic>".to_string()
-                }
-            } else {
-                "<unknown>".to_string()
-            };
-            eprintln!(
-                "Warning: Dynamic import('{}') not fully supported, returning undefined",
-                module_path
-            );
-            // Dynamic imports return a Promise that resolves to the module
-            // For now, return undefined as we'd need full runtime support
-            Ok(Expr::Undefined)
+            // Issue #100: dynamic import() — lower to Expr::DynamicImport with
+            // an empty `paths` list. `collect_modules` runs the path-const
+            // folder and populates `paths`. If the argument can't be folded
+            // to a finite set, that pass raises a compile error before codegen
+            // sees the empty node.
+            let arg = args
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("dynamic import() requires a path argument"))?;
+            Ok(Expr::DynamicImport {
+                paths: Vec::new(),
+                arg: Box::new(arg),
+            })
         }
     }
 }
