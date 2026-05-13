@@ -7385,8 +7385,7 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     // returns undefined.
     if is_native_module_callable_export(module_name, property_name) {
         let heap_name = {
-            let layout =
-                std::alloc::Layout::from_size_align(property_name_len.max(1), 1).unwrap();
+            let layout = std::alloc::Layout::from_size_align(property_name_len.max(1), 1).unwrap();
             let ptr = std::alloc::alloc(layout);
             std::ptr::copy_nonoverlapping(property_name_ptr, ptr, property_name_len);
             ptr
