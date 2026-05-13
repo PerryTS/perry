@@ -10718,33 +10718,153 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             lower_expr(ctx, target)
         }
 
-        // Issue #100: compile-time-resolved dynamic `import()`. The
-        // resolver in `collect_modules` already registered each target
-        // as a regular import edge, so the target module's
-        // `__perry_init_<prefix>` runs as part of the eager init chain
-        // and its top-level statements execute before this site fires.
+        // Issue #100: compile-time-resolved dynamic `import()`.
         //
-        // MVP: return a `Promise<{}>` — a resolved promise holding a
-        // fresh empty object. This is a known limitation tracked in the
-        // PR description: until a per-module namespace global +
-        // `js_create_namespace` runtime primitive lands, the namespace
-        // object the caller awaits has no exports on it. Code that
-        // immediately destructures or reads members will see undefined.
-        // The import graph wiring is still correct: the target module
-        // is compiled, linked, and initialized — only the namespace
-        // surface is empty.
-        Expr::DynamicImport { arg, .. } => {
-            // Evaluate the argument for its side effects (and to ensure
-            // a runtime path string is computed when callers do
-            // something like `import(fn())` — even though such args
-            // would have been rejected by the resolver, this keeps
-            // codegen robust against malformed HIR).
-            let _path_val = lower_expr(ctx, arg)?;
+        // The resolver in `collect_modules` already registered each
+        // target path as a regular import edge (marked `is_dynamic`),
+        // so the target's `__perry_init_<prefix>` runs as part of the
+        // eager init chain BEFORE this dispatch site fires. The
+        // populator at the end of that init has built the target's
+        // `@__perry_ns_<prefix>` global; we just load it here, wrap in
+        // a resolved Promise, and return.
+        //
+        // Single-path: emit a static load + `js_promise_resolved`.
+        // Multi-path: evaluate the runtime path string, compare against
+        // each compile-time constant via `js_string_equals`, and
+        // dispatch to that target's namespace global. Falls through to
+        // `js_promise_rejected(TypeError)` on no-match.
+        Expr::DynamicImport { paths, arg } => {
+            // Defensive: an empty `paths` list means the resolver pass
+            // failed to populate this node, which `collect_modules`
+            // should have raised as a compile error. Fall through to a
+            // rejected promise rather than crashing the IR.
+            if paths.is_empty() {
+                let _ = lower_expr(ctx, arg)?;
+                let blk = ctx.block();
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &undef)]);
+                return Ok(nanbox_pointer_inline(blk, &p));
+            }
+
+            // Single-target fast path. Skip the runtime string compare
+            // — the static resolver already proved this is the only
+            // possible target.
+            if paths.len() == 1 {
+                // Evaluate the arg for side effects (most are pure but
+                // a template literal with computed parts can have e.g.
+                // function calls); the result is discarded.
+                let _ = lower_expr(ctx, arg)?;
+                let path = &paths[0];
+                let target_prefix = ctx
+                    .dynamic_import_path_to_prefix
+                    .get(path)
+                    .cloned();
+                let blk = ctx.block();
+                let ns_val = match target_prefix {
+                    Some(prefix) => blk.load(DOUBLE, &format!("@__perry_ns_{}", prefix)),
+                    None => {
+                        // Driver didn't resolve this path to a target
+                        // module — surface a rejected promise.
+                        let undef =
+                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &undef)]);
+                        return Ok(nanbox_pointer_inline(blk, &p));
+                    }
+                };
+                let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
+                return Ok(nanbox_pointer_inline(blk, &promise));
+            }
+
+            // Multi-target: evaluate the runtime path string, then
+            // emit a chain of `js_string_equals` compares. Each
+            // successful compare resolves to its corresponding
+            // namespace global. The final fallback emits a rejected
+            // promise.
+            let path_val = lower_expr(ctx, arg)?;
+            // Result phi slot: every successful match stores the
+            // promise (NaN-boxed POINTER_TAG f64) here, then jumps to
+            // a join block which loads and returns. Using an alloca
+            // keeps the IR straightforward without proper phi nodes.
+            let result_slot = ctx.block().alloca(DOUBLE);
+            let join_block_idx = ctx.new_block("dynamic_import_join");
+
+            // Unbox the path argument once into an i64 StringHeader*.
+            let path_handle = ctx
+                .block()
+                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &path_val)]);
+
+            // Pre-resolve target prefixes so we can skip paths that
+            // don't have a known target (driver dropped them).
+            let resolved: Vec<(String, String)> = paths
+                .iter()
+                .filter_map(|p| {
+                    ctx.dynamic_import_path_to_prefix
+                        .get(p)
+                        .cloned()
+                        .map(|tgt| (p.clone(), tgt))
+                })
+                .collect();
+
+            for (i, (path_str, target_prefix)) in resolved.iter().enumerate() {
+                // Intern the path string so the compare against the
+                // runtime arg works on real StringHeader pointers.
+                let key_idx = ctx.strings.intern(path_str);
+                let key_entry = ctx.strings.entry(key_idx);
+                let key_handle_global = format!("@{}", key_entry.handle_global);
+
+                let blk = ctx.block();
+                let key_box = blk.load(DOUBLE, &key_handle_global);
+                let key_handle = blk.call(
+                    I64,
+                    "js_get_string_pointer_unified",
+                    &[(DOUBLE, &key_box)],
+                );
+                let eq_i32 = blk.call(
+                    I32,
+                    "js_string_equals",
+                    &[(I64, &path_handle), (I64, &key_handle)],
+                );
+                let cond = blk.icmp_ne(I32, &eq_i32, "0");
+
+                let match_block_idx = ctx.new_block(&format!("dyn_import_match_{}", i));
+                let next_label = if i + 1 < resolved.len() {
+                    ctx.new_block(&format!("dyn_import_next_{}", i))
+                } else {
+                    ctx.new_block(&format!("dyn_import_reject_{}", i))
+                };
+                let match_label = ctx.block_label(match_block_idx);
+                let next_label_str = ctx.block_label(next_label);
+                ctx.block().cond_br(&cond, &match_label, &next_label_str);
+
+                // Match arm — load namespace, wrap in promise, store
+                // into result_slot, branch to join.
+                ctx.current_block = match_block_idx;
+                let join_label = ctx.block_label(join_block_idx);
+                let blk = ctx.block();
+                let ns_val = blk.load(DOUBLE, &format!("@__perry_ns_{}", target_prefix));
+                let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
+                let boxed = nanbox_pointer_inline(blk, &promise);
+                blk.store(DOUBLE, &boxed, &result_slot);
+                blk.br(&join_label);
+
+                // Move to the next compare block (or fallthrough to
+                // rejection on the last iteration).
+                ctx.current_block = next_label;
+            }
+
+            // No-match fallthrough: rejected promise. Reuses the same
+            // pattern as the empty-paths defensive arm.
+            let join_label = ctx.block_label(join_block_idx);
             let blk = ctx.block();
             let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let ns_obj = blk.call(DOUBLE, "js_object_create", &[(DOUBLE, &undef)]);
-            let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_obj)]);
-            Ok(nanbox_pointer_inline(blk, &promise_handle))
+            let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &undef)]);
+            let boxed = nanbox_pointer_inline(blk, &p);
+            blk.store(DOUBLE, &boxed, &result_slot);
+            blk.br(&join_label);
+
+            // Join: load result and return.
+            ctx.current_block = join_block_idx;
+            Ok(ctx.block().load(DOUBLE, &result_slot))
         }
 
         // -------- ExternFuncRef as a value --------

@@ -9063,7 +9063,7 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
 /// Keys are length-prefixed UTF-8 (Perry strings are not guaranteed
 /// null-terminated), passed as parallel `*const *const u8` (data
 /// pointers) and `*const i32` (byte lengths). Values are the already
-/// NaN-boxed `f64` representations stored as `JSValue`.
+/// NaN-boxed `f64` representations passed as a flat `f64` array.
 ///
 /// The returned f64 is a NaN-boxed POINTER_TAG `ObjectHeader` with its
 /// `keys_array` populated so `Object.keys(ns)`/iteration and property
@@ -9074,13 +9074,20 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
 /// already registered with `js_gc_register_global_root`.
 ///
 /// Empty namespace (`n == 0`) returns a fresh empty object.
+///
+/// Returns an `f64` directly (not `JSValue`) so the LLVM ABI signature
+/// `double js_create_namespace(...)` declared in `runtime_decls.rs`
+/// matches: NaN-boxed values use float-register-return on AArch64 /
+/// SysV-x86_64. A `JSValue` return would route through integer
+/// registers (`#[repr(transparent)]` over `u64`) and the call site's
+/// `%xmm0` read would observe stale bits.
 #[no_mangle]
 pub extern "C" fn js_create_namespace(
     n: i32,
     keys: *const *const u8,
     key_lens: *const i32,
-    values: *const JSValue,
-) -> JSValue {
+    values: *const f64,
+) -> f64 {
     let count = if n < 0 { 0 } else { n as usize };
     unsafe {
         // Allocate a plain object with `count` inline slots. class_id 0
@@ -9088,22 +9095,14 @@ pub extern "C" fn js_create_namespace(
         let obj = js_object_alloc(0, count as u32);
         if obj.is_null() {
             // Fallback to undefined — should never happen but defensive.
-            return JSValue::undefined();
+            return f64::from_bits(0x7FFC_0000_0000_0001);
         }
 
-        // Build the keys array parallel to the inline-slot order so
-        // `Object.keys()` / `for (const k in ns)` iterate in declared
-        // export order.
-        let keys_arr = crate::array::js_array_alloc(count as u32);
-        for i in 0..count {
-            let key_data = *keys.add(i);
-            let key_len = *key_lens.add(i);
-            let key_len_u = if key_len < 0 { 0u32 } else { key_len as u32 };
-            // Build a StringHeader. SSO covers short identifiers (the
-            // common case for export names), heap-allocated otherwise.
-            let key_f64 = crate::string::js_string_new_sso(key_data, key_len_u);
-            crate::array::js_array_push_f64(keys_arr, key_f64);
-        }
+        // Initialize an empty keys array so `js_object_set_field_by_name`
+        // can append to it. Pre-populating the keys array AND calling
+        // set_field_by_name would double every key — the property
+        // setter's "add key to keys_array" step runs unconditionally.
+        let keys_arr = crate::array::js_array_alloc(0);
         js_object_set_keys(obj, keys_arr);
 
         // Set each (key, value) pair on the object. We route through
@@ -9121,12 +9120,12 @@ pub extern "C" fn js_create_namespace(
             // (which expects a real `StringHeader*`) gets a valid
             // pointer. Pre-SSO-only would crash on >7-byte export names.
             let key_hdr = crate::string::js_string_from_bytes(key_data, key_len_u);
-            let val = f64::from_bits((*values.add(i)).bits());
+            let val = *values.add(i);
             js_object_set_field_by_name(obj, key_hdr, val);
         }
 
         // NaN-box POINTER_TAG and return.
         let bits = (obj as u64) | 0x7FFD_0000_0000_0000;
-        JSValue::from_bits(bits)
+        f64::from_bits(bits)
     }
 }
