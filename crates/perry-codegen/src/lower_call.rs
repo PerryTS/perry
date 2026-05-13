@@ -840,6 +840,28 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
             return Ok(ctx.block().call(DOUBLE, name, &arg_slices));
         }
+        // Issue #692: default-import call against an unresolved module.
+        // `import sanitizeHtml from "sanitize-html"` (when sanitize-html
+        // didn't resolve to a NativeCompiled module / perry-stdlib
+        // binding) lowers `sanitizeHtml(x)` to `Call { callee:
+        // ExternFuncRef { name: "default" } }` — the HIR's
+        // register_imported_func uses the literal `"default"` as the
+        // exported-name marker for default imports (lower.rs:3727).
+        // Without a source_prefix, the catch-all below emitted a direct
+        // LLVM call to the bare symbol `default`, and the system linker
+        // failed with `undefined reference to 'default'`. Route to the
+        // runtime stub instead: lower args for side effects (so closure
+        // collection / string interning still happens), then call
+        // `js_unresolved_default_call` which returns NaN-boxed undefined
+        // and prints a one-shot diagnostic at runtime. The program now
+        // links; the user gets a clear runtime signal rather than a
+        // cryptic linker error.
+        if name == "default" && !ctx.import_function_prefixes.contains_key(name) {
+            for a in args {
+                let _ = lower_expr(ctx, a)?;
+            }
+            return Ok(ctx.block().call(DOUBLE, "js_unresolved_default_call", &[]));
+        }
         // Native library functions (bloom_draw_rect, bloom_init_window,
         // etc.) that aren't in the import map — emit a direct call so
         // the linker resolves them against the linked native .a library.

@@ -824,6 +824,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // cleanly resolves to undefined (instead of TAG_TRUE → "boolean" /
     // "(boolean).method is not a function").
     module.declare_function("js_unresolved_namespace_stub", DOUBLE, &[]);
+    // Issue #692: stub for default-imported callables from unresolved modules —
+    // returns NaN-boxed undefined and prints a one-shot diagnostic, so the
+    // program links instead of failing with `undefined reference to 'default'`.
+    module.declare_function("js_unresolved_default_call", DOUBLE, &[]);
     // Issue #611: real persistent globalThis singleton. Returns a
     // NaN-boxed POINTER to a per-process ObjectHeader so
     // `globalThis[k] = v` then `globalThis[k]` round-trips correctly.

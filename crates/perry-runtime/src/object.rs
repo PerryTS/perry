@@ -500,6 +500,31 @@ pub extern "C" fn js_unresolved_namespace_stub() -> f64 {
     f64::from_bits(crate::JSValue::pointer(null_obj_ptr).bits())
 }
 
+/// Issue #692: default-import calls against unresolved modules
+/// (`import jwt from "jsonwebtoken"; jwt.sign(...)` when no perry-stdlib
+/// binding matched the method, or `import sanitizeHtml from
+/// "sanitize-html"; sanitizeHtml(x)` when sanitize-html doesn't resolve
+/// to a NativeCompiled module) used to lower to an LLVM extern named
+/// literally `default`, which the system linker can't resolve —
+/// surfaced as `undefined reference to 'default'`. Route those calls
+/// here so the binary links; the runtime stub prints a one-shot
+/// diagnostic and returns NaN-boxed undefined. The user gets a clear
+/// signal at first call rather than a cryptic link error.
+#[no_mangle]
+pub extern "C" fn js_unresolved_default_call() -> f64 {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "perry: called a default-imported binding from an unresolved module \
+             (returns undefined). The module's default export was not found in \
+             perry-stdlib or perry.compilePackages — run `perry --print-api-manifest` \
+             to see what's supported."
+        );
+    }
+    f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
+}
+
 static NULL_OBJECT_BYTES: NullObjectBytes = NullObjectBytes {
     object_type: 1,
     class_id: 0,

@@ -1256,7 +1256,14 @@ pub(super) fn build_and_run_link(
             .arg("oleaut32.lib")
             .arg("propsys.lib")
             .arg("runtimeobject.lib")
-            .arg("iphlpapi.lib");
+            .arg("iphlpapi.lib")
+            // winhttp.lib — perry-ui-windows::widgets::image::fetch_url_blocking
+            // uses WinHttpOpen/Connect/OpenRequest/SendRequest/ReceiveResponse
+            // to fetch Image(url) bytes. The `windows` crate's `Win32_Networking_WinHttp`
+            // feature emits #[link] attrs in the rlib, but those don't propagate
+            // through perry-ui-windows's `staticlib` crate-type to perry's final
+            // link line. Closes #732.
+            .arg("winhttp.lib");
     } else {
         // macOS frameworks for runtime (sysinfo, etc.) and V8.
         // Gate on `!is_harmonyos` so the macOS host doesn't leak its
