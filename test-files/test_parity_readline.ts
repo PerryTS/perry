@@ -97,3 +97,13 @@ try {
 // PERRY-SKIP: 'error' — only fires on stream-level failures we can't synthesize portably.
 
 // Coverage: 0 auto-emitted, 29 TODO, 0 skip-listed.
+
+/*
+@covers
+crates/perry-stdlib/src/readline.rs:
+  - js_readline_close
+  - js_readline_create_interface
+  - js_readline_has_active
+  - js_readline_on
+  - js_readline_question
+*/

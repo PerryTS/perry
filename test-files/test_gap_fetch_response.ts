@@ -119,3 +119,52 @@ async function main(): Promise<void> {
 }
 
 main();
+
+/*
+@covers
+crates/perry-stdlib/src/fetch.rs:
+  - js_blob_array_buffer
+  - js_blob_bytes
+  - js_blob_size
+  - js_blob_slice
+  - js_blob_stream
+  - js_blob_text
+  - js_blob_type
+  - js_fetch_get
+  - js_fetch_get_with_auth
+  - js_fetch_post
+  - js_fetch_post_with_auth
+  - js_fetch_response_count
+  - js_fetch_response_json
+  - js_fetch_response_ok
+  - js_fetch_response_status
+  - js_fetch_response_status_text
+  - js_fetch_response_text
+  - js_fetch_stream_close
+  - js_fetch_stream_poll
+  - js_fetch_stream_start
+  - js_fetch_stream_status
+  - js_fetch_text
+  - js_fetch_with_options
+  - js_headers_delete
+  - js_headers_entries
+  - js_headers_for_each
+  - js_headers_get
+  - js_headers_has
+  - js_headers_keys
+  - js_headers_new
+  - js_headers_set
+  - js_headers_values
+  - js_request_get_body
+  - js_request_get_method
+  - js_request_get_url
+  - js_request_new
+  - js_response_array_buffer
+  - js_response_blob
+  - js_response_body
+  - js_response_clone
+  - js_response_get_headers
+  - js_response_new
+  - js_response_static_json
+  - js_response_static_redirect
+*/

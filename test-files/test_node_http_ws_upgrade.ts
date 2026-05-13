@@ -35,3 +35,19 @@ server.on("upgrade", (req: any, wsId: any, _head: any) => {
 
 console.log("[node:http upgrade test] starting on " + port);
 server.listen(port);
+
+/*
+@covers
+crates/perry-stdlib/src/ws.rs:
+  - js_ws_connect
+  - js_ws_connect_start
+  - js_ws_handle_to_i64
+  - js_ws_is_open
+  - js_ws_message_count
+  - js_ws_process_pending
+  - js_ws_receive
+  - js_ws_send_to_client
+  - js_ws_server_close
+  - js_ws_server_new
+  - js_ws_wait_for_message
+*/

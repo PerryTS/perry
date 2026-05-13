@@ -6,7 +6,7 @@
 // inventory into behavioral tests as each area gets deeper compatibility
 // coverage.
 //
-// Inventory entries: 359 unique FFI names, 378 declarations.
+// Inventory entries: 346 unique FFI names, 347 declarations.
 
 const testFfiSurfaceRuntimeCoreVersion = 1;
 if (testFfiSurfaceRuntimeCoreVersion !== 1) {
@@ -76,7 +76,6 @@ crates/perry-runtime/src/builtins.rs:
   - js_loose_eq
   - js_lt
   - js_mod
-  - js_mul
   - js_number_coerce
   - js_number_is_finite
   - js_number_is_integer
@@ -212,12 +211,9 @@ crates/perry-runtime/src/net.rs:
   - js_net_server_address
   - js_net_server_close
   - js_net_server_listen
-  - js_net_socket_destroy
-  - js_net_socket_end
   - js_net_socket_read
   - js_net_socket_remote_address
   - js_net_socket_remote_port
-  - js_net_socket_write
 crates/perry-runtime/src/node_stream.rs:
   - js_node_stream_duplex_new
   - js_node_stream_passthrough_new
@@ -330,15 +326,6 @@ crates/perry-runtime/src/static_plugins.rs:
   - perry_resolve_static_plugin
 crates/perry-runtime/src/stdlib_stubs.rs:
   - js_stdlib_init_dispatch
-  - js_ws_connect
-  - js_ws_connect_start
-  - js_ws_is_open
-  - js_ws_message_count
-  - js_ws_process_pending
-  - js_ws_receive
-  - js_ws_server_close
-  - js_ws_server_new
-  - js_ws_wait_for_message
 crates/perry-runtime/src/string.rs:
   - js_string_error
   - js_string_warn

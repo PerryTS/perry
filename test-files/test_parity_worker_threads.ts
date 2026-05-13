@@ -113,3 +113,14 @@ try {
 // not yet implemented in Perry and tied to async scheduler internals.
 
 // Coverage: 9 auto-emitted, 33 TODO, 0 skip-listed.
+
+/*
+@covers
+crates/perry-stdlib/src/worker_threads.rs:
+  - js_worker_threads_get_worker_data
+  - js_worker_threads_has_pending
+  - js_worker_threads_on
+  - js_worker_threads_parent_port
+  - js_worker_threads_post_message
+  - js_worker_threads_process_pending
+*/
