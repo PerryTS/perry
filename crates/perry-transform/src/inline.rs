@@ -636,7 +636,116 @@ fn is_inlinable(func: &Function) -> bool {
         return false;
     }
 
+    // Don't inline functions that call themselves. The single-Return-of-Call
+    // pattern in `try_inline_simple_call` (and the multi-Let-then-Return
+    // pattern) substitutes the body verbatim; when the body is
+    // `return self(args)` the substituted result IS another call to `self`,
+    // which `inline_calls_in_expr` immediately re-inlines, and the recursion
+    // unbounded → perry-main stack overflow (issue #733: 2-line repro
+    // `function f(): any { return f(); }; f();` blew the 64 MB compiler
+    // stack on Windows). The infinite-recursion case has no useful
+    // inlining anyway (we can't unroll the call into a finite expression
+    // tree). Reject any function whose body contains a call whose callee
+    // is its own FuncRef.
+    if body_calls_func(&func.body, func.id) {
+        return false;
+    }
+
     true
+}
+
+/// Check if `stmts` contains any `Expr::Call { callee: FuncRef(target_id) }`,
+/// recursively. Stops at closure boundaries — a self-reference inside a nested
+/// closure is a value-position read, not a same-frame recursive tail, and the
+/// closure body becomes a separate function at codegen.
+fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
+    fn check_expr(expr: &Expr, target_id: FuncId) -> bool {
+        match expr {
+            Expr::Call { callee, args, .. } => {
+                if let Expr::FuncRef(fid) = callee.as_ref() {
+                    if *fid == target_id {
+                        return true;
+                    }
+                }
+                check_expr(callee, target_id) || args.iter().any(|a| check_expr(a, target_id))
+            }
+            Expr::Binary { left, right, .. }
+            | Expr::Logical { left, right, .. }
+            | Expr::Compare { left, right, .. } => {
+                check_expr(left, target_id) || check_expr(right, target_id)
+            }
+            Expr::Unary { operand, .. } => check_expr(operand, target_id),
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                check_expr(condition, target_id)
+                    || check_expr(then_expr, target_id)
+                    || check_expr(else_expr, target_id)
+            }
+            Expr::Array(elements) => elements.iter().any(|e| check_expr(e, target_id)),
+            Expr::IndexGet { object, index } => {
+                check_expr(object, target_id) || check_expr(index, target_id)
+            }
+            Expr::IndexSet {
+                object,
+                index,
+                value,
+            } => {
+                check_expr(object, target_id)
+                    || check_expr(index, target_id)
+                    || check_expr(value, target_id)
+            }
+            Expr::PropertyGet { object, .. } => check_expr(object, target_id),
+            Expr::PropertySet { object, value, .. } => {
+                check_expr(object, target_id) || check_expr(value, target_id)
+            }
+            Expr::LocalSet(_, value) => check_expr(value, target_id),
+            // Closure bodies are NOT walked: their calls happen in a different
+            // frame at runtime. A nested closure that calls the outer is fine
+            // for inlining purposes (the closure body itself won't be inlined
+            // here — it's a separate codegen unit).
+            _ => false,
+        }
+    }
+    fn check_stmt(stmt: &Stmt, target_id: FuncId) -> bool {
+        match stmt {
+            Stmt::Let {
+                init: Some(expr), ..
+            } => check_expr(expr, target_id),
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+                check_expr(expr, target_id)
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                check_expr(condition, target_id)
+                    || then_branch.iter().any(|s| check_stmt(s, target_id))
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|b| b.iter().any(|s| check_stmt(s, target_id)))
+            }
+            Stmt::While { condition, body } => {
+                check_expr(condition, target_id) || body.iter().any(|s| check_stmt(s, target_id))
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_ref().is_some_and(|i| check_stmt(i, target_id))
+                    || condition.as_ref().is_some_and(|c| check_expr(c, target_id))
+                    || update.as_ref().is_some_and(|u| check_expr(u, target_id))
+                    || body.iter().any(|s| check_stmt(s, target_id))
+            }
+            _ => false,
+        }
+    }
+    stmts.iter().any(|s| check_stmt(s, target_id))
 }
 
 /// Returns true iff `body` only references symbols whose resolution stays
