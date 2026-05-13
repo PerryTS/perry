@@ -645,7 +645,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.artifact }}
           path: staging/
@@ -729,7 +729,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download .deb packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: deb-*
           merge-multiple: true
@@ -924,7 +924,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-artifacts/
 
