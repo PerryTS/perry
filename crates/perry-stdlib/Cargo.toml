@@ -318,7 +318,7 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1", "to
 image = { version = "0.25", optional = true }
 
 # HTML parser
-scraper = { version = "0.19", optional = true }
+scraper = { version = "0.27", optional = true }
 
 # Scheduler
 cron = { version = "0.12", optional = true }
