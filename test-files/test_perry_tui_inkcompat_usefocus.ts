@@ -30,3 +30,12 @@ run(() => {
 });
 
 console.log("FINAL_FOCUSED=" + finalFocused);
+
+/*
+@covers
+crates/perry-runtime/src/tui/hooks.rs:
+  - js_perry_tui_focus_next
+  - js_perry_tui_focus_previous
+crates/perry-runtime/src/tui/input.rs:
+  - js_perry_tui_exit
+*/

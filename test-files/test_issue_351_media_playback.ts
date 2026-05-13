@@ -74,3 +74,23 @@ if (player !== 0) {
 }
 
 console.log("smoke OK");
+
+/*
+@covers
+crates/perry-runtime/src/media_playback.rs:
+  - perry_media_create_player
+  - perry_media_destroy
+  - perry_media_get_current_time
+  - perry_media_get_duration
+  - perry_media_get_state
+  - perry_media_is_playing
+  - perry_media_on_state_change
+  - perry_media_on_time_update
+  - perry_media_pause
+  - perry_media_play
+  - perry_media_seek
+  - perry_media_set_now_playing
+  - perry_media_set_rate
+  - perry_media_set_volume
+  - perry_media_stop
+*/
