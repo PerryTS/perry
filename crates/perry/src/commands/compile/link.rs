@@ -1858,6 +1858,11 @@ pub(super) fn build_and_run_link(
                 cmd.arg("-framework").arg(framework);
             }
 
+            // Add library search paths
+            for lib_dir in &target_config.lib_dirs {
+                cmd.arg(format!("-L{}", lib_dir));
+            }
+
             // Add platform libraries
             for lib in &target_config.libs {
                 if is_windows {

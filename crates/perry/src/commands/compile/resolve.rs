@@ -205,6 +205,15 @@ pub(super) fn parse_native_library_manifest(
                         .collect()
                 })
                 .unwrap_or_default(),
+            lib_dirs: tc
+                .get("libDirs")
+                .and_then(|l| l.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
             pkg_config: tc
                 .get("pkgConfig")
                 .and_then(|p| p.as_array())

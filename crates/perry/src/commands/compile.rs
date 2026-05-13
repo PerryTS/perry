@@ -555,6 +555,7 @@ pub struct TargetNativeConfig {
     pub lib_name: String,
     pub frameworks: Vec<String>,
     pub libs: Vec<String>,
+    pub lib_dirs: Vec<String>,
     pub pkg_config: Vec<String>,
     /// Swift sources (absolute paths) to compile via swiftc and link into the
     /// final binary. Used by `--features watchos-swift-app` so a native lib
