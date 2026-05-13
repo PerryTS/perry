@@ -29,7 +29,7 @@ webkit6 = "=0.4"
 # dir resolution for `ephemeral: false`. Pure-Rust crate, no system deps.
 dirs = "5"
 # perry/media — GStreamer playbin for streaming audio playback (#351).
-gstreamer = "0.23"
+gstreamer = "0.25"
 # perry/media — MPRIS D-Bus exposure for GNOME / KDE / playerctl /
 # Bluetooth headphones (#366). Linux-only; zbus has Linux-specific
 # system deps that don't build on macOS / Windows hosts, so the crate
