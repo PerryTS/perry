@@ -443,7 +443,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_webassembly_validate", DOUBLE, &[DOUBLE]);
     module.declare_function("js_webassembly_instantiate", DOUBLE, &[DOUBLE]);
     module.declare_function("js_webassembly_call_export_0", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_webassembly_call_export_1", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_webassembly_call_export_1",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function(
         "js_webassembly_call_export_2",
         DOUBLE,

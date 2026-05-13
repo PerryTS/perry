@@ -25,8 +25,7 @@ const PERRY_I18N_DTS: &str = include_str!("../../../../types/perry/i18n/index.d.
 const PERRY_SYSTEM_DTS: &str = include_str!("../../../../types/perry/system/index.d.ts");
 const PERRY_MEDIA_DTS: &str = include_str!("../../../../types/perry/media/index.d.ts");
 const PERRY_TUI_DTS: &str = include_str!("../../../../types/perry/tui/index.d.ts");
-const PERRY_WEBASSEMBLY_DTS: &str =
-    include_str!("../../../../types/perry/webassembly/index.d.ts");
+const PERRY_WEBASSEMBLY_DTS: &str = include_str!("../../../../types/perry/webassembly/index.d.ts");
 const PERRY_BUILD_DTS: &str = include_str!("../../../../types/perry/build/index.d.ts");
 
 // Auto-generated stdlib `.d.ts` from the API manifest (#465's

@@ -5408,8 +5408,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         } => {
             let inst = lower_expr(ctx, instance)?;
             let name_v = lower_expr(ctx, name)?;
-            let lowered_args: Vec<String> =
-                args.iter().map(|a| lower_expr(ctx, a)).collect::<Result<Vec<_>>>()?;
+            let lowered_args: Vec<String> = args
+                .iter()
+                .map(|a| lower_expr(ctx, a))
+                .collect::<Result<Vec<_>>>()?;
             let blk = ctx.block();
             match lowered_args.len() {
                 0 => Ok(blk.call(
@@ -5420,7 +5422,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 1 => Ok(blk.call(
                     DOUBLE,
                     "js_webassembly_call_export_1",
-                    &[(DOUBLE, &inst), (DOUBLE, &name_v), (DOUBLE, &lowered_args[0])],
+                    &[
+                        (DOUBLE, &inst),
+                        (DOUBLE, &name_v),
+                        (DOUBLE, &lowered_args[0]),
+                    ],
                 )),
                 2 => Ok(blk.call(
                     DOUBLE,

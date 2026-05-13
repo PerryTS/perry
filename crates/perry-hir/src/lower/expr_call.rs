@@ -288,10 +288,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                             e
                         )
                     })?;
-                    let elems: Vec<Expr> = bytes
-                        .iter()
-                        .map(|b| Expr::Number(*b as f64))
-                        .collect();
+                    let elems: Vec<Expr> = bytes.iter().map(|b| Expr::Number(*b as f64)).collect();
                     return Ok(Expr::Uint8ArrayNew(Some(Box::new(Expr::Array(elems)))));
                 }
                 crate::lower_bail!(
@@ -1577,8 +1574,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                 if let ast::Expr::Ident(inst_ident) = inner.obj.as_ref() {
                                     let inst_name = inst_ident.sym.as_ref();
                                     if ctx.wasm_instance_locals.contains(inst_name) {
-                                        let instance_lowered =
-                                            lower_expr(ctx, inner.obj.as_ref())?;
+                                        let instance_lowered = lower_expr(ctx, inner.obj.as_ref())?;
                                         ctx.uses_webassembly = true;
                                         return Ok(Expr::WebAssemblyCallExport {
                                             instance: Box::new(instance_lowered),

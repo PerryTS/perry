@@ -200,6 +200,7 @@ impl SH for Module {
             exported_functions,
             widgets,
             uses_fetch,
+            uses_webassembly,
             extern_funcs,
             init_was_unrolled,
         } = self;
@@ -219,6 +220,7 @@ impl SH for Module {
         exported_functions.hash(h);
         widgets.hash(h);
         uses_fetch.hash(h);
+        uses_webassembly.hash(h);
         extern_funcs.hash(h);
         init_was_unrolled.hash(h);
     }
@@ -3429,6 +3431,24 @@ impl SH for Expr {
                 tag(h, 448);
                 func.as_ref().hash(h);
                 proto.as_ref().hash(h);
+            }
+            Expr::WebAssemblyValidate(bytes) => {
+                tag(h, 449);
+                bytes.as_ref().hash(h);
+            }
+            Expr::WebAssemblyInstantiate(bytes) => {
+                tag(h, 450);
+                bytes.as_ref().hash(h);
+            }
+            Expr::WebAssemblyCallExport {
+                instance,
+                name,
+                args,
+            } => {
+                tag(h, 451);
+                instance.as_ref().hash(h);
+                name.as_ref().hash(h);
+                args.hash(h);
             }
         }
     }

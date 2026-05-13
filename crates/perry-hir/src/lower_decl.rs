@@ -3821,10 +3821,8 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 // `inst.exports.<method>(...)` syntactic match in
                 // `lower/expr_call.rs` only fires for genuine wasm
                 // instances (not CJS-style `module.exports.foo()`).
-                if let (
-                    ast::Pat::Ident(binding),
-                    Some(init_expr),
-                ) = (&decl.name, decl.init.as_deref())
+                if let (ast::Pat::Ident(binding), Some(init_expr)) =
+                    (&decl.name, decl.init.as_deref())
                 {
                     if init_is_webassembly_instantiate(init_expr) {
                         ctx.wasm_instance_locals

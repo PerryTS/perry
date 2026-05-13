@@ -418,11 +418,19 @@ pub(super) fn build_optimized_libs(
         }
     };
 
-    // Hash the (features, panic_mode, target) tuple into the target dir
-    // name so cargo treats each combination as its own incremental cache.
+    // Hash the (features, panic_mode, target, wasm-host) tuple into the
+    // target dir name so cargo treats each combination as its own
+    // incremental cache. `wasm-host` lives on `perry-runtime` (not
+    // perry-stdlib), so it isn't part of `feature_arg`; bake it in here
+    // separately so a wasm program's build doesn't get served from a
+    // cached non-wasm dir (which would lack `js_webassembly_*` symbols)
+    // and vice versa (would carry unresolved `perry_wasm_host_*` refs).
     // Cheap djb2 — no need for the SipHash overhead.
     let target_str = target.unwrap_or("host");
-    let key_input = format!("{}|{}|{}", feature_arg, panic_abort_safe, target_str);
+    let key_input = format!(
+        "{}|{}|{}|wasm={}",
+        feature_arg, panic_abort_safe, target_str, ctx.needs_wasm_runtime
+    );
     let mut hash: u64 = 5381;
     for b in key_input.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
@@ -498,6 +506,13 @@ pub(super) fn build_optimized_libs(
         if f == "ios-game-loop" || f == "watchos-game-loop" || f == "ohos-napi" {
             cross_features.push(format!("perry-runtime/{}", f));
         }
+    }
+    // Issue #76 — enable perry-runtime's `wasm-host` feature when the
+    // program references `WebAssembly.*`. Without this the shim TU stays
+    // out of libperry_runtime.a, so unrelated programs don't drag in
+    // unresolved `perry_wasm_host_*` references at link time.
+    if ctx.needs_wasm_runtime {
+        cross_features.push("perry-runtime/wasm-host".to_string());
     }
     if !cross_features.is_empty() {
         cargo_cmd.arg("--features").arg(cross_features.join(","));

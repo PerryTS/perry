@@ -5448,7 +5448,7 @@ dependencies = [
 
 [[package]]
 name = "perry-wasm-host"
-version = "0.5.836"
+version = "0.5.898"
 dependencies = [
  "wasmi",
 ]

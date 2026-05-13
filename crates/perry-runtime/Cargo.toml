@@ -30,6 +30,12 @@ watchos-game-loop = []
 # invokes Perry's compiled `main()`. Auto-enabled by the compiler when
 # --target harmonyos[-simulator] is passed (see crates/perry-runtime/src/ohos_napi.rs).
 ohos-napi = []
+# WebAssembly host shims (issue #76). When on, `webassembly.rs` is compiled
+# into libperry_runtime.a, which adds undefined references to `perry_wasm_host_*`
+# (resolved by linking libperry_wasm_host.a). The auto-optimize path turns
+# this on only when the user's program references `WebAssembly.*`, so non-wasm
+# programs don't pay an unresolvable-symbol penalty at link time.
+wasm-host = []
 
 [dependencies]
 thiserror.workspace = true

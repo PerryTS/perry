@@ -184,7 +184,8 @@ fn capture_err(out_err: *mut *mut c_char, e: WasmHostError) {
     if out_err.is_null() {
         return;
     }
-    let cs = CString::new(e.to_string()).unwrap_or_else(|_| CString::new("wasm host error").unwrap());
+    let cs =
+        CString::new(e.to_string()).unwrap_or_else(|_| CString::new("wasm host error").unwrap());
     unsafe { *out_err = cs.into_raw() };
 }
 
@@ -300,7 +301,10 @@ pub extern "C" fn perry_wasm_host_call_export(
     let name_str = match std::str::from_utf8(name_bytes) {
         Ok(s) => s,
         Err(_) => {
-            capture_err(out_err, WasmHostError::InvalidExport("non-utf8 export name".into()));
+            capture_err(
+                out_err,
+                WasmHostError::InvalidExport("non-utf8 export name".into()),
+            );
             return 0;
         }
     };
@@ -314,7 +318,10 @@ pub extern "C" fn perry_wasm_host_call_export(
             WASM_VAL_KIND_F32 => WasmVal::F32(f32::from_bits(bits[i] as u32)),
             WASM_VAL_KIND_F64 => WasmVal::F64(f64::from_bits(bits[i])),
             other => {
-                capture_err(out_err, WasmHostError::UnsupportedSignature(format!("arg kind {other}")));
+                capture_err(
+                    out_err,
+                    WasmHostError::UnsupportedSignature(format!("arg kind {other}")),
+                );
                 return 0;
             }
         };
@@ -370,8 +377,8 @@ mod tests {
     fn instantiate_and_call_add() {
         let module = compile(ADD_WASM).expect("compile");
         let mut inst = instantiate(&module).expect("instantiate");
-        let result = call_export(&mut inst, "add", &[WasmVal::I32(2), WasmVal::I32(3)])
-            .expect("call");
+        let result =
+            call_export(&mut inst, "add", &[WasmVal::I32(2), WasmVal::I32(3)]).expect("call");
         assert_eq!(result, Some(WasmVal::I32(5)));
     }
 }

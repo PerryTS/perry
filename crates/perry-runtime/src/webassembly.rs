@@ -86,7 +86,8 @@ fn extract_bytes(jsval: f64) -> Option<(*const u8, usize)> {
             let header = addr as *const crate::typedarray::TypedArrayHeader;
             let len = unsafe { (*header).length as usize };
             let data = unsafe {
-                (header as *const u8).add(std::mem::size_of::<crate::typedarray::TypedArrayHeader>())
+                (header as *const u8)
+                    .add(std::mem::size_of::<crate::typedarray::TypedArrayHeader>())
             };
             return Some((data, len));
         }
@@ -111,14 +112,14 @@ fn extract_bytes(jsval: f64) -> Option<(*const u8, usize)> {
 /// heap strings only (the short-string SSO path is unlikely to carry an
 /// export name longer than 5 chars, so SSO support can come later).
 fn extract_string_bytes(jsval: f64) -> Option<(*const u8, usize)> {
-    let ptr = crate::value::js_get_string_pointer_unified(jsval) as *const crate::string::StringHeader;
+    let ptr =
+        crate::value::js_get_string_pointer_unified(jsval) as *const crate::string::StringHeader;
     if ptr.is_null() {
         return None;
     }
     let byte_len = unsafe { (*ptr).byte_len } as usize;
-    let data = unsafe {
-        (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>())
-    };
+    let data =
+        unsafe { (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>()) };
     Some((data, byte_len))
 }
 
@@ -224,19 +225,12 @@ pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64) -> f64 {
 /// Args > 4 are silently truncated in this MVP — the codegen-side wiring
 /// only routes 0-4 args anyway.
 #[no_mangle]
-pub extern "C" fn js_webassembly_call_export_0(
-    inst_jsval: f64,
-    name_jsval: f64,
-) -> f64 {
+pub extern "C" fn js_webassembly_call_export_0(inst_jsval: f64, name_jsval: f64) -> f64 {
     call_export_n(inst_jsval, name_jsval, &[])
 }
 
 #[no_mangle]
-pub extern "C" fn js_webassembly_call_export_1(
-    inst_jsval: f64,
-    name_jsval: f64,
-    a: f64,
-) -> f64 {
+pub extern "C" fn js_webassembly_call_export_1(inst_jsval: f64, name_jsval: f64, a: f64) -> f64 {
     call_export_n(inst_jsval, name_jsval, &[a])
 }
 

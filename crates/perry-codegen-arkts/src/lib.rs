@@ -7908,6 +7908,7 @@ mod tests {
             exported_functions: vec![],
             widgets: vec![],
             uses_fetch: false,
+            uses_webassembly: false,
             init_was_unrolled: false,
             extern_funcs: vec![],
         }
