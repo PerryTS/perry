@@ -563,6 +563,8 @@ mod object_cache_tests {
             i18n_table: None,
             fast_math: false,
             app_metadata: perry_codegen::AppMetadata::default(),
+            namespace_entries: Vec::new(),
+            dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         }
     }
 

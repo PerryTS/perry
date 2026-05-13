@@ -2819,6 +2819,195 @@ pub fn run_with_parse_cache(
     let object_cache = ObjectCache::new(&ctx.project_root, cache_target_dir, cache_enabled);
     let perry_version = env!("CARGO_PKG_VERSION");
 
+    // Issue #100: precompute the dynamic-import plumbing so the rayon
+    // per-module compile worker has everything it needs.
+    //
+    //  1. `dyn_target_paths`: every native-module path that is the
+    //     target of at least one `await import("...")` site anywhere
+    //     in the program. Those modules need a `__perry_ns_<prefix>`
+    //     global emitted + populated at the end of their `__init`.
+    //  2. `path_to_module_name`: lookup from resolved path back to the
+    //     `Module::name` string used for flatten_exports / Export
+    //     source-key resolution.
+    //  3. `per_module_namespace_entries`: for each dynamic-import
+    //     target, the resolved `NamespaceEntry` list — driven by
+    //     `flatten_exports` then enriched with kind info (Var /
+    //     Function / Class / NestedNamespace) by walking the source
+    //     module's HIR. Computed once here so the parallel codegen
+    //     workers don't need cross-module HIR access.
+    //  4. `per_module_dyn_import_targets`: for each module's own
+    //     `Expr::DynamicImport` sites, the map from path-arg string
+    //     to target sanitized prefix. Codegen at the dispatch site
+    //     reads `@__perry_ns_<target_prefix>`.
+    let sanitize_module_name = |s: &str| -> String {
+        let mut out: String = s
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+            .collect();
+        if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            out.insert(0, '_');
+        }
+        out
+    };
+    let mut path_to_module_name: HashMap<PathBuf, String> = HashMap::new();
+    let mut module_name_to_path: HashMap<String, PathBuf> = HashMap::new();
+    let mut module_name_to_module: HashMap<String, perry_hir::Module> = HashMap::new();
+    for (path, hir_module) in &ctx.native_modules {
+        path_to_module_name.insert(path.clone(), hir_module.name.clone());
+        module_name_to_path.insert(hir_module.name.clone(), path.clone());
+        module_name_to_module.insert(hir_module.name.clone(), hir_module.clone());
+    }
+    // Set of native-module paths that are dynamic-import targets. We
+    // also build a parallel set keyed by Module::name for flatten_exports.
+    let mut dyn_target_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for (_path, hir_module) in &ctx.native_modules {
+        for import in &hir_module.imports {
+            if !import.is_dynamic {
+                continue;
+            }
+            if let Some(rp) = &import.resolved_path {
+                dyn_target_paths.insert(PathBuf::from(rp));
+            }
+        }
+    }
+    // Per-module precomputed namespace_entries (keyed by path).
+    let mut per_module_namespace_entries: HashMap<PathBuf, Vec<perry_codegen::NamespaceEntry>> =
+        HashMap::new();
+    for target_path in &dyn_target_paths {
+        let target_hir = match ctx.native_modules.get(target_path) {
+            Some(m) => m,
+            None => continue, // native/JS module — handled elsewhere
+        };
+        let target_name = target_hir.name.clone();
+        let lookup = |s: &str| module_name_to_module.get(s);
+        let flat = perry_hir::flatten_exports(&target_name, &lookup);
+        let mut entries: Vec<perry_codegen::NamespaceEntry> = Vec::new();
+        for fe in flat {
+            // Locate source module's HIR (where the binding lives).
+            let source_mod = module_name_to_module.get(&fe.source_module);
+            let source_prefix = source_mod
+                .map(|m| sanitize_module_name(&m.name))
+                .unwrap_or_else(|| sanitize_module_name(&fe.source_module));
+            let kind = if let Some(nested) = &fe.nested_namespace_of {
+                let nested_prefix = module_name_to_module
+                    .get(nested)
+                    .map(|m| sanitize_module_name(&m.name))
+                    .unwrap_or_else(|| sanitize_module_name(nested));
+                perry_codegen::NamespaceEntryKind::NestedNamespace {
+                    source_prefix: nested_prefix,
+                }
+            } else if fe.source_module == target_name {
+                // Local binding — find what kind it is in target_hir.
+                if let Some(func) = target_hir
+                    .functions
+                    .iter()
+                    .find(|f| f.name == fe.source_local)
+                {
+                    let scoped = format!(
+                        "perry_fn_{}__{}",
+                        sanitize_module_name(&target_hir.name),
+                        sanitize_module_name(&func.name)
+                    );
+                    perry_codegen::NamespaceEntryKind::LocalFunction {
+                        wrap_symbol: format!("__perry_wrap_{}", scoped),
+                    }
+                } else if let Some(class) = target_hir
+                    .classes
+                    .iter()
+                    .find(|c| c.name == fe.source_local)
+                {
+                    perry_codegen::NamespaceEntryKind::LocalClass {
+                        class_id: class.id as u32,
+                    }
+                } else if let Some(global) = target_hir
+                    .globals
+                    .iter()
+                    .find(|g| g.name == fe.source_local)
+                {
+                    let gname = format!(
+                        "perry_global_{}__{}",
+                        sanitize_module_name(&target_hir.name),
+                        global.id
+                    );
+                    perry_codegen::NamespaceEntryKind::LocalVar {
+                        global_name: gname,
+                    }
+                } else {
+                    // Best-effort: treat unknown locals as Var sourced
+                    // by getter. This covers re-export shapes that the
+                    // local-detection misses; the cross-module getter
+                    // for the same module returns the value too.
+                    perry_codegen::NamespaceEntryKind::ForeignVar {
+                        source_prefix: sanitize_module_name(&target_hir.name),
+                        source_local: fe.source_local.clone(),
+                    }
+                }
+            } else {
+                // Cross-module binding. Determine if it's a function in
+                // the source module so codegen can emit the closure
+                // singleton path; otherwise treat as a foreign var
+                // (`perry_fn_<src>__<local>()` getter).
+                if let Some(src) = source_mod {
+                    if let Some(func) = src.functions.iter().find(|f| f.name == fe.source_local) {
+                        perry_codegen::NamespaceEntryKind::ForeignFunction {
+                            source_prefix: source_prefix.clone(),
+                            source_local: fe.source_local.clone(),
+                            param_count: func.params.len(),
+                        }
+                    } else if let Some(class) =
+                        src.classes.iter().find(|c| c.name == fe.source_local)
+                    {
+                        perry_codegen::NamespaceEntryKind::LocalClass {
+                            class_id: class.id as u32,
+                        }
+                    } else {
+                        perry_codegen::NamespaceEntryKind::ForeignVar {
+                            source_prefix: source_prefix.clone(),
+                            source_local: fe.source_local.clone(),
+                        }
+                    }
+                } else {
+                    perry_codegen::NamespaceEntryKind::ForeignVar {
+                        source_prefix: source_prefix.clone(),
+                        source_local: fe.source_local.clone(),
+                    }
+                }
+            };
+            entries.push(perry_codegen::NamespaceEntry {
+                name: fe.name,
+                kind,
+            });
+        }
+        per_module_namespace_entries.insert(target_path.clone(), entries);
+    }
+    // For each consumer module, map every `Expr::DynamicImport` arg-path
+    // string (as resolved in `collect_modules`) to the target's
+    // sanitized prefix. Built by scanning the consumer's imports for
+    // `is_dynamic == true` and reading the `source` + `resolved_path`.
+    let mut per_module_dyn_import_targets: HashMap<PathBuf, HashMap<String, String>> =
+        HashMap::new();
+    for (path, hir_module) in &ctx.native_modules {
+        let mut local_map: HashMap<String, String> = HashMap::new();
+        for import in &hir_module.imports {
+            if !import.is_dynamic {
+                continue;
+            }
+            let rp = match &import.resolved_path {
+                Some(p) => PathBuf::from(p),
+                None => continue,
+            };
+            let target_name = match path_to_module_name.get(&rp) {
+                Some(n) => n.clone(),
+                None => continue,
+            };
+            let target_prefix = sanitize_module_name(&target_name);
+            local_map.insert(import.source.clone(), target_prefix);
+        }
+        if !local_map.is_empty() {
+            per_module_dyn_import_targets.insert(path.clone(), local_map);
+        }
+    }
+
     let compile_results: Vec<Result<(PathBuf, Vec<u8>), String>> = ctx
         .native_modules
         .par_iter()
@@ -4008,6 +4197,18 @@ pub fn run_with_parse_cache(
                 i18n_table: i18n_snapshot.clone(),
                 fast_math: ctx.fast_math,
                 app_metadata: app_metadata.clone(),
+                // Issue #100: namespace_entries empty unless this
+                // module is a dynamic-import target; the consumer-side
+                // dispatch map is empty unless this module performs
+                // dynamic imports.
+                namespace_entries: per_module_namespace_entries
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_default(),
+                dynamic_import_path_to_prefix: per_module_dyn_import_targets
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_default(),
             };
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this

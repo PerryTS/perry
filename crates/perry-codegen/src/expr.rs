@@ -515,6 +515,15 @@ pub(crate) struct FnCtx<'a> {
     /// instantiation as a shared borrow.
     pub i18n: &'a Option<I18nLowerCtx>,
 
+    /// Issue #100: per-site target prefix for `Expr::DynamicImport`.
+    /// Maps the path-string from `DynamicImport::paths` to the
+    /// sanitized module prefix whose `@__perry_ns_<prefix>` global the
+    /// dispatcher must load. Empty if this module performs no dynamic
+    /// imports — the empty-map branch keeps codegen safe against a
+    /// stray `DynamicImport` node leaking past the resolver.
+    pub dynamic_import_path_to_prefix:
+        &'a std::collections::HashMap<String, String>,
+
     /// Local-variable class aliases: `let_name → class_name` for any
     /// `Stmt::Let { name, init: Some(Expr::ClassRef(class_name)) }`
     /// in the current function. Also propagated through `LocalGet`
