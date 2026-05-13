@@ -177,8 +177,57 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                             ctx.local_class_aliases.insert(name.clone(), resolved);
                         }
                     }
+                    // Also propagate the per-object field-class map: `let
+                    // O2 = O` should carry `O`'s known field→class
+                    // bindings forward (otherwise `new O2.Inner(...)`
+                    // can't resolve back to the class). Refs #740.
+                    if let Some(fields) = ctx.local_class_field_aliases.get(other_id).cloned() {
+                        ctx.local_class_field_aliases.insert(*id, fields);
+                    }
+                }
+                // Refs #740: `let X = O.Inner` where `O` is an object
+                // literal that holds a class ref under "Inner" — promote
+                // X to a class alias so `new X(args)` dispatches to the
+                // real class instead of the empty-object placeholder.
+                Some(perry_hir::Expr::PropertyGet { object, property }) => {
+                    if let perry_hir::Expr::LocalGet(other_id) = object.as_ref() {
+                        if let Some(fields) = ctx.local_class_field_aliases.get(other_id) {
+                            if let Some(class_name) = fields.get(property) {
+                                ctx.local_class_aliases
+                                    .insert(name.clone(), class_name.clone());
+                            }
+                        }
+                    }
                 }
                 _ => {}
+            }
+
+            // Refs #740: object literal embeds class refs. When `init` is
+            // `Expr::New { class_name (an __AnonShape), args }`, walk the
+            // class's fields and the args in parallel — any `ClassRef`
+            // arg becomes a `(local_id, field_name) → class_name` entry
+            // in `local_class_field_aliases`. This lets later reads
+            // (`O.Inner` / `let C = O.Inner`) recover the underlying
+            // class. Mirrors the shape-fields ordering produced by
+            // `synthesize_anon_shape_class` in the HIR lowering.
+            if let Some(perry_hir::Expr::New {
+                class_name: shape_name,
+                args,
+                ..
+            }) = init.as_ref()
+            {
+                if let Some(class) = ctx.classes.get(shape_name).copied() {
+                    let mut field_map: std::collections::HashMap<String, String> =
+                        std::collections::HashMap::new();
+                    for (field, arg) in class.fields.iter().zip(args.iter()) {
+                        if let perry_hir::Expr::ClassRef(class_name_ref) = arg {
+                            field_map.insert(field.name.clone(), class_name_ref.clone());
+                        }
+                    }
+                    if !field_map.is_empty() {
+                        ctx.local_class_field_aliases.insert(*id, field_map);
+                    }
+                }
             }
 
             // Issue #50: row-alias detection. When `let krow = X[i]` where
