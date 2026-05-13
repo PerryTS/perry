@@ -24,6 +24,12 @@ struct BottomNavState {
     items: Vec<ItemViews>,
     callback_key: i64,
     selected: i64,
+    /// Issue #706 — explicit ARGB tint for the selected tab. None
+    /// keeps the existing default blue (#FF2563EB) used in apply_styling.
+    selected_tint: Option<i32>,
+    /// Issue #706 — explicit ARGB tint for unselected tabs. None falls
+    /// back to the existing default gray (#FF6B7280).
+    unselected_tint: Option<i32>,
 }
 
 thread_local! {
@@ -128,6 +134,8 @@ pub fn create(on_select: f64) -> i64 {
                 items: Vec::new(),
                 callback_key: cb_key,
                 selected: 0,
+                selected_tint: None,
+                unselected_tint: None,
             },
         );
     });
@@ -489,7 +497,7 @@ pub fn set_selected(handle: i64, index: i64) {
 }
 
 fn apply_styling(handle: i64) {
-    let (items, selected) = STATES.with(|s| {
+    let (items, selected, selected_tint, unselected_tint) = STATES.with(|s| {
         let map = s.borrow();
         match map.get(&handle) {
             Some(st) => (
@@ -498,17 +506,20 @@ fn apply_styling(handle: i64) {
                     .map(|i| (i.icon, i.label))
                     .collect::<Vec<_>>(),
                 st.selected,
+                st.selected_tint,
+                st.unselected_tint,
             ),
-            None => (Vec::new(), 0),
+            None => (Vec::new(), 0, None, None),
         }
     });
     let mut env = jni_bridge::get_env();
     let _ = env.push_local_frame(16);
     for (i, (icon_handle, label_handle)) in items.iter().enumerate() {
-        let color = if i as i64 == selected {
-            0xFF2563EBu32 as i32
+        let is_sel = i as i64 == selected;
+        let color = if is_sel {
+            selected_tint.unwrap_or(0xFF2563EBu32 as i32)
         } else {
-            0xFF6B7280u32 as i32
+            unselected_tint.unwrap_or(0xFF6B7280u32 as i32)
         };
         if let Some(icon_ref) = super::get_widget(*icon_handle) {
             let _ = env.call_method(
@@ -530,4 +541,35 @@ fn apply_styling(handle: i64) {
     unsafe {
         let _ = env.pop_local_frame(&JObject::null());
     }
+}
+
+/// Pack RGBA 0..1 into Android ARGB int (`0xAARRGGBB`).
+fn rgba_to_argb(r: f64, g: f64, b: f64, a: f64) -> i32 {
+    let to_u8 = |v: f64| -> u32 { (v.clamp(0.0, 1.0) * 255.0).round() as u32 };
+    let argb = (to_u8(a) << 24) | (to_u8(r) << 16) | (to_u8(g) << 8) | to_u8(b);
+    argb as i32
+}
+
+/// Issue #706 — override the active tab's tint. Stored in `BottomNavState`
+/// and applied via `setColorFilter` (icon) + `setTextColor` (label) on the
+/// next `apply_styling` pass.
+pub fn set_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    let argb = rgba_to_argb(r, g, b, a);
+    STATES.with(|s| {
+        if let Some(state) = s.borrow_mut().get_mut(&handle) {
+            state.selected_tint = Some(argb);
+        }
+    });
+    apply_styling(handle);
+}
+
+/// Issue #706 — override inactive tabs' tint.
+pub fn set_unselected_tint_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    let argb = rgba_to_argb(r, g, b, a);
+    STATES.with(|s| {
+        if let Some(state) = s.borrow_mut().get_mut(&handle) {
+            state.unselected_tint = Some(argb);
+        }
+    });
+    apply_styling(handle);
 }

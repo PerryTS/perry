@@ -2060,6 +2060,7 @@ fn decode_hex(input: &[u8]) -> Vec<u8> {
     }
 }
 
+#[cfg(test)]
 fn encode_hex(input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(input.len() * 2);
     let table = HEX_ENCODE_TABLE;
@@ -2078,6 +2079,7 @@ fn decode_base64(input: &[u8]) -> Vec<u8> {
     }
 }
 
+#[cfg(test)]
 fn encode_base64(input: &[u8]) -> Vec<u8> {
     let out_len = input.len().div_ceil(3) * 4;
     let mut out = vec![0u8; out_len];

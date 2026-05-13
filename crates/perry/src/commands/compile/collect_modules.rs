@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use crate::OutputFormat;
 
 use super::{
-    cached_resolve_import, djb2_hash, extract_compile_package_dir, has_perry_native_library,
+    cached_resolve_import, extract_compile_package_dir, has_perry_native_library,
     is_declaration_file, is_in_compile_package, is_in_perry_native_package, is_js_file,
     parse_cached, parse_native_library_manifest, parse_package_specifier, CompilationContext,
     JsModule, ParseCache,
@@ -129,11 +129,11 @@ pub(super) fn collect_modules(
         raw_source
     };
 
-    // Record the source hash for V2.2's per-module object cache. Computed here
-    // (instead of in the rayon codegen loop) so the cache key doesn't force a
-    // second read of the source bytes — we already have them.
-    ctx.module_source_hashes
-        .insert(canonical.clone(), djb2_hash(source.as_bytes()));
+    // Note (#686): we no longer hash source bytes here. The object cache key
+    // is now keyed on a post-transform HIR fingerprint computed inside the
+    // rayon codegen job (see compile.rs's main per-module closure), so
+    // formatter-only edits hit the cache. Removing the per-source hash also
+    // removes one bytes scan per module from the collect path.
 
     let filename = canonical
         .file_name()
@@ -216,7 +216,24 @@ pub(super) fn collect_modules(
     let is_external_module = !canonical.starts_with(&ctx.project_root)
         || canonical.to_string_lossy().contains("/node_modules/")
         || entry_path.to_string_lossy().contains("/node_modules/");
-    let (mut hir_module, new_next_class_id) = perry_hir::lower_module_full(
+    // Refs #665: install per-thread override so HIR's `is_native_module`
+    // returns false for packages the user opted into via
+    // `perry.compilePackages`. Without this, the HIR lowering at
+    // `expr_member::lower_member` treats `obj.prop` on a registered
+    // native instance as a zero-arg FFI getter call (`NativeMethodCall {
+    // method, args: [] }`), which for compile-package-overridden classes
+    // routes through `js_native_call_method` and returns `0.0` — the
+    // bug Ralph hit as `typeof limiter.consume === "number"`. With the
+    // override in place, `is_native_module("rate-limiter-flexible")`
+    // returns false, the import is not registered as a native module,
+    // `limiter` is not tagged as a native instance, and `limiter.consume`
+    // lowers as a real `PropertyGet` → codegen's class-method-bind path
+    // synthesizes a `BOUND_METHOD_FUNC_PTR` closure. The thread-local
+    // is rayon-safe (each worker thread has its own copy) and cleared
+    // immediately after the lower call so it can't leak to subsequent
+    // unrelated work on the same thread.
+    perry_hir::set_compile_packages_override(ctx.compile_packages.clone());
+    let lower_result = perry_hir::lower_module_full(
         ast_module,
         &module_name,
         &source_file_path,
@@ -225,7 +242,9 @@ pub(super) fn collect_modules(
         imported_class_fields,
         is_entry_module,
         is_external_module,
-    )?;
+    );
+    perry_hir::clear_compile_packages_override();
+    let (mut hir_module, new_next_class_id) = lower_result?;
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
     // Process imports and update their resolved paths and module kinds
@@ -234,6 +253,19 @@ pub(super) fn collect_modules(
         if let Some(alias) = ctx.package_aliases.get(import.source.as_str()).cloned() {
             import.source = alias;
             import.is_native = perry_hir::is_native_module(&import.source);
+        }
+
+        // Refs #665: an opt-in via `perry.compilePackages` overrides the
+        // built-in native binding. HIR lowering set `is_native` based on the
+        // NATIVE_MODULES manifest alone; downgrade it here so the import
+        // falls through to file resolution (cjs_wrap + native codegen) and
+        // the user's `node_modules` copy wins. Mirrors the parallel check in
+        // `resolve::resolve_import`.
+        if import.is_native {
+            let (import_pkg_name, _) = super::resolve::parse_package_specifier(&import.source);
+            if ctx.compile_packages.contains(&import_pkg_name) {
+                import.is_native = false;
+            }
         }
 
         if import.is_native {

@@ -2632,10 +2632,6 @@ fn resolve_file_deps(project_dir: &Path) -> Vec<(String, PathBuf)> {
     deps
 }
 
-pub(crate) fn create_project_tarball(project_dir: &Path) -> Result<Vec<u8>> {
-    create_project_tarball_with_excludes(project_dir, &[])
-}
-
 pub(crate) fn create_project_tarball_with_excludes(
     project_dir: &Path,
     extra_excludes: &[String],

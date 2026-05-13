@@ -1042,10 +1042,12 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     // cursor + cumulative-walk threshold + sparse cache + force-
     // materialize-on-mutate) means lazy no longer loses on any
     // measured access pattern for non-trivial blobs. The blob-size
-    // threshold avoids tape-build overhead on tiny parses where
-    // direct is measurably faster (small-array bench: lazy 35 ms vs
-    // direct 32 ms → below threshold, lazy fires only on
-    // genuine-size payloads).
+    // threshold avoids tape-build overhead on small parses where
+    // direct is measurably faster. #437 showed the 21 KB
+    // honest_bench JSON pipeline fixture paying lazy-header +
+    // forced-materialization overhead while still iterating every
+    // record, so auto-mode now waits for a larger blob before using
+    // the tape path.
     //
     // Escape hatches: `PERRY_JSON_TAPE=0` forces the direct parser
     // for every parse (correctness fallback if a workload hits an
@@ -1064,20 +1066,21 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     // single tree build. The cumulative walk-steps trigger in
     // `lazy_get` only catches *random* access, not sequential.
     //
-    // The auto-mode size window: lazy fires above 1 KB (small
+    // The auto-mode size window: lazy fires above 64 KB (small
     // parses don't pay the tape build) and below 16 MB (large
     // blobs are dominated by the iterate-all idiom in practice —
     // 108 MB honest_bench full fixture, server log dumps, dataset
     // ETL — and the direct parser's tree-build is faster end-to-
     // end than tape + materialize). The upper bound was tuned
-    // against the honest_bench small (21 KB → lazy, 7-10 ms) and
-    // full (108 MB → direct, ~3.3 s) fixtures; intermediate sizes
-    // need re-evaluation when their workload shape is known.
+    // against the honest_bench small (21 KB → direct, avoids
+    // lazy+materialize overhead on iterate-all) and full (108 MB →
+    // direct, ~3.3 s) fixtures; intermediate sizes need
+    // re-evaluation when their workload shape is known.
     //
     // Escape hatch via PERRY_JSON_TAPE=1 (force lazy regardless
     // of size, useful for testing) / =0 (force direct, useful as
     // a correctness fallback).
-    const LAZY_MIN_BLOB_BYTES: usize = 1024;
+    const LAZY_MIN_BLOB_BYTES: usize = 64 * 1024;
     const LAZY_MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
     let tape_mode = tape_mode_from_env();
     let use_tape = match tape_mode {

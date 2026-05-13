@@ -36,6 +36,12 @@ struct BottomNavState {
     items: Vec<ItemViews>,
     on_select: f64,
     selected: i64,
+    /// Issue #706 — explicit RGBA tint for the selected tab. None
+    /// keeps the existing `suggested-action` + `accent` CSS classes
+    /// (which inherit from the active GTK theme).
+    selected_tint: Option<(u16, u16, u16)>,
+    /// Issue #706 — explicit RGBA tint for inactive tabs.
+    unselected_tint: Option<(u16, u16, u16)>,
 }
 
 thread_local! {
@@ -56,6 +62,8 @@ pub fn create(on_select: f64) -> i64 {
                 items: Vec::new(),
                 on_select,
                 selected: 0,
+                selected_tint: None,
+                unselected_tint: None,
             },
         );
     });
@@ -169,19 +177,68 @@ fn select_index(handle: i64, index: i64) {
 }
 
 fn apply_styling(handle: i64) {
+    use gtk4::pango;
     STATES.with(|s| {
         let nav = s.borrow();
         let Some(state) = nav.get(&handle) else {
             return;
         };
         for (i, item) in state.items.iter().enumerate() {
-            if i as i64 == state.selected {
+            let is_sel = i as i64 == state.selected;
+            let tint = if is_sel {
+                state.selected_tint
+            } else {
+                state.unselected_tint
+            };
+            // When an explicit tint is set, override the label foreground
+            // via a Pango AttrColor (the canonical "set the GtkLabel's
+            // text color" path that works across themes). Selected
+            // styling falls back to the existing CSS classes when no
+            // explicit tint is requested.
+            if let Some((r16, g16, b16)) = tint {
+                let attrs = pango::AttrList::new();
+                attrs.insert(pango::AttrColor::new_foreground(r16, g16, b16));
+                item.label.set_attributes(Some(&attrs));
+            } else {
+                item.label.set_attributes(None);
+            }
+
+            if is_sel {
                 item.button.add_css_class("suggested-action");
-                item.label.add_css_class("accent");
+                if tint.is_none() {
+                    item.label.add_css_class("accent");
+                } else {
+                    item.label.remove_css_class("accent");
+                }
             } else {
                 item.button.remove_css_class("suggested-action");
                 item.label.remove_css_class("accent");
             }
         }
     });
+}
+
+/// Issue #706 — override the active tab's tint (RGBA 0.0-1.0).
+pub fn set_tint_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
+    STATES.with(|s| {
+        if let Some(state) = s.borrow_mut().get_mut(&handle) {
+            state.selected_tint = Some(rgb_to_pango(r, g, b));
+        }
+    });
+    apply_styling(handle);
+}
+
+/// Issue #706 — override the inactive tabs' tint (RGBA 0.0-1.0).
+pub fn set_unselected_tint_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
+    STATES.with(|s| {
+        if let Some(state) = s.borrow_mut().get_mut(&handle) {
+            state.unselected_tint = Some(rgb_to_pango(r, g, b));
+        }
+    });
+    apply_styling(handle);
+}
+
+fn rgb_to_pango(r: f64, g: f64, b: f64) -> (u16, u16, u16) {
+    let to16 = |v: f64| (v.clamp(0.0, 1.0) * 65535.0) as u16;
+    (to16(r), to16(g), to16(b))
 }

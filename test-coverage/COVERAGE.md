@@ -1,930 +1,125 @@
 # Perry FFI Test Coverage
 
-Generated: 2026-04-16T07:10:40Z
+Generated: 2026-05-11T17:05:37Z
 
 ## Summary
 
-- **Total FFI functions:** 1437
-- **Covered (referenced in tests):** 615
-- **Uncovered:** 822
-- **Coverage:** 42.8%
+- **Total FFI functions:** 1771
+- **Covered by TypeScript fixtures:** 1771 (100.0%)
+- **Covered by Rust tests:** 1430 (80.7%)
+- **Covered by either TS or Rust:** 1771 (100.0%)
+- **Uncovered by either TS or Rust:** 0
 
 ## Coverage by File
 
-| File | Total | Covered | Coverage |
-|------|-------|---------|----------|
-| `crates/perry-runtime/src/arena.rs` | 4 | 0 | 0% |
-| `crates/perry-runtime/src/array.rs` | 67 | 67 | 100% |
-| `crates/perry-runtime/src/bigint.rs` | 28 | 28 | 100% |
-| `crates/perry-runtime/src/box.rs` | 3 | 0 | 0% |
-| `crates/perry-runtime/src/buffer.rs` | 68 | 68 | 100% |
-| `crates/perry-runtime/src/builtins.rs` | 60 | 6 | 10% |
-| `crates/perry-runtime/src/child_process.rs` | 7 | 7 | 100% |
-| `crates/perry-runtime/src/closure.rs` | 54 | 54 | 100% |
-| `crates/perry-runtime/src/date.rs` | 40 | 40 | 100% |
-| `crates/perry-runtime/src/error.rs` | 14 | 5 | 35% |
-| `crates/perry-runtime/src/exception.rs` | 8 | 0 | 0% |
-| `crates/perry-runtime/src/fs.rs` | 23 | 8 | 34% |
-| `crates/perry-runtime/src/gc.rs` | 7 | 7 | 100% |
-| `crates/perry-runtime/src/geisterhand_registry.rs` | 22 | 0 | 0% |
-| `crates/perry-runtime/src/i18n.rs` | 11 | 0 | 0% |
-| `crates/perry-runtime/src/ios_game_loop.rs` | 3 | 1 | 33% |
-| `crates/perry-runtime/src/json.rs` | 13 | 1 | 7% |
-| `crates/perry-runtime/src/lib.rs` | 6 | 1 | 16% |
-| `crates/perry-runtime/src/map.rs` | 12 | 10 | 83% |
-| `crates/perry-runtime/src/math.rs` | 27 | 0 | 0% |
-| `crates/perry-runtime/src/net.rs` | 11 | 11 | 100% |
-| `crates/perry-runtime/src/object.rs` | 60 | 60 | 100% |
-| `crates/perry-runtime/src/os.rs` | 29 | 29 | 100% |
-| `crates/perry-runtime/src/path.rs` | 13 | 6 | 46% |
-| `crates/perry-runtime/src/plugin.rs` | 22 | 0 | 0% |
-| `crates/perry-runtime/src/process.rs` | 3 | 0 | 0% |
-| `crates/perry-runtime/src/promise.rs` | 26 | 10 | 38% |
-| `crates/perry-runtime/src/proxy.rs` | 19 | 1 | 5% |
-| `crates/perry-runtime/src/regex.rs` | 18 | 18 | 100% |
-| `crates/perry-runtime/src/set.rs` | 9 | 9 | 100% |
-| `crates/perry-runtime/src/static_plugins.rs` | 2 | 0 | 0% |
-| `crates/perry-runtime/src/stdlib_stubs.rs` | 14 | 1 | 7% |
-| `crates/perry-runtime/src/string.rs` | 47 | 47 | 100% |
-| `crates/perry-runtime/src/symbol.rs` | 14 | 6 | 42% |
-| `crates/perry-runtime/src/text.rs` | 4 | 0 | 0% |
-| `crates/perry-runtime/src/thread.rs` | 5 | 0 | 0% |
-| `crates/perry-runtime/src/timer.rs` | 16 | 3 | 18% |
-| `crates/perry-runtime/src/typedarray.rs` | 12 | 8 | 66% |
-| `crates/perry-runtime/src/url.rs` | 28 | 28 | 100% |
-| `crates/perry-runtime/src/value.rs` | 49 | 49 | 100% |
-| `crates/perry-runtime/src/weakref.rs` | 15 | 8 | 53% |
-| `crates/perry-stdlib/src/argon2.rs` | 5 | 1 | 20% |
-| `crates/perry-stdlib/src/async_local_storage.rs` | 6 | 0 | 0% |
-| `crates/perry-stdlib/src/axios.rs` | 8 | 0 | 0% |
-| `crates/perry-stdlib/src/bcrypt.rs` | 5 | 0 | 0% |
-| `crates/perry-stdlib/src/cheerio.rs` | 18 | 0 | 0% |
-| `crates/perry-stdlib/src/commander.rs` | 15 | 0 | 0% |
-| `crates/perry-stdlib/src/common/async_bridge.rs` | 4 | 1 | 25% |
-| `crates/perry-stdlib/src/common/dispatch.rs` | 4 | 0 | 0% |
-| `crates/perry-stdlib/src/common/handle.rs` | 1 | 1 | 100% |
-| `crates/perry-stdlib/src/cron.rs` | 16 | 1 | 6% |
-| `crates/perry-stdlib/src/crypto.rs` | 14 | 0 | 0% |
-| `crates/perry-stdlib/src/crypto_e2e.rs` | 6 | 0 | 0% |
-| `crates/perry-stdlib/src/dayjs.rs` | 36 | 0 | 0% |
-| `crates/perry-stdlib/src/decimal.rs` | 30 | 0 | 0% |
-| `crates/perry-stdlib/src/dotenv.rs` | 3 | 0 | 0% |
-| `crates/perry-stdlib/src/ethers.rs` | 7 | 0 | 0% |
-| `crates/perry-stdlib/src/events.rs` | 7 | 0 | 0% |
-| `crates/perry-stdlib/src/exponential_backoff.rs` | 2 | 0 | 0% |
-| `crates/perry-stdlib/src/fastify/app.rs` | 14 | 0 | 0% |
-| `crates/perry-stdlib/src/fastify/context.rs` | 20 | 0 | 0% |
-| `crates/perry-stdlib/src/fastify/server.rs` | 2 | 2 | 100% |
-| `crates/perry-stdlib/src/fetch.rs` | 33 | 4 | 12% |
-| `crates/perry-stdlib/src/framework/multipart.rs` | 2 | 2 | 100% |
-| `crates/perry-stdlib/src/framework/request.rs` | 8 | 0 | 0% |
-| `crates/perry-stdlib/src/framework/response.rs` | 8 | 0 | 0% |
-| `crates/perry-stdlib/src/framework/server.rs` | 10 | 0 | 0% |
-| `crates/perry-stdlib/src/http.rs` | 13 | 0 | 0% |
-| `crates/perry-stdlib/src/ioredis.rs` | 18 | 0 | 0% |
-| `crates/perry-stdlib/src/jsonwebtoken.rs` | 5 | 0 | 0% |
-| `crates/perry-stdlib/src/lodash.rs` | 38 | 0 | 0% |
-| `crates/perry-stdlib/src/lru_cache.rs` | 8 | 0 | 0% |
-| `crates/perry-stdlib/src/moment.rs` | 28 | 0 | 0% |
-| `crates/perry-stdlib/src/mongodb.rs` | 15 | 0 | 0% |
-| `crates/perry-stdlib/src/mysql2/connection.rs` | 7 | 0 | 0% |
-| `crates/perry-stdlib/src/mysql2/pool.rs` | 8 | 0 | 0% |
-| `crates/perry-stdlib/src/nanoid.rs` | 3 | 0 | 0% |
-| `crates/perry-stdlib/src/net/mod.rs` | 8 | 5 | 62% |
-| `crates/perry-stdlib/src/nodemailer.rs` | 3 | 0 | 0% |
-| `crates/perry-stdlib/src/pg/connection.rs` | 4 | 0 | 0% |
-| `crates/perry-stdlib/src/pg/pool.rs` | 3 | 0 | 0% |
-| `crates/perry-stdlib/src/ratelimit.rs` | 11 | 0 | 0% |
-| `crates/perry-stdlib/src/sharp.rs` | 18 | 0 | 0% |
-| `crates/perry-stdlib/src/slugify.rs` | 3 | 0 | 0% |
-| `crates/perry-stdlib/src/sqlite.rs` | 13 | 1 | 7% |
-| `crates/perry-stdlib/src/uuid.rs` | 6 | 0 | 0% |
-| `crates/perry-stdlib/src/validator.rs` | 17 | 0 | 0% |
-| `crates/perry-stdlib/src/worker_threads.rs` | 6 | 0 | 0% |
-| `crates/perry-stdlib/src/ws.rs` | 19 | 0 | 0% |
-| `crates/perry-stdlib/src/zlib.rs` | 6 | 0 | 0% |
-
-## Uncovered Functions
-
-- `js_inline_arena_state` (crates/perry-runtime/src/arena.rs)
-- `js_inline_arena_slow_alloc` (crates/perry-runtime/src/arena.rs)
-- `js_arena_alloc` (crates/perry-runtime/src/arena.rs)
-- `js_arena_stats` (crates/perry-runtime/src/arena.rs)
-- `js_box_alloc` (crates/perry-runtime/src/box.rs)
-- `js_box_get` (crates/perry-runtime/src/box.rs)
-- `js_box_set` (crates/perry-runtime/src/box.rs)
-- `js_console_log_dynamic` (crates/perry-runtime/src/builtins.rs)
-- `js_console_error_i32` (crates/perry-runtime/src/builtins.rs)
-- `js_console_error_dynamic` (crates/perry-runtime/src/builtins.rs)
-- `js_console_error_number` (crates/perry-runtime/src/builtins.rs)
-- `js_console_warn_i32` (crates/perry-runtime/src/builtins.rs)
-- `js_console_warn_dynamic` (crates/perry-runtime/src/builtins.rs)
-- `js_console_warn_number` (crates/perry-runtime/src/builtins.rs)
-- `js_console_log_i32` (crates/perry-runtime/src/builtins.rs)
-- `js_console_log_i64` (crates/perry-runtime/src/builtins.rs)
-- `js_console_log_spread` (crates/perry-runtime/src/builtins.rs)
-- `js_console_error_spread` (crates/perry-runtime/src/builtins.rs)
-- `js_console_warn_spread` (crates/perry-runtime/src/builtins.rs)
-- `js_array_print` (crates/perry-runtime/src/builtins.rs)
-- `js_add` (crates/perry-runtime/src/builtins.rs)
-- `js_sub` (crates/perry-runtime/src/builtins.rs)
-- `js_div` (crates/perry-runtime/src/builtins.rs)
-- `js_mod` (crates/perry-runtime/src/builtins.rs)
-- `js_eq` (crates/perry-runtime/src/builtins.rs)
-- `js_loose_eq` (crates/perry-runtime/src/builtins.rs)
-- `js_lt` (crates/perry-runtime/src/builtins.rs)
-- `js_le` (crates/perry-runtime/src/builtins.rs)
-- `js_gt` (crates/perry-runtime/src/builtins.rs)
-- `js_parse_int` (crates/perry-runtime/src/builtins.rs)
-- `js_parse_float` (crates/perry-runtime/src/builtins.rs)
-- `js_number_coerce` (crates/perry-runtime/src/builtins.rs)
-- `js_is_nan` (crates/perry-runtime/src/builtins.rs)
-- `js_is_finite` (crates/perry-runtime/src/builtins.rs)
-- `js_number_is_nan` (crates/perry-runtime/src/builtins.rs)
-- `js_number_is_finite` (crates/perry-runtime/src/builtins.rs)
-- `js_number_is_integer` (crates/perry-runtime/src/builtins.rs)
-- `js_number_is_safe_integer` (crates/perry-runtime/src/builtins.rs)
-- `perry_debug_trace_init` (crates/perry-runtime/src/builtins.rs)
-- `perry_debug_trace_init_done` (crates/perry-runtime/src/builtins.rs)
-- `js_console_time` (crates/perry-runtime/src/builtins.rs)
-- `js_console_time_end` (crates/perry-runtime/src/builtins.rs)
-- `js_console_time_log` (crates/perry-runtime/src/builtins.rs)
-- `js_console_count` (crates/perry-runtime/src/builtins.rs)
-- `js_console_count_reset` (crates/perry-runtime/src/builtins.rs)
-- `js_console_group` (crates/perry-runtime/src/builtins.rs)
-- `js_console_group_begin` (crates/perry-runtime/src/builtins.rs)
-- `js_console_group_end` (crates/perry-runtime/src/builtins.rs)
-- `js_console_assert` (crates/perry-runtime/src/builtins.rs)
-- `js_console_assert_spread` (crates/perry-runtime/src/builtins.rs)
-- `js_console_clear` (crates/perry-runtime/src/builtins.rs)
-- `js_console_table` (crates/perry-runtime/src/builtins.rs)
-- `js_text_encoder_encode` (crates/perry-runtime/src/builtins.rs)
-- `js_text_decoder_decode` (crates/perry-runtime/src/builtins.rs)
-- `js_encode_uri` (crates/perry-runtime/src/builtins.rs)
-- `js_decode_uri` (crates/perry-runtime/src/builtins.rs)
-- `js_encode_uri_component` (crates/perry-runtime/src/builtins.rs)
-- `js_decode_uri_component` (crates/perry-runtime/src/builtins.rs)
-- `js_structured_clone` (crates/perry-runtime/src/builtins.rs)
-- `js_queue_microtask` (crates/perry-runtime/src/builtins.rs)
-- `js_drain_queued_microtasks` (crates/perry-runtime/src/builtins.rs)
-- `js_error_new` (crates/perry-runtime/src/error.rs)
-- `js_error_new_with_message` (crates/perry-runtime/src/error.rs)
-- `js_error_new_with_cause` (crates/perry-runtime/src/error.rs)
-- `js_typeerror_new` (crates/perry-runtime/src/error.rs)
-- `js_rangeerror_new` (crates/perry-runtime/src/error.rs)
-- `js_referenceerror_new` (crates/perry-runtime/src/error.rs)
-- `js_syntaxerror_new` (crates/perry-runtime/src/error.rs)
-- `js_aggregateerror_new` (crates/perry-runtime/src/error.rs)
-- `js_error_get_kind` (crates/perry-runtime/src/error.rs)
-- `js_try_push` (crates/perry-runtime/src/exception.rs)
-- `js_try_end` (crates/perry-runtime/src/exception.rs)
-- `js_throw` (crates/perry-runtime/src/exception.rs)
-- `js_get_exception` (crates/perry-runtime/src/exception.rs)
-- `js_has_exception` (crates/perry-runtime/src/exception.rs)
-- `js_clear_exception` (crates/perry-runtime/src/exception.rs)
-- `js_enter_finally` (crates/perry-runtime/src/exception.rs)
-- `js_leave_finally` (crates/perry-runtime/src/exception.rs)
-- `js_fs_read_file_binary` (crates/perry-runtime/src/fs.rs)
-- `js_fs_rm_recursive` (crates/perry-runtime/src/fs.rs)
-- `js_fs_stat_sync` (crates/perry-runtime/src/fs.rs)
-- `js_fs_rename_sync` (crates/perry-runtime/src/fs.rs)
-- `js_fs_copy_file_sync` (crates/perry-runtime/src/fs.rs)
-- `js_fs_access_sync` (crates/perry-runtime/src/fs.rs)
-- `js_fs_realpath_sync` (crates/perry-runtime/src/fs.rs)
-- `js_fs_mkdtemp_sync` (crates/perry-runtime/src/fs.rs)
-- `js_fs_rmdir_sync` (crates/perry-runtime/src/fs.rs)
-- `js_fs_stats_is_file` (crates/perry-runtime/src/fs.rs)
-- `js_fs_stats_is_directory` (crates/perry-runtime/src/fs.rs)
-- `js_fs_access_sync_throw` (crates/perry-runtime/src/fs.rs)
-- `js_fs_create_write_stream` (crates/perry-runtime/src/fs.rs)
-- `js_fs_create_read_stream` (crates/perry-runtime/src/fs.rs)
-- `js_fs_read_file_callback` (crates/perry-runtime/src/fs.rs)
-- `perry_geisterhand_register_state_set` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_register_screenshot_capture` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_register_textfield_set_string` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_register_scroll_set` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_register_read_value` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_register_query_tree` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_register` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_register_with_shortcut` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_find_by_shortcut` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_queue_scroll` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_queue_action` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_queue_action1` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_queue_state_set` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_queue_set_text` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_pump` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_get_registry_json` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_free_string` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_registry_count` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_request_screenshot` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_request_value` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_request_tree` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_geisterhand_get_closure` (crates/perry-runtime/src/geisterhand_registry.rs)
-- `perry_i18n_get_locale_index` (crates/perry-runtime/src/i18n.rs)
-- `perry_i18n_set_locale_index` (crates/perry-runtime/src/i18n.rs)
-- `perry_i18n_init` (crates/perry-runtime/src/i18n.rs)
-- `perry_i18n_interpolate` (crates/perry-runtime/src/i18n.rs)
-- `perry_i18n_plural_category` (crates/perry-runtime/src/i18n.rs)
-- `perry_i18n_set_plural_locales` (crates/perry-runtime/src/i18n.rs)
-- `perry_i18n_format_number` (crates/perry-runtime/src/i18n.rs)
-- `perry_i18n_format_currency` (crates/perry-runtime/src/i18n.rs)
-- `perry_i18n_format_percent` (crates/perry-runtime/src/i18n.rs)
-- `perry_i18n_format_date` (crates/perry-runtime/src/i18n.rs)
-- `perry_i18n_format_time` (crates/perry-runtime/src/i18n.rs)
-- `perry_ios_get_connected_scene` (crates/perry-runtime/src/ios_game_loop.rs)
-- `perry_ios_classes_registered` (crates/perry-runtime/src/ios_game_loop.rs)
-- `js_json_parse` (crates/perry-runtime/src/json.rs)
-- `js_json_stringify_string` (crates/perry-runtime/src/json.rs)
-- `js_json_stringify_number` (crates/perry-runtime/src/json.rs)
-- `js_json_stringify_bool` (crates/perry-runtime/src/json.rs)
-- `js_json_stringify_null` (crates/perry-runtime/src/json.rs)
-- `js_json_is_valid` (crates/perry-runtime/src/json.rs)
-- `js_json_get_string` (crates/perry-runtime/src/json.rs)
-- `js_json_get_number` (crates/perry-runtime/src/json.rs)
-- `js_json_get_bool` (crates/perry-runtime/src/json.rs)
-- `js_json_stringify_with_replacer` (crates/perry-runtime/src/json.rs)
-- `js_json_stringify_full` (crates/perry-runtime/src/json.rs)
-- `js_json_parse_with_reviver` (crates/perry-runtime/src/json.rs)
-- `js_register_stdlib_pump` (crates/perry-runtime/src/lib.rs)
-- `js_run_stdlib_pump` (crates/perry-runtime/src/lib.rs)
-- `js_register_stdlib_has_active` (crates/perry-runtime/src/lib.rs)
-- `js_stdlib_has_active_handles` (crates/perry-runtime/src/lib.rs)
-- `perry_init_guard_check_and_set` (crates/perry-runtime/src/lib.rs)
-- `js_map_alloc` (crates/perry-runtime/src/map.rs)
-- `js_map_from_array` (crates/perry-runtime/src/map.rs)
-- `js_math_pow` (crates/perry-runtime/src/math.rs)
-- `js_math_fmod` (crates/perry-runtime/src/math.rs)
-- `js_math_log` (crates/perry-runtime/src/math.rs)
-- `js_math_log2` (crates/perry-runtime/src/math.rs)
-- `js_math_log10` (crates/perry-runtime/src/math.rs)
-- `js_math_sin` (crates/perry-runtime/src/math.rs)
-- `js_math_cos` (crates/perry-runtime/src/math.rs)
-- `js_math_tan` (crates/perry-runtime/src/math.rs)
-- `js_math_asin` (crates/perry-runtime/src/math.rs)
-- `js_math_acos` (crates/perry-runtime/src/math.rs)
-- `js_math_atan` (crates/perry-runtime/src/math.rs)
-- `js_math_atan2` (crates/perry-runtime/src/math.rs)
-- `js_math_cbrt` (crates/perry-runtime/src/math.rs)
-- `js_math_fround` (crates/perry-runtime/src/math.rs)
-- `js_math_clz32` (crates/perry-runtime/src/math.rs)
-- `js_math_expm1` (crates/perry-runtime/src/math.rs)
-- `js_math_log1p` (crates/perry-runtime/src/math.rs)
-- `js_math_sinh` (crates/perry-runtime/src/math.rs)
-- `js_math_cosh` (crates/perry-runtime/src/math.rs)
-- `js_math_tanh` (crates/perry-runtime/src/math.rs)
-- `js_math_asinh` (crates/perry-runtime/src/math.rs)
-- `js_math_acosh` (crates/perry-runtime/src/math.rs)
-- `js_math_atanh` (crates/perry-runtime/src/math.rs)
-- `js_math_hypot` (crates/perry-runtime/src/math.rs)
-- `js_math_random` (crates/perry-runtime/src/math.rs)
-- `js_math_min_array` (crates/perry-runtime/src/math.rs)
-- `js_math_max_array` (crates/perry-runtime/src/math.rs)
-- `js_path_normalize` (crates/perry-runtime/src/path.rs)
-- `js_path_relative` (crates/perry-runtime/src/path.rs)
-- `js_path_basename_ext` (crates/perry-runtime/src/path.rs)
-- `js_path_parse` (crates/perry-runtime/src/path.rs)
-- `js_path_format` (crates/perry-runtime/src/path.rs)
-- `js_path_sep_get` (crates/perry-runtime/src/path.rs)
-- `js_path_delimiter_get` (crates/perry-runtime/src/path.rs)
-- `perry_plugin_register_hook` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_register_hook_ex` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_register_tool` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_register_service` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_register_route` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_get_config` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_log` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_set_metadata` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_on` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_emit` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_load` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_unload` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_emit_hook` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_emit_event` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_invoke_tool` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_set_config` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_discover` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_list_plugins` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_list_hooks` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_list_tools` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_count` (crates/perry-runtime/src/plugin.rs)
-- `perry_plugin_init` (crates/perry-runtime/src/plugin.rs)
-- `js_process_exit` (crates/perry-runtime/src/process.rs)
-- `js_getenv` (crates/perry-runtime/src/process.rs)
-- `js_process_memory_usage` (crates/perry-runtime/src/process.rs)
-- `js_promise_free` (crates/perry-runtime/src/promise.rs)
-- `js_promise_reason` (crates/perry-runtime/src/promise.rs)
-- `js_promise_result` (crates/perry-runtime/src/promise.rs)
-- `js_promise_resolve_with_promise` (crates/perry-runtime/src/promise.rs)
-- `js_promise_reject` (crates/perry-runtime/src/promise.rs)
-- `js_promise_catch` (crates/perry-runtime/src/promise.rs)
-- `js_promise_finally` (crates/perry-runtime/src/promise.rs)
-- `js_array_from_async` (crates/perry-runtime/src/promise.rs)
-- `js_promise_rejected` (crates/perry-runtime/src/promise.rs)
-- `js_value_is_promise` (crates/perry-runtime/src/promise.rs)
-- `js_promise_new_with_executor` (crates/perry-runtime/src/promise.rs)
-- `js_promise_all` (crates/perry-runtime/src/promise.rs)
-- `js_promise_race` (crates/perry-runtime/src/promise.rs)
-- `js_promise_all_settled` (crates/perry-runtime/src/promise.rs)
-- `js_promise_any` (crates/perry-runtime/src/promise.rs)
-- `js_promise_with_resolvers` (crates/perry-runtime/src/promise.rs)
-- `js_proxy_new` (crates/perry-runtime/src/proxy.rs)
-- `js_proxy_revoke` (crates/perry-runtime/src/proxy.rs)
-- `js_proxy_is_revoked` (crates/perry-runtime/src/proxy.rs)
-- `js_proxy_is_proxy` (crates/perry-runtime/src/proxy.rs)
-- `js_proxy_target` (crates/perry-runtime/src/proxy.rs)
-- `js_proxy_get` (crates/perry-runtime/src/proxy.rs)
-- `js_proxy_set` (crates/perry-runtime/src/proxy.rs)
-- `js_proxy_delete` (crates/perry-runtime/src/proxy.rs)
-- `js_proxy_apply` (crates/perry-runtime/src/proxy.rs)
-- `js_proxy_construct` (crates/perry-runtime/src/proxy.rs)
-- `js_reflect_get` (crates/perry-runtime/src/proxy.rs)
-- `js_reflect_set` (crates/perry-runtime/src/proxy.rs)
-- `js_reflect_has` (crates/perry-runtime/src/proxy.rs)
-- `js_reflect_delete` (crates/perry-runtime/src/proxy.rs)
-- `js_reflect_own_keys` (crates/perry-runtime/src/proxy.rs)
-- `js_reflect_apply` (crates/perry-runtime/src/proxy.rs)
-- `js_reflect_define_property` (crates/perry-runtime/src/proxy.rs)
-- `js_reflect_get_prototype_of` (crates/perry-runtime/src/proxy.rs)
-- `perry_register_static_plugin` (crates/perry-runtime/src/static_plugins.rs)
-- `perry_resolve_static_plugin` (crates/perry-runtime/src/static_plugins.rs)
-- `js_ws_connect` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_connect_start` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_send` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_close` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_is_open` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_message_count` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_receive` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_wait_for_message` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_on` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_server_new` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_server_close` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_ws_process_pending` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_stdlib_init_dispatch` (crates/perry-runtime/src/stdlib_stubs.rs)
-- `js_is_symbol` (crates/perry-runtime/src/symbol.rs)
-- `js_symbol_new_empty` (crates/perry-runtime/src/symbol.rs)
-- `js_symbol_new` (crates/perry-runtime/src/symbol.rs)
-- `js_symbol_key_for` (crates/perry-runtime/src/symbol.rs)
-- `js_object_get_symbol_property` (crates/perry-runtime/src/symbol.rs)
-- `js_object_get_own_property_symbols` (crates/perry-runtime/src/symbol.rs)
-- `js_symbol_typeof` (crates/perry-runtime/src/symbol.rs)
-- `js_symbol_equals` (crates/perry-runtime/src/symbol.rs)
-- `js_text_encoder_new` (crates/perry-runtime/src/text.rs)
-- `js_text_decoder_new` (crates/perry-runtime/src/text.rs)
-- `js_text_encoder_encode_llvm` (crates/perry-runtime/src/text.rs)
-- `js_text_decoder_decode_llvm` (crates/perry-runtime/src/text.rs)
-- `js_thread_parallel_map` (crates/perry-runtime/src/thread.rs)
-- `js_thread_parallel_filter` (crates/perry-runtime/src/thread.rs)
-- `js_thread_spawn` (crates/perry-runtime/src/thread.rs)
-- `js_thread_process_pending` (crates/perry-runtime/src/thread.rs)
-- `js_thread_has_pending` (crates/perry-runtime/src/thread.rs)
-- `js_timer_now` (crates/perry-runtime/src/timer.rs)
-- `js_set_timeout` (crates/perry-runtime/src/timer.rs)
-- `js_set_timeout_value` (crates/perry-runtime/src/timer.rs)
-- `js_timer_tick` (crates/perry-runtime/src/timer.rs)
-- `js_timer_has_pending` (crates/perry-runtime/src/timer.rs)
-- `js_timer_next_deadline` (crates/perry-runtime/src/timer.rs)
-- `js_sleep_ms` (crates/perry-runtime/src/timer.rs)
-- `js_set_timeout_callback` (crates/perry-runtime/src/timer.rs)
-- `js_callback_timer_tick` (crates/perry-runtime/src/timer.rs)
-- `js_callback_timer_has_pending` (crates/perry-runtime/src/timer.rs)
-- `js_interval_timer_tick` (crates/perry-runtime/src/timer.rs)
-- `js_interval_timer_has_pending` (crates/perry-runtime/src/timer.rs)
-- `js_interval_timer_next_deadline` (crates/perry-runtime/src/timer.rs)
-- `js_typed_array_new_empty` (crates/perry-runtime/src/typedarray.rs)
-- `js_typed_array_new_from_array` (crates/perry-runtime/src/typedarray.rs)
-- `js_typed_array_length` (crates/perry-runtime/src/typedarray.rs)
-- `js_typed_array_set` (crates/perry-runtime/src/typedarray.rs)
-- `js_weakref_new` (crates/perry-runtime/src/weakref.rs)
-- `js_weakref_deref` (crates/perry-runtime/src/weakref.rs)
-- `js_finreg_new` (crates/perry-runtime/src/weakref.rs)
-- `js_finreg_register` (crates/perry-runtime/src/weakref.rs)
-- `js_finreg_unregister` (crates/perry-runtime/src/weakref.rs)
-- `js_weakmap_new` (crates/perry-runtime/src/weakref.rs)
-- `js_weakset_new` (crates/perry-runtime/src/weakref.rs)
-- `js_argon2_hash_sync` (crates/perry-stdlib/src/argon2.rs)
-- `js_argon2_verify` (crates/perry-stdlib/src/argon2.rs)
-- `js_argon2_verify_sync` (crates/perry-stdlib/src/argon2.rs)
-- `js_argon2_needs_rehash` (crates/perry-stdlib/src/argon2.rs)
-- `js_async_local_storage_new` (crates/perry-stdlib/src/async_local_storage.rs)
-- `js_async_local_storage_run` (crates/perry-stdlib/src/async_local_storage.rs)
-- `js_async_local_storage_get_store` (crates/perry-stdlib/src/async_local_storage.rs)
-- `js_async_local_storage_enter_with` (crates/perry-stdlib/src/async_local_storage.rs)
-- `js_async_local_storage_exit` (crates/perry-stdlib/src/async_local_storage.rs)
-- `js_async_local_storage_disable` (crates/perry-stdlib/src/async_local_storage.rs)
-- `js_axios_get` (crates/perry-stdlib/src/axios.rs)
-- `js_axios_post` (crates/perry-stdlib/src/axios.rs)
-- `js_axios_put` (crates/perry-stdlib/src/axios.rs)
-- `js_axios_delete` (crates/perry-stdlib/src/axios.rs)
-- `js_axios_patch` (crates/perry-stdlib/src/axios.rs)
-- `js_axios_response_status` (crates/perry-stdlib/src/axios.rs)
-- `js_axios_response_status_text` (crates/perry-stdlib/src/axios.rs)
-- `js_axios_response_data` (crates/perry-stdlib/src/axios.rs)
-- `js_bcrypt_hash` (crates/perry-stdlib/src/bcrypt.rs)
-- `js_bcrypt_compare` (crates/perry-stdlib/src/bcrypt.rs)
-- `js_bcrypt_gen_salt` (crates/perry-stdlib/src/bcrypt.rs)
-- `js_bcrypt_hash_sync` (crates/perry-stdlib/src/bcrypt.rs)
-- `js_bcrypt_compare_sync` (crates/perry-stdlib/src/bcrypt.rs)
-- `js_cheerio_load` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_load_fragment` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_select` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_text` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_html` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_attr` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_length` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_first` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_last` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_eq` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_find` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_children` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_parent` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_has_class` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_is` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_to_array` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_texts` (crates/perry-stdlib/src/cheerio.rs)
-- `js_cheerio_selection_attrs` (crates/perry-stdlib/src/cheerio.rs)
-- `js_commander_new` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_name` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_description` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_version` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_option` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_required_option` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_action` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_command` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_parse` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_opts` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_get_option` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_get_option_number` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_get_option_bool` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_args_count` (crates/perry-stdlib/src/commander.rs)
-- `js_commander_get_arg` (crates/perry-stdlib/src/commander.rs)
-- `js_stdlib_has_active_handles` (crates/perry-stdlib/src/common/async_bridge.rs)
-- `js_ws_process_pending` (crates/perry-stdlib/src/common/async_bridge.rs)
-- `js_ws_process_pending` (crates/perry-stdlib/src/common/async_bridge.rs)
-- `js_handle_method_dispatch` (crates/perry-stdlib/src/common/dispatch.rs)
-- `js_handle_property_dispatch` (crates/perry-stdlib/src/common/dispatch.rs)
-- `js_handle_property_set_dispatch` (crates/perry-stdlib/src/common/dispatch.rs)
-- `js_stdlib_init_dispatch` (crates/perry-stdlib/src/common/dispatch.rs)
-- `js_cron_timer_tick` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_timer_has_pending` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_validate` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_schedule` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_job_start` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_job_is_running` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_next_date` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_next_dates` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_describe` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_set_interval` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_clear_interval` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_set_timeout` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_clear_timeout` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_timer_tick` (crates/perry-stdlib/src/cron.rs)
-- `js_cron_timer_has_pending` (crates/perry-stdlib/src/cron.rs)
-- `js_crypto_sha256` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_sha256_bytes` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_md5` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_random_bytes_buffer` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_random_bytes_hex` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_random_uuid` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_hmac_sha256` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_hmac_sha256_bytes` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_pbkdf2_bytes` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_aes256_encrypt` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_aes256_decrypt` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_pbkdf2` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_scrypt` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_scrypt_custom` (crates/perry-stdlib/src/crypto.rs)
-- `js_crypto_x25519_keypair` (crates/perry-stdlib/src/crypto_e2e.rs)
-- `js_crypto_x25519_shared_secret` (crates/perry-stdlib/src/crypto_e2e.rs)
-- `js_crypto_aes256_gcm_encrypt` (crates/perry-stdlib/src/crypto_e2e.rs)
-- `js_crypto_aes256_gcm_decrypt` (crates/perry-stdlib/src/crypto_e2e.rs)
-- `js_crypto_random_nonce` (crates/perry-stdlib/src/crypto_e2e.rs)
-- `js_crypto_hkdf_sha256` (crates/perry-stdlib/src/crypto_e2e.rs)
-- `js_dayjs_now` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_from_timestamp` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_parse` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_format` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_to_iso_string` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_value_of` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_unix` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_year` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_month` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_date` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_day` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_hour` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_minute` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_second` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_millisecond` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_add` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_subtract` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_start_of` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_end_of` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_diff` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_is_before` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_is_after` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_is_same` (crates/perry-stdlib/src/dayjs.rs)
-- `js_dayjs_is_valid` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_format` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_parse_iso` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_add_days` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_add_months` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_add_years` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_difference_in_days` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_difference_in_hours` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_difference_in_minutes` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_is_after` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_is_before` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_start_of_day` (crates/perry-stdlib/src/dayjs.rs)
-- `js_datefns_end_of_day` (crates/perry-stdlib/src/dayjs.rs)
-- `js_decimal_from_number` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_from_string` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_plus` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_plus_number` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_minus` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_minus_number` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_times` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_times_number` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_div` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_div_number` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_mod` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_pow` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_sqrt` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_abs` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_neg` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_round` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_floor` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_ceil` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_to_fixed` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_to_string` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_to_number` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_eq` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_lt` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_lte` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_gt` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_gte` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_is_zero` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_is_positive` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_is_negative` (crates/perry-stdlib/src/decimal.rs)
-- `js_decimal_cmp` (crates/perry-stdlib/src/decimal.rs)
-- `js_dotenv_config` (crates/perry-stdlib/src/dotenv.rs)
-- `js_dotenv_config_path` (crates/perry-stdlib/src/dotenv.rs)
-- `js_dotenv_parse` (crates/perry-stdlib/src/dotenv.rs)
-- `js_ethers_get_address` (crates/perry-stdlib/src/ethers.rs)
-- `js_ethers_parse_ether` (crates/perry-stdlib/src/ethers.rs)
-- `js_ethers_format_ether` (crates/perry-stdlib/src/ethers.rs)
-- `js_keccak256_native` (crates/perry-stdlib/src/ethers.rs)
-- `js_keccak256_native_bytes` (crates/perry-stdlib/src/ethers.rs)
-- `js_ethers_format_units` (crates/perry-stdlib/src/ethers.rs)
-- `js_ethers_parse_units` (crates/perry-stdlib/src/ethers.rs)
-- `js_event_emitter_new` (crates/perry-stdlib/src/events.rs)
-- `js_event_emitter_on` (crates/perry-stdlib/src/events.rs)
-- `js_event_emitter_emit` (crates/perry-stdlib/src/events.rs)
-- `js_event_emitter_emit0` (crates/perry-stdlib/src/events.rs)
-- `js_event_emitter_remove_listener` (crates/perry-stdlib/src/events.rs)
-- `js_event_emitter_remove_all_listeners` (crates/perry-stdlib/src/events.rs)
-- `js_event_emitter_listener_count` (crates/perry-stdlib/src/events.rs)
-- `backOff` (crates/perry-stdlib/src/exponential_backoff.rs)
-- `js_backoff_simple` (crates/perry-stdlib/src/exponential_backoff.rs)
-- `js_fastify_create` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_create_with_opts` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_get` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_post` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_put` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_delete` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_patch` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_head` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_options` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_all` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_route` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_add_hook` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_set_error_handler` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_register` (crates/perry-stdlib/src/fastify/app.rs)
-- `js_fastify_req_method` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_url` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_params` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_params_object` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_param` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_query` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_query_object` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_body` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_json` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_headers` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_header` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_get_user_data` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_req_set_user_data` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_reply_status` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_reply_header` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_reply_send` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_ctx_json` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_ctx_text` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_ctx_html` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fastify_ctx_redirect` (crates/perry-stdlib/src/fastify/context.rs)
-- `js_fetch_response_count` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_with_options` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_response_status` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_response_status_text` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_response_ok` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_response_text` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_response_json` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_text` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_stream_start` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_stream_poll` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_stream_status` (crates/perry-stdlib/src/fetch.rs)
-- `js_fetch_stream_close` (crates/perry-stdlib/src/fetch.rs)
-- `js_headers_new` (crates/perry-stdlib/src/fetch.rs)
-- `js_headers_set` (crates/perry-stdlib/src/fetch.rs)
-- `js_headers_get` (crates/perry-stdlib/src/fetch.rs)
-- `js_headers_has` (crates/perry-stdlib/src/fetch.rs)
-- `js_headers_delete` (crates/perry-stdlib/src/fetch.rs)
-- `js_headers_for_each` (crates/perry-stdlib/src/fetch.rs)
-- `js_response_new` (crates/perry-stdlib/src/fetch.rs)
-- `js_response_get_headers` (crates/perry-stdlib/src/fetch.rs)
-- `js_response_clone` (crates/perry-stdlib/src/fetch.rs)
-- `js_response_array_buffer` (crates/perry-stdlib/src/fetch.rs)
-- `js_response_blob` (crates/perry-stdlib/src/fetch.rs)
-- `js_response_static_json` (crates/perry-stdlib/src/fetch.rs)
-- `js_response_static_redirect` (crates/perry-stdlib/src/fetch.rs)
-- `js_request_new` (crates/perry-stdlib/src/fetch.rs)
-- `js_request_get_url` (crates/perry-stdlib/src/fetch.rs)
-- `js_request_get_method` (crates/perry-stdlib/src/fetch.rs)
-- `js_request_get_body` (crates/perry-stdlib/src/fetch.rs)
-- `js_http_request_id` (crates/perry-stdlib/src/framework/request.rs)
-- `js_http_request_query_param` (crates/perry-stdlib/src/framework/request.rs)
-- `js_http_request_query_all` (crates/perry-stdlib/src/framework/request.rs)
-- `js_http_request_headers_all` (crates/perry-stdlib/src/framework/request.rs)
-- `js_http_request_has_header` (crates/perry-stdlib/src/framework/request.rs)
-- `js_http_request_content_type` (crates/perry-stdlib/src/framework/request.rs)
-- `js_http_request_is_method` (crates/perry-stdlib/src/framework/request.rs)
-- `js_http_request_body_length` (crates/perry-stdlib/src/framework/request.rs)
-- `js_http_respond_text` (crates/perry-stdlib/src/framework/response.rs)
-- `js_http_respond_json` (crates/perry-stdlib/src/framework/response.rs)
-- `js_http_respond_html` (crates/perry-stdlib/src/framework/response.rs)
-- `js_http_respond_with_headers` (crates/perry-stdlib/src/framework/response.rs)
-- `js_http_respond_redirect` (crates/perry-stdlib/src/framework/response.rs)
-- `js_http_respond_not_found` (crates/perry-stdlib/src/framework/response.rs)
-- `js_http_respond_error` (crates/perry-stdlib/src/framework/response.rs)
-- `js_http_respond_status_text` (crates/perry-stdlib/src/framework/response.rs)
-- `js_http_server_create` (crates/perry-stdlib/src/framework/server.rs)
-- `js_http_server_accept` (crates/perry-stdlib/src/framework/server.rs)
-- `js_http_request_method` (crates/perry-stdlib/src/framework/server.rs)
-- `js_http_request_path` (crates/perry-stdlib/src/framework/server.rs)
-- `js_http_request_query` (crates/perry-stdlib/src/framework/server.rs)
-- `js_http_request_header` (crates/perry-stdlib/src/framework/server.rs)
-- `js_http_request_body` (crates/perry-stdlib/src/framework/server.rs)
-- `js_http_respond` (crates/perry-stdlib/src/framework/server.rs)
-- `js_http_server_accept_v2` (crates/perry-stdlib/src/framework/server.rs)
-- `js_http_server_close` (crates/perry-stdlib/src/framework/server.rs)
-- `js_http_request` (crates/perry-stdlib/src/http.rs)
-- `js_https_request` (crates/perry-stdlib/src/http.rs)
-- `js_http_get` (crates/perry-stdlib/src/http.rs)
-- `js_https_get` (crates/perry-stdlib/src/http.rs)
-- `js_http_client_request_write` (crates/perry-stdlib/src/http.rs)
-- `js_http_client_request_end` (crates/perry-stdlib/src/http.rs)
-- `js_http_on` (crates/perry-stdlib/src/http.rs)
-- `js_http_set_header` (crates/perry-stdlib/src/http.rs)
-- `js_http_set_timeout` (crates/perry-stdlib/src/http.rs)
-- `js_http_status_code` (crates/perry-stdlib/src/http.rs)
-- `js_http_status_message` (crates/perry-stdlib/src/http.rs)
-- `js_http_response_headers` (crates/perry-stdlib/src/http.rs)
-- `js_http_process_pending` (crates/perry-stdlib/src/http.rs)
-- `js_ioredis_new` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_set` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_get` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_del` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_exists` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_incr` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_decr` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_expire` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_connect` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_setex` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_disconnect` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_ping` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_hget` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_hset` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_hgetall` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_hdel` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_hlen` (crates/perry-stdlib/src/ioredis.rs)
-- `js_ioredis_quit` (crates/perry-stdlib/src/ioredis.rs)
-- `js_jwt_sign` (crates/perry-stdlib/src/jsonwebtoken.rs)
-- `js_jwt_sign_es256` (crates/perry-stdlib/src/jsonwebtoken.rs)
-- `js_jwt_sign_rs256` (crates/perry-stdlib/src/jsonwebtoken.rs)
-- `js_jwt_verify` (crates/perry-stdlib/src/jsonwebtoken.rs)
-- `js_jwt_decode` (crates/perry-stdlib/src/jsonwebtoken.rs)
-- `js_lodash_chunk` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_compact` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_concat` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_difference` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_drop` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_drop_right` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_fill` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_first` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_last` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_flatten` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_initial` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_tail` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_take` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_take_right` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_uniq` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_reverse` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_camel_case` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_capitalize` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_kebab_case` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_snake_case` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_upper_case` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_lower_case` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_trim` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_trim_start` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_trim_end` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_pad` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_pad_start` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_pad_end` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_repeat` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_truncate` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_clamp` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_in_range` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_random` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_times` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_range` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_is_empty` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_is_nil` (crates/perry-stdlib/src/lodash.rs)
-- `js_lodash_size` (crates/perry-stdlib/src/lodash.rs)
-- `js_lru_cache_new` (crates/perry-stdlib/src/lru_cache.rs)
-- `js_lru_cache_get` (crates/perry-stdlib/src/lru_cache.rs)
-- `js_lru_cache_set` (crates/perry-stdlib/src/lru_cache.rs)
-- `js_lru_cache_has` (crates/perry-stdlib/src/lru_cache.rs)
-- `js_lru_cache_delete` (crates/perry-stdlib/src/lru_cache.rs)
-- `js_lru_cache_clear` (crates/perry-stdlib/src/lru_cache.rs)
-- `js_lru_cache_size` (crates/perry-stdlib/src/lru_cache.rs)
-- `js_lru_cache_peek` (crates/perry-stdlib/src/lru_cache.rs)
-- `js_moment_now` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_from_timestamp` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_parse` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_format` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_to_iso_string` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_value_of` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_unix` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_year` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_month` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_date` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_day` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_hour` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_minute` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_second` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_millisecond` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_add` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_subtract` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_start_of` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_end_of` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_diff` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_is_before` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_is_after` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_is_same` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_is_between` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_is_valid` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_clone` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_from_now` (crates/perry-stdlib/src/moment.rs)
-- `js_moment_to_date` (crates/perry-stdlib/src/moment.rs)
-- `js_mongodb_connect` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_client_db` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_db_collection` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_collection_find_one` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_collection_find` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_collection_insert_one` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_collection_insert_many` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_collection_update_one` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_collection_update_many` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_collection_delete_one` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_collection_delete_many` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_collection_count` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_client_close` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_client_list_databases` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mongodb_db_list_collections` (crates/perry-stdlib/src/mongodb.rs)
-- `js_mysql2_create_connection` (crates/perry-stdlib/src/mysql2/connection.rs)
-- `js_mysql2_connection_end` (crates/perry-stdlib/src/mysql2/connection.rs)
-- `js_mysql2_connection_query` (crates/perry-stdlib/src/mysql2/connection.rs)
-- `js_mysql2_connection_execute` (crates/perry-stdlib/src/mysql2/connection.rs)
-- `js_mysql2_connection_begin_transaction` (crates/perry-stdlib/src/mysql2/connection.rs)
-- `js_mysql2_connection_commit` (crates/perry-stdlib/src/mysql2/connection.rs)
-- `js_mysql2_connection_rollback` (crates/perry-stdlib/src/mysql2/connection.rs)
-- `js_mysql2_create_pool` (crates/perry-stdlib/src/mysql2/pool.rs)
-- `js_mysql2_pool_end` (crates/perry-stdlib/src/mysql2/pool.rs)
-- `js_mysql2_pool_query` (crates/perry-stdlib/src/mysql2/pool.rs)
-- `js_mysql2_pool_execute` (crates/perry-stdlib/src/mysql2/pool.rs)
-- `js_mysql2_pool_get_connection` (crates/perry-stdlib/src/mysql2/pool.rs)
-- `js_mysql2_pool_connection_release` (crates/perry-stdlib/src/mysql2/pool.rs)
-- `js_mysql2_pool_connection_query` (crates/perry-stdlib/src/mysql2/pool.rs)
-- `js_mysql2_pool_connection_execute` (crates/perry-stdlib/src/mysql2/pool.rs)
-- `js_nanoid` (crates/perry-stdlib/src/nanoid.rs)
-- `js_nanoid_sized` (crates/perry-stdlib/src/nanoid.rs)
-- `js_nanoid_custom` (crates/perry-stdlib/src/nanoid.rs)
-- `js_tls_connect` (crates/perry-stdlib/src/net/mod.rs)
-- `js_net_socket_upgrade_tls` (crates/perry-stdlib/src/net/mod.rs)
-- `js_net_process_pending` (crates/perry-stdlib/src/net/mod.rs)
-- `js_nodemailer_create_transport` (crates/perry-stdlib/src/nodemailer.rs)
-- `js_nodemailer_send_mail` (crates/perry-stdlib/src/nodemailer.rs)
-- `js_nodemailer_verify` (crates/perry-stdlib/src/nodemailer.rs)
-- `js_pg_connect` (crates/perry-stdlib/src/pg/connection.rs)
-- `js_pg_client_end` (crates/perry-stdlib/src/pg/connection.rs)
-- `js_pg_client_query` (crates/perry-stdlib/src/pg/connection.rs)
-- `js_pg_client_query_params` (crates/perry-stdlib/src/pg/connection.rs)
-- `js_pg_create_pool` (crates/perry-stdlib/src/pg/pool.rs)
-- `js_pg_pool_query` (crates/perry-stdlib/src/pg/pool.rs)
-- `js_pg_pool_end` (crates/perry-stdlib/src/pg/pool.rs)
-- `js_ratelimit_new` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_ratelimit_new_keyed` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_ratelimit_consume` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_ratelimit_get` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_ratelimit_delete` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_ratelimit_block` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_ratelimit_penalty` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_ratelimit_reward` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_ratelimit_check` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_ratelimit_remaining` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_ratelimit_reset` (crates/perry-stdlib/src/ratelimit.rs)
-- `js_sharp_from_file` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_from_buffer` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_resize` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_rotate` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_flip` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_flop` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_grayscale` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_blur` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_sharpen` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_crop` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_jpeg` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_png` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_webp` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_to_file` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_to_buffer` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_metadata` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_width` (crates/perry-stdlib/src/sharp.rs)
-- `js_sharp_height` (crates/perry-stdlib/src/sharp.rs)
-- `js_slugify` (crates/perry-stdlib/src/slugify.rs)
-- `js_slugify_with_options` (crates/perry-stdlib/src/slugify.rs)
-- `js_slugify_strict` (crates/perry-stdlib/src/slugify.rs)
-- `js_sqlite_open` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_exec` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_prepare` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_stmt_run` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_stmt_get` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_stmt_all` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_pragma` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_begin_transaction` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_commit` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_rollback` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_close` (crates/perry-stdlib/src/sqlite.rs)
-- `js_sqlite_in_transaction` (crates/perry-stdlib/src/sqlite.rs)
-- `js_uuid_v4` (crates/perry-stdlib/src/uuid.rs)
-- `js_uuid_v1` (crates/perry-stdlib/src/uuid.rs)
-- `js_uuid_v7` (crates/perry-stdlib/src/uuid.rs)
-- `js_uuid_validate` (crates/perry-stdlib/src/uuid.rs)
-- `js_uuid_version` (crates/perry-stdlib/src/uuid.rs)
-- `js_uuid_nil` (crates/perry-stdlib/src/uuid.rs)
-- `js_validator_is_email` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_url` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_uuid` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_alpha` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_alphanumeric` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_numeric` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_int` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_float` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_hexadecimal` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_empty` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_json` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_length_min` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_length` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_contains` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_equals` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_lowercase` (crates/perry-stdlib/src/validator.rs)
-- `js_validator_is_uppercase` (crates/perry-stdlib/src/validator.rs)
-- `js_worker_threads_get_worker_data` (crates/perry-stdlib/src/worker_threads.rs)
-- `js_worker_threads_parent_port` (crates/perry-stdlib/src/worker_threads.rs)
-- `js_worker_threads_post_message` (crates/perry-stdlib/src/worker_threads.rs)
-- `js_worker_threads_on` (crates/perry-stdlib/src/worker_threads.rs)
-- `js_worker_threads_process_pending` (crates/perry-stdlib/src/worker_threads.rs)
-- `js_worker_threads_has_pending` (crates/perry-stdlib/src/worker_threads.rs)
-- `js_ws_connect` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_connect_start` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_connect_start` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_connect` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_send` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_send` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_close` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_close` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_is_open` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_is_open` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_message_count` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_message_count` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_receive` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_receive` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_wait_for_message` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_handle_to_i64` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_on` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_server_new` (crates/perry-stdlib/src/ws.rs)
-- `js_ws_server_close` (crates/perry-stdlib/src/ws.rs)
-- `js_zlib_gzip_sync` (crates/perry-stdlib/src/zlib.rs)
-- `js_zlib_gunzip_sync` (crates/perry-stdlib/src/zlib.rs)
-- `js_zlib_deflate_sync` (crates/perry-stdlib/src/zlib.rs)
-- `js_zlib_inflate_sync` (crates/perry-stdlib/src/zlib.rs)
-- `js_zlib_gzip` (crates/perry-stdlib/src/zlib.rs)
-- `js_zlib_gunzip` (crates/perry-stdlib/src/zlib.rs)
+| File | Total | TS Covered | Rust Covered | Combined | TS Coverage | Combined Coverage |
+|------|-------|------------|--------------|----------|-------------|-------------------|
+| `crates/perry-runtime/src/arena.rs` | 4 | 4 | 4 | 4 | 100% | 100% |
+| `crates/perry-runtime/src/arkts_callbacks.rs` | 8 | 8 | 3 | 8 | 100% | 100% |
+| `crates/perry-runtime/src/array.rs` | 74 | 74 | 74 | 74 | 100% | 100% |
+| `crates/perry-runtime/src/bigint.rs` | 28 | 28 | 28 | 28 | 100% | 100% |
+| `crates/perry-runtime/src/box.rs` | 3 | 3 | 0 | 3 | 100% | 100% |
+| `crates/perry-runtime/src/buffer.rs` | 77 | 77 | 77 | 77 | 100% | 100% |
+| `crates/perry-runtime/src/builtins.rs` | 62 | 62 | 62 | 62 | 100% | 100% |
+| `crates/perry-runtime/src/child_process.rs` | 8 | 8 | 8 | 8 | 100% | 100% |
+| `crates/perry-runtime/src/closure.rs` | 57 | 57 | 57 | 57 | 100% | 100% |
+| `crates/perry-runtime/src/color_parse.rs` | 1 | 1 | 1 | 1 | 100% | 100% |
+| `crates/perry-runtime/src/date.rs` | 41 | 41 | 41 | 41 | 100% | 100% |
+| `crates/perry-runtime/src/error.rs` | 17 | 17 | 9 | 17 | 100% | 100% |
+| `crates/perry-runtime/src/event_pump.rs` | 2 | 2 | 2 | 2 | 100% | 100% |
+| `crates/perry-runtime/src/exception.rs` | 8 | 8 | 1 | 8 | 100% | 100% |
+| `crates/perry-runtime/src/fs.rs` | 24 | 24 | 8 | 24 | 100% | 100% |
+| `crates/perry-runtime/src/gc.rs` | 12 | 12 | 12 | 12 | 100% | 100% |
+| `crates/perry-runtime/src/geisterhand_registry.rs` | 24 | 24 | 0 | 24 | 100% | 100% |
+| `crates/perry-runtime/src/i18n.rs` | 18 | 18 | 0 | 18 | 100% | 100% |
+| `crates/perry-runtime/src/ios_game_loop.rs` | 3 | 3 | 1 | 3 | 100% | 100% |
+| `crates/perry-runtime/src/json.rs` | 14 | 14 | 2 | 14 | 100% | 100% |
+| `crates/perry-runtime/src/jsx.rs` | 2 | 2 | 2 | 2 | 100% | 100% |
+| `crates/perry-runtime/src/lib.rs` | 6 | 6 | 1 | 6 | 100% | 100% |
+| `crates/perry-runtime/src/map.rs` | 14 | 14 | 12 | 14 | 100% | 100% |
+| `crates/perry-runtime/src/math.rs` | 27 | 27 | 0 | 27 | 100% | 100% |
+| `crates/perry-runtime/src/media_playback.rs` | 15 | 15 | 0 | 15 | 100% | 100% |
+| `crates/perry-runtime/src/net.rs` | 11 | 11 | 11 | 11 | 100% | 100% |
+| `crates/perry-runtime/src/node_stream.rs` | 6 | 6 | 1 | 6 | 100% | 100% |
+| `crates/perry-runtime/src/object.rs` | 77 | 77 | 77 | 77 | 100% | 100% |
+| `crates/perry-runtime/src/os.rs` | 29 | 29 | 29 | 29 | 100% | 100% |
+| `crates/perry-runtime/src/path.rs` | 13 | 13 | 6 | 13 | 100% | 100% |
+| `crates/perry-runtime/src/plugin.rs` | 22 | 22 | 22 | 22 | 100% | 100% |
+| `crates/perry-runtime/src/process.rs` | 4 | 4 | 0 | 4 | 100% | 100% |
+| `crates/perry-runtime/src/promise.rs` | 34 | 34 | 22 | 34 | 100% | 100% |
+| `crates/perry-runtime/src/proxy.rs` | 19 | 19 | 1 | 19 | 100% | 100% |
+| `crates/perry-runtime/src/regex.rs` | 19 | 19 | 19 | 19 | 100% | 100% |
+| `crates/perry-runtime/src/set.rs` | 11 | 11 | 11 | 11 | 100% | 100% |
+| `crates/perry-runtime/src/static_plugins.rs` | 2 | 2 | 0 | 2 | 100% | 100% |
+| `crates/perry-runtime/src/stdlib_stubs.rs` | 16 | 16 | 15 | 16 | 100% | 100% |
+| `crates/perry-runtime/src/string.rs` | 59 | 59 | 59 | 59 | 100% | 100% |
+| `crates/perry-runtime/src/symbol.rs` | 16 | 16 | 8 | 16 | 100% | 100% |
+| `crates/perry-runtime/src/text.rs` | 4 | 4 | 0 | 4 | 100% | 100% |
+| `crates/perry-runtime/src/thread.rs` | 5 | 5 | 3 | 5 | 100% | 100% |
+| `crates/perry-runtime/src/timer.rs` | 17 | 17 | 9 | 17 | 100% | 100% |
+| `crates/perry-runtime/src/tty.rs` | 8 | 8 | 8 | 8 | 100% | 100% |
+| `crates/perry-runtime/src/tui/ffi.rs` | 32 | 32 | 30 | 32 | 100% | 100% |
+| `crates/perry-runtime/src/tui/hooks.rs` | 26 | 26 | 26 | 26 | 100% | 100% |
+| `crates/perry-runtime/src/tui/input.rs` | 2 | 2 | 2 | 2 | 100% | 100% |
+| `crates/perry-runtime/src/tui/run.rs` | 1 | 1 | 1 | 1 | 100% | 100% |
+| `crates/perry-runtime/src/tui/state.rs` | 3 | 3 | 3 | 3 | 100% | 100% |
+| `crates/perry-runtime/src/typedarray.rs` | 15 | 15 | 12 | 15 | 100% | 100% |
+| `crates/perry-runtime/src/ui_text_registry.rs` | 18 | 18 | 1 | 18 | 100% | 100% |
+| `crates/perry-runtime/src/url.rs` | 36 | 36 | 36 | 36 | 100% | 100% |
+| `crates/perry-runtime/src/value.rs` | 54 | 54 | 54 | 54 | 100% | 100% |
+| `crates/perry-runtime/src/watchos_game_loop.rs` | 2 | 2 | 1 | 2 | 100% | 100% |
+| `crates/perry-runtime/src/weakref.rs` | 15 | 15 | 1 | 15 | 100% | 100% |
+| `crates/perry-stdlib/src/argon2.rs` | 5 | 5 | 2 | 5 | 100% | 100% |
+| `crates/perry-stdlib/src/async_local_storage.rs` | 6 | 6 | 5 | 6 | 100% | 100% |
+| `crates/perry-stdlib/src/axios.rs` | 8 | 8 | 8 | 8 | 100% | 100% |
+| `crates/perry-stdlib/src/bcrypt.rs` | 5 | 5 | 2 | 5 | 100% | 100% |
+| `crates/perry-stdlib/src/cheerio.rs` | 18 | 18 | 18 | 18 | 100% | 100% |
+| `crates/perry-stdlib/src/commander.rs` | 15 | 15 | 15 | 15 | 100% | 100% |
+| `crates/perry-stdlib/src/common/async_bridge.rs` | 2 | 2 | 1 | 2 | 100% | 100% |
+| `crates/perry-stdlib/src/common/dispatch.rs` | 4 | 4 | 0 | 4 | 100% | 100% |
+| `crates/perry-stdlib/src/common/handle.rs` | 1 | 1 | 1 | 1 | 100% | 100% |
+| `crates/perry-stdlib/src/cron.rs` | 14 | 14 | 14 | 14 | 100% | 100% |
+| `crates/perry-stdlib/src/crypto.rs` | 16 | 16 | 1 | 16 | 100% | 100% |
+| `crates/perry-stdlib/src/crypto_e2e.rs` | 6 | 6 | 0 | 6 | 100% | 100% |
+| `crates/perry-stdlib/src/dayjs.rs` | 36 | 36 | 36 | 36 | 100% | 100% |
+| `crates/perry-stdlib/src/decimal.rs` | 42 | 42 | 42 | 42 | 100% | 100% |
+| `crates/perry-stdlib/src/dotenv.rs` | 3 | 3 | 3 | 3 | 100% | 100% |
+| `crates/perry-stdlib/src/ethers.rs` | 8 | 8 | 8 | 8 | 100% | 100% |
+| `crates/perry-stdlib/src/events.rs` | 7 | 7 | 7 | 7 | 100% | 100% |
+| `crates/perry-stdlib/src/exponential_backoff.rs` | 2 | 2 | 2 | 2 | 100% | 100% |
+| `crates/perry-stdlib/src/fastify/app.rs` | 14 | 14 | 14 | 14 | 100% | 100% |
+| `crates/perry-stdlib/src/fastify/context.rs` | 20 | 20 | 19 | 20 | 100% | 100% |
+| `crates/perry-stdlib/src/fastify/server.rs` | 2 | 2 | 2 | 2 | 100% | 100% |
+| `crates/perry-stdlib/src/fetch.rs` | 44 | 44 | 44 | 44 | 100% | 100% |
+| `crates/perry-stdlib/src/framework/multipart.rs` | 2 | 2 | 2 | 2 | 100% | 100% |
+| `crates/perry-stdlib/src/framework/request.rs` | 8 | 8 | 0 | 8 | 100% | 100% |
+| `crates/perry-stdlib/src/framework/response.rs` | 8 | 8 | 0 | 8 | 100% | 100% |
+| `crates/perry-stdlib/src/framework/server.rs` | 10 | 10 | 0 | 10 | 100% | 100% |
+| `crates/perry-stdlib/src/http.rs` | 13 | 13 | 13 | 13 | 100% | 100% |
+| `crates/perry-stdlib/src/ioredis.rs` | 18 | 18 | 18 | 18 | 100% | 100% |
+| `crates/perry-stdlib/src/jsonwebtoken.rs` | 5 | 5 | 5 | 5 | 100% | 100% |
+| `crates/perry-stdlib/src/lib.rs` | 2 | 2 | 2 | 2 | 100% | 100% |
+| `crates/perry-stdlib/src/lodash.rs` | 38 | 38 | 16 | 38 | 100% | 100% |
+| `crates/perry-stdlib/src/lru_cache.rs` | 8 | 8 | 8 | 8 | 100% | 100% |
+| `crates/perry-stdlib/src/moment.rs` | 28 | 28 | 28 | 28 | 100% | 100% |
+| `crates/perry-stdlib/src/mongodb.rs` | 26 | 26 | 26 | 26 | 100% | 100% |
+| `crates/perry-stdlib/src/mysql2/connection.rs` | 7 | 7 | 7 | 7 | 100% | 100% |
+| `crates/perry-stdlib/src/mysql2/pool.rs` | 8 | 8 | 8 | 8 | 100% | 100% |
+| `crates/perry-stdlib/src/nanoid.rs` | 3 | 3 | 3 | 3 | 100% | 100% |
+| `crates/perry-stdlib/src/net/mod.rs` | 10 | 10 | 10 | 10 | 100% | 100% |
+| `crates/perry-stdlib/src/nodemailer.rs` | 3 | 3 | 3 | 3 | 100% | 100% |
+| `crates/perry-stdlib/src/perry_ffi_async.rs` | 6 | 6 | 5 | 6 | 100% | 100% |
+| `crates/perry-stdlib/src/pg/connection.rs` | 6 | 6 | 6 | 6 | 100% | 100% |
+| `crates/perry-stdlib/src/pg/pool.rs` | 4 | 4 | 4 | 4 | 100% | 100% |
+| `crates/perry-stdlib/src/ratelimit.rs` | 11 | 11 | 11 | 11 | 100% | 100% |
+| `crates/perry-stdlib/src/readline.rs` | 8 | 8 | 8 | 8 | 100% | 100% |
+| `crates/perry-stdlib/src/sharp.rs` | 18 | 18 | 18 | 18 | 100% | 100% |
+| `crates/perry-stdlib/src/slugify.rs` | 3 | 3 | 3 | 3 | 100% | 100% |
+| `crates/perry-stdlib/src/sqlite.rs` | 14 | 14 | 14 | 14 | 100% | 100% |
+| `crates/perry-stdlib/src/streams.rs` | 39 | 39 | 36 | 39 | 100% | 100% |
+| `crates/perry-stdlib/src/uuid.rs` | 6 | 6 | 6 | 6 | 100% | 100% |
+| `crates/perry-stdlib/src/validator.rs` | 17 | 17 | 17 | 17 | 100% | 100% |
+| `crates/perry-stdlib/src/webcrypto.rs` | 4 | 4 | 4 | 4 | 100% | 100% |
+| `crates/perry-stdlib/src/worker_threads.rs` | 6 | 6 | 3 | 6 | 100% | 100% |
+| `crates/perry-stdlib/src/ws.rs` | 23 | 23 | 23 | 23 | 100% | 100% |
+| `crates/perry-stdlib/src/zlib.rs` | 6 | 6 | 6 | 6 | 100% | 100% |

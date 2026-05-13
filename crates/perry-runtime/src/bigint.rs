@@ -76,15 +76,6 @@ fn bigint_alloc() -> *mut BigIntHeader {
     raw as *mut BigIntHeader
 }
 
-/// Check if a BigInt pointer is valid (not null, not NaN-boxed, in user address space).
-/// Protects against accidental use of NaN-boxed values (e.g., TAG_UNDEFINED) as BigInt pointers.
-#[inline(always)]
-fn is_valid_bigint_ptr(p: *const BigIntHeader) -> bool {
-    let bits = p as usize;
-    // Valid heap pointers: non-null, >= 0x10000, upper 16 bits must be 0 (48-bit address space)
-    bits >= 0x10000 && (bits as u64) >> 48 == 0
-}
-
 /// Strip NaN-boxing tags from a BigInt pointer (defensive guard).
 /// Returns null if the value is not a valid bigint pointer.
 #[inline(always)]

@@ -10,4 +10,4 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-scraper = "0.19"
+scraper = "0.27"

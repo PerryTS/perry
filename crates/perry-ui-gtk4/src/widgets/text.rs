@@ -132,6 +132,46 @@ pub fn set_decoration(handle: i64, decoration: i64) {
     }
 }
 
+/// Issue #707 — cap visible lines on a GtkLabel. `lines = 0` means
+/// unlimited (default). Calling with `lines > 0` enables wrapping and
+/// sets `lines` + `ellipsize = END`.
+pub fn set_number_of_lines(handle: i64, lines: i64) {
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(label) = widget.downcast_ref::<Label>() {
+            if lines <= 0 {
+                label.set_lines(-1);
+                label.set_ellipsize(pango::EllipsizeMode::None);
+                return;
+            }
+            // GtkLabel needs both `wrap = true` AND `lines = N` for the
+            // multi-line truncation path; without wrap, the label
+            // single-lines regardless of `lines`.
+            label.set_wrap(true);
+            label.set_wrap_mode(pango::WrapMode::WordChar);
+            label.set_lines(lines as i32);
+            if label.ellipsize() == pango::EllipsizeMode::None {
+                label.set_ellipsize(pango::EllipsizeMode::End);
+            }
+        }
+    }
+}
+
+/// Issue #707 — truncation mode (0=word-wrap/no-truncation, 1=head,
+/// 2=middle, 3=tail).
+pub fn set_truncation_mode(handle: i64, mode: i64) {
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(label) = widget.downcast_ref::<Label>() {
+            let m = match mode {
+                1 => pango::EllipsizeMode::Start,
+                2 => pango::EllipsizeMode::Middle,
+                3 => pango::EllipsizeMode::End,
+                _ => pango::EllipsizeMode::None,
+            };
+            label.set_ellipsize(m);
+        }
+    }
+}
+
 /// Set the font family of a Text widget.
 pub fn set_font_family(handle: i64, family_ptr: *const u8) {
     let family = str_from_header(family_ptr);

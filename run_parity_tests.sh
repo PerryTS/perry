@@ -184,6 +184,7 @@ normalize_output() {
         # with Perry's output).
         sed -E '/^\(node:[0-9]+\) \[MODULE_TYPELESS_PACKAGE_JSON\]/d' | \
         sed -E '/^\(node:[0-9]+\) \[DEP[0-9]+\] DeprecationWarning:/d' | \
+        sed -E '/^\(node:[0-9]+\) ExperimentalWarning: Type Stripping is an experimental feature/d' | \
         sed -E '/^\(Use `node --trace-deprecation/d' | \
         sed -E '/^Reparsing as ES module because module syntax was detected/d' | \
         sed -E '/^To eliminate this warning, add "type": "module"/d' | \

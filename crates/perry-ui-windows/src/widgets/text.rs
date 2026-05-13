@@ -103,6 +103,102 @@ pub fn set_string(handle: i64, text_ptr: *const u8) {
     set_text_str(handle, text);
 }
 
+/// Issue #707 — cap visible lines on a STATIC control.
+///
+/// Win32 STATIC has no `MaxLines` style; truncation is controlled via
+/// the SS_ENDELLIPSIS / SS_PATHELLIPSIS / SS_WORDELLIPSIS style bits
+/// instead. We approximate the iOS/Android semantics:
+///   - `lines == 0` (unlimited) clears any ellipsis style.
+///   - `lines == 1` forces single-line + tail-ellipsis (SS_ENDELLIPSIS,
+///     which forces a single-line render).
+///   - `lines > 1` is best-effort on Win32: STATIC doesn't expose a
+///     per-line cap, so we keep ellipsis off and rely on the control
+///     bounds clipping the trailing lines. A richer impl would owner-
+///     draw the text via DrawText with DT_END_ELLIPSIS + a clipping rect.
+pub fn set_number_of_lines(handle: i64, lines: i64) {
+    #[cfg(target_os = "windows")]
+    {
+        const SS_ENDELLIPSIS: u32 = 0x4000;
+        const SS_PATHELLIPSIS: u32 = 0x8000;
+        const SS_WORDELLIPSIS: u32 = 0xC000;
+        const ELLIPSIS_MASK: u32 = SS_ENDELLIPSIS | SS_PATHELLIPSIS | SS_WORDELLIPSIS;
+
+        if let Some(hwnd) = super::get_hwnd(handle) {
+            unsafe {
+                let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+                let new_style: u32 = if lines == 1 {
+                    (style & !ELLIPSIS_MASK) | SS_ENDELLIPSIS
+                } else {
+                    style & !ELLIPSIS_MASK
+                };
+                let _ = SetWindowLongPtrW(hwnd, GWL_STYLE, new_style as isize);
+                // SetWindowPos with SWP_FRAMECHANGED is needed for style
+                // changes to take effect on STATIC controls.
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND(std::ptr::null_mut()),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (handle, lines);
+    }
+}
+
+/// Issue #707 — STATIC truncation mode (0=word-wrap, 1=head, 2=middle, 3=tail).
+///
+/// Win32 STATIC doesn't have a "head" ellipsis mode — `SS_PATHELLIPSIS`
+/// drops middle segments of a path-like string, `SS_WORDELLIPSIS`
+/// truncates on word boundaries (tail-ish), and `SS_ENDELLIPSIS` is the
+/// canonical tail truncation. We map:
+///   - 0 → clear ellipsis (matches "no truncation")
+///   - 1 (head) → fall back to SS_ENDELLIPSIS (Win32 has no head mode)
+///   - 2 (middle) → SS_PATHELLIPSIS
+///   - 3 (tail) → SS_ENDELLIPSIS
+pub fn set_truncation_mode(handle: i64, mode: i64) {
+    #[cfg(target_os = "windows")]
+    {
+        const SS_ENDELLIPSIS: u32 = 0x4000;
+        const SS_PATHELLIPSIS: u32 = 0x8000;
+        const SS_WORDELLIPSIS: u32 = 0xC000;
+        const ELLIPSIS_MASK: u32 = SS_ENDELLIPSIS | SS_PATHELLIPSIS | SS_WORDELLIPSIS;
+
+        if let Some(hwnd) = super::get_hwnd(handle) {
+            unsafe {
+                let bit: u32 = match mode {
+                    1 => SS_ENDELLIPSIS, // no native head mode
+                    2 => SS_PATHELLIPSIS,
+                    3 => SS_ENDELLIPSIS,
+                    _ => 0,
+                };
+                let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+                let new_style = (style & !ELLIPSIS_MASK) | bit;
+                let _ = SetWindowLongPtrW(hwnd, GWL_STYLE, new_style as isize);
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND(std::ptr::null_mut()),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (handle, mode);
+    }
+}
+
 /// Set the text string of a Text widget from a &str (used by state bindings).
 pub fn set_text_str(handle: i64, text: &str) {
     #[cfg(target_os = "windows")]

@@ -89,6 +89,80 @@ struct LazyDataSource {
     items_source: String,
 }
 
+/// Issue #669 — Chart widget HarmonyOS backend. Each `Chart(kind, w, h)`
+/// allocates an inline CanvasRenderingContext2D on the @Component
+/// (`private __chart_<n>_ctx: CanvasRenderingContext2D = new
+/// CanvasRenderingContext2D(new RenderingContextSettings(true))`).
+/// `chartAddDataPoint` / `chartClearData` / `chartSetTitle` calls in the
+/// module-init harvest are folded into the static `data` / `title`
+/// arrays baked into the Canvas's `onReady` draw closure. `chartReload`
+/// is a no-op at codegen time — the draw closure is already wired to
+/// the Canvas's draw cycle.
+#[allow(dead_code)] // kind / width / height / points / title are
+                    // baked into the draw closure at emit time, but
+                    // we also stash them on the instance so a future
+                    // diagnostic pass (e.g. "how many points does each
+                    // chart have?") can read them off the harvest.
+struct ChartInstance {
+    /// Per-page sequential id used to name `__chart_<n>_ctx`.
+    field_id: String,
+    /// 0 = line, 1 = bar, 2 = pie. Falls back to bar for unknown values.
+    kind: i64,
+    /// Layout hints — flow through to `.width(N).height(N)`. 0 means
+    /// "use intrinsic / leave unset".
+    width: f64,
+    height: f64,
+    /// Folded `(label, value)` pairs. `chartClearData` resets the list;
+    /// `chartAddDataPoint` appends; later wins.
+    points: Vec<(String, f64)>,
+    /// Folded title string (last `chartSetTitle` wins). Empty = no title.
+    title: String,
+}
+
+/// Issue #670 — TreeView widget HarmonyOS backend. Each `TreeView(root,
+/// onSelect)` builds a static node graph at codegen time (by following
+/// the chain of `TreeNode(id, label)` constructors + `treeNodeAddChild`
+/// mutators referenced by `root`) and emits the graph as a private
+/// `__tree_<n>_nodes` constant + `@State __tree_<n>_expanded: Set<string>`
+/// + `@State __tree_<n>_selectedId: string` on the @Component. A
+/// `__tree_<n>_flatten()` method walks the graph using the expanded set
+/// and produces the visible rows ArkUI's `ForEach` iterates over.
+#[allow(dead_code)] // on_select_idx is used in the inline ForEach
+                    // body (literal interpolation) rather than read
+                    // back at emit time, but we record it on the
+                    // instance for diagnostic clarity.
+struct TreeViewInstance {
+    /// Per-page sequential id used to name fields + helper method.
+    field_id: String,
+    /// Resolved tree built at codegen time. `Some` when the root walk
+    /// succeeded; `None` is impossible here (we only push on success).
+    root: TreeViewNode,
+    /// Callback slot id for the user-supplied onSelect closure, if any.
+    on_select_idx: Option<usize>,
+}
+
+/// Static tree node captured at codegen time. Mirrors `TreeNode(id, label)`
+/// + its accumulated `treeNodeAddChild` children, recursively.
+#[derive(Clone)]
+struct TreeViewNode {
+    id: String,
+    label: String,
+    children: Vec<TreeViewNode>,
+}
+
+/// Bundled holder for per-page state collectors that emit_widget grew
+/// to need beyond text_slots / lazy_sources. Lives behind a single
+/// `&mut HarvestExtras` param so adding a new widget that registers
+/// @Component-level state doesn't require touching every emit_*
+/// signature. Currently holds:
+/// - chart_instances: see [`ChartInstance`] (issue #669)
+/// - tree_view_instances: see [`TreeViewInstance`] (issue #670)
+#[derive(Default)]
+struct HarvestExtras {
+    chart_instances: Vec<ChartInstance>,
+    tree_view_instances: Vec<TreeViewInstance>,
+}
+
 /// Phase 2 v6 — `state<T>(initial)` registry. Each `let x = state(initial)`
 /// declaration in `module.init` registers a synthetic id (`__state_<N>`)
 /// + the initial value. Subsequent `x.text()` calls emit reactive Text
@@ -236,6 +310,24 @@ enum Mutation {
     /// through a NAPI drain queue (`perry_arkts_set_visibility`) which
     /// ArkTS pumps into the bound `@State hidden_<id>: boolean` field.
     VisibilityBinding(String),
+    /// Issue #669 — `chartAddDataPoint(chart, label, value)` recorded
+    /// against the chart's local. Folded into the static `data` array
+    /// the chart's draw closure iterates over. Label resolves through
+    /// bindings; value through `numeric_arg_resolved`.
+    ChartAddDataPoint(String, f64),
+    /// Issue #669 — `chartClearData(chart)` recorded against the chart.
+    /// Wipes any earlier `ChartAddDataPoint` entries in the fold pass.
+    ChartClearData,
+    /// Issue #669 — `chartSetTitle(chart, title)`. Last-wins fold.
+    ChartSetTitle(String),
+    /// Issue #669 — `chartReload(chart)`. No-op at codegen time
+    /// (ArkUI's Canvas redraws automatically when the build() runs);
+    /// recorded so we don't flag it as an unrecognized mutator.
+    ChartReload,
+    /// Issue #670 — `treeNodeAddChild(parent, child)` recorded against
+    /// the parent tree-node's local. Walked recursively by
+    /// `build_tree_node_from_local` when emitting the TreeView.
+    TreeAddChild(Expr),
 }
 
 /// A recorded mutation plus its enclosing condition, if any.
@@ -516,6 +608,7 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
     let mut callbacks: Vec<Expr> = Vec::new();
     let mut text_slots: Vec<TextSlot> = Vec::new();
     let mut lazy_sources: Vec<LazyDataSource> = Vec::new();
+    let mut extras = HarvestExtras::default();
     let arkts_locals: HashMap<LocalId, String> = HashMap::new();
     let widget_arkui = emit_widget(
         &body_expr,
@@ -527,6 +620,7 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
         &classes,
         &state_registry,
         &mut lazy_sources,
+        &mut extras,
         &mutations,
         None,
     );
@@ -538,6 +632,7 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
             uses_media,
             &visibility_bindings,
             &view_builders,
+            &extras,
         ),
         callbacks,
     }))
@@ -2901,6 +2996,49 @@ fn collect_mutations_in_expr(
                 cond,
             );
         }
+        // ---- Issue #669 Chart mutators ----
+        "chartAddDataPoint" => {
+            // Args: (chart, label, value). Both label + value must resolve
+            // through bindings — the static fold can't bake in a runtime
+            // computed value. When either is unresolvable, drop the point
+            // and emit a comment so the user can see the gap. (Matching
+            // the textSetFontFamily behavior for un-resolvable strings.)
+            let label = args.get(1).and_then(|e| resolve_string_arg(e, bindings));
+            let value = numeric_arg_resolved(&args[1..], 1, bindings);
+            match (label, value) {
+                (Some(l), Some(v)) => {
+                    push_mut(Mutation::ChartAddDataPoint(l, v), out, cond);
+                }
+                _ => {
+                    push_mut(
+                        Mutation::Comment(
+                            "chartAddDataPoint: non-literal label/value, point dropped".to_string(),
+                        ),
+                        out,
+                        cond,
+                    );
+                }
+            }
+        }
+        "chartClearData" => {
+            push_mut(Mutation::ChartClearData, out, cond);
+        }
+        "chartSetTitle" => {
+            let title = args
+                .get(1)
+                .and_then(|e| resolve_string_arg(e, bindings))
+                .unwrap_or_default();
+            push_mut(Mutation::ChartSetTitle(title), out, cond);
+        }
+        "chartReload" => {
+            push_mut(Mutation::ChartReload, out, cond);
+        }
+        // ---- Issue #670 TreeView mutators ----
+        "treeNodeAddChild" => {
+            if let Some(child) = args.get(1) {
+                push_mut(Mutation::TreeAddChild(child.clone()), out, cond);
+            }
+        }
         // ---- Text styling mutators (#408 follow-up) ----
         // All four resolve their numeric args through `bindings` so calls
         // with bound locals (`textSetFontSize(w, size)` where `size` is a
@@ -3277,6 +3415,9 @@ fn is_widget_factory(name: &str) -> bool {
             | "ContextMenu"
             | "Grid"
             | "NavStack"
+            | "Chart"
+            | "TreeView"
+            | "TreeNode"
             | "showToast"
             | "setText"
             | "state"
@@ -4137,6 +4278,7 @@ fn emit_widget(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    extras: &mut HarvestExtras,
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
     // `outer_local_hint` is set when the caller already knows the
     // top-level LocalId we're emitting for — used by recursive calls
@@ -4198,6 +4340,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     local_hint,
                 ),
@@ -4212,6 +4355,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     local_hint,
                 ),
@@ -4232,6 +4376,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     local_hint,
                 ),
@@ -4245,6 +4390,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                 ),
                 "Picker" => emit_picker(args, callbacks),
@@ -4274,6 +4420,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     local_hint,
                 ),
@@ -4288,6 +4435,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                 ),
                 "Modal" | "Dialog" => emit_modal(args, callbacks),
@@ -4302,6 +4450,7 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                 ),
                 // Phase 2 v11: state-driven multi-page nav.
@@ -4315,7 +4464,25 @@ fn emit_widget(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
+                ),
+                // Issue #669 — Chart(kind, w, h) → ArkUI Canvas with the
+                // mutator-folded data baked into the draw closure.
+                "Chart" => emit_chart(args, bindings, mutations, local_hint, extras),
+                // Issue #670 — TreeView(root, onSelect) → ArkUI List with
+                // a recursive flatten over a static node graph + @State
+                // expanded/selected fields.
+                "TreeView" => emit_treeview(args, bindings, callbacks, mutations, extras),
+                // Issue #670 — TreeNode(id, label) is a node-graph
+                // builder, not a renderable widget. Its only legal
+                // appearance in the widget tree is as a TreeView's
+                // first arg (handled above). Falling here means the
+                // user used TreeNode in an unsupported position —
+                // emit a comment + placeholder so the build still works.
+                "TreeNode" => format!(
+                    "// TreeNode used outside TreeView's first arg — not renderable\n\
+                     Text('[TreeNode misplaced]').fontSize(14).fontColor('#888888')"
                 ),
                 other => format!(
                     "// unsupported perry/ui widget: {} (Phase 2 v12)\n\
@@ -4367,6 +4534,7 @@ fn emit_widget(
             classes,
             state_registry,
             lazy_sources,
+            extras,
             mutations,
         ),
         // Issue #408 follow-up — ternary `cond ? thenWidget : elseWidget`
@@ -4405,6 +4573,7 @@ fn emit_widget(
                 classes,
                 state_registry,
                 lazy_sources,
+                extras,
                 mutations,
                 local_hint,
             )
@@ -4485,6 +4654,14 @@ fn emit_modifier_mutations(muts: &[MutationEntry]) -> String {
             }
             // Structural mutations are handled by the per-widget emitters.
             Mutation::AddChild(_) | Mutation::ClearChildren | Mutation::SetScrollChild(_) => {}
+            // Issue #669/#670 — Chart + TreeView mutations are folded by
+            // `emit_chart` / `emit_treeview` directly. They're already
+            // consumed; nothing more to emit as a modifier chain entry.
+            Mutation::ChartAddDataPoint(_, _)
+            | Mutation::ChartClearData
+            | Mutation::ChartSetTitle(_)
+            | Mutation::ChartReload
+            | Mutation::TreeAddChild(_) => {}
         }
     }
     out
@@ -4593,6 +4770,7 @@ fn emit_mutation_children(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    extras: &mut HarvestExtras,
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> Vec<String> {
     let (unconditional, conds) = fold_child_mutations(muts);
@@ -4608,6 +4786,7 @@ fn emit_mutation_children(
             classes,
             state_registry,
             lazy_sources,
+            extras,
             mutations,
             None,
         ));
@@ -4628,6 +4807,7 @@ fn emit_mutation_children(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     None,
                 )
@@ -4646,6 +4826,7 @@ fn emit_mutation_children(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     None,
                 )
@@ -4733,6 +4914,7 @@ fn emit_for_each(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    extras: &mut HarvestExtras,
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let array_src = arkts_array_source(array, bindings);
@@ -4765,6 +4947,7 @@ fn emit_for_each(
                 classes,
                 state_registry,
                 lazy_sources,
+                extras,
                 mutations,
                 None,
             );
@@ -5207,6 +5390,7 @@ fn emit_stack(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    extras: &mut HarvestExtras,
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
     local_hint: Option<LocalId>,
 ) -> String {
@@ -5232,6 +5416,7 @@ fn emit_stack(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     None,
                 )
@@ -5250,6 +5435,7 @@ fn emit_stack(
             classes,
             state_registry,
             lazy_sources,
+            extras,
             mutations,
             None,
         )],
@@ -5283,6 +5469,7 @@ fn emit_stack(
                 classes,
                 state_registry,
                 lazy_sources,
+                extras,
                 mutations,
             );
             children.extend(extra);
@@ -5604,6 +5791,7 @@ fn emit_scrollview(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    extras: &mut HarvestExtras,
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
     local_hint: Option<LocalId>,
 ) -> String {
@@ -5625,6 +5813,7 @@ fn emit_scrollview(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     None,
                 )
@@ -5640,6 +5829,7 @@ fn emit_scrollview(
             classes,
             state_registry,
             lazy_sources,
+            extras,
             mutations,
             None,
         )],
@@ -5668,6 +5858,7 @@ fn emit_scrollview(
                         classes,
                         state_registry,
                         lazy_sources,
+                        extras,
                         mutations,
                         None,
                     )];
@@ -5700,6 +5891,7 @@ fn emit_scrollview(
                 classes,
                 state_registry,
                 lazy_sources,
+                extras,
                 mutations,
             );
             children.extend(extra);
@@ -5751,6 +5943,7 @@ fn emit_lazy_vstack(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    extras: &mut HarvestExtras,
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 1);
@@ -5786,6 +5979,7 @@ fn emit_lazy_vstack(
                         classes,
                         state_registry,
                         lazy_sources,
+                        extras,
                         mutations,
                         None,
                     );
@@ -5850,6 +6044,7 @@ fn emit_lazy_vstack(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     None,
                 )
@@ -6102,6 +6297,524 @@ fn emit_progressview(args: &[Expr]) -> String {
     )
 }
 
+/// Issue #669 — `Chart(kind, width, height)` → ArkUI `Canvas` backed by a
+/// per-instance `CanvasRenderingContext2D` class field. The data points,
+/// title and kind are baked into the page at codegen time by folding
+/// the chart's mutator stream (`chartAddDataPoint`, `chartClearData`,
+/// `chartSetTitle`). The draw closure is registered via `.onReady` and
+/// runs once per build() — `chartReload` doesn't need an explicit
+/// re-trigger because every closure-time data mutation routes through
+/// ArkUI's `@State` re-render cycle (the static fold is the v1 baseline
+/// matching `comboboxAddItem`'s limitation — dynamic-data charts are a
+/// follow-up).
+///
+/// The math mirrors the Android impl
+/// (`crates/perry-ui-android/template/.../PerryBridge.kt::PerryChartView`):
+/// - 0=line: stroke path connecting data points + point dots + x-axis labels
+/// - 1=bar:  filled rectangles + x-axis labels
+/// - 2=pie:  filled arcs + legend column on the left
+/// padding/colors copied 1:1 so the harmonyos rendering matches the
+/// other platforms.
+fn emit_chart(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
+    local_hint: Option<LocalId>,
+    extras: &mut HarvestExtras,
+) -> String {
+    let kind = numeric_arg_resolved(args, 0, bindings).unwrap_or(1.0) as i64;
+    let width = numeric_arg_resolved(args, 1, bindings).unwrap_or(0.0);
+    let height = numeric_arg_resolved(args, 2, bindings).unwrap_or(0.0);
+
+    // Fold the chart's mutator stream into a static (data, title) pair.
+    let (points, title) = fold_chart_mutations(local_hint, mutations);
+
+    // Register a per-instance ctx field; the field id is a simple
+    // sequence number so emitted source is deterministic regardless of
+    // the user's local-id remapping.
+    let field_id = format!("{}", extras.chart_instances.len());
+    extras.chart_instances.push(ChartInstance {
+        field_id: field_id.clone(),
+        kind,
+        width,
+        height,
+        points: points.clone(),
+        title: title.clone(),
+    });
+
+    // Inline data + title literals so the draw closure doesn't need to
+    // walk class state — keeps the closure self-contained per build().
+    let data_lit = points
+        .iter()
+        .map(|(l, v)| {
+            format!(
+                "{{ label: {}, value: {} }}",
+                arkts_string_lit(l),
+                fmt_num(*v)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let title_lit = arkts_string_lit(&title);
+
+    let mut sizing = String::new();
+    if width > 0.0 {
+        sizing.push_str(&format!(".width({})", fmt_num(width)));
+    }
+    if height > 0.0 {
+        sizing.push_str(&format!(".height({})", fmt_num(height)));
+    }
+
+    let draw_body = chart_draw_body(kind);
+
+    // Resolve the actual canvas pixel size — the draw closure reads
+    // `cw` / `ch` from the rendering context to compute scaled
+    // coordinates. When the user passed width/height we know those
+    // numbers; otherwise fall back to the closure's intrinsic
+    // measurement at draw time.
+    let cw_decl = if width > 0.0 {
+        format!("        const cw: number = {};\n", fmt_num(width))
+    } else {
+        "        const cw: number = ctx.width;\n".to_string()
+    };
+    let ch_decl = if height > 0.0 {
+        format!("        const ch: number = {};\n", fmt_num(height))
+    } else {
+        "        const ch: number = ctx.height;\n".to_string()
+    };
+
+    format!(
+        "Canvas(this.__chart_{id}_ctx){sizing}.backgroundColor('#ffffff').onReady(() => {{\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20const ctx = this.__chart_{id}_ctx;\n\
+         {cw}\
+         {ch}\
+         \x20\x20\x20\x20\x20\x20\x20\x20const data: Array<{{ label: string, value: number }}> = [{data}];\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20const title: string = {title};\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20ctx.clearRect(0, 0, cw, ch);\n\
+         {draw}\
+         \x20\x20\x20\x20}})",
+        id = field_id,
+        sizing = sizing,
+        cw = cw_decl,
+        ch = ch_decl,
+        data = data_lit,
+        title = title_lit,
+        draw = draw_body,
+    )
+}
+
+/// Fold a chart's recorded mutator stream into a `(points, title)` pair.
+/// Order matters: `chartClearData` resets the points list, then later
+/// `chartAddDataPoint` entries refill it; the last `chartSetTitle` wins.
+/// Conditional mutations (recorded with `MutationEntry::condition: Some`)
+/// are flattened by treating them as unconditional — the v1 fold doesn't
+/// emit per-branch chart configurations. That's fine because the issue
+/// #669 scope explicitly punts dynamic data; charts are static.
+fn fold_chart_mutations(
+    local_hint: Option<LocalId>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
+) -> (Vec<(String, f64)>, String) {
+    let mut points: Vec<(String, f64)> = Vec::new();
+    let mut title = String::new();
+    let Some(id) = local_hint else {
+        return (points, title);
+    };
+    let Some(entries) = mutations.get(&id) else {
+        return (points, title);
+    };
+    for entry in entries {
+        match &entry.mutation {
+            Mutation::ChartAddDataPoint(label, value) => {
+                points.push((label.clone(), *value));
+            }
+            Mutation::ChartClearData => {
+                points.clear();
+            }
+            Mutation::ChartSetTitle(t) => {
+                title = t.clone();
+            }
+            Mutation::ChartReload => { /* no-op at codegen time */ }
+            _ => {}
+        }
+    }
+    (points, title)
+}
+
+/// Generate the ArkTS draw closure body for the chosen chart kind. All
+/// three branches use ctx.* (CanvasRenderingContext2D) so the same body
+/// works for any per-instance ctx the caller binds. Lines indented at
+/// 8 spaces so they slot under `Canvas(...).onReady(() => { ... })`.
+fn chart_draw_body(kind: i64) -> String {
+    // Common: title bar at the top — drawn for every kind so the chart
+    // always has its label visible regardless of which kind renders below.
+    // (Matches the Android impl, where titleHeight is reserved up front.)
+    let title_block = "\
+        const titleHeight: number = title.length > 0 ? 28 : 0;\n\
+        if (title.length > 0) {\n\
+            ctx.fillStyle = '#222222';\n\
+            ctx.font = 'bold 18px sans-serif';\n\
+            ctx.textAlign = 'center';\n\
+            ctx.fillText(title, cw / 2, 22);\n\
+        }\n\
+        if (data.length === 0) { return; }\n";
+    let body = match kind {
+        0 => chart_draw_line(),
+        2 => chart_draw_pie(),
+        // bar is the default for unknown kinds (matches Android's
+        // `else -> drawBar(...)` branch).
+        _ => chart_draw_bar(),
+    };
+    format!(
+        "\x20\x20\x20\x20\x20\x20\x20\x20{title}{body}",
+        title = title_block.replace('\n', "\n        "),
+        body = body,
+    )
+}
+
+fn chart_draw_bar() -> String {
+    "\
+const padL: number = 36;\n\
+const padR: number = 12;\n\
+const padB: number = 36;\n\
+const padT: number = titleHeight + 12;\n\
+const plotW: number = cw - padL - padR;\n\
+const plotH: number = ch - padT - padB;\n\
+if (plotW <= 0 || plotH <= 0) { return; }\n\
+let maxV: number = 1e-9;\n\
+for (const p of data) { if (p.value > maxV) { maxV = p.value; } }\n\
+const step: number = plotW / data.length;\n\
+const barWidth: number = step * 0.7;\n\
+ctx.strokeStyle = '#888888';\n\
+ctx.lineWidth = 2;\n\
+ctx.beginPath();\n\
+ctx.moveTo(padL, ch - padB);\n\
+ctx.lineTo(cw - padR, ch - padB);\n\
+ctx.stroke();\n\
+ctx.fillStyle = '#4287F5';\n\
+for (let i = 0; i < data.length; i++) {\n\
+    const p = data[i];\n\
+    const cx = padL + step * (i + 0.5);\n\
+    const barH = p.value / maxV * plotH;\n\
+    ctx.fillRect(cx - barWidth / 2, (ch - padB) - barH, barWidth, barH);\n\
+}\n\
+ctx.fillStyle = '#222222';\n\
+ctx.font = '12px sans-serif';\n\
+ctx.textAlign = 'center';\n\
+for (let i = 0; i < data.length; i++) {\n\
+    const cx = padL + step * (i + 0.5);\n\
+    ctx.fillText(data[i].label, cx, ch - padB + 18);\n\
+}\n"
+    .replace('\n', "\n        ")
+}
+
+fn chart_draw_line() -> String {
+    "\
+const padL: number = 36;\n\
+const padR: number = 12;\n\
+const padB: number = 36;\n\
+const padT: number = titleHeight + 12;\n\
+const plotW: number = cw - padL - padR;\n\
+const plotH: number = ch - padT - padB;\n\
+if (plotW <= 0 || plotH <= 0) { return; }\n\
+let maxV: number = 1e-9;\n\
+for (const p of data) { if (p.value > maxV) { maxV = p.value; } }\n\
+const step: number = data.length <= 1 ? 0 : plotW / (data.length - 1);\n\
+ctx.strokeStyle = '#888888';\n\
+ctx.lineWidth = 2;\n\
+ctx.beginPath();\n\
+ctx.moveTo(padL, ch - padB);\n\
+ctx.lineTo(cw - padR, ch - padB);\n\
+ctx.stroke();\n\
+ctx.strokeStyle = '#4287F5';\n\
+ctx.lineWidth = 3;\n\
+ctx.beginPath();\n\
+for (let i = 0; i < data.length; i++) {\n\
+    const cx = padL + step * i;\n\
+    const cy = (ch - padB) - (data[i].value / maxV * plotH);\n\
+    if (i === 0) { ctx.moveTo(cx, cy); } else { ctx.lineTo(cx, cy); }\n\
+}\n\
+ctx.stroke();\n\
+ctx.fillStyle = '#1B5FB8';\n\
+for (let i = 0; i < data.length; i++) {\n\
+    const cx = padL + step * i;\n\
+    const cy = (ch - padB) - (data[i].value / maxV * plotH);\n\
+    ctx.beginPath();\n\
+    ctx.arc(cx, cy, 4, 0, Math.PI * 2);\n\
+    ctx.fill();\n\
+}\n\
+ctx.fillStyle = '#222222';\n\
+ctx.font = '12px sans-serif';\n\
+ctx.textAlign = 'center';\n\
+for (let i = 0; i < data.length; i++) {\n\
+    const cx = padL + step * i;\n\
+    ctx.fillText(data[i].label, cx, ch - padB + 18);\n\
+}\n"
+    .replace('\n', "\n        ")
+}
+
+fn chart_draw_pie() -> String {
+    "\
+const colors: string[] = ['#4287F5', '#E54545', '#34A853', '#FBBC05', '#9C27B0', '#00ACC1', '#FF7043', '#8D6E63'];\n\
+let sum: number = 0;\n\
+for (const p of data) { sum += p.value; }\n\
+if (sum <= 0) { return; }\n\
+const padT: number = titleHeight + 12;\n\
+const plotH: number = ch - padT - 12;\n\
+const radius: number = Math.max(8, Math.min(cw, plotH) / 2 - 12);\n\
+const cx: number = cw / 2;\n\
+const cy: number = padT + plotH / 2;\n\
+let startAngle: number = -Math.PI / 2;\n\
+for (let i = 0; i < data.length; i++) {\n\
+    const sweep = data[i].value / sum * Math.PI * 2;\n\
+    ctx.fillStyle = colors[i % colors.length];\n\
+    ctx.beginPath();\n\
+    ctx.moveTo(cx, cy);\n\
+    ctx.arc(cx, cy, radius, startAngle, startAngle + sweep);\n\
+    ctx.closePath();\n\
+    ctx.fill();\n\
+    startAngle += sweep;\n\
+}\n\
+ctx.font = '12px sans-serif';\n\
+ctx.textAlign = 'left';\n\
+let ly: number = padT + 16;\n\
+for (let i = 0; i < data.length; i++) {\n\
+    ctx.fillStyle = colors[i % colors.length];\n\
+    ctx.fillRect(8, ly - 12, 16, 12);\n\
+    ctx.fillStyle = '#222222';\n\
+    ctx.fillText(data[i].label, 32, ly);\n\
+    ly += 18;\n\
+}\n"
+        .replace('\n', "\n        ")
+}
+
+/// Issue #670 — `TreeView(rootNode, onSelect)` → ArkUI `List` with
+/// a recursive flatten. The node graph is rebuilt at codegen time by
+/// chasing `rootNode` back through `bindings` to its `TreeNode(id,
+/// label)` constructor + accumulated `treeNodeAddChild` mutations.
+/// The result lives as a `private __tree_<n>_nodes: TreeNodeData[]`
+/// constant on the @Component; expand/collapse state is
+/// `@State __tree_<n>_expanded: Set<string>`; the currently selected
+/// id is `@State __tree_<n>_selectedId: string`. A helper method
+/// `__tree_<n>_flatten()` walks the graph using the expanded set and
+/// returns the visible rows ArkUI's `ForEach` iterates over.
+///
+/// Tapping a row that has children toggles the chevron and re-renders
+/// (ArkUI reacts to the Set mutation via the `=` assignment helper).
+/// Tapping any row fires the user `onSelect` closure with the row's id.
+/// `treeViewExpandAll` / `treeViewCollapseAll` / `treeViewGetSelectedId`
+/// route through the existing perry_arkts drain queue at runtime — out
+/// of scope for v1; the @State surface is in place so a v1.1 NAPI
+/// drain bridge can flip the set without touching codegen.
+fn emit_treeview(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+    callbacks: &mut Vec<Expr>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
+    extras: &mut HarvestExtras,
+) -> String {
+    let root_arg = args.first();
+
+    let on_select_idx = match args.get(1) {
+        Some(closure @ Expr::Closure { .. }) => {
+            let idx = callbacks.len();
+            callbacks.push(closure.clone());
+            Some(idx)
+        }
+        _ => None,
+    };
+
+    // Build the static tree by walking from root_arg through bindings.
+    let root = root_arg.and_then(|e| build_tree_node(e, bindings, mutations, 0));
+    let Some(root_node) = root else {
+        // Couldn't resolve the root TreeNode call — degrade to a comment
+        // + placeholder so the user can see the gap.
+        return format!(
+            "// TreeView: couldn't resolve root TreeNode call (non-literal binding)\n\
+             Text('[TreeView: unresolved root]').fontSize(14).fontColor('#888888')"
+        );
+    };
+
+    let field_id = format!("{}", extras.tree_view_instances.len());
+    extras.tree_view_instances.push(TreeViewInstance {
+        field_id: field_id.clone(),
+        root: root_node,
+        on_select_idx,
+    });
+
+    let select_call = match on_select_idx {
+        Some(idx) => format!(
+            "perryEntry.invokeCallback1({}, row.id); {drain}",
+            idx,
+            drain = drain_loop_body()
+        ),
+        None => String::new(),
+    };
+
+    // ForEach key extractor uses row.id so ArkUI can diff between
+    // pre/post-expand flattenings. The chevron leaf-vs-branch logic
+    // mirrors the Android indentation glyphs ("▾"/"▸"/blank).
+    format!(
+        "List({{ space: 0 }}) {{\n\
+         \x20\x20\x20\x20ForEach(this.__tree_{id}_flatten(), (row: {{ id: string, label: string, depth: number, hasChildren: boolean, expanded: boolean }}) => {{\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20ListItem() {{\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Row({{ space: 4 }}) {{\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Text(row.hasChildren ? (row.expanded ? '\u{25be}' : '\u{25b8}') : ' ').fontSize(14).width(16)\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Text(row.label).fontSize(14)\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20}}\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20.padding({{ left: row.depth * 16, top: 4, bottom: 4 }})\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20.onClick(() => {{\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20this.__tree_{id}_selectedId = row.id;\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20if (row.hasChildren) {{\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20const next = new Set<string>(this.__tree_{id}_expanded);\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20if (next.has(row.id)) {{ next.delete(row.id); }} else {{ next.add(row.id); }}\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20this.__tree_{id}_expanded = next;\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20}}\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20{select}\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20}})\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20}}\n\
+         \x20\x20\x20\x20}}, (row: {{ id: string }}) => row.id)\n\
+         }}",
+        id = field_id,
+        select = select_call,
+    )
+}
+
+/// Walk an `Expr` (presumably a `LocalGet` referring to a `TreeNode(id,
+/// label)` constructor) through bindings + recorded `treeNodeAddChild`
+/// mutations to produce a static [`TreeViewNode`] tree. Bounded depth
+/// (16) protects against pathological binding cycles.
+fn build_tree_node(
+    expr: &Expr,
+    bindings: &HashMap<LocalId, Expr>,
+    mutations: &HashMap<LocalId, Vec<MutationEntry>>,
+    depth: usize,
+) -> Option<TreeViewNode> {
+    if depth > 16 {
+        return None;
+    }
+    let (id_str, label_str, target_local) = match expr {
+        Expr::LocalGet(id) => {
+            let init = bindings.get(id)?;
+            // The init must itself be a TreeNode(id, label) call.
+            let (i, l) = treenode_id_label(init)?;
+            (i, l, Some(*id))
+        }
+        _ => {
+            let (i, l) = treenode_id_label(expr)?;
+            (i, l, None)
+        }
+    };
+    let mut children: Vec<TreeViewNode> = Vec::new();
+    if let Some(lid) = target_local {
+        if let Some(entries) = mutations.get(&lid) {
+            for entry in entries {
+                if let Mutation::TreeAddChild(child_expr) = &entry.mutation {
+                    if let Some(c) = build_tree_node(child_expr, bindings, mutations, depth + 1) {
+                        children.push(c);
+                    }
+                }
+            }
+        }
+    }
+    Some(TreeViewNode {
+        id: id_str,
+        label: label_str,
+        children,
+    })
+}
+
+/// Inspect an expr for the `TreeNode(id, label)` factory call shape and
+/// extract the literal id + label strings. Returns None for any other
+/// shape (unbound local, non-literal args, etc.).
+fn treenode_id_label(expr: &Expr) -> Option<(String, String)> {
+    let Expr::NativeMethodCall {
+        module,
+        method,
+        args,
+        ..
+    } = expr
+    else {
+        return None;
+    };
+    if module != "perry/ui" || method != "TreeNode" {
+        return None;
+    }
+    let id = match args.first()? {
+        Expr::String(s) => s.clone(),
+        _ => return None,
+    };
+    let label = match args.get(1)? {
+        Expr::String(s) => s.clone(),
+        _ => return None,
+    };
+    Some((id, label))
+}
+
+/// Emit ArkTS source for `chart_decls`, `tree_view_decls`, and
+/// `tree_view_methods` consumed by `wrap_index_page`. Splits Chart's
+/// field decls from TreeView's so the @Component layout stays readable
+/// (charts come first, then tree views, then media glue).
+fn chart_and_tree_glue(extras: &HarvestExtras) -> (String, String, String) {
+    let mut chart_decls = String::new();
+    for inst in &extras.chart_instances {
+        chart_decls.push_str(&format!(
+            "    private __chart_{id}_settings: RenderingContextSettings = new RenderingContextSettings(true);\n\
+             \x20\x20\x20\x20private __chart_{id}_ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.__chart_{id}_settings);\n",
+            id = inst.field_id,
+        ));
+    }
+
+    let mut tree_view_decls = String::new();
+    let mut tree_view_methods = String::new();
+    for inst in &extras.tree_view_instances {
+        let nodes_lit = render_tree_data_literal(&inst.root);
+        tree_view_decls.push_str(&format!(
+            "    private __tree_{id}_nodes: Array<{{ id: string, label: string, children: any[] }}> = [{lit}];\n\
+             \x20\x20\x20\x20@State __tree_{id}_expanded: Set<string> = new Set<string>();\n\
+             \x20\x20\x20\x20@State __tree_{id}_selectedId: string = '';\n",
+            id = inst.field_id,
+            lit = nodes_lit,
+        ));
+        tree_view_methods.push_str(&format!(
+            "    __tree_{id}_flatten(): Array<{{ id: string, label: string, depth: number, hasChildren: boolean, expanded: boolean }}> {{\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20const out: Array<{{ id: string, label: string, depth: number, hasChildren: boolean, expanded: boolean }}> = [];\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20const expanded = this.__tree_{id}_expanded;\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20const walk = (nodes: Array<{{ id: string, label: string, children: any[] }}>, depth: number): void => {{\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20for (const n of nodes) {{\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20const has = n.children && n.children.length > 0;\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20const isOpen = expanded.has(n.id);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20out.push({{ id: n.id, label: n.label, depth: depth, hasChildren: has, expanded: isOpen }});\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20if (has && isOpen) {{ walk(n.children, depth + 1); }}\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20}}\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20}};\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20walk(this.__tree_{id}_nodes, 0);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20return out;\n\
+             \x20\x20\x20\x20}}\n",
+            id = inst.field_id,
+        ));
+    }
+
+    (chart_decls, tree_view_decls, tree_view_methods)
+}
+
+/// Render a `TreeViewNode` (and its children, recursively) as an ArkTS
+/// object-literal entry. Used by `chart_and_tree_glue` to bake the
+/// static graph into the @Component's `__tree_<n>_nodes` field.
+fn render_tree_data_literal(node: &TreeViewNode) -> String {
+    let children = node
+        .children
+        .iter()
+        .map(render_tree_data_literal)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{{ id: {id}, label: {label}, children: [{kids}] }}",
+        id = arkts_string_lit(&node.id),
+        label = arkts_string_lit(&node.label),
+        kids = children,
+    )
+}
+
 /// `Section(title, children)` → labeled vertical group.
 /// Emits `Column({space: 4}) { Text('<title>').fontSize(14).fontColor('#888888'); <children> }`.
 /// The greyed-out small label header matches the iOS UITableView section
@@ -6117,6 +6830,7 @@ fn emit_section(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    extras: &mut HarvestExtras,
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
     local_hint: Option<LocalId>,
 ) -> String {
@@ -6139,6 +6853,7 @@ fn emit_section(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     None,
                 )
@@ -6154,6 +6869,7 @@ fn emit_section(
             classes,
             state_registry,
             lazy_sources,
+            extras,
             mutations,
             None,
         )],
@@ -6179,6 +6895,7 @@ fn emit_section(
                 classes,
                 state_registry,
                 lazy_sources,
+                extras,
                 mutations,
             );
             children.extend(extra);
@@ -6235,6 +6952,7 @@ fn emit_tabs(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    extras: &mut HarvestExtras,
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let tab_specs: Vec<&Expr> = match args.first() {
@@ -6294,6 +7012,7 @@ fn emit_tabs(
                         classes,
                         state_registry,
                         lazy_sources,
+                        extras,
                         mutations,
                         None,
                     )
@@ -6396,6 +7115,7 @@ fn emit_grid(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    extras: &mut HarvestExtras,
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let columns = numeric_arg(args, 0).unwrap_or(2.0) as i64;
@@ -6420,6 +7140,7 @@ fn emit_grid(
                 classes,
                 state_registry,
                 lazy_sources,
+                extras,
                 mutations,
                 None,
             );
@@ -6487,6 +7208,7 @@ fn emit_nav_stack(
     classes: &[Class],
     state_registry: &HashMap<LocalId, StateBinding>,
     lazy_sources: &mut Vec<LazyDataSource>,
+    extras: &mut HarvestExtras,
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let inner_indent = "    ".repeat(depth + 1);
@@ -6545,6 +7267,7 @@ fn emit_nav_stack(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     None,
                 )
@@ -6590,6 +7313,7 @@ fn emit_nav_stack(
                     classes,
                     state_registry,
                     lazy_sources,
+                    extras,
                     mutations,
                     None,
                 )
@@ -6689,6 +7413,7 @@ fn wrap_index_page(
     uses_media: bool,
     visibility_bindings: &HashMap<LocalId, VisibilityBinding>,
     view_builders: &[ViewBuilder],
+    extras: &HarvestExtras,
 ) -> String {
     let indented = widget_body
         .lines()
@@ -6860,6 +7585,9 @@ class PerryListDataSource implements IDataSource {\n\
         (String::new(), String::new(), String::new(), String::new())
     };
 
+    // Issue #669 / #670 — Chart + TreeView class-level state.
+    let (chart_decls, tree_view_decls, tree_view_methods) = chart_and_tree_glue(extras);
+
     format!(
         "// Auto-generated by Perry (perry-codegen-arkts) — do not edit.\n\
          // Regenerated every `perry compile --target harmonyos`.\n\
@@ -6878,10 +7606,13 @@ class PerryListDataSource implements IDataSource {\n\
          {visibility_decls}\
          {content_view_decls}\
          {lazy_decls}\
+         {chart_decls}\
+         {tree_view_decls}\
          {media_decls}\
          {apply}\
          {apply_visibility}\
          {apply_content_view}\
+         {tree_view_methods}\
          {media_methods}\
          \x20\x20\x20\x20build() {{\n\
          \x20\x20\x20\x20\x20\x20\x20\x20Column() {{\n\
@@ -6898,6 +7629,9 @@ class PerryListDataSource implements IDataSource {\n\
         content_view_decls = content_view_decls,
         lazy_class = lazy_class,
         lazy_decls = lazy_decls,
+        chart_decls = chart_decls,
+        tree_view_decls = tree_view_decls,
+        tree_view_methods = tree_view_methods,
         apply = apply_method,
         apply_visibility = apply_visibility_method,
         apply_content_view = apply_content_view_method,
@@ -10497,6 +11231,334 @@ mod tests {
             !src.contains("Button('b')"),
             "else-branch must NOT render (dead-branch elim):\n{}",
             src
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Issue #669 — Chart on HarmonyOS (ArkUI Canvas backend).
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn chart_bar_with_data_points_emits_canvas_and_draw_calls() {
+        // const c = Chart(1, 200, 150);
+        // chartAddDataPoint(c, 'Q1', 10);
+        // chartAddDataPoint(c, 'Q2', 20);
+        // chartSetTitle(c, 'Sales');
+        // App({ body: c });
+        let mut m = empty_module();
+        m.init.push(let_widget(
+            42,
+            "c",
+            nmc(
+                "Chart",
+                vec![Expr::Integer(1), Expr::Number(200.0), Expr::Number(150.0)],
+            ),
+        ));
+        m.init.push(mutator_stmt(
+            "chartAddDataPoint",
+            vec![
+                Expr::LocalGet(42),
+                Expr::String("Q1".into()),
+                Expr::Number(10.0),
+            ],
+        ));
+        m.init.push(mutator_stmt(
+            "chartAddDataPoint",
+            vec![
+                Expr::LocalGet(42),
+                Expr::String("Q2".into()),
+                Expr::Number(20.0),
+            ],
+        ));
+        m.init.push(mutator_stmt(
+            "chartSetTitle",
+            vec![Expr::LocalGet(42), Expr::String("Sales".into())],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(42)));
+
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        let src = r.ets_source;
+
+        // Canvas widget + per-instance ctx field.
+        assert!(
+            src.contains("Canvas(this.__chart_0_ctx)"),
+            "Canvas with per-instance ctx must render:\n{}",
+            src,
+        );
+        assert!(
+            src.contains(
+                "private __chart_0_settings: RenderingContextSettings = \
+                 new RenderingContextSettings(true)"
+            ),
+            "RenderingContextSettings field missing:\n{}",
+            src,
+        );
+        assert!(
+            src.contains(
+                "private __chart_0_ctx: CanvasRenderingContext2D = \
+                 new CanvasRenderingContext2D(this.__chart_0_settings)"
+            ),
+            "CanvasRenderingContext2D field missing:\n{}",
+            src,
+        );
+        // Size flowed through.
+        assert!(src.contains(".width(200)"), "width missing:\n{}", src);
+        assert!(src.contains(".height(150)"), "height missing:\n{}", src);
+        // Data points folded.
+        assert!(
+            src.contains("{ label: 'Q1', value: 10 }"),
+            "Q1 point missing:\n{}",
+            src
+        );
+        assert!(
+            src.contains("{ label: 'Q2', value: 20 }"),
+            "Q2 point missing:\n{}",
+            src
+        );
+        // Title folded.
+        assert!(
+            src.contains("const title: string = 'Sales'"),
+            "title missing:\n{}",
+            src
+        );
+        // 2D context draw calls present (bar branch uses fillRect for bars).
+        assert!(
+            src.contains("ctx.clearRect(0, 0, cw, ch)"),
+            "clearRect missing:\n{}",
+            src
+        );
+        assert!(src.contains("ctx.fillRect("), "fillRect missing:\n{}", src);
+        assert!(
+            src.contains("ctx.fillText(title, cw / 2, 22)"),
+            "title fillText missing:\n{}",
+            src
+        );
+    }
+
+    #[test]
+    fn chart_line_kind_emits_stroke_path() {
+        let mut m = empty_module();
+        m.init.push(let_widget(
+            7,
+            "c",
+            nmc(
+                "Chart",
+                vec![Expr::Integer(0), Expr::Number(100.0), Expr::Number(100.0)],
+            ),
+        ));
+        m.init.push(mutator_stmt(
+            "chartAddDataPoint",
+            vec![
+                Expr::LocalGet(7),
+                Expr::String("a".into()),
+                Expr::Number(5.0),
+            ],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(7)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        let src = r.ets_source;
+        // Line kind: lineTo + stroke + arc-dots.
+        assert!(src.contains("ctx.lineTo("), "lineTo missing:\n{}", src);
+        assert!(src.contains("ctx.stroke()"), "stroke() missing:\n{}", src);
+        assert!(src.contains("ctx.arc("), "arc dot missing:\n{}", src);
+    }
+
+    #[test]
+    fn chart_pie_kind_emits_arc_fill_and_legend() {
+        let mut m = empty_module();
+        m.init.push(let_widget(
+            9,
+            "c",
+            nmc(
+                "Chart",
+                vec![Expr::Integer(2), Expr::Number(120.0), Expr::Number(120.0)],
+            ),
+        ));
+        m.init.push(mutator_stmt(
+            "chartAddDataPoint",
+            vec![
+                Expr::LocalGet(9),
+                Expr::String("x".into()),
+                Expr::Number(1.0),
+            ],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(9)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        let src = r.ets_source;
+        assert!(
+            src.contains("ctx.arc(cx, cy, radius"),
+            "pie arc missing:\n{}",
+            src
+        );
+        assert!(
+            src.contains("ctx.closePath()"),
+            "pie closePath missing:\n{}",
+            src
+        );
+        assert!(src.contains("ctx.fill()"), "pie fill missing:\n{}", src);
+    }
+
+    #[test]
+    fn chart_clear_data_resets_points() {
+        // chartAddDataPoint then chartClearData then chartAddDataPoint —
+        // only the last point should survive in the static fold.
+        let mut m = empty_module();
+        m.init.push(let_widget(
+            5,
+            "c",
+            nmc(
+                "Chart",
+                vec![Expr::Integer(1), Expr::Number(100.0), Expr::Number(100.0)],
+            ),
+        ));
+        m.init.push(mutator_stmt(
+            "chartAddDataPoint",
+            vec![
+                Expr::LocalGet(5),
+                Expr::String("dropped".into()),
+                Expr::Number(99.0),
+            ],
+        ));
+        m.init
+            .push(mutator_stmt("chartClearData", vec![Expr::LocalGet(5)]));
+        m.init.push(mutator_stmt(
+            "chartAddDataPoint",
+            vec![
+                Expr::LocalGet(5),
+                Expr::String("kept".into()),
+                Expr::Number(7.0),
+            ],
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(5)));
+
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        let src = r.ets_source;
+        assert!(
+            !src.contains("'dropped'"),
+            "cleared point must not render:\n{}",
+            src
+        );
+        assert!(
+            src.contains("{ label: 'kept', value: 7 }"),
+            "surviving point must render:\n{}",
+            src
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Issue #670 — TreeView on HarmonyOS (ArkUI List backend).
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn treeview_static_graph_emits_list_foreach_and_state() {
+        // const root  = TreeNode('root', 'Root');
+        // const child = TreeNode('c1',   'Child 1');
+        // treeNodeAddChild(root, child);
+        // const tv = TreeView(root, () => {});
+        // App({ body: tv });
+        let mut m = empty_module();
+        m.init.push(let_widget(
+            10,
+            "root",
+            nmc(
+                "TreeNode",
+                vec![Expr::String("root".into()), Expr::String("Root".into())],
+            ),
+        ));
+        m.init.push(let_widget(
+            11,
+            "child",
+            nmc(
+                "TreeNode",
+                vec![Expr::String("c1".into()), Expr::String("Child 1".into())],
+            ),
+        ));
+        m.init.push(mutator_stmt(
+            "treeNodeAddChild",
+            vec![Expr::LocalGet(10), Expr::LocalGet(11)],
+        ));
+        m.init.push(let_widget(
+            12,
+            "tv",
+            nmc("TreeView", vec![Expr::LocalGet(10), closure_stub()]),
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(12)));
+
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        let src = r.ets_source;
+
+        // List + ForEach with the flatten helper as its source.
+        assert!(
+            src.contains("List({ space: 0 })"),
+            "List container missing:\n{}",
+            src,
+        );
+        assert!(
+            src.contains("ForEach(this.__tree_0_flatten(),"),
+            "ForEach over flatten missing:\n{}",
+            src,
+        );
+        // Static node data baked recursively (root holds child).
+        assert!(
+            src.contains(
+                "{ id: 'root', label: 'Root', \
+                 children: [{ id: 'c1', label: 'Child 1', children: [] }] }"
+            ),
+            "recursive node literal missing:\n{}",
+            src,
+        );
+        // @State fields for expanded set + selected id.
+        assert!(
+            src.contains("@State __tree_0_expanded: Set<string> = new Set<string>()"),
+            "expanded @State missing:\n{}",
+            src,
+        );
+        assert!(
+            src.contains("@State __tree_0_selectedId: string = ''"),
+            "selectedId @State missing:\n{}",
+            src,
+        );
+        // Flatten method emitted on the @Component.
+        assert!(
+            src.contains("__tree_0_flatten():"),
+            "flatten helper missing:\n{}",
+            src,
+        );
+        // Tap-handler wires invokeCallback1 with row.id.
+        assert!(
+            src.contains("perryEntry.invokeCallback1(0, row.id)"),
+            "onSelect dispatch missing:\n{}",
+            src,
+        );
+        assert_eq!(r.callbacks.len(), 1);
+    }
+
+    #[test]
+    fn treeview_depth_padding_uses_row_depth_field() {
+        // Verifies the ArkUI .padding({ left: row.depth * 16 }) shape so
+        // children render with their indent. The actual numbers (16 px)
+        // are a v1 layout choice — change requires test + code together.
+        let mut m = empty_module();
+        m.init.push(let_widget(
+            20,
+            "root",
+            nmc(
+                "TreeNode",
+                vec![Expr::String("r".into()), Expr::String("R".into())],
+            ),
+        ));
+        m.init.push(let_widget(
+            21,
+            "tv",
+            nmc("TreeView", vec![Expr::LocalGet(20), closure_stub()]),
+        ));
+        m.init.push(app_with_body(Expr::LocalGet(21)));
+        let r = emit_index_ets(&mut m).unwrap().unwrap();
+        let src = r.ets_source;
+        assert!(
+            src.contains(".padding({ left: row.depth * 16,"),
+            "depth-based padding missing:\n{}",
+            src,
         );
     }
 }

@@ -802,8 +802,15 @@ pub(super) fn resolve_import(
     compile_packages: &HashSet<String>,
     compile_package_dirs: &HashMap<String, PathBuf>,
 ) -> Option<(PathBuf, ModuleKind)> {
-    // Check if it's a native Rust stdlib module
-    if perry_hir::is_native_module(import_source) {
+    // Check if it's a native Rust stdlib module. Refs #665: when the user has
+    // explicitly opted the package into `perry.compilePackages`, they want
+    // their `node_modules` copy compiled from source (cjs_wrap + native
+    // codegen), not the built-in Rust FFI binding — which for some packages
+    // (e.g. `rate-limiter-flexible`'s `perry-ext-ratelimit`) is incomplete.
+    // The opt-in is package-scoped: bare `rate-limiter-flexible` and any
+    // subpath under it both fall through to file resolution.
+    let (native_check_pkg, _) = parse_package_specifier(import_source);
+    if perry_hir::is_native_module(import_source) && !compile_packages.contains(&native_check_pkg) {
         return None; // Native modules are handled by stdlib, not file imports
     }
 

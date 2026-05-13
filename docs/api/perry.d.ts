@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 815 entries across 70 modules
+// Coverage: 820 entries across 70 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -815,6 +815,8 @@ declare module "perry/ui" {
   /** stdlib */
   export function App(...args: any[]): any;
   /** stdlib */
+  export function AttributedText(...args: any[]): any;
+  /** stdlib */
   export function BottomNavigation(...args: any[]): any;
   /** stdlib */
   export function Button(...args: any[]): any;
@@ -895,11 +897,19 @@ declare module "perry/ui" {
   /** stdlib */
   export function appSetTimer(...args: any[]): any;
   /** stdlib */
+  export function attributedTextAppend(...args: any[]): any;
+  /** stdlib */
+  export function attributedTextClear(...args: any[]): any;
+  /** stdlib */
   export function bottomNavAddItem(...args: any[]): any;
   /** stdlib */
   export function bottomNavSetBadge(...args: any[]): any;
   /** stdlib */
   export function bottomNavSetSelected(...args: any[]): any;
+  /** stdlib */
+  export function bottomNavSetTintColor(...args: any[]): any;
+  /** stdlib */
+  export function bottomNavSetUnselectedTintColor(...args: any[]): any;
   /** stdlib */
   export function clipboardRead(...args: any[]): any;
   /** stdlib */

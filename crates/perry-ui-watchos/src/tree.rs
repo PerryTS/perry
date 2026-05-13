@@ -27,6 +27,8 @@ pub enum NodeKind {
     NavigationStack = 14,
     TextArea = 15,
     MapView = 16,
+    /// Issue #710 — AttributedText (per-range styled label).
+    AttributedText = 17,
 }
 
 /// A single node in the UI tree.
@@ -85,6 +87,18 @@ pub struct NodeData {
     // SwiftUI host applies `.underline()` / `.strikethrough()` modifier when
     // rendering.
     pub text_decoration: i64,
+    /// Issue #707 — cap visible lines. 0 = unlimited; SwiftUI host
+    /// applies `.lineLimit(n)` when > 0.
+    pub text_number_of_lines: i64,
+    /// Issue #707 — truncation mode. 0=word-wrap (no truncation), 1=head,
+    /// 2=middle, 3=tail. SwiftUI host applies `.truncationMode(.head/.middle/.tail)`.
+    pub text_truncation_mode: i64,
+    /// Issue #710 — AttributedText runs (text + per-run attrs). Empty for
+    /// plain Text nodes; populated by `attributedTextAppend`. SwiftUI host
+    /// renders by concatenating `Text(run).bold().italic().underline()
+    /// .foregroundColor(...)` per entry. Each tuple is
+    /// `(text, bold, italic, underline, font_size, r, g, b, a)`.
+    pub attributed_runs: Vec<(CString, bool, bool, bool, f64, f64, f64, f64, f64)>,
     // MapView widget (issue #517). Center + lat/lon span (degrees) + map
     // type (0=standard, 1=satellite, 2=hybrid) + pin annotations. SwiftUI
     // host renders via `Map(coordinateRegion:annotationItems:)` (watchOS
@@ -135,6 +149,9 @@ impl NodeData {
             font_family: None,
             text_wraps: false,
             text_decoration: 0,
+            text_number_of_lines: 0,
+            text_truncation_mode: 0,
+            attributed_runs: Vec::new(),
             map_lat: 0.0,
             map_lon: 0.0,
             map_lat_span: 0.0,
@@ -645,6 +662,97 @@ pub extern "C" fn perry_watchos_node_map_pin_lon(id: i64, idx: i32) -> f64 {
         n.map_pins
             .get(idx as usize)
             .map(|(_, lon, _)| *lon)
+            .unwrap_or(0.0)
+    })
+    .unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_text_number_of_lines(id: i64) -> i64 {
+    with_node(id, |n| n.text_number_of_lines).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_text_truncation_mode(id: i64) -> i64 {
+    with_node(id, |n| n.text_truncation_mode).unwrap_or(0)
+}
+
+/// Issue #710 — AttributedText introspection. Each run is read field-by-
+/// field by the SwiftUI host: count, then per-run text/flags/font/color.
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_attr_run_count(id: i64) -> i32 {
+    with_node(id, |n| n.attributed_runs.len() as i32).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_attr_run_text(id: i64, idx: i32) -> *const std::ffi::c_char {
+    with_node(id, |n| {
+        n.attributed_runs
+            .get(idx as usize)
+            .map(|r| r.0.as_ptr())
+            .unwrap_or(std::ptr::null())
+    })
+    .unwrap_or(std::ptr::null())
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_attr_run_bold(id: i64, idx: i32) -> bool {
+    with_node(id, |n| {
+        n.attributed_runs
+            .get(idx as usize)
+            .map(|r| r.1)
+            .unwrap_or(false)
+    })
+    .unwrap_or(false)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_attr_run_italic(id: i64, idx: i32) -> bool {
+    with_node(id, |n| {
+        n.attributed_runs
+            .get(idx as usize)
+            .map(|r| r.2)
+            .unwrap_or(false)
+    })
+    .unwrap_or(false)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_attr_run_underline(id: i64, idx: i32) -> bool {
+    with_node(id, |n| {
+        n.attributed_runs
+            .get(idx as usize)
+            .map(|r| r.3)
+            .unwrap_or(false)
+    })
+    .unwrap_or(false)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_attr_run_font_size(id: i64, idx: i32) -> f64 {
+    with_node(id, |n| {
+        n.attributed_runs
+            .get(idx as usize)
+            .map(|r| r.4)
+            .unwrap_or(0.0)
+    })
+    .unwrap_or(0.0)
+}
+
+/// Color component: 0=r, 1=g, 2=b, 3=a. Returns 0.0 for missing runs;
+/// alpha=0 means "inherit" (omit the color modifier in SwiftUI).
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_attr_run_color(id: i64, idx: i32, component: i32) -> f64 {
+    with_node(id, |n| {
+        n.attributed_runs
+            .get(idx as usize)
+            .map(|r| match component {
+                0 => r.5,
+                1 => r.6,
+                2 => r.7,
+                3 => r.8,
+                _ => 0.0,
+            })
             .unwrap_or(0.0)
     })
     .unwrap_or(0.0)
