@@ -216,7 +216,24 @@ pub(super) fn collect_modules(
     let is_external_module = !canonical.starts_with(&ctx.project_root)
         || canonical.to_string_lossy().contains("/node_modules/")
         || entry_path.to_string_lossy().contains("/node_modules/");
-    let (mut hir_module, new_next_class_id) = perry_hir::lower_module_full(
+    // Refs #665: install per-thread override so HIR's `is_native_module`
+    // returns false for packages the user opted into via
+    // `perry.compilePackages`. Without this, the HIR lowering at
+    // `expr_member::lower_member` treats `obj.prop` on a registered
+    // native instance as a zero-arg FFI getter call (`NativeMethodCall {
+    // method, args: [] }`), which for compile-package-overridden classes
+    // routes through `js_native_call_method` and returns `0.0` — the
+    // bug Ralph hit as `typeof limiter.consume === "number"`. With the
+    // override in place, `is_native_module("rate-limiter-flexible")`
+    // returns false, the import is not registered as a native module,
+    // `limiter` is not tagged as a native instance, and `limiter.consume`
+    // lowers as a real `PropertyGet` → codegen's class-method-bind path
+    // synthesizes a `BOUND_METHOD_FUNC_PTR` closure. The thread-local
+    // is rayon-safe (each worker thread has its own copy) and cleared
+    // immediately after the lower call so it can't leak to subsequent
+    // unrelated work on the same thread.
+    perry_hir::set_compile_packages_override(ctx.compile_packages.clone());
+    let lower_result = perry_hir::lower_module_full(
         ast_module,
         &module_name,
         &source_file_path,
@@ -225,7 +242,9 @@ pub(super) fn collect_modules(
         imported_class_fields,
         is_entry_module,
         is_external_module,
-    )?;
+    );
+    perry_hir::clear_compile_packages_override();
+    let (mut hir_module, new_next_class_id) = lower_result?;
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
     // Process imports and update their resolved paths and module kinds

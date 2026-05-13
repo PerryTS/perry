@@ -44,10 +44,78 @@ pub fn typed_array_kind_for_name(name: &str) -> Option<u8> {
 /// import from `perry_api_manifest` directly.
 pub const NATIVE_MODULES: &[&str] = perry_api_manifest::NATIVE_MODULES;
 
-/// Check if a module path refers to a native stdlib module
+thread_local! {
+    /// Refs #665: per-thread set of packages the user opted into via
+    /// `perry.compilePackages`. When non-empty, `is_native_module` returns
+    /// false for any path whose package name is in this set — so HIR
+    /// lowering treats the import as a regular ESM/CJS module (running
+    /// cjs_wrap, registering classes as imported rather than native), and
+    /// `obj.method` on a compile-package-overridden class lowers as a
+    /// real PropertyGet instead of a zero-arg `NativeMethodCall` (which
+    /// would have called the missing FFI getter and returned `0.0`).
+    ///
+    /// The compiler driver sets this thread-local before each
+    /// `lower_module_full` invocation and clears it after. Rayon's
+    /// thread pool gives each worker its own copy.
+    static COMPILE_PACKAGES_OVERRIDE: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Set the per-thread override of which packages to treat as
+/// non-native during HIR lowering. Called by the compiler driver before
+/// each `lower_module_full` invocation. Refs #665.
+pub fn set_compile_packages_override(set: std::collections::HashSet<String>) {
+    COMPILE_PACKAGES_OVERRIDE.with(|cell| *cell.borrow_mut() = set);
+}
+
+/// Clear the per-thread override. Refs #665.
+pub fn clear_compile_packages_override() {
+    COMPILE_PACKAGES_OVERRIDE.with(|cell| cell.borrow_mut().clear());
+}
+
+/// Parse the package name out of an import specifier. Mirrors the
+/// `parse_package_specifier` helper in `crates/perry/src/commands/compile/resolve.rs`
+/// but lives here so `is_native_module` doesn't gain a perry-crate dep.
+fn package_name_of(path: &str) -> &str {
+    let normalized = path.strip_prefix("node:").unwrap_or(path);
+    if let Some(stripped) = normalized.strip_prefix('@') {
+        // Scoped: `@scope/pkg/subpath` → `@scope/pkg`
+        let mut parts = stripped.splitn(3, '/');
+        let scope = parts.next().unwrap_or("");
+        let pkg = parts.next().unwrap_or("");
+        if scope.is_empty() || pkg.is_empty() {
+            normalized
+        } else {
+            // Return a slice covering "@scope/pkg" from the original normalized
+            // string. Since `stripped = &normalized[1..]`, the scope segment
+            // ends at `1 + scope.len()` and "@scope/pkg" ends at
+            // `1 + scope.len() + 1 + pkg.len()`.
+            let end = 1 + scope.len() + 1 + pkg.len();
+            &normalized[..end]
+        }
+    } else {
+        // Regular: `pkg/subpath` → `pkg`
+        normalized.split('/').next().unwrap_or(normalized)
+    }
+}
+
+/// Check if a module path refers to a native stdlib module.
+///
+/// Refs #665: when the user has opted the package into
+/// `perry.compilePackages`, this returns false even for paths that
+/// match the built-in NATIVE_MODULES manifest — the user's
+/// `node_modules` copy will be compiled from source and HIR lowering
+/// must not register the import as a native module (which would
+/// cascade into `obj.prop` being lowered as a zero-arg FFI getter call
+/// instead of a real PropertyGet → bound-method-closure).
 pub fn is_native_module(path: &str) -> bool {
     let normalized = path.strip_prefix("node:").unwrap_or(path);
-    NATIVE_MODULES.contains(&normalized)
+    if !NATIVE_MODULES.contains(&normalized) {
+        return false;
+    }
+    let pkg = package_name_of(path);
+    let overridden = COMPILE_PACKAGES_OVERRIDE.with(|cell| cell.borrow().contains(pkg));
+    !overridden
 }
 
 /// Check if a module path refers to a native module, including external native libraries.
