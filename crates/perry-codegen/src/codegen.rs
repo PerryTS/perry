@@ -226,6 +226,27 @@ pub struct CompileOptions {
     /// value (single-path) or to chain string-compare dispatches
     /// (multi-path). Empty if this module performs no dynamic imports.
     pub dynamic_import_path_to_prefix: std::collections::HashMap<String, String>,
+
+    /// Issue #753: sanitized prefixes of modules whose init must NOT
+    /// run as part of the entry module's eager init chain. Reachable
+    /// from the entry only through dynamic `import()` edges, so their
+    /// `<prefix>__init` fires lazily from the dispatch site. The entry
+    /// module's `main` filters this set out of `non_entry_module_prefixes`
+    /// when emitting the eager init call sequence. Empty when no module
+    /// in the program is deferred.
+    pub deferred_module_prefixes: std::collections::HashSet<String>,
+
+    /// Issue #753: sanitized prefixes of THIS module's static-import +
+    /// re-export source modules (non-entry only — the entry has no
+    /// `__init` to call). The wrapper `<prefix>__init` calls each
+    /// dep's `<dep>__init` (idempotently) before invoking the body.
+    /// Required so that a Deferred module firing lazily transitively
+    /// initializes any Deferred deps reached only through its own
+    /// re-export chain — otherwise the namespace populator at the
+    /// tail of `<prefix>__init_body` reads zero-initialized cross-
+    /// module globals. For Eager modules the redundant calls
+    /// short-circuit on the guard's first-write check.
+    pub module_init_deps: Vec<String>,
 }
 
 /// Issue #100: one entry in a module's namespace-population list.
@@ -483,6 +504,17 @@ pub(crate) struct CrossModuleCtx {
     /// dispatch site in `expr.rs::Expr::DynamicImport` to find the
     /// `@__perry_ns_<target_prefix>` global to load.
     pub dynamic_import_path_to_prefix: std::collections::HashMap<String, String>,
+    /// Issue #753: sanitized prefixes of modules reached only through
+    /// dynamic `import()` edges. Their `<prefix>__init` is excluded
+    /// from the entry-main eager init call sequence and fires lazily
+    /// from each `Expr::DynamicImport` dispatch site.
+    pub deferred_module_prefixes: std::collections::HashSet<String>,
+    /// Issue #753: this module's static-import + re-export source
+    /// prefixes (non-entry only). Consumed by `compile_module_entry`
+    /// when emitting the wrapper for `<prefix>__init` so dep init
+    /// fires before the body — transitively pulls in any Deferred dep
+    /// chain reached only through this module's re-exports.
+    pub module_init_deps: Vec<String>,
 }
 
 /// Compile a Perry HIR module to an object file via LLVM IR.
@@ -1325,6 +1357,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .collect(),
         namespace_entries: opts.namespace_entries.clone(),
         dynamic_import_path_to_prefix: opts.dynamic_import_path_to_prefix.clone(),
+        deferred_module_prefixes: opts.deferred_module_prefixes.clone(),
+        module_init_deps: opts.module_init_deps.clone(),
     };
 
     // Module-level globals registry. Pre-walk:
@@ -2715,6 +2749,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         for prefix in foreign_prefixes {
             let ns_name = format!("__perry_ns_{}", prefix);
             llmod.add_external_global(&ns_name, DOUBLE);
+            // Issue #753: declare each dynamic-import target's `__init`
+            // so the dispatch site in `Expr::DynamicImport` can call it
+            // before loading the namespace. The wrapper-side init is
+            // idempotent — calling it for an already-initialized
+            // target costs a load + cmp + cond_br. For Deferred
+            // targets it's the only thing that triggers their init.
+            llmod.declare_function(&format!("{}__init", prefix), VOID, &[]);
         }
     }
 
@@ -3947,6 +3988,21 @@ fn compile_module_entry(
         for prefix in non_entry_module_prefixes {
             llmod.declare_function(&format!("{}__init", prefix), VOID, &[]);
         }
+        // Issue #753: emit a no-op `<entry_prefix>__init` stub so the
+        // dispatch site in some other module that does `await
+        // import("./entry.ts")` resolves at link time. The entry
+        // module's actual body runs in `main`, not in a separate
+        // `__init` — the stub exists purely to satisfy the dispatch's
+        // unconditional init call. The namespace populator at the
+        // tail of `main` (when `cross_module.namespace_entries` is
+        // non-empty) is what makes the entry observable through the
+        // dynamic-import namespace; the stub does no work.
+        {
+            let stub_name = format!("{}__init", module_prefix);
+            let stub = llmod.define_function(&stub_name, VOID, vec![]);
+            let _ = stub.create_block("entry");
+            stub.block_mut(0).unwrap().ret_void();
+        }
 
         // For dylib output, emit `void perry_module_init()` instead of
         // `int main()`. The host process calls this once after dlopen to
@@ -4018,7 +4074,19 @@ fn compile_module_entry(
             // Then every non-entry module's init in order. Each
             // non-entry module's `<prefix>__init` runs its own string
             // pool init internally before its top-level statements.
+            //
+            // Issue #753: skip Deferred modules — those reached only
+            // through dynamic `import()` edges. Their `<prefix>__init`
+            // fires lazily from each `Expr::DynamicImport` dispatch
+            // site, idempotently guarded by `@__perry_init_done_<prefix>`
+            // so a program that never reaches the dispatch never pays
+            // the startup cost. The extern declaration at line ~3947
+            // still emits for every non-entry prefix so the dispatch
+            // site can resolve the symbol at link time.
             for prefix in non_entry_module_prefixes {
+                if cross_module.deferred_module_prefixes.contains(prefix) {
+                    continue;
+                }
                 blk.call_void(&format!("{}__init", prefix), &[]);
             }
         }
@@ -4282,7 +4350,79 @@ fn compile_module_entry(
             llmod.add_raw_global(raw.clone());
         }
     } else {
+        // Issue #753: idempotent init guard. Every non-entry module gets
+        // a one-byte `@__perry_init_done_<prefix>` flag and a thin
+        // wrapper `<prefix>__init` that returns immediately when the
+        // flag is set or stores 1 + dispatches to `<prefix>__init_body`
+        // when it isn't. The wrapper is what the entry main calls
+        // eagerly (for Eager modules) and what every
+        // `Expr::DynamicImport` dispatch site calls (for any module
+        // that's a dynamic-import target — possibly multiple sites in
+        // the same program). The 2-state guard matches ESM's
+        // partial-cycle semantics: re-entry during init returns without
+        // re-running the body, leaving the namespace populator's work
+        // partially observable. The wrapper sets `done = 1` BEFORE
+        // calling the body so the re-entry path returns immediately.
+        let done_global = format!("__perry_init_done_{}", module_prefix);
+        llmod.add_internal_global(&done_global, I8, "0");
         let init_name = format!("{}__init", module_prefix);
+        let init_body_name = format!("{}__init_body", module_prefix);
+        {
+            let wrap_fn = llmod.define_function(&init_name, VOID, vec![]);
+            let _ = wrap_fn.create_block("entry");
+            let _ = wrap_fn.create_block("guard.ret");
+            let _ = wrap_fn.create_block("guard.do");
+            let ret_label = wrap_fn.block_mut(1).unwrap().label.clone();
+            let do_label = wrap_fn.block_mut(2).unwrap().label.clone();
+            {
+                let blk = wrap_fn.block_mut(0).unwrap();
+                let done = blk.load(I8, &format!("@{}", done_global));
+                let already = blk.icmp_ne(I8, &done, "0");
+                blk.cond_br(&already, &ret_label, &do_label);
+            }
+            {
+                let blk = wrap_fn.block_mut(1).unwrap();
+                blk.ret_void();
+            }
+            {
+                let blk = wrap_fn.block_mut(2).unwrap();
+                blk.store(I8, "1", &format!("@{}", done_global));
+                // Trigger init of static-dep + re-export source modules
+                // before the body runs. Each `<dep>__init` is itself
+                // wrapped by the same guard pattern, so this short-
+                // circuits when the dep was already initialized
+                // (Eager-via-main path) and fires the body when the
+                // dep is Deferred and this is the first reach. The
+                // entry module has no `__init` so the driver excludes
+                // it from `module_init_deps`.
+                for dep_prefix in &cross_module.module_init_deps {
+                    if dep_prefix == module_prefix {
+                        continue;
+                    }
+                    blk.call_void(&format!("{}__init", dep_prefix), &[]);
+                }
+                blk.call_void(&init_body_name, &[]);
+                blk.ret_void();
+            }
+        }
+        // Declare every dep's `__init` symbol so the wrapper's calls
+        // resolve at link time. Most overlap with `non_entry_module_prefixes`
+        // (whose declarations live in the entry module's compilation),
+        // but a non-entry module compiled standalone has no entry-side
+        // declaration list — emit them here too. `declare_function`
+        // dedupes by name.
+        for dep_prefix in &cross_module.module_init_deps {
+            if dep_prefix == module_prefix {
+                continue;
+            }
+            llmod.declare_function(&format!("{}__init", dep_prefix), VOID, &[]);
+        }
+        // The body retains every existing semantic of `<prefix>__init`
+        // (strings init, globals/GC registration, top-level statements,
+        // namespace populator at the tail). It's `internal` linkage:
+        // only the wrapper above ever calls it, both within this module
+        // and across modules via the wrapper's external symbol.
+        let init_name = init_body_name;
         // Debug: emit puts("INIT: <prefix>") at the top of each module init
         let debug_init_const = if std::env::var("PERRY_DEBUG_INIT").is_ok() {
             let debug_msg = format!("INIT: {}\0", module_prefix);
@@ -4295,6 +4435,7 @@ fn compile_module_entry(
         let ic_base = llmod.ic_counter;
         let buffer_alias_base = llmod.buffer_alias_counter;
         let init_fn = llmod.define_function(&init_name, VOID, vec![]);
+        init_fn.linkage = "internal".to_string();
         let _ = init_fn.create_block("entry");
         {
             let blk = init_fn.block_mut(0).unwrap();

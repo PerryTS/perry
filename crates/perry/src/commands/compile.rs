@@ -1677,6 +1677,84 @@ pub fn run_with_parse_cache(
         .canonicalize()
         .unwrap_or_else(|_| args.input.clone());
 
+    // Issue #753: reachability classification for eager vs deferred init.
+    // Modules reachable from the entry through any static-import or
+    // re-export edge init at program start (Eager). Modules reachable
+    // ONLY through dynamic `import()` edges init lazily on first
+    // dispatch (Deferred). Run a fixed-point pass starting from the
+    // entry and propagating Eager across static / re-export edges; what
+    // remains unmarked is Deferred. Re-export sources must propagate
+    // because an Eager module's namespace populator reads the source's
+    // getter at init time — if the source is Deferred, the getter
+    // returns a zero-initialized global rather than the real binding.
+    {
+        let mut eager: HashSet<PathBuf> = HashSet::new();
+        eager.insert(entry_path.clone());
+        loop {
+            let mut changed = false;
+            let paths: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
+            for path in &paths {
+                if !eager.contains(path) {
+                    continue;
+                }
+                let module = match ctx.native_modules.get(path) {
+                    Some(m) => m,
+                    None => continue,
+                };
+                let static_targets: Vec<PathBuf> = module
+                    .imports
+                    .iter()
+                    .filter(|i| !i.is_dynamic && !i.type_only)
+                    .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
+                    .collect();
+                let reexport_sources: Vec<String> = module
+                    .exports
+                    .iter()
+                    .filter_map(|e| match e {
+                        perry_hir::Export::ExportAll { source } => Some(source.clone()),
+                        perry_hir::Export::ReExport { source, .. } => Some(source.clone()),
+                        perry_hir::Export::NamespaceReExport { source, .. } => Some(source.clone()),
+                        perry_hir::Export::Named { .. } => None,
+                    })
+                    .collect();
+                for resolved_path in static_targets {
+                    if ctx.native_modules.contains_key(&resolved_path)
+                        && !eager.contains(&resolved_path)
+                    {
+                        eager.insert(resolved_path);
+                        changed = true;
+                    }
+                }
+                for src in reexport_sources {
+                    if let Some((resolved_path, _)) = resolve_import(
+                        &src,
+                        path,
+                        &ctx.project_root,
+                        &ctx.compile_packages,
+                        &ctx.compile_package_dirs,
+                    ) {
+                        if ctx.native_modules.contains_key(&resolved_path)
+                            && !eager.contains(&resolved_path)
+                        {
+                            eager.insert(resolved_path);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for (path, module) in ctx.native_modules.iter_mut() {
+            module.init_kind = if eager.contains(path) {
+                perry_hir::ModuleInitKind::Eager
+            } else {
+                perry_hir::ModuleInitKind::Deferred
+            };
+        }
+    }
+
     // Collect non-entry module names for init function calls
     // Topologically sort by import dependencies so that if module A imports from module B,
     // module B is initialized first. This ensures module-level variables (e.g., Maps) are
@@ -3112,6 +3190,82 @@ pub fn run_with_parse_cache(
             } else {
                 Vec::new()
             };
+            // Issue #753: every module receives the program-wide set of
+            // Deferred module prefixes. The entry main filters these
+            // out of its eager init call sequence; non-entry modules
+            // ignore it. Empty when no module in the program is
+            // Deferred (i.e. no dynamic `import()` sites).
+            let deferred_module_prefixes: std::collections::HashSet<String> = ctx
+                .native_modules
+                .iter()
+                .filter(|(_, m)| m.init_kind == perry_hir::ModuleInitKind::Deferred)
+                .map(|(_, m)| sanitize_name(&m.name))
+                .collect();
+            // Issue #753: prefixes of this module's static-import +
+            // re-export source modules (non-entry only — the entry's
+            // body is in `main`, not a `__init`). The wrapper at
+            // `<prefix>__init` calls each dep's `__init` before
+            // dispatching to `<prefix>__init_body`; this transitively
+            // initializes any Deferred dep reached only through this
+            // module's re-export chain. For Eager modules the calls
+            // short-circuit on the idempotent guard's first-write
+            // check (one load + cmp + cond_br each).
+            let module_init_deps: Vec<String> = if is_entry {
+                Vec::new()
+            } else {
+                let mut deps: Vec<String> = Vec::new();
+                let mut seen: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let entry_prefix = ctx
+                    .native_modules
+                    .get(&entry_path)
+                    .map(|m| sanitize_name(&m.name));
+                let push_dep = |deps: &mut Vec<String>,
+                                seen: &mut std::collections::HashSet<String>,
+                                prefix: String| {
+                    if Some(&prefix) == entry_prefix.as_ref() {
+                        return;
+                    }
+                    if seen.insert(prefix.clone()) {
+                        deps.push(prefix);
+                    }
+                };
+                for import in &hir_module.imports {
+                    if import.is_dynamic || import.type_only {
+                        continue;
+                    }
+                    if let Some(resolved) = &import.resolved_path {
+                        let resolved_path = PathBuf::from(resolved);
+                        if let Some(src_mod) = ctx.native_modules.get(&resolved_path) {
+                            push_dep(&mut deps, &mut seen, sanitize_name(&src_mod.name));
+                        }
+                    }
+                }
+                for export in &hir_module.exports {
+                    let src = match export {
+                        perry_hir::Export::ExportAll { source } => Some(source.clone()),
+                        perry_hir::Export::ReExport { source, .. } => Some(source.clone()),
+                        perry_hir::Export::NamespaceReExport { source, .. } => {
+                            Some(source.clone())
+                        }
+                        perry_hir::Export::Named { .. } => None,
+                    };
+                    if let Some(src) = src {
+                        if let Some((resolved_path, _)) = resolve_import(
+                            &src,
+                            path,
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) {
+                            if let Some(src_mod) = ctx.native_modules.get(&resolved_path) {
+                                push_dep(&mut deps, &mut seen, sanitize_name(&src_mod.name));
+                            }
+                        }
+                    }
+                }
+                deps
+            };
             // Build import → source-prefix table for cross-module
             // ExternFuncRef calls. For each Named import in this
             // module, look up the source module's HIR by resolved
@@ -4254,6 +4408,8 @@ pub fn run_with_parse_cache(
                     .get(path)
                     .cloned()
                     .unwrap_or_default(),
+                deferred_module_prefixes,
+                module_init_deps,
             };
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this

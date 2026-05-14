@@ -183,6 +183,21 @@ pub fn compute_object_cache_key(
         &opts.non_entry_module_prefixes.join("|"),
     );
     h.field("mod_init_names", &opts.native_module_init_names.join("|"));
+    // Issue #753: eager/deferred split. The set membership controls
+    // which `<prefix>__init` calls main emits eagerly, so the entry
+    // module's `.o` bytes change when a target module moves between
+    // Eager and Deferred classifications (e.g. a new dynamic
+    // `import()` site appears that's the ONLY path to a previously-
+    // statically-reached module).
+    {
+        let mut v: Vec<&String> = opts.deferred_module_prefixes.iter().collect();
+        v.sort();
+        h.field(
+            "deferred_prefixes",
+            &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("|"),
+        );
+    }
+    h.field("init_deps", &opts.module_init_deps.join("|"));
     h.field("js_specs", &opts.js_module_specifiers.join("|"));
     {
         let mut buf = String::new();
@@ -565,6 +580,8 @@ mod object_cache_tests {
             app_metadata: perry_codegen::AppMetadata::default(),
             namespace_entries: Vec::new(),
             dynamic_import_path_to_prefix: std::collections::HashMap::new(),
+            deferred_module_prefixes: std::collections::HashSet::new(),
+            module_init_deps: Vec::new(),
         }
     }
 

@@ -10819,7 +10819,15 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let target_prefix = ctx.dynamic_import_path_to_prefix.get(path).cloned();
                 let blk = ctx.block();
                 let ns_val = match target_prefix {
-                    Some(prefix) => blk.load(DOUBLE, &format!("@__perry_ns_{}", prefix)),
+                    Some(prefix) => {
+                        // Issue #753: trigger the target's init before
+                        // loading its namespace. For Eager targets the
+                        // guard short-circuits; for Deferred targets
+                        // this is the only invocation that populates
+                        // `@__perry_ns_<prefix>`.
+                        blk.call_void(&format!("{}__init", prefix), &[]);
+                        blk.load(DOUBLE, &format!("@__perry_ns_{}", prefix))
+                    }
                     None => {
                         // Driver didn't resolve this path to a target
                         // module — surface a rejected promise.
@@ -10890,11 +10898,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let next_label_str = ctx.block_label(next_label);
                 ctx.block().cond_br(&cond, &match_label, &next_label_str);
 
-                // Match arm — load namespace, wrap in promise, store
-                // into result_slot, branch to join.
+                // Match arm — call target's __init (idempotent), load
+                // namespace, wrap in promise, store into result_slot,
+                // branch to join. Issue #753: the init call is the
+                // only thing that triggers a Deferred target's body
+                // and namespace populator; for Eager targets the
+                // guard short-circuits.
                 ctx.current_block = match_block_idx;
                 let join_label = ctx.block_label(join_block_idx);
                 let blk = ctx.block();
+                blk.call_void(&format!("{}__init", target_prefix), &[]);
                 let ns_val = blk.load(DOUBLE, &format!("@__perry_ns_{}", target_prefix));
                 let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
                 let boxed = nanbox_pointer_inline(blk, &promise);
