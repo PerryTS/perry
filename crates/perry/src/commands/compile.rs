@@ -555,7 +555,11 @@ pub struct TargetNativeConfig {
     pub lib_name: String,
     pub frameworks: Vec<String>,
     pub libs: Vec<String>,
-    pub lib_dirs: Vec<String>,
+    /// Extra `-L`/`/LIBPATH:` search paths to hand the linker before the
+    /// `libs` entries are resolved. Anchored to the manifest's
+    /// `package_dir`, so relative entries in `package.json` resolve
+    /// against the package, not the user's cwd.
+    pub lib_dirs: Vec<PathBuf>,
     pub pkg_config: Vec<String>,
     /// Swift sources (absolute paths) to compile via swiftc and link into the
     /// final binary. Used by `--features watchos-swift-app` so a native lib

@@ -154,6 +154,7 @@ as their device counterpart (`ios` covers both `ios-simulator` and
 | `lib`           | string           | yes\*    | Library name (without the `lib` prefix or `.a` extension). Required when `prebuilt` is absent. |
 | `frameworks`    | array of string  | no       | Apple-only — frameworks to pass to `clang -framework`. |
 | `libs`          | array of string  | no       | System libraries to pass to the linker (`-lcurl`, etc.). |
+| `libDirs`       | array of paths   | no       | Extra linker search paths. Emitted before `libs` as `-L<dir>` (or `/LIBPATH:<dir>` on Windows MSVC). Relative entries resolve against `package.json`. |
 | `pkgConfig`     | array of string  | no       | pkg-config package names. The compiler runs `pkg-config --libs` and forwards the output. |
 | `swift_sources` | array of paths   | no       | Swift sources to compile via `swiftc` and link in. Used by SwiftUI wrappers. |
 | `metal_sources` | array of paths   | no       | Metal shader sources to compile via `xcrun metal` into `<app>.app/default.metallib`. |
