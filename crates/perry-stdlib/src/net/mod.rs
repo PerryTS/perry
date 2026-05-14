@@ -403,11 +403,7 @@ fn build_tls_connector_insecure() -> Result<TlsConnector, String> {
 /// Signature matches NATIVE_MODULE_TABLE entry
 /// `{ module: "net", method: "connect" | "createConnection", args: &[NA_F64, NA_F64, NA_F64], ret: NR_PTR }`.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_connect(
-    arg1_f64: f64,
-    arg2_f64: f64,
-    arg3_f64: f64,
-) -> i64 {
+pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg3_f64: f64) -> i64 {
     fn register_connect_cb(handle: i64, cb_f64: f64) {
         if handle == 0 || !is_nanboxed_pointer(cb_f64) {
             return;

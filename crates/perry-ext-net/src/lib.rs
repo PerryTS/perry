@@ -503,11 +503,7 @@ where
 /// All three args must be NaN-boxed Perry-runtime values per the
 /// codegen ABI — see `NA_F64` lowering in perry-codegen.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_connect(
-    arg1_f64: f64,
-    arg2_f64: f64,
-    arg3_f64: f64,
-) -> i64 {
+pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg3_f64: f64) -> i64 {
     /// Register `cb_f64` as a `'connect'` listener on `handle` if it
     /// carries a real closure pointer. No-op otherwise.
     fn register_connect_cb(handle: i64, cb_f64: f64) {
