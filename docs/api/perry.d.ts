@@ -440,9 +440,9 @@ declare module "net" {
   /** stdlib */
   export function Socket(...args: any[]): any;
   /** stdlib */
-  export function connect(p0: any, p1: string): any;
+  export function connect(p0: any, p1: any, p2: any): any;
   /** stdlib */
-  export function createConnection(p0: any, p1: string): any;
+  export function createConnection(p0: any, p1: any, p2: any): any;
 }
 
 declare module "node-cron" {

@@ -6924,7 +6924,7 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         method: "createConnection",
         class_filter: None,
         runtime: "js_net_socket_connect",
-        args: &[NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
     // Factory alias: `net.connect(...)` is the spec'd alias for
@@ -6939,7 +6939,7 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         method: "connect",
         class_filter: None,
         runtime: "js_net_socket_connect",
-        args: &[NA_F64, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
     // Constructor: `new net.Socket()` allocates an unconnected socket

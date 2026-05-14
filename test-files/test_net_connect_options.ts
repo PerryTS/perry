@@ -26,25 +26,31 @@ const server = createServer((req: any, res: any) => {
 server.listen(port, () => {
   console.log("server listening");
 
-  // Options-object form with auto-registered connectListener.
+  // (1) Options-object form with auto-registered connectListener.
   const sock1 = net.connect({ host: "127.0.0.1", port: port }, () => {
-    console.log("sock1: connectListener fired");
+    console.log("sock1 (options): connectListener fired");
   });
   sock1.on("error", (err: any) => {
     console.log("sock1 unexpected error:", err?.message);
   });
-  // Force close via the 'connect' listener path so the test doesn't
-  // hang on an idle socket — `setTimeout` below covers it.
 
-  // Closed-port connection — should fire 'error' with an Error-shaped
+  // (2) Positional form with auto-registered connectListener (3rd arg).
+  const sock2 = net.connect(port, "127.0.0.1", () => {
+    console.log("sock2 (positional): connectListener fired");
+  });
+  sock2.on("error", (err: any) => {
+    console.log("sock2 unexpected error:", err?.message);
+  });
+
+  // (3) Closed-port connection — should fire 'error' with an Error-shaped
   // object whose `.message` is a real string.
   setTimeout(() => {
-    const sock2 = net.connect({ host: "127.0.0.1", port: 1 });
-    sock2.on("connect", () => { console.log("sock2 unexpected connect"); });
-    sock2.on("error", (err: any) => {
-      console.log("sock2 error typeof:", typeof err);
-      console.log("sock2 error message typeof:", typeof err?.message);
-      console.log("sock2 error has message:", err?.message ? "yes" : "no");
+    const sock3 = net.connect({ host: "127.0.0.1", port: 1 });
+    sock3.on("connect", () => { console.log("sock3 unexpected connect"); });
+    sock3.on("error", (err: any) => {
+      console.log("sock3 error typeof:", typeof err);
+      console.log("sock3 error message typeof:", typeof err?.message);
+      console.log("sock3 error has message:", err?.message ? "yes" : "no");
     });
   }, 500);
 

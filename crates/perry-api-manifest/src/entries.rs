@@ -460,7 +460,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "createConnection",
         false,
         None,
-        &[p_any("p0"), p_str("p1")],
+        // p0 = port (number) or options object; p1 = host (string) or
+        // connectListener; p2 = connectListener in positional form.
+        // Issue #770 widened to accept the options-object overload.
+        &[p_any("p0"), p_any("p1"), p_any("p2")],
         TypeSpec::Any,
     ),
     method_sig(
@@ -468,7 +471,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "connect",
         false,
         None,
-        &[p_any("p0"), p_str("p1")],
+        &[p_any("p0"), p_any("p1"), p_any("p2")],
         TypeSpec::Any,
     ),
     method_sig("net", "Socket", false, None, &[], TypeSpec::Any),

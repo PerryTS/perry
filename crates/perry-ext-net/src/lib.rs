@@ -209,16 +209,19 @@ extern "C" {
     fn js_object_get_field_by_name_f64(obj: *const ObjectHeader, key: *const StringHeader) -> f64;
 }
 
-/// Is `val_f64` a NaN-boxed pointer / object / string / closure (any
-/// non-number value)? Used by `js_net_socket_connect` to discriminate
-/// between the positional `(port, host)` overload and the
-/// options-object `({host, port}, cb?)` overload. Issue #770.
-fn looks_like_nanboxed_object(val_f64: f64) -> bool {
-    let upper = val_f64.to_bits() >> 48;
-    // NaN-boxed values live in `0x7FF8..=0x7FFF` (quiet NaN prefix +
-    // 3-bit tag). Plain `f64` ports like `80.0` never reach this range
-    // because the prefix lives in the exponent.
-    (0x7FF8..=0x7FFF).contains(&upper)
+/// True iff `val_f64` carries `POINTER_TAG` (0x7FFD) — a real pointer
+/// to a heap object or closure. Used to discriminate the
+/// positional `net.connect(port, host)` overload (arg1 is a plain
+/// number) from the options-object `net.connect({host, port}, cb?)`
+/// overload (arg1 is a NaN-boxed object pointer), and to detect a
+/// real `connectListener` closure in the trailing arg slot.
+///
+/// Narrower than "any NaN-tagged value": the dispatch table pads
+/// missing user args with `TAG_UNDEFINED` (`0x7FFC` band), so this
+/// check has to reject `undefined` cleanly to keep "user passed only
+/// 2 args" from misfiring as "user passed a callback". Issue #770.
+fn is_nanboxed_pointer(val_f64: f64) -> bool {
+    (val_f64.to_bits() >> 48) == 0x7FFD
 }
 
 /// Unbox a NaN-boxed value to the raw 48-bit pointer payload, regardless
@@ -232,7 +235,7 @@ unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
 /// values and numeric values (numbers stringified) — Node accepts both
 /// shapes for `port` etc.
 unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
-    if !looks_like_nanboxed_object(obj_f64) {
+    if !is_nanboxed_pointer(obj_f64) {
         return None;
     }
     let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
@@ -255,7 +258,7 @@ unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<Stri
 }
 
 unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
-    if !looks_like_nanboxed_object(obj_f64) {
+    if !is_nanboxed_pointer(obj_f64) {
         return None;
     }
     let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
@@ -482,22 +485,49 @@ where
 /// immediately; connection happens in the background and emits
 /// `'connect'` or `'error'`. Supports both Node overloads:
 ///
-/// - Positional: `net.connect(port, host)`. `arg1_f64` is the port as a
-///   regular f64 number, `arg2_f64` carries the host as a NaN-boxed
-///   string value (the codegen passes it through as f64 via `NA_F64`).
-/// - Options object: `net.connect({ host, port }, cb?)`. `arg1_f64` is
-///   a NaN-boxed pointer to a JS object with `host`/`port`/optionally
-///   `localAddress` keys; `arg2_f64` is the optional connectListener
-///   (NaN-boxed closure pointer) — Node auto-registers it as a
-///   `'connect'` listener. Issue #770.
+/// - Positional: `net.connect(port, host, cb?)`. `arg1_f64` is the
+///   port as a regular f64 number, `arg2_f64` carries the host as a
+///   NaN-boxed string, `arg3_f64` is the optional `connectListener`.
+/// - Options object: `net.connect({ host, port }, cb?)`. `arg1_f64`
+///   is a NaN-boxed pointer to a JS object with `host`/`hostname`/
+///   `port`; `arg2_f64` is the optional `connectListener`. In this
+///   form `arg3_f64` is unused (the dispatch table pads it with
+///   `undefined`). Issue #770.
+///
+/// The `connectListener` (whichever slot it ends up in) is
+/// auto-registered as a `'connect'` listener on the new socket
+/// handle, matching the Node spec.
 ///
 /// # Safety
 ///
-/// `arg1_f64` / `arg2_f64` must be NaN-boxed Perry-runtime values per
-/// the codegen ABI — see `NA_F64` lowering in perry-codegen.
+/// All three args must be NaN-boxed Perry-runtime values per the
+/// codegen ABI — see `NA_F64` lowering in perry-codegen.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64) -> i64 {
-    if looks_like_nanboxed_object(arg1_f64) {
+pub unsafe extern "C" fn js_net_socket_connect(
+    arg1_f64: f64,
+    arg2_f64: f64,
+    arg3_f64: f64,
+) -> i64 {
+    /// Register `cb_f64` as a `'connect'` listener on `handle` if it
+    /// carries a real closure pointer. No-op otherwise.
+    fn register_connect_cb(handle: i64, cb_f64: f64) {
+        if handle == 0 || !is_nanboxed_pointer(cb_f64) {
+            return;
+        }
+        let cb_ptr = unsafe { unbox_pointer(cb_f64) } as i64;
+        if cb_ptr == 0 {
+            return;
+        }
+        let mut listeners = statics::listeners().lock().unwrap();
+        listeners
+            .entry(handle)
+            .or_default()
+            .entry("connect".to_string())
+            .or_default()
+            .push(cb_ptr);
+    }
+
+    if is_nanboxed_pointer(arg1_f64) {
         // Options-object overload: extract host/port from the object.
         let host = match get_object_string_field(arg1_f64, "host")
             .or_else(|| get_object_string_field(arg1_f64, "hostname"))
@@ -510,24 +540,14 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64) -> 
             None => return 0,
         };
         let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
-        // Auto-register the connectListener (the spec'd Node API).
-        if handle != 0 && looks_like_nanboxed_object(arg2_f64) {
-            let cb_ptr = unbox_pointer(arg2_f64) as i64;
-            if cb_ptr != 0 {
-                let mut listeners = statics::listeners().lock().unwrap();
-                listeners
-                    .entry(handle)
-                    .or_default()
-                    .entry("connect".to_string())
-                    .or_default()
-                    .push(cb_ptr);
-            }
-        }
+        // connectListener lives in arg2 for the options form.
+        register_connect_cb(handle, arg2_f64);
         return handle;
     }
     // Positional overload: arg1 is the port number, arg2 is the host
-    // string (NaN-boxed). Reuse the runtime's string-pointer unifier
-    // (which handles STRING_TAG and POINTER_TAG strings the same way).
+    // string (NaN-boxed), arg3 is the optional connectListener. Reuse
+    // the runtime's string-pointer unifier (handles STRING_TAG and
+    // POINTER_TAG strings the same way).
     extern "C" {
         fn js_get_string_pointer_unified(value: f64) -> i64;
     }
@@ -537,7 +557,9 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64) -> 
         None => return 0,
     };
     let port = arg1_f64 as u16;
-    spawn_socket_task(host, port, /* direct_tls: */ None)
+    let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
+    register_connect_cb(handle, arg3_f64);
+    handle
 }
 
 // ─── FFI: new net.Socket() (alloc-only, deferred connect) ────────────────────

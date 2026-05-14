@@ -184,12 +184,14 @@ unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
-/// Issue #770 — true when `val_f64` is a NaN-boxed pointer/object/string
-/// (any non-plain-number value). Plain `f64` ports like `80.0` never
-/// land in `0x7FF8..=0x7FFF` because the prefix lives in the exponent.
-fn looks_like_nanboxed_object(val_f64: f64) -> bool {
-    let upper = val_f64.to_bits() >> 48;
-    (0x7FF8..=0x7FFF).contains(&upper)
+/// Issue #770 — true iff `val_f64` carries `POINTER_TAG` (0x7FFD), i.e.
+/// it's a real heap-pointer NaN-box (object or closure). Plain `f64`
+/// ports like `80.0` never reach this band, and `undefined` / `null`
+/// land in `0x7FFC` so they're cleanly rejected — which matters
+/// because the dispatch table pads missing user args with
+/// `TAG_UNDEFINED`.
+fn is_nanboxed_pointer(val_f64: f64) -> bool {
+    (val_f64.to_bits() >> 48) == 0x7FFD
 }
 
 unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
@@ -198,7 +200,7 @@ unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
 }
 
 unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
-    if !looks_like_nanboxed_object(obj_f64) {
+    if !is_nanboxed_pointer(obj_f64) {
         return None;
     }
     let obj_ptr = unbox_pointer(obj_f64) as *const perry_runtime::ObjectHeader;
@@ -220,7 +222,7 @@ unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<Stri
 }
 
 unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
-    if !looks_like_nanboxed_object(obj_f64) {
+    if !is_nanboxed_pointer(obj_f64) {
         return None;
     }
     let obj_ptr = unbox_pointer(obj_f64) as *const perry_runtime::ObjectHeader;
@@ -387,18 +389,43 @@ fn build_tls_connector_insecure() -> Result<TlsConnector, String> {
 /// `'connect'` or `'error'`.
 ///
 /// Supports both Node overloads (issue #770):
-///   - Positional: `net.connect(port, host)` — `arg1_f64` is the port,
-///     `arg2_f64` is the host (NaN-boxed string).
+///   - Positional: `net.connect(port, host, cb?)` — `arg1_f64` is the
+///     port, `arg2_f64` is the host (NaN-boxed string), `arg3_f64` is
+///     the optional connectListener.
 ///   - Options object: `net.connect({ host, port }, cb?)` — `arg1_f64`
 ///     is a NaN-boxed pointer to the options object; `arg2_f64` is the
-///     optional connectListener (auto-registered as a `'connect'`
-///     listener per Node spec).
+///     optional connectListener; `arg3_f64` is unused (the dispatch
+///     table pads it with `undefined`).
+///
+/// The `connectListener` is auto-registered as a `'connect'` listener
+/// on the new socket handle, matching Node spec.
 ///
 /// Signature matches NATIVE_MODULE_TABLE entry
-/// `{ module: "net", method: "connect" | "createConnection", args: &[NA_F64, NA_F64], ret: NR_PTR }`.
+/// `{ module: "net", method: "connect" | "createConnection", args: &[NA_F64, NA_F64, NA_F64], ret: NR_PTR }`.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64) -> i64 {
-    if looks_like_nanboxed_object(arg1_f64) {
+pub unsafe extern "C" fn js_net_socket_connect(
+    arg1_f64: f64,
+    arg2_f64: f64,
+    arg3_f64: f64,
+) -> i64 {
+    fn register_connect_cb(handle: i64, cb_f64: f64) {
+        if handle == 0 || !is_nanboxed_pointer(cb_f64) {
+            return;
+        }
+        let cb_ptr = unsafe { unbox_pointer(cb_f64) } as i64;
+        if cb_ptr == 0 {
+            return;
+        }
+        let mut listeners = NET_LISTENERS.lock().unwrap();
+        listeners
+            .entry(handle)
+            .or_default()
+            .entry("connect".to_string())
+            .or_default()
+            .push(cb_ptr);
+    }
+
+    if is_nanboxed_pointer(arg1_f64) {
         let host = match get_object_string_field(arg1_f64, "host")
             .or_else(|| get_object_string_field(arg1_f64, "hostname"))
         {
@@ -410,28 +437,19 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64) -> 
             None => return 0,
         };
         let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
-        if handle != 0 && looks_like_nanboxed_object(arg2_f64) {
-            let cb_ptr = unbox_pointer(arg2_f64) as i64;
-            if cb_ptr != 0 {
-                let mut listeners = NET_LISTENERS.lock().unwrap();
-                listeners
-                    .entry(handle)
-                    .or_default()
-                    .entry("connect".to_string())
-                    .or_default()
-                    .push(cb_ptr);
-            }
-        }
+        register_connect_cb(handle, arg2_f64);
         return handle;
     }
-    // Positional form: arg2 is a NaN-boxed string.
+    // Positional form: arg2 is a NaN-boxed string, arg3 is the cb.
     let host_ptr = perry_runtime::js_get_string_pointer_unified(arg2_f64);
     let host = match string_from_header_i64(host_ptr) {
         Some(h) => h,
         None => return 0,
     };
     let port = arg1_f64 as u16;
-    spawn_socket_task(host, port, /* direct_tls: */ None)
+    let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
+    register_connect_cb(handle, arg3_f64);
+    handle
 }
 
 // ─── FFI: new net.Socket() (alloc-only, deferred connect) ────────────────────
