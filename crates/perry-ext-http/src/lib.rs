@@ -593,6 +593,18 @@ pub unsafe extern "C" fn js_http_set_timeout(handle: Handle, ms: f64) -> Handle 
 // FFI: IncomingMessage accessors
 // ------------------------------------------------------------------
 
+/// `1` if `handle` is registered as an `IncomingMessageHandle`,
+/// `0` otherwise. Used by perry-stdlib's `js_handle_property_dispatch`
+/// to gate the `res.statusCode` / `res.headers` arms — keeps the
+/// property-name match from accidentally returning IncomingMessage
+/// fields for an unrelated handle whose id collides.
+#[no_mangle]
+pub extern "C" fn js_http_is_incoming_message(handle: Handle) -> i32 {
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |_| ())
+        .map(|_| 1)
+        .unwrap_or(0)
+}
+
 /// `res.statusCode`.
 #[no_mangle]
 pub extern "C" fn js_http_status_code(handle: Handle) -> f64 {
