@@ -144,6 +144,16 @@ external-net-pump = ["async-runtime"]
 # Mirrors `external-net-pump` and `external-ws-pump`. Closes #604.
 external-http-server-pump = ["async-runtime"]
 
+# Activated by `optimized_libs::build_optimized_libs` when the well-known
+# flip routes `node:http` / `node:https` to perry-ext-http and the user
+# code calls `http.request` / `http.get` (client side). Tells
+# perry-stdlib's `js_stdlib_process_pending` and
+# `js_stdlib_has_active_handles` to call into perry-ext-http's
+# `js_http_process_pending` / `js_http_has_pending` externs each tick.
+# Without this the client-side response/error events stay queued and
+# the program exits before any callback fires. Issue #769.
+external-http-client-pump = ["async-runtime"]
+
 # TLS — direct `tls.connect()` and `socket.upgradeToTLS()` (Postgres SSLRequest flow).
 # Uses rustls (not native-tls) to avoid OpenSSL on every platform and keep Android
 # cross-compile unblocked; matches reqwest/tokio-tungstenite/mongodb feature flags.

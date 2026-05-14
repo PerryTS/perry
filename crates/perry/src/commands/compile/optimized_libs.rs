@@ -349,6 +349,15 @@ pub(super) fn build_optimized_libs(
             if matches!(module_normalized, "http" | "https" | "http2") {
                 features.insert("external-http-server-pump");
             }
+            // Issue #769 — when `node:http` / `node:https` routes to
+            // perry-ext-http, also activate the client-side pump so the
+            // response/error queue produced by `http.request` /
+            // `http.get` (perry-ext-http's `js_http_request`,
+            // `js_http_get`) actually gets drained. Without this the
+            // request fires but the user callback never runs.
+            if matches!(module_normalized, "http" | "https") {
+                features.insert("external-http-client-pump");
+            }
         }
     }
 

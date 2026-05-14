@@ -9353,6 +9353,100 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[],
         ret: NR_PTR,
     },
+    // ========== node:http / node:https client (issue #769) ==========
+    // `http.request(url_or_options, cb)` / `http.get(url_or_options, cb)`
+    // and their `https.*` variants. Runtime impls live in
+    // `crates/perry-stdlib/src/http.rs` and have been declared in the FFI
+    // table for a while, but no `NativeModSig` entries existed — so user
+    // code calling `http.request(...)` fell through to the unknown-method
+    // path and got back `TAG_UNDEFINED`. Return is a `ClientRequest`
+    // handle; the let-stmt arm in `crates/perry-hir/src/lower.rs` tags
+    // the binding so `req.on/.end/.write/...` dispatch via the
+    // class-filtered entries below.
+    NativeModSig {
+        module: "http",
+        has_receiver: false,
+        method: "request",
+        class_filter: None,
+        runtime: "js_http_request",
+        args: &[NA_F64, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: false,
+        method: "get",
+        class_filter: None,
+        runtime: "js_http_get",
+        args: &[NA_F64, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "https",
+        has_receiver: false,
+        method: "request",
+        class_filter: None,
+        runtime: "js_https_request",
+        args: &[NA_F64, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "https",
+        has_receiver: false,
+        method: "get",
+        class_filter: None,
+        runtime: "js_https_get",
+        args: &[NA_F64, NA_PTR],
+        ret: NR_PTR,
+    },
+    // ClientRequest instance methods (`req.on/.end/.write/.setHeader/.setTimeout`).
+    // Shared between `http` and `https` factories — both register the
+    // returned binding under module `"http"` in the HIR class table.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "on",
+        class_filter: Some("ClientRequest"),
+        runtime: "js_http_on",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "end",
+        class_filter: Some("ClientRequest"),
+        runtime: "js_http_client_request_end",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "write",
+        class_filter: Some("ClientRequest"),
+        runtime: "js_http_client_request_write",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "setHeader",
+        class_filter: Some("ClientRequest"),
+        runtime: "js_http_set_header",
+        args: &[NA_STR, NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "setTimeout",
+        class_filter: Some("ClientRequest"),
+        runtime: "js_http_set_timeout",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
     // ========== node:http server (issue #577) ==========
     // Module-level: `import { createServer } from "node:http"; createServer(handler)`
     NativeModSig {

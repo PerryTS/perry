@@ -3826,6 +3826,57 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                         }
                     }
                 }
+                // Issue #769 — mirror the class-tagging that
+                // `lower::lower_stmt` does for top-level var decls,
+                // but inside closure bodies (function-body path).
+                // `const req = http.request(...)` declared inside a
+                // callback like `server.listen(port, () => { ... })`
+                // wouldn't otherwise be tagged as ClientRequest, so
+                // `req.on/.end/...` would fall through and dispatch as
+                // a generic property-call — never reaching
+                // `js_http_client_request_end`. Mirrors the equivalent
+                // arm for `net.createConnection` / `net.connect` /
+                // `tls.connect` / `new net.Socket()`.
+                for s in &stmts {
+                    if let Stmt::Let {
+                        name,
+                        init:
+                            Some(Expr::NativeMethodCall {
+                                module: mod_name,
+                                method,
+                                object: None,
+                                ..
+                            }),
+                        ..
+                    } = s
+                    {
+                        let socket_class = match (mod_name.as_str(), method.as_str()) {
+                            ("net", "createConnection" | "connect") => Some(("net", "Socket")),
+                            ("tls", "connect") => Some(("net", "Socket")),
+                            ("net", "Socket") => Some(("net", "Socket")),
+                            _ => None,
+                        };
+                        if let Some((m, c)) = socket_class {
+                            ctx.register_native_instance(
+                                name.clone(),
+                                m.to_string(),
+                                c.to_string(),
+                            );
+                        }
+                        let client_class = match (mod_name.as_str(), method.as_str()) {
+                            ("http", "request" | "get") => Some("ClientRequest"),
+                            ("https", "request" | "get") => Some("ClientRequest"),
+                            _ => None,
+                        };
+                        if let Some(cn) = client_class {
+                            ctx.register_native_instance(
+                                name.clone(),
+                                "http".to_string(),
+                                cn.to_string(),
+                            );
+                        }
+                    }
+                }
                 result.extend(stmts);
             }
         }

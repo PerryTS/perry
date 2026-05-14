@@ -292,6 +292,19 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += n;
     }
 
+    // Issue #769 — when the well-known flip routes `node:http` /
+    // `node:https` client (`http.request` / `http.get`) to
+    // perry-ext-http, drain its response/error queue on every tick.
+    // Mirrors the server-side `external-http-server-pump` arm above.
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_http_process_pending() -> i32;
+        }
+        let n = unsafe { js_http_process_pending() };
+        count += n;
+    }
+
     // Process pending worker_threads messages (stdin reader)
     count += crate::worker_threads::js_worker_threads_process_pending();
 
@@ -410,6 +423,18 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
             fn js_node_http_server_has_active() -> i32;
         }
         if unsafe { js_node_http_server_has_active() } != 0 {
+            return 1;
+        }
+    }
+    // Issue #769 — keep the event loop alive while an in-flight
+    // `http.request` / `http.get` (perry-ext-http) hasn't received its
+    // response or error event yet.
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_http_has_pending() -> i32;
+        }
+        if unsafe { js_http_has_pending() } != 0 {
             return 1;
         }
     }

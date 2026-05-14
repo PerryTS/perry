@@ -308,8 +308,14 @@ fn make_request_handle(
     })
 }
 
-/// Spawn the actual reqwest send. Pure async work boxed onto tokio's
-/// blocking pool via `spawn_blocking + Handle::current().block_on`.
+/// Spawn the actual reqwest send. The `spawn_blocking_with_reactor`
+/// shim runs the closure inside `runtime().spawn(async { ... })`, so
+/// we're already in an async context — `Handle::current().block_on`
+/// from here would panic with "Cannot start a runtime from within a
+/// runtime" (issue #769). Instead, spawn the request future as a
+/// fresh detached task on the same multi-thread runtime; it drives
+/// itself via `await` chains while we return immediately. Mirrors
+/// the `spawn_socket_runner` pattern in `perry-ext-net`.
 fn dispatch_request(
     request_handle: Handle,
     method: String,
@@ -319,10 +325,19 @@ fn dispatch_request(
     timeout_ms: Option<u64>,
 ) {
     spawn_blocking(move || {
-        // SAFETY: spawn_blocking workers run inside tokio's runtime,
-        // so Handle::current() is always available.
-        let rt = tokio::runtime::Handle::current();
-        let result: Result<reqwest::Response, reqwest::Error> = rt.block_on(async move {
+        // Defeat LTO dead-stripping of tokio's CONTEXT statics — same
+        // workaround perry-ext-net needs (see spawn_socket_runner).
+        let try_h = tokio::runtime::Handle::try_current();
+        std::hint::black_box(&try_h);
+        if try_h.is_err() {
+            eprintln!(
+                "[perry-ext-http] BUG: dispatch_request Handle::try_current returned Err — \
+                 LTO has likely dead-stripped tokio's CONTEXT statics."
+            );
+            return;
+        }
+        let handle = tokio::runtime::Handle::current();
+        let jh = handle.spawn(async move {
             let mut req = match method.as_str() {
                 "POST" => HTTP_CLIENT.post(&url),
                 "PUT" => HTTP_CLIENT.put(&url),
@@ -343,42 +358,43 @@ fn dispatch_request(
             if !body.is_empty() {
                 req = req.body(body);
             }
-            req.send().await
-        });
-
-        match result {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let status_message = response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("")
-                    .to_string();
-                let mut headers = Vec::new();
-                for (k, v) in response.headers() {
-                    if let Ok(s) = v.to_str() {
-                        headers.push((k.to_string(), s.to_string()));
+            match req.send().await {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    let status_message = response
+                        .status()
+                        .canonical_reason()
+                        .unwrap_or("")
+                        .to_string();
+                    let mut hdrs = Vec::new();
+                    for (k, v) in response.headers() {
+                        if let Ok(s) = v.to_str() {
+                            hdrs.push((k.to_string(), s.to_string()));
+                        }
                     }
+                    let body = response
+                        .bytes()
+                        .await
+                        .map(|b| b.to_vec())
+                        .unwrap_or_default();
+                    push_event(PendingHttpEvent::Response {
+                        request_handle,
+                        status,
+                        status_message,
+                        headers: hdrs,
+                        body,
+                    });
                 }
-                let body = rt
-                    .block_on(async move { response.bytes().await })
-                    .map(|b| b.to_vec())
-                    .unwrap_or_default();
-                push_event(PendingHttpEvent::Response {
-                    request_handle,
-                    status,
-                    status_message,
-                    headers,
-                    body,
-                });
+                Err(e) => {
+                    push_event(PendingHttpEvent::Error {
+                        request_handle,
+                        error_message: e.to_string(),
+                    });
+                }
             }
-            Err(e) => {
-                push_event(PendingHttpEvent::Error {
-                    request_handle,
-                    error_message: e.to_string(),
-                });
-            }
-        }
+        });
+        std::hint::black_box(&jh);
+        std::mem::forget(jh);
     });
 }
 
@@ -386,13 +402,29 @@ fn dispatch_request(
 // FFI: http.request / https.request / http.get / https.get
 // ------------------------------------------------------------------
 
-unsafe fn request_common(opts_f64: f64, callback: i64, default_protocol: &str) -> Handle {
+unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Handle {
     ensure_gc_scanner_registered();
-    let opts = parse_options_object(opts_f64).unwrap_or(serde_json::Value::Null);
-    let method = method_from_options(&opts);
-    let url = url_from_options(&opts, default_protocol);
-    let headers = headers_from_options(&opts);
-    let timeout = timeout_from_options(&opts);
+    // Issue #769 — accept either a URL string or an options object. Mirrors
+    // the dispatch in `get_common` so `http.request("http://…", cb)` works
+    // the same as `http.request({ host, port, path }, cb)`.
+    let (method, url, headers, timeout) = if is_string_value(arg_f64) {
+        let raw = extract_string_value(arg_f64).unwrap_or_default();
+        let url = if raw.starts_with("http://") || raw.starts_with("https://") {
+            raw
+        } else if !raw.is_empty() {
+            format!("{}://{}", default_protocol, raw)
+        } else {
+            String::new()
+        };
+        ("GET".to_string(), url, HashMap::new(), None)
+    } else {
+        let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
+        let method = method_from_options(&opts);
+        let url = url_from_options(&opts, default_protocol);
+        let headers = headers_from_options(&opts);
+        let timeout = timeout_from_options(&opts);
+        (method, url, headers, timeout)
+    };
     make_request_handle(method, url, headers, timeout, callback)
 }
 

@@ -6105,6 +6105,23 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                                         cn.to_string(),
                                     ));
                                 }
+                                // Issue #769 — node:http / node:https CLIENT factories.
+                                // `const req = http.request(url, cb)` and `http.get` / `https.*`
+                                // variants return a ClientRequest handle; register under
+                                // module `"http"` so subsequent `req.on/.end/.write/...`
+                                // resolve via the class-filtered entries in NATIVE_MODULE_TABLE.
+                                let client_class = match (mod_name.as_str(), method.as_str()) {
+                                    ("http", "request" | "get") => Some("ClientRequest"),
+                                    ("https", "request" | "get") => Some("ClientRequest"),
+                                    _ => None,
+                                };
+                                if let Some(cn) = client_class {
+                                    ctx.register_native_instance(
+                                        name.clone(),
+                                        "http".to_string(),
+                                        cn.to_string(),
+                                    );
+                                }
                             }
                             // User-defined factory wrappers: when the init is a
                             // bare call to `userFunc(...)` and `userFunc` was
