@@ -70,6 +70,7 @@ where
         | Expr::NativeModuleRef(_)
         | Expr::ClassRef(_)
         | Expr::This
+        | Expr::SuperPropertyGet { .. }
         | Expr::EnumMember { .. }
         | Expr::StaticFieldGet { .. }
         | Expr::Update { .. }
@@ -1334,6 +1335,7 @@ where
         | Expr::NativeModuleRef(_)
         | Expr::ClassRef(_)
         | Expr::This
+        | Expr::SuperPropertyGet { .. }
         | Expr::EnumMember { .. }
         | Expr::StaticFieldGet { .. }
         | Expr::Update { .. }

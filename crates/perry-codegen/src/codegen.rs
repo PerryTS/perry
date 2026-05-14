@@ -2550,6 +2550,50 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         blk.ret(DOUBLE, &result);
     }
 
+    // Issue #774: emit closure-call wrappers for class instance methods
+    // so `Expr::SuperPropertyGet` (value-form `super.<method>`) can
+    // materialize them via `js_closure_alloc_singleton(@__perry_wrap_<method>)`.
+    // Methods have signature `perry_method_<...>(this_box, args...)`;
+    // the closure-call ABI is `(i64 closure, double a0, ...)` and
+    // doesn't carry a separate `this`. Strict JS for `const fn =
+    // super.greet; fn(x)` calls the method with `this=undefined`,
+    // which is what we forward here.
+    let mut emitted_wrappers: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for class in &hir.classes {
+        for method in &class.methods {
+            let Some(method_fn_name) = method_names
+                .get(&(class.name.clone(), method.name.clone()))
+                .cloned()
+            else {
+                continue;
+            };
+            let wrap_name = format!("__perry_wrap_{}", method_fn_name);
+            if !emitted_wrappers.insert(wrap_name.clone()) {
+                continue;
+            }
+            let arity = method.params.len().min(5);
+            let mut wrap_params: Vec<(LlvmType, String)> = vec![(I64, "%this_closure".to_string())];
+            for i in 0..arity {
+                wrap_params.push((DOUBLE, format!("%a{}", i)));
+            }
+            let wf = llmod.define_function(&wrap_name, DOUBLE, wrap_params);
+            let _ = wf.create_block("entry");
+            let blk = wf.block_mut(0).unwrap();
+            // Forward `this=undefined` then the args.
+            let undef_lit = crate::nanbox::i64_literal(crate::nanbox::TAG_UNDEFINED);
+            let undef_double = blk.bitcast_i64_to_double(&undef_lit);
+            let mut call_args: Vec<(LlvmType, String)> = Vec::with_capacity(arity + 1);
+            call_args.push((DOUBLE, undef_double));
+            for i in 0..arity {
+                call_args.push((DOUBLE, format!("%a{}", i)));
+            }
+            let call_args_ref: Vec<(LlvmType, &str)> =
+                call_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
+            let result = blk.call(DOUBLE, &method_fn_name, &call_args_ref);
+            blk.ret(DOUBLE, &result);
+        }
+    }
+
     // #337: emit an always-defined fallback wrapper for the
     // `perry_unknown_func` sentinel. `expr.rs::Expr::FuncRef` falls
     // through to `wrap_name = "__perry_wrap_perry_unknown_func"` when the

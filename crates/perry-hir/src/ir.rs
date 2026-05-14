@@ -1161,6 +1161,12 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    // Super property read (value form). super.<prop>. Resolved at
+    // codegen by walking the parent class's method table (issue #774).
+    SuperPropertyGet {
+        property: String,
+    },
+
     // Environment variable access: process.env.VARNAME
     EnvGet(String),
     // Dynamic environment variable access: process.env[expr]

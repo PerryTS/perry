@@ -1624,6 +1624,10 @@ impl SH for Expr {
                 method.hash(h);
                 args.hash(h);
             }
+            Expr::SuperPropertyGet { property } => {
+                tag(h, 461);
+                property.hash(h);
+            }
             Expr::EnvGet(s) => {
                 tag(h, 53);
                 s.hash(h);

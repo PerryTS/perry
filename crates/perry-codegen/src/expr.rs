@@ -6131,6 +6131,54 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices))
         }
 
+        // -------- super.<prop> as a value (issue #774) --------
+        // Walk the parent-class chain. If a parent declares a method
+        // with the requested name, materialize it as a closure value
+        // via the singleton wrapper (mirroring `Expr::FuncRef`).
+        // Otherwise return `undefined` — which is the strict-JS
+        // result for instance-field shadows like:
+        //
+        //     class A { foo = "A"; }
+        //     class B extends A { foo = "B"; m() { return super.foo; } }
+        //
+        // The previous lowering rewrote `super.foo` to `this.foo`, so
+        // it silently returned the child override ("B") instead of
+        // `undefined`. See issue #774 / PR #774 follow-up.
+        //
+        // Call-form `super.method(...)` never reaches this arm — it
+        // is lowered to `Expr::SuperMethodCall` in lower_call.rs.
+        Expr::SuperPropertyGet { property } => {
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let Some(current_class_name) = ctx.class_stack.last().cloned() else {
+                return Ok(undef);
+            };
+            let mut parent = ctx
+                .classes
+                .get(&current_class_name)
+                .and_then(|c| c.extends_name.clone());
+            let mut resolved_fn: Option<String> = None;
+            while let Some(p) = parent {
+                let key = (p.clone(), property.clone());
+                if let Some(fname) = ctx.methods.get(&key).cloned() {
+                    resolved_fn = Some(fname);
+                    break;
+                }
+                parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
+            }
+            let Some(fn_name) = resolved_fn else {
+                return Ok(undef);
+            };
+            // Mirror Expr::FuncRef: route through the singleton wrapper
+            // so callers can invoke via the closure-call ABI. The
+            // `__perry_wrap_<fn>` symbol is emitted by compile_module
+            // for every user function.
+            let wrap_name = format!("__perry_wrap_{}", fn_name);
+            let blk = ctx.block();
+            let wrap_ptr = format!("@{}", wrap_name);
+            let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+            Ok(nanbox_pointer_inline(blk, &closure_handle))
+        }
+
         // -------- fs.readFileSync(path) -> Buffer (no encoding) --------
         // Node returns a Buffer when no encoding is supplied; mirror that.
         // js_fs_read_file_binary returns a raw *mut BufferHeader registered

@@ -56,21 +56,19 @@ pub(super) fn lower_super_prop(
     // here for value-form reads like `super._next` (rxjs's
     // OperatorSubscriber), `super.value` (NestJS adapter chains), etc.
     //
-    // Strict JS semantics would resolve through the parent class's
-    // prototype, bypassing any override on the child. Perry currently
-    // doesn't carry a runtime parent-vtable lookup separate from the
-    // instance's own vtable chain, so we approximate by lowering to
-    // `this.<prop>` — the instance method dispatch already walks the
-    // class chain and returns the inherited method when the child does
-    // not override. The substitution is correct when the child does
-    // not override the property (the dominant rxjs / NestJS pattern;
-    // see PR #754 maintainer review on the NestJS smoke test). When
-    // the child *does* override, this approximation will resolve to
-    // the override rather than the parent — a TODO for a future
-    // explicit super-vtable path in codegen.
+    // Ident form (`super.foo`) routes through Expr::SuperPropertyGet so
+    // codegen can do an explicit parent-class vtable lookup (issue
+    // #774). The previous `this.<prop>` approximation silently
+    // returned the child override when the child shadowed the
+    // property; strict JS resolves through the parent prototype.
+    //
+    // Computed form (`super[expr]`) is kept on the `this[expr]`
+    // fallback for now — computed super needs a runtime dispatch
+    // that's out of scope for #774 (the dominant PR #754 rxjs /
+    // NestJS patterns are all ident-form method calls, which go
+    // through SuperMethodCall anyway).
     match &super_prop.prop {
-        ast::SuperProp::Ident(ident) => Ok(Expr::PropertyGet {
-            object: Box::new(Expr::This),
+        ast::SuperProp::Ident(ident) => Ok(Expr::SuperPropertyGet {
             property: ident.sym.to_string(),
         }),
         ast::SuperProp::Computed(computed) => {
