@@ -247,6 +247,91 @@ pub(super) fn collect_modules(
     let (mut hir_module, new_next_class_id) = lower_result?;
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
+    // Issue #100: const-fold dynamic `import()` paths, register each
+    // resolved target as a regular import edge (marked `is_dynamic`), and
+    // detect top-level `await` so codegen can chain the init Promise on
+    // the dispatch side. Unresolvable / over-cap arguments surface as a
+    // structured compile error here — never propagating to codegen.
+    perry_hir::detect_top_level_await(&mut hir_module);
+    let mut dyn_errors: Vec<String> = Vec::new();
+    let mut new_dyn_imports: Vec<String> = Vec::new();
+    // Issue #100: collect the module's top-level `const` locals once so
+    // the resolver can follow `import(localStringVar)` and
+    // `` import(`./prefix_${localStringVar}.ts`) `` paths transitively.
+    let module_const_locals = perry_hir::collect_module_const_locals(&hir_module);
+    perry_hir::for_each_dynamic_import_mut(&mut hir_module, &mut |expr| {
+        if let perry_hir::Expr::DynamicImport { paths, arg } = expr {
+            if !paths.is_empty() {
+                // Already resolved (e.g. a second pass on the same module).
+                return;
+            }
+            let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            match perry_hir::resolve_import_path_with_consts(
+                arg,
+                &module_const_locals,
+                &mut visiting,
+            ) {
+                perry_hir::Resolution::Set(set) => {
+                    if set.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
+                        dyn_errors.push(format!(
+                            "dynamic import() in module {}: resolves to {} possible paths \
+                             (limit: {})\n  note: consider enumerating with a ternary or \
+                             registry object",
+                            module_name,
+                            set.len(),
+                            perry_hir::DYNAMIC_IMPORT_PATH_CAP
+                        ));
+                        return;
+                    }
+                    for p in &set {
+                        if !new_dyn_imports.contains(p) {
+                            new_dyn_imports.push(p.clone());
+                        }
+                    }
+                    *paths = set;
+                }
+                perry_hir::Resolution::Unresolved(reason) => {
+                    dyn_errors.push(format!(
+                        "dynamic import() in module {}: {}",
+                        module_name, reason
+                    ));
+                }
+            }
+        }
+    });
+    if !dyn_errors.is_empty() {
+        return Err(anyhow!("{}", dyn_errors.join("\n")));
+    }
+    for source in new_dyn_imports {
+        // A dynamic edge to the same source as a static import is folded
+        // into the existing edge (just flip is_dynamic off — the static
+        // edge already gives us full namespace materialization). A
+        // dynamic-only target appears as a new import with empty
+        // specifiers and `is_dynamic = true`.
+        if hir_module
+            .imports
+            .iter()
+            .any(|i| i.source == source && !i.is_dynamic)
+        {
+            continue;
+        }
+        let is_native = perry_hir::is_native_module(&source);
+        let module_kind = if is_native {
+            ModuleKind::NativeRust
+        } else {
+            ModuleKind::NativeCompiled
+        };
+        hir_module.imports.push(perry_hir::Import {
+            source,
+            specifiers: Vec::new(),
+            is_native,
+            module_kind,
+            resolved_path: None,
+            type_only: false,
+            is_dynamic: true,
+        });
+    }
+
     // Process imports and update their resolved paths and module kinds
     for import in &mut hir_module.imports {
         // Apply package alias (e.g., @parse/node-apn → perry-push from perry.packageAliases)

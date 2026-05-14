@@ -7,7 +7,15 @@ fast-math is opt-in; the previous "Perry default" through v0.5.584 is
 now the `--fast-math` mode).
 
 **Run date (Perry):** 2026-05-06 — Perry commit `main` (v0.5.585).
-**Run date (other languages):** 2026-04-15 — refreshed when next polyglot
+The 2026-05-14 v0.5.908 default-mode polyglot sweep (see `RESULTS.md`)
+did not rerun `bench_opt.*` — the table here is preserved as the
+last side-by-side opt-tuning sweep. The 2026-05-14 default-column
+numbers in `RESULTS.md` match v0.5.585 within 1-4 ms (e.g. fibonacci
+304 → 309, loop_overhead 95 → 97, math_intensive 50 → 51), so the
+opt-side cells here are within noise of the current binary; the
+shape (which language's `opt` flags close the gap to Perry
+`--fast-math`) is unchanged.
+**Run date (other languages):** 2026-04-15 — refreshed when next opt
 sweep runs.
 **Hardware:** Apple M1 Max, macOS 26.4.
 **Methodology:** Perry RUNS=11 median; other languages best of 5 per

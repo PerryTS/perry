@@ -7911,6 +7911,8 @@ mod tests {
             uses_webassembly: false,
             init_was_unrolled: false,
             extern_funcs: vec![],
+            has_top_level_await: false,
+            init_kind: perry_hir::ModuleInitKind::Eager,
         }
     }
 

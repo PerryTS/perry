@@ -1,0 +1,9 @@
+getAddress lower: 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed
+getAddress upper: 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed
+parseEther 1.5: 1500000000000000000
+formatEther round-trip: 1.500000000000000000
+parseUnits 6dec: 123456789
+formatUnits 6dec: 123.456789
+parseUnits gwei: 25000000000
+formatUnits gwei: 25.000000000
+ethers parity: ok

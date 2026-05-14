@@ -308,3 +308,21 @@ try {
 console.log("http.WebSocket typeof:", typeof (http as any).WebSocket);
 
 // Coverage: 4 auto-emitted, 144 TODO, 0 skip-listed.
+
+/*
+@covers
+crates/perry-stdlib/src/http.rs:
+  - js_http_client_request_end
+  - js_http_client_request_write
+  - js_http_get
+  - js_http_on
+  - js_http_process_pending
+  - js_http_request
+  - js_http_response_headers
+  - js_http_set_header
+  - js_http_set_timeout
+  - js_http_status_code
+  - js_http_status_message
+  - js_https_get
+  - js_https_request
+*/

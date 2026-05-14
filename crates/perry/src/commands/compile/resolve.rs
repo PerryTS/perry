@@ -205,6 +205,15 @@ pub(super) fn parse_native_library_manifest(
                         .collect()
                 })
                 .unwrap_or_default(),
+            lib_dirs: tc
+                .get("libDirs")
+                .and_then(|l| l.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
+                        .collect()
+                })
+                .unwrap_or_default(),
             pkg_config: tc
                 .get("pkgConfig")
                 .and_then(|p| p.as_array())
@@ -366,6 +375,75 @@ mod abi_validation_tests {
         let m = manifest_with_abi(Some("not a version"));
         let err = validate_abi_version(&m).expect_err("garbage must reject");
         assert!(err.contains("unparseable"), "got: {}", err);
+    }
+}
+
+#[cfg(test)]
+mod manifest_parse_tests {
+    use super::*;
+
+    /// Relative `libDirs` entries must resolve against the package's
+    /// own directory, not the user's cwd — otherwise a wrapper that
+    /// ships a `vendor/lib/` alongside its `package.json` would only
+    /// link when invoked from one specific directory. Absolute entries
+    /// pass through unchanged (`PathBuf::join` ignores the base when
+    /// the right-hand side is absolute).
+    #[test]
+    fn lib_dirs_relative_paths_anchored_to_package_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "macos": {
+                            "crate": "rust",
+                            "lib": "demo",
+                            "libDirs": ["vendor/lib", "/abs/path"]
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed =
+            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        assert_eq!(tc.lib_dirs.len(), 2);
+        assert_eq!(tc.lib_dirs[0], pkg_dir.join("vendor/lib"));
+        assert_eq!(tc.lib_dirs[1], PathBuf::from("/abs/path"));
+    }
+
+    /// Omitted `libDirs` must default to an empty list, not error —
+    /// it's an optional field on every existing wrapper.
+    #[test]
+    fn lib_dirs_defaults_to_empty_when_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": { "macos": { "crate": "rust", "lib": "demo" } }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed =
+            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        assert!(tc.lib_dirs.is_empty());
     }
 }
 

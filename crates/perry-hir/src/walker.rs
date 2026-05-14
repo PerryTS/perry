@@ -1301,6 +1301,11 @@ where
                 }
             }
         }
+
+        // Issue #100: dynamic import() — descend into the path arg.
+        Expr::DynamicImport { arg, .. } => {
+            f(arg);
+        }
     }
 }
 
@@ -2519,6 +2524,10 @@ where
                     f(d);
                 }
             }
+        }
+        // Issue #100: dynamic import() — descend into the path arg.
+        Expr::DynamicImport { arg, .. } => {
+            f(arg);
         }
     }
 }

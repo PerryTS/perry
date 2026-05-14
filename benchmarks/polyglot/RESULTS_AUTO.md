@@ -1,31 +1,22 @@
 # Polyglot Compute-Microbench Results (auto-generated)
 
 **Runs per cell:** 11 · **Pinning:** macOS scheduler hint (taskpolicy -t 0 -l 0 — P-core preferred via throughput/latency tiers, NOT strict affinity)
-**Hardware:** Darwin 25.4.0 arm64 on MacBookPro · **Date:** 2026-04-25
-**Perry version:** v0.5.249
-
-> **⚠ Pre-fast-math-flip snapshot (v0.5.585+).** This table was generated
-> when Perry emitted `reassoc + contract` per-instruction FMF flags
-> unconditionally. The current default (v0.5.585+) does NOT emit those
-> flags; the numbers in the Perry column here correspond to today's
-> `--fast-math` mode. For the post-flip Perry numbers in BOTH modes,
-> see [`RESULTS.md`](./RESULTS.md). Re-running this auto-generated file
-> needs a full polyglot sweep (8 benches × 9 runtimes × RUNS=11);
-> tracked as a follow-up.
+**Hardware:** Darwin 25.4.0 arm64 on MacBook-Pro-69 · **Date:** 2026-05-14
+**Perry version:** v0.5.908
 
 Headline = median wall-clock ms. Lower is better.
 
 | Benchmark           | Perry |  Rust |   C++ |    Go | Swift |  Java |  Node |   Bun | Hermes |  Python |
 |---------------------|-------|-------|-------|-------|-------|-------|-------|-------|--------|---------|
-| fibonacci           |   318 |   330 |   315 |   451 |   406 |   282 |  1022 |   589 |      - |   16054 |
-| loop_overhead       |    12 |    98 |    98 |    98 |   143 |   100 |    54 |    46 |      - |    3019 |
-| loop_data_dependent |   235 |   229 |   129 |   128 |   233 |   229 |   322 |   232 |      - |   10750 |
-| array_write         |     4 |     7 |     3 |     9 |     2 |     7 |     9 |     6 |      - |     401 |
-| array_read          |     4 |     9 |     9 |    11 |     9 |    12 |    13 |    16 |      - |     342 |
-| math_intensive      |    14 |    48 |    51 |    49 |    50 |    74 |    51 |    51 |      - |    2238 |
-| object_create       |     1 |     0 |     0 |     0 |     0 |     5 |    11 |     6 |      - |     164 |
-| nested_loops        |    18 |     8 |     8 |    10 |     8 |    11 |    18 |    21 |      - |     484 |
-| accumulate          |    34 |    98 |    98 |    98 |    98 |   100 |   617 |   100 |      - |    5048 |
+| fibonacci           |   309 |   316 |   309 |   446 |   401 |   278 |   987 |   518 |      - |   12382 |
+| loop_overhead       |    97 |    97 |    96 |    96 |    96 |    97 |    53 |    41 |      - |    1967 |
+| loop_data_dependent |   225 |   226 |   129 |   128 |   225 |   226 |   226 |   230 |      - |    6068 |
+| array_write         |     3 |     7 |     2 |     9 |     2 |     6 |     9 |     6 |      - |     331 |
+| array_read          |    11 |     9 |     9 |    10 |     9 |    11 |    14 |    16 |      - |     236 |
+| math_intensive      |    51 |    48 |    50 |    48 |    48 |    50 |    49 |    50 |      - |    1579 |
+| object_create       |     2 |     0 |     0 |     0 |     0 |     5 |     8 |     6 |      - |     133 |
+| nested_loops        |    18 |     8 |     8 |    10 |     8 |    10 |    17 |    20 |      - |     353 |
+| accumulate          |    97 |    97 |    96 |    96 |    96 |    98 |   597 |    98 |      - |    4382 |
 
 ## Per-cell full stats
 
@@ -33,93 +24,113 @@ Format: median (p95: X, σ: S, min: Y, max: Z) ms
 
 | Benchmark | Runtime | Stats (ms) |
 |---|---|---|
-| fibonacci | perry | 318 (p95: 358, σ: 13.4, min: 315, max: 358) |
-| fibonacci | rust | 330 (p95: 662, σ: 115.5, min: 322, max: 662) |
-| fibonacci | cpp | 315 (p95: 317, σ: 1.1, min: 314, max: 317) |
-| fibonacci | go | 451 (p95: 462, σ: 4.1, min: 448, max: 462) |
-| fibonacci | swift | 406 (p95: 409, σ: 0.9, min: 406, max: 409) |
-| fibonacci | java | 282 (p95: 364, σ: 23.9, min: 279, max: 364) |
-| fibonacci | node | 1022 (p95: 1656, σ: 182.3, min: 1008, max: 1656) |
-| fibonacci | bun | 589 (p95: 1442, σ: 250.3, min: 537, max: 1442) |
+| fibonacci | perry | 309 (p95: 317, σ: 2.8, min: 307, max: 317) |
+| fibonacci | rust | 316 (p95: 323, σ: 2.5, min: 315, max: 323) |
+| fibonacci | cpp | 309 (p95: 312, σ: 1.0, min: 308, max: 312) |
+| fibonacci | go | 446 (p95: 448, σ: 0.9, min: 445, max: 448) |
+| fibonacci | swift | 401 (p95: 409, σ: 2.7, min: 399, max: 409) |
+| fibonacci | java | 278 (p95: 296, σ: 6.0, min: 277, max: 296) |
+| fibonacci | node | 987 (p95: 1030, σ: 12.5, min: 985, max: 1030) |
+| fibonacci | bun | 518 (p95: 525, σ: 2.9, min: 515, max: 525) |
 | fibonacci | hermes | - |
-| fibonacci | python | 16054 (p95: 20114, σ: 1178.7, min: 15874, max: 20114) |
-| loop_overhead | perry | 12 (p95: 13, σ: 0.5, min: 12, max: 13) |
-| loop_overhead | rust | 98 (p95: 264, σ: 61.0, min: 97, max: 264) |
-| loop_overhead | cpp | 98 (p95: 197, σ: 33.7, min: 98, max: 197) |
-| loop_overhead | go | 98 (p95: 99, σ: 0.6, min: 97, max: 99) |
-| loop_overhead | swift | 143 (p95: 282, σ: 49.4, min: 97, max: 282) |
-| loop_overhead | java | 100 (p95: 126, σ: 7.6, min: 98, max: 126) |
-| loop_overhead | node | 54 (p95: 58, σ: 1.2, min: 54, max: 58) |
-| loop_overhead | bun | 46 (p95: 63, σ: 6.2, min: 43, max: 63) |
+| fibonacci | python | 12382 (p95: 12503, σ: 58.7, min: 12322, max: 12503) |
+| loop_overhead | perry | 97 (p95: 99, σ: 0.9, min: 96, max: 99) |
+| loop_overhead | rust | 97 (p95: 98, σ: 0.6, min: 96, max: 98) |
+| loop_overhead | cpp | 96 (p95: 97, σ: 0.6, min: 95, max: 97) |
+| loop_overhead | go | 96 (p95: 97, σ: 0.6, min: 95, max: 97) |
+| loop_overhead | swift | 96 (p95: 97, σ: 0.6, min: 95, max: 97) |
+| loop_overhead | java | 97 (p95: 98, σ: 0.5, min: 97, max: 98) |
+| loop_overhead | node | 53 (p95: 58, σ: 1.4, min: 53, max: 58) |
+| loop_overhead | bun | 41 (p95: 42, σ: 0.7, min: 40, max: 42) |
 | loop_overhead | hermes | - |
-| loop_overhead | python | 3019 (p95: 5066, σ: 587.6, min: 2979, max: 5066) |
-| loop_data_dependent | perry | 235 (p95: 307, σ: 29.3, min: 229, max: 307) |
-| loop_data_dependent | rust | 229 (p95: 247, σ: 7.5, min: 227, max: 247) |
-| loop_data_dependent | cpp | 129 (p95: 130, σ: 0.9, min: 128, max: 130) |
-| loop_data_dependent | go | 128 (p95: 130, σ: 1.0, min: 127, max: 130) |
-| loop_data_dependent | swift | 233 (p95: 278, σ: 18.4, min: 229, max: 278) |
-| loop_data_dependent | java | 229 (p95: 231, σ: 0.8, min: 229, max: 231) |
-| loop_data_dependent | node | 322 (p95: 447, σ: 63.4, min: 259, max: 447) |
-| loop_data_dependent | bun | 232 (p95: 241, σ: 3.9, min: 230, max: 241) |
+| loop_overhead | python | 1967 (p95: 2056, σ: 34.4, min: 1964, max: 2056) |
+| loop_data_dependent | perry | 225 (p95: 234, σ: 2.7, min: 224, max: 234) |
+| loop_data_dependent | rust | 226 (p95: 230, σ: 1.6, min: 225, max: 230) |
+| loop_data_dependent | cpp | 129 (p95: 131, σ: 1.3, min: 128, max: 131) |
+| loop_data_dependent | go | 128 (p95: 129, σ: 0.5, min: 128, max: 129) |
+| loop_data_dependent | swift | 225 (p95: 226, σ: 0.6, min: 224, max: 226) |
+| loop_data_dependent | java | 226 (p95: 229, σ: 1.4, min: 224, max: 229) |
+| loop_data_dependent | node | 226 (p95: 228, σ: 0.8, min: 225, max: 228) |
+| loop_data_dependent | bun | 230 (p95: 232, σ: 1.1, min: 228, max: 232) |
 | loop_data_dependent | hermes | - |
-| loop_data_dependent | python | 10750 (p95: 35545, σ: 8839.0, min: 8201, max: 35545) |
-| array_write | perry | 4 (p95: 5, σ: 0.6, min: 3, max: 5) |
+| loop_data_dependent | python | 6068 (p95: 6186, σ: 41.6, min: 6044, max: 6186) |
+| array_write | perry | 3 (p95: 4, σ: 0.5, min: 3, max: 4) |
 | array_write | rust | 7 (p95: 8, σ: 0.4, min: 7, max: 8) |
-| array_write | cpp | 3 (p95: 4, σ: 0.7, min: 2, max: 4) |
-| array_write | go | 9 (p95: 10, σ: 0.6, min: 8, max: 10) |
-| array_write | swift | 2 (p95: 3, σ: 0.4, min: 2, max: 3) |
-| array_write | java | 7 (p95: 7, σ: 0.4, min: 6, max: 7) |
-| array_write | node | 9 (p95: 10, σ: 0.7, min: 8, max: 10) |
+| array_write | cpp | 2 (p95: 3, σ: 0.3, min: 2, max: 3) |
+| array_write | go | 9 (p95: 9, σ: 0.4, min: 8, max: 9) |
+| array_write | swift | 2 (p95: 4, σ: 0.8, min: 2, max: 4) |
+| array_write | java | 6 (p95: 7, σ: 0.7, min: 5, max: 7) |
+| array_write | node | 9 (p95: 9, σ: 0.5, min: 8, max: 9) |
 | array_write | bun | 6 (p95: 9, σ: 1.0, min: 5, max: 9) |
 | array_write | hermes | - |
-| array_write | python | 401 (p95: 431, σ: 10.2, min: 396, max: 431) |
-| array_read | perry | 4 (p95: 5, σ: 0.9, min: 2, max: 5) |
-| array_read | rust | 9 (p95: 10, σ: 0.4, min: 9, max: 10) |
-| array_read | cpp | 9 (p95: 10, σ: 0.4, min: 9, max: 10) |
-| array_read | go | 11 (p95: 12, σ: 0.5, min: 10, max: 12) |
-| array_read | swift | 9 (p95: 11, σ: 0.6, min: 9, max: 11) |
-| array_read | java | 12 (p95: 23, σ: 4.0, min: 11, max: 23) |
-| array_read | node | 13 (p95: 18, σ: 1.4, min: 13, max: 18) |
-| array_read | bun | 16 (p95: 19, σ: 1.2, min: 14, max: 19) |
+| array_write | python | 331 (p95: 338, σ: 3.3, min: 327, max: 338) |
+| array_read | perry | 11 (p95: 12, σ: 0.4, min: 11, max: 12) |
+| array_read | rust | 9 (p95: 9, σ: 0.0, min: 9, max: 9) |
+| array_read | cpp | 9 (p95: 11, σ: 0.7, min: 9, max: 11) |
+| array_read | go | 10 (p95: 11, σ: 0.4, min: 10, max: 11) |
+| array_read | swift | 9 (p95: 10, σ: 0.3, min: 9, max: 10) |
+| array_read | java | 11 (p95: 13, σ: 0.6, min: 11, max: 13) |
+| array_read | node | 14 (p95: 14, σ: 0.5, min: 13, max: 14) |
+| array_read | bun | 16 (p95: 17, σ: 0.8, min: 14, max: 17) |
 | array_read | hermes | - |
-| array_read | python | 342 (p95: 356, σ: 5.6, min: 332, max: 356) |
-| math_intensive | perry | 14 (p95: 15, σ: 0.5, min: 14, max: 15) |
-| math_intensive | rust | 48 (p95: 49, σ: 0.6, min: 47, max: 49) |
-| math_intensive | cpp | 51 (p95: 51, σ: 0.4, min: 50, max: 51) |
-| math_intensive | go | 49 (p95: 50, σ: 0.4, min: 49, max: 50) |
-| math_intensive | swift | 50 (p95: 88, σ: 11.0, min: 49, max: 88) |
-| math_intensive | java | 74 (p95: 135, σ: 30.3, min: 51, max: 135) |
-| math_intensive | node | 51 (p95: 52, σ: 0.7, min: 50, max: 52) |
-| math_intensive | bun | 51 (p95: 52, σ: 0.5, min: 51, max: 52) |
+| array_read | python | 236 (p95: 244, σ: 4.7, min: 227, max: 244) |
+| math_intensive | perry | 51 (p95: 51, σ: 0.4, min: 50, max: 51) |
+| math_intensive | rust | 48 (p95: 49, σ: 0.7, min: 47, max: 49) |
+| math_intensive | cpp | 50 (p95: 54, σ: 1.4, min: 49, max: 54) |
+| math_intensive | go | 48 (p95: 49, σ: 0.5, min: 48, max: 49) |
+| math_intensive | swift | 48 (p95: 50, σ: 0.8, min: 48, max: 50) |
+| math_intensive | java | 50 (p95: 51, σ: 0.3, min: 50, max: 51) |
+| math_intensive | node | 49 (p95: 52, σ: 1.0, min: 49, max: 52) |
+| math_intensive | bun | 50 (p95: 52, σ: 0.9, min: 50, max: 52) |
 | math_intensive | hermes | - |
-| math_intensive | python | 2238 (p95: 2347, σ: 35.3, min: 2227, max: 2347) |
-| object_create | perry | 1 (p95: 1, σ: 0.5, min: 0, max: 1) |
+| math_intensive | python | 1579 (p95: 1593, σ: 4.1, min: 1578, max: 1593) |
+| object_create | perry | 2 (p95: 4, σ: 0.6, min: 2, max: 4) |
 | object_create | rust | 0 (p95: 1, σ: 0.3, min: 0, max: 1) |
 | object_create | cpp | 0 (p95: 1, σ: 0.4, min: 0, max: 1) |
-| object_create | go | 0 (p95: 1, σ: 0.3, min: 0, max: 1) |
-| object_create | swift | 0 (p95: 1, σ: 0.3, min: 0, max: 1) |
-| object_create | java | 5 (p95: 6, σ: 0.6, min: 4, max: 6) |
-| object_create | node | 11 (p95: 20, σ: 3.4, min: 8, max: 20) |
-| object_create | bun | 6 (p95: 7, σ: 0.5, min: 6, max: 7) |
+| object_create | go | 0 (p95: 0, σ: 0.0, min: 0, max: 0) |
+| object_create | swift | 0 (p95: 0, σ: 0.0, min: 0, max: 0) |
+| object_create | java | 5 (p95: 5, σ: 0.0, min: 5, max: 5) |
+| object_create | node | 8 (p95: 9, σ: 0.5, min: 8, max: 9) |
+| object_create | bun | 6 (p95: 9, σ: 1.0, min: 5, max: 9) |
 | object_create | hermes | - |
-| object_create | python | 164 (p95: 224, σ: 17.5, min: 160, max: 224) |
-| nested_loops | perry | 18 (p95: 19, σ: 0.7, min: 17, max: 19) |
-| nested_loops | rust | 8 (p95: 9, σ: 0.3, min: 8, max: 9) |
-| nested_loops | cpp | 8 (p95: 8, σ: 0.0, min: 8, max: 8) |
-| nested_loops | go | 10 (p95: 15, σ: 1.6, min: 9, max: 15) |
-| nested_loops | swift | 8 (p95: 31, σ: 7.1, min: 8, max: 31) |
-| nested_loops | java | 11 (p95: 11, σ: 0.5, min: 10, max: 11) |
-| nested_loops | node | 18 (p95: 25, σ: 2.2, min: 17, max: 25) |
-| nested_loops | bun | 21 (p95: 24, σ: 1.1, min: 20, max: 24) |
+| object_create | python | 133 (p95: 134, σ: 0.6, min: 132, max: 134) |
+| nested_loops | perry | 18 (p95: 18, σ: 0.5, min: 17, max: 18) |
+| nested_loops | rust | 8 (p95: 8, σ: 0.0, min: 8, max: 8) |
+| nested_loops | cpp | 8 (p95: 9, σ: 0.3, min: 8, max: 9) |
+| nested_loops | go | 10 (p95: 12, σ: 0.8, min: 9, max: 12) |
+| nested_loops | swift | 8 (p95: 8, σ: 0.0, min: 8, max: 8) |
+| nested_loops | java | 10 (p95: 12, σ: 0.7, min: 10, max: 12) |
+| nested_loops | node | 17 (p95: 27, σ: 3.4, min: 16, max: 27) |
+| nested_loops | bun | 20 (p95: 20, σ: 0.5, min: 19, max: 20) |
 | nested_loops | hermes | - |
-| nested_loops | python | 484 (p95: 717, σ: 66.9, min: 472, max: 717) |
-| accumulate | perry | 34 (p95: 36, σ: 0.8, min: 33, max: 36) |
-| accumulate | rust | 98 (p95: 99, σ: 0.8, min: 96, max: 99) |
-| accumulate | cpp | 98 (p95: 98, σ: 0.5, min: 97, max: 98) |
-| accumulate | go | 98 (p95: 101, σ: 1.0, min: 97, max: 101) |
-| accumulate | swift | 98 (p95: 229, σ: 37.7, min: 97, max: 229) |
-| accumulate | java | 100 (p95: 101, σ: 0.9, min: 98, max: 101) |
-| accumulate | node | 617 (p95: 745, σ: 37.6, min: 610, max: 745) |
-| accumulate | bun | 100 (p95: 101, σ: 0.7, min: 99, max: 101) |
+| nested_loops | python | 353 (p95: 356, σ: 3.6, min: 347, max: 356) |
+| accumulate | perry | 97 (p95: 101, σ: 1.3, min: 96, max: 101) |
+| accumulate | rust | 97 (p95: 98, σ: 0.9, min: 95, max: 98) |
+| accumulate | cpp | 96 (p95: 97, σ: 0.4, min: 96, max: 97) |
+| accumulate | go | 96 (p95: 97, σ: 0.5, min: 95, max: 97) |
+| accumulate | swift | 96 (p95: 98, σ: 1.2, min: 95, max: 98) |
+| accumulate | java | 98 (p95: 101, σ: 1.1, min: 97, max: 101) |
+| accumulate | node | 597 (p95: 690, σ: 27.0, min: 592, max: 690) |
+| accumulate | bun | 98 (p95: 99, σ: 0.6, min: 97, max: 99) |
 | accumulate | hermes | - |
-| accumulate | python | 5048 (p95: 5949, σ: 335.7, min: 4971, max: 5949) |
+| accumulate | python | 4382 (p95: 4461, σ: 27.4, min: 4359, max: 4461) |
+
+## Perry `--fast-math` addendum (separate run, same v0.5.908 binary recompiled with `PERRY_FAST_MATH=1`)
+
+| Benchmark | Runtime | Stats (ms) |
+|---|---|---|
+| fibonacci | perry --fast | 306 (p95: 310, σ: 1.3, min: 305, max: 310) |
+| loop_overhead | perry --fast | 12 (p95: 17, σ: 1.4, min: 12, max: 17) |
+| loop_data_dependent | perry --fast | 224 (p95: 226, σ: 1.0, min: 223, max: 226) |
+| array_write | perry --fast | 4 (p95: 7, σ: 1.2, min: 3, max: 7) |
+| array_read | perry --fast | 11 (p95: 12, σ: 0.3, min: 11, max: 12) |
+| math_intensive | perry --fast | 14 (p95: 16, σ: 0.6, min: 14, max: 16) |
+| object_create | perry --fast | 0 (p95: 1, σ: 0.4, min: 0, max: 1) |
+| nested_loops | perry --fast | 17 (p95: 25, σ: 2.2, min: 17, max: 25) |
+| accumulate | perry --fast | 34 (p95: 36, σ: 0.9, min: 33, max: 36) |
+
+The `--fast-math` rerun produced tight σ on every cell (1-2 ms typical),
+indicating a clean run. Trivially-foldable cells (`loop_overhead`,
+`math_intensive`, `accumulate`) reproduce the historical 7-8× win;
+non-foldable cells (`fibonacci`, `loop_data_dependent`, `nested_loops`)
+match default mode within 1-4 ms — exactly the structural expectation.

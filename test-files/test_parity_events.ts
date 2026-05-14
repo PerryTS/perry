@@ -173,3 +173,15 @@ try {
 // PERRY-SKIP: EventEmitterAsyncResource — async_hooks integration, output is non-deterministic (asyncId varies).
 
 // Coverage: 4 auto-emitted, 10 TODO, 0 skip-listed.
+
+/*
+@covers
+crates/perry-stdlib/src/events.rs:
+  - js_event_emitter_emit
+  - js_event_emitter_emit0
+  - js_event_emitter_listener_count
+  - js_event_emitter_new
+  - js_event_emitter_on
+  - js_event_emitter_remove_all_listeners
+  - js_event_emitter_remove_listener
+*/

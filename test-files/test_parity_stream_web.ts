@@ -260,3 +260,46 @@ try {
 } catch (e: any) { console.log("DecompressionStream ERR:", e && e.message); }
 
 // Coverage: 0 auto-emitted, 85 TODO, 0 skip-listed.
+
+/*
+@covers
+crates/perry-stdlib/src/streams.rs:
+  - js_readable_stream_cancel
+  - js_readable_stream_controller_close
+  - js_readable_stream_controller_desired_size
+  - js_readable_stream_controller_enqueue
+  - js_readable_stream_controller_error
+  - js_readable_stream_from_blob
+  - js_readable_stream_from_iterable
+  - js_readable_stream_from_response
+  - js_readable_stream_get_reader
+  - js_readable_stream_locked
+  - js_readable_stream_pipe_through
+  - js_readable_stream_pipe_to
+  - js_readable_stream_subclass_init
+  - js_readable_stream_tee
+  - js_reader_cancel
+  - js_reader_closed
+  - js_reader_read
+  - js_reader_release_lock
+  - js_stream_unwrap_handle
+  - js_streams_throw_byob_not_implemented
+  - js_streams_throw_byte_length_not_implemented
+  - js_transform_stream_new
+  - js_transform_stream_readable
+  - js_transform_stream_subclass_init
+  - js_transform_stream_writable
+  - js_writable_stream_abort
+  - js_writable_stream_close
+  - js_writable_stream_get_writer
+  - js_writable_stream_locked
+  - js_writable_stream_new
+  - js_writable_stream_subclass_init
+  - js_writer_abort
+  - js_writer_close
+  - js_writer_closed
+  - js_writer_desired_size
+  - js_writer_ready
+  - js_writer_release_lock
+  - js_writer_write
+*/

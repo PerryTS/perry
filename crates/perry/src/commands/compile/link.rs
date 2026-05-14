@@ -1858,6 +1858,20 @@ pub(super) fn build_and_run_link(
                 cmd.arg("-framework").arg(framework);
             }
 
+            // Add library search paths. MSVC link.exe takes `/LIBPATH:`;
+            // every other linker we drive (clang/ld on Apple, gcc/ld on
+            // Linux/Android/HarmonyOS) understands `-L`. Mirror the
+            // `target_config.libs` branch immediately below so a
+            // `targets.windows.libDirs` entry actually resolves the
+            // `{lib}.lib` lookups instead of being a silent no-op.
+            for lib_dir in &target_config.lib_dirs {
+                if is_windows {
+                    cmd.arg(format!("/LIBPATH:{}", lib_dir.display()));
+                } else {
+                    cmd.arg(format!("-L{}", lib_dir.display()));
+                }
+            }
+
             // Add platform libraries
             for lib in &target_config.libs {
                 if is_windows {

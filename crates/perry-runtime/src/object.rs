@@ -9212,3 +9212,77 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     }
     f64::from_bits(TAG_NULL)
 }
+
+/// Issue #100: build a module-namespace object (the value an `await
+/// import("./foo.ts")` resolves to) from parallel arrays of keys and
+/// values.
+///
+/// Keys are length-prefixed UTF-8 (Perry strings are not guaranteed
+/// null-terminated), passed as parallel `*const *const u8` (data
+/// pointers) and `*const i32` (byte lengths). Values are the already
+/// NaN-boxed `f64` representations passed as a flat `f64` array.
+///
+/// The returned f64 is a NaN-boxed POINTER_TAG `ObjectHeader` with its
+/// `keys_array` populated so `Object.keys(ns)`/iteration and property
+/// dispatch work the same as on any other JS object. Caller is
+/// responsible for pinning the object as a GC root if it stores the
+/// result in a long-lived slot — codegen does this by writing the
+/// result into the module-scoped `__perry_ns_<prefix>` global which is
+/// already registered with `js_gc_register_global_root`.
+///
+/// Empty namespace (`n == 0`) returns a fresh empty object.
+///
+/// Returns an `f64` directly (not `JSValue`) so the LLVM ABI signature
+/// `double js_create_namespace(...)` declared in `runtime_decls.rs`
+/// matches: NaN-boxed values use float-register-return on AArch64 /
+/// SysV-x86_64. A `JSValue` return would route through integer
+/// registers (`#[repr(transparent)]` over `u64`) and the call site's
+/// `%xmm0` read would observe stale bits.
+#[no_mangle]
+pub extern "C" fn js_create_namespace(
+    n: i32,
+    keys: *const *const u8,
+    key_lens: *const i32,
+    values: *const f64,
+) -> f64 {
+    let count = if n < 0 { 0 } else { n as usize };
+    unsafe {
+        // Allocate a plain object with `count` inline slots. class_id 0
+        // is the generic-object class used by Object.create / {} / URL.
+        let obj = js_object_alloc(0, count as u32);
+        if obj.is_null() {
+            // Fallback to undefined — should never happen but defensive.
+            return f64::from_bits(0x7FFC_0000_0000_0001);
+        }
+
+        // Initialize an empty keys array so `js_object_set_field_by_name`
+        // can append to it. Pre-populating the keys array AND calling
+        // set_field_by_name would double every key — the property
+        // setter's "add key to keys_array" step runs unconditionally.
+        let keys_arr = crate::array::js_array_alloc(0);
+        js_object_set_keys(obj, keys_arr);
+
+        // Set each (key, value) pair on the object. We route through
+        // `js_object_set_field_by_name` so the standard property-write
+        // path (inline-slot allocation, shape transitions, accessor
+        // dispatch) handles everything. This matches how user-written
+        // `obj.k = v` and `js_object_assign_one` populate objects, so
+        // downstream reads (PropertyGet PIC, Object.keys, JSON.stringify)
+        // all work without special-casing the namespace shape.
+        for i in 0..count {
+            let key_data = *keys.add(i);
+            let key_len = *key_lens.add(i);
+            let key_len_u = if key_len < 0 { 0u32 } else { key_len as u32 };
+            // Use the heap StringHeader path so the property machinery
+            // (which expects a real `StringHeader*`) gets a valid
+            // pointer. Pre-SSO-only would crash on >7-byte export names.
+            let key_hdr = crate::string::js_string_from_bytes(key_data, key_len_u);
+            let val = *values.add(i);
+            js_object_set_field_by_name(obj, key_hdr, val);
+        }
+
+        // NaN-box POINTER_TAG and return.
+        let bits = (obj as u64) | 0x7FFD_0000_0000_0000;
+        f64::from_bits(bits)
+    }
+}

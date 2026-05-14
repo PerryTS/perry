@@ -22,3 +22,13 @@ run(() => {
 });
 
 console.log("EXIT_REASON=" + exitReason);
+
+/*
+@covers
+crates/perry-runtime/src/tui/hooks.rs:
+  - js_perry_tui_app_exit
+  - js_perry_tui_app_wait_until_exit
+  - js_perry_tui_wait_until_exit
+crates/perry-runtime/src/tui/run.rs:
+  - js_perry_tui_run
+*/

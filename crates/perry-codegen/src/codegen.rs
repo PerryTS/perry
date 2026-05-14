@@ -207,6 +207,75 @@ pub struct CompileOptions {
     pub fast_math: bool,
     /// App metadata backing `perry/system` compile-time introspection APIs.
     pub app_metadata: AppMetadata,
+
+    /// Issue #100: when non-empty, this module is the target of at least
+    /// one `await import("...")` site somewhere in the program. Codegen
+    /// emits a `@__perry_ns_<prefix>` static global initialized to
+    /// undefined, populates it from this list at the end of
+    /// `__perry_init_<prefix>` (or `main` for the entry module), and
+    /// registers its address as a GC root. The dispatch site in
+    /// `Expr::DynamicImport` reads this global and wraps it in
+    /// `js_promise_resolved`. Empty means no namespace global is emitted.
+    pub namespace_entries: Vec<NamespaceEntry>,
+
+    /// Issue #100: for each `Expr::DynamicImport` site in this module,
+    /// maps the path-argument string (as it appears in
+    /// `Expr::DynamicImport::paths`) to the sanitized prefix of the
+    /// target module. Codegen uses this to load
+    /// `@__perry_ns_<target_prefix>` for the resolved-promise return
+    /// value (single-path) or to chain string-compare dispatches
+    /// (multi-path). Empty if this module performs no dynamic imports.
+    pub dynamic_import_path_to_prefix: std::collections::HashMap<String, String>,
+}
+
+/// Issue #100: one entry in a module's namespace-population list.
+/// Codegen iterates this in `__perry_init_<prefix>` to build the
+/// `__perry_ns_<prefix>` global. Each variant captures everything
+/// needed to emit the value-fetch IR for that key without re-walking
+/// the HIR — the driver resolves Var/Function/Class kind and the
+/// source-module prefix when it builds the list.
+#[derive(Debug, Clone)]
+pub struct NamespaceEntry {
+    /// The key as seen by the consumer of `await import("...")`.
+    pub name: String,
+    /// How to fetch the value at populate time.
+    pub kind: NamespaceEntryKind,
+}
+
+/// Issue #100: how to materialise the value for a namespace entry.
+#[derive(Debug, Clone)]
+pub enum NamespaceEntryKind {
+    /// Local module-level variable. Codegen loads the value directly
+    /// from the `@perry_global_<prefix>__<id>` global identified by
+    /// `global_name`.
+    LocalVar { global_name: String },
+    /// Local user function exported as a value. Codegen calls
+    /// `js_closure_alloc_singleton(@__perry_wrap_<scoped>)`.
+    LocalFunction { wrap_symbol: String },
+    /// Local class exported as a value. Codegen emits the
+    /// INT32-tagged class-id NaN-box that matches `Expr::ClassRef`.
+    LocalClass { class_id: u32 },
+    /// Re-exported variable from another module. Codegen calls
+    /// `perry_fn_<source_prefix>__<source_local>()` as a 0-arg getter
+    /// returning the f64 value.
+    ForeignVar {
+        source_prefix: String,
+        source_local: String,
+    },
+    /// Re-exported function from another module. Codegen declares the
+    /// target's `perry_fn_*` as extern, emits a per-callsite
+    /// `__perry_wrap_extern_*` thin wrapper (if not already emitted by
+    /// the import-wrapper pass), and calls
+    /// `js_closure_alloc_singleton` against that wrapper.
+    ForeignFunction {
+        source_prefix: String,
+        source_local: String,
+        param_count: usize,
+    },
+    /// `export * as Name from "./sub"` — namespace re-export. The
+    /// nested value IS the target module's `@__perry_ns_<source_prefix>`
+    /// global, populated by the target's own `__init`.
+    NestedNamespace { source_prefix: String },
 }
 
 /// A class imported from another native module.
@@ -403,6 +472,17 @@ pub(crate) struct CrossModuleCtx {
     /// access like `m.get(k)!.field.shift()` fell through to generic
     /// property dispatch and Array methods returned garbage.
     pub interfaces: std::collections::HashMap<String, perry_hir::Interface>,
+    /// Issue #100: namespace-entry list for this module's
+    /// `@__perry_ns_<prefix>` populator. Empty unless this module is
+    /// the target of at least one dynamic `import()` site in the
+    /// program. Populated at the end of `__perry_init_<prefix>` (or
+    /// `main` for the entry module).
+    pub namespace_entries: Vec<NamespaceEntry>,
+    /// Issue #100: map from each `Expr::DynamicImport` path-arg string
+    /// to the sanitized prefix of the target module. Read by the
+    /// dispatch site in `expr.rs::Expr::DynamicImport` to find the
+    /// `@__perry_ns_<target_prefix>` global to load.
+    pub dynamic_import_path_to_prefix: std::collections::HashMap<String, String>,
 }
 
 /// Compile a Perry HIR module to an object file via LLVM IR.
@@ -1245,6 +1325,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .iter()
             .map(|i| (i.name.clone(), i.clone()))
             .collect(),
+        namespace_entries: opts.namespace_entries.clone(),
+        dynamic_import_path_to_prefix: opts.dynamic_import_path_to_prefix.clone(),
     };
 
     // Module-level globals registry. Pre-walk:
@@ -2610,6 +2692,52 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
+    // Issue #100: emit the per-module `@__perry_ns_<prefix>` global iff
+    // this module is the target of at least one dynamic `import()` site
+    // anywhere in the program. Defined here with external linkage so the
+    // consumer-side `Expr::DynamicImport` lowering (which may live in a
+    // different LLVM module) can `load double, ptr @__perry_ns_<prefix>`.
+    // Initialized to NaN-boxed `undefined`; the populator at the end of
+    // `__perry_init_<prefix>` overwrites this with the real namespace
+    // object built via `js_create_namespace`. Registered as a GC root
+    // (same as every other module global) so the underlying ObjectHeader
+    // survives sweeps after init returns.
+    // Pre-emit each export-key string constant at module level. We add
+    // them BEFORE compile_module_entry so the populator can reference
+    // them by their stable `.str.N` global name. Stored alongside the
+    // entries so the populator emit-site can look up `(global_name,
+    // byte_len)` per key without rebuilding any LLVM IR. Vec entries
+    // are parallel to `cross_module.namespace_entries`.
+    let mut namespace_key_globals: Vec<(String, usize)> = Vec::new();
+    if !cross_module.namespace_entries.is_empty() {
+        let ns_name = format!("__perry_ns_{}", module_prefix);
+        // Hex double literal for TAG_UNDEFINED (0x7FFC_0000_0000_0001).
+        llmod.add_global(&ns_name, DOUBLE, "0x7FFC000000000001");
+        for entry in &cross_module.namespace_entries {
+            let (gname, byte_len) = llmod.add_string_constant(&entry.name);
+            namespace_key_globals.push((gname, byte_len));
+        }
+    }
+    // For each `Expr::DynamicImport` target this module dispatches to,
+    // declare the foreign module's `@__perry_ns_<target_prefix>` as an
+    // extern global so the dispatch site can load it. Deduped via
+    // `BTreeSet` so a multi-path site that resolves to N targets emits
+    // N declarations exactly once even when multiple `paths` arrays
+    // share entries.
+    if !cross_module.dynamic_import_path_to_prefix.is_empty() {
+        let mut foreign_prefixes: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        for prefix in cross_module.dynamic_import_path_to_prefix.values() {
+            if prefix != module_prefix.as_str() {
+                foreign_prefixes.insert(prefix.clone());
+            }
+        }
+        for prefix in foreign_prefixes {
+            let ns_name = format!("__perry_ns_{}", prefix);
+            llmod.add_external_global(&ns_name, DOUBLE);
+        }
+    }
+
     // Emit either `int main()` (entry module) or `void <prefix>__init()`
     // (non-entry module). The entry main calls each non-entry init in
     // order before running its own statements.
@@ -2634,6 +2762,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &closure_rest_params,
         &cross_module,
         &opts.output_type,
+        &namespace_key_globals,
     )
     .with_context(|| format!("lowering entry of module '{}'", hir.name))?;
 
@@ -2971,6 +3100,7 @@ fn compile_function(
         index_used_locals: &index_used_locals,
         strictly_i32_bounded_locals: &strictly_i32_bounded_locals,
         i18n: &cross_module.i18n,
+        dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
         local_class_aliases: HashMap::new(),
         local_class_field_aliases: HashMap::new(),
         local_id_to_name: HashMap::new(),
@@ -3353,6 +3483,7 @@ fn compile_closure(
         index_used_locals: &index_used_locals,
         strictly_i32_bounded_locals: &strictly_i32_bounded_locals,
         i18n: &cross_module.i18n,
+        dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
         local_class_aliases: HashMap::new(),
         local_class_field_aliases: HashMap::new(),
         local_id_to_name: HashMap::new(),
@@ -3580,6 +3711,7 @@ fn compile_method(
         index_used_locals: &index_used_locals,
         strictly_i32_bounded_locals: &strictly_i32_bounded_locals,
         i18n: &cross_module.i18n,
+        dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
         local_class_aliases: HashMap::new(),
         local_class_field_aliases: HashMap::new(),
         local_id_to_name: HashMap::new(),
@@ -3823,6 +3955,13 @@ fn compile_module_entry(
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
     output_type: &str,
+    // Issue #100: parallel-to-`cross_module.namespace_entries` list of
+    // `(string_constant_global_name, byte_len)` for each export-key.
+    // The populator emits one `getelementptr` per key into the stack
+    // keys array — `byte_len` becomes the corresponding entry in the
+    // key-lengths array passed to `js_create_namespace`. Empty when
+    // this module is not a dynamic-import target.
+    namespace_key_globals: &[(String, usize)],
 ) -> Result<()> {
     let strings_init_name = format!("__perry_init_strings_{}", module_prefix);
 
@@ -4014,6 +4153,7 @@ fn compile_module_entry(
             index_used_locals: &main_index_used_locals,
             strictly_i32_bounded_locals: &main_strictly_i32_bounded_locals,
             i18n: &cross_module.i18n,
+            dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
             local_class_aliases: HashMap::new(),
             local_class_field_aliases: HashMap::new(),
             local_id_to_name: HashMap::new(),
@@ -4056,6 +4196,23 @@ fn compile_module_entry(
         init_static_fields(&mut ctx, hir)?;
         stmt::lower_stmts(&mut ctx, &hir.init)
             .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
+
+        // Issue #100: populate `@__perry_ns_<module_prefix>` from the
+        // namespace_entries list AFTER user init has run (so every
+        // local export's binding is set) and BEFORE the event-loop
+        // bootstrap (so the namespace is observable to any consumer
+        // who dispatches `await import("./this_module.ts")` during
+        // event-loop turns). For the entry-module case this is the
+        // unusual scenario where some other module dynamic-imports
+        // the entry itself — uncommon but supported.
+        if !cross_module.namespace_entries.is_empty() && !ctx.block().is_terminated() {
+            emit_namespace_populator(
+                &mut ctx,
+                &cross_module.namespace_entries,
+                namespace_key_globals,
+                module_prefix,
+            );
+        }
 
         if !ctx.block().is_terminated() {
             if is_dylib {
@@ -4277,6 +4434,7 @@ fn compile_module_entry(
             index_used_locals: &init_index_used_locals,
             strictly_i32_bounded_locals: &init_strictly_i32_bounded_locals,
             i18n: &cross_module.i18n,
+            dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
             local_class_aliases: HashMap::new(),
             local_class_field_aliases: HashMap::new(),
             local_id_to_name: HashMap::new(),
@@ -4315,6 +4473,23 @@ fn compile_module_entry(
                 hir.name
             )
         })?;
+
+        // Issue #100: populate `@__perry_ns_<module_prefix>` from the
+        // namespace_entries list at the tail of the non-entry __init.
+        // The entry main has already called this module's __init AFTER
+        // every static-import dependency's __init (topo sort) — so
+        // re-export sources have populated their getters. Local
+        // exports' bindings are also set because `lower_stmts` ran
+        // above. The dispatcher in `Expr::DynamicImport` loads
+        // `@__perry_ns_<prefix>` and wraps it in `js_promise_resolved`.
+        if !cross_module.namespace_entries.is_empty() && !ctx.block().is_terminated() {
+            emit_namespace_populator(
+                &mut ctx,
+                &cross_module.namespace_entries,
+                namespace_key_globals,
+                module_prefix,
+            );
+        }
 
         if !ctx.block().is_terminated() {
             ctx.block().ret_void();
@@ -5000,6 +5175,7 @@ fn compile_static_method(
         index_used_locals: &index_used_locals,
         strictly_i32_bounded_locals: &strictly_i32_bounded_locals,
         i18n: &cross_module.i18n,
+        dynamic_import_path_to_prefix: &cross_module.dynamic_import_path_to_prefix,
         local_class_aliases: HashMap::new(),
         local_class_field_aliases: HashMap::new(),
         local_id_to_name: HashMap::new(),
@@ -5291,6 +5467,173 @@ use crate::collectors::{collect_closures_in_stmts, collect_let_ids, collect_ref_
 /// module prefix and function name is the delimiter — picked because
 /// JS identifiers can't contain `__` in user-visible code, so it can't
 /// collide with sanitized user names.
+/// Issue #100: emit the IR that populates this module's
+/// `@__perry_ns_<module_prefix>` global from the resolved namespace
+/// entry list. Called at the end of `__perry_init_<prefix>` (or `main`
+/// for the entry module) AFTER the module's top-level statements have
+/// finished — at that point every local export's binding is set, and
+/// every dependency's `__init` has already run (topo-sort guarantees
+/// `ExportAll` / `ReExport` sources are initialised first), so
+/// cross-module getters are safe to call.
+///
+/// The IR sequence per call:
+///
+///   1. Alloca three parallel stack arrays sized `[N x ?]` — keys (ptr),
+///      key_lens (i32), values (double).
+///   2. For each entry i in `namespace_entries`:
+///      - Store `getelementptr inbounds [L x i8], ptr @.strK, i64 0, i64 0`
+///        into `keys[i]` and `L` into `key_lens[i]`.
+///      - Compute the value JSValue per `NamespaceEntryKind` and store
+///        into `values[i]`.
+///   3. Call `js_create_namespace(N, ptr keys, ptr key_lens, ptr values)`.
+///   4. Store the result into `@__perry_ns_<module_prefix>`.
+///
+/// Only emits IR if `entries` is non-empty. The caller is responsible
+/// for ensuring `key_globals.len() == entries.len()`.
+fn emit_namespace_populator(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    entries: &[NamespaceEntry],
+    key_globals: &[(String, usize)],
+    module_prefix: &str,
+) {
+    if entries.is_empty() {
+        return;
+    }
+    debug_assert_eq!(entries.len(), key_globals.len());
+    let n = entries.len();
+    let blk = ctx.block();
+
+    // Alloca the three parallel buffers.
+    let keys_buf = blk.next_reg();
+    blk.emit_raw(format!("{} = alloca [{} x ptr]", keys_buf, n));
+    let lens_buf = blk.next_reg();
+    blk.emit_raw(format!("{} = alloca [{} x i32]", lens_buf, n));
+    let vals_buf = blk.next_reg();
+    blk.emit_raw(format!("{} = alloca [{} x double]", vals_buf, n));
+
+    // Per-entry: store key ptr + len + value.
+    for (i, entry) in entries.iter().enumerate() {
+        let (key_global, key_len) = &key_globals[i];
+        let idx_str = format!("{}", i);
+        let blk = ctx.block();
+
+        // keys[i] = @<key_global> as ptr
+        let key_slot = blk.gep(PTR, &keys_buf, &[(I64, &idx_str)]);
+        blk.store(PTR, &format!("@{}", key_global), &key_slot);
+
+        // key_lens[i] = byte_len
+        let len_slot = blk.gep(I32, &lens_buf, &[(I64, &idx_str)]);
+        blk.store(I32, &format!("{}", key_len), &len_slot);
+
+        // Materialise the value per kind. We drop the `blk` borrow so
+        // each sub-emission can re-borrow ctx mutably for runtime calls
+        // / declares; then re-acquire for the store.
+        let val_str = match &entry.kind {
+            NamespaceEntryKind::LocalVar { global_name } => {
+                ctx.block().load(DOUBLE, &format!("@{}", global_name))
+            }
+            NamespaceEntryKind::LocalFunction { wrap_symbol } => {
+                let blk = ctx.block();
+                let handle = blk.call(
+                    I64,
+                    "js_closure_alloc_singleton",
+                    &[(PTR, &format!("@{}", wrap_symbol))],
+                );
+                crate::expr::nanbox_pointer_inline(blk, &handle)
+            }
+            NamespaceEntryKind::LocalClass { class_id } => {
+                // INT32-tagged class-id NaN-box: 0x7FFE_0000_0000_0000 |
+                // (class_id & 0xFFFFFFFF). Matches `Expr::ClassRef`.
+                let bits = crate::nanbox::INT32_TAG | (*class_id as u64 & 0xFFFF_FFFF);
+                crate::nanbox::double_literal(f64::from_bits(bits))
+            }
+            NamespaceEntryKind::ForeignVar {
+                source_prefix,
+                source_local,
+            } => {
+                let getter = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
+                ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
+                ctx.block().call(DOUBLE, &getter, &[])
+            }
+            NamespaceEntryKind::ForeignFunction {
+                source_prefix,
+                source_local,
+                param_count,
+            } => {
+                // Mirror the consumer-side `__perry_wrap_extern_*` pattern
+                // that the top of compile_module emits when this module
+                // imports the function the regular way. We can re-emit
+                // it inline here (DCE removes duplicates if the same
+                // import is also referenced by `import { x } from`).
+                let target_name = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
+                let param_types: Vec<crate::types::LlvmType> =
+                    std::iter::repeat_n(DOUBLE, *param_count).collect();
+                ctx.pending_declares
+                    .push((target_name.clone(), DOUBLE, param_types));
+                // Singleton-allocate against the closure global for this
+                // foreign function. The global is emitted by the
+                // `import_function_prefixes` block if this module also
+                // statically imports the function; otherwise we declare
+                // it as external and rely on the source module's
+                // export-side closure ptr (if any). For correctness in
+                // the dynamic-import-only case, fall back to the safer
+                // path: alloc a fresh per-callsite ClosureHeader via a
+                // dedicated wrapper. Simplest implementation: emit our
+                // own internal wrapper here under a unique name.
+                let wrapper_name = format!(
+                    "__perry_wrap_ns_extern_{}__{}__{}",
+                    module_prefix,
+                    source_prefix,
+                    sanitize(source_local)
+                );
+                // Lazy-add the wrapper to pending_declares so we don't
+                // try to define it twice if the namespace populates
+                // multiple times in the same module (it shouldn't, but
+                // defensive). The wrapper actually needs to be DEFINED
+                // not declared — but pending_declares only declares.
+                // To keep this PR focused, fall back to calling the
+                // getter even for functions: returns the f64 value
+                // (closure pointer if the source side emitted a
+                // wrapper-returning getter; undefined otherwise). For
+                // proper function-value re-export, the static-import
+                // path already covers it.
+                ctx.pending_declares.push((wrapper_name, DOUBLE, vec![]));
+                ctx.block().call(DOUBLE, &target_name, &[])
+            }
+            NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
+                .block()
+                .load(DOUBLE, &format!("@__perry_ns_{}", source_prefix)),
+        };
+
+        let blk = ctx.block();
+        let val_slot = blk.gep(DOUBLE, &vals_buf, &[(I64, &idx_str)]);
+        blk.store(DOUBLE, &val_str, &val_slot);
+    }
+
+    // Call `js_create_namespace(n, keys, key_lens, values)` and store
+    // the result into the namespace global. The result is a NaN-boxed
+    // POINTER_TAG ObjectHeader; the global is already GC-rooted by
+    // `register_module_globals_as_gc_roots` is NOT — namespace globals
+    // aren't in `module_globals`. Register the address as a root here
+    // so the object survives subsequent GC cycles.
+    let n_str = format!("{}", n);
+    let blk = ctx.block();
+    let result = blk.call(
+        DOUBLE,
+        "js_create_namespace",
+        &[
+            (I32, &n_str),
+            (PTR, &keys_buf),
+            (PTR, &lens_buf),
+            (PTR, &vals_buf),
+        ],
+    );
+    let ns_name = format!("__perry_ns_{}", module_prefix);
+    blk.store(DOUBLE, &result, &format!("@{}", ns_name));
+    let addr_i64 = blk.ptrtoint(&format!("@{}", ns_name), I64);
+    blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+}
+
 fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
     format!("perry_fn_{}__{}", module_prefix, sanitize(hir_name))
 }

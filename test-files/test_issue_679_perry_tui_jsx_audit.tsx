@@ -37,3 +37,9 @@ function Tag() {
 const t = <Tag />;
 render(Box([t]));
 console.log("\n--- no-props JSX ok ---");
+
+/*
+@covers
+crates/perry-runtime/src/jsx.rs:
+  - js_jsxs
+*/

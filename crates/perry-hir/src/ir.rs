@@ -151,6 +151,19 @@ pub enum ModuleKind {
     Interpreted,
 }
 
+/// Whether a module is initialized eagerly (at program start, in topo order
+/// across static imports) or lazily (on first dynamic `import()` resolving
+/// to it). See issue #100.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModuleInitKind {
+    /// Reachable from the entry through at least one static-import chain.
+    #[default]
+    Eager,
+    /// Every path from the entry to this module goes through a dynamic
+    /// `import()` edge — init runs on first dispatch.
+    Deferred,
+}
+
 /// Determine the module kind for a given import path
 pub fn determine_module_kind(source: &str, resolved_path: Option<&std::path::Path>) -> ModuleKind {
     // First check if it's a native Rust stdlib module
@@ -239,6 +252,17 @@ pub struct Module {
     /// not inside a function, so the codegen-side channel-vector SIMD
     /// gate consults this flag for module.init lowering.
     pub init_was_unrolled: bool,
+    /// Issue #100: true iff this module's top-level `init` contains an
+    /// `await` expression OUTSIDE any function/closure body. Drives the
+    /// deferred-import dispatch to chain the init promise rather than
+    /// returning a pre-resolved namespace.
+    pub has_top_level_await: bool,
+    /// Issue #100: eager vs deferred init. Modules reachable from the
+    /// entry over only static-import edges init at program start (Eager).
+    /// Modules only reachable through dynamic `import()` init lazily on
+    /// the first dispatch (Deferred). Populated during `collect_modules`
+    /// after the import graph is fully built.
+    pub init_kind: ModuleInitKind,
 }
 
 /// A widget extension declaration (WidgetKit on iOS/watchOS, Glance on Android, Tiles on Wear OS)
@@ -562,6 +586,11 @@ pub struct Import {
     /// bar }`) is still tracked because the same declaration also has
     /// value specifiers — only the whole-decl flag is runtime-meaningless.
     pub type_only: bool,
+    /// Issue #100: synthesized from a dynamic `import()` call whose path
+    /// const-folded to this source. Dynamic edges enter the import graph
+    /// but do NOT pin the target as eager — if no static edge reaches it
+    /// the target is `Deferred`. `specifiers` is empty for these.
+    pub is_dynamic: bool,
 }
 
 /// Import specifier
@@ -2464,6 +2493,20 @@ pub enum Expr {
         target: Box<Expr>,
         property_key: Option<Box<Expr>>,
     },
+
+    /// Issue #100: dynamic `import()` call whose path argument the
+    /// const-folder resolved to a finite set of module sources. Lowered
+    /// to dispatch code (single-path or string switch) that returns a
+    /// Promise of the target module's namespace object. `paths` is
+    /// always non-empty after the resolver pass runs in `collect_modules`
+    /// (initial lowering leaves it empty; an Unresolved/over-cap argument
+    /// raises a compile error before codegen sees it). `arg` is the
+    /// lowered original argument, kept for runtime dispatch on
+    /// multi-path sites.
+    DynamicImport {
+        paths: Vec<String>,
+        arg: Box<Expr>,
+    },
 }
 
 /// Binary operators
@@ -2560,6 +2603,8 @@ impl Module {
             uses_webassembly: false,
             extern_funcs: Vec::new(),
             init_was_unrolled: false,
+            has_top_level_await: false,
+            init_kind: ModuleInitKind::Eager,
         }
     }
 }
