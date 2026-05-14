@@ -75,6 +75,22 @@ extern "C" {
     /// tokio worker stacks. Same call perry-stdlib's fastify makes
     /// to dodge issue #31.
     fn js_gc_enter_unsafe_zone();
+
+    /// Condvar-based wait for the next event (timer fire, notify from a
+    /// tokio worker, or 1 s idle cap). Used by `wait_for_promise` so the
+    /// handler dispatcher blocks on real events instead of burning the
+    /// CPU in a 100 us-poll loop. Wakes the moment any stdlib worker
+    /// calls `js_notify_main_thread`, including the per-promise wake
+    /// fired by `js_promise_resolve` / `js_promise_reject`.
+    fn js_wait_for_event();
+
+    /// Drive timer callback dispatch (matches the codegen-emitted await
+    /// wait body). Without these the `await new Promise(r => setTimeout(r, n))`
+    /// shape would never advance inside `wait_for_promise`, only inside
+    /// directly-compiled `await` sites.
+    fn js_timer_tick() -> i32;
+    fn js_callback_timer_tick() -> i32;
+    fn js_interval_timer_tick() -> i32;
 }
 
 /// Opaque marker for the runtime's Promise struct. We never read its
@@ -463,7 +479,38 @@ fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
                 let ptr = jsv.as_pointer::<Promise>();
                 if !ptr.is_null() && unsafe { js_is_promise(ptr) } != 0 {
                     wait_for_promise(ptr);
-                    final_result = unsafe { js_promise_value(ptr) };
+                    // Read state AFTER the wait — `js_promise_value`
+                    // returns `(*promise).value` unconditionally, and
+                    // that field stays at its initial `0.0` for rejected
+                    // promises (which set `reason`, not `value`) and
+                    // pending promises (which are never reached after
+                    // the unbounded `wait_for_promise` returns, but
+                    // defending here keeps us robust against future
+                    // changes to `wait_for_promise`'s contract). Without
+                    // this branch, an unhandled rejection inside a
+                    // route handler would serialize the literal byte
+                    // `0` as the response body — exactly the issue
+                    // #748 symptom for the cases where the chain
+                    // rejected instead of stalling.
+                    let st = unsafe { js_promise_state(ptr) };
+                    if st == 2 {
+                        // Rejected — translate to a 500 response with
+                        // the rejection reason rendered to JSON. The
+                        // dispatcher's fallback `build_response_body`
+                        // already JSON-stringifies pointer values, so
+                        // wrap the reason in a `{ error: <reason> }`
+                        // envelope to avoid spilling raw stack traces
+                        // into the wire. Mirrors `fastify`'s default
+                        // error handler shape.
+                        if let Some(ctx) = perry_ffi::get_handle_mut::<FastifyContext>(ctx_handle) {
+                            ctx.status_code = 500;
+                            let reason = unsafe { js_promise_reason(ptr) };
+                            ctx.response_body = Some(unsafe { render_rejection_body(reason) });
+                        }
+                        final_result = f64::from_bits(TAG_UNDEFINED);
+                    } else {
+                        final_result = unsafe { js_promise_value(ptr) };
+                    }
                 }
             }
         }
@@ -524,29 +571,125 @@ fn call_hook_awaiting(hook: ClosurePtr, ctx_f64: f64, ctx_handle: Handle) -> boo
         .unwrap_or(false)
 }
 
-/// Spin until a promise resolves — bounded to avoid infinite loops if
-/// the handler chain stalls. Polls microtasks and the stdlib pump every
-/// iteration so awaited values get a chance to settle. The codegen-
-/// emitted `await` body already pumps stdlib inside compiled functions
-/// (`perry-codegen/src/expr.rs:9500`), so the common case is covered
-/// without this — but a route handler that returns a Promise resolved
-/// directly by an external mechanism (no inner `await` loop pumping
-/// stdlib) would otherwise stall here. Matches `perry-stdlib/src/
-/// fastify/server.rs:432`, which has had this call all along; the
-/// perry-ext-fastify port (v0.5.572) dropped it.
+/// Wait until a promise settles, driving microtasks, the stdlib pump,
+/// and timer ticks every iteration. Blocks on `js_wait_for_event` (a
+/// condvar with a 1 s idle cap) instead of `thread::sleep`, so the
+/// dispatcher wakes the moment any stdlib worker calls
+/// `js_notify_main_thread` — the same wake that `js_promise_resolve`
+/// and `js_promise_reject` fire when the awaited chain advances.
+///
+/// Mirrors the codegen-emitted `await` body in
+/// `crates/perry-codegen/src/expr.rs` (the "=== wait ===" block at
+/// lines ~9645-9665): no fixed iteration limit, condvar-based wait.
+///
+/// ### Why the old polling loop is wrong (issue #748)
+///
+/// The previous implementation looped 10_000 × 100 us = ~1 s and then
+/// returned regardless of whether the promise had settled. Callers
+/// then read `js_promise_value(ptr)` which returns `(*promise).value`
+/// — `0.0` for a still-Pending Promise (it's initialized to zero in
+/// `Promise::new` and only overwritten by `js_promise_resolve`). The
+/// dispatcher serialized that `0.0` as the response body, yielding the
+/// literal ASCII byte `0x30` ("0") with HTTP 200 (default
+/// `status_code` — `reply.code(201)` was never reached because the
+/// handler chain hadn't returned). The signup-style route in #748
+/// runs many awaits (rate-limiter, argon2 hash, multiple `pool.exec`
+/// round-trips, JWT signing) which routinely exceeds 1 s on a cold
+/// connection pool; every operation after the timeout silently
+/// no-op'd because the dispatcher returned and stopped pumping
+/// microtasks for the orphaned chain.
 fn wait_for_promise(promise_ptr: *mut Promise) {
-    use std::time::Duration;
-    for _ in 0..10000 {
+    // First pump synchronously — handles the already-settled case
+    // (e.g. `async () => 42` whose promise is fulfilled before this
+    // function is even called) without entering the wait path.
+    unsafe {
+        js_run_stdlib_pump();
+        js_promise_run_microtasks();
+    }
+    let mut state = unsafe { js_promise_state(promise_ptr) };
+    if state != 0 {
+        return;
+    }
+    loop {
         unsafe {
+            // Drive timers, the stdlib pump, and microtasks every tick
+            // — mirrors the codegen-emitted await body. `js_timer_tick`
+            // & friends are no-ops when there's nothing to dispatch.
+            let _ = js_timer_tick();
+            let _ = js_callback_timer_tick();
+            let _ = js_interval_timer_tick();
             js_run_stdlib_pump();
             js_promise_run_microtasks();
+            // Condvar wait: blocks until a notify arrives or the 1 s
+            // idle cap elapses, whichever is first. `js_promise_resolve`
+            // / `js_promise_reject` fire `js_notify_main_thread`, so
+            // the wake happens the instant the chain advances.
+            js_wait_for_event();
         }
-        let state = unsafe { js_promise_state(promise_ptr) };
+        state = unsafe { js_promise_state(promise_ptr) };
         if state != 0 {
             return;
         }
-        std::thread::sleep(Duration::from_micros(100));
     }
+}
+
+/// Render a Promise rejection reason as a `{ "error": ... }` JSON body
+/// for the 500 response surfaced by `process_request`. Falls back to a
+/// generic envelope if the reason can't be stringified (e.g. opaque
+/// pointer that JSON.stringify rejects).
+unsafe fn render_rejection_body(reason: f64) -> Vec<u8> {
+    // Strings: wrap the user's message verbatim.
+    let jsv = JsValue::from_bits(reason.to_bits());
+    if jsv.is_string() {
+        let s = jsvalue_to_response_body(reason);
+        // s is the raw string bytes; embed as a JSON string literal.
+        let mut out = b"{\"error\":".to_vec();
+        out.push(b'"');
+        for b in s {
+            match b {
+                b'"' => out.extend_from_slice(b"\\\""),
+                b'\\' => out.extend_from_slice(b"\\\\"),
+                b'\n' => out.extend_from_slice(b"\\n"),
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\t' => out.extend_from_slice(b"\\t"),
+                0x00..=0x1f => out.extend_from_slice(format!("\\u{:04x}", b).as_bytes()),
+                _ => out.push(b),
+            }
+        }
+        out.push(b'"');
+        out.push(b'}');
+        return out;
+    }
+    if jsv.is_pointer() {
+        let str_ptr = js_json_stringify(reason, 0);
+        if !str_ptr.is_null() {
+            let len = (*str_ptr).byte_len as usize;
+            let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            let inner = std::slice::from_raw_parts(data_ptr, len).to_vec();
+            let mut out = b"{\"error\":".to_vec();
+            out.extend_from_slice(&inner);
+            out.push(b'}');
+            return out;
+        }
+    }
+    // Numbers/bools/null/undefined: best-effort stringification.
+    let body = jsvalue_to_response_body(reason);
+    let mut out = b"{\"error\":".to_vec();
+    if body.is_empty() {
+        out.extend_from_slice(b"null");
+    } else {
+        out.push(b'"');
+        for b in body {
+            match b {
+                b'"' => out.extend_from_slice(b"\\\""),
+                b'\\' => out.extend_from_slice(b"\\\\"),
+                _ => out.push(b),
+            }
+        }
+        out.push(b'"');
+    }
+    out.push(b'}');
+    out
 }
 
 /// Render the handler return value as response bytes. Handlers can
