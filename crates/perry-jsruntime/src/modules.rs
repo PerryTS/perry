@@ -148,6 +148,15 @@ impl NodeModuleLoader {
     }
 
     /// Check if a specifier is a Node.js built-in module
+    ///
+    /// Issue #755: `fs/promises` (and the other `*/promises` subpath aliases
+    /// that Node exposes as standalone builtins — `stream/promises`,
+    /// `dns/promises`, `timers/promises`, `readline/promises`) must be
+    /// recognized here, otherwise the resolver falls through to
+    /// `resolve_from_node_modules` and fails with
+    /// "Cannot find module 'fs/promises' in node_modules". Real packages
+    /// (colyseus, etc.) `import` these directly. The base `is_node_builtin`
+    /// uses exact string matches so each subpath needs its own entry.
     fn is_node_builtin(specifier: &str) -> bool {
         let specifier = specifier.trim_end_matches('/');
         matches!(
@@ -158,25 +167,33 @@ impl NodeModuleLoader {
                 | "http2"
                 | "https"
                 | "fs"
+                | "fs/promises"
                 | "path"
                 | "os"
                 | "crypto"
                 | "stream"
+                | "stream/promises"
+                | "stream/consumers"
                 | "stream/web"
                 | "buffer"
                 | "util"
+                | "util/types"
                 | "events"
                 | "assert"
+                | "assert/strict"
                 | "child_process"
                 | "dns"
+                | "dns/promises"
                 | "dgram"
                 | "url"
                 | "querystring"
                 | "string_decoder"
                 | "zlib"
                 | "readline"
+                | "readline/promises"
                 | "repl"
                 | "timers"
+                | "timers/promises"
                 | "tty"
                 | "vm"
                 | "worker_threads"
@@ -186,31 +203,40 @@ impl NodeModuleLoader {
                 | "trace_events"
                 | "inspector"
                 | "v8"
+                | "process"
                 | "node:net"
                 | "node:tls"
                 | "node:http"
                 | "node:http2"
                 | "node:https"
                 | "node:fs"
+                | "node:fs/promises"
                 | "node:path"
                 | "node:os"
                 | "node:crypto"
                 | "node:stream"
+                | "node:stream/promises"
+                | "node:stream/consumers"
                 | "node:stream/web"
                 | "node:buffer"
                 | "node:util"
+                | "node:util/types"
                 | "node:events"
                 | "node:assert"
+                | "node:assert/strict"
                 | "node:child_process"
                 | "node:dns"
+                | "node:dns/promises"
                 | "node:dgram"
                 | "node:url"
                 | "node:querystring"
                 | "node:string_decoder"
                 | "node:zlib"
                 | "node:readline"
+                | "node:readline/promises"
                 | "node:repl"
                 | "node:timers"
+                | "node:timers/promises"
                 | "node:tty"
                 | "node:vm"
                 | "node:worker_threads"
@@ -220,6 +246,7 @@ impl NodeModuleLoader {
                 | "node:trace_events"
                 | "node:inspector"
                 | "node:v8"
+                | "node:process"
         )
     }
 
@@ -1099,6 +1126,108 @@ export function triggerAsyncId() { return 0; }
 export function createHook() { return { enable() { return this; }, disable() { return this; } }; }
 export default { AsyncResource, AsyncLocalStorage, executionAsyncId, executionAsyncResource, triggerAsyncId, createHook };
 "#.to_string(),
+        // Issue #755: Node built-in subpath aliases. These ship in real Node
+        // as separate module IDs (`fs/promises`, `stream/promises`, etc.)
+        // and packages like colyseus import them directly. Stubs mirror the
+        // promise-flavored shape of the corresponding base module.
+        "fs/promises" => r#"
+// Stub implementation for Node.js 'fs/promises' module
+export async function readFile() { throw new Error('fs.promises.readFile not supported'); }
+export async function writeFile() { throw new Error('fs.promises.writeFile not supported'); }
+export async function appendFile() { throw new Error('fs.promises.appendFile not supported'); }
+export async function access() { throw new Error('fs.promises.access not supported'); }
+export async function stat() { throw new Error('fs.promises.stat not supported'); }
+export async function lstat() { throw new Error('fs.promises.lstat not supported'); }
+export async function mkdir() { throw new Error('fs.promises.mkdir not supported'); }
+export async function readdir() { return []; }
+export async function rmdir() { throw new Error('fs.promises.rmdir not supported'); }
+export async function rm() { throw new Error('fs.promises.rm not supported'); }
+export async function unlink() { throw new Error('fs.promises.unlink not supported'); }
+export async function rename() { throw new Error('fs.promises.rename not supported'); }
+export async function copyFile() { throw new Error('fs.promises.copyFile not supported'); }
+export async function chmod() { throw new Error('fs.promises.chmod not supported'); }
+export async function chown() { throw new Error('fs.promises.chown not supported'); }
+export async function realpath() { throw new Error('fs.promises.realpath not supported'); }
+export async function symlink() { throw new Error('fs.promises.symlink not supported'); }
+export async function readlink() { throw new Error('fs.promises.readlink not supported'); }
+export async function open() { throw new Error('fs.promises.open not supported'); }
+export async function utimes() { throw new Error('fs.promises.utimes not supported'); }
+export async function truncate() { throw new Error('fs.promises.truncate not supported'); }
+export async function cp() { throw new Error('fs.promises.cp not supported'); }
+export const constants = {};
+export default { readFile, writeFile, appendFile, access, stat, lstat, mkdir, readdir, rmdir, rm, unlink, rename, copyFile, chmod, chown, realpath, symlink, readlink, open, utimes, truncate, cp, constants };
+"#.to_string(),
+        "stream/promises" => r#"
+// Stub implementation for Node.js 'stream/promises' module
+export async function pipeline() { throw new Error('stream.promises.pipeline not supported'); }
+export async function finished() { throw new Error('stream.promises.finished not supported'); }
+export default { pipeline, finished };
+"#.to_string(),
+        "stream/consumers" => r#"
+// Stub implementation for Node.js 'stream/consumers' module
+export async function arrayBuffer() { throw new Error('stream.consumers.arrayBuffer not supported'); }
+export async function blob() { throw new Error('stream.consumers.blob not supported'); }
+export async function buffer() { throw new Error('stream.consumers.buffer not supported'); }
+export async function json() { throw new Error('stream.consumers.json not supported'); }
+export async function text() { throw new Error('stream.consumers.text not supported'); }
+export default { arrayBuffer, blob, buffer, json, text };
+"#.to_string(),
+        "stream/web" => r#"
+// Stub implementation for Node.js 'stream/web' module
+export const ReadableStream = globalThis.ReadableStream;
+export const WritableStream = globalThis.WritableStream;
+export const TransformStream = globalThis.TransformStream;
+export const ByteLengthQueuingStrategy = globalThis.ByteLengthQueuingStrategy;
+export const CountQueuingStrategy = globalThis.CountQueuingStrategy;
+export default { ReadableStream, WritableStream, TransformStream, ByteLengthQueuingStrategy, CountQueuingStrategy };
+"#.to_string(),
+        "dns/promises" => r#"
+// Stub implementation for Node.js 'dns/promises' module
+export async function lookup() { throw new Error('dns.promises.lookup not supported'); }
+export async function resolve() { throw new Error('dns.promises.resolve not supported'); }
+export async function resolve4() { throw new Error('dns.promises.resolve4 not supported'); }
+export async function resolve6() { throw new Error('dns.promises.resolve6 not supported'); }
+export async function reverse() { throw new Error('dns.promises.reverse not supported'); }
+export default { lookup, resolve, resolve4, resolve6, reverse };
+"#.to_string(),
+        "timers/promises" => r#"
+// Stub implementation for Node.js 'timers/promises' module
+export function setTimeout(ms, value) { return new Promise((resolve) => globalThis.setTimeout(() => resolve(value), ms)); }
+export function setImmediate(value) { return new Promise((resolve) => globalThis.setTimeout(() => resolve(value), 0)); }
+export async function* setInterval(ms, value) { while (true) { await new Promise((r) => globalThis.setTimeout(r, ms)); yield value; } }
+export default { setTimeout, setImmediate, setInterval };
+"#.to_string(),
+        "readline/promises" => r#"
+// Stub implementation for Node.js 'readline/promises' module
+export class Interface {
+    constructor() {}
+    async question() { throw new Error('readline.promises.question not supported'); }
+    close() {}
+    on() { return this; }
+}
+export function createInterface() { return new Interface(); }
+export default { Interface, createInterface };
+"#.to_string(),
+        "util/types" => r#"
+// Stub implementation for Node.js 'util/types' module
+export function isDate(v) { return v instanceof Date; }
+export function isRegExp(v) { return v instanceof RegExp; }
+export function isMap(v) { return v instanceof Map; }
+export function isSet(v) { return v instanceof Set; }
+export function isPromise(v) { return v && typeof v.then === 'function'; }
+export function isArrayBuffer(v) { return v instanceof ArrayBuffer; }
+export function isTypedArray(v) { return ArrayBuffer.isView(v) && !(v instanceof DataView); }
+export function isUint8Array(v) { return v instanceof Uint8Array; }
+export default { isDate, isRegExp, isMap, isSet, isPromise, isArrayBuffer, isTypedArray, isUint8Array };
+"#.to_string(),
+        "assert/strict" => r#"
+// Stub implementation for Node.js 'assert/strict' module
+export function ok(value, message) { if (!value) throw new Error(message || 'Assertion failed'); }
+export function strictEqual(a, b, message) { if (a !== b) throw new Error(message || 'Assertion failed'); }
+export function deepStrictEqual(a, b, message) { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(message || 'Assertion failed'); }
+export function notStrictEqual(a, b, message) { if (a === b) throw new Error(message || 'Assertion failed'); }
+export default { ok, strictEqual, deepStrictEqual, notStrictEqual };
+"#.to_string(),
         _ => format!(r#"
 // Empty stub for unsupported Node.js built-in: {}
 export default {{}};
@@ -1250,5 +1379,74 @@ mod tests {
 
         assert_eq!(resolved, index);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Issue #755: `fs/promises` and the other Node-builtin subpath aliases
+    /// must be recognized by the resolver so they don't fall through to
+    /// the node_modules lookup ("Cannot find module 'fs/promises' in
+    /// node_modules"). This guards the explicit-match list in
+    /// `is_node_builtin` so a future edit can't silently drop them.
+    #[test]
+    fn test_is_node_builtin_promise_subpaths() {
+        for spec in &[
+            "fs",
+            "fs/promises",
+            "node:fs/promises",
+            "stream/promises",
+            "node:stream/promises",
+            "stream/consumers",
+            "stream/web",
+            "dns/promises",
+            "node:dns/promises",
+            "timers",
+            "timers/promises",
+            "node:timers/promises",
+            "readline/promises",
+            "node:readline/promises",
+            "util/types",
+            "node:util/types",
+            "assert/strict",
+            "node:assert/strict",
+            "process",
+            "node:process",
+        ] {
+            assert!(
+                NodeModuleLoader::is_node_builtin(spec),
+                "expected `{}` to be recognized as a Node built-in",
+                spec
+            );
+        }
+    }
+
+    /// Stub generator must return a real (non-empty-fallback) module body
+    /// for the promise-subpath builtins added in #755. The empty-fallback
+    /// branch only `export default {}`, which trips `Cannot read properties
+    /// of undefined` at the import site once colyseus reaches for, e.g.,
+    /// `fsp.readFile`.
+    #[test]
+    fn test_get_builtin_stub_promise_subpaths() {
+        for name in &[
+            "fs/promises",
+            "stream/promises",
+            "stream/consumers",
+            "stream/web",
+            "dns/promises",
+            "timers/promises",
+            "readline/promises",
+            "util/types",
+            "assert/strict",
+        ] {
+            let stub = get_builtin_stub(name);
+            assert!(
+                !stub.contains("Empty stub for unsupported"),
+                "expected real stub for `{}`, got empty-fallback body",
+                name
+            );
+            assert!(
+                stub.contains("export default"),
+                "stub for `{}` missing default export",
+                name
+            );
+        }
     }
 }
