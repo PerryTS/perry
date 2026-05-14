@@ -941,7 +941,34 @@ export function deprecate(fn) { return fn; }
 export function inherits(ctor, superCtor) { Object.setPrototypeOf(ctor.prototype, superCtor.prototype); }
 export const TextEncoder = globalThis.TextEncoder;
 export const TextDecoder = globalThis.TextDecoder;
-export default { promisify, callbackify, inspect, format, debuglog, deprecate, inherits, TextEncoder, TextDecoder };
+// util.types — Node's runtime introspection namespace. NestJS / rxjs
+// reach into this for cheap Promise / TypedArray / Map / Set probes
+// during DI dispatch. Most call sites just want a boolean; returning
+// `false` for an unknown shape is the conservative answer (the caller
+// then falls through to its own duck-typing path).
+const _isPromiseLike = (v) => v != null && (typeof v === "object" || typeof v === "function") && typeof v.then === "function";
+export const types = {
+    isPromise: (v) => _isPromiseLike(v),
+    isAsyncFunction: (v) => typeof v === "function" && v.constructor && v.constructor.name === "AsyncFunction",
+    isGeneratorFunction: (v) => typeof v === "function" && v.constructor && v.constructor.name === "GeneratorFunction",
+    isMap: (v) => v instanceof Map,
+    isSet: (v) => v instanceof Set,
+    isWeakMap: (v) => v instanceof WeakMap,
+    isWeakSet: (v) => v instanceof WeakSet,
+    isRegExp: (v) => v instanceof RegExp,
+    isDate: (v) => v instanceof Date,
+    isArrayBuffer: (v) => v instanceof ArrayBuffer,
+    isSharedArrayBuffer: () => false,
+    isDataView: (v) => v instanceof DataView,
+    isUint8Array: (v) => v instanceof Uint8Array,
+    isTypedArray: (v) => ArrayBuffer.isView(v) && !(v instanceof DataView),
+    isProxy: () => false,
+    isNativeError: (v) => v instanceof Error,
+    isBoxedPrimitive: () => false,
+    isAnyArrayBuffer: (v) => v instanceof ArrayBuffer,
+    isModuleNamespaceObject: () => false,
+};
+export default { promisify, callbackify, inspect, format, debuglog, deprecate, inherits, TextEncoder, TextDecoder, types };
 "#.to_string(),
         "events" => r#"
 // Stub implementation for Node.js 'events' module
@@ -1029,6 +1056,48 @@ export function createGunzip() { throw new Error('zlib.createGunzip not supporte
 export function createDeflate() { throw new Error('zlib.createDeflate not supported'); }
 export function createInflate() { throw new Error('zlib.createInflate not supported'); }
 export default { gzip, gunzip, gzipSync, gunzipSync, deflate, inflate, deflateSync, inflateSync, brotliCompress, brotliDecompress, brotliCompressSync, brotliDecompressSync, createGzip, createGunzip, createDeflate, createInflate };
+"#.to_string(),
+        "async_hooks" => r#"
+// Stub implementation for Node.js 'async_hooks' module
+// Used by @nestjs/core for request-scoped DI context propagation (PR #754).
+// No real async-context tracking here: each AsyncResource is a thin
+// wrapper that just runs the callback in the current context.
+export class AsyncResource {
+    constructor(_type, _options) {}
+    runInAsyncScope(fn, thisArg, ...args) { return fn.apply(thisArg, args); }
+    emitDestroy() { return this; }
+    asyncId() { return 0; }
+    triggerAsyncId() { return 0; }
+    bind(fn) {
+        const ar = this;
+        return function (...args) { return ar.runInAsyncScope(fn, this, ...args); };
+    }
+    static bind(fn, type, thisArg) {
+        const ar = new AsyncResource(type || "bound-anonymous-fn");
+        return ar.bind(thisArg !== undefined ? fn.bind(thisArg) : fn);
+    }
+}
+export class AsyncLocalStorage {
+    constructor() { this._store = undefined; }
+    run(store, fn, ...args) {
+        const prev = this._store;
+        this._store = store;
+        try { return fn(...args); } finally { this._store = prev; }
+    }
+    exit(fn, ...args) {
+        const prev = this._store;
+        this._store = undefined;
+        try { return fn(...args); } finally { this._store = prev; }
+    }
+    getStore() { return this._store; }
+    enterWith(store) { this._store = store; }
+    disable() { this._store = undefined; }
+}
+export function executionAsyncId() { return 0; }
+export function executionAsyncResource() { return {}; }
+export function triggerAsyncId() { return 0; }
+export function createHook() { return { enable() { return this; }, disable() { return this; } }; }
+export default { AsyncResource, AsyncLocalStorage, executionAsyncId, executionAsyncResource, triggerAsyncId, createHook };
 "#.to_string(),
         _ => format!(r#"
 // Empty stub for unsupported Node.js built-in: {}

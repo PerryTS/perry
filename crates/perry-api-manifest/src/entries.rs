@@ -519,6 +519,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("async_hooks", "enterWith", true, None),
     method("async_hooks", "exit", true, None),
     method("async_hooks", "disable", true, None),
+    // AsyncResource — Nest's `@nestjs/core` request-scoped DI uses
+    // this to bind a callback to a synthetic async resource. The
+    // stub in `node:async_hooks` JS module satisfies callers that
+    // only need the `runInAsyncScope` shape.
+    class("async_hooks", "AsyncResource"),
+    class("async_hooks", "AsyncLocalStorage"),
     method("decimal.js", "plus", true, None),
     method("decimal.js", "minus", true, None),
     method("decimal.js", "times", true, None),
@@ -1654,6 +1660,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("util", "isDeepStrictEqual", false, None),
     class("util", "TextEncoder"),
     class("util", "TextDecoder"),
+    // util.types — Node's runtime type-introspection namespace. Required
+    // for `@nestjs/core` / rxjs internal dispatch (PR #754 fixture). The
+    // backing object lives in the `node:util` stub in
+    // perry-jsruntime/src/modules.rs and answers every is* probe with
+    // `false` (a safe default — no Perry value type matches Node's
+    // privileged BoxedPrimitive/Proxy/external introspection cases).
+    property("util", "types"),
     // --- stream (Web Streams API + Node stream classes — see
     //     perry-stdlib/src/streams.rs and perry-ext-streams) ---
     class("stream", "Readable"),
