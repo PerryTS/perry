@@ -7,7 +7,7 @@ use perry_types::{Type, TypeParam};
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower::LoweringContext;
+use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_patterns::{get_pat_name, lower_lit};
 
 pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
@@ -1153,7 +1153,7 @@ pub(crate) fn extract_binding_type(binding: &ast::Pat) -> Type {
 
 /// Lower decorators from SWC AST to HIR Decorators
 pub(crate) fn lower_decorators(
-    _ctx: &mut LoweringContext,
+    ctx: &mut LoweringContext,
     decorators: &[ast::Decorator],
 ) -> Vec<Decorator> {
     decorators
@@ -1166,30 +1166,56 @@ pub(crate) fn lower_decorators(
                 ast::Expr::Ident(ident) => Some(Decorator {
                     name: ident.sym.to_string(),
                     args: Vec::new(),
+                    is_factory: false,
+                    is_reflect_metadata: false,
                 }),
                 ast::Expr::Call(call) => {
                     // Get the callee name
                     if let ast::Callee::Expr(callee_expr) = &call.callee {
+                        if let ast::Expr::Member(member) = callee_expr.as_ref() {
+                            if let ast::Expr::Ident(obj) = member.obj.as_ref() {
+                                if obj.sym.as_ref() == "Reflect" {
+                                    if let ast::MemberProp::Ident(method) = &member.prop {
+                                        if method.sym.as_ref() == "metadata" {
+                                            let args: Vec<Expr> = call
+                                                .args
+                                                .iter()
+                                                .filter_map(|arg| {
+                                                    if arg.spread.is_some() {
+                                                        None
+                                                    } else {
+                                                        lower_decorator_arg(ctx, arg.expr.as_ref())
+                                                    }
+                                                })
+                                                .collect();
+                                            return Some(Decorator {
+                                                name: "Reflect.metadata".to_string(),
+                                                args,
+                                                is_factory: true,
+                                                is_reflect_metadata: true,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
-                            // Lower the arguments - for now just handle simple literals
                             let args: Vec<Expr> = call
                                 .args
                                 .iter()
                                 .filter_map(|arg| {
                                     if arg.spread.is_some() {
-                                        None // Skip spread arguments for now
+                                        None
                                     } else {
-                                        // For decorator args, only handle simple literals for now
-                                        match arg.expr.as_ref() {
-                                            ast::Expr::Lit(lit) => lower_lit(lit).ok(),
-                                            _ => None,
-                                        }
+                                        lower_decorator_arg(ctx, arg.expr.as_ref())
                                     }
                                 })
                                 .collect();
                             return Some(Decorator {
                                 name: ident.sym.to_string(),
                                 args,
+                                is_factory: true,
+                                is_reflect_metadata: false,
                             });
                         }
                     }
@@ -1199,4 +1225,64 @@ pub(crate) fn lower_decorators(
             }
         })
         .collect()
+}
+
+fn lower_decorator_arg(ctx: &mut LoweringContext, expr: &ast::Expr) -> Option<Expr> {
+    match expr {
+        ast::Expr::Lit(lit) => lower_lit(lit).ok(),
+        ast::Expr::Ident(ident) => match lower_expr(ctx, expr).ok() {
+            Some(Expr::GlobalGet(0)) => Some(Expr::ClassRef(ident.sym.to_string())),
+            other => other,
+        },
+        ast::Expr::Array(arr) => {
+            let items = arr
+                .elems
+                .iter()
+                .map(|elem| {
+                    elem.as_ref()
+                        .and_then(|elem| {
+                            if elem.spread.is_some() {
+                                None
+                            } else {
+                                lower_decorator_arg(ctx, elem.expr.as_ref())
+                            }
+                        })
+                        .unwrap_or(Expr::Undefined)
+                })
+                .collect();
+            Some(Expr::Array(items))
+        }
+        ast::Expr::Object(obj) => {
+            let mut fields = Vec::new();
+            for prop in &obj.props {
+                let ast::PropOrSpread::Prop(prop) = prop else {
+                    return None;
+                };
+                match prop.as_ref() {
+                    ast::Prop::KeyValue(kv) => {
+                        let key = decorator_prop_name(&kv.key)?;
+                        let value = lower_decorator_arg(ctx, kv.value.as_ref())?;
+                        fields.push((key, value));
+                    }
+                    ast::Prop::Shorthand(ident) => {
+                        let name = ident.sym.to_string();
+                        let value = lower_decorator_arg(ctx, &ast::Expr::Ident(ident.clone()))?;
+                        fields.push((name, value));
+                    }
+                    _ => return None,
+                }
+            }
+            Some(Expr::Object(fields))
+        }
+        _ => lower_expr(ctx, expr).ok(),
+    }
+}
+
+fn decorator_prop_name(name: &ast::PropName) -> Option<String> {
+    match name {
+        ast::PropName::Ident(ident) => Some(ident.sym.to_string()),
+        ast::PropName::Str(s) => Some(s.value.as_str().unwrap_or("").to_string()),
+        ast::PropName::Num(n) => Some(n.value.to_string()),
+        _ => None,
+    }
 }

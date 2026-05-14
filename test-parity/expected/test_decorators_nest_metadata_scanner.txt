@@ -1,0 +1,5 @@
+prototype methods true
+find descriptor true
+scanner ready true
+route path /:id
+route method 0

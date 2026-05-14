@@ -84,6 +84,7 @@ fn param(id: LocalId, name: &str) -> Param {
         name: name.to_string(),
         ty: Type::Any,
         default: None,
+        decorators: Vec::new(),
         is_rest: false,
     }
 }

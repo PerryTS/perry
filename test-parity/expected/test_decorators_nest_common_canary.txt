@@ -1,0 +1,12 @@
+injectable true
+design param true
+ctor inject 0 CUSTOM_REPO
+property inject repo true
+controller true
+controller path /users
+route path /:id
+route method 0
+module providers true
+module controllers true
+module exports true
+module lengths 2 1 1

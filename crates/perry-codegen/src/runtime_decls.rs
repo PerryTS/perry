@@ -1531,6 +1531,34 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_reflect_define_metadata",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_reflect_get_metadata", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_reflect_get_own_metadata",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_reflect_has_metadata", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_reflect_has_own_metadata",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_reflect_get_metadata_keys", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_reflect_get_own_metadata_keys",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_reflect_delete_metadata",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
 
     declare_stdlib_ffi(module);
 }
@@ -2343,6 +2371,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== Closures / functions ==========
     module.declare_function("js_call_function", DOUBLE, &[I64, I64, I64, I64, I64]);
     module.declare_function("js_call_method", DOUBLE, &[DOUBLE, I64, I64, I64, I64]);
+    module.declare_function("js_call_value", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_closure_call_array", DOUBLE, &[I64, I64, I64]);
     module.declare_function(
         "js_closure_call_apply_with_spread",
@@ -2426,6 +2455,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // Lets `typeof obj.method === "function"` and `let f = obj.method; f(args)`
     // dispatch through CLASS_VTABLE_REGISTRY instead of returning undefined.
     module.declare_function("js_class_method_bind", DOUBLE, &[DOUBLE, I64, I64]);
+    module.declare_function("js_class_prototype_method_value", DOUBLE, &[DOUBLE, DOUBLE]);
     // #519: read the implicit `this` thread-local set by
     // `js_native_call_method`'s field-scan dispatch when invoking a
     // closure-typed class field method-style. `Expr::This` codegen reads

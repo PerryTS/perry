@@ -5,13 +5,16 @@
 
 use crate::bridge::{
     fixup_native_for_v8, get_handle_id, get_js_handle, is_js_handle, make_js_handle_value,
-    native_to_v8, store_js_handle, v8_to_native,
+    native_to_v8, store_js_handle, v8_to_native, v8_to_native_metadata_target,
+    v8_to_native_metadata_value,
 };
 use crate::{
     ensure_runtime_initialized, get_tokio_runtime, with_runtime, JsRuntimeState, JS_RUNTIME,
 };
 use deno_core::v8;
+use std::collections::hash_map::DefaultHasher;
 use std::ffi::{c_char, CStr};
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 /// Convert a NaN-boxed f64 to a V8 value, returning None if the conversion fails
@@ -49,6 +52,243 @@ pub extern "C" fn js_runtime_init() {
     perry_runtime::js_set_native_module_js_loader(native_module_js_property_loader);
     perry_runtime::js_set_new_from_handle_v8(js_new_from_handle_v8_impl);
     perry_runtime::js_set_handle_typeof(js_handle_typeof);
+
+    with_runtime(install_reflect_metadata_bridge);
+}
+
+fn install_reflect_metadata_bridge(state: &mut JsRuntimeState) {
+    deno_core::scope!(scope, &mut state.runtime);
+    let global = scope.get_current_context().global(scope);
+
+    macro_rules! define_global_function {
+        ($name:literal, $callback:ident) => {
+            if let (Some(key), Some(function)) = (
+                v8::String::new(scope, $name),
+                v8::Function::builder($callback).build(scope),
+            ) {
+                global.set(scope, key.into(), function.into());
+            }
+        };
+    }
+
+    define_global_function!(
+        "__perryReflectDefineMetadata",
+        reflect_define_metadata_bridge
+    );
+    define_global_function!("__perryReflectGetMetadata", reflect_get_metadata_bridge);
+    define_global_function!(
+        "__perryReflectGetOwnMetadata",
+        reflect_get_own_metadata_bridge
+    );
+    define_global_function!("__perryReflectHasMetadata", reflect_has_metadata_bridge);
+    define_global_function!(
+        "__perryReflectHasOwnMetadata",
+        reflect_has_own_metadata_bridge
+    );
+    define_global_function!(
+        "__perryReflectGetMetadataKeys",
+        reflect_get_metadata_keys_bridge
+    );
+    define_global_function!(
+        "__perryReflectGetOwnMetadataKeys",
+        reflect_get_own_metadata_keys_bridge
+    );
+    define_global_function!(
+        "__perryReflectDeleteMetadata",
+        reflect_delete_metadata_bridge
+    );
+
+    let Some(source) = v8::String::new(
+        scope,
+        r#"
+(function () {
+  if (typeof Reflect !== "object" || Reflect === null) return;
+  if (
+    Reflect.__perryMetadataBridgeInstalled === true &&
+    Reflect.defineMetadata &&
+    Reflect.defineMetadata.__perryMetadataBridgeWrapper === true
+  ) {
+    return;
+  }
+  const markBridgeWrapper = fn => {
+    try {
+      Object.defineProperty(fn, "__perryMetadataBridgeWrapper", { value: true });
+    } catch (_) {}
+    return fn;
+  };
+  const originalDefine = Reflect.defineMetadata;
+  const originalGet = Reflect.getMetadata;
+  const originalGetOwn = Reflect.getOwnMetadata;
+  const originalHas = Reflect.hasMetadata;
+  const originalHasOwn = Reflect.hasOwnMetadata;
+  if (typeof originalDefine !== "function" || typeof originalGet !== "function") {
+    Reflect.defineMetadata = markBridgeWrapper(function (key, value, target, propertyKey) {
+      return globalThis.__perryReflectDefineMetadata(key, value, target, propertyKey);
+    });
+    Reflect.getMetadata = markBridgeWrapper(function (key, target, propertyKey) {
+      return globalThis.__perryReflectGetMetadata(key, target, propertyKey);
+    });
+    Reflect.getOwnMetadata = markBridgeWrapper(function (key, target, propertyKey) {
+      return globalThis.__perryReflectGetOwnMetadata(key, target, propertyKey);
+    });
+    Reflect.hasMetadata = markBridgeWrapper(function (key, target, propertyKey) {
+      return globalThis.__perryReflectHasMetadata(key, target, propertyKey);
+    });
+    Reflect.hasOwnMetadata = markBridgeWrapper(function (key, target, propertyKey) {
+      return globalThis.__perryReflectHasOwnMetadata(key, target, propertyKey);
+    });
+    Reflect.getMetadataKeys = markBridgeWrapper(function (target, propertyKey) {
+      return globalThis.__perryReflectGetMetadataKeys(target, propertyKey);
+    });
+    Reflect.getOwnMetadataKeys = markBridgeWrapper(function (target, propertyKey) {
+      return globalThis.__perryReflectGetOwnMetadataKeys(target, propertyKey);
+    });
+    Reflect.deleteMetadata = markBridgeWrapper(function (key, target, propertyKey) {
+      return globalThis.__perryReflectDeleteMetadata(key, target, propertyKey);
+    });
+    Reflect.metadata = markBridgeWrapper(function (key, value) {
+      return function (target, propertyKey) {
+        Reflect.defineMetadata(key, value, target, propertyKey);
+      };
+    });
+    Reflect.__perryMetadataBridgeInstalled = true;
+    return;
+  }
+
+  Reflect.defineMetadata = markBridgeWrapper(function (key, value, target, propertyKey) {
+    const result = originalDefine.apply(this, arguments);
+    globalThis.__perryReflectDefineMetadata(key, value, target, propertyKey);
+    return result;
+  });
+
+  Reflect.getMetadata = markBridgeWrapper(function (key, target, propertyKey) {
+    const original = originalGet.apply(this, arguments);
+    return original === undefined
+      ? globalThis.__perryReflectGetMetadata(key, target, propertyKey)
+      : original;
+  });
+
+  Reflect.getOwnMetadata = markBridgeWrapper(function (key, target, propertyKey) {
+    const original = typeof originalGetOwn === "function"
+      ? originalGetOwn.apply(this, arguments)
+      : undefined;
+    return original === undefined
+      ? globalThis.__perryReflectGetOwnMetadata(key, target, propertyKey)
+      : original;
+  });
+
+  Reflect.hasMetadata = markBridgeWrapper(function (key, target, propertyKey) {
+    if (typeof originalHas === "function" && originalHas.apply(this, arguments)) return true;
+    return globalThis.__perryReflectHasMetadata(key, target, propertyKey);
+  });
+
+  Reflect.hasOwnMetadata = markBridgeWrapper(function (key, target, propertyKey) {
+    if (typeof originalHasOwn === "function" && originalHasOwn.apply(this, arguments)) return true;
+    return globalThis.__perryReflectHasOwnMetadata(key, target, propertyKey);
+  });
+
+  Reflect.__perryMetadataBridgeInstalled = true;
+})();
+"#,
+    ) else {
+        return;
+    };
+    let _ = v8::Script::compile(scope, source, None).and_then(|script| script.run(scope));
+}
+
+fn reflect_define_metadata_bridge(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let key = v8_to_native(scope, args.get(0));
+    let value = v8_to_native_metadata_value(scope, args.get(1));
+    let target = v8_to_native_metadata_target(scope, args.get(2));
+    let property_key = v8_to_native(scope, args.get(3));
+    let result = perry_runtime::proxy::js_reflect_define_metadata(key, value, target, property_key);
+    retval.set(native_to_v8(scope, result));
+}
+
+fn reflect_get_metadata_bridge(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let key = v8_to_native(scope, args.get(0));
+    let target = v8_to_native_metadata_target(scope, args.get(1));
+    let property_key = v8_to_native(scope, args.get(2));
+    let result = perry_runtime::proxy::js_reflect_get_metadata(key, target, property_key);
+    retval.set(native_to_v8(scope, result));
+}
+
+fn reflect_get_own_metadata_bridge(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let key = v8_to_native(scope, args.get(0));
+    let target = v8_to_native_metadata_target(scope, args.get(1));
+    let property_key = v8_to_native(scope, args.get(2));
+    let result = perry_runtime::proxy::js_reflect_get_own_metadata(key, target, property_key);
+    retval.set(native_to_v8(scope, result));
+}
+
+fn reflect_has_metadata_bridge(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let key = v8_to_native(scope, args.get(0));
+    let target = v8_to_native_metadata_target(scope, args.get(1));
+    let property_key = v8_to_native(scope, args.get(2));
+    let result = perry_runtime::proxy::js_reflect_has_metadata(key, target, property_key);
+    retval.set(native_to_v8(scope, result));
+}
+
+fn reflect_has_own_metadata_bridge(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let key = v8_to_native(scope, args.get(0));
+    let target = v8_to_native_metadata_target(scope, args.get(1));
+    let property_key = v8_to_native(scope, args.get(2));
+    let result = perry_runtime::proxy::js_reflect_has_own_metadata(key, target, property_key);
+    retval.set(native_to_v8(scope, result));
+}
+
+fn reflect_get_metadata_keys_bridge(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let target = v8_to_native_metadata_target(scope, args.get(0));
+    let property_key = v8_to_native(scope, args.get(1));
+    let result = perry_runtime::proxy::js_reflect_get_metadata_keys(target, property_key);
+    retval.set(native_to_v8(scope, result));
+}
+
+fn reflect_get_own_metadata_keys_bridge(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let target = v8_to_native_metadata_target(scope, args.get(0));
+    let property_key = v8_to_native(scope, args.get(1));
+    let result = perry_runtime::proxy::js_reflect_get_own_metadata_keys(target, property_key);
+    retval.set(native_to_v8(scope, result));
+}
+
+fn reflect_delete_metadata_bridge(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let key = v8_to_native(scope, args.get(0));
+    let target = v8_to_native_metadata_target(scope, args.get(1));
+    let property_key = v8_to_native(scope, args.get(2));
+    let result = perry_runtime::proxy::js_reflect_delete_metadata(key, target, property_key);
+    retval.set(native_to_v8(scope, result));
 }
 
 /// Probe a V8 handle's `typeof` discriminator. Returns 1 for callables (functions),
@@ -212,7 +452,7 @@ pub unsafe extern "C" fn js_load_module(path_ptr: *const i8, path_len: usize) ->
 
     let canonical = resolved_path.clone();
 
-    let specifier = match deno_core::ModuleSpecifier::from_file_path(&canonical) {
+    let target_specifier = match deno_core::ModuleSpecifier::from_file_path(&canonical) {
         Ok(s) => s,
         Err(_) => {
             log::error!(
@@ -222,6 +462,37 @@ pub unsafe extern "C" fn js_load_module(path_ptr: *const i8, path_len: usize) ->
             return 0;
         }
     };
+    let target_specifier_str = target_specifier.to_string();
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    // Materialize the proxy in a per-process temp directory rather than the
+    // user's CWD. Deno's recursive loader still resolves the proxy specifier
+    // through our NodeModuleLoader, so the file must exist on disk even
+    // though the source is also supplied via load_side_es_module_from_code.
+    let proxy_dir = std::env::temp_dir().join(format!("perry-js-proxy-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&proxy_dir);
+    let proxy_path = proxy_dir.join(format!("__perry_js_proxy_{:016x}.mjs", hasher.finish()));
+    let specifier = match deno_core::ModuleSpecifier::from_file_path(&proxy_path) {
+        Ok(s) => s,
+        Err(_) => {
+            log::error!(
+                "Failed to create proxy module specifier for {:?}",
+                canonical
+            );
+            return 0;
+        }
+    };
+    let proxy_code = format!(
+        r#"import * as __perry_ns from {target:?};
+const __perry_default = Object.prototype.hasOwnProperty.call(__perry_ns, "default") ? __perry_ns.default : __perry_ns;
+export {{ __perry_default as default }};
+export * from {target:?};
+"#,
+        target = target_specifier_str
+    );
+    if let Ok(proxy_file_path) = specifier.to_file_path() {
+        let _ = std::fs::write(proxy_file_path, &proxy_code);
+    }
 
     let tokio_rt = get_tokio_runtime();
 
@@ -248,8 +519,15 @@ pub unsafe extern "C" fn js_load_module(path_ptr: *const i8, path_len: usize) ->
                     .build()
                     .expect("Failed to create local Tokio runtime for module loading");
                 local_rt.block_on(async {
-                    // Load the module (use load_side_es_module since native code is the main module)
-                    let module_id = match state.runtime.load_side_es_module(&specifier).await {
+                    // Load a proxy module rather than the target directly. The target may
+                    // already have been evaluated as a dependency of another JS module; a
+                    // proxy imports and re-exports it without evaluating that target as a
+                    // new side root.
+                    let module_id = match state
+                        .runtime
+                        .load_side_es_module_from_code(&specifier, proxy_code)
+                        .await
+                    {
                         Ok(id) => id,
                         Err(e) => {
                             eprintln!("[js_load_module] FAILED to load '{}': {}", path_str, e);
@@ -273,6 +551,8 @@ pub unsafe extern "C" fn js_load_module(path_ptr: *const i8, path_len: usize) ->
                         );
                         return Err(());
                     }
+
+                    install_reflect_metadata_bridge(state);
 
                     // Cache the module
                     state.loaded_modules.insert(canonical.clone(), module_id);
@@ -571,9 +851,10 @@ pub unsafe extern "C" fn js_call_value(
 
     with_runtime(|state| {
         deno_core::scope!(scope, &mut state.runtime);
+        v8::tc_scope!(tc_scope, scope);
 
         // Extract the function from the NaN-boxed value
-        let func_local = match nanbox_to_v8(scope, func_value) {
+        let func_local = match nanbox_to_v8(tc_scope, func_value) {
             Some(v) => v,
             None => {
                 log::error!("Failed to convert function value from NaN-boxed");
@@ -591,20 +872,42 @@ pub unsafe extern "C" fn js_call_value(
         // Convert arguments
         let v8_args: Vec<v8::Local<v8::Value>> = args
             .iter()
-            .map(|&arg| native_to_v8(scope, fixup_native_for_v8(arg)))
+            .map(|&arg| native_to_v8(tc_scope, fixup_native_for_v8(arg)))
             .collect();
 
         // Call with undefined as 'this'
-        let undefined = v8::undefined(scope);
-        let result = match func.call(scope, undefined.into(), &v8_args) {
+        let undefined = v8::undefined(tc_scope);
+        let result = match func.call(tc_scope, undefined.into(), &v8_args) {
             Some(r) => r,
             None => {
-                log::error!("Function call failed");
+                if tc_scope.has_caught() {
+                    if let Some(msg_obj) = tc_scope.message() {
+                        let msg_str = msg_obj.get(tc_scope).to_rust_string_lossy(tc_scope);
+                        let line = msg_obj.get_line_number(tc_scope).unwrap_or(0);
+                        let script = msg_obj
+                            .get_script_resource_name(tc_scope)
+                            .map(|s| s.to_rust_string_lossy(tc_scope))
+                            .unwrap_or_default();
+                        log::error!(
+                            "[JS-INTEROP] Function value threw: {} ({}:{})",
+                            msg_str,
+                            script,
+                            line
+                        );
+                    } else if let Some(exception) = tc_scope.exception() {
+                        log::error!(
+                            "[JS-INTEROP] Function value threw: {}",
+                            exception.to_rust_string_lossy(tc_scope)
+                        );
+                    }
+                } else {
+                    log::error!("Function call failed");
+                }
                 return f64::from_bits(0x7FFC_0000_0000_0001);
             }
         };
 
-        v8_to_native(scope, result)
+        v8_to_native(tc_scope, result)
     })
 }
 

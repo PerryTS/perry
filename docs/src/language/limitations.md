@@ -25,21 +25,35 @@ new Function("return 42");
 
 ## Decorators
 
-Perry parses decorator syntax and supports compile-time-only transforms
-(see the bundled `@log` example), but does not implement the runtime
-metadata facilities (`Reflect.metadata`, `Symbol`-keyed metadata,
-`emitDecoratorMetadata` type capture) that Angular / NestJS / TypeORM
-DI containers rely on. See [Decorators](decorators.md) for the full
-stance and a worked migration recipe.
+Perry parses decorator syntax, supports compile-time-only transforms
+(see the bundled `@log` example), and has a reduced legacy TypeScript
+compatibility path for class decorators, method decorators, constructor
+parameter decorators, method parameter decorators, and property
+decorators. That path emits `design:paramtypes` for decorated
+classes/methods, `design:type` for decorated properties, and implements
+`Reflect.defineMetadata`, `Reflect.getMetadata`,
+`Reflect.getOwnMetadata`, `Reflect.hasMetadata`,
+`Reflect.hasOwnMetadata`, `Reflect.getMetadataKeys`,
+`Reflect.getOwnMetadataKeys`, `Reflect.deleteMetadata`, and
+`@Reflect.metadata(...)`.
+
+Accessor decorators, descriptor replacement, general
+`Reflect.metadata(...)` calls outside decorator syntax, `Symbol`
+metadata keys, and full Angular / NestJS / TypeORM runtime metadata flows
+are not supported. See [Decorators](decorators.md) for details and a
+worked migration recipe.
 
 ## No Runtime Metadata Reflection
 
-TypeScript-style runtime metadata is not supported:
+Perry implements a small metadata subset for legacy decorators. General
+runtime reflection is not supported:
 
 <!-- intentionally-rejects: this snippet documents code Perry refuses to compile -->
 ```text
-// Not supported
 Reflect.getMetadata("design:type", target, key);
+Reflect.getMetadataKeys(target, key);
+// Not supported as a general helper call outside decorator syntax
+Reflect.metadata("design:type", String)(target, key);
 ```
 
 ## No User-Space CommonJS require()

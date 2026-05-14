@@ -15,34 +15,55 @@ already AOT-deletes most decorator metadata at build time, and TC39's
 new stage-3 decorator spec deliberately drops the runtime type
 reflection that NestJS and TypeORM rely on.
 
-Perry follows the modern direction: types are erased at compile time
-(see [Limitations](limitations.md)), there is no `Reflect.metadata`,
-no `Symbol`-keyed metadata side-tables, and no runtime DI container.
-Code that depends on those facilities does not run on Perry as-is and
-must be migrated to one of the patterns below.
+Perry still follows the modern direction: types are erased at compile
+time (see [Limitations](limitations.md)) and there is no runtime DI
+container. A small legacy compatibility path exists for libraries that
+only need AOT-lowerable decorator side effects and metadata.
+Code that depends on richer decorator behavior still needs one of the
+patterns below.
 
 ## What works today
 
-Perry parses decorator syntax (legacy / experimental form) and supports
-**compile-time-only** transforms. The bundled `@log` transform is the
-canonical example — it rewrites a decorated method into a wrapper that
-prints entry/exit at compile time, with zero runtime decorator
-machinery. See `crates/perry-hir/src/decorator_log.rs` for the
-implementation.
+Perry parses legacy / experimental TypeScript decorator syntax and
+supports two paths:
+
+- **Legacy class decorators, method decorators, property decorators,
+  constructor parameter decorators, and method parameter decorators** for
+  Nest-style DI and route metadata canaries. Decorator functions run for
+  side effects, `Reflect.defineMetadata`, `Reflect.getMetadata`,
+  `Reflect.getOwnMetadata`, `Reflect.hasMetadata`,
+  `Reflect.hasOwnMetadata`, `Reflect.getMetadataKeys`,
+  `Reflect.getOwnMetadataKeys`, `Reflect.deleteMetadata`, and
+  `@Reflect.metadata(...)` are available. Perry emits
+  `design:paramtypes` for decorated classes/methods and `design:type`
+  for decorated properties.
+- **Compile-time-only transforms.** The bundled `@log` transform is the
+  canonical example — it rewrites a decorated method into a wrapper that
+  prints entry/exit at compile time, with zero runtime decorator
+  machinery. See `crates/perry-hir/src/decorator_log.rs` for the
+  implementation.
 
 ## What does not work
 
-- `Reflect.metadata(...)` and `Reflect.getMetadata(...)`
+- Accessor decorators and descriptor replacement
+- Decorator class replacement return values. If a class decorator
+  returns anything other than `undefined`, Perry throws a `TypeError`
+  at decorator application time. Real-world decorators like
+  `@Memoize`, `@Throttle`, and GraphQL resolver wrappers that return
+  wrapped classes need a Perry-aware port — the lowered class is fixed
+  in the IR and cannot be replaced at runtime.
+- General `Reflect.metadata(...)` helper calls outside decorator syntax
 - `Symbol(...)` as a metadata key
-- `emitDecoratorMetadata`-style runtime type capture (constructor
-  parameter types are erased; there is no `design:paramtypes`)
+- `emitDecoratorMetadata` beyond class/method `design:paramtypes` and
+  property `design:type`
 - Runtime DI containers that resolve dependencies by type
-  (`tsyringe`, NestJS's injector, Angular's root injector)
+  beyond the reduced class-constructor canary (`tsyringe`, full NestJS
+  injector behavior, Angular's root injector)
 - `class-validator`, `type-graphql`, `TypeORM` runtime metadata flows
 
-If your code depends on any of these, the port path is *not* "wait for
-Perry to add Reflect" — it is to migrate to the explicit-wiring pattern
-below.
+If your code depends on any of these, the port path is still explicit
+wiring or a dedicated AOT transform, not relying on the full legacy
+TypeScript decorator runtime.
 
 ## Recommended pattern: explicit construction
 
@@ -178,24 +199,24 @@ collapses into one `new RatingService(api)` line in `services.ts`.
 
 ## What about Angular components, NestJS controllers, TypeORM entities?
 
-Perry does not support these decorator surfaces today, and the runtime
-metadata they rely on is not on the roadmap. The Path-B option of
+Perry's reduced legacy path is enough for small Nest-style
+constructor-injection and route-metadata canaries, but it is not full
+Angular, NestJS, or TypeORM compatibility. The Path-B option of
 recognizing `@Component` / `@Controller` / `@Entity` at the compiler
 level (analogous to Angular Ivy's AOT step) is reserved for if and when
 a concrete port needs it — see [issue #581][issue-581] for the tracking
-discussion. For now, the recommendation is the same: drop the
-decorator, write the equivalent explicit construction, register routes
-or schema as plain function calls / module-level constants.
+discussion. For now, the recommendation is the same: drop the decorator
+where possible, write the equivalent explicit construction, register
+routes or schema as plain function calls / module-level constants.
 
 [issue-581]: https://github.com/PerryTS/perry/issues/581
 
 ## Future direction
 
-If decorators come back into ecosystem fashion, it will be in the
-[TC39 stage-3 form][tc39-decorators] — pure compile-time, no metadata
-reflection — which aligns naturally with Perry's "types erased,
-compile to native" architecture. Any future investment in decorator
-support will target that spec, not the legacy / experimental form that
-Angular and NestJS use today.
+New feature work should prefer the [TC39 stage-3 form][tc39-decorators]
+because it aligns better with Perry's "types erased, compile to native"
+architecture. The legacy TypeScript path exists for compatibility and
+will stay focused on narrow AOT-lowerable metadata cases rather than
+becoming a full `tsc` decorator runtime.
 
 [tc39-decorators]: https://github.com/tc39/proposal-decorators

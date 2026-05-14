@@ -265,6 +265,11 @@ pub(crate) struct FnCtx<'a> {
     /// has_rest_param)`. Used by FuncRef call sites to know whether
     /// to bundle trailing arguments into a rest array.
     pub func_signatures: &'a std::collections::HashMap<u32, (usize, bool, bool)>,
+    /// Function declarations where Perry appended a synthetic trailing
+    /// `arguments` binding. Unlike a real rest parameter, it must receive
+    /// every actual argument while fixed parameters still receive their
+    /// normal positional values.
+    pub func_synthetic_arguments: &'a std::collections::HashSet<u32>,
     /// LocalIds that must be stored in heap boxes (`js_box_alloc`)
     /// instead of stack allocas. A local gets boxed when at least
     /// one closure captures it AND it's written to (either by the
@@ -10778,6 +10783,148 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the compiler folds to a compile-time bool. Return target.
             lower_expr(ctx, target)
         }
+        Expr::ReflectDefineMetadata {
+            key,
+            value,
+            target,
+            property_key,
+        } => {
+            let k = lower_expr(ctx, key)?;
+            let v = lower_expr(ctx, value)?;
+            let t = lower_expr(ctx, target)?;
+            let p = property_key
+                .as_ref()
+                .map(|p| lower_expr(ctx, p))
+                .transpose()?
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_define_metadata",
+                &[(DOUBLE, &k), (DOUBLE, &v), (DOUBLE, &t), (DOUBLE, &p)],
+            ))
+        }
+        Expr::ReflectGetMetadata {
+            key,
+            target,
+            property_key,
+        } => {
+            let k = lower_expr(ctx, key)?;
+            let t = lower_expr(ctx, target)?;
+            let p = property_key
+                .as_ref()
+                .map(|p| lower_expr(ctx, p))
+                .transpose()?
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_get_metadata",
+                &[(DOUBLE, &k), (DOUBLE, &t), (DOUBLE, &p)],
+            ))
+        }
+        Expr::ReflectGetOwnMetadata {
+            key,
+            target,
+            property_key,
+        } => {
+            let k = lower_expr(ctx, key)?;
+            let t = lower_expr(ctx, target)?;
+            let p = property_key
+                .as_ref()
+                .map(|p| lower_expr(ctx, p))
+                .transpose()?
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_get_own_metadata",
+                &[(DOUBLE, &k), (DOUBLE, &t), (DOUBLE, &p)],
+            ))
+        }
+        Expr::ReflectHasMetadata {
+            key,
+            target,
+            property_key,
+        } => {
+            let k = lower_expr(ctx, key)?;
+            let t = lower_expr(ctx, target)?;
+            let p = property_key
+                .as_ref()
+                .map(|p| lower_expr(ctx, p))
+                .transpose()?
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_has_metadata",
+                &[(DOUBLE, &k), (DOUBLE, &t), (DOUBLE, &p)],
+            ))
+        }
+        Expr::ReflectHasOwnMetadata {
+            key,
+            target,
+            property_key,
+        } => {
+            let k = lower_expr(ctx, key)?;
+            let t = lower_expr(ctx, target)?;
+            let p = property_key
+                .as_ref()
+                .map(|p| lower_expr(ctx, p))
+                .transpose()?
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_has_own_metadata",
+                &[(DOUBLE, &k), (DOUBLE, &t), (DOUBLE, &p)],
+            ))
+        }
+        Expr::ReflectGetMetadataKeys {
+            target,
+            property_key,
+        } => {
+            let t = lower_expr(ctx, target)?;
+            let p = property_key
+                .as_ref()
+                .map(|p| lower_expr(ctx, p))
+                .transpose()?
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_get_metadata_keys",
+                &[(DOUBLE, &t), (DOUBLE, &p)],
+            ))
+        }
+        Expr::ReflectGetOwnMetadataKeys {
+            target,
+            property_key,
+        } => {
+            let t = lower_expr(ctx, target)?;
+            let p = property_key
+                .as_ref()
+                .map(|p| lower_expr(ctx, p))
+                .transpose()?
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_get_own_metadata_keys",
+                &[(DOUBLE, &t), (DOUBLE, &p)],
+            ))
+        }
+        Expr::ReflectDeleteMetadata {
+            key,
+            target,
+            property_key,
+        } => {
+            let k = lower_expr(ctx, key)?;
+            let t = lower_expr(ctx, target)?;
+            let p = property_key
+                .as_ref()
+                .map(|p| lower_expr(ctx, p))
+                .transpose()?
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_delete_metadata",
+                &[(DOUBLE, &k), (DOUBLE, &t), (DOUBLE, &p)],
+            ))
+        }
 
         // Issue #100: compile-time-resolved dynamic `import()`.
         //
@@ -10819,7 +10966,15 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let target_prefix = ctx.dynamic_import_path_to_prefix.get(path).cloned();
                 let blk = ctx.block();
                 let ns_val = match target_prefix {
-                    Some(prefix) => blk.load(DOUBLE, &format!("@__perry_ns_{}", prefix)),
+                    Some(prefix) => {
+                        // Issue #753: trigger the target's init before
+                        // loading its namespace. For Eager targets the
+                        // guard short-circuits; for Deferred targets
+                        // this is the only invocation that populates
+                        // `@__perry_ns_<prefix>`.
+                        blk.call_void(&format!("{}__init", prefix), &[]);
+                        blk.load(DOUBLE, &format!("@__perry_ns_{}", prefix))
+                    }
                     None => {
                         // Driver didn't resolve this path to a target
                         // module — surface a rejected promise.
@@ -10890,11 +11045,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let next_label_str = ctx.block_label(next_label);
                 ctx.block().cond_br(&cond, &match_label, &next_label_str);
 
-                // Match arm — load namespace, wrap in promise, store
-                // into result_slot, branch to join.
+                // Match arm — call target's __init (idempotent), load
+                // namespace, wrap in promise, store into result_slot,
+                // branch to join. Issue #753: the init call is the
+                // only thing that triggers a Deferred target's body
+                // and namespace populator; for Eager targets the
+                // guard short-circuits.
                 ctx.current_block = match_block_idx;
                 let join_label = ctx.block_label(join_block_idx);
                 let blk = ctx.block();
+                blk.call_void(&format!("{}__init", target_prefix), &[]);
                 let ns_val = blk.load(DOUBLE, &format!("@__perry_ns_{}", target_prefix));
                 let promise = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &ns_val)]);
                 let boxed = nanbox_pointer_inline(blk, &promise);
@@ -11819,6 +11979,20 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (PTR, &args_ptr),
                     (I64, &args_len_str),
                 ],
+            ))
+        }
+
+        Expr::JsCallValue { callee, args } => {
+            let func_dbl = lower_expr(ctx, callee)?;
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+            let (args_ptr, args_len_str) = lower_js_args_array(ctx, &lowered_args);
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_call_value",
+                &[(DOUBLE, &func_dbl), (PTR, &args_ptr), (I64, &args_len_str)],
             ))
         }
 

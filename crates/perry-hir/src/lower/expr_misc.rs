@@ -47,22 +47,39 @@ pub(super) fn lower_await(ctx: &mut LoweringContext, await_expr: &ast::AwaitExpr
 }
 
 pub(super) fn lower_super_prop(
-    _ctx: &mut LoweringContext,
+    ctx: &mut LoweringContext,
     super_prop: &ast::SuperPropExpr,
 ) -> Result<Expr> {
-    // super.property access — used in super.method() calls. When used
-    // as a call target, the Call expression detects this and routes
-    // through SuperMethodCall. Direct super property access (without
-    // the trailing call) is a syntax form Perry hasn't implemented yet.
+    // `super.<prop>` as a value (NOT followed by a call). Call-form
+    // `super.method(...)` is detected in lower_call.rs and routed through
+    // SuperMethodCall before this function ever runs, so we only land
+    // here for value-form reads like `super._next` (rxjs's
+    // OperatorSubscriber), `super.value` (NestJS adapter chains), etc.
+    //
+    // Strict JS semantics would resolve through the parent class's
+    // prototype, bypassing any override on the child. Perry currently
+    // doesn't carry a runtime parent-vtable lookup separate from the
+    // instance's own vtable chain, so we approximate by lowering to
+    // `this.<prop>` — the instance method dispatch already walks the
+    // class chain and returns the inherited method when the child does
+    // not override. The substitution is correct when the child does
+    // not override the property (the dominant rxjs / NestJS pattern;
+    // see PR #754 maintainer review on the NestJS smoke test). When
+    // the child *does* override, this approximation will resolve to
+    // the override rather than the parent — a TODO for a future
+    // explicit super-vtable path in codegen.
     match &super_prop.prop {
-        ast::SuperProp::Ident(_ident) => crate::lower_bail!(
-            super_prop.span,
-            "Direct super property access not yet supported, use super.method()"
-        ),
-        ast::SuperProp::Computed(_) => crate::lower_bail!(
-            super_prop.span,
-            "Computed super property access not supported"
-        ),
+        ast::SuperProp::Ident(ident) => Ok(Expr::PropertyGet {
+            object: Box::new(Expr::This),
+            property: ident.sym.to_string(),
+        }),
+        ast::SuperProp::Computed(computed) => {
+            let index = Box::new(lower_expr(ctx, &computed.expr)?);
+            Ok(Expr::IndexGet {
+                object: Box::new(Expr::This),
+                index,
+            })
+        }
     }
 }
 

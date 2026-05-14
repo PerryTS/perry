@@ -1589,6 +1589,7 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
                         .default
                         .as_ref()
                         .map(|d| substitute_expr(d, substitutions)),
+                    decorators: p.decorators.clone(),
                     is_rest: p.is_rest,
                 })
                 .collect(),
@@ -1847,6 +1848,7 @@ pub fn specialize_function(func: &Function, type_args: &[Type], new_id: FuncId) 
                     .default
                     .as_ref()
                     .map(|d| substitute_expr(d, &substitutions)),
+                decorators: p.decorators.clone(),
                 is_rest: p.is_rest,
             })
             .collect(),
@@ -1897,6 +1899,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                 init: f.init.as_ref().map(|e| substitute_expr(e, &substitutions)),
                 is_private: f.is_private,
                 is_readonly: f.is_readonly,
+                decorators: f.decorators.clone(),
             })
             .collect(),
         constructor: class.constructor.as_ref().map(|ctor| Function {
@@ -1914,6 +1917,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                         .default
                         .as_ref()
                         .map(|d| substitute_expr(d, &substitutions)),
+                    decorators: p.decorators.clone(),
                     is_rest: p.is_rest,
                 })
                 .collect(),
@@ -1946,6 +1950,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                                 .default
                                 .as_ref()
                                 .map(|d| substitute_expr(d, &substitutions)),
+                            decorators: p.decorators.clone(),
                             is_rest: p.is_rest,
                         })
                         .collect(),
@@ -2006,6 +2011,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                                     .default
                                     .as_ref()
                                     .map(|d| substitute_expr(d, &substitutions)),
+                                decorators: p.decorators.clone(),
                                 is_rest: p.is_rest,
                             })
                             .collect(),
@@ -2024,6 +2030,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .collect(),
         static_fields: class.static_fields.clone(),
         static_methods: class.static_methods.clone(),
+        decorators: class.decorators.clone(),
         is_exported: class.is_exported,
         aliases: class.aliases.clone(),
     }
@@ -3562,6 +3569,7 @@ mod tests {
                 name: "x".to_string(),
                 ty: Type::TypeVar("T".to_string()),
                 default: None,
+                decorators: Vec::new(),
                 is_rest: false,
             }],
             return_type: Type::TypeVar("T".to_string()),
@@ -3636,6 +3644,7 @@ mod tests {
                 name: "x".to_string(),
                 ty: Type::TypeVar("T".to_string()),
                 default: None,
+                decorators: Vec::new(),
                 is_rest: false,
             }],
             return_type: Type::TypeVar("T".to_string()),
@@ -3703,6 +3712,7 @@ mod tests {
                 name: "x".to_string(),
                 ty: Type::TypeVar("T".to_string()),
                 default: None,
+                decorators: Vec::new(),
                 is_rest: false,
             }],
             return_type: Type::TypeVar("T".to_string()),
@@ -3799,6 +3809,7 @@ mod tests {
                 name: "x".to_string(),
                 ty: Type::TypeVar("T".to_string()),
                 default: None,
+                decorators: Vec::new(),
                 is_rest: false,
             }],
             return_type: Type::TypeVar("T".to_string()),

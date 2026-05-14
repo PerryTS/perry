@@ -8494,6 +8494,7 @@ mod tests {
             name: "item".to_string(),
             ty: perry_types::Type::Any,
             default: None,
+            decorators: Vec::new(),
             is_rest: false,
         };
         let inner_text = nmc("Text", vec![Expr::LocalGet(42)]);
@@ -9027,6 +9028,7 @@ mod tests {
             name: "item".to_string(),
             ty: perry_types::Type::Any,
             default: None,
+            decorators: Vec::new(),
             is_rest: false,
         };
         let inner_text = nmc("Text", vec![Expr::LocalGet(99)]);

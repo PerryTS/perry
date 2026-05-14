@@ -632,6 +632,12 @@ where
                 f(a);
             }
         }
+        Expr::JsCallValue { callee, args } => {
+            f(callee);
+            for a in args {
+                f(a);
+            }
+        }
         Expr::JsSetProperty { object, value, .. } => {
             f(object);
             f(value);
@@ -1203,6 +1209,63 @@ where
             f(target);
             f(key);
             f(descriptor);
+        }
+        Expr::ReflectDefineMetadata {
+            key,
+            value,
+            target,
+            property_key,
+        } => {
+            f(key);
+            f(value);
+            f(target);
+            if let Some(property_key) = property_key {
+                f(property_key);
+            }
+        }
+        Expr::ReflectGetMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectGetOwnMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectHasMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectHasOwnMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectDeleteMetadata {
+            key,
+            target,
+            property_key,
+        } => {
+            f(key);
+            f(target);
+            if let Some(property_key) = property_key {
+                f(property_key);
+            }
+        }
+        Expr::ReflectGetMetadataKeys {
+            target,
+            property_key,
+        }
+        | Expr::ReflectGetOwnMetadataKeys {
+            target,
+            property_key,
+        } => {
+            f(target);
+            if let Some(property_key) = property_key {
+                f(property_key);
+            }
         }
 
         // ─── FinalizationRegistry register/unregister ────────────────────
@@ -1829,6 +1892,12 @@ where
                 f(a);
             }
         }
+        Expr::JsCallValue { callee, args } => {
+            f(callee);
+            for a in args {
+                f(a);
+            }
+        }
         Expr::JsSetProperty { object, value, .. } => {
             f(object);
             f(value);
@@ -2374,6 +2443,63 @@ where
             f(target);
             f(key);
             f(descriptor);
+        }
+        Expr::ReflectDefineMetadata {
+            key,
+            value,
+            target,
+            property_key,
+        } => {
+            f(key);
+            f(value);
+            f(target);
+            if let Some(property_key) = property_key {
+                f(property_key);
+            }
+        }
+        Expr::ReflectGetMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectGetOwnMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectHasMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectHasOwnMetadata {
+            key,
+            target,
+            property_key,
+        }
+        | Expr::ReflectDeleteMetadata {
+            key,
+            target,
+            property_key,
+        } => {
+            f(key);
+            f(target);
+            if let Some(property_key) = property_key {
+                f(property_key);
+            }
+        }
+        Expr::ReflectGetMetadataKeys {
+            target,
+            property_key,
+        }
+        | Expr::ReflectGetOwnMetadataKeys {
+            target,
+            property_key,
+        } => {
+            f(target);
+            if let Some(property_key) = property_key {
+                f(property_key);
+            }
         }
         Expr::FinalizationRegistryRegister {
             registry,

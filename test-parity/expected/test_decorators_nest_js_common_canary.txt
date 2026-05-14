@@ -1,0 +1,7 @@
+js decorator injectable true
+js decorator controller true
+js decorator provider array 2 true true
+js decorator controller array 1 true
+js decorator service deps true
+js decorator controller deps true
+js decorator route /:id 0

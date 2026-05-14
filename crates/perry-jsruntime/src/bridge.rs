@@ -21,6 +21,7 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
 const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 
@@ -35,8 +36,110 @@ const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 thread_local! {
     /// Maps handle IDs to V8 Global handles
     static JS_OBJECT_HANDLES: RefCell<HashMap<u64, v8::Global<v8::Value>>> = RefCell::new(HashMap::new());
+    /// Stable V8 constructor-like wrappers for Perry class references.
+    static NATIVE_CLASS_HANDLES: RefCell<HashMap<u32, v8::Global<v8::Value>>> = RefCell::new(HashMap::new());
     /// Counter for generating unique handle IDs
     static NEXT_HANDLE_ID: Cell<u64> = const { Cell::new(1) };
+}
+
+fn native_class_constructor(
+    scope: &mut v8::PinScope<'_, '_>,
+    _args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    retval.set(v8::Object::new(scope).into());
+}
+
+fn native_class_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    class_id: u32,
+) -> v8::Local<'s, v8::Value> {
+    if let Some(existing) = NATIVE_CLASS_HANDLES.with(|handles| {
+        handles
+            .borrow()
+            .get(&class_id)
+            .map(|global| v8::Local::new(scope, global))
+    }) {
+        return existing;
+    }
+
+    let function = v8::Function::builder(native_class_constructor)
+        .build(scope)
+        .unwrap_or_else(|| v8::Function::new(scope, native_class_constructor).unwrap());
+    if let Some(key) = v8::String::new(scope, "__perry_native_class_id") {
+        let value = v8::Integer::new_from_unsigned(scope, class_id);
+        function.set(scope, key.into(), value.into());
+    }
+    let value: v8::Local<v8::Value> = function.into();
+    NATIVE_CLASS_HANDLES.with(|handles| {
+        handles
+            .borrow_mut()
+            .insert(class_id, v8::Global::new(scope, value));
+    });
+    value
+}
+
+fn native_class_id_from_v8(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> Option<u32> {
+    if !(value.is_function() || value.is_object()) {
+        return None;
+    }
+    let obj = v8::Local::<v8::Object>::try_from(value).ok()?;
+    let key = v8::String::new(scope, "__perry_native_class_id")?;
+    let id_value = obj.get(scope, key.into())?;
+    if id_value.is_undefined() || id_value.is_null() || !id_value.is_uint32() {
+        return None;
+    }
+    let id = id_value.uint32_value(scope)?;
+    if id == 0 {
+        return None;
+    }
+    Some(id)
+}
+
+pub fn v8_to_native_metadata_target(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> f64 {
+    if let Some(class_id) = native_class_id_from_v8(scope, value) {
+        return f64::from_bits(INT32_TAG | class_id as u64);
+    }
+
+    if value.is_object() {
+        if let Ok(obj) = v8::Local::<v8::Object>::try_from(value) {
+            if let Some(key) = v8::String::new(scope, "__native_ptr__") {
+                if let Some(ptr_value) = obj.get(scope, key.into()) {
+                    if ptr_value.is_external() {
+                        let external = v8::Local::<v8::External>::try_from(ptr_value).unwrap();
+                        return f64::from_bits(
+                            POINTER_TAG | (external.value() as u64 & POINTER_MASK),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    v8_to_native(scope, value)
+}
+
+pub fn v8_to_native_metadata_value(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> f64 {
+    if let Some(class_id) = native_class_id_from_v8(scope, value) {
+        return f64::from_bits(INT32_TAG | class_id as u64);
+    }
+
+    if value.is_array() {
+        let array = v8::Local::<v8::Array>::try_from(value).unwrap();
+        let ptr = v8_array_to_native_metadata(scope, array);
+        return f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK));
+    }
+
+    v8_to_native(scope, value)
 }
 
 /// Store a V8 value in the handle table and return a handle ID
@@ -140,6 +243,19 @@ pub fn native_to_v8<'s>(scope: &mut v8::PinScope<'s, '_>, value: f64) -> v8::Loc
     // Check for int32
     if tag == INT32_TAG {
         let int_val = (bits & 0xFFFF_FFFF) as i32;
+        // Perry encodes class references as INT32_TAG | class_id (see
+        // `Expr::ClassRef` codegen). When such a value crosses into V8 we
+        // surface it as a stable constructor-like function so JS code can use
+        // it as a metadata target. NOTE: this means raw integers that happen
+        // to equal a registered class id (low positive numbers, the common
+        // range) cannot round-trip through the bridge — they materialize as
+        // the class function on the JS side. Decorator metadata is the only
+        // existing caller, where the input is always a real class ref. If a
+        // future caller needs int round-trip, switch class refs to a
+        // dedicated NaN-box tag (see review on #754).
+        if int_val > 0 && perry_runtime::object::is_class_id_registered(int_val as u32) {
+            return native_class_to_v8(scope, int_val as u32);
+        }
         return v8::Integer::new(scope, int_val).into();
     }
 
@@ -151,6 +267,17 @@ pub fn native_to_v8<'s>(scope: &mut v8::PinScope<'s, '_>, value: f64) -> v8::Loc
             if let Some(v8_str) = v8::String::new(scope, &rust_str) {
                 return v8_str.into();
             }
+        }
+        return v8::String::empty(scope).into();
+    }
+
+    if tag == SHORT_STRING_TAG {
+        let value = JSValue::from_bits(bits);
+        let mut buf = [0u8; perry_runtime::value::SHORT_STRING_MAX_LEN];
+        let len = value.short_string_to_buf(&mut buf);
+        let rust_str = String::from_utf8_lossy(&buf[..len]);
+        if let Some(v8_str) = v8::String::new(scope, &rust_str) {
+            return v8_str.into();
         }
         return v8::String::empty(scope).into();
     }
@@ -355,18 +482,11 @@ fn native_object_to_v8<'s>(
 
                 let count = std::cmp::min(field_count, keys_length);
                 for i in 0..count {
-                    // Get key string from keys_array (NaN-boxed with STRING_TAG)
+                    // Get key string from keys_array. Keys may be heap strings or
+                    // inline short strings, so route through the general V8 bridge.
                     let key_f64 = unsafe { *keys_elements_ptr.add(i as usize) };
-                    let key_bits = key_f64.to_bits();
-                    let key_ptr = (key_bits & POINTER_MASK) as *const u8;
-                    if key_ptr.is_null() || (key_ptr as usize) < 0x1000 {
-                        continue;
-                    }
-                    let key_str = unsafe { native_string_to_rust(key_ptr) };
-                    if key_str.is_empty() {
-                        continue;
-                    }
-                    let v8_key = match v8::String::new(scope, &key_str) {
+                    let key_val = native_to_v8(scope, key_f64);
+                    let v8_key = match key_val.to_string(scope) {
                         Some(k) => k,
                         None => continue,
                     };
@@ -540,6 +660,9 @@ fn v8_array_to_native(scope: &mut v8::PinScope<'_, '_>, array: v8::Local<v8::Arr
 
     // Allocate native array
     let native_array = js_array_alloc(length);
+    unsafe {
+        (*native_array).length = length;
+    }
 
     // Convert each element
     // We use js_array_set_f64 which takes the raw f64 bits
@@ -550,6 +673,31 @@ fn v8_array_to_native(scope: &mut v8::PinScope<'_, '_>, array: v8::Local<v8::Arr
                 // Set the value directly using pointer arithmetic
                 // ArrayHeader is { length: u32, capacity: u32 } = 8 bytes
                 // Followed by array of f64 values
+                let data_ptr = (native_array as *mut u8).add(8) as *mut f64;
+                *data_ptr.add(i as usize) = native_val;
+            }
+        }
+    }
+
+    native_array as *mut u8
+}
+
+fn v8_array_to_native_metadata(
+    scope: &mut v8::PinScope<'_, '_>,
+    array: v8::Local<v8::Array>,
+) -> *mut u8 {
+    use perry_runtime::js_array_alloc;
+
+    let length = array.length();
+    let native_array = js_array_alloc(length);
+    unsafe {
+        (*native_array).length = length;
+    }
+
+    for i in 0..length {
+        if let Some(val) = array.get_index(scope, i) {
+            let native_val = v8_to_native_metadata_value(scope, val);
+            unsafe {
                 let data_ptr = (native_array as *mut u8).add(8) as *mut f64;
                 *data_ptr.add(i as usize) = native_val;
             }

@@ -35,6 +35,8 @@ thread_local! {
     /// + arena_walk_objects in the GC path).
     static OVERFLOW_FIELDS: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<u64>>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+    static CLASS_PROTOTYPE_METHOD_VALUES: RefCell<HashMap<(u32, String), u64>> =
+        RefCell::new(HashMap::new());
 
     /// Sidecar hash index for object key lookup. The on-object
     /// `keys_array` only supports O(N) linear scan; for objects that
@@ -3096,6 +3098,13 @@ pub extern "C" fn js_object_get_field_by_name(
                 // #420 / #618 followup.
                 if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
                     return JSValue::from_bits(bits);
+                }
+                if name == "prototype" && class_id != 0 && is_class_id_registered(class_id) {
+                    return JSValue::from_bits(bits);
+                }
+                if class_id != 0 && class_has_own_method(class_id, name) {
+                    let value = class_prototype_method_value_for_name(class_id, name);
+                    return JSValue::from_bits(value.to_bits());
                 }
                 if !name.is_empty() {
                     let result = CLASS_DYNAMIC_PROPS.with(|m| {
@@ -7487,6 +7496,75 @@ pub extern "C" fn js_class_method_bind(
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
+fn class_ref_id(value: f64) -> Option<u32> {
+    let bits = value.to_bits();
+    if (bits >> 48) == 0x7FFE {
+        let class_id = (bits & 0xFFFF_FFFF) as u32;
+        if class_id != 0 && is_class_id_registered(class_id) {
+            return Some(class_id);
+        }
+    }
+    None
+}
+
+unsafe fn metadata_key_to_string(value: f64) -> Option<String> {
+    let key_str = crate::builtins::js_string_coerce(value);
+    if key_str.is_null() {
+        return None;
+    }
+    let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let name_len = (*key_str).byte_len as usize;
+    std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+        .ok()
+        .map(|s| s.to_string())
+}
+
+fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
+    let registry = match CLASS_VTABLE_REGISTRY.read() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    registry
+        .as_ref()
+        .and_then(|reg| reg.get(&class_id))
+        .map(|vtable| vtable.methods.contains_key(method_name))
+        .unwrap_or(false)
+}
+
+fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -> f64 {
+    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(bits) = cache.get(&(class_id, method_name.to_string())).copied() {
+            return f64::from_bits(bits);
+        }
+
+        // Bounded leak: `js_class_method_bind` keeps the byte pointer for the
+        // lifetime of the bound closure (it's stashed inside the closure's
+        // capture frame). We leak one allocation per unique
+        // `(class_id, method_name)` pair the program ever asks for, so the
+        // total leak is bounded by the static set of decorated method
+        // descriptors. The cache below short-circuits repeat queries.
+        let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
+        let class_bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF);
+        let class_ref = f64::from_bits(class_bits);
+        let value = js_class_method_bind(class_ref, leaked.as_ptr(), leaked.len());
+        cache.insert((class_id, method_name.to_string()), value.to_bits());
+        value
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn js_class_prototype_method_value(class_ref: f64, method_key: f64) -> f64 {
+    let Some(class_id) = class_ref_id(class_ref) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let method_name = unsafe { metadata_key_to_string(method_key) };
+    let Some(method_name) = method_name else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    class_prototype_method_value_for_name(class_id, &method_name)
+}
+
 /// Extract the module name string from a native module namespace object.
 unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> &'static str {
     let jsval = JSValue::from_bits(namespace_obj.to_bits());
@@ -8659,6 +8737,34 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     unsafe {
+        if let Some(class_id) = class_ref_id(obj_value) {
+            let method_name = metadata_key_to_string(key_value);
+            if let Some(method_name) = method_name {
+                if method_name == "constructor" || class_has_own_method(class_id, &method_name) {
+                    let value = if method_name == "constructor" {
+                        obj_value
+                    } else {
+                        class_prototype_method_value_for_name(class_id, &method_name)
+                    };
+                    let packed = b"value\0writable\0enumerable\0configurable";
+                    let desc = js_object_alloc_with_shape(
+                        0x0D_E5_C2,
+                        4,
+                        packed.as_ptr(),
+                        packed.len() as u32,
+                    );
+                    let header_size = std::mem::size_of::<ObjectHeader>();
+                    let fields = (desc as *mut u8).add(header_size) as *mut f64;
+                    *fields = value;
+                    *fields.add(1) = f64::from_bits(TAG_TRUE);
+                    *fields.add(2) = f64::from_bits(TAG_FALSE);
+                    *fields.add(3) = f64::from_bits(TAG_TRUE);
+                    return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
+                }
+            }
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -8891,6 +8997,25 @@ pub extern "C" fn js_get_global_this() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
     unsafe {
+        if let Some(class_id) = class_ref_id(obj_value) {
+            let mut names: Vec<String> = vec!["constructor".to_string()];
+            if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+                if let Some(reg) = registry.as_ref() {
+                    if let Some(vtable) = reg.get(&class_id) {
+                        let mut methods: Vec<String> = vtable.methods.keys().cloned().collect();
+                        methods.sort();
+                        names.extend(methods);
+                    }
+                }
+            }
+            let result = crate::array::js_array_alloc(names.len() as u32);
+            for name in names {
+                let str_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                crate::array::js_array_push(result, JSValue::string_ptr(str_ptr));
+            }
+            return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
+        }
+
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() {
             let empty = crate::array::js_array_alloc(0);

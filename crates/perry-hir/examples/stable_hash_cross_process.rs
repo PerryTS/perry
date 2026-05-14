@@ -67,6 +67,7 @@ fn build_canonical() -> Module {
             name: "n".to_string(),
             ty: Type::Number,
             default: None,
+            decorators: Vec::new(),
             is_rest: false,
         }],
         return_type: Type::Number,

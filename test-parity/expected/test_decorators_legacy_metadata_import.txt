@@ -1,0 +1,2 @@
+module injectable true
+module paramtypes true

@@ -54,6 +54,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
             name: param_name,
             ty: param_ty,
             default: param_default,
+            decorators: Vec::new(),
             is_rest,
         });
         // Track destructuring patterns to generate extraction statements
@@ -270,6 +271,7 @@ pub(super) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
             name: param_name,
             ty: Type::Any,
             default: param_default,
+            decorators: Vec::new(),
             is_rest,
         });
         // Track destructuring patterns to generate extraction statements

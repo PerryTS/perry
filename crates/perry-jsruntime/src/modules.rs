@@ -9,7 +9,22 @@ use deno_core::{
     ModuleSourceCode, ModuleSpecifier, ModuleType, ResolutionKind,
 };
 use deno_error::JsErrorBox;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::path::{Path, PathBuf};
+
+// CJS heuristics regex set. These are tight, hot path on every loaded JS
+// module (called once per import); compiling them once amortizes the cost.
+static EXPORTS_WORD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bexports\b").unwrap());
+static REQUIRE_CALL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
+static EXPORTS_ASSIGN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"exports\.(\w+)\s*=").unwrap());
+static EXPORT_STAR_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"__exportStar\s*\(\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*,\s*exports\s*\)"#)
+        .unwrap()
+});
+static BLOCK_COMMENT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
+static LINE_COMMENT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)//.*$").unwrap());
 
 /// Node.js-compatible module loader
 pub struct NodeModuleLoader {
@@ -68,7 +83,7 @@ impl NodeModuleLoader {
         if specifier.starts_with("file://") {
             let path_str = specifier.strip_prefix("file://").unwrap_or(specifier);
             let path = PathBuf::from(path_str);
-            if path.exists() {
+            if path.exists() && path.is_file() {
                 return Ok(path);
             }
             return self.resolve_with_extensions(path);
@@ -134,17 +149,20 @@ impl NodeModuleLoader {
 
     /// Check if a specifier is a Node.js built-in module
     fn is_node_builtin(specifier: &str) -> bool {
+        let specifier = specifier.trim_end_matches('/');
         matches!(
             specifier,
             "net"
                 | "tls"
                 | "http"
+                | "http2"
                 | "https"
                 | "fs"
                 | "path"
                 | "os"
                 | "crypto"
                 | "stream"
+                | "stream/web"
                 | "buffer"
                 | "util"
                 | "events"
@@ -157,6 +175,8 @@ impl NodeModuleLoader {
                 | "string_decoder"
                 | "zlib"
                 | "readline"
+                | "repl"
+                | "timers"
                 | "tty"
                 | "vm"
                 | "worker_threads"
@@ -169,12 +189,14 @@ impl NodeModuleLoader {
                 | "node:net"
                 | "node:tls"
                 | "node:http"
+                | "node:http2"
                 | "node:https"
                 | "node:fs"
                 | "node:path"
                 | "node:os"
                 | "node:crypto"
                 | "node:stream"
+                | "node:stream/web"
                 | "node:buffer"
                 | "node:util"
                 | "node:events"
@@ -187,6 +209,8 @@ impl NodeModuleLoader {
                 | "node:string_decoder"
                 | "node:zlib"
                 | "node:readline"
+                | "node:repl"
+                | "node:timers"
                 | "node:tty"
                 | "node:vm"
                 | "node:worker_threads"
@@ -272,9 +296,7 @@ impl NodeModuleLoader {
         if let Some(exports) = pkg.get("exports") {
             if let Some(entry) = resolve_exports(exports, ".") {
                 let entry_path = package_dir.join(entry);
-                if entry_path.exists() {
-                    return Ok(entry_path);
-                }
+                return self.resolve_with_extensions(entry_path);
             }
         }
 
@@ -344,7 +366,10 @@ impl ModuleLoader for NodeModuleLoader {
     ) -> Result<ModuleSpecifier, ModuleLoaderError> {
         // Handle Node.js built-in modules with a special URL scheme
         if Self::is_node_builtin(specifier) {
-            let builtin_name = specifier.strip_prefix("node:").unwrap_or(specifier);
+            let builtin_name = specifier
+                .strip_prefix("node:")
+                .unwrap_or(specifier)
+                .trim_end_matches('/');
             // Use a special URL scheme for built-ins so we can intercept them in load()
             return ModuleSpecifier::parse(&format!("node:{}", builtin_name))
                 .map_err(|e| JsErrorBox::generic(e.to_string()));
@@ -364,6 +389,12 @@ impl ModuleLoader for NodeModuleLoader {
             .map_err(|e| JsErrorBox::generic(e.to_string()))?;
 
         let canonical = std::fs::canonicalize(&resolved_path).unwrap_or(resolved_path);
+        let canonical = if canonical.is_dir() {
+            self.resolve_with_extensions(canonical)
+                .map_err(|e| JsErrorBox::generic(e.to_string()))?
+        } else {
+            canonical
+        };
 
         ModuleSpecifier::from_file_path(&canonical).map_err(|_| {
             JsErrorBox::generic(format!(
@@ -402,8 +433,8 @@ impl ModuleLoader for NodeModuleLoader {
             Ok(c) => c,
             Err(e) => {
                 return ModuleLoadResponse::Sync(Err(JsErrorBox::generic(format!(
-                    "Failed to read module: {}",
-                    e
+                    "Failed to read module {:?}: {}",
+                    path, e
                 ))))
             }
         };
@@ -411,7 +442,7 @@ impl ModuleLoader for NodeModuleLoader {
         let module_type = self.detect_module_type(&path);
 
         // Wrap CommonJS modules if needed
-        let code = if is_commonjs(&code) {
+        let code = if module_type != ModuleType::Json && is_commonjs(&code) {
             wrap_commonjs(&code)
         } else {
             code
@@ -484,18 +515,35 @@ fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Option<String>
 
 /// Check if code appears to be CommonJS
 fn is_commonjs(code: &str) -> bool {
+    if looks_like_esm(code) {
+        return false;
+    }
+
+    let code = strip_js_comments(code);
+
     // Quick heuristics for CommonJS detection
     code.contains("module.exports")
         || code.contains("exports.")
+        || EXPORTS_WORD_RE.is_match(&code)
+        || code.contains("Object.defineProperty(exports,")
         || (code.contains("require(") && !code.contains("import "))
+}
+
+fn looks_like_esm(code: &str) -> bool {
+    code.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("import ")
+            || trimmed.starts_with("export ")
+            || trimmed.starts_with("export{")
+    })
 }
 
 /// Wrap CommonJS code as ESM
 fn wrap_commonjs(code: &str) -> String {
     // Extract all require() specifiers so we can convert them to ESM imports
-    let require_re = regex::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap();
+    let code_without_comments = strip_js_comments(code);
     let mut require_specs: Vec<String> = Vec::new();
-    for cap in require_re.captures_iter(code) {
+    for cap in REQUIRE_CALL_RE.captures_iter(&code_without_comments) {
         if let Some(spec) = cap.get(1) {
             let spec_str = spec.as_str().to_string();
             if !require_specs.contains(&spec_str) {
@@ -504,11 +552,19 @@ fn wrap_commonjs(code: &str) -> String {
         }
     }
 
-    // Generate ESM import statements for each require() specifier
+    // Generate ESM namespace imports for each require() specifier. `require()`
+    // unwraps wrapped CJS default exports when safe, but falls back to the
+    // namespace if a circular module's default binding is still in TDZ.
     let imports = require_specs
         .iter()
         .enumerate()
-        .map(|(i, spec)| format!("import _req_{} from '{}';", i, spec))
+        .map(|(i, spec)| {
+            if spec.ends_with(".json") {
+                format!("import _req_{} from '{}' with {{ type: 'json' }};", i, spec)
+            } else {
+                format!("import * as _req_{} from '{}';", i, spec)
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -516,22 +572,42 @@ fn wrap_commonjs(code: &str) -> String {
     let require_cases = require_specs
         .iter()
         .enumerate()
-        .map(|(i, spec)| format!("        if (specifier === '{}') return _req_{};", spec, i))
+        .map(|(i, spec)| {
+            if spec.ends_with(".json") {
+                format!("        if (specifier === '{}') return _req_{};", spec, i)
+            } else {
+                format!(
+                    "        if (specifier === '{}') return __perry_require_namespace(_req_{});",
+                    spec, i
+                )
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
     // Extract exported names from CommonJS code to properly re-export them
     let mut named_exports = Vec::new();
+    let mut export_star_specs = Vec::new();
 
     // Find exports.X = assignments
-    for cap in regex::Regex::new(r"exports\.(\w+)\s*=")
-        .unwrap()
-        .captures_iter(code)
-    {
+    for cap in EXPORTS_ASSIGN_RE.captures_iter(code) {
         if let Some(name) = cap.get(1) {
             let name = name.as_str();
-            if name != "__esModule" && !named_exports.contains(&name.to_string()) {
+            if name != "__esModule"
+                && name != "default"
+                && !named_exports.contains(&name.to_string())
+            {
                 named_exports.push(name.to_string());
+            }
+        }
+    }
+
+    // Find tslib __exportStar(require("..."), exports) barrel re-exports.
+    for cap in EXPORT_STAR_RE.captures_iter(code) {
+        if let Some(spec) = cap.get(1) {
+            let spec = spec.as_str().to_string();
+            if !export_star_specs.contains(&spec) {
+                export_star_specs.push(spec);
             }
         }
     }
@@ -544,7 +620,27 @@ fn wrap_commonjs(code: &str) -> String {
         // Create individual export statements that reference the _cjs object
         named_exports
             .iter()
-            .map(|n| format!("export const {} = _cjs.{};", n, n))
+            .map(|n| {
+                if is_safe_js_binding_name(n) {
+                    format!("export const {} = _cjs.{};", n, n)
+                } else {
+                    let alias = format!("_cjs_export_{}", n);
+                    format!(
+                        "const {} = _cjs.{};\nexport {{ {} as {} }};",
+                        alias, n, alias, n
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let export_star_decls = if export_star_specs.is_empty() {
+        String::new()
+    } else {
+        export_star_specs
+            .iter()
+            .map(|spec| format!("export * from '{}';", spec))
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -552,8 +648,15 @@ fn wrap_commonjs(code: &str) -> String {
     format!(
         r#"{}
 const _cjs = (function() {{
-    const module = {{ exports: {{}} }};
-    const exports = module.exports;
+    var module = {{ exports: {{}} }};
+    var exports = module.exports;
+    function __perry_require_namespace(ns) {{
+        try {{
+            if (ns.__perry_commonjs === true && ns.default !== undefined) return ns.default;
+        }} catch (_) {{
+        }}
+        return ns;
+    }}
     function require(specifier) {{
 {}
         throw new Error('require() is not supported: ' + specifier);
@@ -565,9 +668,70 @@ const _cjs = (function() {{
 }})();
 
 export default _cjs;
+export const __perry_commonjs = true;
+{}
 {}
 "#,
-        imports, require_cases, code, named_export_decls
+        imports, require_cases, code, named_export_decls, export_star_decls
+    )
+}
+
+fn strip_js_comments(code: &str) -> String {
+    let without_blocks = BLOCK_COMMENT_RE.replace_all(code, "");
+    LINE_COMMENT_RE
+        .replace_all(&without_blocks, "")
+        .into_owned()
+}
+
+fn is_safe_js_binding_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let mut chars = name.chars();
+    let first = chars.next().unwrap();
+    if !(first == '_' || first == '$' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    if !chars.all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    !matches!(
+        name,
+        "await"
+            | "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "export"
+            | "extends"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "return"
+            | "static"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "yield"
     )
 }
 
@@ -614,15 +778,16 @@ export function connect() { return new TLSSocket(); }
 export function createSecureContext() { return {}; }
 export default { TLSSocket, connect, createSecureContext };
 "#.to_string(),
-        "http" | "https" => r#"
-// Stub implementation for Node.js http/https module
+        "http" | "https" | "http2" => r#"
+// Stub implementation for Node.js http/https/http2 module
 export class IncomingMessage {}
 export class ServerResponse {}
 export class Agent {}
 export function request() { throw new Error('http.request not supported in this environment'); }
 export function get() { throw new Error('http.get not supported in this environment'); }
 export function createServer() { throw new Error('http.createServer not supported in this environment'); }
-export default { IncomingMessage, ServerResponse, Agent, request, get, createServer };
+export function createSecureServer() { throw new Error('http2.createSecureServer not supported in this environment'); }
+export default { IncomingMessage, ServerResponse, Agent, request, get, createServer, createSecureServer };
 "#.to_string(),
         "crypto" => r#"
 // Stub implementation for Node.js 'crypto' module
@@ -700,7 +865,7 @@ export function networkInterfaces() { return {}; }
 export const EOL = '\n';
 export default { platform, arch, cpus, homedir, tmpdir, hostname, type, release, totalmem, freemem, uptime, loadavg, networkInterfaces, EOL };
 "#.to_string(),
-        "stream" => r#"
+        "stream" | "stream/web" => r#"
 // Stub implementation for Node.js 'stream' module
 export class Readable {
     constructor() {}
@@ -720,9 +885,33 @@ export class Duplex extends Readable {
 }
 export class Transform extends Duplex {}
 export class PassThrough extends Transform {}
+export class ReadableStream {}
+export class WritableStream {}
+export class TransformStream {}
 export function pipeline() {}
 export function finished() {}
-export default { Readable, Writable, Duplex, Transform, PassThrough, pipeline, finished };
+export default { Readable, Writable, Duplex, Transform, PassThrough, ReadableStream, WritableStream, TransformStream, pipeline, finished };
+"#.to_string(),
+        "repl" => r#"
+// Stub implementation for Node.js 'repl' module
+export function start() {
+    return {
+        context: {},
+        on() { return this; },
+        close() {}
+    };
+}
+export default { start };
+"#.to_string(),
+        "timers" => r#"
+// Stub implementation for Node.js 'timers' module
+export const setTimeout = globalThis.setTimeout.bind(globalThis);
+export const clearTimeout = globalThis.clearTimeout.bind(globalThis);
+export const setInterval = globalThis.setInterval.bind(globalThis);
+export const clearInterval = globalThis.clearInterval.bind(globalThis);
+export const setImmediate = globalThis.setImmediate || ((fn, ...args) => setTimeout(fn, 0, ...args));
+export const clearImmediate = globalThis.clearImmediate || clearTimeout;
+export default { setTimeout, clearTimeout, setInterval, clearInterval, setImmediate, clearImmediate };
 "#.to_string(),
         "buffer" => r#"
 // Stub implementation for Node.js 'buffer' module
@@ -752,7 +941,34 @@ export function deprecate(fn) { return fn; }
 export function inherits(ctor, superCtor) { Object.setPrototypeOf(ctor.prototype, superCtor.prototype); }
 export const TextEncoder = globalThis.TextEncoder;
 export const TextDecoder = globalThis.TextDecoder;
-export default { promisify, callbackify, inspect, format, debuglog, deprecate, inherits, TextEncoder, TextDecoder };
+// util.types — Node's runtime introspection namespace. NestJS / rxjs
+// reach into this for cheap Promise / TypedArray / Map / Set probes
+// during DI dispatch. Most call sites just want a boolean; returning
+// `false` for an unknown shape is the conservative answer (the caller
+// then falls through to its own duck-typing path).
+const _isPromiseLike = (v) => v != null && (typeof v === "object" || typeof v === "function") && typeof v.then === "function";
+export const types = {
+    isPromise: (v) => _isPromiseLike(v),
+    isAsyncFunction: (v) => typeof v === "function" && v.constructor && v.constructor.name === "AsyncFunction",
+    isGeneratorFunction: (v) => typeof v === "function" && v.constructor && v.constructor.name === "GeneratorFunction",
+    isMap: (v) => v instanceof Map,
+    isSet: (v) => v instanceof Set,
+    isWeakMap: (v) => v instanceof WeakMap,
+    isWeakSet: (v) => v instanceof WeakSet,
+    isRegExp: (v) => v instanceof RegExp,
+    isDate: (v) => v instanceof Date,
+    isArrayBuffer: (v) => v instanceof ArrayBuffer,
+    isSharedArrayBuffer: () => false,
+    isDataView: (v) => v instanceof DataView,
+    isUint8Array: (v) => v instanceof Uint8Array,
+    isTypedArray: (v) => ArrayBuffer.isView(v) && !(v instanceof DataView),
+    isProxy: () => false,
+    isNativeError: (v) => v instanceof Error,
+    isBoxedPrimitive: () => false,
+    isAnyArrayBuffer: (v) => v instanceof ArrayBuffer,
+    isModuleNamespaceObject: () => false,
+};
+export default { promisify, callbackify, inspect, format, debuglog, deprecate, inherits, TextEncoder, TextDecoder, types };
 "#.to_string(),
         "events" => r#"
 // Stub implementation for Node.js 'events' module
@@ -769,6 +985,12 @@ export class EventEmitter {
     setMaxListeners() { return this; }
     getMaxListeners() { return 10; }
 }
+export function once(emitter, event) {
+    return new Promise((resolve) => emitter.once(event, (...args) => resolve(args)));
+}
+EventEmitter.EventEmitter = EventEmitter;
+EventEmitter.once = once;
+export const __perry_commonjs = true;
 export default EventEmitter;
 "#.to_string(),
         "assert" => r#"
@@ -799,6 +1021,13 @@ export function escape(str) { return encodeURIComponent(str); }
 export function unescape(str) { return decodeURIComponent(str); }
 export default { stringify, parse, escape, unescape };
 "#.to_string(),
+        "tty" => r#"
+// Stub implementation for Node.js 'tty' module
+export function isatty() { return false; }
+export class ReadStream {}
+export class WriteStream {}
+export default { isatty, ReadStream, WriteStream };
+"#.to_string(),
         "string_decoder" => r#"
 // Stub implementation for Node.js 'string_decoder' module
 export class StringDecoder {
@@ -827,6 +1056,48 @@ export function createGunzip() { throw new Error('zlib.createGunzip not supporte
 export function createDeflate() { throw new Error('zlib.createDeflate not supported'); }
 export function createInflate() { throw new Error('zlib.createInflate not supported'); }
 export default { gzip, gunzip, gzipSync, gunzipSync, deflate, inflate, deflateSync, inflateSync, brotliCompress, brotliDecompress, brotliCompressSync, brotliDecompressSync, createGzip, createGunzip, createDeflate, createInflate };
+"#.to_string(),
+        "async_hooks" => r#"
+// Stub implementation for Node.js 'async_hooks' module
+// Used by @nestjs/core for request-scoped DI context propagation (PR #754).
+// No real async-context tracking here: each AsyncResource is a thin
+// wrapper that just runs the callback in the current context.
+export class AsyncResource {
+    constructor(_type, _options) {}
+    runInAsyncScope(fn, thisArg, ...args) { return fn.apply(thisArg, args); }
+    emitDestroy() { return this; }
+    asyncId() { return 0; }
+    triggerAsyncId() { return 0; }
+    bind(fn) {
+        const ar = this;
+        return function (...args) { return ar.runInAsyncScope(fn, this, ...args); };
+    }
+    static bind(fn, type, thisArg) {
+        const ar = new AsyncResource(type || "bound-anonymous-fn");
+        return ar.bind(thisArg !== undefined ? fn.bind(thisArg) : fn);
+    }
+}
+export class AsyncLocalStorage {
+    constructor() { this._store = undefined; }
+    run(store, fn, ...args) {
+        const prev = this._store;
+        this._store = store;
+        try { return fn(...args); } finally { this._store = prev; }
+    }
+    exit(fn, ...args) {
+        const prev = this._store;
+        this._store = undefined;
+        try { return fn(...args); } finally { this._store = prev; }
+    }
+    getStore() { return this._store; }
+    enterWith(store) { this._store = store; }
+    disable() { this._store = undefined; }
+}
+export function executionAsyncId() { return 0; }
+export function executionAsyncResource() { return {}; }
+export function triggerAsyncId() { return 0; }
+export function createHook() { return { enable() { return this; }, disable() { return this; } }; }
+export default { AsyncResource, AsyncLocalStorage, executionAsyncId, executionAsyncResource, triggerAsyncId, createHook };
 "#.to_string(),
         _ => format!(r#"
 // Empty stub for unsupported Node.js built-in: {}
@@ -863,7 +1134,121 @@ mod tests {
     fn test_is_commonjs() {
         assert!(is_commonjs("module.exports = {};"));
         assert!(is_commonjs("exports.foo = 'bar';"));
+        assert!(is_commonjs("var base64 = exports;"));
+        assert!(is_commonjs(
+            "Object.defineProperty(exports, \"__esModule\", { value: true });"
+        ));
         assert!(!is_commonjs("export default {};"));
         assert!(!is_commonjs("import foo from 'bar';"));
+    }
+
+    #[test]
+    fn test_is_commonjs_does_not_wrap_esm_with_exports_text() {
+        let code =
+            "import fs from 'node:fs';\n/** docs mention exports.foo */\nexport const value = 1;";
+
+        assert!(!is_commonjs(code));
+    }
+
+    #[test]
+    fn test_wrap_commonjs_skips_default_named_export() {
+        let wrapped = wrap_commonjs("exports.default = 1;\nexports.iterate = 2;");
+
+        assert!(!wrapped.contains("export const default"));
+        assert!(wrapped.contains("export default _cjs;"));
+        assert!(wrapped.contains("export const iterate = _cjs.iterate;"));
+    }
+
+    #[test]
+    fn test_wrap_commonjs_requires_namespace_imports() {
+        let wrapped = wrap_commonjs("const uid = require('uid');\nexports.value = uid.uid();");
+
+        assert!(wrapped.contains("import * as _req_0 from 'uid';"));
+        assert!(
+            wrapped.contains("if (specifier === 'uid') return __perry_require_namespace(_req_0);")
+        );
+        assert!(wrapped.contains(
+            "if (ns.__perry_commonjs === true && ns.default !== undefined) return ns.default;"
+        ));
+        assert!(wrapped.contains("catch (_)"));
+        assert!(wrapped.contains("export const __perry_commonjs = true;"));
+    }
+
+    #[test]
+    fn test_wrap_commonjs_ignores_require_in_comments() {
+        let wrapped = wrap_commonjs(
+            "module.exports = roots;\n/** Example only: require('./compiled.js'); */",
+        );
+
+        assert!(!wrapped.contains("import * as _req_0 from './compiled.js';"));
+        assert!(!wrapped.contains("specifier === './compiled.js'"));
+    }
+
+    #[test]
+    fn test_wrap_commonjs_imports_json_with_attribute() {
+        let wrapped = wrap_commonjs("exports.version = require('../package.json').version;");
+
+        assert!(wrapped.contains("import _req_0 from '../package.json' with { type: 'json' };"));
+        assert!(wrapped.contains("if (specifier === '../package.json') return _req_0;"));
+    }
+
+    #[test]
+    fn test_wrap_commonjs_emits_export_star_barrels() {
+        let wrapped = wrap_commonjs(
+            "const tslib_1 = require('tslib');\ntslib_1.__exportStar(require('./decorators'), exports);",
+        );
+
+        assert!(wrapped.contains("export * from './decorators';"));
+    }
+
+    #[test]
+    fn test_wrap_commonjs_aliases_reserved_export_names() {
+        let wrapped = wrap_commonjs("exports.static = require('serve-static');");
+
+        assert!(wrapped.contains("const _cjs_export_static = _cjs.static;"));
+        assert!(wrapped.contains("export { _cjs_export_static as static };"));
+        assert!(!wrapped.contains("export const static"));
+    }
+
+    #[test]
+    fn test_file_url_directory_resolves_to_index() {
+        let root = std::env::temp_dir().join(format!(
+            "perry-jsruntime-module-test-{}",
+            std::process::id()
+        ));
+        let module_dir = root.join("pkg");
+        std::fs::create_dir_all(&module_dir).unwrap();
+        let index = module_dir.join("index.js");
+        std::fs::write(&index, "export const value = 1;").unwrap();
+
+        let loader = NodeModuleLoader::with_base_dir(root.clone());
+        let specifier = format!("file://{}", module_dir.display());
+        let resolved = loader
+            .resolve_module_path(&specifier, &root.join("entry.js"))
+            .unwrap();
+
+        assert_eq!(resolved, index);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_package_main_resolves_to_file() {
+        let root = std::env::temp_dir().join(format!(
+            "perry-jsruntime-package-test-{}",
+            std::process::id()
+        ));
+        let package_dir = root.join("node_modules").join("pkg");
+        std::fs::create_dir_all(&package_dir).unwrap();
+        let index = package_dir.join("index.js");
+        std::fs::write(&index, "module.exports = {};").unwrap();
+        std::fs::write(package_dir.join("package.json"), r#"{"main":"index.js"}"#).unwrap();
+
+        let loader = NodeModuleLoader::with_base_dir(root.clone());
+        let resolved = loader
+            .resolve_module_path("pkg", &root.join("entry.js"))
+            .unwrap();
+
+        assert_eq!(resolved, index);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
