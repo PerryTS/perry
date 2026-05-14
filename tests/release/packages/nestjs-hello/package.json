@@ -6,8 +6,8 @@
   "description": "Tier-3 fixture: minimal NestJS app that wires @Module/@Controller/@Injectable/@Get + DI through Perry's legacy decorator metadata path (PR #754). Starts a real HTTP listener on $PERRY_NEST_PORT (default 13754) so the test exercises bootstrap end-to-end — not a bespoke mock container.",
   "dependencies": {
     "@nestjs/common": "^10.4.0",
-    "@nestjs/core": "^10.4.0",
-    "@nestjs/platform-express": "^10.4.0",
+    "@nestjs/core": "^11.1.21",
+    "@nestjs/platform-express": "^11.1.21",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
