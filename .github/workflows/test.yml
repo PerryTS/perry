@@ -350,6 +350,8 @@ jobs:
             test_issue_610_foreach \
             test_issue_610_smoke \
             test_issue_640_navstack_textfield \
+            test_issue_763_reactive_textfield \
+            test_issue_764_state_at_module_init \
             test_parity_assert \
             test_parity_async_hooks \
             test_parity_buffer \

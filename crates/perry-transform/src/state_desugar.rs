@@ -58,7 +58,7 @@
 use perry_hir::walker::walk_expr_children_mut;
 use perry_hir::{Expr, Module, Param, Stmt};
 use perry_types::{FuncId, LocalId, Type};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Counters threaded through the rewrite for fresh `LocalId` / `FuncId`
 /// allocation. The NavStack lowering needs both: each call site spawns a
@@ -96,9 +96,28 @@ struct StateBinding {
 
 /// Run the desugar. No-op when the module has no `state<T>` declarations.
 pub fn run(module: &mut Module) {
-    let bindings = collect_state_bindings(&module.init);
+    let mut bindings = collect_state_bindings(&module.init);
     if bindings.is_empty() {
         return;
+    }
+    // #764: a binding declared as `const x = State(initial)` at module-init
+    // that is *also* consumed by the handle-based state API surface
+    // (`stateOnChange`, `stateBindTextfield`, `stateBindToggle`, etc.) MUST
+    // stay handle-based. Those FFI entry points expect the integer Widget
+    // handle returned by `perry_ui_state_create`, not a synthetic
+    // `"__state_N"` registry key. Rewriting them to `__state_init` +
+    // leaving `stateOnChange(x, ...)` untouched silently passes `undefined`
+    // as the handle and the callback never fires — exactly the surface
+    // symptom in #763 (the `Text(\`...${state.value}...\`)` IIFE desugared
+    // by HIR lowering registers `stateOnChange` against a now-`undefined`
+    // local). Drop those bindings from the rewrite map so they stay
+    // pointing at the real `State(...)` constructor call.
+    let handle_uses = collect_handle_based_state_uses(module);
+    if !handle_uses.is_empty() {
+        bindings.retain(|id, _| !handle_uses.contains(id));
+        if bindings.is_empty() {
+            return;
+        }
     }
     rewrite_init_decls(&mut module.init, &bindings);
     let mut fresh = FreshIds {
@@ -385,6 +404,160 @@ fn scan_expr_func_ids(e: &Expr, max_id: &mut FuncId) {
     }
     use perry_hir::walker::walk_expr_children;
     walk_expr_children(e, &mut |child| scan_expr_func_ids(child, max_id));
+}
+
+/// Walk the entire module and return the set of `LocalId`s passed as the
+/// first positional argument to a handle-based state API on `perry/ui`.
+/// These bindings can't be safely keyed-rewritten because the runtime FFI
+/// (`perry_ui_state_on_change`, `perry_ui_state_bind_textfield`, …) takes
+/// the integer Widget handle, not a `"__state_N"` registry key. See the
+/// call site in `run()` for the original incident (#763 / #764).
+///
+/// The match is intentionally conservative: only methods that are known
+/// to consume a `State<T>` as their receiver-equivalent first arg. Methods
+/// the rewrite pass already handles end-to-end (`NavStack`, `ForEach`,
+/// `state.set` / `state.value` / `state.get` / `state.text`) are NOT in
+/// this list — those have a complete keyed-side implementation.
+fn is_handle_based_state_api(method: &str) -> bool {
+    matches!(
+        method,
+        "stateOnChange"
+            | "stateBindTextfield"
+            | "stateBindToggle"
+            | "stateBindSlider"
+            | "stateBindVisibility"
+            | "stateBindTextNumeric"
+    )
+}
+
+fn collect_handle_based_state_uses(module: &Module) -> HashSet<LocalId> {
+    let mut out = HashSet::new();
+    let walk_stmts = |stmts: &[Stmt], out: &mut HashSet<LocalId>| {
+        for stmt in stmts {
+            scan_stmt_handle_uses(stmt, out);
+        }
+    };
+    walk_stmts(&module.init, &mut out);
+    for func in &module.functions {
+        walk_stmts(&func.body, &mut out);
+    }
+    for class in &module.classes {
+        for method in &class.methods {
+            walk_stmts(&method.body, &mut out);
+        }
+        if let Some(ctor) = &class.constructor {
+            walk_stmts(&ctor.body, &mut out);
+        }
+    }
+    out
+}
+
+fn scan_stmt_handle_uses(stmt: &Stmt, out: &mut HashSet<LocalId>) {
+    match stmt {
+        Stmt::Let { init: Some(e), .. } => scan_expr_handle_uses(e, out),
+        Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_handle_uses(e, out),
+        Stmt::Return(Some(e)) => scan_expr_handle_uses(e, out),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            scan_expr_handle_uses(condition, out);
+            for s in then_branch {
+                scan_stmt_handle_uses(s, out);
+            }
+            if let Some(eb) = else_branch {
+                for s in eb {
+                    scan_stmt_handle_uses(s, out);
+                }
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            scan_expr_handle_uses(condition, out);
+            for s in body {
+                scan_stmt_handle_uses(s, out);
+            }
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                scan_stmt_handle_uses(i, out);
+            }
+            if let Some(c) = condition {
+                scan_expr_handle_uses(c, out);
+            }
+            if let Some(u) = update {
+                scan_expr_handle_uses(u, out);
+            }
+            for s in body {
+                scan_stmt_handle_uses(s, out);
+            }
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+            ..
+        } => {
+            for s in body {
+                scan_stmt_handle_uses(s, out);
+            }
+            if let Some(c) = catch {
+                for s in &c.body {
+                    scan_stmt_handle_uses(s, out);
+                }
+            }
+            if let Some(f) = finally {
+                for s in f {
+                    scan_stmt_handle_uses(s, out);
+                }
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            scan_expr_handle_uses(discriminant, out);
+            for case in cases {
+                if let Some(t) = &case.test {
+                    scan_expr_handle_uses(t, out);
+                }
+                for s in &case.body {
+                    scan_stmt_handle_uses(s, out);
+                }
+            }
+        }
+        Stmt::Labeled { body, .. } => scan_stmt_handle_uses(body, out),
+        _ => {}
+    }
+}
+
+fn scan_expr_handle_uses(e: &Expr, out: &mut HashSet<LocalId>) {
+    if let Expr::NativeMethodCall {
+        module,
+        method,
+        object: None,
+        args,
+        ..
+    } = e
+    {
+        if module == "perry/ui" && is_handle_based_state_api(method) {
+            if let Some(Expr::LocalGet(id)) = args.first() {
+                out.insert(*id);
+            }
+        }
+    }
+    use perry_hir::walker::walk_expr_children;
+    walk_expr_children(e, &mut |child| scan_expr_handle_uses(child, out));
+    if let Expr::Closure { body, .. } = e {
+        for s in body {
+            scan_stmt_handle_uses(s, out);
+        }
+    }
 }
 
 /// Walk `module.init` for `let x = state(initial)` and assign each a
@@ -969,5 +1142,180 @@ fn format_number(n: f64) -> String {
         format!("{}", n as i64)
     } else {
         format!("{}", n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state_let(id: LocalId, method: &str, initial: Expr) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("cell_{}", id),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::NativeMethodCall {
+                module: "perry/ui".to_string(),
+                class_name: None,
+                object: None,
+                method: method.to_string(),
+                args: vec![initial],
+            }),
+        }
+    }
+
+    fn handle_call(method: &str, state_id: LocalId) -> Stmt {
+        Stmt::Expr(Expr::NativeMethodCall {
+            module: "perry/ui".to_string(),
+            class_name: None,
+            object: None,
+            method: method.to_string(),
+            args: vec![
+                Expr::LocalGet(state_id),
+                Expr::Closure {
+                    func_id: 100,
+                    params: vec![],
+                    return_type: Type::Any,
+                    body: vec![],
+                    captures: vec![],
+                    mutable_captures: vec![],
+                    captures_this: false,
+                    enclosing_class: None,
+                    is_async: false,
+                },
+            ],
+        })
+    }
+
+    fn set_method_call(state_id: LocalId, value: &str) -> Stmt {
+        Stmt::Expr(Expr::NativeMethodCall {
+            module: "perry/ui".to_string(),
+            class_name: Some("State".to_string()),
+            object: Some(Box::new(Expr::LocalGet(state_id))),
+            method: "set".to_string(),
+            args: vec![Expr::String(value.to_string())],
+        })
+    }
+
+    /// Returns true if the first init statement still constructs a State
+    /// (i.e., the desugar didn't replace it with `Let { init: Undefined }`
+    /// + `__state_init`). #764 regression check.
+    fn first_let_init_is_state_call(module: &Module) -> bool {
+        matches!(
+            module.init.first(),
+            Some(Stmt::Let {
+                init: Some(Expr::NativeMethodCall { method, .. }),
+                ..
+            }) if method == "State" || method == "state"
+        )
+    }
+
+    /// True if `module.init` contains a `__state_init` synthetic call —
+    /// i.e., the rewrite was applied.
+    fn has_state_init_call(module: &Module) -> bool {
+        module.init.iter().any(|s| {
+            matches!(
+                s,
+                Stmt::Expr(Expr::NativeMethodCall { method, .. }) if method == "__state_init"
+            )
+        })
+    }
+
+    #[test]
+    fn module_init_uppercase_state_with_state_on_change_is_skipped() {
+        // #764: `const cell = State("v"); stateOnChange(cell, …); cell.set(...)`
+        // at module-init level used to be hijacked into `__state_init` +
+        // `__state_set`, leaving `stateOnChange` registered against
+        // `undefined`. The fix preserves the original handle-based call.
+        let mut module = Module::new("test");
+        module
+            .init
+            .push(state_let(0, "State", Expr::String("v".to_string())));
+        module.init.push(handle_call("stateOnChange", 0));
+        module.init.push(set_method_call(0, "next"));
+
+        run(&mut module);
+
+        assert!(
+            first_let_init_is_state_call(&module),
+            "binding should remain `State(...)` when stateOnChange is used at module-init",
+        );
+        assert!(
+            !has_state_init_call(&module),
+            "__state_init must not be emitted when the binding is handle-consumed",
+        );
+    }
+
+    #[test]
+    fn module_init_lowercase_state_with_state_on_change_is_also_skipped() {
+        // Same gate applies to lowercase `state(...)` — if the user mixes
+        // it with the handle-based API, we must not rewrite.
+        let mut module = Module::new("test");
+        module.init.push(state_let(0, "state", Expr::Number(0.0)));
+        module.init.push(handle_call("stateBindTextfield", 0));
+
+        run(&mut module);
+
+        assert!(first_let_init_is_state_call(&module));
+        assert!(!has_state_init_call(&module));
+    }
+
+    #[test]
+    fn module_init_state_without_handle_api_is_still_rewritten() {
+        // Sanity: when no handle-based API touches the binding (e.g. the
+        // user goes purely through `cell.set` / `cell.value`), the original
+        // keyed rewrite must still fire. Otherwise NavStack / ForEach /
+        // string-state.text() flows regress.
+        let mut module = Module::new("test");
+        module
+            .init
+            .push(state_let(0, "state", Expr::String("v".to_string())));
+        module.init.push(set_method_call(0, "next"));
+
+        run(&mut module);
+
+        assert!(
+            has_state_init_call(&module),
+            "rewrite must still fire for pure keyed-API usage",
+        );
+        // Original Let should now be `init: Some(Undefined)`.
+        let first_init = match &module.init[0] {
+            Stmt::Let { init: Some(e), .. } => e.clone(),
+            other => panic!("expected Let stmt, got {:?}", other),
+        };
+        assert!(matches!(first_init, Expr::Undefined));
+    }
+
+    #[test]
+    fn handle_use_inside_function_body_also_gates_module_init_binding() {
+        // The user's #763 shape places `State()` at module-init but uses
+        // `stateOnChange` inside `function main()`. The gate must scan all
+        // function bodies, not just module.init, to catch this.
+        use perry_hir::Function;
+        let mut module = Module::new("test");
+        module
+            .init
+            .push(state_let(0, "State", Expr::String("v".to_string())));
+        module.functions.push(Function {
+            id: 0,
+            name: "main".to_string(),
+            params: vec![],
+            type_params: vec![],
+            return_type: Type::Any,
+            body: vec![handle_call("stateOnChange", 0)],
+            is_async: false,
+            is_generator: false,
+            is_exported: false,
+            captures: vec![],
+            decorators: vec![],
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+
+        run(&mut module);
+
+        assert!(first_let_init_is_state_call(&module));
+        assert!(!has_state_init_call(&module));
     }
 }
