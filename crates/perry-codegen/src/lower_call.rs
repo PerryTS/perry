@@ -3516,6 +3516,28 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     } else {
         None
     };
+    // Issue #740: synthesized `__perry_cap_<id>` ctor params (added by
+    // `lower_class_decl` when a class declared inside a function captures
+    // outer-scope locals) must be visible to field initializers, since
+    // those field initializers were rewritten to read the captured value
+    // via `LocalGet(fresh_param_id)`. Bind ALL ctor params (own + cap)
+    // before `apply_field_initializers_recursive` so the soft-fallback at
+    // `LocalGet` codegen doesn't return 0.0. Locals/local_types are
+    // saved-and-restored around the whole inlined ctor flow below; we
+    // mirror that here so the ctor params don't leak out of `new`.
+    let mut saved_locals_for_ctor: Option<std::collections::HashMap<u32, String>> = None;
+    let mut saved_local_types_for_ctor: Option<std::collections::HashMap<u32, HirType>> = None;
+    if let Some(ctor) = &class.constructor {
+        saved_locals_for_ctor = Some(ctx.locals.clone());
+        saved_local_types_for_ctor = Some(ctx.local_types.clone());
+        for (param, arg_val) in ctor.params.iter().zip(lowered_args.iter()) {
+            let slot = ctx.func.alloca_entry(DOUBLE);
+            ctx.block().store(DOUBLE, arg_val, &slot);
+            ctx.locals.insert(param.id, slot);
+            ctx.local_types.insert(param.id, param.ty.clone());
+        }
+    }
+
     if let Some(stop_at) = inherited_ctor_class.clone() {
         apply_field_initializers_recursive(ctx, class_name, FieldInitMode::UpToInclusive(stop_at))?;
     } else {
@@ -3532,25 +3554,16 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // the constructor's bindings scoped to its body — they don't leak
     // back into the enclosing function.
     if let Some(ctor) = &class.constructor {
-        let saved_locals = ctx.locals.clone();
-        let saved_local_types = ctx.local_types.clone();
-
-        for (param, arg_val) in ctor.params.iter().zip(lowered_args.iter()) {
-            // Ctor params become ctx.locals for the inlined body;
-            // closures inside the ctor may capture them, so hoist
-            // to the entry block.
-            let slot = ctx.func.alloca_entry(DOUBLE);
-            ctx.block().store(DOUBLE, arg_val, &slot);
-            ctx.locals.insert(param.id, slot);
-            ctx.local_types.insert(param.id, param.ty.clone());
-        }
-
+        // Issue #740: ctor params were already bound above so field
+        // initializers could read them. Don't re-bind (the slots already
+        // hold the lowered arg values); just lower the body.
+        let _ = ctor;
         // Lower the constructor body. Errors propagate.
-        crate::stmt::lower_stmts(ctx, &ctor.body)?;
+        crate::stmt::lower_stmts(ctx, &class.constructor.as_ref().unwrap().body)?;
 
         // Restore the enclosing function's local scope.
-        ctx.locals = saved_locals;
-        ctx.local_types = saved_local_types;
+        ctx.locals = saved_locals_for_ctor.take().unwrap_or_default();
+        ctx.local_types = saved_local_types_for_ctor.take().unwrap_or_default();
     } else {
         // No own constructor — walk the parent chain to find an
         // inherited constructor and inline it. TypeScript semantics:

@@ -283,6 +283,15 @@ pub struct LoweringContext {
     /// here so the `Expr::New { class_name }` lowering can append
     /// `LocalGet(id)` for each captured id at every construction site.
     pub(crate) class_captures: Vec<(String, Vec<LocalId>)>,
+    /// Issue #740: `let_name → class_name` for `let/const/var <name> = <ClassRef>`
+    /// initializers. Lets `Expr::New { class_name }` (where `class_name` is
+    /// the source-level identifier of an alias binding) resolve to the
+    /// underlying class so its `class_captures` (if any) get appended as
+    /// ctor args at the `new` site. Mirrors codegen's `local_class_aliases`,
+    /// but built at HIR-lowering time so the captured-arg LocalGets land in
+    /// the HIR (where codegen consumes them) rather than being patched in
+    /// after lowering.
+    pub(crate) let_class_aliases: Vec<(String, String)>,
     /// Issue #444: true when this module is the user-supplied entry file.
     /// Drives `import.meta.main` — Node 24+ / Bun semantics where the entry
     /// module reports `true` and every imported module reports `false`. Set
@@ -378,6 +387,7 @@ impl LoweringContext {
             next_anon_shape_id: 0,
             class_method_return_types: Vec::new(),
             class_captures: Vec::new(),
+            let_class_aliases: Vec::new(),
             is_entry_module: false,
             is_external_module: false,
         }
@@ -760,6 +770,44 @@ impl LoweringContext {
             .iter()
             .find(|(n, _)| n == class_name)
             .map(|(_, c)| c.as_slice())
+    }
+
+    /// Issue #740: register a `let/const/var <let_name> = <ClassRef>` alias
+    /// so `Expr::New { class_name: <let_name> }` can resolve to the
+    /// underlying class for capture-forwarding purposes.
+    pub(crate) fn register_let_class_alias(&mut self, let_name: String, class_name: String) {
+        if let Some(entry) = self
+            .let_class_aliases
+            .iter_mut()
+            .find(|(n, _)| *n == let_name)
+        {
+            entry.1 = class_name;
+        } else {
+            self.let_class_aliases.push((let_name, class_name));
+        }
+    }
+
+    /// Look up the underlying class name for a let/const/var alias. Walks
+    /// the alias chain (`const B = A; const C = B` → C resolves to A's
+    /// underlying class) up to a small depth to avoid runaway loops.
+    pub(crate) fn resolve_class_alias(&self, name: &str) -> Option<String> {
+        let mut cur = name.to_string();
+        for _ in 0..8 {
+            let next = self
+                .let_class_aliases
+                .iter()
+                .find(|(n, _)| n == &cur)
+                .map(|(_, c)| c.clone());
+            match next {
+                Some(n) if n != cur => cur = n,
+                _ => break,
+            }
+        }
+        if cur != name {
+            Some(cur)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn register_class_statics(

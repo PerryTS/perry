@@ -636,8 +636,21 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // constructor with one synthesized param per captured id;
             // pass each as `LocalGet(id)` here so the outer scope's
             // current value is snapshotted onto the new instance.
+            //
+            // Issue #740: when `class_name` is the name of a `let/const`
+            // alias (`const C = Inner` or `const C = makeChild(...)`
+            // where the returned class is statically known via a
+            // `ClassRef` chain), resolve through the alias before
+            // looking up captures. Plain function-return aliases
+            // (`const C = makeChild("foo")`) can't be resolved at HIR
+            // time — those flow through the closure mechanism in
+            // `compile_function` (the function body inlines `new`
+            // with the captures forwarded correctly).
+            let lookup_name = ctx
+                .resolve_class_alias(&class_name)
+                .unwrap_or_else(|| class_name.clone());
             let class_captures: Vec<LocalId> = ctx
-                .lookup_class_captures(&class_name)
+                .lookup_class_captures(&lookup_name)
                 .map(|c| c.to_vec())
                 .unwrap_or_default();
             for cid in class_captures {
