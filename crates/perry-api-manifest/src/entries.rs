@@ -2019,6 +2019,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "resume", true, Some("IncomingMessage")),
     method("http", "destroy", true, Some("IncomingMessage")),
     method("http", "read", true, Some("IncomingMessage")),
+    // Issue #769 — `ClientRequest.setTimeout(ms)` for `http.request` /
+    // `http.get` returns. Class filter differs from any existing http
+    // method, so the manifest-consistency drift guard requires a row
+    // here even though the test collapses class_filter variants.
+    method("http", "setTimeout", true, Some("ClientRequest")),
     method("http", "setHeader", true, Some("ServerResponse")),
     method("http", "getHeader", true, Some("ServerResponse")),
     method("http", "removeHeader", true, Some("ServerResponse")),
