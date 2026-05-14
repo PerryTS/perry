@@ -3702,10 +3702,11 @@ fn append_legacy_decorator_init_for_class(
         append_property_decorator_init(ctx, init, class, field);
     }
 
-    append_decorator_invocations(
+    append_class_decorator_invocations(
         ctx,
         init,
         &class.decorators,
+        &class.name,
         vec![Expr::ClassRef(class.name.clone())],
     );
 }
@@ -3816,7 +3817,35 @@ fn append_decorator_invocations(
     decorators: &[Decorator],
     invocation_args: Vec<Expr>,
 ) {
-    let mut callees = Vec::with_capacity(decorators.len());
+    append_decorator_invocations_inner(ctx, out, decorators, invocation_args, None);
+}
+
+/// Same as `append_decorator_invocations`, but each non-`Reflect.metadata`
+/// invocation captures its return value and throws a `TypeError` if it is
+/// anything other than `undefined`. Used for class decorators, where TS
+/// allows the decorator to return a replacement class but Perry does not
+/// install the replacement (the lowered class is fixed in the IR). Throwing
+/// on a non-`undefined` return surfaces the silent-failure case the
+/// maintainer flagged on PR #754 (`@Memoize`, `@Throttle`, GraphQL resolver
+/// wrappers, etc.).
+fn append_class_decorator_invocations(
+    ctx: &mut LoweringContext,
+    out: &mut Vec<Stmt>,
+    decorators: &[Decorator],
+    class_name: &str,
+    invocation_args: Vec<Expr>,
+) {
+    append_decorator_invocations_inner(ctx, out, decorators, invocation_args, Some(class_name));
+}
+
+fn append_decorator_invocations_inner(
+    ctx: &mut LoweringContext,
+    out: &mut Vec<Stmt>,
+    decorators: &[Decorator],
+    invocation_args: Vec<Expr>,
+    class_name_for_replacement_check: Option<&str>,
+) {
+    let mut callees: Vec<(Expr, String)> = Vec::with_capacity(decorators.len());
     for dec in decorators {
         if dec.is_reflect_metadata {
             append_reflect_metadata_decorator(out, dec, &invocation_args);
@@ -3841,18 +3870,64 @@ fn append_decorator_invocations(
                     type_args: Vec::new(),
                 }),
             });
-            callees.push(Expr::LocalGet(temp_id));
+            callees.push((Expr::LocalGet(temp_id), dec.name.clone()));
         } else {
-            callees.push(base);
+            callees.push((base, dec.name.clone()));
         }
     }
 
-    for callee in callees.into_iter().rev() {
-        out.push(Stmt::Expr(Expr::Call {
+    for (callee, dec_name) in callees.into_iter().rev() {
+        let call = Expr::Call {
             callee: Box::new(callee),
             args: invocation_args.clone(),
             type_args: Vec::new(),
-        }));
+        };
+        match class_name_for_replacement_check {
+            Some(class_name) => {
+                let ret_id = ctx.fresh_local();
+                out.push(Stmt::Let {
+                    id: ret_id,
+                    name: format!("__perry_dec_ret_{}", ret_id),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(call),
+                });
+                let msg = format!(
+                    "Class decorator `@{dec_name}` on `{class_name}` returned a replacement \
+class. Perry does not install class replacements from decorators (see \
+docs/src/language/decorators.md). Return `undefined` (or nothing) to keep \
+the decorator running for side effects only."
+                );
+                // Check `typeof ret === "function"` rather than
+                // `ret !== undefined`: Perry's lowering for a function
+                // expression with no explicit `return` currently leaves a
+                // numeric sentinel in the return slot rather than the
+                // NaN-boxed undefined value, so `!== undefined` would
+                // false-positive on side-effect-only decorators. The
+                // semantic check the maintainer asked for is "did the
+                // decorator return a class?" — a class is `typeof
+                // "function"` in JS, so this catches the @Memoize /
+                // @Throttle / GraphQL-wrapper case while leaving the bare
+                // `@Injectable` (no return) shape alone.
+                out.push(Stmt::If {
+                    condition: Expr::Compare {
+                        op: CompareOp::Eq,
+                        left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(ret_id)))),
+                        right: Box::new(Expr::String("function".to_string())),
+                    },
+                    // Perry has dedicated HIR variants for built-in errors
+                    // (`Expr::TypeErrorNew`, etc.); the generic
+                    // `Expr::New { class_name: "TypeError" }` path falls
+                    // through to an empty-object placeholder and prints
+                    // `Uncaught exception: [object] (bits=…)`.
+                    then_branch: vec![Stmt::Throw(Expr::TypeErrorNew(Box::new(Expr::String(msg))))],
+                    else_branch: None,
+                });
+            }
+            None => {
+                out.push(Stmt::Expr(call));
+            }
+        }
     }
 }
 
@@ -3915,6 +3990,30 @@ fn decorator_callee_expr(ctx: &LoweringContext, name: &str) -> Expr {
     }
 }
 
+/// Emit a one-shot note when the user imports `reflect-metadata`. Perry
+/// ships a built-in subset that's enough for the Nest-style decorator
+/// metadata canaries (see docs/src/language/decorators.md), but is NOT
+/// the full npm package's surface — `class-validator` and `TypeORM` reach
+/// into corners that aren't shimmed. Telling the user up-front avoids the
+/// silent-failure surprise where a polyfill they `import`-ed turns out
+/// not to be the polyfill they expected.
+fn emit_reflect_metadata_shim_note() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static EMITTED: AtomicBool = AtomicBool::new(false);
+    if EMITTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    eprintln!(
+        "[perry] note: `import \"reflect-metadata\"` is satisfied by Perry's built-in \
+metadata subset. Implemented surface: Reflect.defineMetadata, getMetadata, \
+getOwnMetadata, hasMetadata, hasOwnMetadata, getMetadataKeys, \
+getOwnMetadataKeys, deleteMetadata, and @Reflect.metadata(...). \
+Anything outside this surface (Symbol-keyed metadata, the full reflect-metadata \
+runtime used by class-validator/TypeORM) is not provided. \
+See docs/src/language/decorators.md."
+    );
+}
+
 fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -3931,6 +4030,7 @@ fn lower_module_decl(
                 .to_string();
 
             if source == "reflect-metadata" {
+                emit_reflect_metadata_shim_note();
                 return Ok(());
             }
 

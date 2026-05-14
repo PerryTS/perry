@@ -46,8 +46,12 @@ supports two paths:
 ## What does not work
 
 - Accessor decorators and descriptor replacement
-- Decorator class replacement return values. Perry invokes the
-  decorator but ignores a replacement class returned from it.
+- Decorator class replacement return values. If a class decorator
+  returns anything other than `undefined`, Perry throws a `TypeError`
+  at decorator application time. Real-world decorators like
+  `@Memoize`, `@Throttle`, and GraphQL resolver wrappers that return
+  wrapped classes need a Perry-aware port — the lowered class is fixed
+  in the IR and cannot be replaced at runtime.
 - General `Reflect.metadata(...)` helper calls outside decorator syntax
 - `Symbol(...)` as a metadata key
 - `emitDecoratorMetadata` beyond class/method `design:paramtypes` and
