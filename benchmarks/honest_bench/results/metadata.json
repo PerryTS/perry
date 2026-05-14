@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-05-04T08:54:24.219226+00:00",
+  "generated_at": "2026-05-14T07:44:59.755910+00:00",
   "host": {
     "os_version": "26.4",
-    "kernel": "Darwin MacBookPro.fritz.box 25.4.0 Darwin Kernel Version 25.4.0: Thu Mar 19 19:30:44 PDT 2026; root:xnu-12377.101.15~1/RELEASE_ARM64_T6000 arm64",
+    "kernel": "Darwin MacBook-Pro-69.local 25.4.0 Darwin Kernel Version 25.4.0: Thu Mar 19 19:30:44 PDT 2026; root:xnu-12377.101.15~1/RELEASE_ARM64_T6000 arm64",
     "arch": "arm64",
     "cpu": "Apple M1 Max",
     "ncpu": "10",
@@ -12,11 +12,11 @@
     "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
     "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)",
     "zig": "0.15.2",
-    "python": "Python 3.14.3",
-    "perry": "perry 0.5.495"
+    "python": "Python 3.14.4",
+    "perry": "perry 0.5.908"
   },
   "harness": {
-    "warmup": 2,
-    "measured": 5
+    "warmup": 5,
+    "measured": 20
   }
 }
