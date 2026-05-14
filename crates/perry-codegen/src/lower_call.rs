@@ -6903,22 +6903,32 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         ret: NR_VOID,
     },
     // ========== Raw TCP sockets (net) + TLS ==========
-    // Factory: `net.createConnection(port, host)` returns a Socket handle.
-    // Argument order matches Node.js: port (number) first, host (string) second.
-    // HIR lowering at crates/perry-hir/src/lower.rs registers the return
-    // value as class "Socket" so subsequent methods dispatch via the
-    // class_filter entries below.
+    // Factory: `net.createConnection(...)` / `net.connect(...)` returns
+    // a Socket handle. Supports both Node overloads:
+    //   - `net.connect(port, host)` — positional
+    //   - `net.connect({ host, port }, cb?)` — options object (issue #770)
+    // Both args are passed through as `NA_F64` so the runtime sees the
+    // raw NaN-boxed bits and can discriminate the overload by tag.
+    // Pre-#770 the second arg was `NA_STR`, which silently corrupted the
+    // options-object call site: codegen tried to coerce the callback
+    // function to a string pointer, the runtime read garbage bytes as
+    // the host name, and `getaddrinfo`'s internal `CString::new()`
+    // panicked with "file name contained an unexpected NUL byte".
+    //
+    // HIR lowering at crates/perry-hir/src/lower.rs registers the
+    // return value as class "Socket" so subsequent methods dispatch via
+    // the class_filter entries below.
     NativeModSig {
         module: "net",
         has_receiver: false,
         method: "createConnection",
         class_filter: None,
         runtime: "js_net_socket_connect",
-        args: &[NA_F64, NA_STR],
+        args: &[NA_F64, NA_F64],
         ret: NR_PTR,
     },
-    // Factory alias: `net.connect(port, host)` is the spec'd alias for
-    // `net.createConnection(port, host)`. Pre-issue-#422 only the
+    // Factory alias: `net.connect(...)` is the spec'd alias for
+    // `net.createConnection(...)`. Pre-issue-#422 only the
     // `createConnection` form was wired; `net.connect(...)` fell through
     // to the receiver-less unknown-method path which returns
     // TAG_UNDEFINED, so user code reading `typeof net.connect(...)`
@@ -6929,7 +6939,7 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         method: "connect",
         class_filter: None,
         runtime: "js_net_socket_connect",
-        args: &[NA_F64, NA_STR],
+        args: &[NA_F64, NA_F64],
         ret: NR_PTR,
     },
     // Constructor: `new net.Socket()` allocates an unconnected socket

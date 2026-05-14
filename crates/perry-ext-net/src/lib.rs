@@ -30,8 +30,9 @@
 //! for backwards compat; the well-known flip routes here.
 
 use perry_ffi::{
-    alloc_buffer, alloc_string, gc_register_root_scanner, nanbox_string_bits, BufferHeader,
-    JsClosure, JsPromise, RawClosureHeader, StringHeader,
+    alloc_buffer, alloc_string, build_object_shape, gc_register_root_scanner,
+    js_object_alloc_with_shape, js_object_set_field, nanbox_string_bits, BufferHeader, JsClosure,
+    JsPromise, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::io;
@@ -199,6 +200,108 @@ unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
     let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+}
+
+// Runtime entrypoints provided by perry-runtime (declared as extern so
+// perry-ext-net doesn't need to depend on the perry-runtime rlib).
+extern "C" {
+    fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
+    fn js_object_get_field_by_name_f64(obj: *const ObjectHeader, key: *const StringHeader) -> f64;
+}
+
+/// Is `val_f64` a NaN-boxed pointer / object / string / closure (any
+/// non-number value)? Used by `js_net_socket_connect` to discriminate
+/// between the positional `(port, host)` overload and the
+/// options-object `({host, port}, cb?)` overload. Issue #770.
+fn looks_like_nanboxed_object(val_f64: f64) -> bool {
+    let upper = val_f64.to_bits() >> 48;
+    // NaN-boxed values live in `0x7FF8..=0x7FFF` (quiet NaN prefix +
+    // 3-bit tag). Plain `f64` ports like `80.0` never reach this range
+    // because the prefix lives in the exponent.
+    (0x7FF8..=0x7FFF).contains(&upper)
+}
+
+/// Unbox a NaN-boxed value to the raw 48-bit pointer payload, regardless
+/// of which `0x7FFx` tag it carries.
+unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
+    let bits = val_f64.to_bits();
+    (bits & 0x0000_FFFF_FFFF_FFFF) as *mut u8
+}
+
+/// Extract a string field from a NaN-boxed JS object. Accepts string
+/// values and numeric values (numbers stringified) — Node accepts both
+/// shapes for `port` etc.
+unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
+    if !looks_like_nanboxed_object(obj_f64) {
+        return None;
+    }
+    let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
+    if obj_ptr.is_null() {
+        return None;
+    }
+    let key = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let val_f64 = js_object_get_field_by_name_f64(obj_ptr, key);
+    let val = JsValue::from_bits(val_f64.to_bits());
+    if val.is_undefined() || val.is_null() {
+        return None;
+    }
+    if val.is_string() {
+        return string_from_header_i64(val.as_string_ptr() as i64);
+    }
+    if val.is_number() {
+        return Some(format!("{}", val.to_number() as i64));
+    }
+    None
+}
+
+unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
+    if !looks_like_nanboxed_object(obj_f64) {
+        return None;
+    }
+    let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
+    if obj_ptr.is_null() {
+        return None;
+    }
+    let key = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let val_f64 = js_object_get_field_by_name_f64(obj_ptr, key);
+    let val = JsValue::from_bits(val_f64.to_bits());
+    if val.is_undefined() || val.is_null() {
+        return None;
+    }
+    if val.is_number() {
+        return Some(val.to_number());
+    }
+    // Some npm code passes `port` as a string — accept that too.
+    if val.is_string() {
+        if let Some(s) = string_from_header_i64(val.as_string_ptr() as i64) {
+            if let Ok(n) = s.parse::<f64>() {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Build an `Error`-shaped object `{ message: msg }` so user code can
+/// read `err.message` from the `'error'` listener — Node emits Error
+/// instances, not raw strings. Returns a NaN-boxed `f64` pointing at
+/// the object. Issue #770.
+unsafe fn build_error_object(msg: &str) -> f64 {
+    let keys: [&str; 1] = ["message"];
+    let (packed, shape_id) = build_object_shape(&keys);
+    let obj: *mut ObjectHeader =
+        js_object_alloc_with_shape(shape_id, 1, packed.as_ptr(), packed.len() as u32);
+    if obj.is_null() {
+        // Fall back to the bare string so the listener still receives
+        // *something* if the object alloc failed.
+        let s = alloc_string(msg);
+        return f64::from_bits(nanbox_string_bits(s.as_raw()));
+    }
+    let s = alloc_string(msg);
+    let v = JsValue::from_string_ptr(s.as_raw());
+    js_object_set_field(obj, 0, v);
+    let obj_v = JsValue::from_object_ptr(obj as *mut u8);
+    f64::from_bits(obj_v.bits())
 }
 
 fn next_id() -> i64 {
@@ -373,23 +476,67 @@ where
     });
 }
 
-// ─── FFI: net.createConnection(port, host) ───────────────────────────────────
+// ─── FFI: net.createConnection / net.connect ─────────────────────────────────
 
-/// `net.createConnection(port, host)` — returns a handle immediately;
-/// connection happens in the background and emits `'connect'` or `'error'`.
+/// `net.createConnection(...)` / `net.connect(...)` — returns a handle
+/// immediately; connection happens in the background and emits
+/// `'connect'` or `'error'`. Supports both Node overloads:
+///
+/// - Positional: `net.connect(port, host)`. `arg1_f64` is the port as a
+///   regular f64 number, `arg2_f64` carries the host as a NaN-boxed
+///   string value (the codegen passes it through as f64 via `NA_F64`).
+/// - Options object: `net.connect({ host, port }, cb?)`. `arg1_f64` is
+///   a NaN-boxed pointer to a JS object with `host`/`port`/optionally
+///   `localAddress` keys; `arg2_f64` is the optional connectListener
+///   (NaN-boxed closure pointer) — Node auto-registers it as a
+///   `'connect'` listener. Issue #770.
 ///
 /// # Safety
 ///
-/// `host_ptr` must be null or a Perry-runtime `StringHeader` pointer (cast
-/// to `i64` per the codegen ABI — see `NA_PTR` / `NA_STR` lowering in
-/// perry-codegen).
+/// `arg1_f64` / `arg2_f64` must be NaN-boxed Perry-runtime values per
+/// the codegen ABI — see `NA_F64` lowering in perry-codegen.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_connect(port: f64, host_ptr: i64) -> i64 {
+pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64) -> i64 {
+    if looks_like_nanboxed_object(arg1_f64) {
+        // Options-object overload: extract host/port from the object.
+        let host = match get_object_string_field(arg1_f64, "host")
+            .or_else(|| get_object_string_field(arg1_f64, "hostname"))
+        {
+            Some(h) if !h.is_empty() => h,
+            _ => "localhost".to_string(),
+        };
+        let port = match get_object_number_field(arg1_f64, "port") {
+            Some(p) => p as u16,
+            None => return 0,
+        };
+        let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
+        // Auto-register the connectListener (the spec'd Node API).
+        if handle != 0 && looks_like_nanboxed_object(arg2_f64) {
+            let cb_ptr = unbox_pointer(arg2_f64) as i64;
+            if cb_ptr != 0 {
+                let mut listeners = statics::listeners().lock().unwrap();
+                listeners
+                    .entry(handle)
+                    .or_default()
+                    .entry("connect".to_string())
+                    .or_default()
+                    .push(cb_ptr);
+            }
+        }
+        return handle;
+    }
+    // Positional overload: arg1 is the port number, arg2 is the host
+    // string (NaN-boxed). Reuse the runtime's string-pointer unifier
+    // (which handles STRING_TAG and POINTER_TAG strings the same way).
+    extern "C" {
+        fn js_get_string_pointer_unified(value: f64) -> i64;
+    }
+    let host_ptr = js_get_string_pointer_unified(arg2_f64);
     let host = match string_from_header_i64(host_ptr) {
         Some(h) => h,
         None => return 0,
     };
-    let port = port as u16;
+    let port = arg1_f64 as u16;
     spawn_socket_task(host, port, /* direct_tls: */ None)
 }
 
@@ -845,11 +992,13 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 if cbs.is_empty() {
                     continue;
                 }
-                let s = alloc_string(&msg);
-                let s_f64 = f64::from_bits(nanbox_string_bits(s.as_raw()));
+                // Issue #770 — emit an Error-shaped object `{message: msg}`
+                // so user code can read `err.message`. Pre-fix this was a
+                // raw NaN-boxed string and `err.message` was `undefined`.
+                let err_f64 = build_error_object(&msg);
                 for cb in cbs {
                     if cb != 0 {
-                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(s_f64);
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(err_f64);
                     }
                 }
             }

@@ -184,6 +184,96 @@ unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
+/// Issue #770 — true when `val_f64` is a NaN-boxed pointer/object/string
+/// (any non-plain-number value). Plain `f64` ports like `80.0` never
+/// land in `0x7FF8..=0x7FFF` because the prefix lives in the exponent.
+fn looks_like_nanboxed_object(val_f64: f64) -> bool {
+    let upper = val_f64.to_bits() >> 48;
+    (0x7FF8..=0x7FFF).contains(&upper)
+}
+
+unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
+    let bits = val_f64.to_bits();
+    (bits & 0x0000_FFFF_FFFF_FFFF) as *mut u8
+}
+
+unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
+    if !looks_like_nanboxed_object(obj_f64) {
+        return None;
+    }
+    let obj_ptr = unbox_pointer(obj_f64) as *const perry_runtime::ObjectHeader;
+    if obj_ptr.is_null() {
+        return None;
+    }
+    let key = perry_runtime::js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key);
+    if val.is_undefined() || val.is_null() {
+        return None;
+    }
+    if val.is_string() {
+        return string_from_header_i64(val.as_string_ptr() as i64);
+    }
+    if val.is_number() {
+        return Some(format!("{}", val.as_number() as i64));
+    }
+    None
+}
+
+unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
+    if !looks_like_nanboxed_object(obj_f64) {
+        return None;
+    }
+    let obj_ptr = unbox_pointer(obj_f64) as *const perry_runtime::ObjectHeader;
+    if obj_ptr.is_null() {
+        return None;
+    }
+    let key = perry_runtime::js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key);
+    if val.is_undefined() || val.is_null() {
+        return None;
+    }
+    if val.is_number() {
+        return Some(val.as_number());
+    }
+    if val.is_string() {
+        if let Some(s) = string_from_header_i64(val.as_string_ptr() as i64) {
+            if let Ok(n) = s.parse::<f64>() {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Issue #770 — build an `Error`-shaped object `{ message: msg }` so
+/// `socket.on('error', err => err.message)` works. Returns a NaN-boxed
+/// f64 pointing at the object, falling back to a bare string on alloc
+/// failure. Packed-keys format (NUL-delimited names + hash shape id)
+/// mirrors `crates/perry-stdlib/src/sqlite.rs::build_packed_keys`.
+unsafe fn build_error_object(msg: &str) -> f64 {
+    use perry_runtime::JSValue;
+    let name = b"message";
+    let packed: Vec<u8> = name.to_vec();
+    let mut shape_id: u32 = 0x4E45_0000; // "NE" — net error
+    for &b in name {
+        shape_id = shape_id.wrapping_mul(31).wrapping_add(b as u32);
+    }
+    shape_id = shape_id.wrapping_add(1);
+    let s_msg = perry_runtime::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let obj = perry_runtime::js_object_alloc_with_shape(
+        shape_id,
+        1,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    if obj.is_null() {
+        return f64::from_bits(0x7FFF_0000_0000_0000u64 | (s_msg as u64 & 0x0000_FFFF_FFFF_FFFF));
+    }
+    perry_runtime::js_object_set_field(obj, 0, JSValue::string_ptr(s_msg));
+    let obj_bits = (obj as u64 & 0x0000_FFFF_FFFF_FFFF) | 0x7FFD_0000_0000_0000;
+    f64::from_bits(obj_bits)
+}
+
 fn next_id() -> i64 {
     let mut g = NEXT_NET_ID.lock().unwrap();
     let id = *g;
@@ -290,21 +380,57 @@ fn build_tls_connector_insecure() -> Result<TlsConnector, String> {
     Ok(TlsConnector::from(Arc::new(config)))
 }
 
-// ─── FFI: net.createConnection(port, host) ───────────────────────────────────
+// ─── FFI: net.createConnection / net.connect ─────────────────────────────────
 
-/// `net.createConnection(port, host)` — returns a handle immediately;
-/// connection happens in the background and emits `'connect'` or `'error'`.
+/// `net.createConnection(...)` / `net.connect(...)` — returns a handle
+/// immediately; connection happens in the background and emits
+/// `'connect'` or `'error'`.
 ///
-/// Argument order matches Node.js: port (number) first, host (string) second.
+/// Supports both Node overloads (issue #770):
+///   - Positional: `net.connect(port, host)` — `arg1_f64` is the port,
+///     `arg2_f64` is the host (NaN-boxed string).
+///   - Options object: `net.connect({ host, port }, cb?)` — `arg1_f64`
+///     is a NaN-boxed pointer to the options object; `arg2_f64` is the
+///     optional connectListener (auto-registered as a `'connect'`
+///     listener per Node spec).
+///
 /// Signature matches NATIVE_MODULE_TABLE entry
-/// `{ module: "net", method: "createConnection", args: &[NA_F64, NA_STR], ret: NR_PTR }`.
+/// `{ module: "net", method: "connect" | "createConnection", args: &[NA_F64, NA_F64], ret: NR_PTR }`.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_connect(port: f64, host_ptr: i64) -> i64 {
+pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64) -> i64 {
+    if looks_like_nanboxed_object(arg1_f64) {
+        let host = match get_object_string_field(arg1_f64, "host")
+            .or_else(|| get_object_string_field(arg1_f64, "hostname"))
+        {
+            Some(h) if !h.is_empty() => h,
+            _ => "localhost".to_string(),
+        };
+        let port = match get_object_number_field(arg1_f64, "port") {
+            Some(p) => p as u16,
+            None => return 0,
+        };
+        let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
+        if handle != 0 && looks_like_nanboxed_object(arg2_f64) {
+            let cb_ptr = unbox_pointer(arg2_f64) as i64;
+            if cb_ptr != 0 {
+                let mut listeners = NET_LISTENERS.lock().unwrap();
+                listeners
+                    .entry(handle)
+                    .or_default()
+                    .entry("connect".to_string())
+                    .or_default()
+                    .push(cb_ptr);
+            }
+        }
+        return handle;
+    }
+    // Positional form: arg2 is a NaN-boxed string.
+    let host_ptr = perry_runtime::js_get_string_pointer_unified(arg2_f64);
     let host = match string_from_header_i64(host_ptr) {
         Some(h) => h,
         None => return 0,
     };
-    let port = port as u16;
+    let port = arg1_f64 as u16;
     spawn_socket_task(host, port, /* direct_tls: */ None)
 }
 
@@ -805,13 +931,14 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 if cbs.is_empty() {
                     continue;
                 }
-                let bytes = msg.as_bytes();
-                let s = perry_runtime::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-                let s_f64 =
-                    f64::from_bits(0x7FFF_0000_0000_0000u64 | (s as u64 & 0x0000_FFFF_FFFF_FFFF));
+                // Issue #770 — emit an Error-shaped object `{message: msg}`
+                // so user code can read `err.message`. Pre-fix the listener
+                // received a raw NaN-boxed string and `err.message` came
+                // back as `undefined`.
+                let err_f64 = build_error_object(&msg);
                 for cb in cbs {
                     if cb != 0 {
-                        js_closure_call1(cb as *const ClosureHeader, s_f64);
+                        js_closure_call1(cb as *const ClosureHeader, err_f64);
                     }
                 }
             }
