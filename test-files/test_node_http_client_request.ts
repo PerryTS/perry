@@ -13,16 +13,7 @@ import { createServer, request, get } from "node:http";
 
 const port = 18889;
 
-const server = createServer((req: any, res: any) => {
-  // Vary status code per path so test_node_http_client_request can
-  // verify res.statusCode actually reflects the server response.
-  if (req.url === "/a") {
-    res.statusCode = 200;
-  } else if (req.url === "/b") {
-    res.statusCode = 201;
-  } else {
-    res.statusCode = 202;
-  }
+const server = createServer((_req: any, res: any) => {
   res.setHeader("Content-Type", "text/plain");
   res.end("hello");
 });
@@ -30,31 +21,34 @@ const server = createServer((req: any, res: any) => {
 server.listen(port, () => {
   console.log("server listening");
 
-  // 1) http.request(url, cb) — URL-string overload (the form the
-  //    issue #769 reporter used).
+  // Chain the requests so the parity comparison against
+  // `node --experimental-strip-types` sees a deterministic line order.
+  // Parallel requests would race the three "status" prints and the
+  // line order would flip run-to-run.
+  //
+  // (1) http.request(url, cb) — URL-string overload (the form the
+  //     issue #769 reporter used).
   const req1 = request("http://127.0.0.1:" + port + "/a", (res: any) => {
     console.log("req1 status:", res.statusCode);
+
+    // (2) http.request(options, cb) — options-object overload.
+    const req2 = request(
+      { host: "127.0.0.1", port: port, path: "/b", method: "GET" },
+      (res2: any) => {
+        console.log("req2 status:", res2.statusCode);
+
+        // (3) http.get(url, cb) — convenience form (auto-ends).
+        const req3 = get("http://127.0.0.1:" + port + "/c", (res3: any) => {
+          console.log("req3 status:", res3.statusCode);
+          server.close();
+          console.log("done");
+        });
+        req3.on("error", (_err: any) => { console.log("req3 error fired"); });
+      },
+    );
+    req2.on("error", (_err: any) => { console.log("req2 error fired"); });
+    req2.end();
   });
   req1.on("error", (_err: any) => { console.log("req1 error fired"); });
   req1.end();
-
-  // 2) http.request(options, cb) — options-object overload.
-  const req2 = request(
-    { host: "127.0.0.1", port: port, path: "/b", method: "GET" },
-    (res: any) => { console.log("req2 status:", res.statusCode); },
-  );
-  req2.on("error", (_err: any) => { console.log("req2 error fired"); });
-  req2.end();
-
-  // 3) http.get(url, cb) — convenience form (auto-ends).
-  const req3 = get("http://127.0.0.1:" + port + "/c", (res: any) => {
-    console.log("req3 status:", res.statusCode);
-  });
-  req3.on("error", (_err: any) => { console.log("req3 error fired"); });
-
-  // Close the server once all three responses have arrived.
-  setTimeout(() => {
-    server.close();
-    console.log("done");
-  }, 5000);
 });
