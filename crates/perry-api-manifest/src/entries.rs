@@ -1874,6 +1874,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perry/system", "audioGetPeak", false, None),
     method("perry/system", "audioGetWaveform", false, None),
     method("perry/system", "audioSetOutputFilename", false, None),
+    method("perry/system", "audioRegisterCallback", false, None),
+    method("perry/system", "audioUnregisterCallback", false, None),
     method("perry/system", "audioStartRecording", false, None),
     method("perry/system", "audioStopRecording", false, None),
     // --- perry/system geolocation + image picker (issue #552). ---

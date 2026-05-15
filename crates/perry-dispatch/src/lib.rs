@@ -2211,6 +2211,18 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         ret: ReturnKind::Void,
     },
     MethodRow {
+        method: "audioRegisterCallback",
+        runtime: "perry_system_audio_register_callback",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "audioUnregisterCallback",
+        runtime: "perry_system_audio_unregister_callback",
+        args: &[],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
         method: "audioStartRecording",
         runtime: "perry_system_audio_start_recording",
         args: &[],

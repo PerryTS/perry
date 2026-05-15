@@ -21,6 +21,8 @@ static mut WAVEFORM_BUFFER: [f64; WAVEFORM_SIZE] = [0.0; WAVEFORM_SIZE];
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
+static AUDIO_CALLBACK: Mutex<Option<f64>> = Mutex::new(None);
+
 // Recording state
 static RECORDING: AtomicBool = AtomicBool::new(false);
 static RECORDED_SAMPLES: Mutex<Vec<f32>> = Mutex::new(Vec::new());
@@ -197,6 +199,9 @@ extern "C" {
     fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
     fn js_array_create() -> i64;
     fn js_array_push_f64(array_ptr: i64, value: f64);
+    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64);
+    fn js_nanbox_get_pointer(value: f64) -> i64;
+    fn js_nanbox_pointer(ptr: i64) -> f64;
 }
 
 pub fn set_output_filename(filename: &str) {
@@ -310,6 +315,9 @@ pub fn start() -> i64 {
                 RECORDED_SAMPLES.lock().unwrap().extend_from_slice(&buf);
             }
 
+            eprintln!("[audio] Calling invoke_audio_callback");
+            invoke_audio_callback(buf.as_ptr(), buffer_frames);
+
             let mut sum_sq = 0.0f64;
             let mut peak = 0.0f32;
 
@@ -399,4 +407,33 @@ pub fn get_device_model() -> i64 {
         }
     };
     unsafe { js_string_from_bytes(model.as_ptr(), model.len() as i32) }
+}
+
+pub fn register_audio_callback(callback: f64) {
+    eprintln!("[audio] register_audio_callback called, callback: {:?}", callback);
+    *AUDIO_CALLBACK.lock().unwrap() = Some(callback);
+    eprintln!("[audio] AUDIO_CALLBACK has been set to: {:?}", *AUDIO_CALLBACK.lock().unwrap());
+}
+
+pub fn unregister_audio_callback() {
+    eprintln!("[audio] unregister_audio_callback called");
+    *AUDIO_CALLBACK.lock().unwrap() = None;
+}
+
+pub fn invoke_audio_callback(samples_ptr: *const f32, num_samples: usize) {
+    let callback_opt = *AUDIO_CALLBACK.lock().unwrap();
+    if callback_opt.is_none() {
+        eprintln!("[audio] WARNING: No audio callback registered");
+        return;
+    }
+    let callback = callback_opt.unwrap();
+    let callback_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+    
+    let samples_val = unsafe { js_nanbox_pointer(samples_ptr as i64) };
+    let num_samples_val = num_samples as f64;
+    
+    eprintln!("[audio] Invoking audio callback with {} samples", num_samples);
+    unsafe {
+        js_closure_call2(callback_ptr, samples_val, num_samples_val);
+    }
 }
