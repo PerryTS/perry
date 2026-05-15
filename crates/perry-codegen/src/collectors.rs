@@ -839,7 +839,10 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
                 walk(v, out);
             }
         }
-        Expr::MathPow(a, b) | Expr::PathJoin(a, b) | Expr::PathRelative(a, b) => {
+        Expr::MathPow(a, b)
+        | Expr::PathJoin(a, b)
+        | Expr::PathRelative(a, b)
+        | Expr::PathWin32Join(a, b) => {
             walk(a, out);
             walk(b, out);
         }
@@ -3308,7 +3311,10 @@ fn collect_localset_ids_in_expr_filtered(
                 walk(v, out);
             }
         }
-        Expr::MathPow(a, b) | Expr::PathJoin(a, b) | Expr::PathRelative(a, b) => {
+        Expr::MathPow(a, b)
+        | Expr::PathJoin(a, b)
+        | Expr::PathRelative(a, b)
+        | Expr::PathWin32Join(a, b) => {
             walk(a, out);
             walk(b, out);
         }
@@ -4849,6 +4855,7 @@ fn check_escapes_in_expr(
         }
         Expr::MathPow(a, b)
         | Expr::PathJoin(a, b)
+        | Expr::PathWin32Join(a, b)
         | Expr::ObjectIs(a, b)
         | Expr::ObjectHasOwn(a, b) => {
             check_escapes_in_expr(a, candidates, classes, escaped);
