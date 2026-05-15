@@ -14,6 +14,7 @@ pub mod fixer;
 pub mod harmonyos_hap;
 pub mod i18n;
 pub mod init;
+pub mod install;
 pub mod login;
 pub mod native;
 pub mod publish;
