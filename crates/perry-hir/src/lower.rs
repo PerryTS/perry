@@ -4004,6 +4004,33 @@ See docs/src/language/decorators.md."
     );
 }
 
+/// Emit a one-shot note when the user imports `node:async_hooks`. Perry
+/// ships a structural stub (see crates/perry-jsruntime/src/modules.rs)
+/// that satisfies the NestJS bootstrap path, but does NOT yet implement
+/// real async-context tracking. Anything relying on `AsyncLocalStorage`
+/// for context propagation across `await` / `setImmediate` /
+/// `process.nextTick` boundaries (Sentry request scopes, OpenTelemetry
+/// trace propagation, NestJS request-scoped providers, pino child
+/// loggers) will compile and run but silently lose context. Warning at
+/// compile time avoids the production surprise.
+fn emit_async_hooks_shim_note() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static EMITTED: AtomicBool = AtomicBool::new(false);
+    if EMITTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    eprintln!(
+        "[perry] note: `import \"node:async_hooks\"` is satisfied by Perry's structural \
+stub. Implemented surface: AsyncResource, AsyncLocalStorage, executionAsyncId, \
+and createHook shapes — enough that NestJS bootstrap compiles. \
+AsyncLocalStorage.run() does NOT propagate context across \
+`await`/`setImmediate`/`process.nextTick` boundaries, so anything that \
+relies on async-context tracking (Sentry request scopes, OpenTelemetry \
+trace propagation, NestJS request-scoped providers, pino child loggers) \
+will silently lose context. See https://github.com/PerryTS/perry/issues/775."
+    );
+}
+
 fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -4022,6 +4049,13 @@ fn lower_module_decl(
             if source == "reflect-metadata" {
                 emit_reflect_metadata_shim_note();
                 return Ok(());
+            }
+
+            if source == "async_hooks" {
+                emit_async_hooks_shim_note();
+                // Fall through — the import still needs to bind
+                // AsyncLocalStorage / AsyncResource so calling code
+                // compiles against the structural stub.
             }
 
             // Check if this is a native module import
