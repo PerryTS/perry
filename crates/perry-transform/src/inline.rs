@@ -613,10 +613,7 @@ fn specialize_captured_class_factories(module: &mut Module) {
     // For (b) and (c) the middle statements must not REASSIGN the bound
     // local (`x` / `o`). Statements that read it (e.g. `PropertySet` on
     // sub-properties for prototype mutation) are allowed.
-    fn resolve_factory_return_class<'a>(
-        body: &'a [Stmt],
-        classes: &'a [Class],
-    ) -> Option<String> {
+    fn resolve_factory_return_class<'a>(body: &'a [Stmt], classes: &'a [Class]) -> Option<String> {
         if let [Stmt::Return(Some(Expr::ClassRef(c)))] = body {
             return Some(c.clone());
         }
@@ -628,7 +625,12 @@ fn specialize_captured_class_factories(module: &mut Module) {
         let Stmt::Return(Some(ret_expr)) = &body[last_idx] else {
             return None;
         };
-        let Stmt::Let { id: bound_id, init: Some(init_expr), .. } = &body[0] else {
+        let Stmt::Let {
+            id: bound_id,
+            init: Some(init_expr),
+            ..
+        } = &body[0]
+        else {
             return None;
         };
         // Middle stmts (between the Let and the Return) must not reassign
@@ -640,11 +642,13 @@ fn specialize_captured_class_factories(module: &mut Module) {
             }
         }
         match (init_expr, ret_expr) {
-            (Expr::ClassRef(c), Expr::LocalGet(x_ref)) if *x_ref == *bound_id => {
-                Some(c.clone())
-            }
+            (Expr::ClassRef(c), Expr::LocalGet(x_ref)) if *x_ref == *bound_id => Some(c.clone()),
             (
-                Expr::New { class_name: anon_name, args, .. },
+                Expr::New {
+                    class_name: anon_name,
+                    args,
+                    ..
+                },
                 Expr::PropertyGet { object, property },
             ) => {
                 if let Expr::LocalGet(o_ref) = object.as_ref() {
@@ -738,59 +742,201 @@ fn specialize_captured_class_factories(module: &mut Module) {
         for stmt in stmts.iter_mut() {
             match stmt {
                 Stmt::Let { init: Some(e), .. } => {
-                    rewrite_call_init(e, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                    rewrite_call_init(
+                        e,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                 }
                 Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => {
-                    rewrite_call_init(e, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                    rewrite_call_init(
+                        e,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                 }
-                Stmt::If { condition, then_branch, else_branch } => {
-                    rewrite_call_init(condition, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
-                    visit_stmts(then_branch, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    rewrite_call_init(
+                        condition,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
+                    visit_stmts(
+                        then_branch,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                     if let Some(eb) = else_branch {
-                        visit_stmts(eb, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                        visit_stmts(
+                            eb,
+                            factory_targets,
+                            classes,
+                            new_classes,
+                            next_class_counter,
+                            base_class_counter_seed,
+                        );
                     }
                 }
                 Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                    rewrite_call_init(condition, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
-                    visit_stmts(body, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                    rewrite_call_init(
+                        condition,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
+                    visit_stmts(
+                        body,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                 }
-                Stmt::For { init, condition, update, body } => {
+                Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                } => {
                     if let Some(init_stmt) = init {
                         let mut tmp = vec![*init_stmt.clone()];
-                        visit_stmts(&mut tmp, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                        visit_stmts(
+                            &mut tmp,
+                            factory_targets,
+                            classes,
+                            new_classes,
+                            next_class_counter,
+                            base_class_counter_seed,
+                        );
                         if tmp.len() == 1 {
                             **init_stmt = tmp.remove(0);
                         }
                     }
                     if let Some(c) = condition {
-                        rewrite_call_init(c, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                        rewrite_call_init(
+                            c,
+                            factory_targets,
+                            classes,
+                            new_classes,
+                            next_class_counter,
+                            base_class_counter_seed,
+                        );
                     }
                     if let Some(u) = update {
-                        rewrite_call_init(u, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                        rewrite_call_init(
+                            u,
+                            factory_targets,
+                            classes,
+                            new_classes,
+                            next_class_counter,
+                            base_class_counter_seed,
+                        );
                     }
-                    visit_stmts(body, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                    visit_stmts(
+                        body,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                 }
-                Stmt::Try { body, catch, finally } => {
-                    visit_stmts(body, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    visit_stmts(
+                        body,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                     if let Some(c) = catch {
-                        visit_stmts(&mut c.body, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                        visit_stmts(
+                            &mut c.body,
+                            factory_targets,
+                            classes,
+                            new_classes,
+                            next_class_counter,
+                            base_class_counter_seed,
+                        );
                     }
                     if let Some(fin) = finally {
-                        visit_stmts(fin, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                        visit_stmts(
+                            fin,
+                            factory_targets,
+                            classes,
+                            new_classes,
+                            next_class_counter,
+                            base_class_counter_seed,
+                        );
                     }
                 }
-                Stmt::Switch { discriminant, cases } => {
-                    rewrite_call_init(discriminant, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                } => {
+                    rewrite_call_init(
+                        discriminant,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                     for case in cases {
                         if let Some(t) = &mut case.test {
-                            rewrite_call_init(t, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                            rewrite_call_init(
+                                t,
+                                factory_targets,
+                                classes,
+                                new_classes,
+                                next_class_counter,
+                                base_class_counter_seed,
+                            );
                         }
-                        visit_stmts(&mut case.body, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                        visit_stmts(
+                            &mut case.body,
+                            factory_targets,
+                            classes,
+                            new_classes,
+                            next_class_counter,
+                            base_class_counter_seed,
+                        );
                     }
                 }
                 Stmt::Labeled { body, .. } => {
                     let mut tmp = vec![*body.clone()];
-                    visit_stmts(&mut tmp, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                    visit_stmts(
+                        &mut tmp,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                     if tmp.len() == 1 {
                         **body = tmp.remove(0);
                     }
@@ -819,44 +965,146 @@ fn specialize_captured_class_factories(module: &mut Module) {
         // a Call we don't want to recurse into a second time.
         match expr {
             Expr::Call { callee, args, .. } => {
-                rewrite_call_init(callee, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                rewrite_call_init(
+                    callee,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
                 for a in args.iter_mut() {
-                    rewrite_call_init(a, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                    rewrite_call_init(
+                        a,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                 }
             }
             Expr::Binary { left, right, .. }
             | Expr::Logical { left, right, .. }
             | Expr::Compare { left, right, .. } => {
-                rewrite_call_init(left, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
-                rewrite_call_init(right, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                rewrite_call_init(
+                    left,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
+                rewrite_call_init(
+                    right,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
             }
             Expr::Unary { operand, .. } => {
-                rewrite_call_init(operand, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                rewrite_call_init(
+                    operand,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
             }
-            Expr::Conditional { condition, then_expr, else_expr } => {
-                rewrite_call_init(condition, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
-                rewrite_call_init(then_expr, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
-                rewrite_call_init(else_expr, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                rewrite_call_init(
+                    condition,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
+                rewrite_call_init(
+                    then_expr,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
+                rewrite_call_init(
+                    else_expr,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
             }
             Expr::Array(elems) => {
                 for e in elems.iter_mut() {
-                    rewrite_call_init(e, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                    rewrite_call_init(
+                        e,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                 }
             }
             Expr::RegisterClassParentDynamic { parent_expr, .. } => {
-                rewrite_call_init(parent_expr, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                rewrite_call_init(
+                    parent_expr,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
             }
             Expr::New { args, .. } => {
                 for a in args.iter_mut() {
-                    rewrite_call_init(a, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                    rewrite_call_init(
+                        a,
+                        factory_targets,
+                        classes,
+                        new_classes,
+                        next_class_counter,
+                        base_class_counter_seed,
+                    );
                 }
             }
             Expr::PropertyGet { object, .. } => {
-                rewrite_call_init(object, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                rewrite_call_init(
+                    object,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
             }
             Expr::PropertySet { object, value, .. } => {
-                rewrite_call_init(object, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
-                rewrite_call_init(value, factory_targets, classes, new_classes, next_class_counter, base_class_counter_seed);
+                rewrite_call_init(
+                    object,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
+                rewrite_call_init(
+                    value,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
             }
             _ => {}
         }
@@ -912,7 +1160,10 @@ fn specialize_captured_class_factories(module: &mut Module) {
         }
         // Clone and specialize the class.
         let mut next_id_seed: LocalId = 0;
-        let cloned_name = format!("{}__inline_{}_{}", target_name, base_class_counter_seed, *next_class_counter);
+        let cloned_name = format!(
+            "{}__inline_{}_{}",
+            target_name, base_class_counter_seed, *next_class_counter
+        );
         *next_class_counter += 1;
         let mut cloned = class.clone();
         cloned.name = cloned_name.clone();
@@ -1016,7 +1267,11 @@ fn specialize_captured_class_factories(module: &mut Module) {
     // inline its constructor (which has the captures baked into field
     // initializers), so `new Child()` properly initializes the fields.
     for stmt in &module.init {
-        if let Stmt::Expr(Expr::RegisterClassParentDynamic { class_name, parent_expr }) = stmt {
+        if let Stmt::Expr(Expr::RegisterClassParentDynamic {
+            class_name,
+            parent_expr,
+        }) = stmt
+        {
             if let Expr::ClassRef(parent_name) = parent_expr.as_ref() {
                 if let Some(child) = module.classes.iter_mut().find(|c| &c.name == class_name) {
                     if child.extends_name.is_none() {
@@ -1027,7 +1282,12 @@ fn specialize_captured_class_factories(module: &mut Module) {
                             .iter()
                             .find(|c| &c.name == parent_name)
                             .map(|c| c.id)
-                            .or_else(|| classes_snapshot.iter().find(|c| &c.name == parent_name).map(|c| c.id))
+                            .or_else(|| {
+                                classes_snapshot
+                                    .iter()
+                                    .find(|c| &c.name == parent_name)
+                                    .map(|c| c.id)
+                            })
                         {
                             child.extends = Some(parent_cls);
                         }
