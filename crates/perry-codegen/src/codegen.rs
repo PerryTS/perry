@@ -2740,10 +2740,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // src>__default`, not `perry_fn_<src>__render`. The local
             // wrapper still uses the consumer-visible name so this
             // module's own callers can find it.
-            let origin_suffix = crate::expr::import_origin_suffix(
-                &cross_module.import_function_origin_names,
-                name,
-            );
+            let origin_suffix =
+                crate::expr::import_origin_suffix(&cross_module.import_function_origin_names, name);
             let target_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
             // Look up the param count from the import metadata. Fall back
             // to 0 if missing — emits a no-arg wrapper, which is wrong

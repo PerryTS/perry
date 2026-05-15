@@ -261,8 +261,7 @@ pub fn compute_object_cache_key(
     // package renamed its barrel exports) would share a cached `.o` and
     // silently emit the stale symbol suffix.
     {
-        let mut v: Vec<(&String, &String)> =
-            opts.import_function_origin_names.iter().collect();
+        let mut v: Vec<(&String, &String)> = opts.import_function_origin_names.iter().collect();
         v.sort_by(|a, b| a.0.cmp(b.0));
         let s: String = v
             .iter()

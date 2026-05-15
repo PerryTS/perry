@@ -3695,13 +3695,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let origin_suffix =
                             import_origin_suffix(ctx.import_function_origin_names, property);
                         if ctx.imported_vars.contains(property) {
-                            let getter =
-                                format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                            let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                             ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
                             return Ok(ctx.block().call(DOUBLE, &getter, &[]));
                         }
-                        let target_name =
-                            format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                        let target_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                         let wrap_name = format!("__perry_wrap_{}", target_name);
                         let param_count = ctx
                             .imported_func_param_counts
@@ -11207,8 +11205,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
                 // Issue #678: re-export renames mean the origin's symbol uses
                 // the *origin* name as the suffix, not the consumer-visible one.
-                let origin_suffix =
-                    import_origin_suffix(ctx.import_function_origin_names, name);
+                let origin_suffix = import_origin_suffix(ctx.import_function_origin_names, name);
                 // Imported VARIABLES (exported consts/lets) need to be
                 // called through their getter to fetch the value, not
                 // wrapped as closures. Without this, `let v = HONE_VERSION`
