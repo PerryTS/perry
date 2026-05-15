@@ -109,12 +109,14 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // Bare `return;` returns the NaN-boxed `undefined` value
             // (TAG_UNDEFINED). For async functions, wrap it in a
             // resolved promise.
-            let undef =
-                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             if ctx.is_async_fn {
                 let blk = ctx.block();
-                let handle =
-                    blk.call(crate::types::I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
+                let handle = blk.call(
+                    crate::types::I64,
+                    "js_promise_resolved",
+                    &[(DOUBLE, &undef)],
+                );
                 let boxed = crate::expr::nanbox_pointer_inline_pub(blk, &handle);
                 // Pop open try frames first (see above).
                 for _ in 0..ctx.try_depth {
