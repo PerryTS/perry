@@ -939,14 +939,12 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 } else {
                     // #746 follow-up: server-level `wss.on('message',
                     // (ws, data) => ...)` parity with perry-stdlib::ws.
-                    let parent =
-                        WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
+                    let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
                     if let Some(server_handle) = parent {
                         for cb in listeners_on_server(server_handle, "message") {
                             if cb != 0 {
-                                let closure = unsafe {
-                                    JsClosure::from_raw(cb as *const RawClosureHeader)
-                                };
+                                let closure =
+                                    unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
                                 let _ = unsafe { closure.call2(ws_id as f64, msg_f64) };
                                 fired += 1;
                             }
@@ -968,14 +966,12 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 } else {
                     // #746 follow-up: server-level `wss.on('close',
                     // (ws) => ...)` parity with perry-stdlib::ws.
-                    let parent =
-                        WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
+                    let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
                     if let Some(server_handle) = parent {
                         for cb in listeners_on_server(server_handle, "close") {
                             if cb != 0 {
-                                let closure = unsafe {
-                                    JsClosure::from_raw(cb as *const RawClosureHeader)
-                                };
+                                let closure =
+                                    unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
                                 let _ = unsafe { closure.call1(ws_id as f64) };
                                 fired += 1;
                             }
