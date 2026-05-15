@@ -3310,7 +3310,20 @@ pub fn run_with_parse_cache(
             // `typeof fsp === "boolean"`. Registering here lets the
             // catch-all route through `js_unresolved_namespace_stub`
             // (typeof "object", missing properties → undefined).
+            //
+            // Issue #684: skip WHOLE-DECL type-only imports
+            // (`import type * as X from "..."`). They're erased at
+            // runtime — the local binding never appears in any
+            // value-position expression, so registering it as a
+            // namespace would only widen the per-namespace member
+            // map below. Per-specifier type-only (`import { type Foo,
+            // bar }`) is still handled because the same import has
+            // value specifiers; the whole-decl flag is the one that
+            // makes the entire import a no-op.
             for import in &hir_module.imports {
+                if import.type_only {
+                    continue;
+                }
                 for spec in &import.specifiers {
                     if let perry_hir::ImportSpecifier::Namespace { local } = spec {
                         if !namespace_imports.contains(local) {
@@ -3322,6 +3335,34 @@ pub fn run_with_parse_cache(
 
             for import in &hir_module.imports {
                 if import.module_kind != perry_hir::ModuleKind::NativeCompiled {
+                    continue;
+                }
+                // Issue #684: skip WHOLE-DECL type-only imports
+                // (`import type * as X`, `import type { Foo }`). They
+                // contribute zero runtime state — neither the namespace
+                // binding nor the named members ever appear in a
+                // value-position expression after type erasure. Pre-fix
+                // the loop below treated them like value imports and
+                // registered every export of the source module into
+                // `import_function_prefixes` / `namespace_member_prefixes`,
+                // which collided with later named-import registrations:
+                //   effect's `ParseResult.ts` has both
+                //     `import { TaggedError } from "./Data.js"`
+                //     `import type * as Schema from "./Schema.js"`
+                //   Schema.ts also exports `TaggedError`, so the type-only
+                //   loop iteration registered `TaggedError → Schema_ts`
+                //   into `import_function_prefixes`. If Schema.ts was
+                //   processed AFTER Data.ts (HashMap iteration order is
+                //   unstable), the Schema entry won — and top-level
+                //   `class ParseError extends TaggedError("ParseError")`
+                //   dispatched into Schema.ts's `TaggedError` instead of
+                //   Data.ts's. Worse, Schema.ts is type-only so it isn't
+                //   in `module_init_deps` either, meaning its backing
+                //   global was still 0.0 — `js_closure_call1(0.0, ...)`
+                //   threw `TypeError: value is not a function` during
+                //   `ParseResult.ts__init`. Closes #684 (companion to
+                //   #680's `module_init_deps` filter at L3234).
+                if import.type_only {
                     continue;
                 }
                 let resolved_path = match &import.resolved_path {
