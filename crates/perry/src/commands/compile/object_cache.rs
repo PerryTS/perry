@@ -255,6 +255,23 @@ pub fn compute_object_cache_key(
         h.field("import_fn_prefixes", &s);
     }
 
+    // Issue #678: include the origin-name overrides in the cache key.
+    // Without this, two builds where the same module imports the same
+    // names but with different re-export shapes (e.g. a downstream
+    // package renamed its barrel exports) would share a cached `.o` and
+    // silently emit the stale symbol suffix.
+    {
+        let mut v: Vec<(&String, &String)> =
+            opts.import_function_origin_names.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(k, vv)| format!("{}={}", k, vv))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("import_fn_origin_names", &s);
+    }
+
     // Imported classes — sort by name. Serialize every field that codegen
     // reads so a changed constructor arity or new method on a re-exported
     // class invalidates consumers.
@@ -553,6 +570,7 @@ mod object_cache_tests {
             is_entry_module: false,
             non_entry_module_prefixes: Vec::new(),
             import_function_prefixes: std::collections::HashMap::new(),
+            import_function_origin_names: std::collections::HashMap::new(),
             namespace_member_prefixes: std::collections::HashMap::new(),
             emit_ir_only: false,
             namespace_imports: Vec::new(),

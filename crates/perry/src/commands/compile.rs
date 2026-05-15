@@ -2250,6 +2250,16 @@ pub fn run_with_parse_cache(
     // Build a map of all exports from all modules: module_path -> HashMap<export_name, origin_module_path>
     // This is used for namespace imports (`import * as X from './module'`) to resolve all exports
     let mut all_module_exports: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    // Issue #678: parallel map carrying the *origin name* alongside the
+    // origin path. When `ink/build/index.js` says `export { default as
+    // render } from './render.js'`, `all_module_exports[ink_path]["render"]
+    // = render_js_path` and `all_module_export_origin_names[ink_path]
+    // ["render"] = "default"`. The codegen consumer of an import that
+    // resolves through this chain forms `perry_fn_<render_js>__default`
+    // instead of `perry_fn_<render_js>__render` — without it the linker
+    // fails on the missing `_perry_fn_<render_js>__render` symbol.
+    let mut all_module_export_origin_names: BTreeMap<String, BTreeMap<String, String>> =
+        BTreeMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
         let exports = all_module_exports
@@ -2288,7 +2298,13 @@ pub fn run_with_parse_cache(
 
     // Propagate exports through ExportAll and ReExport chains
     loop {
-        let mut new_export_entries: Vec<(String, String, String)> = Vec::new(); // (module_path, export_name, origin_path)
+        // (module_path, export_name, origin_path, origin_name_in_origin).
+        // The fourth tuple element drives Issue #678's per-export
+        // origin-name map: when a re-export renames a name across a hop
+        // (`export { default as render } from './render.js'`), the
+        // consumer must use the *origin* name (`default`) as the symbol
+        // suffix, not the consumer-visible one (`render`).
+        let mut new_export_entries: Vec<(String, String, String, String)> = Vec::new();
         for (path, hir_module) in &ctx.native_modules {
             let path_str = path.to_string_lossy().to_string();
             for export in &hir_module.exports {
@@ -2309,10 +2325,23 @@ pub fn run_with_parse_cache(
                                         .map(|e| e.contains_key(name))
                                         .unwrap_or(false);
                                     if !already_exists {
+                                        // `export * from "src"` doesn't
+                                        // rename — origin_name == export_name.
+                                        // But if `src` itself remapped this
+                                        // name (e.g. `export { default as
+                                        // foo } from './x.js'`), propagate
+                                        // the deeper origin name across this
+                                        // transitive hop.
+                                        let deep_origin_name = all_module_export_origin_names
+                                            .get(&source_path_str)
+                                            .and_then(|m| m.get(name))
+                                            .cloned()
+                                            .unwrap_or_else(|| name.clone());
                                         new_export_entries.push((
                                             path_str.clone(),
                                             name.clone(),
                                             origin.clone(),
+                                            deep_origin_name,
                                         ));
                                     }
                                 }
@@ -2340,10 +2369,23 @@ pub fn run_with_parse_cache(
                                         .map(|v| v == origin)
                                         .unwrap_or(false);
                                     if !already_correct {
+                                        // Walk one more hop: if `src` itself
+                                        // remapped `imported` to a deeper
+                                        // origin name (`src` did its own
+                                        // `export { default as imported }
+                                        // from "..."`), record THAT deeper
+                                        // name so the consumer's symbol-suffix
+                                        // resolution skips both hops.
+                                        let deep_origin_name = all_module_export_origin_names
+                                            .get(&source_path_str)
+                                            .and_then(|m| m.get(imported))
+                                            .cloned()
+                                            .unwrap_or_else(|| imported.clone());
                                         new_export_entries.push((
                                             path_str.clone(),
                                             exported.clone(),
                                             origin.clone(),
+                                            deep_origin_name,
                                         ));
                                     }
                                 }
@@ -2385,10 +2427,19 @@ pub fn run_with_parse_cache(
                                                     .map(|v| v == origin)
                                                     .unwrap_or(false);
                                                 if !already_correct {
+                                                    let deep_origin_name =
+                                                        all_module_export_origin_names
+                                                            .get(&source_path_str)
+                                                            .and_then(|m| m.get(&imported_name))
+                                                            .cloned()
+                                                            .unwrap_or_else(|| {
+                                                                imported_name.clone()
+                                                            });
                                                     new_export_entries.push((
                                                         path_str.clone(),
                                                         exported.clone(),
                                                         origin.clone(),
+                                                        deep_origin_name,
                                                     ));
                                                 }
                                             }
@@ -2405,11 +2456,22 @@ pub fn run_with_parse_cache(
         if new_export_entries.is_empty() {
             break;
         }
-        for (module_path, name, origin) in new_export_entries {
+        for (module_path, name, origin, origin_name) in new_export_entries {
             all_module_exports
-                .entry(module_path)
+                .entry(module_path.clone())
                 .or_insert_with(BTreeMap::new)
-                .insert(name, origin);
+                .insert(name.clone(), origin);
+            // Only record the origin-name entry when it actually differs
+            // from the export name (the common identity case is implicit —
+            // the codegen helper falls back to the imported name when no
+            // entry is present). This keeps the map sparse and easy to
+            // reason about.
+            if origin_name != name {
+                all_module_export_origin_names
+                    .entry(module_path)
+                    .or_insert_with(BTreeMap::new)
+                    .insert(name, origin_name);
+            }
         }
     }
 
@@ -3273,6 +3335,17 @@ pub fn run_with_parse_cache(
             // to generate `perry_fn_<source_prefix>__<name>`.
             let mut import_function_prefixes: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            // Issue #678: parallel to `import_function_prefixes`. When the
+            // import traverses a re-export rename (`export { default as render
+            // } from './render.js'`), the consumer sees `render` but the
+            // origin module emits the symbol with its own export name
+            // (`default`). This map captures the consumer-name → origin-name
+            // override so every `perry_fn_<src>__<suffix>` construction site
+            // can pick the right suffix. Absent entries (the common case)
+            // mean no rename — the consumer name is the origin name.
+            let mut import_function_origin_names:
+                std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             // Issue #680: per-namespace member resolution. Disambiguates
             // `random.make` vs `tracer.make` when multiple namespaces
             // export the same member name. Keyed by `(namespace_local,
@@ -3310,7 +3383,20 @@ pub fn run_with_parse_cache(
             // `typeof fsp === "boolean"`. Registering here lets the
             // catch-all route through `js_unresolved_namespace_stub`
             // (typeof "object", missing properties → undefined).
+            //
+            // Issue #684: skip WHOLE-DECL type-only imports
+            // (`import type * as X from "..."`). They're erased at
+            // runtime — the local binding never appears in any
+            // value-position expression, so registering it as a
+            // namespace would only widen the per-namespace member
+            // map below. Per-specifier type-only (`import { type Foo,
+            // bar }`) is still handled because the same import has
+            // value specifiers; the whole-decl flag is the one that
+            // makes the entire import a no-op.
             for import in &hir_module.imports {
+                if import.type_only {
+                    continue;
+                }
                 for spec in &import.specifiers {
                     if let perry_hir::ImportSpecifier::Namespace { local } = spec {
                         if !namespace_imports.contains(local) {
@@ -3322,6 +3408,34 @@ pub fn run_with_parse_cache(
 
             for import in &hir_module.imports {
                 if import.module_kind != perry_hir::ModuleKind::NativeCompiled {
+                    continue;
+                }
+                // Issue #684: skip WHOLE-DECL type-only imports
+                // (`import type * as X`, `import type { Foo }`). They
+                // contribute zero runtime state — neither the namespace
+                // binding nor the named members ever appear in a
+                // value-position expression after type erasure. Pre-fix
+                // the loop below treated them like value imports and
+                // registered every export of the source module into
+                // `import_function_prefixes` / `namespace_member_prefixes`,
+                // which collided with later named-import registrations:
+                //   effect's `ParseResult.ts` has both
+                //     `import { TaggedError } from "./Data.js"`
+                //     `import type * as Schema from "./Schema.js"`
+                //   Schema.ts also exports `TaggedError`, so the type-only
+                //   loop iteration registered `TaggedError → Schema_ts`
+                //   into `import_function_prefixes`. If Schema.ts was
+                //   processed AFTER Data.ts (HashMap iteration order is
+                //   unstable), the Schema entry won — and top-level
+                //   `class ParseError extends TaggedError("ParseError")`
+                //   dispatched into Schema.ts's `TaggedError` instead of
+                //   Data.ts's. Worse, Schema.ts is type-only so it isn't
+                //   in `module_init_deps` either, meaning its backing
+                //   global was still 0.0 — `js_closure_call1(0.0, ...)`
+                //   threw `TypeError: value is not a function` during
+                //   `ParseResult.ts__init`. Closes #684 (companion to
+                //   #680's `module_init_deps` filter at L3234).
+                if import.type_only {
                     continue;
                 }
                 let resolved_path = match &import.resolved_path {
@@ -3350,6 +3464,21 @@ pub fn run_with_parse_cache(
                                     compute_module_prefix(origin_path, &ctx.project_root);
                                 import_function_prefixes
                                     .insert(export_name.clone(), origin_prefix.clone());
+                                // Issue #678: surface origin-name overrides
+                                // for namespace-imported members too. A
+                                // member reached via a re-export rename
+                                // (`export { default as foo }`) needs the
+                                // codegen to call `perry_fn_<origin>__default`
+                                // when the consumer writes `ns.foo()`.
+                                if let Some(origin_name) = all_module_export_origin_names
+                                    .get(&resolved_path_str)
+                                    .and_then(|m| m.get(export_name))
+                                {
+                                    if origin_name != export_name {
+                                        import_function_origin_names
+                                            .insert(export_name.clone(), origin_name.clone());
+                                    }
+                                }
                                 // Issue #680: also register under the
                                 // per-namespace key so `random.make` and
                                 // `tracer.make` can be disambiguated.
@@ -3500,6 +3629,17 @@ pub fn run_with_parse_cache(
                                         compute_module_prefix(origin_path, &ctx.project_root);
                                     import_function_prefixes
                                         .insert(export_name.clone(), origin_prefix.clone());
+                                    // Issue #678: surface origin-name overrides
+                                    // for the NamespaceReExport branch too.
+                                    if let Some(origin_name) = all_module_export_origin_names
+                                        .get(&ns_target_str)
+                                        .and_then(|m| m.get(export_name))
+                                    {
+                                        if origin_name != export_name {
+                                            import_function_origin_names
+                                                .insert(export_name.clone(), origin_name.clone());
+                                        }
+                                    }
 
                                     let key = (origin_path.clone(), export_name.clone());
                                     if let Some(&param_count) = exported_func_param_counts.get(&key)
@@ -3619,6 +3759,30 @@ pub fn run_with_parse_cache(
                             .insert(local_name.clone(), effective_prefix.clone());
                     }
 
+                    // Issue #678: if the import chain renames through a
+                    // re-export (`export { default as render } from
+                    // './render.js'`), the symbol in the origin module
+                    // is `perry_fn_<origin>__default`, not
+                    // `perry_fn_<origin>__render`. Surface the deeper
+                    // origin name via `import_function_origin_names` so
+                    // the codegen can pick the right suffix when forming
+                    // the extern symbol. The map is sparse — entries are
+                    // only inserted when origin_name != exported_name.
+                    let resolved_origin_name = all_module_export_origin_names
+                        .get(&resolved_path_str)
+                        .and_then(|m| m.get(&exported_name))
+                        .cloned();
+                    if let Some(ref origin_name) = resolved_origin_name {
+                        if origin_name != &exported_name {
+                            import_function_origin_names
+                                .insert(exported_name.clone(), origin_name.clone());
+                            if local_name != exported_name {
+                                import_function_origin_names
+                                    .insert(local_name.clone(), origin_name.clone());
+                            }
+                        }
+                    }
+
                     // Imported variables (not functions) — ExternFuncRef-as-value
                     // should call the getter, not wrap as closure. Look up by the
                     // ORIGIN path (where the `Let X = ...` actually lives), not
@@ -3629,7 +3793,23 @@ pub fn run_with_parse_cache(
                     // return value AS the call result — pgTable("users", cols)
                     // returned the closure handle (typeof === "function") with no
                     // pgTable body actually invoked.
-                    if exported_var_names.contains(&origin_key) {
+                    //
+                    // Issue #678 followup: when a re-export rename routes
+                    // the import through `export default <var>`, the origin
+                    // module's `exported_objects` carries the synthetic
+                    // "default" entry (the only thing exported at that
+                    // shape) — not the consumer-visible name. Probe both
+                    // keys so the var-vs-function classification fires
+                    // even when re-export renaming is in play.
+                    let origin_key_under_origin_name = resolved_origin_name
+                        .as_ref()
+                        .map(|n| (origin_path.clone(), n.clone()));
+                    if exported_var_names.contains(&origin_key)
+                        || origin_key_under_origin_name
+                            .as_ref()
+                            .map(|k| exported_var_names.contains(k))
+                            .unwrap_or(false)
+                    {
                         imported_vars.insert(exported_name.clone());
                         if local_name != exported_name {
                             imported_vars.insert(local_name.clone());
@@ -4369,6 +4549,7 @@ pub fn run_with_parse_cache(
                 is_entry_module: is_entry,
                 non_entry_module_prefixes,
                 import_function_prefixes,
+                import_function_origin_names,
                 namespace_member_prefixes,
                 emit_ir_only: bitcode_link,
                 namespace_imports,

@@ -48,6 +48,24 @@ pub(crate) fn nanbox_bigint_inline(blk: &mut LlBlock, ptr_i64: &str) -> String {
     blk.bitcast_i64_to_double(&tagged)
 }
 
+/// Issue #678: resolve the actual symbol-suffix for an imported name.
+///
+/// Re-export renames like `export { default as render } from './render.js'`
+/// mean the consumer sees `render` while the origin module emits
+/// `perry_fn_<origin>__default`. The `import_function_origin_names` map
+/// records this rename so every `perry_fn_<src>__<suffix>` construction
+/// site can pick the right suffix instead of the consumer-visible name.
+///
+/// Returns the override when present, falling back to `name` (the common
+/// case where origin name == consumer name). Used by every codegen
+/// path that builds a `perry_fn_<src>__<name>` extern symbol.
+pub(crate) fn import_origin_suffix<'a>(
+    origin_names: &'a std::collections::HashMap<String, String>,
+    name: &'a str,
+) -> &'a str {
+    origin_names.get(name).map(String::as_str).unwrap_or(name)
+}
+
 /// If `callee` is a `new`-target whose class name is statically
 /// known, return that name. Used by the `Expr::NewDynamic` lowering
 /// to reroute statically-resolvable shapes to the regular `lower_new`
@@ -222,6 +240,15 @@ pub(crate) struct FnCtx<'a> {
     /// `ExternFuncRef` lowering in `lower_call` to generate scoped
     /// cross-module calls.
     pub import_function_prefixes: &'a std::collections::HashMap<String, String>,
+    /// Issue #678: Imported function name → original export name in the
+    /// origin module. Set when the import traverses a re-export rename
+    /// (`export { default as render } from './render.js'`). Looked up at
+    /// every `perry_fn_<source_prefix>__<suffix>` construction site to
+    /// pick the right suffix. Absent entries (the common case) mean the
+    /// origin name matches the consumer's imported name; callers should
+    /// treat a missing entry as identity by calling
+    /// `import_origin_suffix(import_function_origin_names, name)`.
+    pub import_function_origin_names: &'a std::collections::HashMap<String, String>,
     /// Closure capture map: when lowering inside a closure body, this
     /// holds `LocalId → capture_index`. `LocalGet`/`LocalSet`/`Update`
     /// of an id in this map routes through the runtime
@@ -3663,12 +3690,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // body. The body only runs later when the consumer
                         // actually calls `HashMap.keySet(self)`, by which time
                         // both modules have finished `__init`.
+                        // Issue #678: re-export renames mean the suffix in the
+                        // origin module differs from the consumer-visible name.
+                        let origin_suffix =
+                            import_origin_suffix(ctx.import_function_origin_names, property);
                         if ctx.imported_vars.contains(property) {
-                            let getter = format!("perry_fn_{}__{}", source_prefix, property);
+                            let getter =
+                                format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                             ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
                             return Ok(ctx.block().call(DOUBLE, &getter, &[]));
                         }
-                        let target_name = format!("perry_fn_{}__{}", source_prefix, property);
+                        let target_name =
+                            format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                         let wrap_name = format!("__perry_wrap_{}", target_name);
                         let param_count = ctx
                             .imported_func_param_counts
@@ -3699,7 +3732,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // object stored in the module's export global.
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
                 if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
-                    let getter = format!("perry_fn_{}__{}", source_prefix, name);
+                    // Issue #678: re-export renames mean the suffix in the
+                    // origin module differs from the consumer-visible name.
+                    let origin_suffix =
+                        import_origin_suffix(ctx.import_function_origin_names, name);
+                    let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                     ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
                     let obj_val = ctx.block().call(DOUBLE, &getter, &[]);
                     // Now do property access on the actual object.
@@ -6060,7 +6097,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if ctx.namespace_imports.contains(class_name) {
                 if let Some(source_prefix) = ctx.import_function_prefixes.get(method_name).cloned()
                 {
-                    let fn_name = format!("perry_fn_{}__{}", source_prefix, method_name);
+                    // Issue #678: namespace member resolved through a re-export
+                    // rename uses the origin name as the symbol suffix.
+                    let origin_suffix =
+                        import_origin_suffix(ctx.import_function_origin_names, method_name);
+                    let fn_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                     let mut lowered: Vec<String> = Vec::with_capacity(args.len());
                     for a in args {
                         lowered.push(lower_expr(ctx, a)?);
@@ -11164,12 +11205,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(double_literal(f64::from_bits(bits)));
             }
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
+                // Issue #678: re-export renames mean the origin's symbol uses
+                // the *origin* name as the suffix, not the consumer-visible one.
+                let origin_suffix =
+                    import_origin_suffix(ctx.import_function_origin_names, name);
                 // Imported VARIABLES (exported consts/lets) need to be
                 // called through their getter to fetch the value, not
                 // wrapped as closures. Without this, `let v = HONE_VERSION`
                 // creates a closure wrapper instead of the actual string.
                 if ctx.imported_vars.contains(name) {
-                    let fname = format!("perry_fn_{}__{}", source_prefix, name);
+                    let fname = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                     ctx.pending_declares.push((fname.clone(), DOUBLE, vec![]));
                     return Ok(ctx.block().call(DOUBLE, &fname, &[]));
                 }
@@ -11200,7 +11245,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `__perry_extern_closure_<src>__<name>` global is no
                 // longer referenced and link-time DCE strips it.
                 // Refs #645 deeper followup / #488 drizzle-sqlite.
-                let target_name = format!("perry_fn_{}__{}", source_prefix, name);
+                let target_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                 let wrap_name = format!("__perry_wrap_{}", target_name);
                 // Declare the source's wrapper so LLVM accepts the
                 // `@<wrap_name>` reference. Signature mirrors the

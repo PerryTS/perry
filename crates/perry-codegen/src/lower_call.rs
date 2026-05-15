@@ -560,7 +560,14 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     .cloned()
                     .or_else(|| ctx.import_function_prefixes.get(property).cloned())
                 {
-                    let symbol = format!("perry_fn_{}__{}", source_prefix, property);
+                    // Issue #678: re-exported names (e.g. `export { default as
+                    // render }`) emit `perry_fn_<src>__default` in the origin —
+                    // resolve the actual origin suffix before forming the symbol.
+                    let origin_suffix = crate::expr::import_origin_suffix(
+                        ctx.import_function_origin_names,
+                        property,
+                    );
+                    let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                     if ctx.imported_vars.contains(property) {
                         // Var-shaped export: fetch closure via zero-arg
                         // getter, then closure-call with the user args.
@@ -1077,7 +1084,14 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 return Ok(ctx.block().call(DOUBLE, name, &arg_slices));
             }
         };
-        let fname = format!("perry_fn_{}__{}", source_prefix, name);
+        // Issue #678: re-export rename (`export { default as render } from
+        // './render.js'`) means the origin module emits the symbol under
+        // the *origin* name (`default`), not the consumer-visible name
+        // (`render`). Look up the actual origin suffix before forming the
+        // extern.
+        let origin_suffix =
+            crate::expr::import_origin_suffix(ctx.import_function_origin_names, name);
+        let fname = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
         // Issue #493 followup: when the imported binding is a VARIABLE
         // holding a closure value (e.g. `var mergePath = (b, s, ...r) => …`
         // exported from another module), `perry_fn_<src>__<name>` is the

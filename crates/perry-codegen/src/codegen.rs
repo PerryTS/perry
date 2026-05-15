@@ -82,6 +82,19 @@ pub struct CompileOptions {
     /// `perry_fn_<source_prefix>__<funcname>`. Built by the CLI driver
     /// from each module's `hir.imports` table.
     pub import_function_prefixes: std::collections::HashMap<String, String>,
+    /// Issue #678: for imports that traverse a re-export rename
+    /// (e.g. `export { default as render } from './render.js'`), maps the
+    /// consumer-visible name (`render`) to the actual export name in the
+    /// origin module (`default`). Used by every `perry_fn_<src>__<name>`
+    /// symbol-construction site so the suffix matches what the origin
+    /// module actually emits. Absent entries (the common case) mean the
+    /// name in origin matches the consumer's imported name; callers should
+    /// treat a missing entry as identity. Without this, `import { Box }
+    /// from "ink"` lowered to `perry_fn_<components_Box_js>__Box` but the
+    /// origin module emitted `perry_fn_<components_Box_js>__default` (Box.js
+    /// has `const Box = ...; export default Box`), and the linker failed
+    /// with `Undefined symbols: _perry_fn_..._Box`.
+    pub import_function_origin_names: std::collections::HashMap<String, String>,
     /// Issue #680: per-namespace member resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `source_prefix`. Used by
     /// the namespace-member access lowering paths in `expr.rs` and
@@ -384,6 +397,10 @@ pub(crate) struct CrossModuleCtx {
     pub local_async_funcs: std::collections::HashSet<u32>,
     pub type_aliases: std::collections::HashMap<String, perry_types::Type>,
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
+    /// Issue #678: see `CompileOptions::import_function_origin_names`.
+    /// Cloned from the same field so codegen helpers reachable via
+    /// `CrossModuleCtx` can resolve the origin name without an extra arg.
+    pub import_function_origin_names: std::collections::HashMap<String, String>,
     /// Issue #608 — imported function names whose source-side signature
     /// has a trailing `...rest` parameter. Used by the cross-module call
     /// site in `lower_call.rs` to pack trailing args into a rest array.
@@ -1183,6 +1200,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         local_async_funcs,
         type_aliases: opts.type_aliases,
         imported_func_param_counts: opts.imported_func_param_counts,
+        import_function_origin_names: opts.import_function_origin_names.clone(),
         imported_func_has_rest: opts.imported_func_has_rest,
         imported_func_return_types: opts.imported_func_return_types,
         method_param_counts,
@@ -2716,7 +2734,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 llmod.add_internal_constant(&global_name, "{ ptr, i32, i32 }", &init);
                 continue;
             }
-            let target_name = format!("perry_fn_{}__{}", source_prefix, name);
+            // Issue #678: when a re-export rename routes this name to an
+            // origin export with a different suffix (`export { default as
+            // render }`), call into the origin's real symbol — `perry_fn_<
+            // src>__default`, not `perry_fn_<src>__render`. The local
+            // wrapper still uses the consumer-visible name so this
+            // module's own callers can find it.
+            let origin_suffix = crate::expr::import_origin_suffix(
+                &cross_module.import_function_origin_names,
+                name,
+            );
+            let target_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
             // Look up the param count from the import metadata. Fall back
             // to 0 if missing — emits a no-arg wrapper, which is wrong
             // for nonzero-arity functions but won't break compilation.
@@ -3146,6 +3174,7 @@ fn compile_function(
         methods,
         module_globals,
         import_function_prefixes,
+        import_function_origin_names: &cross_module.import_function_origin_names,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,
@@ -3522,6 +3551,7 @@ fn compile_closure(
         methods,
         module_globals,
         import_function_prefixes,
+        import_function_origin_names: &cross_module.import_function_origin_names,
         closure_captures,
         current_closure_ptr: Some("%this_closure".to_string()),
         enums,
@@ -3757,6 +3787,7 @@ fn compile_method(
         methods,
         module_globals,
         import_function_prefixes,
+        import_function_origin_names: &cross_module.import_function_origin_names,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,
@@ -4226,6 +4257,7 @@ fn compile_module_entry(
             methods,
             module_globals,
             import_function_prefixes,
+            import_function_origin_names: &cross_module.import_function_origin_names,
             closure_captures: HashMap::new(),
             current_closure_ptr: None,
             enums,
@@ -4580,6 +4612,7 @@ fn compile_module_entry(
             methods,
             module_globals,
             import_function_prefixes,
+            import_function_origin_names: &cross_module.import_function_origin_names,
             closure_captures: HashMap::new(),
             current_closure_ptr: None,
             enums,
@@ -5321,6 +5354,7 @@ fn compile_static_method(
         methods,
         module_globals,
         import_function_prefixes,
+        import_function_origin_names: &cross_module.import_function_origin_names,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,
