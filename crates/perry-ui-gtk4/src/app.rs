@@ -71,6 +71,9 @@ extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
+    fn js_callback_timer_tick() -> i32;
+    fn js_interval_timer_tick() -> i32;
+    fn js_run_ext_pump();
 }
 
 /// Extract a &str from a *const StringHeader pointer.
@@ -285,6 +288,19 @@ pub fn app_run(_app_handle: i64) {
             for (interval_ms, callback) in queued {
                 install_timer(interval_ms, callback);
             }
+        });
+
+        // Start the timer pump to drive setInterval/setTimeout callbacks (~120Hz)
+        // This mirrors the implementation on other platforms (macOS, Windows, etc.)
+        glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
+            unsafe {
+                js_callback_timer_tick();
+                js_interval_timer_tick();
+                js_run_ext_pump();
+                js_run_stdlib_pump();
+                js_promise_run_microtasks();
+            }
+            glib::ControlFlow::Continue
         });
 
         // Call on_activate callback
