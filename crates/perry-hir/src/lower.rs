@@ -230,6 +230,13 @@ pub struct LoweringContext {
     /// the receiver is a tracked instance, avoiding false matches against
     /// CJS-style `module.exports.foo()` patterns.
     pub(crate) wasm_instance_locals: HashSet<String>,
+    /// #809: locals whose initializer is an object literal or
+    /// `Object.create(...)` — i.e. provably a plain object, never a Date.
+    /// Consulted by `static_receiver_class` so `obj.toJSON()` /
+    /// `obj.toString()` / `obj.valueOf()` etc. don't get rewritten to the
+    /// Date intrinsics (which would read the object pointer's bits as a
+    /// timestamp and print `1970-01-01T00:00:00.000Z`).
+    pub(crate) plain_object_locals: HashSet<String>,
     pub(crate) proxy_revoke_locals: HashMap<String, String>,
     /// For `const p = new Proxy(ClassName, handler)`, record the class name
     /// so `new p(args)` can fold to `new ClassName(args)` (pragmatic — lets
@@ -377,6 +384,7 @@ impl LoweringContext {
             regex_exec_locals: HashSet::new(),
             proxy_locals: HashSet::new(),
             wasm_instance_locals: HashSet::new(),
+            plain_object_locals: HashSet::new(),
             proxy_revoke_locals: HashMap::new(),
             proxy_target_classes: HashMap::new(),
             class_expr_aliases: HashMap::new(),

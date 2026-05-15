@@ -634,6 +634,57 @@ pub unsafe extern "C" fn js_object_set_symbol_method(
     js_object_set_symbol_property(obj_f64, sym_f64, closure_f64)
 }
 
+/// #809: string-key analog of [`js_object_set_symbol_method`]. Sets
+/// `obj[key] = closure` by NAME (not the symbol side-table) and ALSO binds
+/// the closure's reserved `this` slot to `obj_f64` so a method written
+/// AFTER a `...spread` in an object literal still reads the right receiver.
+///
+/// Used by the ordered-IIFE lowering of object literals that interleave a
+/// spread with `this`-binding methods (Effect `HashRing.ts` `Proto`). The
+/// non-spread fast path patches `this` post-build in codegen; this helper
+/// is the runtime equivalent for the ordered path where the closure flows
+/// in as a call argument.
+///
+/// Layout assumption (identical to `js_object_set_symbol_method`): the
+/// LAST capture slot is the reserved `this` slot.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_set_method_by_name(
+    obj_f64: f64,
+    key_f64: f64,
+    closure_f64: f64,
+) -> f64 {
+    // 1) Patch the closure's reserved (last) `this` capture slot with obj.
+    let c_bits = closure_f64.to_bits();
+    let c_tag = c_bits & 0xFFFF_0000_0000_0000;
+    if c_tag == POINTER_TAG {
+        let c_ptr = (c_bits & POINTER_MASK) as *mut crate::closure::ClosureHeader;
+        if !c_ptr.is_null() && (c_ptr as usize) >= 0x1000 {
+            let type_tag = std::ptr::read_volatile((c_ptr as *const u8).add(12) as *const u32);
+            if type_tag == crate::closure::CLOSURE_MAGIC {
+                let raw_count = (*c_ptr).capture_count;
+                let real_count = crate::closure::real_capture_count(raw_count);
+                if real_count >= 1 {
+                    let captures_ptr = (c_ptr as *mut u8)
+                        .add(std::mem::size_of::<crate::closure::ClosureHeader>())
+                        as *mut f64;
+                    *captures_ptr.add((real_count - 1) as usize) = obj_f64;
+                }
+            }
+        }
+    }
+
+    // 2) Set the field by name. `js_object_set_field_by_name` strips the
+    //    NaN-box tag off `obj` itself, so passing the raw bits is fine; the
+    //    key must be a real `StringHeader*` (tag stripped).
+    let key_bits = key_f64.to_bits();
+    let key_ptr = (key_bits & POINTER_MASK) as *const StringHeader;
+    let obj_ptr = obj_f64.to_bits() as *mut crate::object::ObjectHeader;
+    if !key_ptr.is_null() && (key_ptr as usize) >= 0x1000 {
+        crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, closure_f64);
+    }
+    obj_f64
+}
+
 /// `ToPrimitive(value, hint)` — if `value` is an object with a
 /// `[Symbol.toPrimitive]` method registered in the symbol side-table, call
 /// it with the appropriate hint string ("number" / "string" / "default")

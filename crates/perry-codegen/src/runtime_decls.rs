@@ -2504,6 +2504,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    // #809: string-key analog of `js_object_set_symbol_method`. Used by the
+    // ordered-IIFE lowering of object literals that mix a spread with
+    // `this`-binding methods (Effect `HashRing.ts` `Proto`). Sets the field
+    // by name AND patches the closure's reserved (last) `this` capture slot
+    // with the object, so a method written after a `...spread` still sees
+    // the right receiver.
+    module.declare_function(
+        "js_object_set_method_by_name",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_to_primitive", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_register_class_has_instance", VOID, &[I32, I64]);
     module.declare_function("js_register_class_to_string_tag", VOID, &[I32, I64]);
