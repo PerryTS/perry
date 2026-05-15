@@ -1,0 +1,406 @@
+# Top npm packages by download volume — used by the typosquat rule
+# (scanner/typosquat.rs). Lines beginning with `#` and blank lines are
+# ignored. Names are case-sensitive (npm names are lowercase by
+# convention, so this is the practical normalization).
+#
+# This is a hand-curated snapshot of the most-typosquatted package
+# names. Refresh periodically; the file is embedded into the binary at
+# compile time via include_str!, so updates require a rebuild.
+#
+# Snapshot date: 2026-05-13
+# Source: npm public registry download statistics + known attack reports.
+
+# Frameworks
+react
+react-dom
+react-native
+react-router
+react-router-dom
+vue
+angular
+svelte
+next
+nuxt
+preact
+solid-js
+remix
+
+# Utilities
+lodash
+underscore
+ramda
+moment
+dayjs
+date-fns
+chalk
+commander
+yargs
+ora
+inquirer
+prompt
+debug
+ms
+uuid
+nanoid
+shortid
+mkdirp
+rimraf
+glob
+fast-glob
+minimatch
+semver
+qs
+
+# Tooling
+typescript
+ts-node
+tsx
+eslint
+prettier
+jest
+mocha
+chai
+vitest
+ava
+tap
+nyc
+husky
+lint-staged
+nodemon
+pm2
+concurrently
+
+# HTTP / network
+axios
+node-fetch
+got
+superagent
+undici
+needle
+isomorphic-fetch
+cross-fetch
+form-data
+
+# Servers
+express
+fastify
+koa
+hapi
+hono
+nestjs
+restify
+polka
+
+# Databases
+pg
+mysql
+mysql2
+redis
+ioredis
+mongoose
+mongodb
+sqlite3
+better-sqlite3
+drizzle-orm
+prisma
+sequelize
+typeorm
+knex
+
+# Build tools
+webpack
+rollup
+vite
+esbuild
+swc
+turbo
+parcel
+gulp
+grunt
+browserify
+metro
+
+# Babel
+babel
+babel-core
+babel-loader
+babel-runtime
+
+# Testing helpers
+sinon
+nock
+supertest
+puppeteer
+playwright
+cypress
+testing-library
+
+# State / data
+redux
+zustand
+mobx
+react-query
+tanstack-query
+swr
+immer
+immutable
+
+# Auth / crypto
+jsonwebtoken
+bcrypt
+bcryptjs
+argon2
+crypto-js
+passport
+oauth
+oauth2-server
+node-jose
+jose
+
+# WebSocket
+ws
+socket.io
+socket.io-client
+sockjs
+engine.io
+
+# Streams / events
+event-stream
+through2
+readable-stream
+stream-buffers
+eventemitter3
+rxjs
+
+# CSS / UI
+tailwindcss
+postcss
+sass
+less
+stylus
+styled-components
+emotion
+classnames
+clsx
+
+# CLI
+clipanion
+caporal
+oclif
+boxen
+figlet
+update-notifier
+
+# Logging
+winston
+pino
+bunyan
+log4js
+loglevel
+morgan
+
+# Validation
+joi
+yup
+zod
+ajv
+class-validator
+io-ts
+
+# Templating
+handlebars
+ejs
+pug
+mustache
+nunjucks
+
+# Bundles often targeted
+fs-extra
+yaml
+js-yaml
+ini
+dotenv
+config
+node-config
+cosmiconfig
+rc
+
+# AI / LLM
+openai
+anthropic
+langchain
+
+# Cloud SDKs
+aws-sdk
+@aws-sdk/client-s3
+@google-cloud/storage
+@azure/storage-blob
+
+# Specific high-value secondary targets (commonly typosquatted)
+async
+bluebird
+async-each
+async-eachof
+request
+request-promise
+underscore.string
+gulp-util
+shelljs
+which
+cross-spawn
+execa
+spawn-sync
+strip-ansi
+ansi-regex
+color-name
+color-convert
+supports-color
+has-flag
+escape-string-regexp
+function-bind
+has
+object-keys
+object-assign
+es-abstract
+define-properties
+get-intrinsic
+side-channel
+internal-slot
+call-bind
+which-typed-array
+is-typed-array
+is-array-buffer
+typed-array-buffer
+buffer
+safe-buffer
+ieee754
+base64-js
+brace-expansion
+balanced-match
+concat-map
+deep-equal
+deep-extend
+fast-deep-equal
+fast-json-stable-stringify
+json-stable-stringify
+graceful-fs
+once
+wrappy
+inflight
+node-gyp
+node-gyp-build
+node-pre-gyp
+prebuild-install
+nopt
+abbrev
+ansi-styles
+strip-bom
+strip-eof
+strip-final-newline
+strip-indent
+strip-json-comments
+trim-newlines
+
+# CI / coverage
+codecov
+istanbul
+nyc
+c8
+coveralls
+
+# Process / concurrency
+p-limit
+p-queue
+p-map
+p-retry
+p-timeout
+p-defer
+yocto-queue
+
+# Date
+luxon
+date-fns-tz
+
+# Markdown / docs
+marked
+markdown-it
+remark
+unified
+gray-matter
+
+# Image / asset
+sharp
+canvas
+imagemin
+puppeteer-core
+
+# Numbers / math
+big.js
+bignumber.js
+decimal.js
+
+# Other common targets
+got
+caw
+proxy-agent
+http-proxy
+http-proxy-agent
+https-proxy-agent
+socks-proxy-agent
+agent-base
+forever-agent
+follow-redirects
+tough-cookie
+cookie
+cookie-parser
+cookie-signature
+body-parser
+multer
+cors
+helmet
+compression
+serve-static
+finalhandler
+mime
+mime-types
+mime-db
+type-is
+accepts
+negotiator
+content-type
+content-disposition
+range-parser
+fresh
+etag
+on-headers
+on-finished
+ee-first
+encodeurl
+escape-html
+parseurl
+
+# Frontend ecosystem extras
+formik
+react-hook-form
+final-form
+react-final-form
+yup
+react-icons
+react-helmet
+@emotion/react
+@emotion/styled
+@mui/material
+@mui/icons-material
+antd
+chakra-ui
+bootstrap
+reactstrap
+
+# Node tooling extras
+dotenv-expand
+dotenv-cli
+cross-env
+env-cmd
+node-forge
+node-fetch-cache
+sharp-cli

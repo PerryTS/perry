@@ -1,2 +1,2 @@
-TypeError: Class decorator `@ReplaceWithOther` on `Original` returned a replacement class. Perry does not install class replacements from decorators (see docs/src/language/decorators.md). Return `undefined` (or nothing) to keep the decorator running for side effects only.
+TypeError: Class decorator `@ReplaceWithOther` on `Original` returned a value. Perry does not install decorator return values as class replacements (see docs/src/language/decorators.md). Return `undefined` (or nothing) to keep the decorator running for side effects only.
     at <anonymous>

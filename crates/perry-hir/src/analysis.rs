@@ -1575,7 +1575,7 @@ fn remap_local_ids_in_stmt(stmt: &mut Stmt, map: &std::collections::HashMap<Loca
 /// `perry_hir::walker`. Pre-refactor this fn carried its own ad-hoc walker
 /// with a `_ => {}` catch-all that silently skipped any new variant added to
 /// `Expr` (issue #212 partial-fix lineage).
-fn remap_local_ids_in_expr(expr: &mut Expr, map: &std::collections::HashMap<LocalId, LocalId>) {
+pub fn remap_local_ids_in_expr(expr: &mut Expr, map: &std::collections::HashMap<LocalId, LocalId>) {
     match expr {
         Expr::LocalGet(id) => {
             if let Some(&new_id) = map.get(id) {

@@ -92,6 +92,16 @@ enum Commands {
     /// Initialize a new perry project
     Init(commands::init::InitArgs),
 
+    /// Install npm packages with a malware-scan gate.
+    ///
+    /// Wraps `bun install --ignore-scripts` (or `npm install --ignore-scripts`
+    /// as fallback) so no package code executes during install. After
+    /// extraction, scans `node_modules/` with bundled offline rules and
+    /// only then runs lifecycle scripts — and only for packages on a
+    /// curated trust allowlist. Works on any standard npm project; no
+    /// Perry-specific config required.
+    Install(commands::install::InstallArgs),
+
     /// Check environment and dependencies
     Doctor(commands::doctor::DoctorArgs),
 
@@ -169,6 +179,7 @@ fn is_legacy_invocation(args: &[String]) -> bool {
                 | "init"
                 | "doctor"
                 | "explain"
+                | "install"
                 | "publish"
                 | "update"
                 | "setup"
@@ -311,6 +322,7 @@ fn main_inner() -> Result<()> {
         Commands::Dev(args) => commands::dev::run(args, cli.format, use_color, cli.verbose),
         Commands::Check(args) => commands::check::run(args, cli.format, use_color, cli.verbose),
         Commands::Init(args) => commands::init::run(args, cli.format, use_color),
+        Commands::Install(args) => commands::install::run(args, cli.format, use_color),
         Commands::Doctor(args) => commands::doctor::run(args, cli.format, use_color),
         Commands::Explain(args) => commands::explain::run(args, cli.format, use_color),
         Commands::Publish(args) => commands::publish::run(args, cli.format, use_color, cli.verbose),

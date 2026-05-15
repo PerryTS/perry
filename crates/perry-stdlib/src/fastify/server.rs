@@ -360,10 +360,37 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                         } != 0
                         {
                             wait_for_promise(ptr as *mut perry_runtime::Promise);
-                            // Extract the resolved value from the promise
-                            final_result = unsafe {
-                                perry_runtime::js_promise_value(ptr as *mut perry_runtime::Promise)
+                            // Read state AFTER the wait — `js_promise_value`
+                            // returns `(*promise).value` unconditionally and
+                            // that field stays at `0.0` for rejected and
+                            // pending promises (rejection writes `reason`,
+                            // not `value`). Without this branch, an
+                            // unhandled rejection inside a route handler
+                            // would serialize the literal byte `0` as the
+                            // response body — issue #748.
+                            let st = unsafe {
+                                perry_runtime::js_promise_state(ptr as *mut perry_runtime::Promise)
                             };
+                            if st == 2 {
+                                if let Some(ctx) = unsafe {
+                                    crate::common::get_handle_mut::<FastifyContext>(ctx_handle)
+                                } {
+                                    ctx.status_code = 500;
+                                    let reason = unsafe {
+                                        perry_runtime::promise::js_promise_reason(
+                                            ptr as *mut perry_runtime::Promise,
+                                        )
+                                    };
+                                    ctx.response_body = Some(render_rejection_body(reason));
+                                }
+                                final_result = f64::from_bits(0x7FFC_0000_0000_0001);
+                            } else {
+                                final_result = unsafe {
+                                    perry_runtime::js_promise_value(
+                                        ptr as *mut perry_runtime::Promise,
+                                    )
+                                };
+                            }
                         }
                     }
                 }
@@ -428,23 +455,123 @@ unsafe fn call_hook_awaiting(hook: ClosurePtr, ctx_f64: f64, ctx_handle: Handle)
     }
 }
 
-/// Wait for a promise to resolve/reject
+/// Wait until a promise settles, driving microtasks, the stdlib pump,
+/// and timer ticks every iteration. Blocks on
+/// `perry_runtime::event_pump::js_wait_for_event` (a condvar with a 1 s
+/// idle cap) instead of `thread::sleep`, so the dispatcher wakes the
+/// moment any stdlib worker calls `js_notify_main_thread` — the same
+/// wake `js_promise_resolve` / `js_promise_reject` fire when the
+/// awaited chain advances.
+///
+/// Mirrors the codegen-emitted `await` body in
+/// `crates/perry-codegen/src/expr.rs` (the "=== wait ===" block at
+/// lines ~9645-9665): no fixed iteration limit, condvar-based wait.
+///
+/// ### Why the old polling loop is wrong (issue #748)
+///
+/// The previous implementation looped 10_000 × 100 us = ~1 s and then
+/// returned regardless of whether the promise had settled. Callers
+/// then read `js_promise_value(ptr)` which returns `(*promise).value`
+/// — `0.0` for a still-Pending Promise (it's initialized to zero in
+/// `Promise::new` and only overwritten by `js_promise_resolve`). The
+/// dispatcher serialized that `0.0` as the response body, yielding the
+/// literal ASCII byte `0x30` ("0") with HTTP 200 (default
+/// `status_code` — `reply.code(201)` was never reached because the
+/// handler chain hadn't returned). Routes that do many awaits
+/// (argon2 hashing + multi-step DB writes, etc.) routinely exceed
+/// 1 s on a cold connection pool; every operation after the timeout
+/// silently no-op'd because the dispatcher returned and stopped
+/// pumping microtasks for the orphaned chain.
 fn wait_for_promise(promise_ptr: *mut perry_runtime::Promise) {
-    // Poll until promise is settled
-    for _ in 0..10000 {
-        // Process pending operations
-        unsafe { crate::common::js_stdlib_process_pending() };
-        perry_runtime::js_promise_run_microtasks();
-
-        // Check if promise is settled (state != 0 means not pending)
-        let state = unsafe { perry_runtime::js_promise_state(promise_ptr) };
-        if state != 0 {
-            break;
-        }
-
-        // Small sleep to avoid busy-waiting
-        std::thread::sleep(std::time::Duration::from_micros(100));
+    // First pump synchronously — handles the already-settled case
+    // (e.g. `async () => 42` whose promise is fulfilled before this
+    // function is even called) without entering the wait path.
+    unsafe { crate::common::js_stdlib_process_pending() };
+    perry_runtime::js_promise_run_microtasks();
+    let mut state = unsafe { perry_runtime::js_promise_state(promise_ptr) };
+    if state != 0 {
+        return;
     }
+    loop {
+        unsafe {
+            // Drive timers, the stdlib pump, and microtasks every tick
+            // — mirrors the codegen-emitted await body.
+            let _ = perry_runtime::timer::js_timer_tick();
+            let _ = perry_runtime::timer::js_callback_timer_tick();
+            let _ = perry_runtime::timer::js_interval_timer_tick();
+            crate::common::js_stdlib_process_pending();
+        }
+        perry_runtime::js_promise_run_microtasks();
+        // Condvar wait: blocks until a notify arrives or the 1 s
+        // idle cap elapses. `js_promise_resolve` / `js_promise_reject`
+        // fire `js_notify_main_thread`, so the wake happens the
+        // instant the chain advances.
+        perry_runtime::event_pump::js_wait_for_event();
+        state = unsafe { perry_runtime::js_promise_state(promise_ptr) };
+        if state != 0 {
+            return;
+        }
+    }
+}
+
+/// Render a Promise rejection reason as a `{ "error": ... }` JSON body
+/// for the 500 response surfaced by the dispatcher on async-handler
+/// rejection (issue #748).
+fn render_rejection_body(reason: f64) -> Vec<u8> {
+    let jsv = JSValue::from_bits(reason.to_bits());
+    if jsv.is_string() {
+        let s = build_response_body(reason);
+        let mut out = b"{\"error\":".to_vec();
+        out.push(b'"');
+        for b in s {
+            match b {
+                b'"' => out.extend_from_slice(b"\\\""),
+                b'\\' => out.extend_from_slice(b"\\\\"),
+                b'\n' => out.extend_from_slice(b"\\n"),
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\t' => out.extend_from_slice(b"\\t"),
+                0x00..=0x1f => out.extend_from_slice(format!("\\u{:04x}", b).as_bytes()),
+                _ => out.push(b),
+            }
+        }
+        out.push(b'"');
+        out.push(b'}');
+        return out;
+    }
+    if jsv.is_pointer() {
+        extern "C" {
+            fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
+        }
+        unsafe {
+            let str_ptr = js_json_stringify(reason, 0);
+            if !str_ptr.is_null() {
+                let len = (*str_ptr).byte_len as usize;
+                let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                let inner = std::slice::from_raw_parts(data_ptr, len).to_vec();
+                let mut out = b"{\"error\":".to_vec();
+                out.extend_from_slice(&inner);
+                out.push(b'}');
+                return out;
+            }
+        }
+    }
+    let body = build_response_body(reason);
+    let mut out = b"{\"error\":".to_vec();
+    if body.is_empty() {
+        out.extend_from_slice(b"null");
+    } else {
+        out.push(b'"');
+        for b in body {
+            match b {
+                b'"' => out.extend_from_slice(b"\\\""),
+                b'\\' => out.extend_from_slice(b"\\\\"),
+                _ => out.push(b),
+            }
+        }
+        out.push(b'"');
+    }
+    out.push(b'}');
+    out
 }
 
 /// Build response body from handler return value

@@ -2138,6 +2138,29 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
+            // Issue #740: track `let/const/var <name> = ClassRef(...)` so
+            // `new <name>(...)` can resolve captures via the alias chain.
+            // Also follow LocalGet aliases for `const B = A` style chains.
+            if let Some(init_expr) = &init {
+                match init_expr {
+                    Expr::ClassRef(class_name) => {
+                        ctx.register_let_class_alias(name.clone(), class_name.clone());
+                    }
+                    Expr::LocalGet(src_id) => {
+                        if let Some((src_name, _, _)) =
+                            ctx.locals.iter().rev().find(|(_, lid, _)| lid == src_id)
+                        {
+                            let src_name = src_name.clone();
+                            if let Some(resolved) = ctx.resolve_class_alias(&src_name) {
+                                ctx.register_let_class_alias(name.clone(), resolved);
+                            } else if ctx.classes_index.contains_key(&src_name) {
+                                ctx.register_let_class_alias(name.clone(), src_name);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
             result.push(Stmt::Let {
                 id,
                 name,
