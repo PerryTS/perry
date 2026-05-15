@@ -3894,27 +3894,16 @@ fn append_decorator_invocations_inner(
                     init: Some(call),
                 });
                 let msg = format!(
-                    "Class decorator `@{dec_name}` on `{class_name}` returned a replacement \
-class. Perry does not install class replacements from decorators (see \
+                    "Class decorator `@{dec_name}` on `{class_name}` returned a value. \
+Perry does not install decorator return values as class replacements (see \
 docs/src/language/decorators.md). Return `undefined` (or nothing) to keep \
 the decorator running for side effects only."
                 );
-                // Check `typeof ret === "function"` rather than
-                // `ret !== undefined`: Perry's lowering for a function
-                // expression with no explicit `return` currently leaves a
-                // numeric sentinel in the return slot rather than the
-                // NaN-boxed undefined value, so `!== undefined` would
-                // false-positive on side-effect-only decorators. The
-                // semantic check the maintainer asked for is "did the
-                // decorator return a class?" — a class is `typeof
-                // "function"` in JS, so this catches the @Memoize /
-                // @Throttle / GraphQL-wrapper case while leaving the bare
-                // `@Injectable` (no return) shape alone.
                 out.push(Stmt::If {
                     condition: Expr::Compare {
-                        op: CompareOp::Eq,
-                        left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(ret_id)))),
-                        right: Box::new(Expr::String("function".to_string())),
+                        op: CompareOp::Ne,
+                        left: Box::new(Expr::LocalGet(ret_id)),
+                        right: Box::new(Expr::Undefined),
                     },
                     // Perry has dedicated HIR variants for built-in errors
                     // (`Expr::TypeErrorNew`, etc.); the generic

@@ -3256,21 +3256,22 @@ fn compile_function(
     stmt::lower_stmts(&mut ctx, &f.body)
         .with_context(|| format!("lowering body of '{}'", f.name))?;
 
-    // Defensive: a well-typed numeric function always returns via an
-    // explicit `return`, but we emit `ret double 0.0` as a fallback so
-    // the LLVM verifier doesn't reject a missing terminator. For
-    // async functions, the fallback also wraps in a resolved promise
-    // so callers can await the result.
+    // A function that falls off the end without an explicit `return`
+    // returns `undefined` in JS — emit the NaN-boxed TAG_UNDEFINED
+    // value so the LLVM verifier has a terminator AND user code that
+    // does `f() === undefined` / `f() !== undefined` observes the
+    // correct value. For async functions, wrap undefined in a
+    // resolved promise so callers can await the result.
     if !ctx.block().is_terminated() {
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         if f.is_async {
-            let zero = "0.0".to_string();
             let handle = ctx
                 .block()
-                .call(I64, "js_promise_resolved", &[(DOUBLE, &zero)]);
+                .call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
             let boxed = crate::expr::nanbox_pointer_inline_pub(ctx.block(), &handle);
             ctx.block().ret(DOUBLE, &boxed);
         } else {
-            ctx.block().ret(DOUBLE, "0.0");
+            ctx.block().ret(DOUBLE, &undef);
         }
     }
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
@@ -3598,15 +3599,15 @@ fn compile_closure(
         .with_context(|| format!("lowering closure body func_id={}", func_id))?;
 
     if !ctx.block().is_terminated() {
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         if is_async {
-            let zero = "0.0".to_string();
             let handle = ctx
                 .block()
-                .call(I64, "js_promise_resolved", &[(DOUBLE, &zero)]);
+                .call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
             let boxed = crate::expr::nanbox_pointer_inline_pub(ctx.block(), &handle);
             ctx.block().ret(DOUBLE, &boxed);
         } else {
-            ctx.block().ret(DOUBLE, "0.0");
+            ctx.block().ret(DOUBLE, &undef);
         }
     }
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
@@ -3898,9 +3899,12 @@ fn compile_method(
                         stmt::lower_stmts(&mut ctx, &method.body).with_context(|| {
                             format!("lowering body of method '{}::{}'", class.name, method.name)
                         })?;
-                        // Fall through to the default ret-void at end.
+                        // Fall through to the default ret at end.
                         if !ctx.block().is_terminated() {
-                            ctx.block().ret(DOUBLE, "0.0");
+                            let undef = crate::nanbox::double_literal(f64::from_bits(
+                                crate::nanbox::TAG_UNDEFINED,
+                            ));
+                            ctx.block().ret(DOUBLE, &undef);
                         }
                         let _ = std::mem::take(&mut ctx.ic_globals);
                         let _ = std::mem::take(&mut ctx.typed_parse_rodata);
@@ -3978,7 +3982,8 @@ fn compile_method(
         .with_context(|| format!("lowering body of method '{}::{}'", class.name, method.name))?;
 
     if !ctx.block().is_terminated() {
-        ctx.block().ret(DOUBLE, "0.0");
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        ctx.block().ret(DOUBLE, &undef);
     }
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
@@ -5389,15 +5394,15 @@ fn compile_static_method(
         .with_context(|| format!("lowering body of static '{}::{}'", class_name, f.name))?;
 
     if !ctx.block().is_terminated() {
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         if f.is_async {
-            let zero = "0.0".to_string();
             let handle = ctx
                 .block()
-                .call(I64, "js_promise_resolved", &[(DOUBLE, &zero)]);
+                .call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
             let boxed = crate::expr::nanbox_pointer_inline_pub(ctx.block(), &handle);
             ctx.block().ret(DOUBLE, &boxed);
         } else {
-            ctx.block().ret(DOUBLE, "0.0");
+            ctx.block().ret(DOUBLE, &undef);
         }
     }
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
