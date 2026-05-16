@@ -2218,6 +2218,25 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 ctx.register_let_class_alias(name.clone(), src_name);
                             }
                         }
+                        // Issue #838: follow prototype-alias chains too,
+                        // so `var m = M.prototype; var n = m; n.foo = …`
+                        // still recognises the underlying class.
+                        if let Some(class_name) = ctx.prototype_aliases.get(src_id).cloned() {
+                            ctx.prototype_aliases.insert(id, class_name);
+                        }
+                    }
+                    // Issue #838: `var p = <ClassName>.prototype` records
+                    // the alias so a later `p.<method> = <fn>` lowers to
+                    // RegisterPrototypeMethod. dayjs's minified shape
+                    // (`var m = M.prototype; m.parse = function(){…};
+                    //  m.init = function(){…};`) hits this — without
+                    // alias-tracking the assignments fell through to a
+                    // generic PropertySet on the prototype proxy that
+                    // nothing downstream observed.
+                    Expr::PropertyGet { object, property } if property == "prototype" => {
+                        if let Expr::ClassRef(class_name) = object.as_ref() {
+                            ctx.prototype_aliases.insert(id, class_name.clone());
+                        }
                     }
                     _ => {}
                 }

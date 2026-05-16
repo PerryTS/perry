@@ -409,6 +409,9 @@ where
             f(func);
             f(proto);
         }
+        Expr::RegisterPrototypeMethod { value, .. } => {
+            f(value);
+        }
         Expr::IndexGet { object, index } => {
             f(object);
             f(index);
@@ -1674,6 +1677,9 @@ where
         Expr::SetFunctionPrototype { func, proto } => {
             f(func);
             f(proto);
+        }
+        Expr::RegisterPrototypeMethod { value, .. } => {
+            f(value);
         }
         Expr::IndexGet { object, index } => {
             f(object);

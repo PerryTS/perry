@@ -1142,6 +1142,23 @@ pub enum Expr {
         proto: Box<Expr>,
     },
 
+    // Issue #838: `<ClassName>.prototype.<method> = <fn>` and the
+    // aliased shape `let p = <ClassName>.prototype; p.<method> = <fn>`.
+    // dayjs / chalk / pre-ES6 npm packages still attach instance
+    // methods via this pattern instead of inside the `class { … }`
+    // block. Codegen emits `js_register_prototype_method(class_id,
+    // name, fn)` which stores the closure into a per-class side
+    // table; the runtime's `js_object_get_field_by_name` and
+    // `js_native_call_method` dispatch hot paths consult it after
+    // the regular vtable / proto-object walks miss, so
+    // `(new Class()).method()` reaches the registered closure with
+    // `this` bound to the receiver.
+    RegisterPrototypeMethod {
+        class_name: String,
+        method_name: String,
+        value: Box<Expr>,
+    },
+
     // Static method call (e.g., Counter.increment())
     StaticMethodCall {
         class_name: String,

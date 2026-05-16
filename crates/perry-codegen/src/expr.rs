@@ -10143,6 +10143,40 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(proto_val)
         }
+        // Issue #838: `<Class>.prototype.<method> = <fn>` and the
+        // aliased `let p = <Class>.prototype; p.<method> = <fn>`
+        // shape. HIR recognises the assignment pattern and lowers it
+        // here; codegen emits `js_register_prototype_method(class_id,
+        // name_ptr, name_len, value)` so the runtime stores the
+        // closure into a per-class side-table consulted at dispatch
+        // time. The expression yields the closure value to match
+        // JS-spec `x.foo = bar`. If the class isn't in
+        // `ctx.class_ids` (cross-module imported class) we fall back
+        // to a generic field-set on `<Class>.prototype` so the value
+        // at least lands on the prototype proxy — the importer side
+        // typically owns the registration anyway.
+        Expr::RegisterPrototypeMethod {
+            class_name,
+            method_name,
+            value,
+        } => {
+            let val_double = lower_expr(ctx, value)?;
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                let key_idx = ctx.strings.intern(method_name);
+                let key_bytes_global = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
+                let key_len = ctx.strings.entry(key_idx).byte_len.to_string();
+                ctx.block().call_void(
+                    "js_register_prototype_method",
+                    &[
+                        (crate::types::I32, &class_id.to_string()),
+                        (PTR, &key_bytes_global),
+                        (I64, &key_len),
+                        (DOUBLE, &val_double),
+                    ],
+                );
+            }
+            Ok(val_double)
+        }
         // `static [Symbol.for("k")] = "v"` — register in the runtime's
         // class-static-symbol side table. Refs #420 (drizzle).
         Expr::ClassStaticSymbolSet {

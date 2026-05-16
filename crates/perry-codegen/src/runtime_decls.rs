@@ -701,6 +701,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // class id allocated for the function value (or 0 on validation
     // failure). Codegen discards the return.
     module.declare_function("js_set_function_prototype", I32, &[DOUBLE, DOUBLE]);
+    // Issue #838: JS-classic prototype-method assignment.
+    // `Class.prototype.method = fn` (or the aliased
+    // `let p = Class.prototype; p.method = fn` shape) registers the
+    // closure into a per-class side table consulted by the
+    // `js_object_get_field_by_name` / `js_native_call_method` dispatch
+    // hot paths so `(new Class()).method()` reaches the closure with
+    // `this` bound to the receiver.
+    module.declare_function(
+        "js_register_prototype_method",
+        VOID,
+        &[I32, PTR, I64, DOUBLE],
+    );
     module.declare_function("js_typeerror_new", I64, &[I64]);
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);
