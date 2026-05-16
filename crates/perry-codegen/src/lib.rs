@@ -9,6 +9,7 @@ pub(crate) mod boxed_vars;
 pub mod codegen;
 pub(crate) mod collectors;
 pub(crate) mod expr;
+pub mod ext_registry;
 pub mod function;
 pub mod linker;
 pub(crate) mod loop_purity;

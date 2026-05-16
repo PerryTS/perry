@@ -559,6 +559,10 @@ impl LlBlock {
     // -------- Function calls --------
 
     pub fn call(&mut self, ret_ty: LlvmType, func_name: &str, args: &[(LlvmType, &str)]) -> String {
+        // #835 + #846: record this emission against the FFI provenance
+        // registry. The driver consults the registry after all per-module
+        // codegen finishes to auto-link the providing crate.
+        crate::ext_registry::record_ffi_call(func_name);
         let r = self.reg();
         let arg_str = format_args(args);
         self.emit(format!(
@@ -569,6 +573,8 @@ impl LlBlock {
     }
 
     pub fn call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
+        // #835 + #846: same registry hook as `call` — see comment there.
+        crate::ext_registry::record_ffi_call(func_name);
         let arg_str = format_args(args);
         self.emit(format!("call void @{}({})", func_name, arg_str));
     }

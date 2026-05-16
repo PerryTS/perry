@@ -888,6 +888,12 @@ pub fn run_with_parse_cache(
     use_color: bool,
     verbose: u8,
 ) -> Result<CompileResult> {
+    // #835 + #846: clear the codegen-side FFI provenance set up-front
+    // so any leftover entries from a prior `perry dev` rebuild (or a
+    // failed-build early-return that skipped our drain below) don't
+    // bleed into this build's auto-link decisions.
+    let _ = perry_codegen::ext_registry::take_used_providers();
+
     match format {
         OutputFormat::Text => println!("Collecting modules..."),
         OutputFormat::Json => {}
@@ -4971,6 +4977,42 @@ pub fn run_with_parse_cache(
             eprintln!("emitted for the failed modules so the binary still links, but");
             eprintln!("any code in those modules will be inert at runtime.");
             eprintln!();
+        }
+    }
+
+    // #835 + #846: fold the codegen-side FFI provenance registry into
+    // ctx so the well-known flip and `needs_stdlib` decisions below see
+    // the symbols codegen actually emitted, not just the modules the
+    // user imported. Today, codegen for compiled-package code can emit
+    // (e.g.) `js_node_http_create_server` or `js_readable_stream_new`
+    // without any `import "node:http"` / `import "streams"` showing up
+    // in `ctx.native_module_imports` — Effect's `Stream`, Express's
+    // server, and similar shapes lower the FFI calls directly. The
+    // registry (`crates/perry-codegen/src/ext_registry.rs`) records
+    // every call-emission site against its providing crate; here we
+    // drain that record and route each entry through the existing
+    // `needs_stdlib` + `native_module_imports` machinery. Done before
+    // `build_optimized_libs` so `compute_required_features` and the
+    // well-known flip both see the augmented set.
+    {
+        use perry_codegen::ext_registry::{take_used_providers, OwnerKind};
+        let providers = take_used_providers();
+        for owner in providers {
+            match owner {
+                OwnerKind::Stdlib => {
+                    ctx.needs_stdlib = true;
+                }
+                OwnerKind::WellKnown(key) => {
+                    // Inserting into native_module_imports flips the
+                    // well-known mechanism for this binding. Also flip
+                    // `needs_stdlib` because the link step's
+                    // "Linking (with stdlib)..." vs "(runtime-only)"
+                    // gate is what brings the well-known libs onto the
+                    // command line (see link.rs:881-916).
+                    ctx.native_module_imports.insert(key.to_string());
+                    ctx.needs_stdlib = true;
+                }
+            }
         }
     }
 
