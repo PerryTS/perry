@@ -3346,6 +3346,19 @@ pub fn run_with_parse_cache(
             let mut import_function_origin_names:
                 std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            // Issue #678 followup: imports landing in `ModuleKind::Interpreted`
+            // (V8 fallback). The codegen probes this map BEFORE
+            // `perry_fn_<src>__<name>` symbol formation and routes hits
+            // through `js_call_v8_export(specifier, name, args, argc)`.
+            // Pre-fix, V8-backed imports were silently dropped from
+            // `import_function_prefixes`, so the consumer's call
+            // emitted a bare `call double @<name>` against an
+            // undefined symbol — every `import { render } from "ink"`
+            // (or similar where the package fell back to V8) failed at
+            // link time with `Undefined symbols: _perry_fn_..._render`.
+            let mut import_function_v8_specifiers:
+                std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             // Issue #680: per-namespace member resolution. Disambiguates
             // `random.make` vs `tracer.make` when multiple namespaces
             // export the same member name. Keyed by `(namespace_local,
@@ -4101,6 +4114,71 @@ pub fn run_with_parse_cache(
                 }
             }
 
+            // Issue #678 followup: V8-fallback imports. Native imports above
+            // wire `perry_fn_<src>__<name>` extern symbols; V8 imports route
+            // through the runtime bridge instead. We populate BOTH
+            // `import_function_prefixes` (with a synthetic prefix so the
+            // codegen's `Some(source_prefix) = prefixes.get(name)` arm fires
+            // and the V8-specifier short-circuit inside it triggers) AND
+            // `import_function_v8_specifiers` (the actual specifier the bridge
+            // hands to `js_load_module`). The synthetic prefix never reaches
+            // a `perry_fn_...` symbol because every codegen site probes
+            // `import_function_v8_specifiers` first.
+            for import in &hir_module.imports {
+                if import.type_only {
+                    continue;
+                }
+                if import.module_kind != perry_hir::ModuleKind::Interpreted {
+                    continue;
+                }
+                // The V8 bridge takes a specifier string and resolves it
+                // through deno_core's Node loader — bare specifiers like
+                // "ink" and absolute paths both work. Prefer the resolved
+                // canonical path (matches the `JsModule.specifier` key in
+                // `ctx.js_modules`) so the same module-handle cache hits
+                // across imports of the same package from different sites.
+                let specifier = import
+                    .resolved_path
+                    .clone()
+                    .unwrap_or_else(|| import.source.clone());
+                let synthetic_prefix = format!("__v8__{}", sanitize_name(&specifier));
+                for spec in &import.specifiers {
+                    match spec {
+                        perry_hir::ImportSpecifier::Named { imported, local } => {
+                            import_function_prefixes
+                                .insert(local.clone(), synthetic_prefix.clone());
+                            import_function_v8_specifiers
+                                .insert(local.clone(), specifier.clone());
+                            if local != imported {
+                                import_function_prefixes
+                                    .insert(imported.clone(), synthetic_prefix.clone());
+                                import_function_v8_specifiers
+                                    .insert(imported.clone(), specifier.clone());
+                            }
+                        }
+                        perry_hir::ImportSpecifier::Default { local } => {
+                            import_function_prefixes
+                                .insert(local.clone(), synthetic_prefix.clone());
+                            import_function_v8_specifiers
+                                .insert(local.clone(), specifier.clone());
+                        }
+                        perry_hir::ImportSpecifier::Namespace { .. } => {
+                            // Namespace bindings (`import * as X from "ink"`)
+                            // are already registered into `namespace_imports`
+                            // by the pre-loop above; per-member access for a
+                            // V8 module has no static export list, so the
+                            // codegen relies on the Named-import path above
+                            // (on a sibling line) to register
+                            // per-member specifiers. Pure namespace usage
+                            // with no Named import alongside falls through
+                            // to the unresolved-namespace runtime stub —
+                            // acceptable because V8 module consumers
+                            // overwhelmingly use Named/Default imports.
+                        }
+                    }
+                }
+            }
+
             // Polymorphic-receiver augmentation (issue #240): when this
             // module references a type name that doesn't resolve to any
             // class, interface, enum, or type alias in the program's
@@ -4550,6 +4628,7 @@ pub fn run_with_parse_cache(
                 non_entry_module_prefixes,
                 import_function_prefixes,
                 import_function_origin_names,
+                import_function_v8_specifiers,
                 namespace_member_prefixes,
                 emit_ir_only: bitcode_link,
                 namespace_imports,

@@ -66,6 +66,103 @@ pub(crate) fn import_origin_suffix<'a>(
     origin_names.get(name).map(String::as_str).unwrap_or(name)
 }
 
+/// Issue #678 followup: emit a `js_call_v8_export` bridge call for a name
+/// that resolves to a V8-fallback (interpreted) module.
+///
+/// Materializes per-call-site rodata constants for the module specifier
+/// and the export name (linker merges duplicates across translation units),
+/// stack-allocates an f64 args array, and emits the runtime call. Returns
+/// the SSA double register holding the NaN-boxed result.
+///
+/// Caller has already validated that `name` is in
+/// `ctx.import_function_v8_specifiers`; this helper just emits the lowering.
+pub(crate) fn emit_v8_export_call(
+    ctx: &mut FnCtx<'_>,
+    specifier: &str,
+    export_name: &str,
+    lowered_args: &[String],
+) -> String {
+    let idx = ctx.typed_parse_counter;
+    ctx.typed_parse_counter += 1;
+    let spec_global = format!("perry_v8_spec_{}", idx);
+    let name_global = format!("perry_v8_name_{}", idx);
+    let escape = |s: &str| -> String {
+        let bytes = s.as_bytes();
+        let mut lit = String::with_capacity(bytes.len() + 4);
+        lit.push('c');
+        lit.push('"');
+        for &b in bytes {
+            if (32..127).contains(&b) && b != b'"' && b != b'\\' {
+                lit.push(b as char);
+            } else {
+                lit.push('\\');
+                lit.push_str(&format!("{:02X}", b));
+            }
+        }
+        lit.push_str("\\00\"");
+        lit
+    };
+    let spec_bytes = specifier.as_bytes().len();
+    let name_bytes = export_name.as_bytes().len();
+    ctx.typed_parse_rodata.push(format!(
+        "@{} = private unnamed_addr constant [{} x i8] {}",
+        spec_global,
+        spec_bytes + 1,
+        escape(specifier)
+    ));
+    ctx.typed_parse_rodata.push(format!(
+        "@{} = private unnamed_addr constant [{} x i8] {}",
+        name_global,
+        name_bytes + 1,
+        escape(export_name)
+    ));
+
+    let argc = lowered_args.len();
+    let alloca_count = if argc == 0 { 1 } else { argc };
+    let blk = ctx.block();
+    let argc_lit = format!("{}", argc);
+    let spec_ptr = format!("@{}", spec_global);
+    let name_ptr = format!("@{}", name_global);
+    let spec_len_lit = format!("{}", spec_bytes);
+    let name_len_lit = format!("{}", name_bytes);
+
+    // Stack-allocate the args buffer (zero-len → still need a pointer; an
+    // `alloca [1 x double]` is well-formed in LLVM and never dereferenced
+    // because argc=0 in that branch of the runtime).
+    let args_slot = blk.fresh_reg();
+    blk.emit_raw(format!(
+        "{} = alloca [{} x double], align 8",
+        args_slot, alloca_count
+    ));
+    for (i, v) in lowered_args.iter().enumerate() {
+        let slot = blk.fresh_reg();
+        blk.emit_raw(format!(
+            "{} = getelementptr inbounds [{} x double], ptr {}, i64 0, i64 {}",
+            slot, alloca_count, args_slot, i
+        ));
+        blk.emit_raw(format!("store double {}, ptr {}, align 8", v, slot));
+    }
+
+    ctx.pending_declares.push((
+        "js_call_v8_export".to_string(),
+        DOUBLE,
+        vec![PTR, I64, PTR, I64, PTR, I64],
+    ));
+    let blk = ctx.block();
+    blk.call(
+        DOUBLE,
+        "js_call_v8_export",
+        &[
+            (PTR, &spec_ptr),
+            (I64, &spec_len_lit),
+            (PTR, &name_ptr),
+            (I64, &name_len_lit),
+            (PTR, &args_slot),
+            (I64, &argc_lit),
+        ],
+    )
+}
+
 /// If `callee` is a `new`-target whose class name is statically
 /// known, return that name. Used by the `Expr::NewDynamic` lowering
 /// to reroute statically-resolvable shapes to the regular `lower_new`
@@ -249,6 +346,14 @@ pub(crate) struct FnCtx<'a> {
     /// treat a missing entry as identity by calling
     /// `import_origin_suffix(import_function_origin_names, name)`.
     pub import_function_origin_names: &'a std::collections::HashMap<String, String>,
+    /// Issue #678 followup: Imported function name → module specifier for
+    /// imports that resolved to a `ModuleKind::Interpreted` (V8-fallback)
+    /// module. When a name is present here, every codegen site that
+    /// would otherwise form `perry_fn_<src>__<name>` routes through the
+    /// runtime bridge `js_call_v8_export(specifier, name, args, argc)`
+    /// instead — there is no native symbol to call. Sparse map; absent
+    /// entries (the common case) mean the import resolves natively.
+    pub import_function_v8_specifiers: &'a std::collections::HashMap<String, String>,
     /// Closure capture map: when lowering inside a closure body, this
     /// holds `LocalId → capture_index`. `LocalGet`/`LocalSet`/`Update`
     /// of an id in this map routes through the runtime
@@ -3655,6 +3760,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         })
                         .or_else(|| ctx.import_function_prefixes.get(property).cloned());
                     if let Some(source_prefix) = source_prefix_opt {
+                        // Issue #678 followup: V8-fallback namespace member
+                        // read as a value (e.g. `let r = ns.render`) — there
+                        // is no native getter to call. Return undefined; a
+                        // subsequent call goes through the closure-magic check
+                        // and fast-paths to undefined. Direct calls of this
+                        // shape (`ns.render(...)`) take a different lowering
+                        // path that routes through `emit_v8_export_call`.
+                        if ctx.import_function_v8_specifiers.contains_key(property) {
+                            return Ok(double_literal(f64::from_bits(
+                                crate::nanbox::TAG_UNDEFINED,
+                            )));
+                        }
                         // Issue #671: distinguish exported VARIABLES from
                         // exported FUNCTIONS — for variables, the symbol
                         // `perry_fn_<src>__<prop>` is a trivial getter that
@@ -6107,6 +6224,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if ctx.namespace_imports.contains(class_name) {
                 if let Some(source_prefix) = ctx.import_function_prefixes.get(method_name).cloned()
                 {
+                    // Issue #678 followup: V8-fallback namespace member route —
+                    // the origin module emits no native symbol, so dispatch
+                    // through the runtime bridge.
+                    if let Some(specifier) =
+                        ctx.import_function_v8_specifiers.get(method_name).cloned()
+                    {
+                        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                        for a in args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
+                    }
                     // Issue #678: namespace member resolved through a re-export
                     // rename uses the origin name as the symbol suffix.
                     let origin_suffix =
@@ -11233,6 +11362,17 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(double_literal(f64::from_bits(bits)));
             }
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
+                // Issue #678 followup: a V8-fallback import used as a value
+                // (rather than called directly) has no native singleton
+                // wrapper to point at — the `__perry_wrap_extern_*` for V8
+                // imports is the same no-op stub the imported-class branch
+                // emits (returns undefined). NaN-box `undefined` so any
+                // truthiness check fails closed; equality compares against
+                // `undefined`; a call through this value fast-paths through
+                // the closure-call's invalid-magic check.
+                if ctx.import_function_v8_specifiers.contains_key(name) {
+                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                }
                 // Issue #678: re-export renames mean the origin's symbol uses
                 // the *origin* name as the suffix, not the consumer-visible one.
                 let origin_suffix = import_origin_suffix(ctx.import_function_origin_names, name);

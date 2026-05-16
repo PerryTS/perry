@@ -560,6 +560,23 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     .cloned()
                     .or_else(|| ctx.import_function_prefixes.get(property).cloned())
                 {
+                    // Issue #678 followup: if the import lands in a V8-fallback
+                    // module (e.g. `import * as ink from "ink"` where ink fell
+                    // back to V8 because yoga-layout pulled in a feature Perry
+                    // can't compile), route the namespace member through the
+                    // runtime bridge — no `perry_fn_<src>__<member>` symbol
+                    // exists for the linker to bind to.
+                    if let Some(specifier) =
+                        ctx.import_function_v8_specifiers.get(property).cloned()
+                    {
+                        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                        for a in args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        return Ok(crate::expr::emit_v8_export_call(
+                            ctx, &specifier, property, &lowered,
+                        ));
+                    }
                     // Issue #678: re-exported names (e.g. `export { default as
                     // render }`) emit `perry_fn_<src>__default` in the origin —
                     // resolve the actual origin suffix before forming the symbol.
@@ -1084,6 +1101,19 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 return Ok(ctx.block().call(DOUBLE, name, &arg_slices));
             }
         };
+        // Issue #678 followup: if the consumer-visible name resolves to a
+        // V8-fallback module, there is no `perry_fn_<src>__<name>` symbol
+        // (the origin was demoted to V8 and never emitted a native one).
+        // Route the call through the runtime V8 bridge.
+        if let Some(specifier) = ctx.import_function_v8_specifiers.get(name).cloned() {
+            let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+            for a in args {
+                lowered.push(lower_expr(ctx, a)?);
+            }
+            return Ok(crate::expr::emit_v8_export_call(
+                ctx, &specifier, name, &lowered,
+            ));
+        }
         // Issue #678: re-export rename (`export { default as render } from
         // './render.js'`) means the origin module emits the symbol under
         // the *origin* name (`default`), not the consumer-visible name

@@ -663,6 +663,40 @@ pub unsafe extern "C" fn js_call_function(
     })
 }
 
+/// Issue #678: invoke a named export of a V8-fallback module by specifier.
+///
+/// Bundles `js_load_module` + `js_call_function` into a single FFI entry the
+/// codegen can drop in wherever an import resolves to a `ModuleKind::Interpreted`
+/// module. Without this, the codegen would emit `perry_fn_<src>__<name>` for
+/// imports out of a V8-routed module — but no such native symbol exists, so
+/// the linker fails with `Undefined symbols: _perry_fn_..._<name>`.
+///
+/// `specifier_ptr` / `specifier_len` and `export_name_ptr` / `export_name_len`
+/// follow the same ptr+len convention as `js_load_module` / `js_call_function`
+/// (zero len = null-terminated C string). `args_ptr` / `args_len` carry the
+/// already-NaN-boxed Perry argument doubles; result is also NaN-boxed.
+#[no_mangle]
+pub unsafe extern "C" fn js_call_v8_export(
+    specifier_ptr: *const i8,
+    specifier_len: usize,
+    export_name_ptr: *const i8,
+    export_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let module_handle = js_load_module(specifier_ptr, specifier_len);
+    if module_handle == 0 {
+        return f64::from_bits(0x7FFC_0000_0000_0001);
+    }
+    js_call_function(
+        module_handle,
+        export_name_ptr,
+        export_name_len,
+        args_ptr,
+        args_len,
+    )
+}
+
 fn call_function_impl(
     state: &mut JsRuntimeState,
     namespace: v8::Global<v8::Object>,
