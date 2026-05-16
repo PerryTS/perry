@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 833 entries across 70 modules.
+Total: 842 entries across 70 modules.
 
 ## Modules
 
@@ -95,11 +95,20 @@ Total: 833 entries across 70 modules.
 
 ### Methods
 
+- `asyncId` — instance *(class: `AsyncResource`)*
+- `bind` — instance *(class: `AsyncResource`)*
+- `createHook` — module
 - `disable` — instance
+- `emitDestroy` — instance *(class: `AsyncResource`)*
+- `enable` — instance *(class: `AsyncHook`)*
 - `enterWith` — instance
+- `executionAsyncId` — module
 - `exit` — instance
 - `getStore` — instance
 - `run` — instance
+- `runInAsyncScope` — instance *(class: `AsyncResource`)*
+- `triggerAsyncId` — module
+- `triggerAsyncId` — instance *(class: `AsyncResource`)*
 
 ## `axios`
 

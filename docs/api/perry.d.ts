@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 833 entries across 70 modules
+// Coverage: 842 entries across 70 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -14,6 +14,12 @@ declare module "async_hooks" {
   export class AsyncLocalStorage { [key: string]: any; }
   /** stdlib */
   export class AsyncResource { [key: string]: any; }
+  /** stdlib */
+  export function createHook(...args: any[]): any;
+  /** stdlib */
+  export function executionAsyncId(...args: any[]): any;
+  /** stdlib */
+  export function triggerAsyncId(...args: any[]): any;
 }
 
 declare module "axios" {
