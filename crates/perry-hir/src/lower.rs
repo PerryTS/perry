@@ -5395,8 +5395,7 @@ fn lower_module_decl(
                         // resolve user-written defaults.
                         let defaults: Vec<Option<Expr>> =
                             func.params.iter().map(|p| p.default.clone()).collect();
-                        let param_ids: Vec<LocalId> =
-                            func.params.iter().map(|p| p.id).collect();
+                        let param_ids: Vec<LocalId> = func.params.iter().map(|p| p.id).collect();
                         let rest_idx = func.params.iter().position(|p| p.is_rest);
                         ctx.func_defaults
                             .push((func.id, defaults, param_ids, rest_idx));
