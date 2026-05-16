@@ -2392,7 +2392,11 @@ fn infer_dynamic_extends_names(module: &mut Module) {
         // pure (no `LocalGet`). Methods on the parent are unaffected —
         // those dispatch through the runtime CLASS_REGISTRY which is
         // populated by the #826 RegisterClassParentDynamic side effect.
-        if class_field_inits_pure.get(parent_name).copied().unwrap_or(false) {
+        if class_field_inits_pure
+            .get(parent_name)
+            .copied()
+            .unwrap_or(false)
+        {
             class.extends_name = Some(parent_name.clone());
         }
     }
