@@ -553,6 +553,17 @@ pub struct NativeFunctionDecl {
 pub struct TargetNativeConfig {
     pub crate_path: PathBuf,
     pub lib_name: String,
+    /// If set, the absolute path to a prebuilt static library that the
+    /// linker should consume directly. Skips the cargo build step
+    /// entirely — `crate_path` is not used when this is `Some`.
+    ///
+    /// Resolved from the manifest's `prebuilt:` string (issue #860): a
+    /// node-style module path like
+    /// `@bloomengine/engine-darwin-arm64/lib/libbloom_macos.a` that
+    /// points into a sibling package installed via npm
+    /// `optionalDependencies` (the esbuild / sharp / swc / lightningcss
+    /// distribution pattern).
+    pub prebuilt: Option<PathBuf>,
     pub frameworks: Vec<String>,
     pub libs: Vec<String>,
     /// Extra `-L`/`/LIBPATH:` search paths to hand the linker before the

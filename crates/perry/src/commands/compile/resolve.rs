@@ -177,9 +177,23 @@ pub(super) fn parse_native_library_manifest(
         _ => "macos",
     };
 
-    let target_config = native_lib
-        .get("targets")
-        .and_then(|t| t.get(target_key))
+    // Issue #860 — prebuilt distribution (esbuild / sharp / swc /
+    // lightningcss pattern) needs per-arch target keys so a single
+    // package.json can describe `macos-arm64`, `macos-x64`,
+    // `linux-x64`, `linux-arm64`, etc. all at once. Probe the
+    // `<target>-<arch>` key first; fall back to the bare `<target>`
+    // key so the existing on-disk wrappers (which only use
+    // `targets.macos`, `targets.linux`, …) keep working unchanged.
+    let arch_for_target = arch_for_target_key(target);
+    let arch_key = arch_for_target.map(|arch| format!("{}-{}", target_key, arch));
+
+    let targets_block = native_lib.get("targets");
+    let target_value = arch_key
+        .as_deref()
+        .and_then(|k| targets_block.and_then(|t| t.get(k)))
+        .or_else(|| targets_block.and_then(|t| t.get(target_key)));
+
+    let target_config = target_value
         .map(|tc| TargetNativeConfig {
             crate_path: package_dir.join(tc.get("crate").and_then(|c| c.as_str()).unwrap_or("")),
             lib_name: tc
@@ -187,6 +201,10 @@ pub(super) fn parse_native_library_manifest(
                 .and_then(|l| l.as_str())
                 .unwrap_or("")
                 .to_string(),
+            prebuilt: tc
+                .get("prebuilt")
+                .and_then(|p| p.as_str())
+                .and_then(|spec| resolve_prebuilt_path(package_dir, spec)),
             frameworks: tc
                 .get("frameworks")
                 .and_then(|f| f.as_array())
@@ -250,6 +268,132 @@ pub(super) fn parse_native_library_manifest(
         functions,
         target_config,
     })
+}
+
+/// Map a Perry target string to the architecture token used in
+/// per-arch manifest keys (e.g. `targets.macos-arm64`).
+///
+/// Returns `None` for targets where the architecture is implicit in
+/// the target string itself (`ios` is always arm64-on-device, `web`
+/// is wasm). The caller falls back to the bare OS-only target key
+/// in those cases, so those wrappers don't need to migrate to the
+/// per-arch shape introduced by #860.
+fn arch_for_target_key(target: Option<&str>) -> Option<&'static str> {
+    // Native (no `--target`): use the host arch so a per-arch entry
+    // for the current machine wins over the OS-only fallback.
+    if target.is_none() {
+        return Some(host_arch_token());
+    }
+    match target {
+        // OS-level targets where both arm64 and x64 are real distribution
+        // targets — surface the arch so wrappers can ship per-arch
+        // prebuilts.
+        Some("macos") => Some("arm64"),
+        Some("linux") => Some("x64"),
+        Some("windows") => Some("x64"),
+        Some("android") => Some("arm64"),
+        Some("harmonyos") => Some("arm64"),
+        Some("harmonyos-simulator") => Some("x64"),
+        // ios/tvos/watchos/visionos: device builds are always arm64 (or
+        // arm64_32 for watchOS). Simulators are arm64 on Apple Silicon
+        // hosts and x64 on Intel hosts — we don't currently expose the
+        // host distinction at the manifest level. Stick with the
+        // OS-only key for now; per-arch keys can be added later if
+        // wrappers start needing them.
+        _ => None,
+    }
+}
+
+/// Architecture token for the current host, matching what
+/// `arch_for_target_key` would return for a native build. Kept in
+/// sync with the npm prebuilt-distribution convention used by
+/// esbuild/sharp/swc/lightningcss.
+fn host_arch_token() -> &'static str {
+    match std::env::consts::ARCH {
+        "aarch64" | "arm64" => "arm64",
+        "x86_64" => "x64",
+        "x86" => "ia32",
+        other => other,
+    }
+}
+
+/// Resolve a `prebuilt:` manifest entry to an absolute filesystem
+/// path. Returns `None` if the entry could not be resolved.
+///
+/// Accepted shapes (issue #860):
+///
+/// - `./relative/path.a` or `../relative/path.a` — resolved against
+///   the consuming package's directory (`package_dir`).
+/// - `/abs/path.a` — used verbatim.
+/// - `@scope/pkg/subpath/file.a` or `pkg/subpath/file.a` — resolved
+///   as a node-style module reference. We walk up from
+///   `package_dir` looking for a `node_modules/<pkg>` that contains
+///   `<subpath>/<file.a>`. This matches what `require.resolve` would
+///   do for a sibling package installed via npm
+///   `optionalDependencies` (the esbuild/sharp pattern).
+fn resolve_prebuilt_path(package_dir: &Path, spec: &str) -> Option<PathBuf> {
+    if spec.is_empty() {
+        return None;
+    }
+
+    let path = Path::new(spec);
+    if path.is_absolute() {
+        return Some(path.to_path_buf());
+    }
+
+    if spec.starts_with("./") || spec.starts_with("../") {
+        let joined = package_dir.join(spec);
+        return Some(joined);
+    }
+
+    // Node-style module reference: split off the package name (one
+    // segment, or two if it starts with `@scope/`) and treat the
+    // remainder as the subpath within that package.
+    let (pkg_name, subpath) = split_module_spec(spec)?;
+
+    // Walk up from `package_dir`, probing every `node_modules/<pkg>`
+    // until we find a match. The optionalDependency could be installed
+    // anywhere along that chain — typically right next to
+    // `package_dir`'s parent (sibling under the same `node_modules/`).
+    let mut current: Option<&Path> = Some(package_dir);
+    while let Some(dir) = current {
+        let candidate_pkg = dir.join("node_modules").join(&pkg_name);
+        if candidate_pkg.is_dir() {
+            let candidate = candidate_pkg.join(&subpath);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        current = dir.parent();
+    }
+
+    None
+}
+
+/// Split a node-style module reference like
+/// `@scope/pkg/lib/foo.a` into `("@scope/pkg", "lib/foo.a")`.
+/// Returns `None` if the spec is just a bare package name (no subpath
+/// — `prebuilt:` needs to point at a specific file).
+fn split_module_spec(spec: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = spec.splitn(4, '/').collect();
+    if spec.starts_with('@') {
+        // Scoped: `@scope/name/<rest>` — package name is first 2
+        // segments, subpath is everything after.
+        if parts.len() < 3 {
+            return None;
+        }
+        let pkg = format!("{}/{}", parts[0], parts[1]);
+        let subpath = parts[2..].join("/");
+        Some((pkg, subpath))
+    } else {
+        // Unscoped: `name/<rest>`.
+        if parts.len() < 2 {
+            return None;
+        }
+        let pkg = parts[0].to_string();
+        let subpath = parts[1..].join("/");
+        Some((pkg, subpath))
+    }
 }
 
 /// The ABI version the bundled `perry-ffi` ships. External wrappers
@@ -444,6 +588,207 @@ mod manifest_parse_tests {
             parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         assert!(tc.lib_dirs.is_empty());
+    }
+
+    /// Issue #860 — `targets.<os>-<arch>` keys take precedence over
+    /// the bare `targets.<os>` key. A wrapper that ships per-arch
+    /// prebuilts (esbuild/sharp/swc pattern) needs to direct macos
+    /// arm64 vs macos x64 consumers at different `.a` archives even
+    /// though both pass `--target macos`.
+    #[test]
+    fn per_arch_target_key_beats_bare_os_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "macos":       { "crate": "rust",       "lib": "fallback" },
+                        "macos-arm64": { "crate": "rust-arm64", "lib": "arm64_lib" },
+                        "macos-x64":   { "crate": "rust-x64",   "lib": "x64_lib"   }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        // The arch key for `Some("macos")` is hard-coded to `arm64`
+        // by `arch_for_target_key` — that's the production macOS
+        // distribution arch (Apple Silicon). x64 entries can still be
+        // delivered by passing a different target string in the
+        // future; we just need the per-arch lookup to fire.
+        let parsed =
+            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        assert_eq!(tc.lib_name, "arm64_lib");
+        assert_eq!(tc.crate_path, pkg_dir.join("rust-arm64"));
+    }
+
+    /// When no per-arch key matches, the bare OS-only key still
+    /// resolves — existing on-disk wrappers must not regress.
+    #[test]
+    fn falls_back_to_bare_os_key_when_per_arch_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "macos": { "crate": "rust", "lib": "demo" }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed =
+            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        assert_eq!(tc.lib_name, "demo");
+        assert!(tc.prebuilt.is_none());
+    }
+
+    /// Issue #860 — `prebuilt:` pointing at a node-style module
+    /// reference (`@scope/pkg/subpath/file.a`) resolves through the
+    /// consumer's `node_modules`. This is the esbuild/sharp/swc
+    /// distribution shape: a thin meta-package declares optional
+    /// per-platform subpackages via `optionalDependencies`, npm
+    /// installs only the matching one, and `prebuilt:` reaches into
+    /// it without invoking cargo.
+    #[test]
+    fn prebuilt_resolves_node_modules_subpackage() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        // Lay out a realistic node_modules: consumer/node_modules/
+        // @bloomengine/{engine, engine-darwin-arm64}/.
+        let consumer_pkg = root.join("node_modules").join("@bloomengine").join("engine");
+        let prebuilt_pkg = root
+            .join("node_modules")
+            .join("@bloomengine")
+            .join("engine-darwin-arm64")
+            .join("lib");
+        std::fs::create_dir_all(&consumer_pkg).expect("mkdir engine");
+        std::fs::create_dir_all(&prebuilt_pkg).expect("mkdir engine-darwin-arm64/lib");
+        let prebuilt_file = prebuilt_pkg.join("libbloom_macos.a");
+        std::fs::write(&prebuilt_file, b"fake archive").expect("write prebuilt");
+
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "macos-arm64": {
+                            "prebuilt": "@bloomengine/engine-darwin-arm64/lib/libbloom_macos.a",
+                            "frameworks": ["Metal", "QuartzCore"]
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            consumer_pkg.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write engine/package.json");
+
+        let parsed = parse_native_library_manifest(&consumer_pkg, "@bloomengine/engine", Some("macos"))
+            .expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        let prebuilt = tc.prebuilt.expect("prebuilt path");
+        // Use canonicalize on both sides — the test's `tmpdir` on
+        // macOS lives under `/var/...` which is a symlink to
+        // `/private/var/...`; the resolver returns the symlinked
+        // form, the original `prebuilt_file` was constructed with
+        // the symlinked form too, so they match before canonicalize
+        // here. But canonicalize defensively in case CI tmpdirs differ.
+        assert_eq!(
+            prebuilt.canonicalize().expect("canonicalize prebuilt"),
+            prebuilt_file
+                .canonicalize()
+                .expect("canonicalize expected")
+        );
+        assert_eq!(tc.frameworks, vec!["Metal", "QuartzCore"]);
+        // The cargo build path should still be empty — no `crate:`
+        // means the prebuilt branch is exclusive.
+        assert_eq!(tc.lib_name, "");
+    }
+
+    /// Relative `prebuilt:` paths anchor against the package's own
+    /// directory — useful for tarball-shipped wrappers that vendor
+    /// the static lib alongside their `package.json`.
+    #[test]
+    fn prebuilt_relative_path_anchors_to_package_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path();
+        let vendor_dir = pkg_dir.join("vendor");
+        std::fs::create_dir_all(&vendor_dir).expect("mkdir vendor");
+        let lib_path = vendor_dir.join("libfoo.a");
+        std::fs::write(&lib_path, b"fake archive").expect("write lib");
+
+        let manifest = serde_json::json!({
+            "perry": {
+                "nativeLibrary": {
+                    "functions": [],
+                    "targets": {
+                        "macos": { "prebuilt": "./vendor/libfoo.a" }
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .expect("write package.json");
+
+        let parsed =
+            parse_native_library_manifest(pkg_dir, "demo", Some("macos")).expect("parsed manifest");
+        let tc = parsed.target_config.expect("target_config");
+        let prebuilt = tc.prebuilt.expect("prebuilt path");
+        assert_eq!(prebuilt, pkg_dir.join("./vendor/libfoo.a"));
+    }
+}
+
+#[cfg(test)]
+mod module_spec_tests {
+    use super::split_module_spec;
+
+    #[test]
+    fn splits_scoped_package_and_subpath() {
+        let (pkg, sub) =
+            split_module_spec("@bloomengine/engine-darwin-arm64/lib/libbloom_macos.a")
+                .expect("split");
+        assert_eq!(pkg, "@bloomengine/engine-darwin-arm64");
+        assert_eq!(sub, "lib/libbloom_macos.a");
+    }
+
+    #[test]
+    fn splits_unscoped_package_and_subpath() {
+        let (pkg, sub) = split_module_spec("esbuild-darwin-arm64/bin/esbuild").expect("split");
+        assert_eq!(pkg, "esbuild-darwin-arm64");
+        assert_eq!(sub, "bin/esbuild");
+    }
+
+    #[test]
+    fn bare_scoped_package_without_subpath_rejected() {
+        // `@scope/pkg` has no file to link — `prebuilt:` must name a
+        // specific archive within the package.
+        assert!(split_module_spec("@bloomengine/engine-darwin-arm64").is_none());
+    }
+
+    #[test]
+    fn bare_unscoped_package_without_subpath_rejected() {
+        assert!(split_module_spec("esbuild-darwin-arm64").is_none());
     }
 }
 

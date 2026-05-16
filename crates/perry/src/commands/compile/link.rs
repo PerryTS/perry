@@ -1733,6 +1733,32 @@ pub(super) fn build_and_run_link(
                 OutputFormat::Json => {}
             }
 
+            // Issue #860 — prebuilt-distribution shortcut. When the
+            // wrapper's manifest specified a `prebuilt:` path that
+            // resolved to an on-disk static library, skip the cargo
+            // build entirely and link the prebuilt archive directly.
+            // `frameworks` / `libs` / `pkgConfig` / `lib_dirs` are
+            // still honored below — those are linker flags the host
+            // toolchain needs regardless of where the `.a` came from.
+            if let Some(prebuilt) = target_config.prebuilt.as_ref() {
+                if !prebuilt.exists() {
+                    return Err(anyhow!(
+                        "Prebuilt native library declared by {} not found at {}. \
+                         If this package is distributed via npm `optionalDependencies` \
+                         (esbuild/sharp pattern), make sure the per-platform subpackage \
+                         is installed for the current host/target.",
+                        native_lib.module,
+                        prebuilt.display()
+                    ));
+                }
+                cmd.arg(prebuilt);
+                match format {
+                    OutputFormat::Text => {
+                        println!("Linking prebuilt native library: {}", prebuilt.display())
+                    }
+                    OutputFormat::Json => {}
+                }
+            } else {
             // Build the Rust crate
             let cargo_toml = target_config.crate_path.join("Cargo.toml");
             if cargo_toml.exists() {
@@ -1852,6 +1878,7 @@ pub(super) fn build_and_run_link(
                     ));
                 }
             }
+            } // closes else of `if let Some(prebuilt) = ...` (issue #860)
 
             // Add platform frameworks
             for framework in &target_config.frameworks {
