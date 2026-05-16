@@ -67,7 +67,30 @@ pub fn iter_well_known() -> impl Iterator<Item = &'static WellKnownBinding> {
     registry().values()
 }
 
-/// Resolve the bundled `.a` path for `binding`, given the perry
+/// Platform-correct static-library filename for an ext-binding lib stem.
+///
+/// Cargo emits `lib<stem>.a` on Unix-likes but `<stem>.lib` on
+/// Windows/MSVC. `target_triple` is the rust triple being built for
+/// (`None` = host build → use the host OS). Every call site that locates
+/// a well-known binding's staticlib must go through this: previously the
+/// `lib<stem>.a` name was hardcoded, so on a Windows build the real
+/// `<stem>.lib` artifact was looked up under a name that never exists,
+/// the binding was silently skipped, and the final link failed with
+/// unresolved `js_*` symbols (e.g. perry-ext-ws's `js_ws_*` when a
+/// program `import`s `ws`).
+pub fn ext_staticlib_filename(lib_stem: &str, target_triple: Option<&str>) -> String {
+    let is_windows = match target_triple {
+        Some(t) => t.contains("windows"),
+        None => cfg!(target_os = "windows"),
+    };
+    if is_windows {
+        format!("{}.lib", lib_stem)
+    } else {
+        format!("lib{}.a", lib_stem)
+    }
+}
+
+/// Resolve the bundled staticlib path for `binding`, given the perry
 /// workspace root (from `find_perry_workspace_root`) and an optional
 /// rust target triple. When `target_triple` is `Some`, look in the
 /// per-target output dir (`target/<triple>/release/`); otherwise the
@@ -83,7 +106,7 @@ pub fn bundled_staticlib_path_for_target(
     } else {
         workspace_root.join("target").join("release")
     };
-    let path = release_dir.join(format!("lib{}.a", binding.lib));
+    let path = release_dir.join(ext_staticlib_filename(&binding.lib, target_triple));
     if path.exists() {
         Some(path)
     } else {

@@ -657,7 +657,13 @@ pub(super) fn build_optimized_libs(
     // bundled in. The linker will dedup duplicate tokio symbols
     // across the staticlibs because the mangled hashes match.
     for (krate, lib, _tracking) in &tokio_using_bindings {
-        let lib_path = release_dir.join(format!("lib{}.a", lib));
+        // Cargo emits `lib<lib>.a` on Unix but `<lib>.lib` on Windows/MSVC.
+        // Hardcoding the Unix name here meant a Windows build never found
+        // the rebuilt ext staticlib (e.g. perry-ext-ws), silently skipped
+        // it, and failed the final link with unresolved `js_*` symbols.
+        let lib_filename =
+            super::well_known::ext_staticlib_filename(lib, rust_target_triple(target));
+        let lib_path = release_dir.join(&lib_filename);
         if !lib_path.exists() {
             // Fall back to the workspace target copy. The linker will
             // still produce a working binary for this wrapper if the
@@ -670,36 +676,36 @@ pub(super) fn build_optimized_libs(
                     .join("target")
                     .join(triple)
                     .join("release")
-                    .join(format!("lib{}.a", lib));
+                    .join(&lib_filename);
                 if triple_path.exists() {
                     triple_path
                 } else {
                     workspace_root
                         .join("target")
                         .join("release")
-                        .join(format!("lib{}.a", lib))
+                        .join(&lib_filename)
                 }
             } else {
                 workspace_root
                     .join("target")
                     .join("release")
-                    .join(format!("lib{}.a", lib))
+                    .join(&lib_filename)
             };
             if fallback.exists() {
                 if matches!(format, OutputFormat::Text) {
                     eprintln!(
-                        "  well-known: rebuild produced no `lib{}.a` in {} — \
+                        "  well-known: rebuild produced no `{}` in {} — \
                          using workspace fallback (CONTEXT panic risk on tokio I/O)",
-                        lib,
+                        lib_filename,
                         release_dir.display()
                     );
                 }
                 well_known_libs.push(fallback);
             } else if matches!(format, OutputFormat::Text) {
                 eprintln!(
-                    "  well-known: rebuild produced no `lib{}.a` for `{}`; \
+                    "  well-known: rebuild produced no `{}` for `{}`; \
                      skipping — link will likely fail with unresolved js_* symbols.",
-                    lib, krate
+                    lib_filename, krate
                 );
             }
             continue;
