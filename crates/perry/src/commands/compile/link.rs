@@ -1759,125 +1759,127 @@ pub(super) fn build_and_run_link(
                     OutputFormat::Json => {}
                 }
             } else {
-            // Build the Rust crate
-            let cargo_toml = target_config.crate_path.join("Cargo.toml");
-            if cargo_toml.exists() {
-                // Tier 3 targets (tvOS, watchOS) need nightly + build-std
-                let is_tier3 = matches!(
-                    target,
-                    Some("tvos")
-                        | Some("tvos-simulator")
-                        | Some("watchos")
-                        | Some("watchos-simulator")
-                );
-
-                let mut cargo_cmd = Command::new("cargo");
-                if is_tier3 {
-                    cargo_cmd.arg("+nightly");
-                }
-                cargo_cmd
-                    .arg("build")
-                    .arg("--release")
-                    .arg("--manifest-path")
-                    .arg(&cargo_toml);
-
-                if let Some(triple) = rust_target_triple(target) {
-                    cargo_cmd.arg("--target").arg(triple);
-                }
-
-                if is_tier3 {
-                    // Match perry-runtime's std build flags exactly so the std
-                    // rlibs are bit-identical and dedupe at link time. Without
-                    // this, native libs pull in a parallel std with different
-                    // metadata hashes and the final Swift-driven link fails
-                    // with hundreds of duplicate-symbol errors.
-                    cargo_cmd.arg("-Zbuild-std=std,panic_abort");
-                }
-
-                // For Android, ensure 16 KB page size alignment (required by Google Play)
-                if is_android {
-                    cargo_cmd.env(
-                        "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS",
-                        "-C link-arg=-Wl,-z,max-page-size=16384",
+                // Build the Rust crate
+                let cargo_toml = target_config.crate_path.join("Cargo.toml");
+                if cargo_toml.exists() {
+                    // Tier 3 targets (tvOS, watchOS) need nightly + build-std
+                    let is_tier3 = matches!(
+                        target,
+                        Some("tvos")
+                            | Some("tvos-simulator")
+                            | Some("watchos")
+                            | Some("watchos-simulator")
                     );
-                }
 
-                // For HarmonyOS, point cargo at the OHOS SDK's clang + sysroot
-                // so cc-rs and rustc's linker invocation actually use the
-                // cross-toolchain instead of falling back to the host `cc`.
-                if is_harmonyos {
-                    if let Some(sdk) = super::library_search::find_harmonyos_sdk() {
-                        for (k, v) in super::library_search::harmonyos_cross_env(&sdk, target) {
-                            cargo_cmd.env(k, v);
+                    let mut cargo_cmd = Command::new("cargo");
+                    if is_tier3 {
+                        cargo_cmd.arg("+nightly");
+                    }
+                    cargo_cmd
+                        .arg("build")
+                        .arg("--release")
+                        .arg("--manifest-path")
+                        .arg(&cargo_toml);
+
+                    if let Some(triple) = rust_target_triple(target) {
+                        cargo_cmd.arg("--target").arg(triple);
+                    }
+
+                    if is_tier3 {
+                        // Match perry-runtime's std build flags exactly so the std
+                        // rlibs are bit-identical and dedupe at link time. Without
+                        // this, native libs pull in a parallel std with different
+                        // metadata hashes and the final Swift-driven link fails
+                        // with hundreds of duplicate-symbol errors.
+                        cargo_cmd.arg("-Zbuild-std=std,panic_abort");
+                    }
+
+                    // For Android, ensure 16 KB page size alignment (required by Google Play)
+                    if is_android {
+                        cargo_cmd.env(
+                            "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS",
+                            "-C link-arg=-Wl,-z,max-page-size=16384",
+                        );
+                    }
+
+                    // For HarmonyOS, point cargo at the OHOS SDK's clang + sysroot
+                    // so cc-rs and rustc's linker invocation actually use the
+                    // cross-toolchain instead of falling back to the host `cc`.
+                    if is_harmonyos {
+                        if let Some(sdk) = super::library_search::find_harmonyos_sdk() {
+                            for (k, v) in super::library_search::harmonyos_cross_env(&sdk, target) {
+                                cargo_cmd.env(k, v);
+                            }
                         }
+                    }
+
+                    let cargo_status = cargo_cmd.status()?;
+                    if !cargo_status.success() {
+                        return Err(anyhow!(
+                            "Failed to build native library crate for {}: {}",
+                            native_lib.module,
+                            target_config.crate_path.display()
+                        ));
                     }
                 }
 
-                let cargo_status = cargo_cmd.status()?;
-                if !cargo_status.success() {
-                    return Err(anyhow!(
-                        "Failed to build native library crate for {}: {}",
-                        native_lib.module,
-                        target_config.crate_path.display()
-                    ));
-                }
-            }
-
-            // Find and link the static library
-            let lib_name = &target_config.lib_name;
-            if !lib_name.is_empty() {
-                // Search in the crate's target directory first, then standard paths.
-                // Refs #564: probe both `target/release/` and
-                // `target/<host-triple>/release/` for native builds — cargo
-                // writes to the triple-prefixed dir when a default target is
-                // pinned via `[build] target` / `CARGO_BUILD_TARGET` /
-                // `rust-toolchain.toml`.
-                let crate_target_dir = target_config.crate_path.join("target");
-                let lib_path = super::library_search::locate_native_lib_artifact(
-                    &crate_target_dir,
-                    target,
-                    lib_name,
-                );
-
-                if let Some(lib) = lib_path {
-                    // For shared libraries (.so) on Android, use -L/-l so the linker
-                    // records just the soname (not the full build path) in DT_NEEDED.
-                    if is_android && lib_name.ends_with(".so") {
-                        if let Some(dir) = lib.parent() {
-                            cmd.arg(format!("-L{}", dir.display()));
-                        }
-                        // Strip "lib" prefix and ".so" suffix for -l flag
-                        let stem = lib_name.strip_prefix("lib").unwrap_or(lib_name);
-                        let stem = stem.strip_suffix(".so").unwrap_or(stem);
-                        cmd.arg(format!("-l{}", stem));
-                    } else {
-                        // When building a plugin host on macOS, force-load plugin-related native
-                        // libraries so their symbols are available for dlopen'd plugin dylibs.
-                        let force_load = cfg!(target_os = "macos")
-                            && ctx.needs_plugins
-                            && native_lib.module.contains("plugin");
-                        if force_load {
-                            cmd.arg(format!("-Wl,-force_load,{}", lib.display()));
-                        } else if is_windows && lib.extension().map_or(false, |e| e == "lib") {
-                            // On Windows, link native staticlibs directly —
-                            // /FORCE:MULTIPLE handles duplicate symbols.
-                            cmd.arg(&lib);
-                        } else {
-                            cmd.arg(&lib);
-                        }
-                    }
-                    match format {
-                        OutputFormat::Text => println!("Linking native library: {}", lib.display()),
-                        OutputFormat::Json => {}
-                    }
-                } else {
-                    return Err(anyhow!(
-                        "Native library {} not found after building {} crate",
+                // Find and link the static library
+                let lib_name = &target_config.lib_name;
+                if !lib_name.is_empty() {
+                    // Search in the crate's target directory first, then standard paths.
+                    // Refs #564: probe both `target/release/` and
+                    // `target/<host-triple>/release/` for native builds — cargo
+                    // writes to the triple-prefixed dir when a default target is
+                    // pinned via `[build] target` / `CARGO_BUILD_TARGET` /
+                    // `rust-toolchain.toml`.
+                    let crate_target_dir = target_config.crate_path.join("target");
+                    let lib_path = super::library_search::locate_native_lib_artifact(
+                        &crate_target_dir,
+                        target,
                         lib_name,
-                        native_lib.module
-                    ));
+                    );
+
+                    if let Some(lib) = lib_path {
+                        // For shared libraries (.so) on Android, use -L/-l so the linker
+                        // records just the soname (not the full build path) in DT_NEEDED.
+                        if is_android && lib_name.ends_with(".so") {
+                            if let Some(dir) = lib.parent() {
+                                cmd.arg(format!("-L{}", dir.display()));
+                            }
+                            // Strip "lib" prefix and ".so" suffix for -l flag
+                            let stem = lib_name.strip_prefix("lib").unwrap_or(lib_name);
+                            let stem = stem.strip_suffix(".so").unwrap_or(stem);
+                            cmd.arg(format!("-l{}", stem));
+                        } else {
+                            // When building a plugin host on macOS, force-load plugin-related native
+                            // libraries so their symbols are available for dlopen'd plugin dylibs.
+                            let force_load = cfg!(target_os = "macos")
+                                && ctx.needs_plugins
+                                && native_lib.module.contains("plugin");
+                            if force_load {
+                                cmd.arg(format!("-Wl,-force_load,{}", lib.display()));
+                            } else if is_windows && lib.extension().map_or(false, |e| e == "lib") {
+                                // On Windows, link native staticlibs directly —
+                                // /FORCE:MULTIPLE handles duplicate symbols.
+                                cmd.arg(&lib);
+                            } else {
+                                cmd.arg(&lib);
+                            }
+                        }
+                        match format {
+                            OutputFormat::Text => {
+                                println!("Linking native library: {}", lib.display())
+                            }
+                            OutputFormat::Json => {}
+                        }
+                    } else {
+                        return Err(anyhow!(
+                            "Native library {} not found after building {} crate",
+                            lib_name,
+                            native_lib.module
+                        ));
+                    }
                 }
-            }
             } // closes else of `if let Some(prebuilt) = ...` (issue #860)
 
             // Add platform frameworks

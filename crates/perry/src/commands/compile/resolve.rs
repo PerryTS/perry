@@ -193,73 +193,72 @@ pub(super) fn parse_native_library_manifest(
         .and_then(|k| targets_block.and_then(|t| t.get(k)))
         .or_else(|| targets_block.and_then(|t| t.get(target_key)));
 
-    let target_config = target_value
-        .map(|tc| TargetNativeConfig {
-            crate_path: package_dir.join(tc.get("crate").and_then(|c| c.as_str()).unwrap_or("")),
-            lib_name: tc
-                .get("lib")
-                .and_then(|l| l.as_str())
-                .unwrap_or("")
-                .to_string(),
-            prebuilt: tc
-                .get("prebuilt")
-                .and_then(|p| p.as_str())
-                .and_then(|spec| resolve_prebuilt_path(package_dir, spec)),
-            frameworks: tc
-                .get("frameworks")
-                .and_then(|f| f.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            libs: tc
-                .get("libs")
-                .and_then(|l| l.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            lib_dirs: tc
-                .get("libDirs")
-                .and_then(|l| l.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            pkg_config: tc
-                .get("pkgConfig")
-                .and_then(|p| p.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            swift_sources: tc
-                .get("swift_sources")
-                .and_then(|s| s.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            metal_sources: tc
-                .get("metal_sources")
-                .and_then(|s| s.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        });
+    let target_config = target_value.map(|tc| TargetNativeConfig {
+        crate_path: package_dir.join(tc.get("crate").and_then(|c| c.as_str()).unwrap_or("")),
+        lib_name: tc
+            .get("lib")
+            .and_then(|l| l.as_str())
+            .unwrap_or("")
+            .to_string(),
+        prebuilt: tc
+            .get("prebuilt")
+            .and_then(|p| p.as_str())
+            .and_then(|spec| resolve_prebuilt_path(package_dir, spec)),
+        frameworks: tc
+            .get("frameworks")
+            .and_then(|f| f.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        libs: tc
+            .get("libs")
+            .and_then(|l| l.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        lib_dirs: tc
+            .get("libDirs")
+            .and_then(|l| l.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        pkg_config: tc
+            .get("pkgConfig")
+            .and_then(|p| p.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        swift_sources: tc
+            .get("swift_sources")
+            .and_then(|s| s.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        metal_sources: tc
+            .get("metal_sources")
+            .and_then(|s| s.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|p| package_dir.join(p)))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    });
 
     Some(NativeLibraryManifest {
         module: module_name.to_string(),
@@ -671,7 +670,10 @@ mod manifest_parse_tests {
         let root = dir.path();
         // Lay out a realistic node_modules: consumer/node_modules/
         // @bloomengine/{engine, engine-darwin-arm64}/.
-        let consumer_pkg = root.join("node_modules").join("@bloomengine").join("engine");
+        let consumer_pkg = root
+            .join("node_modules")
+            .join("@bloomengine")
+            .join("engine");
         let prebuilt_pkg = root
             .join("node_modules")
             .join("@bloomengine")
@@ -701,8 +703,9 @@ mod manifest_parse_tests {
         )
         .expect("write engine/package.json");
 
-        let parsed = parse_native_library_manifest(&consumer_pkg, "@bloomengine/engine", Some("macos"))
-            .expect("parsed manifest");
+        let parsed =
+            parse_native_library_manifest(&consumer_pkg, "@bloomengine/engine", Some("macos"))
+                .expect("parsed manifest");
         let tc = parsed.target_config.expect("target_config");
         let prebuilt = tc.prebuilt.expect("prebuilt path");
         // Use canonicalize on both sides — the test's `tmpdir` on
@@ -713,9 +716,7 @@ mod manifest_parse_tests {
         // here. But canonicalize defensively in case CI tmpdirs differ.
         assert_eq!(
             prebuilt.canonicalize().expect("canonicalize prebuilt"),
-            prebuilt_file
-                .canonicalize()
-                .expect("canonicalize expected")
+            prebuilt_file.canonicalize().expect("canonicalize expected")
         );
         assert_eq!(tc.frameworks, vec!["Metal", "QuartzCore"]);
         // The cargo build path should still be empty — no `crate:`
@@ -765,9 +766,8 @@ mod module_spec_tests {
 
     #[test]
     fn splits_scoped_package_and_subpath() {
-        let (pkg, sub) =
-            split_module_spec("@bloomengine/engine-darwin-arm64/lib/libbloom_macos.a")
-                .expect("split");
+        let (pkg, sub) = split_module_spec("@bloomengine/engine-darwin-arm64/lib/libbloom_macos.a")
+            .expect("split");
         assert_eq!(pkg, "@bloomengine/engine-darwin-arm64");
         assert_eq!(sub, "lib/libbloom_macos.a");
     }
