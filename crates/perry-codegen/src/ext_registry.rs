@@ -20,10 +20,12 @@
 //!
 //! 1. A static `&'static [(&'static str, OwnerKind)]` table maps every
 //!    FFI symbol that codegen can emit to its **providing key** — either
-//!    `OwnerKind::Stdlib` (means: `ctx.needs_stdlib = true`) or
-//!    `OwnerKind::WellKnown("http")` (means: insert "http" into
-//!    `ctx.native_module_imports` so the existing well-known flip picks
-//!    up `perry-ext-http`).
+//!    `OwnerKind::Stdlib { feature: Some("bundled-streams") }` (means:
+//!    `ctx.needs_stdlib = true` AND insert "bundled-streams" into
+//!    `ctx.extra_stdlib_features` so `build_optimized_libs` rebuilds
+//!    perry-stdlib WITH that feature) or `OwnerKind::WellKnown("http")`
+//!    (means: insert "http" into `ctx.native_module_imports` so the
+//!    existing well-known flip picks up `perry-ext-http`).
 //!
 //! 2. A process-wide `Mutex<HashSet<&'static str>>` collector
 //!    [`USED_PROVIDERS`] gets populated by `LlBlock::call` / `call_void`
@@ -50,7 +52,26 @@ use std::sync::Mutex;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OwnerKind {
     /// Symbol lives in `perry-stdlib`. Driver sets `ctx.needs_stdlib = true`.
-    Stdlib,
+    ///
+    /// `feature` is the perry-stdlib Cargo feature gate that compiles
+    /// the symbol's definition into `libperry_stdlib.a`. When the
+    /// auto-optimize layer (`build_optimized_libs`) rebuilds
+    /// perry-stdlib with `--no-default-features`, it only enables the
+    /// features that `compute_required_features` derived from the
+    /// user's `ctx.native_module_imports`. Codegen-emitted FFIs (Effect
+    /// `Stream`, etc.) bypass that import set, so without an explicit
+    /// feature hint the auto-optimize stdlib gets built WITHOUT the
+    /// feature, the symbol never makes it into the .a, and the link
+    /// fails with "Undefined symbols: _js_readable_stream_…".
+    ///
+    /// The driver drains these entries into
+    /// `ctx.extra_stdlib_features`, which `build_optimized_libs`
+    /// unions into the feature set right before rebuilding.
+    ///
+    /// `None` means "symbol is in perry-stdlib's always-on core, no
+    /// feature flip needed" — kept as an escape hatch even though all
+    /// current entries name a feature.
+    Stdlib { feature: Option<&'static str> },
     /// Symbol lives in a `perry-ext-*` crate covered by the well-known
     /// table. The `&'static str` is the *binding key* (e.g. `"http"`,
     /// `"streams"`), which the driver folds into
@@ -79,40 +100,45 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // — codegen-emitted Stream FFIs always pull in libperry_stdlib.a
     // regardless of which front-end (effect, custom subclass, plain
     // `new ReadableStream`) emitted them.
-    ("js_readable_stream_new",                      OwnerKind::Stdlib),
-    ("js_readable_stream_get_reader",               OwnerKind::Stdlib),
-    ("js_readable_stream_locked",                   OwnerKind::Stdlib),
-    ("js_readable_stream_cancel",                   OwnerKind::Stdlib),
-    ("js_readable_stream_tee",                      OwnerKind::Stdlib),
-    ("js_readable_stream_pipe_to",                  OwnerKind::Stdlib),
-    ("js_readable_stream_pipe_through",             OwnerKind::Stdlib),
-    ("js_readable_stream_from_blob",                OwnerKind::Stdlib),
-    ("js_readable_stream_from_response",            OwnerKind::Stdlib),
-    ("js_readable_stream_from_iterable",            OwnerKind::Stdlib),
-    ("js_readable_stream_controller_enqueue",       OwnerKind::Stdlib),
-    ("js_readable_stream_controller_close",         OwnerKind::Stdlib),
-    ("js_readable_stream_controller_error",         OwnerKind::Stdlib),
-    ("js_readable_stream_controller_desired_size",  OwnerKind::Stdlib),
-    ("js_writable_stream_new",                      OwnerKind::Stdlib),
-    ("js_writable_stream_get_writer",               OwnerKind::Stdlib),
-    ("js_writable_stream_locked",                   OwnerKind::Stdlib),
-    ("js_writable_stream_close",                    OwnerKind::Stdlib),
-    ("js_writable_stream_abort",                    OwnerKind::Stdlib),
-    ("js_writer_write",                             OwnerKind::Stdlib),
-    ("js_writer_close",                             OwnerKind::Stdlib),
-    ("js_writer_abort",                             OwnerKind::Stdlib),
-    ("js_writer_release_lock",                      OwnerKind::Stdlib),
-    ("js_writer_closed",                            OwnerKind::Stdlib),
-    ("js_writer_ready",                             OwnerKind::Stdlib),
-    ("js_writer_desired_size",                      OwnerKind::Stdlib),
-    ("js_reader_read",                              OwnerKind::Stdlib),
-    ("js_reader_release_lock",                      OwnerKind::Stdlib),
-    ("js_reader_closed",                            OwnerKind::Stdlib),
-    ("js_reader_cancel",                            OwnerKind::Stdlib),
-    ("js_transform_stream_new",                     OwnerKind::Stdlib),
-    ("js_transform_stream_readable",                OwnerKind::Stdlib),
-    ("js_transform_stream_writable",                OwnerKind::Stdlib),
-    ("js_stream_unwrap_handle",                     OwnerKind::Stdlib),
+    //
+    // Feature `bundled-streams` gates `pub mod streams` in perry-stdlib
+    // (`crates/perry-stdlib/Cargo.toml`). Without it the auto-optimize
+    // stdlib build drops the entire module and the link fails on every
+    // `js_readable_stream_*` reference — the #835/#846 follow-up bug.
+    ("js_readable_stream_new",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_get_reader",               OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_locked",                   OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_cancel",                   OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_tee",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_pipe_to",                  OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_pipe_through",             OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_from_blob",                OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_from_response",            OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_from_iterable",            OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_controller_enqueue",       OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_controller_close",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_controller_error",         OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_controller_desired_size",  OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writable_stream_new",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writable_stream_get_writer",               OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writable_stream_locked",                   OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writable_stream_close",                    OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writable_stream_abort",                    OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writer_write",                             OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writer_close",                             OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writer_abort",                             OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writer_release_lock",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writer_closed",                            OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writer_ready",                             OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_writer_desired_size",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_reader_read",                              OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_reader_release_lock",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_reader_closed",                            OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_reader_cancel",                            OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_transform_stream_new",                     OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_transform_stream_readable",                OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_transform_stream_writable",                OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_stream_unwrap_handle",                     OwnerKind::Stdlib { feature: Some("bundled-streams") }),
 
     // ── #846: node:http server ───────────────────────────────────────
     // `perry-ext-http-server` defines `js_node_http_*`. It's pulled in
@@ -194,7 +220,10 @@ mod tests {
         // Drain anything left over from prior tests.
         let _ = take_used_providers();
 
-        // Repro #835: stream FFI should bind to Stdlib.
+        // Repro #835: stream FFI should bind to Stdlib { feature:
+        // Some("bundled-streams") } — the feature name flows through
+        // to `build_optimized_libs` so the auto-optimize stdlib
+        // rebuild actually includes the streams module.
         record_ffi_call("js_readable_stream_new");
         // Repro #846: server FFI should bind to WellKnown("http").
         record_ffi_call("js_node_http_create_server");
@@ -203,8 +232,10 @@ mod tests {
 
         let got = take_used_providers();
         assert!(
-            got.contains(&OwnerKind::Stdlib),
-            "expected Stdlib in providers, got {:?}",
+            got.contains(&OwnerKind::Stdlib {
+                feature: Some("bundled-streams")
+            }),
+            "expected Stdlib(bundled-streams) in providers, got {:?}",
             got
         );
         assert!(

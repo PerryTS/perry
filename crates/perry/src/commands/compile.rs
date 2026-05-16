@@ -473,6 +473,20 @@ pub struct CompilationContext {
     /// call canonicalizes the entry; bundle-extension entries don't update
     /// it, so their `import.meta.main` correctly resolves to false.
     pub entry_canonical: Option<PathBuf>,
+    /// Extra perry-stdlib Cargo features the codegen-side FFI registry
+    /// (`perry-codegen::ext_registry`) recorded during compilation.
+    /// Populated by the drain right before `build_optimized_libs` from
+    /// `OwnerKind::Stdlib { feature }` entries; unioned with the
+    /// feature set `compute_required_features` derives from
+    /// `native_module_imports`.
+    ///
+    /// Closes the #835/#846 follow-up: compiled-package code (Effect's
+    /// `Stream`, …) can emit `js_readable_stream_*` FFIs without any
+    /// `import "streams"` in the user TS, which leaves
+    /// `native_module_imports` empty and the auto-optimize stdlib
+    /// rebuild without the `bundled-streams` feature. This set lets
+    /// the registry drain inject the missing feature directly.
+    pub extra_stdlib_features: BTreeSet<&'static str>,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -516,6 +530,7 @@ impl CompilationContext {
             cross_module_class_field_types: HashMap::new(),
             min_windows_version: "10".to_string(),
             entry_canonical: None,
+            extra_stdlib_features: BTreeSet::new(),
         }
     }
 }
@@ -5079,8 +5094,23 @@ pub fn run_with_parse_cache(
         let providers = take_used_providers();
         for owner in providers {
             match owner {
-                OwnerKind::Stdlib => {
+                OwnerKind::Stdlib { feature } => {
                     ctx.needs_stdlib = true;
+                    // Follow-up to #835/#846: codegen-emitted Stdlib
+                    // FFIs (Effect `Stream`, etc.) flip needs_stdlib
+                    // here, but the auto-optimize layer
+                    // (`build_optimized_libs`) rebuilds perry-stdlib
+                    // with only the features `compute_required_features`
+                    // derived from `native_module_imports` — which is
+                    // empty when no `import "streams"` appears in the
+                    // user TS. Without the feature, the symbol's
+                    // module is `#[cfg]`-gated out and the link fails
+                    // with "Undefined symbols: _js_readable_stream_…".
+                    // Inject the feature here so the rebuild includes
+                    // the providing module.
+                    if let Some(feat) = feature {
+                        ctx.extra_stdlib_features.insert(feat);
+                    }
                 }
                 OwnerKind::WellKnown(key) => {
                     // Inserting into native_module_imports flips the

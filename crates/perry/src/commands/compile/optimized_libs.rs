@@ -102,6 +102,19 @@ pub(super) fn build_optimized_libs(
         ctx.uses_crypto_builtins,
     );
 
+    // Follow-up to #835/#846: codegen-side FFI registry recorded
+    // Stdlib-resident symbols that the front-end emitted without a
+    // matching `import "<module>"` in the user TS (Effect's `Stream`
+    // lowering, etc.). The drain in `compile.rs` populated
+    // `ctx.extra_stdlib_features` with the perry-stdlib Cargo feature
+    // each symbol needs. Union those in so the rebuild compiles the
+    // providing module — without this, the auto-optimize stdlib
+    // (--no-default-features) drops e.g. `pub mod streams` and the
+    // link fails with "Undefined symbols: _js_readable_stream_…".
+    for feat in &ctx.extra_stdlib_features {
+        features.insert(*feat);
+    }
+
     // #466 Phase 4 step 2: well-known bindings flip. For each
     // imported module that has an entry in `well_known_bindings.toml`
     // *and* whose bundled `.a` is on disk, drop the corresponding
