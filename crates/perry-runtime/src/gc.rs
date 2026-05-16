@@ -507,17 +507,32 @@ pub extern "C" fn js_shadow_frame_push(slot_count: u32) -> u64 {
 }
 
 /// Pop the current shadow-stack frame. `frame_handle` must match
-/// the return value of the matching `js_shadow_frame_push` (debug
-/// assertion). Restores the prior `SHADOW.frame_top`.
+/// the return value of the matching `js_shadow_frame_push`. Restores
+/// the prior `SHADOW.frame_top`.
+///
+/// Robustness: the bounds check below was previously a `debug_assert!`,
+/// which is **compiled out in release builds**. A corrupted / out-of-range
+/// `frame_handle` therefore reached `s.stack[base]` unchecked and aborted
+/// the entire process with an out-of-bounds panic. This was observed on
+/// Windows release builds, where codegen could thread a NaN-boxed value
+/// (e.g. boxed `undefined`, `0x7FFC_0000_0000_0001`) into this `extern "C"`
+/// argument instead of the small index `js_shadow_frame_push` returned —
+/// `js_shadow_frame_pop(9222246136947933185)` → `s.stack[huge]` →
+/// hard crash a few seconds into startup. The shadow stack is Phase A
+/// (built but not yet consumed by the GC tracer), so skipping a malformed
+/// pop is memory-safe and GC-correctness-neutral; aborting the host
+/// program is not. Promote the check to a real release-safe guard and
+/// bail out — mirrors the bounds checks `js_shadow_slot_set` /
+/// `js_shadow_slot_get` already perform on every access.
 #[no_mangle]
 pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
         let base = frame_handle as usize;
-        debug_assert!(
-            base + SHADOW_STACK_HEADER_SLOTS <= s.stack.len(),
-            "shadow-stack pop past end (corrupted frame handle)"
-        );
+        if base + SHADOW_STACK_HEADER_SLOTS > s.stack.len() {
+            debug_assert!(false, "shadow-stack pop past end (corrupted frame handle)");
+            return;
+        }
         let prev_top = s.stack[base] as usize;
         s.stack.truncate(base);
         s.frame_top = prev_top;
