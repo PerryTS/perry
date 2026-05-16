@@ -9,7 +9,7 @@ use super::cell::Grid;
 use super::color::{parse_color, Color};
 use super::render;
 use super::style::{Edges, Length};
-use super::tree::{box_add_child, paint, register, Node};
+use super::tree::{box_add_child, register, Node};
 
 /// Singleton grid — sized to the current terminal at first render.
 static GRID: OnceLock<Mutex<Grid>> = OnceLock::new();
@@ -659,18 +659,16 @@ fn read_handle_array(handles_ptr: i64) -> Vec<i64> {
     if arr.is_null() {
         return Vec::new();
     }
-    unsafe {
-        let len = js_array_length(arr);
-        let mut out = Vec::with_capacity(len as usize);
-        for i in 0..len {
-            let v = js_array_get_f64_unchecked(arr, i);
-            // Widget handles are NaN-boxed POINTER values — extract the
-            // low 48 bits as a raw handle.
-            let h = (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-            out.push(h);
-        }
-        out
+    let len = js_array_length(arr);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let v = js_array_get_f64_unchecked(arr, i);
+        // Widget handles are NaN-boxed POINTER values — extract the
+        // low 48 bits as a raw handle.
+        let h = (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        out.push(h);
     }
+    out
 }
 
 /// Pad `s` to `width` chars with trailing spaces. Truncates if longer.

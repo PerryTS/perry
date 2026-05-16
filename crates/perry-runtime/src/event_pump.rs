@@ -74,7 +74,6 @@ const IDLE_CAP_MS: u64 = 1000;
 /// Safe to call from any thread, including the main thread itself.
 /// Multiple notifies between consumer waits collapse to one wake — the
 /// consumer drains the entire queue each pass anyway.
-#[inline]
 #[no_mangle]
 pub extern "C" fn js_notify_main_thread() {
     // Mark notification visible to the consumer regardless of which

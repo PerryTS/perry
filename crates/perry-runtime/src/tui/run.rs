@@ -62,7 +62,7 @@ pub extern "C" fn js_perry_tui_run(component: i64) -> f64 {
         super::hooks::reset_hook_index();
 
         // Call the component to get a fresh widget tree.
-        let widget_v = unsafe { js_closure_call0(component_closure) };
+        let widget_v = js_closure_call0(component_closure);
         // Unbox the POINTER tag → raw handle (low 48 bits).
         let widget_handle = (widget_v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
 

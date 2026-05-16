@@ -423,7 +423,7 @@ fn rust_string_to_native(s: &str) -> *const u8 {
     use perry_runtime::js_string_from_bytes;
 
     let bytes = s.as_bytes();
-    unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as *const u8 }
+    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as *const u8
 }
 
 /// Convert a native object pointer to a V8 object
@@ -632,7 +632,7 @@ fn v8_object_to_native(scope: &mut v8::PinScope<'_, '_>, obj: v8::Local<v8::Obje
     let field_count = names.length();
 
     // Allocate native object
-    let native_obj = unsafe { js_object_alloc(0, field_count) };
+    let native_obj = js_object_alloc(0, field_count);
 
     // Set fields (keys handling is simplified for now)
     for i in 0..field_count {
@@ -643,9 +643,7 @@ fn v8_object_to_native(scope: &mut v8::PinScope<'_, '_>, obj: v8::Local<v8::Obje
             let native_val = v8_to_native(scope, val);
             // Convert f64 bits to JSValue
             let jsval = JSValue::from_bits(native_val.to_bits());
-            unsafe {
-                js_object_set_field(native_obj, i, jsval);
-            }
+            js_object_set_field(native_obj, i, jsval);
         }
     }
 

@@ -99,7 +99,7 @@ fn install_sigwinch() {
     }
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = sigwinch_handler as usize;
+        sa.sa_sigaction = sigwinch_handler as *const () as usize;
         // SA_RESTART so a stray SIGWINCH during a `read` doesn't return
         // EINTR — important for the readline byte-mode reader.
         sa.sa_flags = libc::SA_RESTART;
@@ -229,7 +229,7 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
     let cb = RESIZE_CALLBACK.with(|c| *c.borrow());
     if let Some(cb_i64) = cb {
         let closure = cb_i64 as *const ClosureHeader;
-        unsafe { js_closure_call0(closure) };
+        js_closure_call0(closure);
         return 1;
     }
     0

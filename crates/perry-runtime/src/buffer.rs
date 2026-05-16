@@ -1224,7 +1224,7 @@ pub extern "C" fn js_buffer_fill_random(buf_ptr: f64) -> f64 {
     unsafe {
         let len = (*buf).length as usize;
         let data = buffer_data_mut(buf);
-        let mut bytes = std::slice::from_raw_parts_mut(data, len);
+        let bytes = std::slice::from_raw_parts_mut(data, len);
         rand::thread_rng().fill_bytes(bytes);
     }
     buf_ptr

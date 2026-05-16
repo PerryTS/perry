@@ -186,25 +186,21 @@ pub extern "C" fn js_proxy_target(proxy_boxed: f64) -> f64 {
 /// Helper: fetch the trap closure from the handler object by name. Returns
 /// TAG_UNDEFINED if the handler has no such trap.
 fn handler_trap(handler: f64, trap_name: &str) -> f64 {
-    unsafe {
-        let key = crate::string::js_string_from_bytes(trap_name.as_ptr(), trap_name.len() as u32);
-        let obj_ptr = extract_pointer(handler.to_bits()) as *const crate::ObjectHeader;
-        if obj_ptr.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        crate::object::js_object_get_field_by_name_f64(obj_ptr, key)
+    let key = crate::string::js_string_from_bytes(trap_name.as_ptr(), trap_name.len() as u32);
+    let obj_ptr = extract_pointer(handler.to_bits()) as *const crate::ObjectHeader;
+    if obj_ptr.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
     }
+    crate::object::js_object_get_field_by_name_f64(obj_ptr, key)
 }
 
 /// Raise a "proxy revoked" TypeError via `js_throw`. Does not return.
 fn revoked_return() -> f64 {
-    unsafe {
-        let msg = "Cannot perform operation on a proxy that has been revoked";
-        let msg_handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(msg_handle);
-        let boxed = f64::from_bits(POINTER_TAG | ((err as u64) & POINTER_MASK));
-        crate::exception::js_throw(boxed);
-    }
+    let msg = "Cannot perform operation on a proxy that has been revoked";
+    let msg_handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_handle);
+    let boxed = f64::from_bits(POINTER_TAG | ((err as u64) & POINTER_MASK));
+    crate::exception::js_throw(boxed);
 }
 
 fn is_callable(value: f64) -> bool {
@@ -270,9 +266,7 @@ pub extern "C" fn js_proxy_get(proxy_boxed: f64, key: f64) -> f64 {
     }
     let trap = handler_trap(handler, "get");
     if is_callable(trap) {
-        unsafe {
-            return js_closure_call2(closure_from(trap), target, key);
-        }
+        return js_closure_call2(closure_from(trap), target, key);
     }
     // No get trap — forward to target.
     target_get(target, key)
@@ -294,14 +288,12 @@ fn extract_pointer(bits: u64) -> u64 {
 }
 
 fn target_get(target: f64, key: f64) -> f64 {
-    unsafe {
-        let obj_ptr = extract_pointer(target.to_bits()) as *const crate::ObjectHeader;
-        let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
-        if obj_ptr.is_null() || key_ptr.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        crate::object::js_object_get_field_by_name_f64(obj_ptr, key_ptr)
+    let obj_ptr = extract_pointer(target.to_bits()) as *const crate::ObjectHeader;
+    let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
+    if obj_ptr.is_null() || key_ptr.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
     }
+    crate::object::js_object_get_field_by_name_f64(obj_ptr, key_ptr)
 }
 
 /// `proxy[key] = value` — if handler.set exists, call it with
@@ -330,9 +322,7 @@ pub extern "C" fn js_proxy_set(proxy_boxed: f64, key: f64, value: f64) -> f64 {
     }
     let trap = handler_trap(handler, "set");
     if is_callable(trap) {
-        unsafe {
-            let _ = js_closure_call3(closure_from(trap), target, key, value);
-        }
+        let _ = js_closure_call3(closure_from(trap), target, key, value);
         return f64::from_bits(TAG_TRUE);
     }
     // No set trap — write to target.
@@ -341,14 +331,12 @@ pub extern "C" fn js_proxy_set(proxy_boxed: f64, key: f64, value: f64) -> f64 {
 }
 
 fn target_set(target: f64, key: f64, value: f64) {
-    unsafe {
-        let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
-        let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
-        if obj_ptr.is_null() || key_ptr.is_null() {
-            return;
-        }
-        crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, value);
+    let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
+    let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
+    if obj_ptr.is_null() || key_ptr.is_null() {
+        return;
     }
+    crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, value);
 }
 
 /// `key in proxy` — if handler.has exists, call it; otherwise delegate to
@@ -375,9 +363,7 @@ pub extern "C" fn js_proxy_has(proxy_boxed: f64, key: f64) -> f64 {
     }
     let trap = handler_trap(handler, "has");
     if is_callable(trap) {
-        unsafe {
-            return js_closure_call2(closure_from(trap), target, key);
-        }
+        return js_closure_call2(closure_from(trap), target, key);
     }
     crate::object::js_object_has_property(target, key)
 }
@@ -406,18 +392,14 @@ pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
     }
     let trap = handler_trap(handler, "deleteProperty");
     if is_callable(trap) {
-        unsafe {
-            let _ = js_closure_call2(closure_from(trap), target, key);
-        }
+        let _ = js_closure_call2(closure_from(trap), target, key);
         return f64::from_bits(TAG_TRUE);
     }
     // Forward to target.
-    unsafe {
-        let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
-        let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
-        if !obj_ptr.is_null() && !key_ptr.is_null() {
-            crate::object::js_object_delete_field(obj_ptr, key_ptr);
-        }
+    let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
+    let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
+    if !obj_ptr.is_null() && !key_ptr.is_null() {
+        crate::object::js_object_delete_field(obj_ptr, key_ptr);
     }
     f64::from_bits(TAG_TRUE)
 }
@@ -447,20 +429,18 @@ pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f6
     }
     let trap = handler_trap(handler, "apply");
     if is_callable(trap) {
-        unsafe {
-            let trap_result = js_closure_call3(closure_from(trap), target, this_arg, args_array);
-            // Pragmatic fallback: if the trap returns undefined (because
-            // the user wrote `return target.apply(thisArg, args)` which
-            // Perry doesn't yet support on closures) OR returns the
-            // runtime's NULL_OBJECT sentinel (which is what
-            // js_native_call_method now returns when a method dispatch
-            // on a closure falls off the end), call the target directly
-            // with the args so the expected value still flows through.
-            if trap_result.to_bits() == TAG_UNDEFINED || is_null_object_sentinel(trap_result) {
-                return call_with_args_array(target, args_array);
-            }
-            return trap_result;
+        let trap_result = js_closure_call3(closure_from(trap), target, this_arg, args_array);
+        // Pragmatic fallback: if the trap returns undefined (because
+        // the user wrote `return target.apply(thisArg, args)` which
+        // Perry doesn't yet support on closures) OR returns the
+        // runtime's NULL_OBJECT sentinel (which is what
+        // js_native_call_method now returns when a method dispatch
+        // on a closure falls off the end), call the target directly
+        // with the args so the expected value still flows through.
+        if trap_result.to_bits() == TAG_UNDEFINED || is_null_object_sentinel(trap_result) {
+            return call_with_args_array(target, args_array);
         }
+        return trap_result;
     }
     // Forward to target: call target with unpacked args. For simplicity
     // we handle 0-3 arg fast paths.
@@ -470,33 +450,31 @@ pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f6
 /// Call a closure/function value with positional args sourced from an Array
 /// JSValue. Up to 4 args handled.
 pub(crate) fn call_with_args_array(callee: f64, args_array: f64) -> f64 {
-    unsafe {
-        let args_bits = args_array.to_bits();
-        let arr_ptr = (args_bits & POINTER_MASK) as *const crate::ArrayHeader;
-        let len = if arr_ptr.is_null() {
-            0
+    let args_bits = args_array.to_bits();
+    let arr_ptr = (args_bits & POINTER_MASK) as *const crate::ArrayHeader;
+    let len = if arr_ptr.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(arr_ptr) as usize
+    };
+    let a = |i: usize| -> f64 {
+        if i < len {
+            let v = crate::array::js_array_get(arr_ptr, i as u32);
+            f64::from_bits(v.bits())
         } else {
-            crate::array::js_array_length(arr_ptr) as usize
-        };
-        let a = |i: usize| -> f64 {
-            if i < len {
-                let v = crate::array::js_array_get(arr_ptr, i as u32);
-                f64::from_bits(v.bits())
-            } else {
-                f64::from_bits(TAG_UNDEFINED)
-            }
-        };
-        let closure = closure_from(callee);
-        if closure.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
+            f64::from_bits(TAG_UNDEFINED)
         }
-        match len {
-            0 => js_closure_call0(closure),
-            1 => js_closure_call1(closure, a(0)),
-            2 => js_closure_call2(closure, a(0), a(1)),
-            3 => js_closure_call3(closure, a(0), a(1), a(2)),
-            _ => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
-        }
+    };
+    let closure = closure_from(callee);
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    match len {
+        0 => js_closure_call0(closure),
+        1 => js_closure_call1(closure, a(0)),
+        2 => js_closure_call2(closure, a(0), a(1)),
+        3 => js_closure_call3(closure, a(0), a(1), a(2)),
+        _ => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
     }
 }
 
@@ -524,9 +502,7 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, _new_tar
     }
     let trap = handler_trap(handler, "construct");
     if is_callable(trap) {
-        unsafe {
-            return js_closure_call2(closure_from(trap), target, args_array);
-        }
+        return js_closure_call2(closure_from(trap), target, args_array);
     }
     // Fallback: the target is a class — forward via callee (the compiler's
     // new-path passes a constructor function NaN-boxed). We treat it as a
@@ -571,12 +547,10 @@ pub extern "C" fn js_reflect_delete(target: f64, key: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_delete(target, key);
     }
-    unsafe {
-        let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
-        let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
-        if !obj_ptr.is_null() && !key_ptr.is_null() {
-            crate::object::js_object_delete_field(obj_ptr, key_ptr);
-        }
+    let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
+    let key_ptr = extract_pointer(key.to_bits()) as *const crate::StringHeader;
+    if !obj_ptr.is_null() && !key_ptr.is_null() {
+        crate::object::js_object_delete_field(obj_ptr, key_ptr);
     }
     f64::from_bits(TAG_TRUE)
 }

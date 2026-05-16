@@ -58,7 +58,7 @@ fn dispatch(type_arg: f64, props: f64) -> f64 {
     if jsval.is_pointer() {
         let ptr = jsval.as_pointer::<ClosureHeader>();
         if !ptr.is_null() && is_valid_closure(ptr) {
-            return unsafe { js_closure_call1(ptr, props) };
+            return js_closure_call1(ptr, props);
         }
     }
 

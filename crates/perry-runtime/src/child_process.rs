@@ -24,9 +24,9 @@ lazy_static::lazy_static! {
 // NaN-boxing tag constants (inline to avoid pub(crate) visibility issues)
 const TAG_NULL_BITS: u64 = 0x7FFC_0000_0000_0002;
 const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
-const TAG_TRUE_F64: f64 = unsafe { f64::from_bits(0x7FFC_0000_0000_0004u64) };
-const TAG_FALSE_F64: f64 = unsafe { f64::from_bits(0x7FFC_0000_0000_0003u64) };
-const TAG_NULL_F64: f64 = unsafe { f64::from_bits(0x7FFC_0000_0000_0002u64) };
+const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004u64);
+const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003u64);
+const TAG_NULL_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0002u64);
 
 /// Helper: extract a Rust string from a NaN-boxed f64 string value
 unsafe fn extract_string_from_nanboxed(val: f64) -> Option<String> {
@@ -317,7 +317,7 @@ pub extern "C" fn js_child_process_exec_sync(
     _options_ptr: *const ObjectHeader,
 ) -> *mut StringHeader {
     if cmd_ptr.is_null() {
-        return unsafe { js_string_from_bytes(b"".as_ptr(), 0) };
+        return js_string_from_bytes(b"".as_ptr(), 0);
     }
 
     unsafe {

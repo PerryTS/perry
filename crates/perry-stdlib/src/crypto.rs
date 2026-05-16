@@ -175,7 +175,7 @@ pub extern "C" fn js_crypto_random_bytes_buffer(
     unsafe {
         (*buf).length = size as u32;
         let data = perry_runtime::buffer::buffer_data_mut(buf);
-        let mut bytes = std::slice::from_raw_parts_mut(data, size);
+        let bytes = std::slice::from_raw_parts_mut(data, size);
         rand::thread_rng().fill_bytes(bytes);
     }
     buf

@@ -1276,7 +1276,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
             && !is_array_expr(ctx, object)
             && is_string_expr(ctx, &args[0])
         {
-            let has_user_toString = receiver_class_name(ctx, object)
+            let has_user_to_string = receiver_class_name(ctx, object)
                 .map(|cls| {
                     let mut cur = Some(cls);
                     while let Some(c) = cur {
@@ -1291,7 +1291,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     false
                 })
                 .unwrap_or(false);
-            if !has_user_toString {
+            if !has_user_to_string {
                 let v = lower_expr(ctx, object)?;
                 let enc_tag_i32 = if let Expr::String(s) = &args[0] {
                     let lower = s.to_ascii_lowercase();
@@ -1326,7 +1326,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
             && !is_array_expr(ctx, object)
         {
             // Only treat as radix call if class doesn't have toString.
-            let has_user_toString = receiver_class_name(ctx, object)
+            let has_user_to_string = receiver_class_name(ctx, object)
                 .map(|cls| {
                     let mut cur = Some(cls);
                     while let Some(c) = cur {
@@ -1341,7 +1341,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     false
                 })
                 .unwrap_or(false);
-            if !has_user_toString {
+            if !has_user_to_string {
                 let v = lower_expr(ctx, object)?;
                 let radix_d = lower_expr(ctx, &args[0])?;
                 let blk = ctx.block();
@@ -1368,7 +1368,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         {
             // Check whether the receiver class (if any) defines
             // toString itself or via inheritance.
-            let has_user_toString = receiver_class_name(ctx, object)
+            let has_user_to_string = receiver_class_name(ctx, object)
                 .map(|cls| {
                     let mut cur = Some(cls);
                     while let Some(c) = cur {
@@ -1383,7 +1383,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     false
                 })
                 .unwrap_or(false);
-            if !has_user_toString {
+            if !has_user_to_string {
                 let v = lower_expr(ctx, object)?;
                 for a in args {
                     let _ = lower_expr(ctx, a)?;

@@ -44,16 +44,14 @@ pub extern "C" fn backOff(
     _options_ptr: *const perry_runtime::ObjectHeader,
 ) -> *mut Promise {
     if fn_ptr.is_null() {
-        let promise = unsafe { js_promise_new() };
-        unsafe {
-            js_promise_reject(promise, f64::NAN);
-        }
+        let promise = js_promise_new();
+        js_promise_reject(promise, f64::NAN);
         return promise;
     }
 
     // Call the function once - for async callbacks (which return Promises),
     // we just pass through the Promise. The caller will await it.
-    let result = unsafe { js_closure_call0(fn_ptr) };
+    let result = js_closure_call0(fn_ptr);
 
     // Check if the result is a NaN-boxed pointer (Promise, object, etc.)
     let bits = result.to_bits();
@@ -70,12 +68,10 @@ pub extern "C" fn backOff(
     }
 
     // For non-Promise results, wrap in a new Promise
-    let promise = unsafe { js_promise_new() };
+    let promise = js_promise_new();
 
     if is_valid_result(result) {
-        unsafe {
-            js_promise_resolve(promise, result);
-        }
+        js_promise_resolve(promise, result);
         return promise;
     }
 
@@ -95,9 +91,7 @@ pub extern "C" fn backOff(
         attempt += 1;
 
         if attempt > num_of_attempts {
-            unsafe {
-                js_promise_reject(promise, f64::NAN);
-            }
+            js_promise_reject(promise, f64::NAN);
             return promise;
         }
 
@@ -105,7 +99,7 @@ pub extern "C" fn backOff(
         thread::sleep(Duration::from_millis(current_delay));
 
         // Call the function again
-        let result = unsafe { js_closure_call0(fn_ptr) };
+        let result = js_closure_call0(fn_ptr);
 
         let bits = result.to_bits();
         let tag = bits >> 48;
@@ -119,9 +113,7 @@ pub extern "C" fn backOff(
         }
 
         if is_valid_result(result) {
-            unsafe {
-                js_promise_resolve(promise, result);
-            }
+            js_promise_resolve(promise, result);
             return promise;
         }
 
@@ -148,7 +140,7 @@ pub extern "C" fn js_backoff_simple(
         attempt += 1;
 
         // Call the function
-        let result = unsafe { js_closure_call0(fn_ptr) };
+        let result = js_closure_call0(fn_ptr);
 
         // Success if valid result
         if is_valid_result(result) {

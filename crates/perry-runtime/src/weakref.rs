@@ -46,14 +46,12 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
     if ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    unsafe {
-        let key_ptr = crate::string::js_string_from_bytes(b"target".as_ptr(), 6);
-        let val = js_object_get_field_by_name(ptr, key_ptr);
-        if val.is_undefined() {
-            f64::from_bits(TAG_UNDEFINED)
-        } else {
-            f64::from_bits(val.bits())
-        }
+    let key_ptr = crate::string::js_string_from_bytes(b"target".as_ptr(), 6);
+    let val = js_object_get_field_by_name(ptr, key_ptr);
+    if val.is_undefined() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        f64::from_bits(val.bits())
     }
 }
 
@@ -81,20 +79,18 @@ pub extern "C" fn js_finreg_register(registry: f64, _target: f64, held: f64, tok
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    unsafe {
-        let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
-        let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
-        let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-        if entries_ptr.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        // Build a 2-element array: [token, held]
-        let pair = js_array_alloc_with_length(2);
-        js_array_set_f64(pair, 0, token);
-        js_array_set_f64(pair, 1, held);
-        let pair_val = f64::from_bits(JSValue::array_ptr(pair).bits());
-        js_array_push_f64(entries_ptr, pair_val);
+    let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
+    let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
+    let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+    if entries_ptr.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
     }
+    // Build a 2-element array: [token, held]
+    let pair = js_array_alloc_with_length(2);
+    js_array_set_f64(pair, 0, token);
+    js_array_set_f64(pair, 1, held);
+    let pair_val = f64::from_bits(JSValue::array_ptr(pair).bits());
+    js_array_push_f64(entries_ptr, pair_val);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -108,37 +104,35 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
-    unsafe {
-        let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
-        let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
-        let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-        if entries_ptr.is_null() {
-            return f64::from_bits(TAG_FALSE);
+    let entries_key = crate::string::js_string_from_bytes(b"entries".as_ptr(), 7);
+    let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
+    let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+    if entries_ptr.is_null() {
+        return f64::from_bits(TAG_FALSE);
+    }
+    let len = js_array_length(entries_ptr) as usize;
+    let mut found = false;
+    // Rebuild the entries array without the matching pairs.
+    let new_arr = js_array_alloc(0);
+    for i in 0..len {
+        let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
+        let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
+        if pair_ptr.is_null() {
+            continue;
         }
-        let len = js_array_length(entries_ptr) as usize;
-        let mut found = false;
-        // Rebuild the entries array without the matching pairs.
-        let new_arr = js_array_alloc(0);
-        for i in 0..len {
-            let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
-            let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-            if pair_ptr.is_null() {
-                continue;
-            }
-            let stored_token = js_array_get_f64(pair_ptr, 0);
-            if stored_token.to_bits() == token.to_bits() {
-                found = true;
-                continue;
-            }
-            js_array_push_f64(new_arr, pair_val_f);
+        let stored_token = js_array_get_f64(pair_ptr, 0);
+        if stored_token.to_bits() == token.to_bits() {
+            found = true;
+            continue;
         }
-        // Replace entries field with the new array.
-        js_object_set_field(reg_ptr, 1, JSValue::array_ptr(new_arr));
-        if found {
-            f64::from_bits(TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        }
+        js_array_push_f64(new_arr, pair_val_f);
+    }
+    // Replace entries field with the new array.
+    js_object_set_field(reg_ptr, 1, JSValue::array_ptr(new_arr));
+    if found {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_FALSE)
     }
 }
 

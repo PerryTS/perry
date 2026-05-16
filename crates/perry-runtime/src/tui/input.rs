@@ -294,9 +294,7 @@ pub fn drain_input() -> i32 {
             let s_ptr = js_string_from_bytes(chunk.as_ptr(), chunk.len() as u32);
             let arg = f64::from_bits(JSValue::string_ptr(s_ptr).bits());
             let closure = handler as *const ClosureHeader;
-            unsafe {
-                js_closure_call1(closure, arg);
-            }
+            js_closure_call1(closure, arg);
         }
         count += 1;
         i = chunk_end;

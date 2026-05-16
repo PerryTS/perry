@@ -343,9 +343,7 @@ pub extern "C" fn js_perry_tui_use_effect(fn_closure: i64, deps_array: i64) -> f
         // but possible) doesn't deadlock.
         drop(s);
         if fn_closure != 0 {
-            unsafe {
-                js_closure_call0(fn_closure as *const ClosureHeader);
-            }
+            js_closure_call0(fn_closure as *const ClosureHeader);
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -417,7 +415,7 @@ pub extern "C" fn js_perry_tui_use_memo(fn_closure: i64, deps_array: i64) -> f64
     if should_compute {
         drop(s);
         let value = if fn_closure != 0 {
-            unsafe { js_closure_call0(fn_closure as *const ClosureHeader) }
+            js_closure_call0(fn_closure as *const ClosureHeader)
         } else {
             f64::from_bits(TAG_UNDEFINED)
         };

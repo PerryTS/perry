@@ -12,7 +12,6 @@
 
 use std::alloc::{alloc, Layout};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::ptr;
 
 use crate::array::ArrayHeader;

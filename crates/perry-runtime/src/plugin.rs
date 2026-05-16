@@ -621,12 +621,12 @@ pub extern "C" fn perry_plugin_discover(dir_path: f64) -> f64 {
         Ok(e) => e,
         Err(err) => {
             eprintln!("[plugin] Cannot read directory {}: {}", dir, err);
-            let arr = unsafe { crate::array::js_array_alloc(8) };
+            let arr = crate::array::js_array_alloc(8);
             return f64::from_bits(JSValue::pointer(arr as *const u8).bits());
         }
     };
 
-    let arr = unsafe { crate::array::js_array_alloc(8) };
+    let arr = crate::array::js_array_alloc(8);
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -639,9 +639,7 @@ pub extern "C" fn perry_plugin_discover(dir_path: f64) -> f64 {
                 let s =
                     crate::string::js_string_from_bytes(path_str.as_ptr(), path_str.len() as u32);
                 let nanboxed = JSValue::string_ptr(s);
-                unsafe {
-                    crate::array::js_array_push_f64(arr, f64::from_bits(nanboxed.bits()));
-                }
+                crate::array::js_array_push_f64(arr, f64::from_bits(nanboxed.bits()));
             }
         }
     }
@@ -653,7 +651,7 @@ pub extern "C" fn perry_plugin_discover(dir_path: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn perry_plugin_list_plugins() -> f64 {
     let reg = REGISTRY.lock().unwrap();
-    let arr = unsafe { crate::array::js_array_alloc(reg.plugins.len() as u32) };
+    let arr = crate::array::js_array_alloc(reg.plugins.len() as u32);
 
     for plugin in &reg.plugins {
         unsafe {
@@ -714,7 +712,7 @@ pub extern "C" fn perry_plugin_list_plugins() -> f64 {
 #[no_mangle]
 pub extern "C" fn perry_plugin_list_hooks() -> f64 {
     let reg = REGISTRY.lock().unwrap();
-    let arr = unsafe { crate::array::js_array_alloc(reg.hooks.len() as u32) };
+    let arr = crate::array::js_array_alloc(reg.hooks.len() as u32);
 
     for hook_name in reg.hooks.keys() {
         unsafe {
@@ -730,7 +728,7 @@ pub extern "C" fn perry_plugin_list_hooks() -> f64 {
 #[no_mangle]
 pub extern "C" fn perry_plugin_list_tools() -> f64 {
     let reg = REGISTRY.lock().unwrap();
-    let arr = unsafe { crate::array::js_array_alloc(reg.tools.len() as u32) };
+    let arr = crate::array::js_array_alloc(reg.tools.len() as u32);
 
     for tool in &reg.tools {
         unsafe {

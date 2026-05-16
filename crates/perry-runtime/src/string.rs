@@ -201,15 +201,13 @@ pub fn str_bytes_from_jsvalue(
 pub extern "C" fn js_string_materialize_to_heap(value: f64) -> *mut StringHeader {
     let bits = value.to_bits();
     let jsval = crate::value::JSValue::from_bits(bits);
-    unsafe {
-        if jsval.is_short_string() {
-            let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            let n = jsval.short_string_to_buf(&mut buf);
-            return js_string_from_bytes(buf.as_ptr(), n as u32);
-        }
-        if jsval.is_string() {
-            return jsval.as_string_ptr() as *mut StringHeader;
-        }
+    if jsval.is_short_string() {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = jsval.short_string_to_buf(&mut buf);
+        return js_string_from_bytes(buf.as_ptr(), n as u32);
+    }
+    if jsval.is_string() {
+        return jsval.as_string_ptr() as *mut StringHeader;
     }
     std::ptr::null_mut()
 }

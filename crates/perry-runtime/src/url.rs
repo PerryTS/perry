@@ -254,51 +254,49 @@ fn create_url_object(url_string: &str) -> *mut ObjectHeader {
         format!("{}//{}", protocol, host)
     };
 
-    unsafe {
-        // Allocate object with URL_FIELD_COUNT fields
-        // Using class_id 0 for now (generic object)
-        let obj = js_object_alloc(0, URL_FIELD_COUNT);
+    // Allocate object with URL_FIELD_COUNT fields
+    // Using class_id 0 for now (generic object)
+    let obj = js_object_alloc(0, URL_FIELD_COUNT);
 
-        // Create the keys array with property names (order must match field indices)
-        let mut keys = js_array_alloc(URL_FIELD_COUNT);
-        keys = js_array_push_f64(keys, create_string_f64("href")); // 0
-        keys = js_array_push_f64(keys, create_string_f64("protocol")); // 1
-        keys = js_array_push_f64(keys, create_string_f64("host")); // 2
-        keys = js_array_push_f64(keys, create_string_f64("hostname")); // 3
-        keys = js_array_push_f64(keys, create_string_f64("port")); // 4
-        keys = js_array_push_f64(keys, create_string_f64("pathname")); // 5
-        keys = js_array_push_f64(keys, create_string_f64("search")); // 6
-        keys = js_array_push_f64(keys, create_string_f64("hash")); // 7
-        keys = js_array_push_f64(keys, create_string_f64("origin")); // 8
-        keys = js_array_push_f64(keys, create_string_f64("searchParams")); // 9
-        keys = js_array_push_f64(keys, create_string_f64("username")); // 10
-        keys = js_array_push_f64(keys, create_string_f64("password")); // 11
-        js_object_set_keys(obj, keys);
+    // Create the keys array with property names (order must match field indices)
+    let mut keys = js_array_alloc(URL_FIELD_COUNT);
+    keys = js_array_push_f64(keys, create_string_f64("href")); // 0
+    keys = js_array_push_f64(keys, create_string_f64("protocol")); // 1
+    keys = js_array_push_f64(keys, create_string_f64("host")); // 2
+    keys = js_array_push_f64(keys, create_string_f64("hostname")); // 3
+    keys = js_array_push_f64(keys, create_string_f64("port")); // 4
+    keys = js_array_push_f64(keys, create_string_f64("pathname")); // 5
+    keys = js_array_push_f64(keys, create_string_f64("search")); // 6
+    keys = js_array_push_f64(keys, create_string_f64("hash")); // 7
+    keys = js_array_push_f64(keys, create_string_f64("origin")); // 8
+    keys = js_array_push_f64(keys, create_string_f64("searchParams")); // 9
+    keys = js_array_push_f64(keys, create_string_f64("username")); // 10
+    keys = js_array_push_f64(keys, create_string_f64("password")); // 11
+    js_object_set_keys(obj, keys);
 
-        // Set all the URL properties
-        js_object_set_field_f64(obj, URL_HREF, create_string_f64(&href));
-        js_object_set_field_f64(obj, URL_PROTOCOL, create_string_f64(&protocol));
-        js_object_set_field_f64(obj, URL_HOST, create_string_f64(&host));
-        js_object_set_field_f64(obj, URL_HOSTNAME, create_string_f64(&hostname));
-        js_object_set_field_f64(obj, URL_PORT, create_string_f64(&port));
-        js_object_set_field_f64(obj, URL_PATHNAME, create_string_f64(&pathname));
-        js_object_set_field_f64(obj, URL_SEARCH, create_string_f64(&search));
-        js_object_set_field_f64(obj, URL_HASH, create_string_f64(&hash));
-        js_object_set_field_f64(obj, URL_ORIGIN, create_string_f64(&origin));
-        js_object_set_field_f64(obj, URL_USERNAME, create_string_f64(&username));
-        js_object_set_field_f64(obj, URL_PASSWORD, create_string_f64(&password));
-        // Build a real URLSearchParams object from the search string (parsed
-        // lazily below). Storing a string here would break `url.searchParams.get()`
-        // because the URLSearchParams method runtime functions interpret the
-        // receiver as `*mut ObjectHeader` and would deref a StringHeader
-        // instead — see issue #111.
-        let params_entries = parse_query_string(&search);
-        let params_obj = create_url_search_params_object(params_entries);
-        let params_f64 = crate::value::js_nanbox_pointer(params_obj as i64);
-        js_object_set_field_f64(obj, URL_SEARCH_PARAMS, params_f64);
+    // Set all the URL properties
+    js_object_set_field_f64(obj, URL_HREF, create_string_f64(&href));
+    js_object_set_field_f64(obj, URL_PROTOCOL, create_string_f64(&protocol));
+    js_object_set_field_f64(obj, URL_HOST, create_string_f64(&host));
+    js_object_set_field_f64(obj, URL_HOSTNAME, create_string_f64(&hostname));
+    js_object_set_field_f64(obj, URL_PORT, create_string_f64(&port));
+    js_object_set_field_f64(obj, URL_PATHNAME, create_string_f64(&pathname));
+    js_object_set_field_f64(obj, URL_SEARCH, create_string_f64(&search));
+    js_object_set_field_f64(obj, URL_HASH, create_string_f64(&hash));
+    js_object_set_field_f64(obj, URL_ORIGIN, create_string_f64(&origin));
+    js_object_set_field_f64(obj, URL_USERNAME, create_string_f64(&username));
+    js_object_set_field_f64(obj, URL_PASSWORD, create_string_f64(&password));
+    // Build a real URLSearchParams object from the search string (parsed
+    // lazily below). Storing a string here would break `url.searchParams.get()`
+    // because the URLSearchParams method runtime functions interpret the
+    // receiver as `*mut ObjectHeader` and would deref a StringHeader
+    // instead — see issue #111.
+    let params_entries = parse_query_string(&search);
+    let params_obj = create_url_search_params_object(params_entries);
+    let params_f64 = crate::value::js_nanbox_pointer(params_obj as i64);
+    js_object_set_field_f64(obj, URL_SEARCH_PARAMS, params_f64);
 
-        obj
-    }
+    obj
 }
 
 /// Create a new URL from a string
@@ -756,29 +754,27 @@ fn url_encode(s: &str) -> String {
 
 /// Create a URLSearchParams object from entries
 fn create_url_search_params_object(entries: Vec<(String, String)>) -> *mut ObjectHeader {
-    unsafe {
-        let obj = js_object_alloc(0, URL_SEARCH_PARAMS_FIELD_COUNT);
+    let obj = js_object_alloc(0, URL_SEARCH_PARAMS_FIELD_COUNT);
 
-        // Create keys array
-        let mut keys = js_array_alloc(URL_SEARCH_PARAMS_FIELD_COUNT);
-        keys = js_array_push_f64(keys, create_string_f64("_entries"));
-        js_object_set_keys(obj, keys);
+    // Create keys array
+    let mut keys = js_array_alloc(URL_SEARCH_PARAMS_FIELD_COUNT);
+    keys = js_array_push_f64(keys, create_string_f64("_entries"));
+    js_object_set_keys(obj, keys);
 
-        // Create entries array - each entry is a 2-element array [key, value]
-        let mut entries_array = js_array_alloc(entries.len() as u32);
-        for (key, value) in entries {
-            let mut pair = js_array_alloc(2);
-            pair = js_array_push_f64(pair, create_string_f64(&key));
-            pair = js_array_push_f64(pair, create_string_f64(&value));
-            let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
-            entries_array = js_array_push_f64(entries_array, pair_f64);
-        }
-
-        let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
-        js_object_set_field_f64(obj, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
-
-        obj
+    // Create entries array - each entry is a 2-element array [key, value]
+    let mut entries_array = js_array_alloc(entries.len() as u32);
+    for (key, value) in entries {
+        let mut pair = js_array_alloc(2);
+        pair = js_array_push_f64(pair, create_string_f64(&key));
+        pair = js_array_push_f64(pair, create_string_f64(&value));
+        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        entries_array = js_array_push_f64(entries_array, pair_f64);
     }
+
+    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    js_object_set_field_f64(obj, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+
+    obj
 }
 
 /// Get entries from a URLSearchParams object
@@ -789,7 +785,7 @@ fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(String, Stri
 
     let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
     let entries_ptr: *mut ArrayHeader =
-        unsafe { f64::to_bits(entries_f64).cast_signed() as *mut ArrayHeader };
+        f64::to_bits(entries_f64).cast_signed() as *mut ArrayHeader;
 
     if entries_ptr.is_null() {
         return Vec::new();
@@ -801,7 +797,7 @@ fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(String, Stri
     for i in 0..len {
         let pair_f64 = crate::array::js_array_get_f64(entries_ptr, i as u32);
         let pair_ptr: *mut ArrayHeader =
-            unsafe { f64::to_bits(pair_f64).cast_signed() as *mut ArrayHeader };
+            f64::to_bits(pair_f64).cast_signed() as *mut ArrayHeader;
 
         if !pair_ptr.is_null() {
             let key_f64 = crate::array::js_array_get_f64(pair_ptr, 0);
@@ -1154,18 +1150,16 @@ pub extern "C" fn js_url_search_params_set(
     entries.push((name, value));
 
     // Update the object with new entries
-    unsafe {
-        let mut entries_array = js_array_alloc(entries.len() as u32);
-        for (key, val) in entries {
-            let mut pair = js_array_alloc(2);
-            pair = js_array_push_f64(pair, create_string_f64(&key));
-            pair = js_array_push_f64(pair, create_string_f64(&val));
-            let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
-            entries_array = js_array_push_f64(entries_array, pair_f64);
-        }
-        let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
-        js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    let mut entries_array = js_array_alloc(entries.len() as u32);
+    for (key, val) in entries {
+        let mut pair = js_array_alloc(2);
+        pair = js_array_push_f64(pair, create_string_f64(&key));
+        pair = js_array_push_f64(pair, create_string_f64(&val));
+        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        entries_array = js_array_push_f64(entries_array, pair_f64);
     }
+    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
 }
 
 /// Append a value (adds even if name already exists)
@@ -1202,18 +1196,16 @@ pub extern "C" fn js_url_search_params_append(
     entries.push((name, value));
 
     // Update the object with new entries
-    unsafe {
-        let mut entries_array = js_array_alloc(entries.len() as u32);
-        for (key, val) in entries {
-            let mut pair = js_array_alloc(2);
-            pair = js_array_push_f64(pair, create_string_f64(&key));
-            pair = js_array_push_f64(pair, create_string_f64(&val));
-            let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
-            entries_array = js_array_push_f64(entries_array, pair_f64);
-        }
-        let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
-        js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    let mut entries_array = js_array_alloc(entries.len() as u32);
+    for (key, val) in entries {
+        let mut pair = js_array_alloc(2);
+        pair = js_array_push_f64(pair, create_string_f64(&key));
+        pair = js_array_push_f64(pair, create_string_f64(&val));
+        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        entries_array = js_array_push_f64(entries_array, pair_f64);
     }
+    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
 }
 
 /// Delete all entries with a name
@@ -1238,18 +1230,16 @@ pub extern "C" fn js_url_search_params_delete(
     entries.retain(|(key, _)| key != &name);
 
     // Update the object with new entries
-    unsafe {
-        let mut entries_array = js_array_alloc(entries.len() as u32);
-        for (key, val) in entries {
-            let mut pair = js_array_alloc(2);
-            pair = js_array_push_f64(pair, create_string_f64(&key));
-            pair = js_array_push_f64(pair, create_string_f64(&val));
-            let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
-            entries_array = js_array_push_f64(entries_array, pair_f64);
-        }
-        let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
-        js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
+    let mut entries_array = js_array_alloc(entries.len() as u32);
+    for (key, val) in entries {
+        let mut pair = js_array_alloc(2);
+        pair = js_array_push_f64(pair, create_string_f64(&key));
+        pair = js_array_push_f64(pair, create_string_f64(&val));
+        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        entries_array = js_array_push_f64(entries_array, pair_f64);
     }
+    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
 }
 
 /// Issue #650: `URLSearchParams.size` getter — returns the number of
@@ -1263,7 +1253,7 @@ pub extern "C" fn js_url_search_params_size(params: *mut ObjectHeader) -> i32 {
     }
     let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
     let entries_ptr: *const ArrayHeader =
-        unsafe { f64::to_bits(entries_f64).cast_signed() as *const ArrayHeader };
+        f64::to_bits(entries_f64).cast_signed() as *const ArrayHeader;
     if entries_ptr.is_null() {
         return 0;
     }
@@ -1299,19 +1289,17 @@ pub extern "C" fn js_url_search_params_to_string(
 #[no_mangle]
 pub extern "C" fn js_url_search_params_entries_arr(params: *mut ObjectHeader) -> f64 {
     let entries = get_url_search_params_entries(params);
-    unsafe {
-        let mut arr = js_array_alloc(entries.len() as u32);
-        for (k, v) in entries {
-            let mut pair = js_array_alloc(2);
-            pair = js_array_push_f64(pair, create_string_f64(&k));
-            pair = js_array_push_f64(pair, create_string_f64(&v));
-            // Inline NaN-box the pair pointer with POINTER_TAG so for-of
-            // destructure reads the array via `js_array_get_f64` correctly.
-            let pair_bits = 0x7FFD_0000_0000_0000u64 | ((pair as u64) & 0x0000_FFFF_FFFF_FFFF);
-            arr = js_array_push_f64(arr, f64::from_bits(pair_bits));
-        }
-        f64::from_bits(0x7FFD_0000_0000_0000u64 | ((arr as u64) & 0x0000_FFFF_FFFF_FFFF))
+    let mut arr = js_array_alloc(entries.len() as u32);
+    for (k, v) in entries {
+        let mut pair = js_array_alloc(2);
+        pair = js_array_push_f64(pair, create_string_f64(&k));
+        pair = js_array_push_f64(pair, create_string_f64(&v));
+        // Inline NaN-box the pair pointer with POINTER_TAG so for-of
+        // destructure reads the array via `js_array_get_f64` correctly.
+        let pair_bits = 0x7FFD_0000_0000_0000u64 | ((pair as u64) & 0x0000_FFFF_FFFF_FFFF);
+        arr = js_array_push_f64(arr, f64::from_bits(pair_bits));
     }
+    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((arr as u64) & 0x0000_FFFF_FFFF_FFFF))
 }
 
 /// Get all values for a name
@@ -1339,13 +1327,11 @@ pub extern "C" fn js_url_search_params_get_all(
         .map(|(_, value)| value.clone())
         .collect();
 
-    unsafe {
-        let mut result = js_array_alloc(values.len() as u32);
-        for value in values {
-            result = js_array_push_f64(result, create_string_f64(&value));
-        }
-        f64::from_bits(i64::cast_unsigned(result as i64))
+    let mut result = js_array_alloc(values.len() as u32);
+    for value in values {
+        result = js_array_push_f64(result, create_string_f64(&value));
     }
+    f64::from_bits(i64::cast_unsigned(result as i64))
 }
 
 // =========================================================================
@@ -1390,45 +1376,41 @@ fn unbox_pointer_ac(v: f64) -> *mut ObjectHeader {
 }
 
 fn alloc_abort_signal() -> *mut ObjectHeader {
-    unsafe {
-        let signal = js_object_alloc(0, ABORT_SIGNAL_FIELD_COUNT);
-        let mut signal_keys = js_array_alloc(ABORT_SIGNAL_FIELD_COUNT);
-        signal_keys = js_array_push_f64(signal_keys, create_string_f64("aborted"));
-        signal_keys = js_array_push_f64(signal_keys, create_string_f64("reason"));
-        signal_keys = js_array_push_f64(signal_keys, create_string_f64("_listeners"));
-        js_object_set_keys(signal, signal_keys);
-        js_object_set_field_f64(signal, 0, f64::from_bits(TAG_FALSE_AC));
-        js_object_set_field_f64(signal, 1, f64::from_bits(TAG_UNDEFINED_AC));
-        js_object_set_field_f64(signal, 2, f64::from_bits(TAG_UNDEFINED_AC));
-        signal
-    }
+    let signal = js_object_alloc(0, ABORT_SIGNAL_FIELD_COUNT);
+    let mut signal_keys = js_array_alloc(ABORT_SIGNAL_FIELD_COUNT);
+    signal_keys = js_array_push_f64(signal_keys, create_string_f64("aborted"));
+    signal_keys = js_array_push_f64(signal_keys, create_string_f64("reason"));
+    signal_keys = js_array_push_f64(signal_keys, create_string_f64("_listeners"));
+    js_object_set_keys(signal, signal_keys);
+    js_object_set_field_f64(signal, 0, f64::from_bits(TAG_FALSE_AC));
+    js_object_set_field_f64(signal, 1, f64::from_bits(TAG_UNDEFINED_AC));
+    js_object_set_field_f64(signal, 2, f64::from_bits(TAG_UNDEFINED_AC));
+    signal
 }
 
 /// Create a new AbortController
 #[no_mangle]
 pub extern "C" fn js_abort_controller_new() -> *mut ObjectHeader {
-    unsafe {
-        // Allocate the AbortController object
-        let controller = js_object_alloc(0, ABORT_CONTROLLER_FIELD_COUNT);
+    // Allocate the AbortController object
+    let controller = js_object_alloc(0, ABORT_CONTROLLER_FIELD_COUNT);
 
-        let signal = alloc_abort_signal();
+    let signal = alloc_abort_signal();
 
-        // Set up controller keys
-        let mut keys = js_array_alloc(ABORT_CONTROLLER_FIELD_COUNT);
-        keys = js_array_push_f64(keys, create_string_f64("signal"));
-        keys = js_array_push_f64(keys, create_string_f64("aborted"));
-        js_object_set_keys(controller, keys);
+    // Set up controller keys
+    let mut keys = js_array_alloc(ABORT_CONTROLLER_FIELD_COUNT);
+    keys = js_array_push_f64(keys, create_string_f64("signal"));
+    keys = js_array_push_f64(keys, create_string_f64("aborted"));
+    js_object_set_keys(controller, keys);
 
-        // Store signal in controller (NaN-boxed with POINTER_TAG)
-        js_object_set_field_f64(controller, ABORT_SIGNAL_FIELD, nanbox_pointer_ac(signal));
-        js_object_set_field_f64(
-            controller,
-            ABORT_ABORTED_FIELD,
-            f64::from_bits(TAG_FALSE_AC),
-        );
+    // Store signal in controller (NaN-boxed with POINTER_TAG)
+    js_object_set_field_f64(controller, ABORT_SIGNAL_FIELD, nanbox_pointer_ac(signal));
+    js_object_set_field_f64(
+        controller,
+        ABORT_ABORTED_FIELD,
+        f64::from_bits(TAG_FALSE_AC),
+    );
 
-        controller
-    }
+    controller
 }
 
 /// Get the signal from an AbortController (returns NaN-boxed object ptr)
@@ -1445,36 +1427,34 @@ fn fire_abort_listeners(signal: *mut ObjectHeader) {
     if signal.is_null() {
         return;
     }
-    unsafe {
-        let listeners_val = crate::object::js_object_get_field_f64(signal, 2);
-        let bits = listeners_val.to_bits();
-        if bits == TAG_UNDEFINED_AC || bits == TAG_FALSE_AC {
-            return;
-        }
-        // Extract array pointer (NaN-boxed POINTER_TAG).
-        let arr_ptr = if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG_AC {
-            (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader
+    let listeners_val = crate::object::js_object_get_field_f64(signal, 2);
+    let bits = listeners_val.to_bits();
+    if bits == TAG_UNDEFINED_AC || bits == TAG_FALSE_AC {
+        return;
+    }
+    // Extract array pointer (NaN-boxed POINTER_TAG).
+    let arr_ptr = if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG_AC {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader
+    } else {
+        return;
+    };
+    if arr_ptr.is_null() {
+        return;
+    }
+    let len = crate::array::js_array_length(arr_ptr) as usize;
+    for i in 0..len {
+        let cb_val = crate::array::js_array_get_f64(arr_ptr, i as u32);
+        let cb_bits = cb_val.to_bits();
+        // Try to extract closure pointer (may be POINTER_TAG or raw bitcast).
+        let cb_ptr = if (cb_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG_AC {
+            (cb_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader
+        } else if cb_bits > 0x10000 && (cb_bits >> 48) == 0 {
+            cb_bits as *const crate::closure::ClosureHeader
         } else {
-            return;
+            continue;
         };
-        if arr_ptr.is_null() {
-            return;
-        }
-        let len = crate::array::js_array_length(arr_ptr) as usize;
-        for i in 0..len {
-            let cb_val = crate::array::js_array_get_f64(arr_ptr, i as u32);
-            let cb_bits = cb_val.to_bits();
-            // Try to extract closure pointer (may be POINTER_TAG or raw bitcast).
-            let cb_ptr = if (cb_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG_AC {
-                (cb_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::closure::ClosureHeader
-            } else if cb_bits > 0x10000 && (cb_bits >> 48) == 0 {
-                cb_bits as *const crate::closure::ClosureHeader
-            } else {
-                continue;
-            };
-            if !cb_ptr.is_null() {
-                crate::closure::js_closure_call0(cb_ptr);
-            }
+        if !cb_ptr.is_null() {
+            crate::closure::js_closure_call0(cb_ptr);
         }
     }
 }
@@ -1491,22 +1471,20 @@ pub extern "C" fn js_abort_controller_abort_reason(controller: *mut ObjectHeader
     if controller.is_null() {
         return;
     }
-    unsafe {
-        let signal_val = crate::object::js_object_get_field_f64(controller, ABORT_SIGNAL_FIELD);
-        let signal = unbox_pointer_ac(signal_val);
+    let signal_val = crate::object::js_object_get_field_f64(controller, ABORT_SIGNAL_FIELD);
+    let signal = unbox_pointer_ac(signal_val);
 
-        if !signal.is_null() {
-            // Set aborted = true on signal
-            js_object_set_field_f64(signal, 0, f64::from_bits(TAG_TRUE_AC));
-            // Store reason (defaults to undefined); if user passes a string or other value we keep it as-is.
-            js_object_set_field_f64(signal, 1, reason);
-            // Fire listeners
-            fire_abort_listeners(signal);
-        }
-
-        // Also set aborted on controller
-        js_object_set_field_f64(controller, ABORT_ABORTED_FIELD, f64::from_bits(TAG_TRUE_AC));
+    if !signal.is_null() {
+        // Set aborted = true on signal
+        js_object_set_field_f64(signal, 0, f64::from_bits(TAG_TRUE_AC));
+        // Store reason (defaults to undefined); if user passes a string or other value we keep it as-is.
+        js_object_set_field_f64(signal, 1, reason);
+        // Fire listeners
+        fire_abort_listeners(signal);
     }
+
+    // Also set aborted on controller
+    js_object_set_field_f64(controller, ABORT_ABORTED_FIELD, f64::from_bits(TAG_TRUE_AC));
 }
 
 /// Register an "abort" event listener on a signal. `event_type` is the NaN-boxed
@@ -1525,22 +1503,20 @@ pub extern "C" fn js_abort_signal_add_listener(
     if type_str != "abort" {
         return;
     }
-    unsafe {
-        let listeners_val = crate::object::js_object_get_field_f64(signal, 2);
-        let bits = listeners_val.to_bits();
-        let arr_ptr: *mut crate::array::ArrayHeader =
-            if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG_AC {
-                (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader
-            } else {
-                // Lazily allocate the listeners array.
-                let new_arr = js_array_alloc(0);
-                let new_bits = POINTER_TAG_AC | ((new_arr as u64) & 0x0000_FFFF_FFFF_FFFF);
-                js_object_set_field_f64(signal, 2, f64::from_bits(new_bits));
-                new_arr
-            };
-        if !arr_ptr.is_null() {
-            js_array_push_f64(arr_ptr, listener);
-        }
+    let listeners_val = crate::object::js_object_get_field_f64(signal, 2);
+    let bits = listeners_val.to_bits();
+    let arr_ptr: *mut crate::array::ArrayHeader =
+        if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG_AC {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader
+        } else {
+            // Lazily allocate the listeners array.
+            let new_arr = js_array_alloc(0);
+            let new_bits = POINTER_TAG_AC | ((new_arr as u64) & 0x0000_FFFF_FFFF_FFFF);
+            js_object_set_field_f64(signal, 2, f64::from_bits(new_bits));
+            new_arr
+        };
+    if !arr_ptr.is_null() {
+        js_array_push_f64(arr_ptr, listener);
     }
 }
 

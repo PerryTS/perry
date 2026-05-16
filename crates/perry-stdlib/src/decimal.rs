@@ -246,7 +246,7 @@ pub extern "C" fn js_decimal_to_fixed(handle: Handle, decimals: f64) -> *const S
     let rounded = a.round_dp(dp);
     let result = format!("{:.1$}", rounded, dp as usize);
 
-    unsafe { js_string_from_bytes(result.as_ptr(), result.len() as u32) }
+    js_string_from_bytes(result.as_ptr(), result.len() as u32)
 }
 
 /// Decimal.toString() - Convert to string
@@ -257,7 +257,7 @@ pub extern "C" fn js_decimal_to_string(handle: Handle) -> *const StringHeader {
         .unwrap_or(Decimal::ZERO);
     let result = a.to_string();
 
-    unsafe { js_string_from_bytes(result.as_ptr(), result.len() as u32) }
+    js_string_from_bytes(result.as_ptr(), result.len() as u32)
 }
 
 /// Decimal.toNumber() - Convert to number

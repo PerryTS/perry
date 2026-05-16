@@ -534,7 +534,7 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
     if arr.is_null() {
         return f64::NAN;
     }
-    const TAG_UNDEFINED_F64: f64 = unsafe { f64::from_bits(0x7FFC_0000_0000_0001u64) };
+    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
     unsafe {
         let length = (*arr).length;
         if index >= length {
@@ -639,7 +639,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // JS spec: out-of-bounds array access returns `undefined`, not NaN.
     // This matters for destructuring defaults (`const [a, b, c = 30] = [1, 2]`)
     // where the `?? fallback` must see TAG_UNDEFINED, not NaN.
-    const TAG_UNDEFINED_F64: f64 = unsafe { f64::from_bits(0x7FFC_0000_0000_0001u64) };
+    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
     unsafe {
         let length = (*arr).length;
         if index >= length {
@@ -904,14 +904,12 @@ pub extern "C" fn js_array_set_index_or_string(
         // Negative numeric key: per JS spec, becomes a string property on
         // the array's expando map. Stringify and delegate.
         let s = idx_i32.to_string();
-        unsafe {
-            let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            crate::object::js_object_set_field_by_name(
-                arr as *mut crate::object::ObjectHeader,
-                key,
-                value,
-            );
-        }
+        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        crate::object::js_object_set_field_by_name(
+            arr as *mut crate::object::ObjectHeader,
+            key,
+            value,
+        );
         return arr;
     }
     js_array_set_f64_extend(arr, idx_i32 as u32, value)
@@ -1049,7 +1047,7 @@ pub extern "C" fn js_array_push_spread_f64(
 /// and took the wrong branch on an empty pool. Issue #536.
 #[no_mangle]
 pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
-    const TAG_UNDEFINED_F64: f64 = unsafe { f64::from_bits(0x7FFC_0000_0000_0001u64) };
+    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
@@ -1100,7 +1098,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             // not stale data. The capacity stays unchanged — JS doesn't
             // require Perry to release the underlying buffer here, and growing
             // back via `push` would just re-overwrite these slots anyway.
-            const TAG_UNDEFINED_F64: f64 = unsafe { f64::from_bits(0x7FFC_0000_0000_0001u64) };
+            const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             for i in n..cur {
                 std::ptr::write(elements_ptr.add(i as usize), TAG_UNDEFINED_F64);
@@ -1112,7 +1110,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             // the OLD location (issue #233 mechanism), so the caller's stale
             // pointer transparently follows the chain to the resized buffer
             // on the next access — no callsite-side writeback needed.
-            const TAG_UNDEFINED_F64: f64 = unsafe { f64::from_bits(0x7FFC_0000_0000_0001u64) };
+            const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
             let target = if n > (*arr).capacity {
                 js_array_grow(arr, n)
             } else {
@@ -1146,7 +1144,7 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
         if index >= length {
             return 1; // delete on out-of-bounds always returns true in JS
         }
-        const TAG_UNDEFINED_F64: f64 = unsafe { f64::from_bits(0x7FFC_0000_0000_0001u64) };
+        const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         std::ptr::write(elements_ptr.add(index as usize), TAG_UNDEFINED_F64);
         1
@@ -1161,7 +1159,7 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
 /// `@perryts/mysql`. Issue #536.
 #[no_mangle]
 pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
-    const TAG_UNDEFINED_F64: f64 = unsafe { f64::from_bits(0x7FFC_0000_0000_0001u64) };
+    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
@@ -1542,7 +1540,7 @@ pub extern "C" fn js_array_concat(
     // `[...new Set(...)]` reads the right elements instead of the
     // SetHeader's raw memory.
     if crate::set::is_registered_set(src as usize) {
-        let arr = unsafe { crate::set::js_set_to_array(src as *const crate::set::SetHeader) };
+        let arr = crate::set::js_set_to_array(src as *const crate::set::SetHeader);
         return js_array_concat(dest, arr);
     }
     // Same treatment for Maps — `[...map]` materializes [key, value]
@@ -3536,7 +3534,7 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
 
     // Look up the "next" method on the iterator object
     let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
-    let next_val = unsafe { js_object_get_field_by_name(iter_obj, next_key) };
+    let next_val = js_object_get_field_by_name(iter_obj, next_key);
     if next_val.is_undefined() {
         return arr;
     }
@@ -3564,7 +3562,7 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
         let result_obj = result_ptr as *const ObjectHeader;
 
         // Check .done
-        let done_val = unsafe { js_object_get_field_by_name(result_obj, done_key) };
+        let done_val = js_object_get_field_by_name(result_obj, done_key);
         let done_bits = unsafe { std::mem::transmute::<_, u64>(done_val) };
         // done is true when it's TAG_TRUE (0x7FFC_0000_0000_0004) or truthy number
         if done_bits == 0x7FFC_0000_0000_0004 {
@@ -3572,7 +3570,7 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
         } // TAG_TRUE
 
         // Get .value and push to array
-        let val = unsafe { js_object_get_field_by_name(result_obj, value_key) };
+        let val = js_object_get_field_by_name(result_obj, value_key);
         let val_f64 = unsafe { f64::from_bits(std::mem::transmute::<_, u64>(val)) };
         result = js_array_push_f64(result, val_f64);
     }

@@ -395,7 +395,6 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
 /// recurses into them — see collectors.rs:862). A hit on `let_id`
 /// means the let must be boxed.
 fn init_expr_has_self_capturing_closure(init: &perry_hir::Expr, let_id: u32) -> bool {
-    use perry_hir::Expr;
     let mut found = false;
     walk_for_self_capturing_closure(init, let_id, &mut found);
     found

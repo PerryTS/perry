@@ -455,8 +455,8 @@ pub extern "C" fn js_process_hrtime_bigint() -> f64 {
     js_nanbox_bigint(bi as i64)
 }
 
-/// Storage for process.on('exit', handler) callbacks.
-/// We just store the handler pointers; they don't actually fire on real exit.
+// Storage for process.on('exit', handler) callbacks.
+// We just store the handler pointers; they don't actually fire on real exit.
 thread_local! {
     static EXIT_HANDLERS: std::cell::RefCell<Vec<*const crate::closure::ClosureHeader>> = const { std::cell::RefCell::new(Vec::new()) };
 }

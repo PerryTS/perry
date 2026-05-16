@@ -261,12 +261,10 @@ pub extern "C" fn js_throw_type_error_property_access(
         "Cannot read properties of {} (reading '{}')",
         receiver, prop
     );
-    unsafe {
-        let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = js_typeerror_new(msg_str);
-        let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-        crate::exception::js_throw(f64::from_bits(err_value))
-    }
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = js_typeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
 }
 
 /// Issue #510: calling a method on a primitive whose name doesn't
@@ -321,12 +319,10 @@ pub extern "C" fn js_throw_type_error_not_a_function(
     } else {
         format!("({}).{} is not a function", kind, prop)
     };
-    unsafe {
-        let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = js_typeerror_new(msg_str);
-        let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-        crate::exception::js_throw(f64::from_bits(err_value))
-    }
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = js_typeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
 }
 
 /// Issue #615: writes to read-only / frozen / sealed / non-extensible
@@ -367,12 +363,10 @@ pub extern "C" fn js_throw_type_error_immutable_write(
         2 => format!("Cannot delete property '{}' of #<Object>", key),
         _ => format!("Cannot modify object: '{}'", key),
     };
-    unsafe {
-        let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = js_typeerror_new(msg_str);
-        let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-        crate::exception::js_throw(f64::from_bits(err_value))
-    }
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = js_typeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
 }
 
 /// Convenience wrapper for the runtime — accepts the key as a

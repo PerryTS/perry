@@ -1487,7 +1487,6 @@ mod parse_float_tests {
 /// Marked `#[inline]` so the bitcode-link path can inline + DCE the
 /// branches when the input type is statically known.
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_number_coerce(value: f64) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
 
@@ -2819,7 +2818,7 @@ pub extern "C" fn js_drain_queued_microtasks() {
             }
         });
         match task {
-            Some(cb) => unsafe {
+            Some(cb) => {
                 js_closure_call0(cb as *const crate::closure::ClosureHeader);
             },
             None => break,

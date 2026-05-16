@@ -15,19 +15,19 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::RwLock;
 
-/// Overflow field storage for objects that exceed their pre-allocated inline slot count.
-/// Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
-/// (inline slots 0..alloc_limit remain `TAG_UNDEFINED` placeholders in the Vec;
-/// they're never read since the inline slots are checked first).
-///
-/// Was a `HashMap<usize, HashMap<usize, u64>>` through v0.5.29 — the inner HashMap
-/// dominated the row-decode hot path: a 20-property row object touches the overflow
-/// storage on each of its 12 post-8-slot writes, and HashMap ops (hash + probe +
-/// mut insert) cost ~40-50ns each. Flat `Vec<u64>` is ~5ns per append + index;
-/// removes most of the residual gap after the shape-transition cache landed.
-///
-/// This handles cases like Object.assign() adding many fields to an object
-/// that was allocated with only 8 slots (e.g., @noble/curves Fp field with 21 properties).
+// Overflow field storage for objects that exceed their pre-allocated inline slot count.
+// Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
+// (inline slots 0..alloc_limit remain `TAG_UNDEFINED` placeholders in the Vec;
+// they're never read since the inline slots are checked first).
+//
+// Was a `HashMap<usize, HashMap<usize, u64>>` through v0.5.29 — the inner HashMap
+// dominated the row-decode hot path: a 20-property row object touches the overflow
+// storage on each of its 12 post-8-slot writes, and HashMap ops (hash + probe +
+// mut insert) cost ~40-50ns each. Flat `Vec<u64>` is ~5ns per append + index;
+// removes most of the residual gap after the shape-transition cache landed.
+//
+// This handles cases like Object.assign() adding many fields to an object
+// that was allocated with only 8 slots (e.g., @noble/curves Fp field with 21 properties).
 thread_local! {
     /// Heap-pointer keyed; PtrHasher avoids the per-call SipHash on
     /// every overflow read/write. `clear_overflow_for_ptr` was 0.7%
@@ -178,43 +178,43 @@ fn keys_index_insert(obj_addr: usize, new_count: u32, key_hash: u64, slot: u32) 
     });
 }
 
-/// Last-accessed overflow Vec cache — one entry, keyed by `obj_ptr`.
-/// Skips the outer HashMap lookup on consecutive writes to the same
-/// object (exactly the row-build pattern: a single object gets its
-/// overflow slots filled back-to-back). Refreshed on every slow-path
-/// HashMap access; invalidated by `clear_overflow_for_ptr` when GC
-/// sweep frees the corresponding object.
-///
-/// Safety: the cached pointer references the `Vec<u64>` struct stored
-/// inside a HashMap bucket. That struct only moves when the HashMap
-/// resizes, which only happens on `entry().or_default()` inserting a
-/// fresh key. The slow path below does both the potentially-resizing
-/// call and the cache refresh inside a single `OVERFLOW_FIELDS.with`
-/// closure, so no other thread-local mutation can interleave between
-/// obtaining `&mut Vec` and caching its address.
+// Last-accessed overflow Vec cache — one entry, keyed by `obj_ptr`.
+// Skips the outer HashMap lookup on consecutive writes to the same
+// object (exactly the row-build pattern: a single object gets its
+// overflow slots filled back-to-back). Refreshed on every slow-path
+// HashMap access; invalidated by `clear_overflow_for_ptr` when GC
+// sweep frees the corresponding object.
+//
+// Safety: the cached pointer references the `Vec<u64>` struct stored
+// inside a HashMap bucket. That struct only moves when the HashMap
+// resizes, which only happens on `entry().or_default()` inserting a
+// fresh key. The slow path below does both the potentially-resizing
+// call and the cache refresh inside a single `OVERFLOW_FIELDS.with`
+// closure, so no other thread-local mutation can interleave between
+// obtaining `&mut Vec` and caching its address.
 thread_local! {
     static OVERFLOW_LAST: std::cell::UnsafeCell<(usize, *mut Vec<u64>)> =
         const { std::cell::UnsafeCell::new((0, std::ptr::null_mut())) };
 }
 
-/// Implicit `this` for closure-typed class fields invoked method-style.
-///
-/// Issue #519: when `obj.fn(args)` calls a closure stored as a class field,
-/// the field-scan dispatch in `js_native_call_method` can't bind `this`
-/// through the closure ABI (closures take `(closure_ptr, arg0, …)` — no
-/// `this` slot). Hono's RegExpRouter does this with `match = match` (the
-/// imported function from matcher.js), and the function body's
-/// `this.buildAllMatchers()` reads `this = 0` and TypeErrors out.
-///
-/// Codegen for `Expr::This` (perry-codegen/src/expr.rs) reads from this
-/// thread-local when the lexical `this_stack` is empty (i.e. inside a
-/// non-arrow function body or top-level closure body). The field-scan
-/// dispatch saves the previous value, sets it to the receiver, calls the
-/// closure, then restores. Direct function calls (`fn(args)`) don't touch
-/// this slot, so non-method invocations don't pollute it across calls.
-///
-/// Defaults to `TAG_UNDEFINED`. JS spec says top-level `this` is undefined
-/// in strict mode, which matches.
+// Implicit `this` for closure-typed class fields invoked method-style.
+//
+// Issue #519: when `obj.fn(args)` calls a closure stored as a class field,
+// the field-scan dispatch in `js_native_call_method` can't bind `this`
+// through the closure ABI (closures take `(closure_ptr, arg0, …)` — no
+// `this` slot). Hono's RegExpRouter does this with `match = match` (the
+// imported function from matcher.js), and the function body's
+// `this.buildAllMatchers()` reads `this = 0` and TypeErrors out.
+//
+// Codegen for `Expr::This` (perry-codegen/src/expr.rs) reads from this
+// thread-local when the lexical `this_stack` is empty (i.e. inside a
+// non-arrow function body or top-level closure body). The field-scan
+// dispatch saves the previous value, sets it to the receiver, calls the
+// closure, then restores. Direct function calls (`fn(args)`) don't touch
+// this slot, so non-method invocations don't pollute it across calls.
+//
+// Defaults to `TAG_UNDEFINED`. JS spec says top-level `this` is undefined
+// in strict mode, which matches.
 thread_local! {
     static IMPLICIT_THIS: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
 }
@@ -439,8 +439,8 @@ unsafe fn mark_all_keys(
     }
 }
 
-/// Recursion depth guard for js_native_call_method to prevent stack overflow
-/// from circular module dependencies during initialization.
+// Recursion depth guard for js_native_call_method to prevent stack overflow
+// from circular module dependencies during initialization.
 thread_local! {
     static CALL_METHOD_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
@@ -2024,7 +2024,6 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
 /// the `arena_alloc_gc` call — into the user's `new ClassName()`
 /// site, eliminating function-call overhead from the hot loop.
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_object_alloc_class_inline_keys(
     class_id: u32,
     parent_class_id: u32,
@@ -2114,7 +2113,6 @@ pub extern "C" fn js_build_class_keys_array(
 /// `class_id` is a compile-time constant (which it always is at the
 /// `new ClassName()` call site).
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_object_alloc_class_with_keys(
     class_id: u32,
     parent_class_id: u32,
@@ -4017,11 +4015,9 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if idx_i32 < 0 {
         // Negative numeric keys → string keys on the object path.
         let s = idx_i32.to_string();
-        unsafe {
-            let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            let v = js_object_get_field_by_name(raw as *mut ObjectHeader, key);
-            return f64::from_bits(v.bits());
-        }
+        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        let v = js_object_get_field_by_name(raw as *mut ObjectHeader, key);
+        return f64::from_bits(v.bits());
     }
 
     let gc_type = unsafe {
@@ -4044,11 +4040,9 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         } else {
             format!("{}", idx)
         };
-        unsafe {
-            let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            let v = js_object_get_field_by_name(raw as *mut ObjectHeader, key);
-            return f64::from_bits(v.bits());
-        }
+        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        let v = js_object_get_field_by_name(raw as *mut ObjectHeader, key);
+        return f64::from_bits(v.bits());
     }
     // Buffer / Map / Set / typed-array / unknown — try the array getter
     // (which handles registered buffers + typed arrays via per-kind reads).
@@ -4097,10 +4091,8 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         // arrays, JS spec gates them to no-ops. Stringify and delegate so
         // the object case (rare but possible) still routes correctly.
         let s = idx_i32.to_string();
-        unsafe {
-            let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
-        }
+        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
         return;
     }
 
@@ -4135,10 +4127,8 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         } else {
             format!("{}", idx)
         };
-        unsafe {
-            let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
-        }
+        let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
         return;
     }
     // Buffer / Map / Set / other GC types — fall through to the array
@@ -7402,22 +7392,20 @@ pub extern "C" fn js_create_native_module_namespace(
     // Create an object with one field to store the module name
     let obj = js_object_alloc(NATIVE_MODULE_CLASS_ID, 1);
 
-    unsafe {
-        // Create a string from the module name
-        let module_name =
-            crate::string::js_string_from_bytes(module_name_ptr, module_name_len as u32);
+    // Create a string from the module name
+    let module_name =
+        crate::string::js_string_from_bytes(module_name_ptr, module_name_len as u32);
 
-        // Store the module name in the first field
-        js_object_set_field(obj, 0, JSValue::string_ptr(module_name));
+    // Store the module name in the first field
+    js_object_set_field(obj, 0, JSValue::string_ptr(module_name));
 
-        // Create a keys array with one key: "__module__"
-        let keys_array = crate::array::js_array_alloc(1);
-        let key_bytes = b"__module__";
-        let key_str =
-            crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-        crate::array::js_array_push(keys_array, JSValue::string_ptr(key_str));
-        js_object_set_keys(obj, keys_array);
-    }
+    // Create a keys array with one key: "__module__"
+    let keys_array = crate::array::js_array_alloc(1);
+    let key_bytes = b"__module__";
+    let key_str =
+        crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    crate::array::js_array_push(keys_array, JSValue::string_ptr(key_str));
+    js_object_set_keys(obj, keys_array);
 
     // Return as NaN-boxed pointer
     crate::value::js_nanbox_pointer(obj as i64)
@@ -9124,7 +9112,7 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
             let modellable = !(crate::set::is_registered_set(proto_addr)
                 || crate::map::is_registered_map(proto_addr)
                 || crate::regex::is_regex_pointer(proto_ptr as *const u8));
-            let valid = modellable && unsafe { is_valid_obj_ptr(proto_ptr as *const u8) };
+            let valid = modellable && is_valid_obj_ptr(proto_ptr as *const u8);
             if valid {
                 let cid =
                     NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

@@ -619,7 +619,7 @@ pub extern "C" fn js_nanbox_pointer(ptr: i64) -> f64 {
 pub extern "C" fn js_nanbox_string(ptr: i64) -> f64 {
     let actual_ptr = if ptr == 0 {
         // Allocate an empty string instead of boxing null
-        unsafe { crate::string::js_string_from_bytes(b"".as_ptr(), 0) as i64 }
+        crate::string::js_string_from_bytes(b"".as_ptr(), 0) as i64
     } else {
         ptr
     };
@@ -1759,7 +1759,6 @@ pub extern "C" fn js_jsvalue_compare(a: f64, b: f64) -> i32 {
 /// Everything else is truthy.
 /// Returns 1 if truthy, 0 if falsy.
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_is_truthy(value: f64) -> i32 {
     let bits = value.to_bits();
 
@@ -2120,7 +2119,7 @@ pub extern "C" fn js_dynamic_array_find(
         let length = js_dynamic_array_length(arr_value);
         for i in 0..length {
             let element = js_dynamic_array_get(arr_value, i);
-            let result = unsafe { crate::closure::js_closure_call1(callback, element) };
+            let result = crate::closure::js_closure_call1(callback, element);
             // Proper truthy check: handles NaN-boxed booleans
             if js_is_truthy(result) != 0 {
                 return element;
@@ -2154,7 +2153,7 @@ pub extern "C" fn js_dynamic_array_findIndex(
         let length = js_dynamic_array_length(arr_value);
         for i in 0..length {
             let element = js_dynamic_array_get(arr_value, i);
-            let result = unsafe { crate::closure::js_closure_call1(callback, element) };
+            let result = crate::closure::js_closure_call1(callback, element);
             // Proper truthy check: handles NaN-boxed booleans
             if js_is_truthy(result) != 0 {
                 return i as f64;

@@ -1103,13 +1103,11 @@ pub extern "C" fn js_headers_for_each(handle: f64, callback: f64) -> f64 {
     }
     let closure = cb_ptr as *const perry_runtime::ClosureHeader;
     for (k, v) in entries {
-        let v_ptr = unsafe { js_string_from_bytes(v.as_ptr(), v.len() as u32) };
-        let k_ptr = unsafe { js_string_from_bytes(k.as_ptr(), k.len() as u32) };
+        let v_ptr = js_string_from_bytes(v.as_ptr(), v.len() as u32);
+        let k_ptr = js_string_from_bytes(k.as_ptr(), k.len() as u32);
         let v_nan = JSValue::string_ptr(v_ptr).bits();
         let k_nan = JSValue::string_ptr(k_ptr).bits();
-        unsafe {
-            perry_runtime::js_closure_call2(closure, f64::from_bits(v_nan), f64::from_bits(k_nan));
-        }
+        perry_runtime::js_closure_call2(closure, f64::from_bits(v_nan), f64::from_bits(k_nan));
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -1129,30 +1127,26 @@ fn nanbox_array_pointer(arr: *mut perry_runtime::ArrayHeader) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_headers_keys(handle: f64) -> f64 {
     let entries = snapshot_sorted(handle);
-    unsafe {
-        let mut arr = perry_runtime::js_array_alloc(entries.len() as u32);
-        for (k, _) in entries {
-            let k_ptr = js_string_from_bytes(k.as_ptr(), k.len() as u32);
-            let k_nan = JSValue::string_ptr(k_ptr).bits();
-            arr = perry_runtime::js_array_push_f64(arr, f64::from_bits(k_nan));
-        }
-        nanbox_array_pointer(arr)
+    let mut arr = perry_runtime::js_array_alloc(entries.len() as u32);
+    for (k, _) in entries {
+        let k_ptr = js_string_from_bytes(k.as_ptr(), k.len() as u32);
+        let k_nan = JSValue::string_ptr(k_ptr).bits();
+        arr = perry_runtime::js_array_push_f64(arr, f64::from_bits(k_nan));
     }
+    nanbox_array_pointer(arr)
 }
 
 /// `headers.values()` — sorted-by-key array of header values. See `js_headers_keys`.
 #[no_mangle]
 pub extern "C" fn js_headers_values(handle: f64) -> f64 {
     let entries = snapshot_sorted(handle);
-    unsafe {
-        let mut arr = perry_runtime::js_array_alloc(entries.len() as u32);
-        for (_, v) in entries {
-            let v_ptr = js_string_from_bytes(v.as_ptr(), v.len() as u32);
-            let v_nan = JSValue::string_ptr(v_ptr).bits();
-            arr = perry_runtime::js_array_push_f64(arr, f64::from_bits(v_nan));
-        }
-        nanbox_array_pointer(arr)
+    let mut arr = perry_runtime::js_array_alloc(entries.len() as u32);
+    for (_, v) in entries {
+        let v_ptr = js_string_from_bytes(v.as_ptr(), v.len() as u32);
+        let v_nan = JSValue::string_ptr(v_ptr).bits();
+        arr = perry_runtime::js_array_push_f64(arr, f64::from_bits(v_nan));
     }
+    nanbox_array_pointer(arr)
 }
 
 /// `headers.entries()` — sorted-by-key array of `[key, value]` pair arrays.
@@ -1161,20 +1155,18 @@ pub extern "C" fn js_headers_values(handle: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_headers_entries(handle: f64) -> f64 {
     let entries = snapshot_sorted(handle);
-    unsafe {
-        let mut arr = perry_runtime::js_array_alloc(entries.len() as u32);
-        for (k, v) in entries {
-            let k_ptr = js_string_from_bytes(k.as_ptr(), k.len() as u32);
-            let v_ptr = js_string_from_bytes(v.as_ptr(), v.len() as u32);
-            let k_nan = JSValue::string_ptr(k_ptr).bits();
-            let v_nan = JSValue::string_ptr(v_ptr).bits();
-            let mut pair = perry_runtime::js_array_alloc(2);
-            pair = perry_runtime::js_array_push_f64(pair, f64::from_bits(k_nan));
-            pair = perry_runtime::js_array_push_f64(pair, f64::from_bits(v_nan));
-            arr = perry_runtime::js_array_push_f64(arr, nanbox_array_pointer(pair));
-        }
-        nanbox_array_pointer(arr)
+    let mut arr = perry_runtime::js_array_alloc(entries.len() as u32);
+    for (k, v) in entries {
+        let k_ptr = js_string_from_bytes(k.as_ptr(), k.len() as u32);
+        let v_ptr = js_string_from_bytes(v.as_ptr(), v.len() as u32);
+        let k_nan = JSValue::string_ptr(k_ptr).bits();
+        let v_nan = JSValue::string_ptr(v_ptr).bits();
+        let mut pair = perry_runtime::js_array_alloc(2);
+        pair = perry_runtime::js_array_push_f64(pair, f64::from_bits(k_nan));
+        pair = perry_runtime::js_array_push_f64(pair, f64::from_bits(v_nan));
+        arr = perry_runtime::js_array_push_f64(arr, nanbox_array_pointer(pair));
     }
+    nanbox_array_pointer(arr)
 }
 
 // ----------------- Response FFI (constructor + extra methods) -----------------
@@ -1533,16 +1525,16 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
     let guard = REQUEST_REGISTRY.lock().unwrap();
     let req = guard.get(&req_id)?;
     let bits = match prop {
-        "url" => unsafe {
+        "url" => {
             let p = js_string_from_bytes(req.url.as_ptr(), req.url.len() as u32);
             JSValue::string_ptr(p).bits()
         },
-        "method" => unsafe {
+        "method" => {
             let p = js_string_from_bytes(req.method.as_ptr(), req.method.len() as u32);
             JSValue::string_ptr(p).bits()
         },
         "body" => match &req.body {
-            Some(b) => unsafe {
+            Some(b) => {
                 let p = js_string_from_bytes(b.as_ptr(), b.len() as u32);
                 JSValue::string_ptr(p).bits()
             },
@@ -1595,7 +1587,7 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
     let resp = guard.get(&resp_id)?;
     let bits = match prop {
         "status" => return Some(resp.status as f64),
-        "statusText" => unsafe {
+        "statusText" => {
             let p = js_string_from_bytes(resp.status_text.as_ptr(), resp.status_text.len() as u32);
             JSValue::string_ptr(p).bits()
         },
@@ -1734,7 +1726,7 @@ pub fn dispatch_blob_property(blob_id: usize, prop: &str) -> Option<f64> {
     let blob = guard.get(&blob_id)?;
     let bits = match prop {
         "size" => return Some(blob.body.len() as f64),
-        "type" => unsafe {
+        "type" => {
             let p =
                 js_string_from_bytes(blob.content_type.as_ptr(), blob.content_type.len() as u32);
             JSValue::string_ptr(p).bits()

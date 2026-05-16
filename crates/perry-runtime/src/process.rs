@@ -184,13 +184,11 @@ pub extern "C" fn js_process_env() -> f64 {
     // environments (CI runners) spill to the overflow Vec path.
     let alloc_limit = std::cmp::max(vars.len() as u32, 8);
     let obj = crate::object::js_object_alloc(0, alloc_limit);
-    unsafe {
-        for (k, v) in &vars {
-            let key = js_string_from_bytes(k.as_ptr(), k.len() as u32);
-            let val = js_string_from_bytes(v.as_ptr(), v.len() as u32);
-            let val_f64 = f64::from_bits(JSValue::string_ptr(val).bits());
-            crate::object::js_object_set_field_by_name(obj, key, val_f64);
-        }
+    for (k, v) in &vars {
+        let key = js_string_from_bytes(k.as_ptr(), k.len() as u32);
+        let val = js_string_from_bytes(v.as_ptr(), v.len() as u32);
+        let val_f64 = f64::from_bits(JSValue::string_ptr(val).bits());
+        crate::object::js_object_set_field_by_name(obj, key, val_f64);
     }
     let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     CACHED_ENV.with(|c| c.set(boxed));

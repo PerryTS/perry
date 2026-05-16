@@ -175,9 +175,7 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
 
             // Call the message callback with the parsed value
             let closure = callback_ptr as *const ClosureHeader;
-            unsafe {
-                perry_runtime::closure::js_closure_call1(closure, parsed);
-            }
+            perry_runtime::closure::js_closure_call1(closure, parsed);
             processed += 1;
         }
     }
@@ -188,9 +186,7 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
         let close_cb = CLOSE_CALLBACK.with(|cb| cb.borrow_mut().take());
         if let Some(callback_ptr) = close_cb {
             let closure = callback_ptr as *const ClosureHeader;
-            unsafe {
-                perry_runtime::closure::js_closure_call0(closure);
-            }
+            perry_runtime::closure::js_closure_call0(closure);
         }
     }
 

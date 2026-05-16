@@ -273,10 +273,8 @@ fn column_value_to_jsvalue(row: &MySqlRow, index: usize) -> JSValue {
         }
         "VARCHAR" | "CHAR" | "TEXT" | "MEDIUMTEXT" | "LONGTEXT" | "TINYTEXT" | "ENUM" | "SET" => {
             if let Ok(val) = row.try_get::<String, _>(index) {
-                unsafe {
-                    let str_ptr = js_string_from_bytes(val.as_ptr(), val.len() as u32);
-                    JSValue::string_ptr(str_ptr)
-                }
+                let str_ptr = js_string_from_bytes(val.as_ptr(), val.len() as u32);
+                JSValue::string_ptr(str_ptr)
             } else {
                 JSValue::null()
             }
@@ -291,10 +289,8 @@ fn column_value_to_jsvalue(row: &MySqlRow, index: usize) -> JSValue {
         "DATETIME" | "TIMESTAMP" => {
             if let Ok(val) = row.try_get::<chrono::NaiveDateTime, _>(index) {
                 let s = val.format("%Y-%m-%d %H:%M:%S").to_string();
-                unsafe {
-                    let str_ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                    JSValue::string_ptr(str_ptr)
-                }
+                let str_ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                JSValue::string_ptr(str_ptr)
             } else {
                 JSValue::null()
             }
@@ -302,10 +298,8 @@ fn column_value_to_jsvalue(row: &MySqlRow, index: usize) -> JSValue {
         "DATE" => {
             if let Ok(val) = row.try_get::<chrono::NaiveDate, _>(index) {
                 let s = val.format("%Y-%m-%d").to_string();
-                unsafe {
-                    let str_ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                    JSValue::string_ptr(str_ptr)
-                }
+                let str_ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                JSValue::string_ptr(str_ptr)
             } else {
                 JSValue::null()
             }
@@ -313,10 +307,8 @@ fn column_value_to_jsvalue(row: &MySqlRow, index: usize) -> JSValue {
         "TIME" => {
             if let Ok(val) = row.try_get::<chrono::NaiveTime, _>(index) {
                 let s = val.format("%H:%M:%S").to_string();
-                unsafe {
-                    let str_ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                    JSValue::string_ptr(str_ptr)
-                }
+                let str_ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                JSValue::string_ptr(str_ptr)
             } else {
                 JSValue::null()
             }
@@ -324,17 +316,13 @@ fn column_value_to_jsvalue(row: &MySqlRow, index: usize) -> JSValue {
         _ => {
             // Try as string first for unknown types
             if let Ok(val) = row.try_get::<String, _>(index) {
-                unsafe {
-                    let str_ptr = js_string_from_bytes(val.as_ptr(), val.len() as u32);
-                    JSValue::string_ptr(str_ptr)
-                }
+                let str_ptr = js_string_from_bytes(val.as_ptr(), val.len() as u32);
+                JSValue::string_ptr(str_ptr)
             } else if let Ok(val) = row.try_get::<Vec<u8>, _>(index) {
                 // Fallback for BLOB/BINARY types — try UTF-8 conversion
                 let s = String::from_utf8_lossy(&val);
-                unsafe {
-                    let str_ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                    JSValue::string_ptr(str_ptr)
-                }
+                let str_ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                JSValue::string_ptr(str_ptr)
             } else {
                 JSValue::null()
             }

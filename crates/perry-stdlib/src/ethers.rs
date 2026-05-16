@@ -69,20 +69,18 @@ pub extern "C" fn js_ethers_wallet_create_random() -> *mut ObjectHeader {
         f64::from_bits(STRING_TAG | (ptr as u64 & 0x0000_FFFF_FFFF_FFFF))
     };
 
-    unsafe {
-        let obj = js_object_alloc(0, 2);
+    let obj = js_object_alloc(0, 2);
 
-        let key_addr_str = js_string_from_bytes(b"address".as_ptr(), 7);
-        let val_addr_str =
-            js_string_from_bytes(addr_checksummed.as_ptr(), addr_checksummed.len() as u32);
-        js_object_set_field_by_name(obj, key_addr_str, nanbox_str(val_addr_str));
+    let key_addr_str = js_string_from_bytes(b"address".as_ptr(), 7);
+    let val_addr_str =
+        js_string_from_bytes(addr_checksummed.as_ptr(), addr_checksummed.len() as u32);
+    js_object_set_field_by_name(obj, key_addr_str, nanbox_str(val_addr_str));
 
-        let key_pk_str = js_string_from_bytes(b"privateKey".as_ptr(), 10);
-        let val_pk_str = js_string_from_bytes(pk_hex.as_ptr(), pk_hex.len() as u32);
-        js_object_set_field_by_name(obj, key_pk_str, nanbox_str(val_pk_str));
+    let key_pk_str = js_string_from_bytes(b"privateKey".as_ptr(), 10);
+    let val_pk_str = js_string_from_bytes(pk_hex.as_ptr(), pk_hex.len() as u32);
+    js_object_set_field_by_name(obj, key_pk_str, nanbox_str(val_pk_str));
 
-        obj
-    }
+    obj
 }
 
 /// parseEther(value: string) -> bigint

@@ -8,7 +8,6 @@ use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use crate::string::StringHeader;
 use std::alloc::{alloc, realloc, Layout};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 
@@ -50,15 +49,15 @@ impl PartialEq for JSValueKey {
 }
 impl Eq for JSValueKey {}
 
-/// Side-table mapping set_ptr -> (JSValueKey -> index_in_elements).
-/// Provides O(1) lookup for `find_value_index` instead of O(n) linear scan.
-///
-/// Both nesting levels use `PtrHasher` (Fibonacci-multiplicative + xorshift
-/// avalanche). Outer key is set heap-pointer; inner is `JSValueKey` whose
-/// `Hash` impl writes either string-content bytes or f64 bits — the
-/// avalanche step handles both cleanly. Same rationale as MAP_INDEX
-/// (commit 39e253cd) — the perry-runtime registries don't need
-/// SipHash's DoS-resistance for keys that never come from external input.
+// Side-table mapping set_ptr -> (JSValueKey -> index_in_elements).
+// Provides O(1) lookup for `find_value_index` instead of O(n) linear scan.
+//
+// Both nesting levels use `PtrHasher` (Fibonacci-multiplicative + xorshift
+// avalanche). Outer key is set heap-pointer; inner is `JSValueKey` whose
+// `Hash` impl writes either string-content bytes or f64 bits — the
+// avalanche step handles both cleanly. Same rationale as MAP_INDEX
+// (commit 39e253cd) — the perry-runtime registries don't need
+// SipHash's DoS-resistance for keys that never come from external input.
 thread_local! {
     static SET_INDEX: RefCell<
         crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<JSValueKey, u32>>,
@@ -519,12 +518,10 @@ pub extern "C" fn js_set_from_array(arr: *const crate::array::ArrayHeader) -> *m
     if arr.is_null() {
         return set;
     }
-    unsafe {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let element = crate::array::js_array_get_f64(arr, i);
-            js_set_add(set, element);
-        }
+    let len = crate::array::js_array_length(arr);
+    for i in 0..len {
+        let element = crate::array::js_array_get_f64(arr, i);
+        js_set_add(set, element);
     }
     set
 }
@@ -554,7 +551,7 @@ pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
     if top16 == 0x7FFF || top16 == 0x7FF9 {
         let set = js_set_alloc(4);
         // Materialize SSO to a real heap StringHeader; cheap for heap strings.
-        let str_ptr = unsafe {
+        let str_ptr = {
             crate::value::js_get_string_pointer_unified(value) as *const crate::string::StringHeader
         };
         if str_ptr.is_null() {

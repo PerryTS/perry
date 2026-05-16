@@ -400,7 +400,7 @@ pub(super) fn lower_builtin_new(
 
                     // Helper: intern a key, load its raw string ptr,
                     // call js_object_get_field_by_name_f64.
-                    let mut get_field = |ctx_inner: &mut FnCtx<'_>, key: &str| -> Result<String> {
+                    let get_field = |ctx_inner: &mut FnCtx<'_>, key: &str| -> Result<String> {
                         let key_idx = ctx_inner.strings.intern(key);
                         let key_global =
                             format!("@{}", ctx_inner.strings.entry(key_idx).handle_global);

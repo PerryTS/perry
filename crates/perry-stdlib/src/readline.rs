@@ -402,7 +402,7 @@ pub extern "C" fn js_readline_close(_handle: i64) -> f64 {
         let cb = CLOSE_CALLBACK.with(|c| c.borrow_mut().take());
         if let Some(cb_i64) = cb {
             let closure = cb_i64 as *const ClosureHeader;
-            unsafe { js_closure_call0(closure) };
+            js_closure_call0(closure);
         }
     }
     f64::from_bits(JSValue::undefined().bits())
@@ -586,7 +586,7 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
             let s = js_string_from_bytes(chunk.as_ptr(), chunk.len() as u32);
             let arg = f64::from_bits(JSValue::string_ptr(s).bits());
             let closure = cb_i64 as *const ClosureHeader;
-            unsafe { js_closure_call1(closure, arg) };
+            js_closure_call1(closure, arg);
             fired += 1;
         }
         // 'keypress' callback receives (sequence_string, key_object).
@@ -597,7 +597,7 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
                 let arg1 = f64::from_bits(JSValue::string_ptr(seq_str).bits());
                 let arg2 = build_keypress_object(&name, ctrl, shift, meta, &seq);
                 let closure = cb_i64 as *const ClosureHeader;
-                unsafe { js_closure_call2(closure, arg1, arg2) };
+                js_closure_call2(closure, arg1, arg2);
                 fired += 1;
             }
         }
@@ -617,14 +617,14 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
         let q_cb = QUESTION_CALLBACK.with(|cb| cb.borrow_mut().take());
         if let Some(cb_i64) = q_cb {
             let closure = cb_i64 as *const ClosureHeader;
-            unsafe { js_closure_call1(closure, arg) };
+            js_closure_call1(closure, arg);
             fired += 1;
             continue;
         }
         let line_cb = LINE_CALLBACK.with(|cb| *cb.borrow());
         if let Some(cb_i64) = line_cb {
             let closure = cb_i64 as *const ClosureHeader;
-            unsafe { js_closure_call1(closure, arg) };
+            js_closure_call1(closure, arg);
             fired += 1;
         }
     }
@@ -640,7 +640,7 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
             let cb = CLOSE_CALLBACK.with(|c| c.borrow_mut().take());
             if let Some(cb_i64) = cb {
                 let closure = cb_i64 as *const ClosureHeader;
-                unsafe { js_closure_call0(closure) };
+                js_closure_call0(closure);
                 fired += 1;
             }
         }

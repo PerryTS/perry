@@ -568,7 +568,7 @@ pub extern "C" fn js_commander_get_arg(handle: Handle, index: f64) -> *const Str
     if let Some(cmd) = get_handle_mut::<CommanderHandle>(handle) {
         if idx < cmd.args.len() {
             let arg = &cmd.args[idx];
-            return unsafe { js_string_from_bytes(arg.as_ptr(), arg.len() as u32) };
+            return js_string_from_bytes(arg.as_ptr(), arg.len() as u32);
         }
     }
     std::ptr::null()

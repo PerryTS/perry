@@ -286,41 +286,39 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
         if !timer.cleared {
             let cb = timer.callback as *const crate::closure::ClosureHeader;
             let a = &timer.args;
-            unsafe {
-                match a.len() {
-                    0 => {
-                        js_closure_call0(cb);
-                    }
-                    1 => {
-                        js_closure_call1(cb, a[0]);
-                    }
-                    2 => {
-                        js_closure_call2(cb, a[0], a[1]);
-                    }
-                    3 => {
-                        js_closure_call3(cb, a[0], a[1], a[2]);
-                    }
-                    4 => {
-                        js_closure_call4(cb, a[0], a[1], a[2], a[3]);
-                    }
-                    5 => {
-                        js_closure_call5(cb, a[0], a[1], a[2], a[3], a[4]);
-                    }
-                    6 => {
-                        js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]);
-                    }
-                    7 => {
-                        js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
-                    }
-                    8 => {
-                        js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
-                    }
-                    _ => {
-                        // >= 9 args: clamp to 9. Real-world setTimeout
-                        // rarely exceeds 1-2 trailing args; this is a
-                        // conservative safety net rather than spec coverage.
-                        js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
-                    }
+            match a.len() {
+                0 => {
+                    js_closure_call0(cb);
+                }
+                1 => {
+                    js_closure_call1(cb, a[0]);
+                }
+                2 => {
+                    js_closure_call2(cb, a[0], a[1]);
+                }
+                3 => {
+                    js_closure_call3(cb, a[0], a[1], a[2]);
+                }
+                4 => {
+                    js_closure_call4(cb, a[0], a[1], a[2], a[3]);
+                }
+                5 => {
+                    js_closure_call5(cb, a[0], a[1], a[2], a[3], a[4]);
+                }
+                6 => {
+                    js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]);
+                }
+                7 => {
+                    js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+                }
+                8 => {
+                    js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+                }
+                _ => {
+                    // >= 9 args: clamp to 9. Real-world setTimeout
+                    // rarely exceeds 1-2 trailing args; this is a
+                    // conservative safety net rather than spec coverage.
+                    js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
                 }
             }
             fired += 1;
@@ -475,9 +473,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
     let mut fired = 0;
     // Call the callbacks outside of the lock
     for callback in callbacks_to_call {
-        unsafe {
-            js_closure_call0(callback as *const crate::closure::ClosureHeader);
-        }
+        js_closure_call0(callback as *const crate::closure::ClosureHeader);
         fired += 1;
     }
 

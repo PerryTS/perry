@@ -8,7 +8,6 @@ use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use crate::string::StringHeader;
 use std::alloc::{alloc, realloc, Layout};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 
@@ -109,39 +108,39 @@ fn is_safe_numeric_key(bits: u64) -> bool {
     true
 }
 
-/// Side-table mapping `map_ptr -> (NumericKey-bits -> entries-array-index)`.
-/// O(1) `find_key_index` for numeric keys; pointer keys still take the
-/// linear-scan path so they remain correct under gen-GC string forwarding.
-///
-/// Both nesting levels use `PtrHasher` (Fibonacci-multiplicative + xorshift
-/// avalanche, see `crate::fast_hash`). The xorshift step is essential here
-/// because `NumericKey(u64)` holds f64 bit-patterns — small whole-number
-/// EntityIds have mantissa-zero, so pure multiplicative hashing would
-/// collapse hundreds of keys into bucket 0 (caught by a 2x regression
-/// the first time around). With the avalanche step, even the worst-case
-/// integer-f64 inputs distribute across buckets normally.
+// Side-table mapping `map_ptr -> (NumericKey-bits -> entries-array-index)`.
+// O(1) `find_key_index` for numeric keys; pointer keys still take the
+// linear-scan path so they remain correct under gen-GC string forwarding.
+//
+// Both nesting levels use `PtrHasher` (Fibonacci-multiplicative + xorshift
+// avalanche, see `crate::fast_hash`). The xorshift step is essential here
+// because `NumericKey(u64)` holds f64 bit-patterns — small whole-number
+// EntityIds have mantissa-zero, so pure multiplicative hashing would
+// collapse hundreds of keys into bucket 0 (caught by a 2x regression
+// the first time around). With the avalanche step, even the worst-case
+// integer-f64 inputs distribute across buckets normally.
 thread_local! {
     static MAP_INDEX: RefCell<
         crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<NumericKey, u32>>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
-/// Side-table mapping `map_ptr -> (FNV-1a 64-bit content hash -> Vec<entries-array-index>)`
-/// for STRING keys. Bypasses the gen-GC-stale-bits constraint that keeps
-/// `MAP_INDEX` numeric-only by hashing the string's CONTENT, not its
-/// pointer bits — so a forwarded heap-string and an SSO inline string
-/// with the same bytes share the same bucket. Stored values are u32
-/// indexes into the entries array (not pointers), which survive
-/// `rewrite_map_fields` evacuation rewrites untouched.
-///
-/// The per-bucket `Vec<u32>` accommodates hash collisions: while FNV-1a
-/// 64-bit collisions are vanishingly rare for distinct strings, we still
-/// validate each candidate via `jsvalue_eq` on lookup so a collision
-/// just costs an extra few-byte memcmp, never a wrong answer.
-///
-/// Pre-fix `Map.set("key_" + i, …)` over 500k inserts was O(N²) because
-/// each `set` did a linear `find_key_index` to dedup-check; with this
-/// table the dedup probe is O(1) amortized.
+// Side-table mapping `map_ptr -> (FNV-1a 64-bit content hash -> Vec<entries-array-index>)`
+// for STRING keys. Bypasses the gen-GC-stale-bits constraint that keeps
+// `MAP_INDEX` numeric-only by hashing the string's CONTENT, not its
+// pointer bits — so a forwarded heap-string and an SSO inline string
+// with the same bytes share the same bucket. Stored values are u32
+// indexes into the entries array (not pointers), which survive
+// `rewrite_map_fields` evacuation rewrites untouched.
+//
+// The per-bucket `Vec<u32>` accommodates hash collisions: while FNV-1a
+// 64-bit collisions are vanishingly rare for distinct strings, we still
+// validate each candidate via `jsvalue_eq` on lookup so a collision
+// just costs an extra few-byte memcmp, never a wrong answer.
+//
+// Pre-fix `Map.set("key_" + i, …)` over 500k inserts was O(N²) because
+// each `set` did a linear `find_key_index` to dedup-check; with this
+// table the dedup probe is O(1) amortized.
 thread_local! {
     static MAP_STRING_INDEX: RefCell<
         crate::fast_hash::PtrHashMap<usize, std::collections::HashMap<u64, Vec<u32>>>,
@@ -925,40 +924,38 @@ pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *m
     if arr.is_null() {
         return map;
     }
-    unsafe {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            // Each entry must itself be a 2-element array [key, value].
-            // Array elements are stored as f64 NaN-boxed values; nested arrays
-            // come through as POINTER_TAG-boxed f64 values.
-            let entry_val = crate::array::js_array_get_f64(arr, i);
-            let entry_bits = entry_val.to_bits();
-            // Extract the inner array pointer (strip NaN-box tag if present).
-            let upper = entry_bits >> 48;
-            let inner_ptr = if upper == 0x7FFD || upper == 0x7FFF || upper == 0x7FFA {
-                // NaN-boxed pointer
-                (entry_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader
-            } else if upper == 0x0000 {
-                let lower = entry_bits & 0x0000_FFFF_FFFF_FFFF;
-                if lower > 0x10000 {
-                    lower as *const crate::array::ArrayHeader
-                } else {
-                    continue;
-                }
+    let len = crate::array::js_array_length(arr);
+    for i in 0..len {
+        // Each entry must itself be a 2-element array [key, value].
+        // Array elements are stored as f64 NaN-boxed values; nested arrays
+        // come through as POINTER_TAG-boxed f64 values.
+        let entry_val = crate::array::js_array_get_f64(arr, i);
+        let entry_bits = entry_val.to_bits();
+        // Extract the inner array pointer (strip NaN-box tag if present).
+        let upper = entry_bits >> 48;
+        let inner_ptr = if upper == 0x7FFD || upper == 0x7FFF || upper == 0x7FFA {
+            // NaN-boxed pointer
+            (entry_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader
+        } else if upper == 0x0000 {
+            let lower = entry_bits & 0x0000_FFFF_FFFF_FFFF;
+            if lower > 0x10000 {
+                lower as *const crate::array::ArrayHeader
             } else {
                 continue;
-            };
-            if inner_ptr.is_null() {
-                continue;
             }
-            let inner_len = crate::array::js_array_length(inner_ptr);
-            if inner_len < 2 {
-                continue;
-            }
-            let key = crate::array::js_array_get_f64(inner_ptr, 0);
-            let value = crate::array::js_array_get_f64(inner_ptr, 1);
-            js_map_set(map, key, value);
+        } else {
+            continue;
+        };
+        if inner_ptr.is_null() {
+            continue;
         }
+        let inner_len = crate::array::js_array_length(inner_ptr);
+        if inner_len < 2 {
+            continue;
+        }
+        let key = crate::array::js_array_get_f64(inner_ptr, 0);
+        let value = crate::array::js_array_get_f64(inner_ptr, 1);
+        js_map_set(map, key, value);
     }
     map
 }

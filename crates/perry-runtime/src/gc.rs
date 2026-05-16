@@ -10,7 +10,6 @@
 
 use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
 
 /// GC header prepended to every heap allocation.
 /// Callers receive a pointer AFTER this header (ptr + 8).
@@ -1751,7 +1750,7 @@ unsafe fn header_from_user_ptr(user_ptr: *const u8) -> *mut GcHeader {
     (user_ptr as *mut u8).sub(GC_HEADER_SIZE) as *mut GcHeader
 }
 
-/// Try to mark a value (if it's a heap pointer). Returns true if newly marked.
+// Try to mark a value (if it's a heap pointer). Returns true if newly marked.
 // === MARK_SEEDS ===
 // Per-cycle worklist populated by `try_mark_value` /
 // `try_mark_value_or_raw` whenever they newly mark an object. The

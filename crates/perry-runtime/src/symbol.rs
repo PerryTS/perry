@@ -90,7 +90,7 @@ pub fn well_known_symbol(short_name: &str) -> *mut SymbolHeader {
     // name as its description. `registered = 0` so `Symbol.keyFor` returns
     // undefined.
     let desc_bytes = short_name.as_bytes();
-    let desc_ptr = unsafe { js_string_from_bytes(desc_bytes.as_ptr(), desc_bytes.len() as u32) };
+    let desc_ptr = js_string_from_bytes(desc_bytes.as_ptr(), desc_bytes.len() as u32);
     let boxed = Box::new(SymbolHeader {
         magic: SYMBOL_MAGIC,
         registered: 0,

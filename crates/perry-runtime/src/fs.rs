@@ -573,7 +573,7 @@ unsafe fn decode_path_value<'a>(path_value: f64) -> Option<&'a str> {
 
 extern "C" fn stats_closure_return_captured(closure: *const crate::closure::ClosureHeader) -> f64 {
     // Slot 0 holds the pre-computed NaN-boxed boolean.
-    unsafe { crate::closure::js_closure_get_capture_f64(closure, 0) }
+    crate::closure::js_closure_get_capture_f64(closure, 0)
 }
 
 unsafe fn make_stats_predicate(value: bool) -> f64 {
@@ -790,12 +790,10 @@ pub extern "C" fn js_fs_access_sync_throw(path_value: f64) -> f64 {
     // Throw an Error via js_throw. The runtime builds the error
     // lazily from a static message — the subclass catch in the test
     // just needs `accessBad = true` in the catch handler.
-    unsafe {
-        let msg = js_string_from_bytes(b"ENOENT: no such file or directory".as_ptr(), 33);
-        let err = crate::error::js_error_new_with_message(msg);
-        let err_val = crate::value::js_nanbox_pointer(err as i64);
-        crate::exception::js_throw(err_val);
-    }
+    let msg = js_string_from_bytes(b"ENOENT: no such file or directory".as_ptr(), 33);
+    let err = crate::error::js_error_new_with_message(msg);
+    let err_val = crate::value::js_nanbox_pointer(err as i64);
+    crate::exception::js_throw(err_val);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -1033,9 +1031,7 @@ fn write_stream_end_internal(closure: *const ClosureHeader, final_chunk: Option<
     if let Some(cb) = pending_finish {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            unsafe {
-                js_closure_call0(cb_ptr);
-            }
+            js_closure_call0(cb_ptr);
         }
     }
 
@@ -1082,22 +1078,18 @@ extern "C" fn write_stream_on_impl(closure: *const ClosureHeader, event: f64, cb
     if cb_is_finish && is_finished {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            unsafe {
-                js_closure_call0(cb_ptr);
-            }
+            js_closure_call0(cb_ptr);
         }
     }
 
     if let Some(msg) = err_msg {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            unsafe {
-                let msg_bytes = msg.as_bytes();
-                let err_str = js_string_from_bytes(msg_bytes.as_ptr(), msg_bytes.len() as u32);
-                let err_obj = crate::error::js_error_new_with_message(err_str);
-                let err_val = crate::value::js_nanbox_pointer(err_obj as i64);
-                js_closure_call1(cb_ptr, err_val);
-            }
+            let msg_bytes = msg.as_bytes();
+            let err_str = js_string_from_bytes(msg_bytes.as_ptr(), msg_bytes.len() as u32);
+            let err_obj = crate::error::js_error_new_with_message(err_str);
+            let err_val = crate::value::js_nanbox_pointer(err_obj as i64);
+            js_closure_call1(cb_ptr, err_val);
         }
     }
 
@@ -1142,13 +1134,11 @@ extern "C" fn read_stream_on_impl(closure: *const ClosureHeader, event: f64, cb:
             }
             let cb_ptr = extract_closure_ptr(cb);
             if !cb_ptr.is_null() {
-                unsafe {
-                    let chunk =
-                        js_string_from_bytes(buffer_copy.as_ptr(), buffer_copy.len() as u32);
-                    let chunk_val =
-                        f64::from_bits(crate::value::js_nanbox_string(chunk as i64).to_bits());
-                    js_closure_call1(cb_ptr, chunk_val);
-                }
+                let chunk =
+                    js_string_from_bytes(buffer_copy.as_ptr(), buffer_copy.len() as u32);
+                let chunk_val =
+                    f64::from_bits(crate::value::js_nanbox_string(chunk as i64).to_bits());
+                js_closure_call1(cb_ptr, chunk_val);
             }
         }
         b"end" | b"close" => {
@@ -1157,23 +1147,19 @@ extern "C" fn read_stream_on_impl(closure: *const ClosureHeader, event: f64, cb:
             }
             let cb_ptr = extract_closure_ptr(cb);
             if !cb_ptr.is_null() {
-                unsafe {
-                    js_closure_call0(cb_ptr);
-                }
+                js_closure_call0(cb_ptr);
             }
         }
         b"error" => {
             if let Some(msg) = err_msg {
                 let cb_ptr = extract_closure_ptr(cb);
                 if !cb_ptr.is_null() {
-                    unsafe {
-                        let msg_bytes = msg.as_bytes();
-                        let err_str =
-                            js_string_from_bytes(msg_bytes.as_ptr(), msg_bytes.len() as u32);
-                        let err_obj = crate::error::js_error_new_with_message(err_str);
-                        let err_val = crate::value::js_nanbox_pointer(err_obj as i64);
-                        js_closure_call1(cb_ptr, err_val);
-                    }
+                    let msg_bytes = msg.as_bytes();
+                    let err_str =
+                        js_string_from_bytes(msg_bytes.as_ptr(), msg_bytes.len() as u32);
+                    let err_obj = crate::error::js_error_new_with_message(err_str);
+                    let err_val = crate::value::js_nanbox_pointer(err_obj as i64);
+                    js_closure_call1(cb_ptr, err_val);
                 }
             }
         }
@@ -1336,21 +1322,19 @@ pub extern "C" fn js_fs_read_file_callback(path_value: f64, _encoding: f64, call
     use crate::closure::{js_closure_call2, ClosureHeader};
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-    unsafe {
-        // Read the file synchronously.
-        let str_ptr = js_fs_read_file_sync(path_value);
-        let data_val = if str_ptr.is_null() {
-            f64::from_bits(TAG_UNDEFINED)
-        } else {
-            f64::from_bits(crate::value::js_nanbox_string(str_ptr as i64).to_bits())
-        };
-        // Invoke the callback with (null, data). The callback is a
-        // NaN-boxed closure pointer — unbox before calling.
-        let cb_bits = callback.to_bits();
-        let cb_ptr = (cb_bits & 0x0000_FFFF_FFFF_FFFF) as *const ClosureHeader;
-        if !cb_ptr.is_null() {
-            js_closure_call2(cb_ptr, f64::from_bits(TAG_NULL), data_val);
-        }
+    // Read the file synchronously.
+    let str_ptr = js_fs_read_file_sync(path_value);
+    let data_val = if str_ptr.is_null() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        f64::from_bits(crate::value::js_nanbox_string(str_ptr as i64).to_bits())
+    };
+    // Invoke the callback with (null, data). The callback is a
+    // NaN-boxed closure pointer — unbox before calling.
+    let cb_bits = callback.to_bits();
+    let cb_ptr = (cb_bits & 0x0000_FFFF_FFFF_FFFF) as *const ClosureHeader;
+    if !cb_ptr.is_null() {
+        js_closure_call2(cb_ptr, f64::from_bits(TAG_NULL), data_val);
     }
     f64::from_bits(TAG_UNDEFINED)
 }

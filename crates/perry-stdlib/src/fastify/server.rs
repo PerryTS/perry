@@ -268,14 +268,14 @@ async fn handle_request(
 
 /// Main event loop - process incoming requests
 fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPendingRequest>) {
-    let app = match unsafe { get_handle::<FastifyApp>(app_handle) } {
+    let app = match get_handle::<FastifyApp>(app_handle) {
         Some(a) => a,
         None => return,
     };
 
     loop {
         // Process any pending stdlib operations (promises, etc.)
-        unsafe { crate::common::js_stdlib_process_pending() };
+        crate::common::js_stdlib_process_pending();
 
         // Process any pending microtasks
         perry_runtime::js_promise_run_microtasks();
@@ -295,7 +295,7 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                 pending.body.clone(),
                 pending.params.clone(),
             );
-            let ctx_handle = unsafe { register_handle(ctx) };
+            let ctx_handle = register_handle(ctx);
 
             // Find matching route and call handler
             let mut response_sent = false;
@@ -340,13 +340,13 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                     let nanboxed_ctx = nanboxed_ctx_for_hooks; // same value, different name for clarity
 
                     // Call handler(request, reply) - both are the context handle
-                    let result = unsafe {
+                    let result = {
                         let closure_ptr = handler as *const perry_runtime::ClosureHeader;
                         perry_runtime::js_closure_call2(closure_ptr, nanboxed_ctx, nanboxed_ctx)
                     };
 
                     // Process any async operations
-                    unsafe { crate::common::js_stdlib_process_pending() };
+                    crate::common::js_stdlib_process_pending();
                     perry_runtime::js_promise_run_microtasks();
 
                     // Check if handler returned a promise (NaN-boxed pointer to a Promise)
@@ -355,7 +355,7 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                     if jsv.is_pointer() {
                         let ptr = jsv.as_pointer::<perry_runtime::Promise>();
                         // Try to treat it as a promise and wait for it
-                        if unsafe {
+                        if {
                             perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise)
                         } != 0
                         {
@@ -368,15 +368,15 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                             // unhandled rejection inside a route handler
                             // would serialize the literal byte `0` as the
                             // response body — issue #748.
-                            let st = unsafe {
+                            let st = {
                                 perry_runtime::js_promise_state(ptr as *mut perry_runtime::Promise)
                             };
                             if st == 2 {
-                                if let Some(ctx) = unsafe {
+                                if let Some(ctx) = {
                                     crate::common::get_handle_mut::<FastifyContext>(ctx_handle)
                                 } {
                                     ctx.status_code = 500;
-                                    let reason = unsafe {
+                                    let reason = {
                                         perry_runtime::promise::js_promise_reason(
                                             ptr as *mut perry_runtime::Promise,
                                         )
@@ -385,7 +385,7 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                                 }
                                 final_result = f64::from_bits(0x7FFC_0000_0000_0001);
                             } else {
-                                final_result = unsafe {
+                                final_result = {
                                     perry_runtime::js_promise_value(
                                         ptr as *mut perry_runtime::Promise,
                                     )
@@ -397,7 +397,7 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
             }
 
             // Always send a response (from hook or route handler)
-            if let Some(ctx) = unsafe { get_handle::<FastifyContext>(ctx_handle) } {
+            if let Some(ctx) = get_handle::<FastifyContext>(ctx_handle) {
                 let response = FastifyResponse {
                     status: ctx.status_code,
                     headers: ctx.response_headers.clone(),
@@ -486,28 +486,26 @@ fn wait_for_promise(promise_ptr: *mut perry_runtime::Promise) {
     // First pump synchronously — handles the already-settled case
     // (e.g. `async () => 42` whose promise is fulfilled before this
     // function is even called) without entering the wait path.
-    unsafe { crate::common::js_stdlib_process_pending() };
+    crate::common::js_stdlib_process_pending();
     perry_runtime::js_promise_run_microtasks();
-    let mut state = unsafe { perry_runtime::js_promise_state(promise_ptr) };
+    let mut state = perry_runtime::js_promise_state(promise_ptr);
     if state != 0 {
         return;
     }
     loop {
-        unsafe {
-            // Drive timers, the stdlib pump, and microtasks every tick
-            // — mirrors the codegen-emitted await body.
-            let _ = perry_runtime::timer::js_timer_tick();
-            let _ = perry_runtime::timer::js_callback_timer_tick();
-            let _ = perry_runtime::timer::js_interval_timer_tick();
-            crate::common::js_stdlib_process_pending();
-        }
+        // Drive timers, the stdlib pump, and microtasks every tick
+        // — mirrors the codegen-emitted await body.
+        let _ = perry_runtime::timer::js_timer_tick();
+        let _ = perry_runtime::timer::js_callback_timer_tick();
+        let _ = perry_runtime::timer::js_interval_timer_tick();
+        crate::common::js_stdlib_process_pending();
         perry_runtime::js_promise_run_microtasks();
         // Condvar wait: blocks until a notify arrives or the 1 s
         // idle cap elapses. `js_promise_resolve` / `js_promise_reject`
         // fire `js_notify_main_thread`, so the wake happens the
         // instant the chain advances.
         perry_runtime::event_pump::js_wait_for_event();
-        state = unsafe { perry_runtime::js_promise_state(promise_ptr) };
+        state = perry_runtime::js_promise_state(promise_ptr);
         if state != 0 {
             return;
         }

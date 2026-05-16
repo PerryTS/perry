@@ -2564,7 +2564,6 @@ unsafe fn estimate_json_size(value: f64, type_hint: u32) -> usize {
 /// element f64s and crash on the first bogus pointer deref. No-op
 /// for non-lazy values and for lazy values whose `materialized` is
 /// still null (the lazy-stringify fast path handles those).
-#[inline]
 unsafe fn redirect_lazy_to_materialized(value: f64) -> f64 {
     let bits = value.to_bits();
     let top16 = bits >> 48;

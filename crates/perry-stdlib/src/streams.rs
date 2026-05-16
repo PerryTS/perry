@@ -312,11 +312,9 @@ fn alloc_readable(start_cb: i64, pull_cb: i64, cancel_cb: i64, hwm: f64) -> usiz
 
 fn alloc_writable(write_cb: i64, close_cb: i64, abort_cb: i64, hwm: f64) -> usize {
     let id = next_id(&NEXT_WS_ID);
-    let ready = unsafe { js_promise_new() };
-    let closed = unsafe { js_promise_new() };
-    unsafe {
-        js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
-    }
+    let ready = js_promise_new();
+    let closed = js_promise_new();
+    js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
     WRITABLE_STREAMS.lock().unwrap().insert(
         id,
         WritableStreamData {

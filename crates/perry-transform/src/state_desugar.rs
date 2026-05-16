@@ -137,7 +137,7 @@ pub fn run(module: &mut Module) {
 /// that allocate from the same global namespace.
 fn compute_max_local_id(module: &Module) -> LocalId {
     let mut max_id: LocalId = 0;
-    let mut walk_stmts = |stmts: &[Stmt], max_id: &mut LocalId| {
+    let walk_stmts = |stmts: &[Stmt], max_id: &mut LocalId| {
         for stmt in stmts {
             scan_stmt_local_ids(stmt, max_id);
         }
@@ -174,7 +174,7 @@ fn compute_max_func_id(module: &Module) -> FuncId {
     for func in &module.functions {
         max_id = max_id.max(func.id);
     }
-    let mut walk_stmts = |stmts: &[Stmt], max_id: &mut FuncId| {
+    let walk_stmts = |stmts: &[Stmt], max_id: &mut FuncId| {
         for stmt in stmts {
             scan_stmt_func_ids(stmt, max_id);
         }
