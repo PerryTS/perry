@@ -2585,6 +2585,116 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         blk.ret(DOUBLE, &result);
     }
 
+    // Closes #837 / refs #836: emit `__perry_wrap_perry_fn_<src>__<exported>`
+    // closure wrappers for every `Export::Named { local, exported }` rename
+    // where `exported != local`. The regular wrapper loop above keys
+    // wrappers on the local HIR name (`__perry_wrap_perry_fn_<src>__<local>`),
+    // and the `perry_fn_<src>__<exported>` alias loop further down emits
+    // the direct-call alias. The MISSING piece was the closure-wrapper
+    // alias: consumer-side `expr.rs:~3819` builds
+    // `__perry_wrap_perry_fn_<src>__<exported>` whenever an imported name
+    // is referenced as a function VALUE (passed as a callback, stored in
+    // a variable, etc.) — for renamed exports that symbol had no definition
+    // and the link failed.
+    //
+    // Concrete failures pre-fix:
+    //   * uuid's `v35.js`: `export default function v35(...)` — the local
+    //     is `v35`, the exported name is `default`. Consumers
+    //     (`v3.js`, `v5.js`) pass `v35` as a closure value to their own
+    //     default wrappers, which transitively pulls
+    //     `__perry_wrap_perry_fn_<v35.js>__default` into the link.
+    //   * zod's `regexes.ts`: `const _null = ...; export { _null as null }`
+    //     (same for `undefined`). A consumer that reads `regexes.null`
+    //     /`regexes.undefined` as a value falls through to the
+    //     function-shape branch (no `imported_vars` entry under the
+    //     renamed name) and references the wrapper symbol.
+    //
+    // Function-renames forward to the local function body (same shape as
+    // the regular wrapper above). Variable-renames have no callable body —
+    // emit a no-op that returns undefined, matching the
+    // `__perry_wrap_perry_unknown_func` fallback pattern below.
+    {
+        use std::collections::HashSet;
+        let mut emitted_export_wrappers: HashSet<String> = HashSet::new();
+        // Pre-compute the local-name → Function lookup. The renamed
+        // export may resolve to a real HIR function (forward to it) or
+        // to something else (variable / class / type / `export default
+        // function NAME` whose body the HIR lowerer never recorded) —
+        // for the latter we emit a no-op so the link still succeeds.
+        let func_by_local_name: HashMap<&str, &perry_hir::Function> =
+            hir.functions.iter().map(|f| (f.name.as_str(), f)).collect();
+        for export in &hir.exports {
+            let perry_hir::Export::Named { local, exported } = export else {
+                continue;
+            };
+            if local == exported {
+                continue;
+            }
+            let exported_wrap = format!(
+                "__perry_wrap_perry_fn_{}__{}",
+                module_prefix,
+                sanitize(exported)
+            );
+            // Skip if a wrapper with this exact name already exists — the
+            // regular wrapper loop above may have produced it when the
+            // *local* HIR name happens to sanitize to the same symbol.
+            if llmod.has_function(&exported_wrap) {
+                continue;
+            }
+            if !emitted_export_wrappers.insert(exported_wrap.clone()) {
+                continue;
+            }
+            // Determine the local target. Prefer a real HIR function;
+            // fall back to a no-op (variable/class/type rename).
+            if let Some(f) = func_by_local_name.get(local.as_str()) {
+                let arity = f.params.len().min(5);
+                let mut wrap_params: Vec<(LlvmType, String)> =
+                    vec![(I64, "%this_closure".to_string())];
+                for i in 0..arity {
+                    wrap_params.push((DOUBLE, format!("%a{}", i)));
+                }
+                let wf = llmod.define_function(&exported_wrap, DOUBLE, wrap_params);
+                let _ = wf.create_block("entry");
+                let blk = wf.block_mut(0).unwrap();
+                let target = scoped_fn_name(&module_prefix, &f.name);
+                let call_args: Vec<(LlvmType, String)> =
+                    (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
+                let call_args_ref: Vec<(LlvmType, &str)> =
+                    call_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
+                let result = blk.call(DOUBLE, &target, &call_args_ref);
+                blk.ret(DOUBLE, &result);
+            } else {
+                // Variable / class / type rename — no callable function
+                // body to forward to. Emit a no-op returning undefined,
+                // mirroring `__perry_wrap_perry_unknown_func`.
+                //
+                // External linkage (the default): consumers in OTHER
+                // translation units take this symbol's address through
+                // `js_closure_alloc_singleton(@__perry_wrap_<sym>)`, so
+                // the wrapper must be visible across TUs. Internal
+                // linkage gets DCE'd because the defining TU never
+                // references the wrapper itself — `expr.rs:~3819`
+                // imports it via `pending_declares`, which generates a
+                // `declare` extern in the consumer TU.
+                let wf = llmod.define_function(
+                    &exported_wrap,
+                    DOUBLE,
+                    vec![
+                        (I64, "%this_closure".to_string()),
+                        (DOUBLE, "%a0".to_string()),
+                        (DOUBLE, "%a1".to_string()),
+                        (DOUBLE, "%a2".to_string()),
+                        (DOUBLE, "%a3".to_string()),
+                        (DOUBLE, "%a4".to_string()),
+                    ],
+                );
+                let _ = wf.create_block("entry");
+                let blk = wf.block_mut(0).unwrap();
+                blk.ret(DOUBLE, "0x7FFC000000000001");
+            }
+        }
+    }
+
     // Issue #774: emit closure-call wrappers for class instance methods
     // so `Expr::SuperPropertyGet` (value-form `super.<method>`) can
     // materialize them via `js_closure_alloc_singleton(@__perry_wrap_<method>)`.
