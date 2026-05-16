@@ -242,10 +242,6 @@ pub fn start() -> i64 {
         return 1;
     }
 
-    if !OUTPUT_FILENAME.lock().unwrap().is_empty() {
-        start_recording();
-    }
-
     RUNNING.store(true, Ordering::Relaxed);
 
     std::thread::spawn(|| {
@@ -315,7 +311,6 @@ pub fn start() -> i64 {
                 RECORDED_SAMPLES.lock().unwrap().extend_from_slice(&buf);
             }
 
-            eprintln!("[audio] Calling invoke_audio_callback");
             invoke_audio_callback(buf.as_ptr(), buffer_frames);
 
             let mut sum_sq = 0.0f64;
@@ -410,20 +405,16 @@ pub fn get_device_model() -> i64 {
 }
 
 pub fn register_audio_callback(callback: f64) {
-    eprintln!("[audio] register_audio_callback called, callback: {:?}", callback);
     *AUDIO_CALLBACK.lock().unwrap() = Some(callback);
-    eprintln!("[audio] AUDIO_CALLBACK has been set to: {:?}", *AUDIO_CALLBACK.lock().unwrap());
 }
 
 pub fn unregister_audio_callback() {
-    eprintln!("[audio] unregister_audio_callback called");
     *AUDIO_CALLBACK.lock().unwrap() = None;
 }
 
 pub fn invoke_audio_callback(samples_ptr: *const f32, num_samples: usize) {
     let callback_opt = *AUDIO_CALLBACK.lock().unwrap();
     if callback_opt.is_none() {
-        eprintln!("[audio] WARNING: No audio callback registered");
         return;
     }
     let callback = callback_opt.unwrap();
@@ -432,7 +423,6 @@ pub fn invoke_audio_callback(samples_ptr: *const f32, num_samples: usize) {
     let samples_val = unsafe { js_nanbox_pointer(samples_ptr as i64) };
     let num_samples_val = num_samples as f64;
     
-    eprintln!("[audio] Invoking audio callback with {} samples", num_samples);
     unsafe {
         js_closure_call2(callback_ptr, samples_val, num_samples_val);
     }
