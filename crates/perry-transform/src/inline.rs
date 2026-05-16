@@ -2207,6 +2207,144 @@ fn body_contains_closure_capturing(
     stmts.iter().any(|s| check_stmt(s, captured_ids))
 }
 
+/// Collect every LocalId that appears in some nested closure's `captures` or
+/// `mutable_captures` list anywhere inside `stmts`. Used by the call-site
+/// inliners to decide which params *must* be materialized as a Let rather
+/// than substituted in-place with the call argument.
+///
+/// Why this matters (issue #858): closure bodies have a stable `func_id`,
+/// which codegen compiles ONCE from whichever `Expr::Closure` occurrence
+/// `collect_closures_in_*` saw first (typically the original definition
+/// inside the enclosing function). The body of that compiled function reads
+/// captured locals from indexed slots in the per-closure capture array. If
+/// the inliner substitutes a literal (`Integer(2026)`) for a captured
+/// `LocalGet` inside the closure's body at a call site, the call-site
+/// `Expr::Closure` ends up with an empty `captures` list — so
+/// `compute_auto_captures` at the closure-creation site emits zero capture
+/// slots. But the compiled body (from the original occurrence) still reads
+/// slot 0, getting an uninitialized value. The visible symptom is that a
+/// closure-captured numeric param reads as `0` inside an object-literal
+/// method shorthand (`function makeDT(y){ return { toDate(){ ... y ... } } }`).
+///
+/// Fix: when the inlined function's body contains a closure that captures
+/// one of the params, force the inliner to introduce a setup `Let` for that
+/// param (instead of substituting the arg literal in place). The closure
+/// body then continues to reference the param via `LocalGet(fresh_id)` and
+/// `captures: [fresh_id]`, preserving the func_id <-> capture-shape contract.
+fn collect_closure_captured_local_ids(
+    stmts: &[Stmt],
+    out: &mut std::collections::HashSet<LocalId>,
+) {
+    fn visit_expr(e: &Expr, out: &mut std::collections::HashSet<LocalId>) {
+        if let Expr::Closure {
+            captures,
+            mutable_captures,
+            body,
+            ..
+        } = e
+        {
+            for id in captures {
+                out.insert(*id);
+            }
+            for id in mutable_captures {
+                out.insert(*id);
+            }
+            // Nested closures inside the body can also capture outer
+            // params transitively (e.g. `function f(y){ return { m(){ return
+            // [].map(_ => y); } } }`). Walk the body so we don't miss them.
+            collect_closure_captured_local_ids(body, out);
+        }
+        // Descend into immediate sub-expressions for non-Closure variants
+        // (and into Param defaults for Closure). The walker is exhaustive,
+        // so any new HIR variant carrying an Expr is automatically covered.
+        perry_hir::walker::walk_expr_children(e, &mut |sub| visit_expr(sub, out));
+    }
+
+    fn visit_stmt(s: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
+        match s {
+            Stmt::Let { init: Some(e), .. } => visit_expr(e, out),
+            Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => visit_expr(e, out),
+            Stmt::Return(None) => {}
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                visit_expr(condition, out);
+                for s in then_branch {
+                    visit_stmt(s, out);
+                }
+                if let Some(eb) = else_branch {
+                    for s in eb {
+                        visit_stmt(s, out);
+                    }
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                visit_expr(condition, out);
+                for s in body {
+                    visit_stmt(s, out);
+                }
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(i) = init {
+                    visit_stmt(i, out);
+                }
+                if let Some(c) = condition {
+                    visit_expr(c, out);
+                }
+                if let Some(u) = update {
+                    visit_expr(u, out);
+                }
+                for s in body {
+                    visit_stmt(s, out);
+                }
+            }
+            Stmt::Switch { discriminant, cases } => {
+                visit_expr(discriminant, out);
+                for case in cases {
+                    if let Some(t) = &case.test {
+                        visit_expr(t, out);
+                    }
+                    for s in &case.body {
+                        visit_stmt(s, out);
+                    }
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                for s in body {
+                    visit_stmt(s, out);
+                }
+                if let Some(c) = catch {
+                    for s in &c.body {
+                        visit_stmt(s, out);
+                    }
+                }
+                if let Some(f) = finally {
+                    for s in f {
+                        visit_stmt(s, out);
+                    }
+                }
+            }
+            Stmt::Labeled { body, .. } => visit_stmt(body, out),
+            _ => {}
+        }
+    }
+
+    for s in stmts {
+        visit_stmt(s, out);
+    }
+}
+
 /// Check if a function is "pure" for init-inlining purposes: its body only
 /// references its own parameters and locally-declared variables.  No GlobalGet,
 /// GlobalSet, ExternFuncRef, or NativeMethodCall.  This makes it safe to inline
@@ -3587,13 +3725,49 @@ fn try_inline_simple_call(
                 // Pattern 1: single Return(expr)
                 if func.body.len() == 1 {
                     if let Stmt::Return(Some(return_expr)) = &func.body[0] {
+                        // Issue #858: params that are captured by some
+                        // closure inside the body MUST be materialized as a
+                        // fresh `Let` rather than substituted in place with
+                        // the (possibly-literal) call argument. Otherwise
+                        // the literal silently rewrites the closure body's
+                        // `LocalGet(param) -> Integer(N)`, the captures list
+                        // empties out at the call site, and the compiled
+                        // closure body (which still reads slot 0 from the
+                        // original `func_id`-keyed occurrence) reads
+                        // garbage / 0. See `collect_closure_captured_local_ids`.
+                        let mut closure_capt: std::collections::HashSet<LocalId> =
+                            std::collections::HashSet::new();
+                        collect_closure_captured_local_ids(&func.body, &mut closure_capt);
+
+                        let mut setup_stmts: Vec<Stmt> = Vec::new();
                         let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
                         for (param, arg) in func.params.iter().zip(args.iter()) {
-                            param_map.insert(param.id, arg.clone());
+                            // If the param is closure-captured AND the arg
+                            // isn't already a plain LocalGet (which the
+                            // closure body can capture as-is), materialize
+                            // via a fresh Let so the closure body's
+                            // `LocalGet(fresh)` and `captures: [fresh]`
+                            // stay in agreement with codegen.
+                            let needs_let = closure_capt.contains(&param.id)
+                                && !matches!(arg, Expr::LocalGet(_));
+                            if needs_let {
+                                let fresh = *next_local_id;
+                                *next_local_id += 1;
+                                setup_stmts.push(Stmt::Let {
+                                    id: fresh,
+                                    name: param.name.clone(),
+                                    ty: param.ty.clone(),
+                                    mutable: false,
+                                    init: Some(arg.clone()),
+                                });
+                                param_map.insert(param.id, Expr::LocalGet(fresh));
+                            } else {
+                                param_map.insert(param.id, arg.clone());
+                            }
                         }
                         let mut result = return_expr.clone();
                         substitute_locals(&mut result, &param_map, next_local_id);
-                        return Some((vec![], result));
+                        return Some((setup_stmts, result));
                     }
                 }
 
@@ -3614,10 +3788,24 @@ fn try_inline_simple_call(
                             )
                         });
                         if all_lets {
+                            // Issue #858: params closure-captured anywhere in
+                            // the body MUST be materialized as a Let even if
+                            // the arg is a literal (Integer/Number/...).
+                            // Substituting a literal in place inside a
+                            // closure body silently empties the closure's
+                            // captures list, breaking the func_id <->
+                            // capture-shape contract codegen relies on.
+                            let mut closure_capt: std::collections::HashSet<LocalId> =
+                                std::collections::HashSet::new();
+                            collect_closure_captured_local_ids(&func.body, &mut closure_capt);
+
                             // Build param substitution map
                             let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
                             for (param, arg) in func.params.iter().zip(args.iter()) {
-                                if is_trivial_expr(arg) {
+                                let trivial_in_closure = is_trivial_expr(arg)
+                                    && !matches!(arg, Expr::LocalGet(_))
+                                    && closure_capt.contains(&param.id);
+                                if is_trivial_expr(arg) && !trivial_in_closure {
                                     param_map.insert(param.id, arg.clone());
                                 } else {
                                     let fresh = *next_local_id;
@@ -3641,8 +3829,13 @@ fn try_inline_simple_call(
                             let mut setup: Vec<Stmt> = Vec::new();
 
                             // First, add Lets for non-trivial param args
+                            // (and for trivial-but-closure-captured args —
+                            // those got promoted to a fresh LocalGet above).
                             for (param, arg) in func.params.iter().zip(args.iter()) {
-                                if !is_trivial_expr(arg) {
+                                let trivial_in_closure = is_trivial_expr(arg)
+                                    && !matches!(arg, Expr::LocalGet(_))
+                                    && closure_capt.contains(&param.id);
+                                if !is_trivial_expr(arg) || trivial_in_closure {
                                     if let Some(Expr::LocalGet(fresh_id)) = param_map.get(&param.id)
                                     {
                                         setup.push(Stmt::Let {
@@ -3734,6 +3927,17 @@ fn try_inline_simple_call(
                     // Check for single return statement
                     if method_candidate.func.body.len() == 1 {
                         if let Stmt::Return(Some(return_expr)) = &method_candidate.func.body[0] {
+                            // Issue #858: see fn-call branch above. Same
+                            // closure-captured-param materialization rule
+                            // applies to method-call inlining.
+                            let mut closure_capt: std::collections::HashSet<LocalId> =
+                                std::collections::HashSet::new();
+                            collect_closure_captured_local_ids(
+                                &method_candidate.func.body,
+                                &mut closure_capt,
+                            );
+
+                            let mut setup_stmts: Vec<Stmt> = Vec::new();
                             let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
 
                             // Map 'this' parameter to the receiver object (only
@@ -3751,7 +3955,22 @@ fn try_inline_simple_call(
                             // Note: Method params don't include 'this' - they use Expr::This instead
                             for (param, arg) in method_candidate.func.params.iter().zip(args.iter())
                             {
-                                param_map.insert(param.id, arg.clone());
+                                let needs_let = closure_capt.contains(&param.id)
+                                    && !matches!(arg, Expr::LocalGet(_));
+                                if needs_let {
+                                    let fresh = *next_local_id;
+                                    *next_local_id += 1;
+                                    setup_stmts.push(Stmt::Let {
+                                        id: fresh,
+                                        name: param.name.clone(),
+                                        ty: param.ty.clone(),
+                                        mutable: false,
+                                        init: Some(arg.clone()),
+                                    });
+                                    param_map.insert(param.id, Expr::LocalGet(fresh));
+                                } else {
+                                    param_map.insert(param.id, arg.clone());
+                                }
                             }
 
                             let mut result = return_expr.clone();
@@ -3763,7 +3982,13 @@ fn try_inline_simple_call(
                                 substitute_this(&mut result, obj_id);
                             }
 
-                            return Some((vec![], result));
+                            // Caller only consumes `(setup, result)` —
+                            // returning a non-empty setup is fine; the
+                            // setup_stmts are hoisted before the call site.
+                            if setup_stmts.is_empty() {
+                                return Some((vec![], result));
+                            }
+                            return Some((setup_stmts, result));
                         }
                     }
 
@@ -3772,24 +3997,54 @@ fn try_inline_simple_call(
                         let mut is_void_method = true;
                         let mut inlined_stmts = Vec::new();
 
+                        // Issue #858: same closure-captured-param rule. We
+                        // build any required setup Lets once for the whole
+                        // void-method body (all Expr stmts share the same
+                        // param substitution).
+                        let mut closure_capt: std::collections::HashSet<LocalId> =
+                            std::collections::HashSet::new();
+                        collect_closure_captured_local_ids(
+                            &method_candidate.func.body,
+                            &mut closure_capt,
+                        );
+                        let mut setup_for_params: Vec<Stmt> = Vec::new();
+                        let mut shared_param_map: HashMap<LocalId, Expr> = HashMap::new();
+                        if let (Some(this_id), Some(obj_id)) =
+                            (method_candidate.this_param_id, obj_id_opt)
+                        {
+                            shared_param_map.insert(this_id, Expr::LocalGet(obj_id));
+                        }
+                        for (param, arg) in
+                            method_candidate.func.params.iter().zip(args.iter())
+                        {
+                            let needs_let = closure_capt.contains(&param.id)
+                                && !matches!(arg, Expr::LocalGet(_));
+                            if needs_let {
+                                let fresh = *next_local_id;
+                                *next_local_id += 1;
+                                setup_for_params.push(Stmt::Let {
+                                    id: fresh,
+                                    name: param.name.clone(),
+                                    ty: param.ty.clone(),
+                                    mutable: false,
+                                    init: Some(arg.clone()),
+                                });
+                                shared_param_map.insert(param.id, Expr::LocalGet(fresh));
+                            } else {
+                                shared_param_map.insert(param.id, arg.clone());
+                            }
+                        }
+
                         for stmt in &method_candidate.func.body {
                             match stmt {
                                 Stmt::Return(None) => {}
                                 Stmt::Expr(e) => {
-                                    let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
-                                    if let (Some(this_id), Some(obj_id)) =
-                                        (method_candidate.this_param_id, obj_id_opt)
-                                    {
-                                        param_map.insert(this_id, Expr::LocalGet(obj_id));
-                                    }
-                                    // Note: Method params don't include 'this' - they use Expr::This instead
-                                    for (param, arg) in
-                                        method_candidate.func.params.iter().zip(args.iter())
-                                    {
-                                        param_map.insert(param.id, arg.clone());
-                                    }
                                     let mut expr = e.clone();
-                                    substitute_locals(&mut expr, &param_map, next_local_id);
+                                    substitute_locals(
+                                        &mut expr,
+                                        &shared_param_map,
+                                        next_local_id,
+                                    );
                                     if let Some(obj_id) = obj_id_opt {
                                         substitute_this(&mut expr, obj_id);
                                     }
@@ -3803,7 +4058,9 @@ fn try_inline_simple_call(
                         }
 
                         if is_void_method && !inlined_stmts.is_empty() {
-                            return Some((inlined_stmts, Expr::Undefined));
+                            let mut all = setup_for_params;
+                            all.extend(inlined_stmts);
+                            return Some((all, Expr::Undefined));
                         }
                     }
                 }
@@ -3830,8 +4087,22 @@ fn try_inline_call(
                 let mut setup_stmts: Vec<Stmt> = Vec::new();
                 let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
 
+                // Issue #858: see fn-call branch in try_inline_simple_call.
+                // Params closure-captured by the inlined body must be
+                // materialized as a Let even when the arg is a literal,
+                // otherwise the in-place substitution silently rewrites the
+                // closure body's `LocalGet` -> literal at the call site only,
+                // while codegen still compiles the original `func_id` body
+                // expecting capture slot 0 to hold the param.
+                let mut closure_capt: std::collections::HashSet<LocalId> =
+                    std::collections::HashSet::new();
+                collect_closure_captured_local_ids(&func.body, &mut closure_capt);
+
                 for (param, arg) in func.params.iter().zip(args.iter()) {
-                    if is_trivial_expr(arg) {
+                    let trivial_in_closure = is_trivial_expr(arg)
+                        && !matches!(arg, Expr::LocalGet(_))
+                        && closure_capt.contains(&param.id);
+                    if is_trivial_expr(arg) && !trivial_in_closure {
                         param_map.insert(param.id, arg.clone());
                     } else {
                         let local_id = *next_local_id;
@@ -3946,10 +4217,23 @@ fn try_inline_call(
                         param_map.insert(this_id, Expr::LocalGet(obj_id));
                     }
 
+                    // Issue #858: closure-captured params from the inlined
+                    // method body must be materialized as Lets even for
+                    // literal args. See try_inline_simple_call.
+                    let mut closure_capt: std::collections::HashSet<LocalId> =
+                        std::collections::HashSet::new();
+                    collect_closure_captured_local_ids(
+                        &method_candidate.func.body,
+                        &mut closure_capt,
+                    );
+
                     // Map parameters to arguments
                     // Note: Method params don't include 'this' - they use Expr::This instead
                     for (param, arg) in method_candidate.func.params.iter().zip(args.iter()) {
-                        if is_trivial_expr(arg) {
+                        let trivial_in_closure = is_trivial_expr(arg)
+                            && !matches!(arg, Expr::LocalGet(_))
+                            && closure_capt.contains(&param.id);
+                        if is_trivial_expr(arg) && !trivial_in_closure {
                             param_map.insert(param.id, arg.clone());
                         } else {
                             let local_id = *next_local_id;
