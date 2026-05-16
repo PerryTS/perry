@@ -1017,6 +1017,61 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 {
                     return true;
                 }
+                // Issue #489 followup: `obj.field(args)` where `field` is
+                // typed as an async function or a function returning
+                // `Promise<T>`. Drizzle's `mysql-proxy/session.js` calls
+                // `this.client(...).then(({rows}) => rows)` where
+                // `this.client` is a class field of type
+                // `(sql, params, method) => Promise<{rows, …}>`. Without
+                // this arm, perry's `.then` lowering doesn't recognize
+                // the call result as a Promise and falls through to a
+                // generic dispatch that silently drops the callback (the
+                // await of `db.insert(...)` resolves to undefined / "").
+                if let Some(HirType::Function(ft)) = static_type_of(ctx, callee.as_ref()) {
+                    if ft.is_async {
+                        return true;
+                    }
+                    if matches!(*ft.return_type, HirType::Promise(_)) {
+                        return true;
+                    }
+                    if let HirType::Generic { ref base, .. } = *ft.return_type {
+                        if base == "Promise" {
+                            return true;
+                        }
+                    }
+                }
+                // Issue #489 followup: `obj.method(args)` where `method`
+                // is a class instance method declared `async` or with a
+                // return type of `Promise<T>`. Class methods live in
+                // `class.methods` (not `class.fields`), so the
+                // static_type_of branch above doesn't catch them. Walk
+                // the parent chain for inherited async methods too —
+                // drizzle's `MySqlInsertBase.execute` is a class-field
+                // arrow defined on the subclass, but the override-vs-
+                // inherited shape varies per query-builder, so handle
+                // both. The fallback class_name comes from the receiver.
+                if let Some(class_name) = receiver_class_name(ctx, object) {
+                    let mut current = Some(class_name);
+                    while let Some(cn) = current {
+                        if let Some(class) = ctx.classes.get(&cn) {
+                            if let Some(m) = class.methods.iter().find(|m| m.name == *property) {
+                                if m.is_async {
+                                    return true;
+                                }
+                                match &m.return_type {
+                                    HirType::Promise(_) => return true,
+                                    HirType::Generic { base, .. } if base == "Promise" => {
+                                        return true
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            current = class.extends_name.clone();
+                        } else {
+                            break;
+                        }
+                    }
+                }
                 false
             }
             // Direct call to a locally-defined async function — its
@@ -1034,6 +1089,11 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             // silently drops the callback.
             Expr::LocalGet(id) => match ctx.local_types.get(id) {
                 Some(HirType::Function(ft)) if ft.is_async => true,
+                Some(HirType::Function(ft)) => match ft.return_type.as_ref() {
+                    HirType::Promise(_) => true,
+                    HirType::Generic { base, .. } if base == "Promise" => true,
+                    _ => false,
+                },
                 _ => false,
             },
             _ => false,

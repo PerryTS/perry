@@ -5410,6 +5410,69 @@ pub unsafe extern "C" fn js_native_call_method(
 
     let jsval = JSValue::from_bits(object.to_bits());
 
+    // Issue #489 followup: Promise's `then` / `catch` / `finally` are
+    // intrinsic — when the dynamic dispatch path lands a `.then(cb)` on
+    // a Promise (drizzle's `mysql-proxy/session.js`:
+    // `this.client(...).then(({rows}) => rows)` where the static
+    // analyzer couldn't prove the receiver is a Promise), route directly
+    // to `js_promise_then` / `js_promise_catch` / `js_promise_finally`.
+    // Without this, the field-scan + class-id walks below find nothing
+    // and return undefined — drizzle's `MySqlRemoteSession.all` then
+    // resolves to undefined and downstream `data[0].insertId` accesses
+    // silently fail.
+    if matches!(method_name, "then" | "catch" | "finally")
+        && crate::promise::js_value_is_promise(object) != 0
+    {
+        let promise_handle = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::Promise;
+        let arg0_box = if args_len >= 1 && !args_ptr.is_null() {
+            *args_ptr
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+        let arg1_box = if args_len >= 2 && !args_ptr.is_null() {
+            *args_ptr.add(1)
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+        // Closures arrive here in two shapes:
+        //  - NaN-boxed `POINTER_TAG | (closure_ptr & 0x0000_FFFF_FFFF_FFFF)`
+        //    (the codegen `js_closure_alloc_singleton` + OR-with-tag form)
+        //  - Raw `*ClosureHeader` bit-cast to f64 — the convention used
+        //    by `js_assimilate_thenable` when it propagates
+        //    `then(resolve, reject)` callbacks through a user-defined
+        //    `then` method's param slots (see `promise.rs:2438-2442`).
+        // Accept both. TAG_UNDEFINED / null / non-pointer values stay
+        // null so `js_promise_then` treats the handler as missing.
+        let extract_closure = |v: f64| -> crate::promise::ClosurePtr {
+            let b = v.to_bits();
+            let candidate = if (b & 0xFFFF_0000_0000_0000) == 0x7FFD_0000_0000_0000 {
+                b & 0x0000_FFFF_FFFF_FFFF
+            } else if (b & 0xFFFF_0000_0000_0000) == 0 {
+                b
+            } else {
+                0
+            };
+            if candidate < 0x10000 {
+                std::ptr::null()
+            } else {
+                candidate as crate::promise::ClosurePtr
+            }
+        };
+        let result = match method_name {
+            "then" => crate::promise::js_promise_then(
+                promise_handle,
+                extract_closure(arg0_box),
+                extract_closure(arg1_box),
+            ),
+            "catch" => crate::promise::js_promise_catch(promise_handle, extract_closure(arg0_box)),
+            "finally" => {
+                crate::promise::js_promise_finally(promise_handle, extract_closure(arg0_box))
+            }
+            _ => unreachable!(),
+        };
+        return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+    }
+
     // Symbols: Symbol.for() pointers are Box-leaked (no GcHeader), so the
     // ObjectHeader path below would dereference garbage. Detect symbols
     // up front via the side-table.
