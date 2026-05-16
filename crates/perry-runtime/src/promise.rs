@@ -1220,8 +1220,7 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 } else {
                     f64::from_bits(0x7FFC_0000_0000_0003) // TAG_FALSE
                 };
-                let result =
-                    crate::closure::js_closure_call2(step_closure, value, is_error_bits);
+                let result = crate::closure::js_closure_call2(step_closure, value, is_error_bits);
                 if let Some(t) = t1 {
                     MT_TIME_NS_CALLBACK.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 }

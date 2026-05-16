@@ -27,13 +27,13 @@ mod targets;
 pub mod well_known;
 use collect_modules::collect_modules;
 pub use library_search::find_library;
+pub(crate) use library_search::host_target_triple;
 use library_search::{
     build_geisterhand_libs, find_geisterhand_library, find_geisterhand_runtime,
     find_geisterhand_ui, find_harmonyos_sdk, find_jsruntime_library, find_lld_link, find_llvm_tool,
     find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_runtime_library,
     find_stdlib_library, find_ui_library, find_wasm_host_library, windows_pe_subsystem_flag,
 };
-pub(crate) use library_search::host_target_triple;
 use link::build_and_run_link;
 use object_cache::compute_object_cache_key;
 pub use object_cache::ObjectCache;

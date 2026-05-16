@@ -1134,8 +1134,7 @@ extern "C" fn read_stream_on_impl(closure: *const ClosureHeader, event: f64, cb:
             }
             let cb_ptr = extract_closure_ptr(cb);
             if !cb_ptr.is_null() {
-                let chunk =
-                    js_string_from_bytes(buffer_copy.as_ptr(), buffer_copy.len() as u32);
+                let chunk = js_string_from_bytes(buffer_copy.as_ptr(), buffer_copy.len() as u32);
                 let chunk_val =
                     f64::from_bits(crate::value::js_nanbox_string(chunk as i64).to_bits());
                 js_closure_call1(cb_ptr, chunk_val);
@@ -1155,8 +1154,7 @@ extern "C" fn read_stream_on_impl(closure: *const ClosureHeader, event: f64, cb:
                 let cb_ptr = extract_closure_ptr(cb);
                 if !cb_ptr.is_null() {
                     let msg_bytes = msg.as_bytes();
-                    let err_str =
-                        js_string_from_bytes(msg_bytes.as_ptr(), msg_bytes.len() as u32);
+                    let err_str = js_string_from_bytes(msg_bytes.as_ptr(), msg_bytes.len() as u32);
                     let err_obj = crate::error::js_error_new_with_message(err_str);
                     let err_val = crate::value::js_nanbox_pointer(err_obj as i64);
                     js_closure_call1(cb_ptr, err_val);

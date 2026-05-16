@@ -1528,16 +1528,16 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
         "url" => {
             let p = js_string_from_bytes(req.url.as_ptr(), req.url.len() as u32);
             JSValue::string_ptr(p).bits()
-        },
+        }
         "method" => {
             let p = js_string_from_bytes(req.method.as_ptr(), req.method.len() as u32);
             JSValue::string_ptr(p).bits()
-        },
+        }
         "body" => match &req.body {
             Some(b) => {
                 let p = js_string_from_bytes(b.as_ptr(), b.len() as u32);
                 JSValue::string_ptr(p).bits()
-            },
+            }
             None => TAG_NULL,
         },
         // Other Request properties not yet wired — fall through so other
@@ -1590,7 +1590,7 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
         "statusText" => {
             let p = js_string_from_bytes(resp.status_text.as_ptr(), resp.status_text.len() as u32);
             JSValue::string_ptr(p).bits()
-        },
+        }
         "ok" => {
             return Some(f64::from_bits(if resp.status >= 200 && resp.status < 300 {
                 TAG_TRUE
@@ -1730,7 +1730,7 @@ pub fn dispatch_blob_property(blob_id: usize, prop: &str) -> Option<f64> {
             let p =
                 js_string_from_bytes(blob.content_type.as_ptr(), blob.content_type.len() as u32);
             JSValue::string_ptr(p).bits()
-        },
+        }
         _ => return None,
     };
     Some(f64::from_bits(bits))

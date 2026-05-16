@@ -2820,7 +2820,7 @@ pub extern "C" fn js_drain_queued_microtasks() {
         match task {
             Some(cb) => {
                 js_closure_call0(cb as *const crate::closure::ClosureHeader);
-            },
+            }
             None => break,
         }
     }

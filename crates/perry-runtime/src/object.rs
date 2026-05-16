@@ -7393,8 +7393,7 @@ pub extern "C" fn js_create_native_module_namespace(
     let obj = js_object_alloc(NATIVE_MODULE_CLASS_ID, 1);
 
     // Create a string from the module name
-    let module_name =
-        crate::string::js_string_from_bytes(module_name_ptr, module_name_len as u32);
+    let module_name = crate::string::js_string_from_bytes(module_name_ptr, module_name_len as u32);
 
     // Store the module name in the first field
     js_object_set_field(obj, 0, JSValue::string_ptr(module_name));
@@ -7402,8 +7401,7 @@ pub extern "C" fn js_create_native_module_namespace(
     // Create a keys array with one key: "__module__"
     let keys_array = crate::array::js_array_alloc(1);
     let key_bytes = b"__module__";
-    let key_str =
-        crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_str = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
     crate::array::js_array_push(keys_array, JSValue::string_ptr(key_str));
     js_object_set_keys(obj, keys_array);
 

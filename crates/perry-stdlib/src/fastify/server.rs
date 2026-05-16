@@ -355,9 +355,7 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                     if jsv.is_pointer() {
                         let ptr = jsv.as_pointer::<perry_runtime::Promise>();
                         // Try to treat it as a promise and wait for it
-                        if {
-                            perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise)
-                        } != 0
+                        if { perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise) } != 0
                         {
                             wait_for_promise(ptr as *mut perry_runtime::Promise);
                             // Read state AFTER the wait — `js_promise_value`
@@ -372,9 +370,9 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                                 perry_runtime::js_promise_state(ptr as *mut perry_runtime::Promise)
                             };
                             if st == 2 {
-                                if let Some(ctx) = {
-                                    crate::common::get_handle_mut::<FastifyContext>(ctx_handle)
-                                } {
+                                if let Some(ctx) =
+                                    { crate::common::get_handle_mut::<FastifyContext>(ctx_handle) }
+                                {
                                     ctx.status_code = 500;
                                     let reason = {
                                         perry_runtime::promise::js_promise_reason(

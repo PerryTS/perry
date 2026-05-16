@@ -784,8 +784,7 @@ fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(String, Stri
     }
 
     let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
-    let entries_ptr: *mut ArrayHeader =
-        f64::to_bits(entries_f64).cast_signed() as *mut ArrayHeader;
+    let entries_ptr: *mut ArrayHeader = f64::to_bits(entries_f64).cast_signed() as *mut ArrayHeader;
 
     if entries_ptr.is_null() {
         return Vec::new();
@@ -796,8 +795,7 @@ fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(String, Stri
 
     for i in 0..len {
         let pair_f64 = crate::array::js_array_get_f64(entries_ptr, i as u32);
-        let pair_ptr: *mut ArrayHeader =
-            f64::to_bits(pair_f64).cast_signed() as *mut ArrayHeader;
+        let pair_ptr: *mut ArrayHeader = f64::to_bits(pair_f64).cast_signed() as *mut ArrayHeader;
 
         if !pair_ptr.is_null() {
             let key_f64 = crate::array::js_array_get_f64(pair_ptr, 0);
