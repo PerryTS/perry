@@ -1323,6 +1323,13 @@ impl JsEmitter {
                 self.emit_expr(b);
                 self.output.push(')');
             }
+            Expr::PathWin32Join(a, b) => {
+                self.output.push_str("__perry.path.win32.join(");
+                self.emit_expr(a);
+                self.output.push_str(", ");
+                self.emit_expr(b);
+                self.output.push(')');
+            }
             Expr::PathDirname(p) => {
                 self.output.push_str("__perry.path.dirname(");
                 self.emit_expr(p);

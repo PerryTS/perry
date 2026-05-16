@@ -5048,9 +5048,14 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         // number would match (the prior "approximate" rule), which made
         // `100 instanceof Date` true and broke the BSON encoder's typed
         // dispatch (`if (value instanceof Date) … else if (typeof v === 'number') …`).
-        if !value.is_nan()
-            && value.is_finite()
-            && crate::date::is_registered_date_bits(value.to_bits())
+        //
+        // The Invalid-Date sentinel is itself a NaN, so it must be matched
+        // *before* the `!is_nan()` guard — `new Date(NaN) instanceof Date`
+        // is `true` per ECMA-262 even though its time value is NaN.
+        if value.to_bits() == crate::date::DATE_NAN_BITS
+            || (!value.is_nan()
+                && value.is_finite()
+                && crate::date::is_registered_date_bits(value.to_bits()))
         {
             return true_val;
         }
@@ -5095,9 +5100,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         if jsval.is_pointer() {
             return true_val;
         }
-        if !value.is_nan()
-            && value.is_finite()
-            && crate::date::is_registered_date_bits(value.to_bits())
+        // Invalid Date is still an Object (NaN time value, but a Date).
+        if value.to_bits() == crate::date::DATE_NAN_BITS
+            || (!value.is_nan()
+                && value.is_finite()
+                && crate::date::is_registered_date_bits(value.to_bits()))
         {
             return true_val;
         }

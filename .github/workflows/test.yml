@@ -230,7 +230,22 @@ jobs:
           # spurious "NEW FAILURES:  - " line and fail this gate.
           jq -r '(.failures.parity // []) + (.failures.compile // []) | .[] | select(. != "")' "$REPORT" | sort -u > /tmp/all_fails.txt
           if [[ -f "$KNOWN" ]]; then
-            jq -r 'keys[]' "$KNOWN" | sort -u > /tmp/known.txt
+            # Issue #797 — known_failures.json moved from flat strings to
+            # structured records. Keep the audit metadata (the `_schema`
+            # key at the top of the file) out of the test-name set so
+            # CI doesn't try to match a real test against it.
+            jq -r 'keys[] | select(. != "_schema")' "$KNOWN" | sort -u > /tmp/known.txt
+
+            # Schema sanity check — every non-_schema entry must be an
+            # object with non-empty `category` and `reason`. Fails the
+            # build on malformed entries so the format doesn't silently
+            # drift back to the legacy flat-string shape.
+            bad="$(jq -r 'to_entries | map(select(.key != "_schema")) | .[] | select((.value | type) != "object" or (.value.category // "") == "" or (.value.reason // "") == "") | .key' "$KNOWN")"
+            if [[ -n "$bad" ]]; then
+              echo "Malformed known_failures.json entries (missing category/reason or not an object):"
+              echo "$bad" | sed 's/^/  - /'
+              exit 1
+            fi
           else
             : > /tmp/known.txt
           fi

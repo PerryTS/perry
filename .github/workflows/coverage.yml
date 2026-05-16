@@ -1,0 +1,124 @@
+name: Coverage
+
+# Weekly cargo-llvm-cov sweep. Non-blocking by design — the goal is
+# visibility into which functions in perry-codegen / perry-transform /
+# perry-runtime have 0% test coverage so we can fill the gaps, not a
+# regression gate. (#795 / part of #793.)
+
+on:
+  schedule:
+    # Mondays at 04:00 UTC — runs after the Sunday-night benchmark
+    # window so we don't fight a 1-vCPU runner with two long jobs.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  llvm-cov:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Separate key from the main test cache — llvm-cov rebuilds
+          # the workspace with instrumentation, so its objects can't
+          # be reused for the regular test job.
+          shared-key: ${{ runner.os }}-perry-coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v3
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Run coverage
+        # Mirrors the `cargo-test` job's exclude list (host-only UI
+        # backends + perry-jsruntime). `--no-fail-fast` keeps the
+        # report comprehensive even if one crate's tests fail —
+        # this is a visibility job, not a gate.
+        run: |
+          cargo llvm-cov --workspace --no-fail-fast \
+            --exclude perry-ui-macos \
+            --exclude perry-ui-ios \
+            --exclude perry-ui-visionos \
+            --exclude perry-ui-tvos \
+            --exclude perry-ui-watchos \
+            --exclude perry-ui-gtk4 \
+            --exclude perry-ui-android \
+            --exclude perry-ui-windows \
+            --exclude perry-jsruntime \
+            --html --output-dir target/llvm-cov-html
+          cargo llvm-cov report --no-fail-fast \
+            --exclude perry-ui-macos \
+            --exclude perry-ui-ios \
+            --exclude perry-ui-visionos \
+            --exclude perry-ui-tvos \
+            --exclude perry-ui-watchos \
+            --exclude perry-ui-gtk4 \
+            --exclude perry-ui-android \
+            --exclude perry-ui-windows \
+            --exclude perry-jsruntime \
+            --lcov --output-path target/lcov.info
+          cargo llvm-cov report --no-fail-fast \
+            --exclude perry-ui-macos \
+            --exclude perry-ui-ios \
+            --exclude perry-ui-visionos \
+            --exclude perry-ui-tvos \
+            --exclude perry-ui-watchos \
+            --exclude perry-ui-gtk4 \
+            --exclude perry-ui-android \
+            --exclude perry-ui-windows \
+            --exclude perry-jsruntime \
+            --summary-only > target/summary.txt
+        # Don't fail the workflow on a non-zero exit — the artifacts
+        # below are still useful, and a missing test in one crate
+        # shouldn't suppress the rest of the report.
+        continue-on-error: true
+
+      - name: Print summary to job log
+        if: always()
+        run: |
+          echo "## Coverage summary" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f target/summary.txt ]]; then
+            {
+              echo '```'
+              cat target/summary.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_(summary.txt not produced — see logs.)_" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: target/llvm-cov-html
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload lcov.info
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-lcov
+          path: target/lcov.info
+          if-no-files-found: warn
+          retention-days: 90

@@ -6507,6 +6507,24 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &result))
         }
 
+        // -------- path.win32.join(a, b) -> string (issue #810) --------
+        // Windows-style join with `\` separator, regardless of host
+        // platform. Multi-arg path.win32.join lowers to chained
+        // PathWin32Join in the HIR.
+        Expr::PathWin32Join(a, b) => {
+            let a_box = lower_expr(ctx, a)?;
+            let b_box = lower_expr(ctx, b)?;
+            let blk = ctx.block();
+            let a_handle = unbox_to_i64(blk, &a_box);
+            let b_handle = unbox_to_i64(blk, &b_box);
+            let result = blk.call(
+                I64,
+                "js_path_win32_join",
+                &[(I64, &a_handle), (I64, &b_handle)],
+            );
+            Ok(nanbox_string_inline(blk, &result))
+        }
+
         // -------- queueMicrotask(fn) / process.nextTick(fn) stubs --------
         // Real microtask scheduling needs the runtime's queue. For
         // now we lower the callback for side effects (it might be a
