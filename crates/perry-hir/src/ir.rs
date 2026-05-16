@@ -1276,6 +1276,7 @@ pub enum Expr {
     PathToNamespacedPath(Box<Expr>),       // path.toNamespacedPath(path) -> string (POSIX: no-op)
     PathMatchesGlob(Box<Expr>, Box<Expr>), // path.matchesGlob(path, pattern) -> boolean
     PathResolveJoin(Box<Expr>, Box<Expr>), // internal: join with reset-on-absolute (multi-arg resolve)
+    PathWin32Join(Box<Expr>, Box<Expr>),   // path.win32.join(a, b) -> string (issue #810)
 
     // WeakRef and FinalizationRegistry
     WeakRefNew(Box<Expr>),              // new WeakRef(obj) -> WeakRef

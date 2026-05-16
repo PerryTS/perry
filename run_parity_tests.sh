@@ -155,24 +155,59 @@ should_skip() {
     return 1
 }
 
+# Issue #796 — per-test output cap. Pathological output
+# (test_parity_timers_promises emitted 5.7M lines pre-fix, root cause
+# #712) DOSed the whole CI job. Cap at MAX_OUTPUT_LINES with a clear
+# TRUNCATED marker so the limit is visible, not silent.
+MAX_OUTPUT_LINES=${MAX_OUTPUT_LINES:-50000}
+
+# Cap a captured-string output to MAX_OUTPUT_LINES, appending a
+# TRUNCATED marker if the cap fired. Linear-time — uses awk's
+# line-counting + cutoff, never re-walks the input.
+cap_output() {
+    awk -v cap="$MAX_OUTPUT_LINES" '
+        { lines++ }
+        lines <= cap { print; next }
+        END {
+            if (lines > cap) {
+                print "TRUNCATED at " cap " lines (total: " lines ")"
+            }
+        }
+    '
+}
+
 # Function to normalize output for comparison
 normalize_output() {
     local input="$1"
 
-    # First pass: decode Buffer representations
-    # <Buffer XX XX...> -> decoded string
-    local decoded=""
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ "$line" == "<Buffer"* ]]; then
-            # Extract hex part and decode
-            local hex=$(echo "$line" | sed 's/<Buffer //' | sed 's/>//')
-            # Decode hex to string (may contain embedded newlines)
-            local decoded_line=$(echo "$hex" | xxd -r -p)
-            decoded+="$decoded_line"$'\n'
-        else
-            decoded+="$line"$'\n'
-        fi
-    done <<< "$input"
+    # Issue #796 — first pass (Buffer-line decode) used to be a bash
+    # while-read loop with `decoded+="$line"\n` per iteration. That's
+    # O(n²) on input size: 5.7M lines × 2.85M-char-average tail ≈ 16T
+    # bytes of string concatenation, which burned ~3 hours on CI before
+    # the runner was killed. Replaced with a single python3 pass —
+    # linear time, decodes `<Buffer XX XX ...>` to its UTF-8 bytes in
+    # one walk. python3 is preinstalled on every ubuntu/macos runner.
+    #
+    # The decode is bytes-faithful: invalid UTF-8 sequences become U+FFFD
+    # via `errors="replace"`, matching the pre-fix `xxd -r -p` behavior
+    # for arbitrary binary content.
+    local decoded
+    decoded=$(printf '%s' "$input" | python3 -c '
+import sys
+for raw in sys.stdin:
+    line = raw.rstrip("\n").rstrip("\r")
+    if line.startswith("<Buffer ") and line.endswith(">"):
+        hex_part = line[len("<Buffer "):-1].replace(" ", "")
+        try:
+            sys.stdout.write(bytes.fromhex(hex_part).decode("utf-8", errors="replace"))
+            sys.stdout.write("\n")
+        except ValueError:
+            # Not a valid hex sequence — pass through unchanged so the
+            # diff still pinpoints the divergence.
+            print(line)
+    else:
+        print(line)
+')
 
     echo "$decoded" | \
         # Normalize line endings
@@ -333,9 +368,17 @@ for test_file in "$TEST_DIR"/*.ts; do
         local_server_pid="$TLS_UPGRADE_SERVER_PID"
     fi
 
-    # Run with Node.js
-    node_output=$(run_with_timeout 10 node --experimental-strip-types "$test_file" 2>&1)
+    # Run with Node.js. Stream stdout/stderr to a temp file first, then
+    # cap before reading into bash (#796): a pathological test that
+    # emits millions of lines would otherwise blow up command-substitution
+    # memory and DOS the runner. PIPESTATUS doesn't propagate across
+    # `$(...)`, so capturing the exit code requires the file detour
+    # rather than a `cmd | cap_output` pipeline.
+    node_tmp=$(mktemp)
+    run_with_timeout 10 node --experimental-strip-types "$test_file" > "$node_tmp" 2>&1
     node_exit=$?
+    node_output=$(cap_output < "$node_tmp")
+    rm -f "$node_tmp"
 
     if [[ $node_exit -ne 0 && $node_exit -ne 124 ]]; then
         # Node.js failed — if we have a stored expected-output file for this
@@ -381,9 +424,12 @@ for test_file in "$TEST_DIR"/*.ts; do
         continue
     fi
 
-    # Run Perry binary
-    perry_output=$(run_with_timeout 10 "$perry_binary" 2>&1)
+    # Run Perry binary — same cap-via-tempfile protocol as Node above (#796).
+    perry_tmp=$(mktemp)
+    run_with_timeout 10 "$perry_binary" > "$perry_tmp" 2>&1
     perry_exit=$?
+    perry_output=$(cap_output < "$perry_tmp")
+    rm -f "$perry_tmp"
 
     # Save Perry output
     echo "$perry_output" > "$perry_output_file"

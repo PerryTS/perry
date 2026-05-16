@@ -1733,6 +1733,11 @@ impl SH for Expr {
                 a.as_ref().hash(h);
                 b.as_ref().hash(h);
             }
+            Expr::PathWin32Join(a, b) => {
+                tag(h, 462);
+                a.as_ref().hash(h);
+                b.as_ref().hash(h);
+            }
             Expr::PathDirname(e) => {
                 tag(h, 91);
                 e.as_ref().hash(h);

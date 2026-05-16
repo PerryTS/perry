@@ -570,6 +570,172 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                 }
             }
 
+            // `path.posix.<method>(args)` / `path.win32.<method>(args)` —
+            // sub-namespace dispatch (issue #810). Without this arm the
+            // generic mod.X.Y() block below skips the call (path.posix /
+            // path.win32 are in its sub-namespace exclusion list to keep
+            // them off the strict-API gate) and the call falls through
+            // to the receiver-less dispatch, returning undefined.
+            //
+            // - `path.posix.X` routes to the existing Expr::PathX variant.
+            //   The runtime js_path_* functions use POSIX (`/`) semantics,
+            //   so this is a direct shape rewrite.
+            // - `path.win32.join` routes to a dedicated Expr::PathWin32Join
+            //   so the result uses `\` separators. Other path.win32.*
+            //   methods are intentionally unwired here — falling through
+            //   to a POSIX impl would silently mis-handle drive letters
+            //   and `\` segments. Track those in a follow-up.
+            if let ast::Expr::Member(outer_member) = expr.as_ref() {
+                if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
+                    if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
+                        let root_name = root_ident.sym.as_ref();
+                        let is_path_root = root_name == "path"
+                            || ctx.lookup_builtin_module_alias(root_name) == Some("path")
+                            || ctx
+                                .lookup_native_module(root_name)
+                                .map(|(m, _)| m == "path")
+                                .unwrap_or(false);
+                        if is_path_root {
+                            if let (
+                                ast::MemberProp::Ident(sub_prop),
+                                ast::MemberProp::Ident(method_prop),
+                            ) = (&inner_member.prop, &outer_member.prop)
+                            {
+                                let sub = sub_prop.sym.as_ref();
+                                let method = method_prop.sym.as_ref();
+                                if sub == "posix" || sub == "win32" {
+                                    // path.<sub>.join(...)
+                                    if method == "join" {
+                                        if args.is_empty() {
+                                            return Ok(Expr::String(".".to_string()));
+                                        }
+                                        if sub == "win32" {
+                                            let mut iter = args.into_iter();
+                                            let mut result = iter.next().unwrap();
+                                            for next_arg in iter {
+                                                result = Expr::PathWin32Join(
+                                                    Box::new(result),
+                                                    Box::new(next_arg),
+                                                );
+                                            }
+                                            return Ok(result);
+                                        } else {
+                                            // posix.join → existing PathJoin
+                                            if args.len() == 1 {
+                                                return Ok(Expr::PathNormalize(Box::new(
+                                                    args.into_iter().next().unwrap(),
+                                                )));
+                                            }
+                                            let mut iter = args.into_iter();
+                                            let mut result = iter.next().unwrap();
+                                            for next_arg in iter {
+                                                result = Expr::PathJoin(
+                                                    Box::new(result),
+                                                    Box::new(next_arg),
+                                                );
+                                            }
+                                            return Ok(result);
+                                        }
+                                    }
+
+                                    // The remaining methods route to the
+                                    // existing POSIX Expr::Path* variants
+                                    // only for the `posix` sub-namespace.
+                                    // For `win32` we deliberately fall
+                                    // through to the receiver-less path
+                                    // (returns undefined) rather than
+                                    // give a wrong POSIX answer.
+                                    if sub == "posix" {
+                                        match method {
+                                            "dirname" if !args.is_empty() => {
+                                                return Ok(Expr::PathDirname(Box::new(
+                                                    args.into_iter().next().unwrap(),
+                                                )));
+                                            }
+                                            "basename" if args.len() >= 2 => {
+                                                let mut it = args.into_iter();
+                                                let p = it.next().unwrap();
+                                                let e = it.next().unwrap();
+                                                return Ok(Expr::PathBasenameExt(
+                                                    Box::new(p),
+                                                    Box::new(e),
+                                                ));
+                                            }
+                                            "basename" if !args.is_empty() => {
+                                                return Ok(Expr::PathBasename(Box::new(
+                                                    args.into_iter().next().unwrap(),
+                                                )));
+                                            }
+                                            "extname" if !args.is_empty() => {
+                                                return Ok(Expr::PathExtname(Box::new(
+                                                    args.into_iter().next().unwrap(),
+                                                )));
+                                            }
+                                            "isAbsolute" if !args.is_empty() => {
+                                                return Ok(Expr::PathIsAbsolute(Box::new(
+                                                    args.into_iter().next().unwrap(),
+                                                )));
+                                            }
+                                            "normalize" if !args.is_empty() => {
+                                                return Ok(Expr::PathNormalize(Box::new(
+                                                    args.into_iter().next().unwrap(),
+                                                )));
+                                            }
+                                            "parse" if !args.is_empty() => {
+                                                return Ok(Expr::PathParse(Box::new(
+                                                    args.into_iter().next().unwrap(),
+                                                )));
+                                            }
+                                            "format" if !args.is_empty() => {
+                                                return Ok(Expr::PathFormat(Box::new(
+                                                    args.into_iter().next().unwrap(),
+                                                )));
+                                            }
+                                            "toNamespacedPath" if !args.is_empty() => {
+                                                return Ok(Expr::PathToNamespacedPath(Box::new(
+                                                    args.into_iter().next().unwrap(),
+                                                )));
+                                            }
+                                            "relative" if args.len() >= 2 => {
+                                                let mut it = args.into_iter();
+                                                let from = it.next().unwrap();
+                                                let to = it.next().unwrap();
+                                                return Ok(Expr::PathRelative(
+                                                    Box::new(from),
+                                                    Box::new(to),
+                                                ));
+                                            }
+                                            "resolve" if !args.is_empty() => {
+                                                let mut it = args.into_iter();
+                                                let first = it.next().unwrap();
+                                                let mut joined = first;
+                                                for next_arg in it {
+                                                    joined = Expr::PathResolveJoin(
+                                                        Box::new(joined),
+                                                        Box::new(next_arg),
+                                                    );
+                                                }
+                                                return Ok(Expr::PathResolve(Box::new(joined)));
+                                            }
+                                            "matchesGlob" if args.len() >= 2 => {
+                                                let mut it = args.into_iter();
+                                                let p = it.next().unwrap();
+                                                let pat = it.next().unwrap();
+                                                return Ok(Expr::PathMatchesGlob(
+                                                    Box::new(p),
+                                                    Box::new(pat),
+                                                ));
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check for module.Class.staticMethod() pattern (e.g.,
             // ethers.Wallet.createRandom()). Modelled after the
             // process.hrtime.bigint() handler above.

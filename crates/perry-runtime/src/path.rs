@@ -46,6 +46,95 @@ pub extern "C" fn js_path_join(
     }
 }
 
+/// `path.win32.join(a, b)` — Windows-style join. Always emits backslash
+/// separators regardless of host platform. Treats both `/` and `\` as
+/// segment separators in normalization (Node's win32 implementation does
+/// the same) and collapses repeated separators.
+#[no_mangle]
+pub extern "C" fn js_path_win32_join(
+    a_ptr: *const StringHeader,
+    b_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    unsafe {
+        let a = string_from_header(a_ptr).unwrap_or_default();
+        let b = string_from_header(b_ptr).unwrap_or_default();
+
+        let joined = if a.is_empty() {
+            b
+        } else if b.is_empty() {
+            a
+        } else if a.ends_with('\\') || a.ends_with('/') {
+            format!("{}{}", a, b)
+        } else {
+            format!("{}\\{}", a, b)
+        };
+        string_to_js(&normalize_win32_str(&joined))
+    }
+}
+
+/// Win32 normalization. Treats both `/` and `\` as separators (matching
+/// Node), preserves a leading drive letter (`C:`), collapses repeated
+/// separators, resolves `.` and `..`, and emits backslash separators.
+fn normalize_win32_str(input: &str) -> String {
+    if input.is_empty() {
+        return ".".to_string();
+    }
+    // Peel off drive prefix like "C:" — anything before the first separator
+    // that ends with ":" is treated as the drive root.
+    let (drive, rest) = match input.find(|c| c == '\\' || c == '/') {
+        Some(i) => {
+            let head = &input[..i];
+            if head.ends_with(':') {
+                (head.to_string(), &input[i..])
+            } else {
+                (String::new(), input)
+            }
+        }
+        None => {
+            if input.ends_with(':') {
+                (input.to_string(), "")
+            } else {
+                (String::new(), input)
+            }
+        }
+    };
+
+    let is_absolute = rest.starts_with('\\') || rest.starts_with('/');
+    let trailing_sep = rest.ends_with('\\') || rest.ends_with('/');
+    let mut out: Vec<&str> = Vec::new();
+    for seg in rest.split(|c: char| c == '\\' || c == '/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            if let Some(last) = out.last() {
+                if *last == ".." {
+                    out.push("..");
+                } else {
+                    out.pop();
+                }
+            } else if !is_absolute {
+                out.push("..");
+            }
+            continue;
+        }
+        out.push(seg);
+    }
+
+    let mut result = drive;
+    if is_absolute {
+        result.push('\\');
+    }
+    result.push_str(&out.join("\\"));
+    if result.is_empty() {
+        return ".".to_string();
+    }
+    if trailing_sep && !result.ends_with('\\') {
+        result.push('\\');
+    }
+    result
+}
+
 /// Get directory name from path. Per Node spec, the root's dirname is the
 /// root itself (`/` → `/`), not an empty string — Rust's `Path::parent`
 /// returns `None` there, which we treat as "stay at root".

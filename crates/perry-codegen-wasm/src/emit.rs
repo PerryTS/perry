@@ -8560,6 +8560,12 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, b);
                 self.emit_memcall(func, "path_join", 2);
             }
+            Expr::PathWin32Join(a, b) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, a);
+                self.emit_store_arg(func, 1, b);
+                self.emit_memcall(func, "path_win32_join", 2);
+            }
             Expr::PathDirname(p) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, p);

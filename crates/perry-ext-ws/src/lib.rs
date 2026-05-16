@@ -778,13 +778,28 @@ fn drive_server_client_io<S>(
                                 // listener-registration site can drain it
                                 // synchronously.
                                 let text_str = text.to_string();
-                                let has_listener = WS_CLIENT_LISTENERS
+                                let client_has_listener = WS_CLIENT_LISTENERS
                                     .lock()
                                     .unwrap()
                                     .get(&ws_id)
                                     .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
                                     .unwrap_or(false);
-                                if has_listener {
+                                // #746 follow-up: a server-level
+                                // `wss.on('message', (ws, data) => ...)` handler
+                                // (perry-stdlib::ws parity) registers on the parent
+                                // WsServerHandle, not on WS_CLIENT_LISTENERS. The
+                                // original #577 Phase 4 race-guard only checked the
+                                // per-client map, so a server-only message handler
+                                // never produced a PendingWsEvent::Message — the
+                                // frame was parked on c.messages forever.
+                                let server_has_listener = WS_CLIENT_PARENT_SERVER
+                                    .lock()
+                                    .unwrap()
+                                    .get(&ws_id)
+                                    .copied()
+                                    .map(|sh| !listeners_on_server(sh, "message").is_empty())
+                                    .unwrap_or(false);
+                                if client_has_listener || server_has_listener {
                                     push_ws_event(PendingWsEvent::Message(ws_id, text_str));
                                 } else if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
                                     c.messages.push(text_str);
@@ -910,25 +925,57 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
             }
             PendingWsEvent::Message(ws_id, text) => {
                 let listeners = listeners_on_client(ws_id, "message");
-                for cb in listeners {
-                    if cb != 0 {
-                        let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                        let s = alloc_string(&text);
-                        let _ = unsafe {
-                            closure
-                                .call1(f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits()))
-                        };
-                        fired += 1;
+                let s = alloc_string(&text);
+                let msg_f64 = f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits());
+                if !listeners.is_empty() {
+                    for cb in listeners {
+                        if cb != 0 {
+                            let closure =
+                                unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                            let _ = unsafe { closure.call1(msg_f64) };
+                            fired += 1;
+                        }
+                    }
+                } else {
+                    // #746 follow-up: server-level `wss.on('message',
+                    // (ws, data) => ...)` parity with perry-stdlib::ws.
+                    let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
+                    if let Some(server_handle) = parent {
+                        for cb in listeners_on_server(server_handle, "message") {
+                            if cb != 0 {
+                                let closure =
+                                    unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                                let _ = unsafe { closure.call2(ws_id as f64, msg_f64) };
+                                fired += 1;
+                            }
+                        }
                     }
                 }
             }
             PendingWsEvent::Close(ws_id, _code, _reason) => {
                 let listeners = listeners_on_client(ws_id, "close");
-                for cb in listeners {
-                    if cb != 0 {
-                        let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                        let _ = unsafe { closure.call0() };
-                        fired += 1;
+                if !listeners.is_empty() {
+                    for cb in listeners {
+                        if cb != 0 {
+                            let closure =
+                                unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                            let _ = unsafe { closure.call0() };
+                            fired += 1;
+                        }
+                    }
+                } else {
+                    // #746 follow-up: server-level `wss.on('close',
+                    // (ws) => ...)` parity with perry-stdlib::ws.
+                    let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
+                    if let Some(server_handle) = parent {
+                        for cb in listeners_on_server(server_handle, "close") {
+                            if cb != 0 {
+                                let closure =
+                                    unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                                let _ = unsafe { closure.call1(ws_id as f64) };
+                                fired += 1;
+                            }
+                        }
                     }
                 }
                 WS_CONNECTIONS.lock().unwrap().remove(&ws_id);

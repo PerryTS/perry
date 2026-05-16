@@ -1240,6 +1240,10 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
             Box::new(substitute_expr(a, substitutions)),
             Box::new(substitute_expr(b, substitutions)),
         ),
+        Expr::PathWin32Join(a, b) => Expr::PathWin32Join(
+            Box::new(substitute_expr(a, substitutions)),
+            Box::new(substitute_expr(b, substitutions)),
+        ),
         Expr::PathDirname(path) => {
             Expr::PathDirname(Box::new(substitute_expr(path, substitutions)))
         }
@@ -2416,7 +2420,10 @@ fn collect_instantiations_in_expr(
             collect_instantiations_in_expr(path, ctx, module, idx);
             collect_instantiations_in_expr(content, ctx, module, idx);
         }
-        Expr::PathJoin(a, b) | Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) => {
+        Expr::PathJoin(a, b)
+        | Expr::PathMatchesGlob(a, b)
+        | Expr::PathResolveJoin(a, b)
+        | Expr::PathWin32Join(a, b) => {
             collect_instantiations_in_expr(a, ctx, module, idx);
             collect_instantiations_in_expr(b, ctx, module, idx);
         }
@@ -2935,7 +2942,10 @@ fn update_call_sites_in_expr(
             update_call_sites_in_expr(path, ctx, lookup);
             update_call_sites_in_expr(content, ctx, lookup);
         }
-        Expr::PathJoin(a, b) | Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) => {
+        Expr::PathJoin(a, b)
+        | Expr::PathMatchesGlob(a, b)
+        | Expr::PathResolveJoin(a, b)
+        | Expr::PathWin32Join(a, b) => {
             update_call_sites_in_expr(a, ctx, lookup);
             update_call_sites_in_expr(b, ctx, lookup);
         }
