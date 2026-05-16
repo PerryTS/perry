@@ -198,6 +198,19 @@ pub fn compute_object_cache_key(
         );
     }
     h.field("init_deps", &opts.module_init_deps.join("|"));
+    // Issue #842: side-effect-only dynamic-import targets emit a
+    // `@__perry_ns_<prefix>` global + populator regardless of
+    // `namespace_entries`. Toggling this flag changes the emitted IR
+    // (one extra global + populator call), so the cache key must
+    // include it.
+    h.field(
+        "dyn_target",
+        if opts.is_dynamic_import_target {
+            "1"
+        } else {
+            "0"
+        },
+    );
     h.field("js_specs", &opts.js_module_specifiers.join("|"));
     {
         let mut buf = String::new();
@@ -643,6 +656,7 @@ mod object_cache_tests {
             dynamic_import_path_to_prefix: std::collections::HashMap::new(),
             deferred_module_prefixes: std::collections::HashSet::new(),
             module_init_deps: Vec::new(),
+            is_dynamic_import_target: false,
         }
     }
 

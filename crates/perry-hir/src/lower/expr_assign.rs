@@ -289,6 +289,88 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 }
             }
 
+            // Issue #838: JS-classic prototype-method assignment.
+            // Two recognised shapes:
+            //   (a) Direct:  `<ClassName>.prototype.<method> = <fn>`
+            //                — `member.obj` is `<ClassName>.prototype`
+            //                  (a MemberExpr).
+            //   (b) Aliased: `let p = <ClassName>.prototype; p.<method>
+            //                = <fn>` — `member.obj` is an Ident that
+            //                  resolves to a local recorded in
+            //                  `ctx.prototype_aliases`. dayjs's minified
+            //                  source uses this shape: `var m =
+            //                  M.prototype; m.parse = function(){…};`.
+            // Route into Expr::RegisterPrototypeMethod which codegen
+            // lowers to `js_register_prototype_method(class_id, name,
+            // closure)`. The runtime consults the resulting side-table
+            // during dispatch so `(new Class()).method()` reaches the
+            // registered closure with `this` bound. The pre-fix path
+            // lowered both shapes to a generic PropertySet on an
+            // unobserved prototype-object proxy, so the assignment was
+            // a silent no-op from the user's perspective.
+            //
+            // TypeScript wrappers (`(Foo.prototype as any).bar = fn`)
+            // surface here as `TsAs(MemberExpr)` / `Paren(MemberExpr)`
+            // / `TsNonNull(MemberExpr)` / etc. inside `member.obj`.
+            // Unwrap them so the recogniser fires on the underlying
+            // shape rather than silently falling through.
+            fn unwrap_ts(e: &ast::Expr) -> &ast::Expr {
+                let mut cur = e;
+                loop {
+                    match cur {
+                        ast::Expr::TsAs(x) => cur = &x.expr,
+                        ast::Expr::TsNonNull(x) => cur = &x.expr,
+                        ast::Expr::TsSatisfies(x) => cur = &x.expr,
+                        ast::Expr::TsTypeAssertion(x) => cur = &x.expr,
+                        ast::Expr::TsConstAssertion(x) => cur = &x.expr,
+                        ast::Expr::Paren(x) => cur = &x.expr,
+                        _ => return cur,
+                    }
+                }
+            }
+            if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                let method_name = prop_ident.sym.to_string();
+                let obj_unwrapped = unwrap_ts(member.obj.as_ref());
+                let resolved_class: Option<String> = match obj_unwrapped {
+                    // (a) <ClassName>.prototype.<method>
+                    ast::Expr::Member(inner) => {
+                        let prop_is_prototype = matches!(
+                            &inner.prop,
+                            ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
+                        );
+                        if prop_is_prototype {
+                            let inner_obj = unwrap_ts(inner.obj.as_ref());
+                            if let ast::Expr::Ident(cls_ident) = inner_obj {
+                                let cls_name = cls_ident.sym.to_string();
+                                if ctx.lookup_class(&cls_name).is_some() {
+                                    Some(cls_name)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    // (b) `<alias>.<method>` where the alias local was
+                    // initialised from `<ClassName>.prototype`.
+                    ast::Expr::Ident(obj_ident) => {
+                        let local_id = ctx.lookup_local(obj_ident.sym.as_ref());
+                        local_id.and_then(|id| ctx.prototype_aliases.get(&id).cloned())
+                    }
+                    _ => None,
+                };
+                if let Some(class_name) = resolved_class {
+                    return Ok(Expr::RegisterPrototypeMethod {
+                        class_name,
+                        method_name,
+                        value,
+                    });
+                }
+            }
+
             // Issue #577 — `res.statusCode = 200` / `res.statusMessage = "OK"`
             // on a registered ServerResponse native instance. Rewrite to
             // a `__set_<name>` NativeMethodCall so codegen dispatches

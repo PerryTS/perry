@@ -295,6 +295,17 @@ pub struct CompileOptions {
     /// module globals. For Eager modules the redundant calls
     /// short-circuit on the guard's first-write check.
     pub module_init_deps: Vec<String>,
+
+    /// Issue #842: true iff this module is the target of at least one
+    /// `await import("./this_module.ts")` site anywhere in the program.
+    /// When `namespace_entries` is empty (side-effect-only target — no
+    /// `export` statements), this flag is the only signal that the
+    /// producer-side `@__perry_ns_<prefix>` global + populator must
+    /// still be emitted, because the consumer-side `Expr::DynamicImport`
+    /// dispatch declares it as an extern global unconditionally.
+    /// Without this, side-effect-only dynamic-import targets fail at
+    /// link with `Undefined symbols: ___perry_ns_<prefix>`.
+    pub is_dynamic_import_target: bool,
 }
 
 /// Issue #100: one entry in a module's namespace-population list.
@@ -583,6 +594,11 @@ pub(crate) struct CrossModuleCtx {
     /// fires before the body — transitively pulls in any Deferred dep
     /// chain reached only through this module's re-exports.
     pub module_init_deps: Vec<String>,
+    /// Issue #842: true iff this module is the target of at least one
+    /// dynamic `import()` site in the program. Forces emission of
+    /// `@__perry_ns_<prefix>` + populator even when `namespace_entries`
+    /// is empty (side-effect-only modules with no `export`s).
+    pub is_dynamic_import_target: bool,
 }
 
 /// Compile a Perry HIR module to an object file via LLVM IR.
@@ -1434,6 +1450,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         dynamic_import_path_to_prefix: opts.dynamic_import_path_to_prefix.clone(),
         deferred_module_prefixes: opts.deferred_module_prefixes.clone(),
         module_init_deps: opts.module_init_deps.clone(),
+        is_dynamic_import_target: opts.is_dynamic_import_target,
     };
 
     // Module-level globals registry. Pre-walk:
@@ -2989,7 +3006,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // byte_len)` per key without rebuilding any LLVM IR. Vec entries
     // are parallel to `cross_module.namespace_entries`.
     let mut namespace_key_globals: Vec<(String, usize)> = Vec::new();
-    if !cross_module.namespace_entries.is_empty() {
+    // Issue #842: also emit `@__perry_ns_<prefix>` for side-effect-only
+    // dynamic-import targets (`namespace_entries` empty but the module
+    // is still a target). Without this, the consumer-side extern
+    // declaration links to nothing. The empty-entries case still emits
+    // the global; the populator below handles `n == 0` by calling
+    // `js_create_namespace(0, ...)` which returns an empty object.
+    if !cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target {
         let ns_name = format!("__perry_ns_{}", module_prefix);
         // Hex double literal for TAG_UNDEFINED (0x7FFC_0000_0000_0001).
         llmod.add_global(&ns_name, DOUBLE, "0x7FFC000000000001");
@@ -4544,7 +4567,14 @@ fn compile_module_entry(
         // event-loop turns). For the entry-module case this is the
         // unusual scenario where some other module dynamic-imports
         // the entry itself — uncommon but supported.
-        if !cross_module.namespace_entries.is_empty() && !ctx.block().is_terminated() {
+        // Issue #842: also run the populator for side-effect-only
+        // dynamic-import targets (`namespace_entries` empty but module
+        // is a target). The populator emits `js_create_namespace(0, ...)`
+        // → an empty NaN-boxed object → stored into `@__perry_ns_<prefix>`,
+        // satisfying the consumer-side extern reference.
+        if (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
+            && !ctx.block().is_terminated()
+        {
             emit_namespace_populator(
                 &mut ctx,
                 &cross_module.namespace_entries,
@@ -4899,7 +4929,14 @@ fn compile_module_entry(
         // exports' bindings are also set because `lower_stmts` ran
         // above. The dispatcher in `Expr::DynamicImport` loads
         // `@__perry_ns_<prefix>` and wraps it in `js_promise_resolved`.
-        if !cross_module.namespace_entries.is_empty() && !ctx.block().is_terminated() {
+        // Issue #842: also run the populator for side-effect-only
+        // dynamic-import targets (`namespace_entries` empty but module
+        // is a target). The populator emits `js_create_namespace(0, ...)`
+        // → an empty NaN-boxed object → stored into `@__perry_ns_<prefix>`,
+        // satisfying the consumer-side extern reference.
+        if (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
+            && !ctx.block().is_terminated()
+        {
             emit_namespace_populator(
                 &mut ctx,
                 &cross_module.namespace_entries,
@@ -5910,28 +5947,37 @@ use crate::collectors::{collect_closures_in_stmts, collect_let_ids, collect_ref_
 ///   3. Call `js_create_namespace(N, ptr keys, ptr key_lens, ptr values)`.
 ///   4. Store the result into `@__perry_ns_<module_prefix>`.
 ///
-/// Only emits IR if `entries` is non-empty. The caller is responsible
-/// for ensuring `key_globals.len() == entries.len()`.
+/// Always emits the `js_create_namespace` call + store, even when
+/// `entries` is empty. This is required for Issue #842 (side-effect-only
+/// dynamic-import targets — no exports, but the consumer still needs a
+/// non-NaN `@__perry_ns_<prefix>` to load). The runtime tolerates
+/// `n == 0` and returns an empty NaN-boxed object. The caller is
+/// responsible for ensuring `key_globals.len() == entries.len()`.
 fn emit_namespace_populator(
     ctx: &mut crate::expr::FnCtx<'_>,
     entries: &[NamespaceEntry],
     key_globals: &[(String, usize)],
     module_prefix: &str,
 ) {
-    if entries.is_empty() {
-        return;
-    }
     debug_assert_eq!(entries.len(), key_globals.len());
+    // Issue #842: side-effect-only dynamic-import targets land here
+    // with `entries.is_empty()`. The runtime `js_create_namespace`
+    // tolerates `n == 0` and returns a fresh empty object — exactly
+    // what an export-less module's namespace should look like. We
+    // still alloca minimum-size buffers (`[1 x ?]`) and pass the
+    // pointers + n=0 so the runtime never dereferences them; the
+    // per-entry loop simply doesn't execute.
     let n = entries.len();
+    let buf_len = n.max(1);
     let blk = ctx.block();
 
     // Alloca the three parallel buffers.
     let keys_buf = blk.next_reg();
-    blk.emit_raw(format!("{} = alloca [{} x ptr]", keys_buf, n));
+    blk.emit_raw(format!("{} = alloca [{} x ptr]", keys_buf, buf_len));
     let lens_buf = blk.next_reg();
-    blk.emit_raw(format!("{} = alloca [{} x i32]", lens_buf, n));
+    blk.emit_raw(format!("{} = alloca [{} x i32]", lens_buf, buf_len));
     let vals_buf = blk.next_reg();
-    blk.emit_raw(format!("{} = alloca [{} x double]", vals_buf, n));
+    blk.emit_raw(format!("{} = alloca [{} x double]", vals_buf, buf_len));
 
     // Per-entry: store key ptr + len + value.
     for (i, entry) in entries.iter().enumerate() {

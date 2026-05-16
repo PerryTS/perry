@@ -1264,6 +1264,93 @@ pub unsafe extern "C" fn js_class_register_static_field(
     });
 }
 
+/// Issue #838: JS-classic prototype method assignment.
+///
+/// `Class.prototype.method = function() {…}` (and the aliased form
+/// `var p = Class.prototype; p.method = function() {…}`) is a pre-ES6
+/// idiom dayjs, chalk, and a long tail of libraries still ship.
+/// Pre-fix the assignment was lowered to a generic `PropertySet` whose
+/// receiver evaluated to a class-prototype-shaped object that nothing
+/// downstream consulted, so `(new Class()).method` came back as
+/// `undefined`.
+///
+/// The HIR-level fix routes recognised shapes to
+/// `js_register_prototype_method(class_id, name, value)`, which stores
+/// the closure value into a per-class side-table here. The dispatch
+/// hot paths (`js_object_get_field_by_name` for `inst.method` reads
+/// and `js_native_call_method` for `inst.method(...)` calls) consult
+/// this table after the regular vtable / proto-object lookups miss,
+/// invoking the closure with `this` bound to the receiver.
+///
+/// Stored values use their full NaN-boxed bits (f64) — typically a
+/// POINTER_TAG'd closure, but the dispatch path treats whatever is
+/// stored as a callable value and routes it through
+/// `js_native_call_value`, which itself accepts both closures and raw
+/// `*ClosureHeader` shapes.
+pub static CLASS_PROTOTYPE_METHODS: RwLock<Option<HashMap<u32, HashMap<String, u64>>>> =
+    RwLock::new(None);
+
+/// Register a JS-classic prototype-method assignment on a class.
+/// Called by codegen-emitted init code for each `Class.prototype.<name>
+/// = <fn>` (or aliased form) that the HIR recognises. `value` is the
+/// NaN-boxed callable to be invoked with `this` bound to the receiver
+/// at dispatch time.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_prototype_method(
+    class_id: u32,
+    name_ptr: *const u8,
+    name_len: usize,
+    value: f64,
+) {
+    if class_id == 0 || name_ptr.is_null() || name_len == 0 {
+        return;
+    }
+    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+        Ok(s) => s.to_string(),
+        Err(_) => return,
+    };
+    let mut guard = CLASS_PROTOTYPE_METHODS.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .entry(class_id)
+        .or_insert_with(HashMap::new)
+        .insert(name, value.to_bits());
+    // Ensure the receiver class can be `typeof`-detected. Method-less
+    // classes that only get extended via `Class.prototype.m = fn`
+    // wouldn't otherwise reach js_register_class_id.
+    js_register_class_id(class_id);
+}
+
+/// Lookup helper: returns the registered prototype-method value for
+/// `(class_id, name)`, or None if no assignment matched. Walks the
+/// parent-class chain so methods registered on a base class are found
+/// via subclass instances.
+pub(crate) fn lookup_prototype_method(class_id: u32, name: &str) -> Option<f64> {
+    let guard = CLASS_PROTOTYPE_METHODS.read().ok()?;
+    let map = guard.as_ref()?;
+    let mut cid = class_id;
+    let mut depth = 0usize;
+    while depth < 32 {
+        if let Some(per_class) = map.get(&cid) {
+            if let Some(&bits) = per_class.get(name) {
+                return Some(f64::from_bits(bits));
+            }
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
 /// Returns true if `class_id` corresponds to a registered class. Used by
 /// `js_value_typeof` (refs #618 / #420 followup) to distinguish a class
 /// reference (NaN-boxed INT32 with class_id payload) from a regular int32
@@ -3804,6 +3891,19 @@ pub extern "C" fn js_object_get_field_by_name(
             {
                 if let Some(v) = resolve_proto_chain_field(class_id, key) {
                     return v;
+                }
+            }
+
+            // Issue #838: JS-classic `Class.prototype.method = fn`
+            // assignment registered via `js_register_prototype_method`.
+            // Read returns the stored closure value directly, mirroring
+            // Node's `Object.getPrototypeOf(inst).method` lookup. The
+            // bound-method-closure fallback below handles vtable methods;
+            // this arm covers methods that only exist as prototype
+            // assignments (never declared inside the `class` block).
+            if let Ok(name) = std::str::from_utf8(key_bytes) {
+                if let Some(v) = lookup_prototype_method(class_id, name) {
+                    return JSValue::from_bits(v.to_bits());
                 }
             }
 
@@ -6408,6 +6508,20 @@ pub unsafe extern "C" fn js_native_call_method(
                         IMPLICIT_THIS.with(|c| c.set(prev_this));
                         return result;
                     }
+                }
+
+                // Issue #838: JS-classic `Class.prototype.method = fn`
+                // method dispatch. The vtable / proto-object walks above
+                // cover ES-class methods and synthetic-prototype-object
+                // shapes; this arm catches the case where the method
+                // only exists in `CLASS_PROTOTYPE_METHODS`. Bind `this`
+                // to the receiver and call the stored closure.
+                if let Some(method_value) = lookup_prototype_method(class_id, method_name) {
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                    let result =
+                        crate::closure::js_native_call_value(method_value, args_ptr, args_len);
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return result;
                 }
             }
         }

@@ -299,6 +299,16 @@ pub struct LoweringContext {
     /// the HIR (where codegen consumes them) rather than being patched in
     /// after lowering.
     pub(crate) let_class_aliases: Vec<(String, String)>,
+    /// Issue #838: locals whose initializer is `<ClassName>.prototype`.
+    /// Lets the assignment lowering recognise `proto.method = fn` as a
+    /// prototype-method assignment on the underlying class (rather than
+    /// a write to a regular object). dayjs's minified shape is
+    /// `var m = M.prototype; m.parse = function(){…}; m.init = function(){…};`
+    /// — every subsequent assignment through the alias has to route to
+    /// the class's prototype-method registry, otherwise the methods
+    /// land in an orphaned object literal and instance reads fall back
+    /// to undefined.
+    pub(crate) prototype_aliases: HashMap<LocalId, String>,
     /// Issue #444: true when this module is the user-supplied entry file.
     /// Drives `import.meta.main` — Node 24+ / Bun semantics where the entry
     /// module reports `true` and every imported module reports `false`. Set
@@ -396,6 +406,7 @@ impl LoweringContext {
             class_method_return_types: Vec::new(),
             class_captures: Vec::new(),
             let_class_aliases: Vec::new(),
+            prototype_aliases: HashMap::new(),
             is_entry_module: false,
             is_external_module: false,
         }
