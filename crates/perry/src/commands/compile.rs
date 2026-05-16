@@ -5036,7 +5036,7 @@ pub fn run_with_parse_cache(
         if entry_failed {
             eprintln!("Aborting: the entry module's `main` symbol is required by the linker.");
             eprintln!("Fix the codegen errors above (search for `Error compiling module`)");
-            eprintln!("and re-run. The driver previously emitted an empty `_perry_init_*`");
+            eprintln!("and re-run. The driver previously emitted an empty `<prefix>__init`");
             eprintln!("stub here and continued to link, which produced the misleading");
             eprintln!("`Undefined symbols: \"_main\"` error far downstream.");
             eprintln!();
@@ -5045,7 +5045,7 @@ pub fn run_with_parse_cache(
                 entry_module_name.as_deref().unwrap_or("?")
             ));
         } else {
-            eprintln!("Continuing with linking. Empty `_perry_init_*` stubs will be");
+            eprintln!("Continuing with linking. Empty `<prefix>__init` stubs will be");
             eprintln!("emitted for the failed modules so the binary still links, but");
             eprintln!("any code in those modules will be inert at runtime.");
             eprintln!();
@@ -5442,14 +5442,28 @@ pub fn run_with_parse_cache(
         // time we get here we know the entry module compiled OK and
         // every entry in `failed_modules` is a non-entry module that
         // we're consciously stubbing out so the binary can still link.
-        // Generate one empty `_perry_init_*` per failed module — the
-        // entry main calls each non-entry init in order, so the symbols
-        // need to exist or the linker will fail.
+        // Generate one empty `<prefix>__init` per failed module — the
+        // entry main and any consumer module call each non-entry init
+        // in order, so the symbols need to exist or the linker fails.
+        //
+        // #837 fix: the old format was `_perry_init_<sanitized>`, which
+        // was the naming convention before the codegen switched to
+        // `<prefix>__init` for module initializers (see
+        // crates/perry-codegen/src/codegen.rs:4668). The stub symbols
+        // never matched the consumer-side declarations, so any program
+        // with a failed-but-stubbable module dep — for example uuid's
+        // sha1.js, which v5.js imports and the codegen can't yet lower
+        // because of Uint8Array.of with 20 args — failed at link with
+        // `Undefined symbols: _<prefix>__init`. Tracking the codegen
+        // naming closes the link without papering over the underlying
+        // module-failure: the binary still links, the stubbed module
+        // body is inert, and any actual call into the missing exports
+        // remains the symptom that surfaces the real bug.
         let stub_init_names: Vec<String> = failed_modules
             .iter()
             .map(|m| {
                 let sanitized = m.replace(|c: char| !c.is_alphanumeric() && c != '_', "_");
-                format!("_perry_init_{}", sanitized)
+                format!("{}__init", sanitized)
             })
             .collect();
         if !stub_init_names.is_empty() {
