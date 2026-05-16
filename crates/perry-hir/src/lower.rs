@@ -8432,7 +8432,15 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     })
                 }
                 ast::OptChainBase::Call(call) => {
-                    // obj?.method() -> obj == null ? undefined : obj.method()
+                    // OptChain(Call) is `<expr>?.(args)` — the `?.` is between the
+                    // callee and the call parens (e.g. `obj.method?.(args)`), NOT
+                    // `obj?.method(args)` (which SWC parses as Call(OptChain(Member))
+                    // and is handled via the regular Call lowering path).
+                    //
+                    // So the short-circuit must check the *function value* (the
+                    // callee), not the receiver. Issue #830: previously this
+                    // checked `obj == null`, which crashed when `obj.method` was
+                    // undefined while `obj` itself was a valid object.
                     let callee = &call.callee;
 
                     // Check for spread arguments
@@ -8468,8 +8476,19 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 Ok((obj, prop))
                             };
                         match &**callee {
-                            ast::Expr::Member(m) => lower_member_flat(m)?,
+                            // Simple `obj.method?.(args)`: check the function value
+                            // (prop), call the function (prop) — codegen still sees
+                            // a PropertyGet callee so `this` binds to obj.
+                            ast::Expr::Member(m) => {
+                                let (_obj, prop) = lower_member_flat(m)?;
+                                (prop.clone(), prop)
+                            }
                             ast::Expr::OptChain(inner) => match &*inner.base {
+                                // Chained `foo?.bar?.(args)`: keep checking the
+                                // receiver (foo) so the inner `?.` short-circuit
+                                // still works. A separate null-check on the
+                                // function value (foo.bar) is a known gap — see
+                                // the comment above the final Conditional below.
                                 ast::OptChainBase::Member(m) => lower_member_flat(m)?,
                                 _ => {
                                     let ce = lower_expr(ctx, callee)?;
