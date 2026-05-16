@@ -30,9 +30,22 @@ use crate::common::async_bridge;
 /// Thin pass-through to perry-runtime's allocator. Returned pointer
 /// is owned by the runtime arena; resolution / rejection is what
 /// transfers it to the awaiter.
+///
+/// Issue #859: the promise is also PINNED before returning, because
+/// every documented use of `perry_ffi_promise_new` ships the pointer
+/// to a worker future (via `perry_ffi_spawn_blocking*` /
+/// `perry_ffi_spawn_async`) and later resolves it from the worker.
+/// Without pinning, the await chain has no path back to the promise
+/// — `P.next = N` is a forward edge — and a GC cycle during the
+/// worker's run sweeps `P` mid-flight, turning the eventual
+/// `js_promise_resolve(P, ...)` into a use-after-free SIGBUS. The
+/// matching unpin lives in `js_stdlib_process_pending` (see
+/// `unpin_promise_after_native_resolution` in `async_bridge`).
 #[no_mangle]
 pub extern "C" fn perry_ffi_promise_new() -> *mut perry_runtime::Promise {
-    perry_runtime::js_promise_new()
+    let p = perry_runtime::js_promise_new();
+    unsafe { async_bridge::pin_promise_for_native_resolution(p as usize) };
+    p
 }
 
 /// `perry_ffi_promise_resolve_bits(promise, bits)` — resolve the

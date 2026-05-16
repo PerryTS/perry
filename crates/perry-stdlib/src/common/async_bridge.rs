@@ -20,6 +20,71 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use tokio::runtime::Runtime;
 
+/// Issue #859: pin a Promise so the GC can't sweep it while a tokio
+/// worker is computing its eventual resolution.
+///
+/// Without pinning, the await chain has no path back to the Promise:
+/// `P.next = N` is a forward edge, and after the user code yields, all
+/// JS-side roots reach only `N`. The tokio future holds `promise_ptr`
+/// as `usize`, invisible to the GC. So `js_promise_new()` in a native
+/// binding + `spawn_for_promise(...)` opens a window where `P` is
+/// unreachable; if GC fires during that window, `P` is swept, and
+/// when the worker finally calls `js_promise_resolve(P, ...)` it
+/// dereferences freed (and possibly OS-reclaimed) memory → SIGBUS.
+///
+/// Pin/unpin must run on the main thread. The bit is set here (right
+/// before crossing the worker boundary) and cleared in
+/// [`js_stdlib_process_pending`] after the queued resolution drains.
+///
+/// # Safety
+/// `promise_ptr` must point to a live Promise allocated by
+/// `js_promise_new()` — i.e. an `8-byte GcHeader`-prefixed allocation
+/// in the GC arena. Callers in `spawn_for_promise[_deferred]` satisfy
+/// this trivially; direct callers of [`queue_promise_resolution`] /
+/// [`queue_deferred_resolution`] (fetch, zlib, etc.) must also pin
+/// before handing the pointer to a worker future.
+#[inline]
+pub unsafe fn pin_promise_for_native_resolution(promise_ptr: usize) {
+    if promise_ptr == 0 {
+        return;
+    }
+    let header = (promise_ptr as *mut u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
+        as *mut perry_runtime::gc::GcHeader;
+    (*header).gc_flags |= perry_runtime::gc::GC_FLAG_PINNED;
+}
+
+/// Inverse of [`pin_promise_for_native_resolution`]; called from
+/// `js_stdlib_process_pending` immediately before the queued
+/// resolve/reject so the next GC cycle can reclaim the (now-settled)
+/// promise on its normal schedule.
+#[inline]
+unsafe fn unpin_promise_after_native_resolution(promise_ptr: usize) {
+    if promise_ptr == 0 {
+        return;
+    }
+    let header = (promise_ptr as *mut u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
+        as *mut perry_runtime::gc::GcHeader;
+    (*header).gc_flags &= !perry_runtime::gc::GC_FLAG_PINNED;
+}
+
+/// Allocate a fresh Promise and pin it for cross-thread resolution.
+/// Convenience wrapper for direct callers of [`queue_promise_resolution`]
+/// / [`queue_deferred_resolution`] (fetch, zlib, bcrypt, ioredis, ws,
+/// etc.) — modules that bypass `spawn_for_promise[_deferred]` because
+/// their own future setup is custom. Equivalent to
+/// `js_promise_new()` followed by [`pin_promise_for_native_resolution`].
+///
+/// # Safety
+/// Same as `js_promise_new()`; the pinning has no preconditions of
+/// its own. The matching unpin runs automatically in
+/// `js_stdlib_process_pending`.
+#[inline]
+pub unsafe fn js_promise_new_for_native_resolution() -> *mut perry_runtime::Promise {
+    let p = perry_runtime::js_promise_new();
+    pin_promise_for_native_resolution(p as usize);
+    p
+}
+
 /// Count of in-flight `perry_ffi_spawn_blocking[_with_reactor]` tasks
 /// dispatched by external native bindings (perry-ext-argon2 /
 /// -bcrypt / etc. via perry-ffi). Each spawn `fetch_add(1)`s before
@@ -195,7 +260,13 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += n as i32;
 
         for resolution in pending.drain(..) {
-            let promise_ptr = resolution.promise_ptr as *mut perry_runtime::Promise;
+            let promise_ptr_usize = resolution.promise_ptr;
+            let promise_ptr = promise_ptr_usize as *mut perry_runtime::Promise;
+            // Issue #859: unpin BEFORE resolve so the just-settled promise
+            // can be reclaimed by the next GC. Resolve doesn't trigger GC
+            // mid-call, so ordering here is purely about leaving a clean
+            // GC state after the loop.
+            unsafe { unpin_promise_after_native_resolution(promise_ptr_usize) };
             if resolution.is_success {
                 perry_runtime::js_promise_resolve(
                     promise_ptr,
@@ -217,10 +288,16 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += n as i32;
 
         for resolution in pending.drain(..) {
-            let promise_ptr = resolution.promise_ptr as *mut perry_runtime::Promise;
+            let promise_ptr_usize = resolution.promise_ptr;
+            let promise_ptr = promise_ptr_usize as *mut perry_runtime::Promise;
             // Run the converter on the main thread to create JSValues safely
             let result_bits = (resolution.converter)();
 
+            // Issue #859: unpin BEFORE resolve. The converter ran first
+            // and may itself have allocated (creating the result string,
+            // etc.), but the promise stayed pinned across that work — so
+            // even if the converter triggered GC, the promise survived.
+            unsafe { unpin_promise_after_native_resolution(promise_ptr_usize) };
             if resolution.is_success {
                 perry_runtime::js_promise_resolve(promise_ptr, f64::from_bits(result_bits));
             } else {
@@ -461,6 +538,9 @@ where
 {
     ensure_pump_registered();
     let ptr = promise_ptr as usize; // Convert to usize for Send
+    // Issue #859: pin the promise BEFORE crossing the tokio boundary.
+    // See `pin_promise_for_native_resolution` for the full rationale.
+    pin_promise_for_native_resolution(ptr);
 
     RUNTIME.spawn(async move {
         match future.await {
@@ -508,6 +588,8 @@ where
 {
     ensure_pump_registered();
     let ptr = promise_ptr as usize;
+    // Issue #859: pin the promise BEFORE crossing the tokio boundary.
+    pin_promise_for_native_resolution(ptr);
 
     RUNTIME.spawn(async move {
         match future.await {
