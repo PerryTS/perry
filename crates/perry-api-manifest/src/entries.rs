@@ -514,6 +514,26 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("events", "emit", true, None),
     method("events", "removeListener", true, None),
     method("events", "removeAllListeners", true, None),
+    // EventEmitter additions wired in v0.5.922 (issue #850).
+    method("events", "once", true, None),
+    method("events", "addListener", true, None),
+    method("events", "prependListener", true, None),
+    method("events", "prependOnceListener", true, None),
+    method("events", "off", true, None),
+    method("events", "listenerCount", true, None),
+    method("events", "listeners", true, None),
+    method("events", "rawListeners", true, None),
+    method("events", "eventNames", true, None),
+    method("events", "setMaxListeners", true, None),
+    method("events", "getMaxListeners", true, None),
+    // Module-level helpers (`events.once` / `events.getEventListeners` /
+    // `events.listenerCount` / `events.getMaxListeners` /
+    // `events.setMaxListeners`).
+    method("events", "once", false, None),
+    method("events", "getEventListeners", false, None),
+    method("events", "listenerCount", false, None),
+    method("events", "getMaxListeners", false, None),
+    method("events", "setMaxListeners", false, None),
     method_sig(
         "lru-cache",
         "default",

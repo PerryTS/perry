@@ -1,25 +1,73 @@
 //! EventEmitter implementation
 //!
 //! Native implementation of Node.js EventEmitter pattern.
-//! Provides on(), emit(), and removeListener() for event handling.
+//! Rewritten for issue #850 — Node-compatible listener-table semantics
+//! covering `on` / `once` / `addListener` / `prependListener` /
+//! `prependOnceListener` / `removeListener` / `removeAllListeners` /
+//! `listenerCount` / `listeners` / `rawListeners` / `eventNames` /
+//! `setMaxListeners` / `getMaxListeners`, plus the module-level
+//! `events.once` / `events.getEventListeners` / `events.listenerCount` /
+//! `events.setMaxListeners` / `events.getMaxListeners` helpers.
+//!
+//! ## Storage model
+//!
+//! Each `EventEmitterHandle` stores an ordered list of events (so
+//! `eventNames()` returns insertion order, matching Node) plus per-event
+//! `Vec<Listener>` with insert-back (`on`/`addListener`) and insert-front
+//! (`prependListener`). Each `Listener` carries a `once` flag — `emit`
+//! collects all `once` listeners, fires the whole snapshot, then prunes
+//! the fired ones from the live list. Pending `events.once` promises are
+//! stored alongside listeners so a single `emit` can resolve them all.
 
-use perry_runtime::{js_closure_call0, js_closure_call1, ClosureHeader, StringHeader};
+use perry_runtime::{
+    js_array_alloc, js_array_push_f64, js_closure_call0, js_closure_call1, js_nanbox_pointer,
+    js_nanbox_string, js_promise_new, js_promise_resolve, js_string_from_bytes, ArrayHeader,
+    ClosureHeader, Promise, StringHeader,
+};
 use std::collections::HashMap;
 
 use crate::common::{for_each_handle_of, get_handle_mut, register_handle, Handle};
 
-/// EventEmitter handle storing event listeners
-/// We store closure pointers as i64 to satisfy Send + Sync requirements
-/// (raw pointers aren't Send/Sync, but the underlying data is managed by the runtime)
-pub struct EventEmitterHandle {
-    /// Event name -> list of closure pointers (stored as i64 for Send + Sync)
-    listeners: HashMap<String, Vec<i64>>,
+/// One registered listener: a raw closure pointer (i64 to satisfy
+/// Send + Sync — the underlying ClosureHeader is GC-managed) plus a
+/// `once` flag.
+#[derive(Copy, Clone)]
+struct Listener {
+    callback: i64,
+    once: bool,
 }
+
+/// EventEmitter handle.
+///
+/// `events` is a `HashMap<String, Vec<Listener>>` for O(1) lookup; the
+/// parallel `event_order` `Vec<String>` preserves insertion order so
+/// `eventNames()` matches Node's behaviour (first-seen order).
+pub struct EventEmitterHandle {
+    /// Event name → list of listeners. Order within the Vec is dispatch
+    /// order (front-of-Vec fires first).
+    events: HashMap<String, Vec<Listener>>,
+    /// Insertion-order shadow of `events.keys()`. Names that get fully
+    /// drained (e.g. via `removeAllListeners(name)`) are removed.
+    event_order: Vec<String>,
+    /// Per-event pending `events.once(em, name)` promises. Resolved on
+    /// the next `emit(name, ...)` with a single-element array.
+    pending_once_promises: HashMap<String, Vec<*mut Promise>>,
+    /// `setMaxListeners` ceiling. Node's default is 10 but we don't warn
+    /// when the count exceeds it — `getMaxListeners()` just reads back
+    /// whatever was written.
+    max_listeners: i32,
+}
+
+// SAFETY: `*mut Promise` is not Send/Sync by default, but the runtime
+// pins Promise allocations and the registry's GC scanner marks them
+// through `pending_once_promises` so they survive minor GC cycles.
+unsafe impl Send for EventEmitterHandle {}
+unsafe impl Sync for EventEmitterHandle {}
 
 static EVENTS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 /// Register the EventEmitter GC root scanner exactly once. User closures
-/// passed to `emitter.on(event, cb)` are stored inside EventEmitterHandle
+/// passed to `emitter.on(event, cb)` live inside EventEmitterHandle
 /// values in the handle registry; without this scanner, a malloc-triggered
 /// GC between `.on(...)` and the next `.emit(...)` would sweep the
 /// closure — same root cause as issue #35 for net.Socket listeners.
@@ -29,14 +77,26 @@ fn ensure_gc_scanner_registered() {
     });
 }
 
-/// GC root scanner for EventEmitter listener closures.
+/// GC root scanner for EventEmitter listener closures and pending
+/// `events.once` promises.
 fn scan_events_roots(mark: &mut dyn FnMut(f64)) {
     for_each_handle_of::<EventEmitterHandle, _>(|emitter| {
-        for cb_vec in emitter.listeners.values() {
-            for &cb in cb_vec.iter() {
-                if cb != 0 {
-                    let boxed =
-                        f64::from_bits(0x7FFD_0000_0000_0000 | (cb as u64 & 0x0000_FFFF_FFFF_FFFF));
+        for listeners in emitter.events.values() {
+            for l in listeners.iter() {
+                if l.callback != 0 {
+                    let boxed = f64::from_bits(
+                        0x7FFD_0000_0000_0000 | (l.callback as u64 & 0x0000_FFFF_FFFF_FFFF),
+                    );
+                    mark(boxed);
+                }
+            }
+        }
+        for proms in emitter.pending_once_promises.values() {
+            for &p in proms.iter() {
+                if !p.is_null() {
+                    let boxed = f64::from_bits(
+                        0x7FFD_0000_0000_0000 | ((p as u64) & 0x0000_FFFF_FFFF_FFFF),
+                    );
                     mark(boxed);
                 }
             }
@@ -53,7 +113,42 @@ impl Default for EventEmitterHandle {
 impl EventEmitterHandle {
     pub fn new() -> Self {
         EventEmitterHandle {
-            listeners: HashMap::new(),
+            events: HashMap::new(),
+            event_order: Vec::new(),
+            pending_once_promises: HashMap::new(),
+            // Node's default is 10. We mirror it so `getMaxListeners()`
+            // on a fresh emitter returns 10 (matching Node).
+            max_listeners: 10,
+        }
+    }
+
+    fn note_event(&mut self, name: &str) {
+        if !self.events.contains_key(name) {
+            self.event_order.push(name.to_string());
+        }
+    }
+
+    fn prune_event_if_empty(&mut self, name: &str) {
+        let drop_it = match self.events.get(name) {
+            Some(v) => v.is_empty(),
+            None => true,
+        };
+        if drop_it {
+            self.events.remove(name);
+            if let Some(pos) = self.event_order.iter().position(|s| s == name) {
+                self.event_order.remove(pos);
+            }
+        }
+    }
+
+    fn add_listener(&mut self, name: &str, callback: i64, once: bool, prepend: bool) {
+        self.note_event(name);
+        let vec = self.events.entry(name.to_string()).or_default();
+        let listener = Listener { callback, once };
+        if prepend {
+            vec.insert(0, listener);
+        } else {
+            vec.push(listener);
         }
     }
 }
@@ -77,34 +172,119 @@ pub extern "C" fn js_event_emitter_new() -> Handle {
     register_handle(EventEmitterHandle::new())
 }
 
-/// EventEmitter.on(eventName, listener)
+/// EventEmitter.on(eventName, listener) — also serves as `addListener`.
 /// Register a listener for the specified event.
 /// Returns the emitter handle for chaining.
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_on(
     handle: Handle,
     event_name_ptr: *const StringHeader,
-    callback_ptr: i64, // Closure pointer passed as i64
+    callback_ptr: i64,
 ) -> Handle {
     ensure_gc_scanner_registered();
     let event_name = match string_from_header(event_name_ptr) {
         Some(name) => name,
         None => return handle,
     };
-
     if callback_ptr == 0 {
         return handle;
     }
-
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        emitter
-            .listeners
-            .entry(event_name)
-            .or_insert_with(Vec::new)
-            .push(callback_ptr);
+        emitter.add_listener(&event_name, callback_ptr, false, false);
     }
-
     handle
+}
+
+/// EventEmitter.once(eventName, listener) — fires once, then auto-removes.
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_once(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+    callback_ptr: i64,
+) -> Handle {
+    ensure_gc_scanner_registered();
+    let event_name = match string_from_header(event_name_ptr) {
+        Some(name) => name,
+        None => return handle,
+    };
+    if callback_ptr == 0 {
+        return handle;
+    }
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        emitter.add_listener(&event_name, callback_ptr, true, false);
+    }
+    handle
+}
+
+/// EventEmitter.prependListener(eventName, listener) — insert at front.
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_prepend_listener(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+    callback_ptr: i64,
+) -> Handle {
+    ensure_gc_scanner_registered();
+    let event_name = match string_from_header(event_name_ptr) {
+        Some(name) => name,
+        None => return handle,
+    };
+    if callback_ptr == 0 {
+        return handle;
+    }
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        emitter.add_listener(&event_name, callback_ptr, false, true);
+    }
+    handle
+}
+
+/// EventEmitter.prependOnceListener(eventName, listener).
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_prepend_once_listener(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+    callback_ptr: i64,
+) -> Handle {
+    ensure_gc_scanner_registered();
+    let event_name = match string_from_header(event_name_ptr) {
+        Some(name) => name,
+        None => return handle,
+    };
+    if callback_ptr == 0 {
+        return handle;
+    }
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        emitter.add_listener(&event_name, callback_ptr, true, true);
+    }
+    handle
+}
+
+/// Drain pending `events.once` promises for `event_name` on `handle`,
+/// resolving each with a single-element array `[arg]`.
+unsafe fn drain_pending_once_promises(
+    emitter: &mut EventEmitterHandle,
+    event_name: &str,
+    arg: f64,
+    has_arg: bool,
+) {
+    let pending = match emitter.pending_once_promises.remove(event_name) {
+        Some(v) => v,
+        None => return,
+    };
+    for promise_ptr in pending {
+        if promise_ptr.is_null() {
+            continue;
+        }
+        // Build a 1-element array `[arg]` (or empty if no arg) so the
+        // awaiter sees Node-compatible shape.
+        let arr = js_array_alloc(1);
+        let arr = if has_arg {
+            js_array_push_f64(arr, arg)
+        } else {
+            arr
+        };
+        let boxed_arr = js_nanbox_pointer(arr as i64);
+        js_promise_resolve(promise_ptr, boxed_arr);
+    }
 }
 
 /// EventEmitter.emit(eventName, arg)
@@ -121,28 +301,38 @@ pub unsafe extern "C" fn js_event_emitter_emit(
         None => return false,
     };
 
+    let mut had_listeners = false;
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        if let Some(listeners) = emitter.listeners.get(&event_name) {
-            if listeners.is_empty() {
-                return false;
-            }
-
-            // Clone the listeners to avoid borrowing issues during iteration
-            let listeners_copy: Vec<i64> = listeners.clone();
-
-            // Call each listener with the argument
-            for callback_ptr in listeners_copy {
-                if callback_ptr != 0 {
-                    let closure_ptr = callback_ptr as *const ClosureHeader;
-                    js_closure_call1(closure_ptr, arg);
+        // Snapshot the listener vec, then prune `once`-listeners from
+        // the live vec before dispatching. This matches Node semantics:
+        // a once-listener removed mid-dispatch still fires this emit,
+        // but is gone for the next one.
+        let snapshot: Vec<Listener> = match emitter.events.get(&event_name) {
+            Some(v) if !v.is_empty() => v.clone(),
+            _ => Vec::new(),
+        };
+        if !snapshot.is_empty() {
+            had_listeners = true;
+            if snapshot.iter().any(|l| l.once) {
+                if let Some(v) = emitter.events.get_mut(&event_name) {
+                    v.retain(|l| !l.once);
                 }
+                emitter.prune_event_if_empty(&event_name);
             }
+        }
 
-            return true;
+        // Resolve any pending `events.once` Promises before dispatch.
+        drain_pending_once_promises(emitter, &event_name, arg, true);
+
+        for l in snapshot {
+            if l.callback != 0 {
+                let closure_ptr = l.callback as *const ClosureHeader;
+                js_closure_call1(closure_ptr, arg);
+            }
         }
     }
 
-    false
+    had_listeners
 }
 
 /// EventEmitter.emit with no arguments
@@ -156,37 +346,47 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
         None => return false,
     };
 
+    let mut had_listeners = false;
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        if let Some(listeners) = emitter.listeners.get(&event_name) {
-            if listeners.is_empty() {
-                return false;
-            }
-
-            // Clone the listeners to avoid borrowing issues during iteration
-            let listeners_copy: Vec<i64> = listeners.clone();
-
-            // Call each listener with no arguments
-            for callback_ptr in listeners_copy {
-                if callback_ptr != 0 {
-                    let closure_ptr = callback_ptr as *const ClosureHeader;
-                    js_closure_call0(closure_ptr);
+        let snapshot: Vec<Listener> = match emitter.events.get(&event_name) {
+            Some(v) if !v.is_empty() => v.clone(),
+            _ => Vec::new(),
+        };
+        if !snapshot.is_empty() {
+            had_listeners = true;
+            if snapshot.iter().any(|l| l.once) {
+                if let Some(v) = emitter.events.get_mut(&event_name) {
+                    v.retain(|l| !l.once);
                 }
+                emitter.prune_event_if_empty(&event_name);
             }
+        }
 
-            return true;
+        drain_pending_once_promises(
+            emitter,
+            &event_name,
+            f64::from_bits(0x7FFC_0000_0000_0001), // TAG_UNDEFINED
+            false,
+        );
+
+        for l in snapshot {
+            if l.callback != 0 {
+                let closure_ptr = l.callback as *const ClosureHeader;
+                js_closure_call0(closure_ptr);
+            }
         }
     }
 
-    false
+    had_listeners
 }
 
 /// EventEmitter.removeListener(eventName, listener)
-/// Remove a specific listener from an event.
+/// Remove the first matching listener for the event.
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_remove_listener(
     handle: Handle,
     event_name_ptr: *const StringHeader,
-    callback_ptr: i64, // Closure pointer passed as i64
+    callback_ptr: i64,
 ) -> Handle {
     let event_name = match string_from_header(event_name_ptr) {
         Some(name) => name,
@@ -194,11 +394,18 @@ pub unsafe extern "C" fn js_event_emitter_remove_listener(
     };
 
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        if let Some(listeners) = emitter.listeners.get_mut(&event_name) {
-            listeners.retain(|&p| p != callback_ptr);
+        let mut removed = false;
+        if let Some(listeners) = emitter.events.get_mut(&event_name) {
+            // Node removes only the first matching listener, not all.
+            if let Some(pos) = listeners.iter().position(|l| l.callback == callback_ptr) {
+                listeners.remove(pos);
+                removed = true;
+            }
+        }
+        if removed {
+            emitter.prune_event_if_empty(&event_name);
         }
     }
-
     handle
 }
 
@@ -211,19 +418,19 @@ pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
 ) -> Handle {
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         if event_name_ptr.is_null() {
-            // Remove all listeners for all events
-            emitter.listeners.clear();
+            emitter.events.clear();
+            emitter.event_order.clear();
         } else if let Some(event_name) = string_from_header(event_name_ptr) {
-            // Remove all listeners for specific event
-            emitter.listeners.remove(&event_name);
+            emitter.events.remove(&event_name);
+            if let Some(pos) = emitter.event_order.iter().position(|s| s == &event_name) {
+                emitter.event_order.remove(pos);
+            }
         }
     }
-
     handle
 }
 
 /// EventEmitter.listenerCount(eventName)
-/// Get the number of listeners for an event.
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_listener_count(
     handle: Handle,
@@ -233,12 +440,169 @@ pub unsafe extern "C" fn js_event_emitter_listener_count(
         Some(name) => name,
         None => return 0.0,
     };
-
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        if let Some(listeners) = emitter.listeners.get(&event_name) {
+        if let Some(listeners) = emitter.events.get(&event_name) {
             return listeners.len() as f64;
         }
     }
-
     0.0
+}
+
+/// EventEmitter.setMaxListeners(n).
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_set_max_listeners(handle: Handle, n: f64) -> Handle {
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        emitter.max_listeners = n as i32;
+    }
+    handle
+}
+
+/// EventEmitter.getMaxListeners().
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_get_max_listeners(handle: Handle) -> f64 {
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        return emitter.max_listeners as f64;
+    }
+    // Node's default for a stranger emitter is 10.
+    10.0
+}
+
+/// EventEmitter.eventNames() — returns an array of strings in insertion
+/// order (matches Node).
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_event_names(handle: Handle) -> *mut ArrayHeader {
+    let arr = js_array_alloc(0);
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        let mut result = arr;
+        for name in emitter.event_order.iter() {
+            // Skip events that have been emptied without prune (shouldn't
+            // happen, but defensive).
+            let alive = emitter
+                .events
+                .get(name)
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
+            if !alive {
+                continue;
+            }
+            let bytes = name.as_bytes();
+            let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            let nanboxed = js_nanbox_string(str_ptr as i64);
+            result = js_array_push_f64(result, nanboxed);
+        }
+        return result;
+    }
+    arr
+}
+
+/// EventEmitter.listeners(eventName) — returns an array of the registered
+/// listener closures (NaN-boxed POINTER_TAG). For the `once` case Node
+/// returns the *unwrapped* user closure; we already store the user
+/// closure directly so the result matches.
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_listeners(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+) -> *mut ArrayHeader {
+    let arr = js_array_alloc(0);
+    let event_name = match string_from_header(event_name_ptr) {
+        Some(name) => name,
+        None => return arr,
+    };
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        if let Some(listeners) = emitter.events.get(&event_name) {
+            let mut result = arr;
+            for l in listeners.iter() {
+                if l.callback != 0 {
+                    let nanboxed = js_nanbox_pointer(l.callback);
+                    result = js_array_push_f64(result, nanboxed);
+                }
+            }
+            return result;
+        }
+    }
+    arr
+}
+
+/// EventEmitter.rawListeners(eventName) — identical to `listeners` in
+/// our model since we don't wrap `once` listeners at registration time
+/// (the `once` flag is stored alongside the user closure).
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_raw_listeners(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+) -> *mut ArrayHeader {
+    js_event_emitter_listeners(handle, event_name_ptr)
+}
+
+// ============================================================================
+// Module-level helpers — `events.once(em, name)`, `events.on(em, name)`,
+// `events.getEventListeners(em, name)`, `events.listenerCount(em, name)`,
+// `events.setMaxListeners(n, em)`, `events.getMaxListeners(em)`.
+// ============================================================================
+
+/// `events.once(emitter, eventName)` — returns a Promise that resolves
+/// to an array of the args fired by the next `emit(eventName, ...)`.
+///
+/// Node returns the *full* args array (e.g. `emit('x', 1, 2)` resolves
+/// to `[1, 2]`). Perry's emit FFI today is single-arg, so the resolved
+/// array is single-element. That's enough for the parity probe in
+/// issue #850; multi-arg parity is a follow-up.
+#[no_mangle]
+pub unsafe extern "C" fn js_events_once(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+) -> *mut Promise {
+    ensure_gc_scanner_registered();
+    let promise = js_promise_new();
+    let event_name = match string_from_header(event_name_ptr) {
+        Some(name) => name,
+        None => return promise,
+    };
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        emitter
+            .pending_once_promises
+            .entry(event_name)
+            .or_default()
+            .push(promise);
+    }
+    promise
+}
+
+/// `events.getEventListeners(emitter, eventName)` — alias for
+/// `emitter.listeners(eventName)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_events_get_event_listeners(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+) -> *mut ArrayHeader {
+    js_event_emitter_listeners(handle, event_name_ptr)
+}
+
+/// `events.listenerCount(emitter, eventName)` — alias for
+/// `emitter.listenerCount(eventName)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_events_listener_count(
+    handle: Handle,
+    event_name_ptr: *const StringHeader,
+) -> f64 {
+    js_event_emitter_listener_count(handle, event_name_ptr)
+}
+
+/// `events.getMaxListeners(emitter)` — alias.
+#[no_mangle]
+pub unsafe extern "C" fn js_events_get_max_listeners(handle: Handle) -> f64 {
+    js_event_emitter_get_max_listeners(handle)
+}
+
+/// `events.setMaxListeners(n, ...emitters)` — Perry FFI takes a single
+/// emitter handle. The codegen wraps multi-target calls by emitting
+/// one FFI call per target; for the common single-emitter case below
+/// this is exactly the right shape.
+#[no_mangle]
+pub unsafe extern "C" fn js_events_set_max_listeners(n: f64, handle: Handle) -> f64 {
+    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+        emitter.max_listeners = n as i32;
+    }
+    f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
 }
