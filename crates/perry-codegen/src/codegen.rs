@@ -95,6 +95,18 @@ pub struct CompileOptions {
     /// has `const Box = ...; export default Box`), and the linker failed
     /// with `Undefined symbols: _perry_fn_..._Box`.
     pub import_function_origin_names: std::collections::HashMap<String, String>,
+    /// Issue #678 followup: imports of names from `ModuleKind::Interpreted`
+    /// (V8-fallback) modules — `consumer_name → module_specifier`. Sparse
+    /// map, only populated for V8-routed imports. When a name appears here
+    /// the codegen sidesteps `perry_fn_<src>__<name>` symbol formation and
+    /// emits a `js_call_v8_export(specifier, name, args, argc)` bridge call
+    /// instead. Without this, native modules that imported from a JS
+    /// fallback (e.g. `ink` pulled in by yoga-layout's V8 dependency)
+    /// failed the link with `Undefined symbols: _perry_fn_..._render`
+    /// even though re-export-rename resolution (#785) was correct — the
+    /// origin module had been demoted to V8 so it never emitted the
+    /// `perry_fn_<src>__<name>` symbol at all.
+    pub import_function_v8_specifiers: std::collections::HashMap<String, String>,
     /// Issue #680: per-namespace member resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `source_prefix`. Used by
     /// the namespace-member access lowering paths in `expr.rs` and
@@ -401,6 +413,10 @@ pub(crate) struct CrossModuleCtx {
     /// Cloned from the same field so codegen helpers reachable via
     /// `CrossModuleCtx` can resolve the origin name without an extra arg.
     pub import_function_origin_names: std::collections::HashMap<String, String>,
+    /// Issue #678 followup: see `CompileOptions::import_function_v8_specifiers`.
+    /// Routes V8-fallback imports through the runtime bridge instead of
+    /// the missing `perry_fn_<src>__<name>` extern.
+    pub import_function_v8_specifiers: std::collections::HashMap<String, String>,
     /// Issue #608 — imported function names whose source-side signature
     /// has a trailing `...rest` parameter. Used by the cross-module call
     /// site in `lower_call.rs` to pack trailing args into a rest array.
@@ -1201,6 +1217,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         type_aliases: opts.type_aliases,
         imported_func_param_counts: opts.imported_func_param_counts,
         import_function_origin_names: opts.import_function_origin_names.clone(),
+        import_function_v8_specifiers: opts.import_function_v8_specifiers.clone(),
         imported_func_has_rest: opts.imported_func_has_rest,
         imported_func_return_types: opts.imported_func_return_types,
         method_param_counts,
@@ -2706,11 +2723,22 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         imports.sort_by(|a, b| a.0.cmp(b.0));
         for (name, source_prefix) in imports {
             let is_class = imported_class_names.contains(name);
+            // Issue #678 followup: V8-fallback imports have no native target
+            // — the wrapper body cannot call `perry_fn_<src>__<name>` because
+            // that symbol doesn't exist. Emit the same no-op wrapper +
+            // ClosureHeader as the imported-class branch so direct calls of
+            // the function-reference-as-value still link (and fail closed at
+            // runtime). Actual call sites — Call/PropertyGet-Call/namespace
+            // member call — route through `emit_v8_export_call` and do NOT
+            // touch this wrapper.
+            let is_v8_import = cross_module
+                .import_function_v8_specifiers
+                .contains_key(name);
             let wrapper_name = format!("__perry_wrap_extern_{}__{}", source_prefix, name);
             if !emitted_wrappers.insert(wrapper_name.clone()) {
                 continue;
             }
-            if is_class {
+            if is_class || is_v8_import {
                 // No-op wrapper + a closure header that points at it. The
                 // wrapper returns NaN-tagged `undefined` so any indirect call
                 // (`MyClass.somethingThatIsActuallyAFn()`) returns undefined.
@@ -3173,6 +3201,7 @@ fn compile_function(
         module_globals,
         import_function_prefixes,
         import_function_origin_names: &cross_module.import_function_origin_names,
+        import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,
@@ -3551,6 +3580,7 @@ fn compile_closure(
         module_globals,
         import_function_prefixes,
         import_function_origin_names: &cross_module.import_function_origin_names,
+        import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
         closure_captures,
         current_closure_ptr: Some("%this_closure".to_string()),
         enums,
@@ -3787,6 +3817,7 @@ fn compile_method(
         module_globals,
         import_function_prefixes,
         import_function_origin_names: &cross_module.import_function_origin_names,
+        import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,
@@ -4261,6 +4292,7 @@ fn compile_module_entry(
             module_globals,
             import_function_prefixes,
             import_function_origin_names: &cross_module.import_function_origin_names,
+            import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
             closure_captures: HashMap::new(),
             current_closure_ptr: None,
             enums,
@@ -4616,6 +4648,7 @@ fn compile_module_entry(
             module_globals,
             import_function_prefixes,
             import_function_origin_names: &cross_module.import_function_origin_names,
+            import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
             closure_captures: HashMap::new(),
             current_closure_ptr: None,
             enums,
@@ -5358,6 +5391,7 @@ fn compile_static_method(
         module_globals,
         import_function_prefixes,
         import_function_origin_names: &cross_module.import_function_origin_names,
+        import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,

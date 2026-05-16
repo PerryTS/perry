@@ -18,7 +18,7 @@
     "issue": "788",
     "added": "2026-05-16",
     "category": "bug-open",
-    "reason": "#807 harness for AsyncLocalStorage propagation through await/microtask/timer and async_hooks.createHook lifecycle. Today's Perry: sync nested run() works (sections 1, 6, 7) but the store evaporates when crossing an await boundary into a separately-named async fn (sections 2/3) and through queueMicrotask/setTimeout (sections 4/5). createHook returns undefined (section 8). Tracks #788 (AsyncLocalStorage real tracking) and #789 (async_hooks lifecycle); each section flips to PASS independently as those land."
+    "reason": "#807 harness for AsyncLocalStorage propagation through await/microtask/timer and async_hooks.createHook lifecycle. Perry now preserves ALS context across await chains, queueMicrotask, setTimeout, nested runs, and concurrent Promise.all branches (#788). Remaining failure is section 8: createHook returns undefined / lacks lifecycle + asyncId tracking, tracked by #789."
   },
   "test_harness_class_mixins": {
     "issue": "806",

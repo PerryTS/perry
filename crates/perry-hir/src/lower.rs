@@ -4216,13 +4216,10 @@ See docs/src/language/decorators.md."
 
 /// Emit a one-shot note when the user imports `node:async_hooks`. Perry
 /// ships a structural stub (see crates/perry-jsruntime/src/modules.rs)
-/// that satisfies the NestJS bootstrap path, but does NOT yet implement
-/// real async-context tracking. Anything relying on `AsyncLocalStorage`
-/// for context propagation across `await` / `setImmediate` /
-/// `process.nextTick` boundaries (Sentry request scopes, OpenTelemetry
-/// trace propagation, NestJS request-scoped providers, pino child
-/// loggers) will compile and run but silently lose context. Warning at
-/// compile time avoids the production surprise.
+/// now has real AsyncLocalStorage propagation, but the observability
+/// half of async_hooks (createHook lifecycle and real async IDs) is still
+/// tracked separately in #789. Warning at compile time keeps APM/tracing
+/// users from mistaking the remaining stub surface for full Node parity.
 fn emit_async_hooks_shim_note() {
     use std::sync::atomic::{AtomicBool, Ordering};
     static EMITTED: AtomicBool = AtomicBool::new(false);
@@ -4231,13 +4228,11 @@ fn emit_async_hooks_shim_note() {
     }
     eprintln!(
         "[perry] note: `import \"node:async_hooks\"` is satisfied by Perry's structural \
-stub. Implemented surface: AsyncResource, AsyncLocalStorage, executionAsyncId, \
-and createHook shapes — enough that NestJS bootstrap compiles. \
-AsyncLocalStorage.run() does NOT propagate context across \
-`await`/`setImmediate`/`process.nextTick` boundaries, so anything that \
-relies on async-context tracking (Sentry request scopes, OpenTelemetry \
-trace propagation, NestJS request-scoped providers, pino child loggers) \
-will silently lose context. See https://github.com/PerryTS/perry/issues/775."
+stub plus AsyncLocalStorage context propagation across await/microtasks/timers. \
+Remaining gap: createHook lifecycle callbacks and real executionAsyncId/\
+triggerAsyncId tracking are still stubs, so APM/tracing tools that observe \
+async resource lifecycles are not fully supported yet. See \
+https://github.com/PerryTS/perry/issues/789."
     );
 }
 

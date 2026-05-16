@@ -271,6 +271,21 @@ pub fn compute_object_cache_key(
         h.field("import_fn_origin_names", &s);
     }
 
+    // Issue #678 followup: V8-fallback specifier overrides — same rationale
+    // as origin_names above. Two builds where the same TS module imports
+    // the same names but the upstream package flipped between native and
+    // V8 fallback must not share a cached `.o`.
+    {
+        let mut v: Vec<(&String, &String)> = opts.import_function_v8_specifiers.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(k, vv)| format!("{}={}", k, vv))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("import_fn_v8_specifiers", &s);
+    }
+
     // Imported classes — sort by name. Serialize every field that codegen
     // reads so a changed constructor arity or new method on a re-exported
     // class invalidates consumers.
@@ -570,6 +585,7 @@ mod object_cache_tests {
             non_entry_module_prefixes: Vec::new(),
             import_function_prefixes: std::collections::HashMap::new(),
             import_function_origin_names: std::collections::HashMap::new(),
+            import_function_v8_specifiers: std::collections::HashMap::new(),
             namespace_member_prefixes: std::collections::HashMap::new(),
             emit_ir_only: false,
             namespace_imports: Vec::new(),

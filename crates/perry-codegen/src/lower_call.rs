@@ -560,6 +560,23 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     .cloned()
                     .or_else(|| ctx.import_function_prefixes.get(property).cloned())
                 {
+                    // Issue #678 followup: if the import lands in a V8-fallback
+                    // module (e.g. `import * as ink from "ink"` where ink fell
+                    // back to V8 because yoga-layout pulled in a feature Perry
+                    // can't compile), route the namespace member through the
+                    // runtime bridge — no `perry_fn_<src>__<member>` symbol
+                    // exists for the linker to bind to.
+                    if let Some(specifier) =
+                        ctx.import_function_v8_specifiers.get(property).cloned()
+                    {
+                        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                        for a in args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        return Ok(crate::expr::emit_v8_export_call(
+                            ctx, &specifier, property, &lowered,
+                        ));
+                    }
                     // Issue #678: re-exported names (e.g. `export { default as
                     // render }`) emit `perry_fn_<src>__default` in the origin —
                     // resolve the actual origin suffix before forming the symbol.
@@ -775,6 +792,46 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     I64,
                     "js_set_timeout_callback",
                     &[(I64, &cb_handle), (DOUBLE, &delay_box)],
+                );
+                return Ok(nanbox_pointer_inline(blk, &id));
+            }
+            "setImmediate" if !args.is_empty() => {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                if args.len() == 1 {
+                    let blk = ctx.block();
+                    let cb_handle = unbox_to_i64(blk, &cb_box);
+                    let id = blk.call(
+                        I64,
+                        "js_set_timeout_callback",
+                        &[(I64, &cb_handle), (DOUBLE, "0.0")],
+                    );
+                    return Ok(nanbox_pointer_inline(blk, &id));
+                }
+
+                let n = args.len() - 1;
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, a) in args.iter().skip(1).enumerate() {
+                    let v = lower_expr(ctx, a)?;
+                    let blk = ctx.block();
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, &v, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf
+                ));
+                let blk = ctx.block();
+                let cb_handle = unbox_to_i64(blk, &cb_box);
+                let id = blk.call(
+                    I64,
+                    "js_set_timeout_callback_args",
+                    &[
+                        (I64, &cb_handle),
+                        (DOUBLE, "0.0"),
+                        (PTR, &ptr_reg),
+                        (I32, &n.to_string()),
+                    ],
                 );
                 return Ok(nanbox_pointer_inline(blk, &id));
             }
@@ -1084,6 +1141,19 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 return Ok(ctx.block().call(DOUBLE, name, &arg_slices));
             }
         };
+        // Issue #678 followup: if the consumer-visible name resolves to a
+        // V8-fallback module, there is no `perry_fn_<src>__<name>` symbol
+        // (the origin was demoted to V8 and never emitted a native one).
+        // Route the call through the runtime V8 bridge.
+        if let Some(specifier) = ctx.import_function_v8_specifiers.get(name).cloned() {
+            let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+            for a in args {
+                lowered.push(lower_expr(ctx, a)?);
+            }
+            return Ok(crate::expr::emit_v8_export_call(
+                ctx, &specifier, name, &lowered,
+            ));
+        }
         // Issue #678: re-export rename (`export { default as render } from
         // './render.js'`) means the origin module emits the symbol under
         // the *origin* name (`default`), not the consumer-visible name
