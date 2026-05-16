@@ -2807,10 +2807,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             //     exists, otherwise emits a no-op (matches the variable/
             //     class branch in the #837 loop above).
             if sanitized != *exported {
-                let sanitized_target =
-                    format!("perry_fn_{}__{}", module_prefix, sanitized);
-                let raw_target =
-                    format!("perry_fn_{}__{}", module_prefix, exported);
+                let sanitized_target = format!("perry_fn_{}__{}", module_prefix, sanitized);
+                let raw_target = format!("perry_fn_{}__{}", module_prefix, exported);
                 if !llmod.has_function(&raw_target) && emitted_aliases.insert(raw_target.clone()) {
                     // Look up the param count to match the sanitized
                     // target's arity. Default to 0 — that matches the
@@ -2831,21 +2829,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     let blk = wf.block_mut(0).unwrap();
                     let arg_names: Vec<String> =
                         (0..param_count).map(|i| format!("%a{}", i)).collect();
-                    let call_args: Vec<(LlvmType, &str)> = arg_names
-                        .iter()
-                        .map(|s| (DOUBLE, s.as_str()))
-                        .collect();
+                    let call_args: Vec<(LlvmType, &str)> =
+                        arg_names.iter().map(|s| (DOUBLE, s.as_str())).collect();
                     let result = blk.call(DOUBLE, &sanitized_target, &call_args);
                     blk.ret(DOUBLE, &result);
                 }
-                let raw_wrap = format!(
-                    "__perry_wrap_perry_fn_{}__{}",
-                    module_prefix, exported
-                );
-                let sanitized_wrap = format!(
-                    "__perry_wrap_perry_fn_{}__{}",
-                    module_prefix, sanitized
-                );
+                let raw_wrap = format!("__perry_wrap_perry_fn_{}__{}", module_prefix, exported);
+                let sanitized_wrap =
+                    format!("__perry_wrap_perry_fn_{}__{}", module_prefix, sanitized);
                 if !llmod.has_function(&raw_wrap) && emitted_aliases.insert(raw_wrap.clone()) {
                     if llmod.has_function(&sanitized_wrap) {
                         // Forward to the sanitized wrapper. Both have the
