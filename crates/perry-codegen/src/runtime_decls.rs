@@ -857,6 +857,19 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // cleanly resolves to undefined (instead of TAG_TRUE → "boolean" /
     // "(boolean).method is not a function").
     module.declare_function("js_unresolved_namespace_stub", DOUBLE, &[]);
+    // Issue #841: per-(submodule, export) function-singleton getter for
+    // the five Node submodules without perry-stdlib backing. Returns a
+    // NaN-boxed ClosureHeader pointer (typeof "function") or TAG_TRUE
+    // as a fallback if the (submod_key, name) pair isn't registered.
+    module.declare_function(
+        "js_node_submodule_export_as_function",
+        DOUBLE,
+        &[PTR, I32, PTR, I32],
+    );
+    // Issue #841 companion: per-submodule namespace stub object. Returns
+    // a NaN-boxed ObjectHeader pointer whose fields are the function
+    // singletons emitted by `js_node_submodule_export_as_function`.
+    module.declare_function("js_node_submodule_namespace", DOUBLE, &[PTR, I32]);
     // Issue #692: stub for default-imported callables from unresolved modules —
     // returns NaN-boxed undefined and prints a one-shot diagnostic, so the
     // program links instead of failing with `undefined reference to 'default'`.

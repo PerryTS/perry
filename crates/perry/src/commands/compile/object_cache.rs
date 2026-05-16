@@ -285,6 +285,31 @@ pub fn compute_object_cache_key(
             .join(",");
         h.field("import_fn_v8_specifiers", &s);
     }
+    // Issue #841: per-(local, submodule_key, export_name) so a flip
+    // between named-import-from-submodule and any other resolution
+    // invalidates the cached `.o`. Same shape as V8 specifiers above.
+    {
+        let mut v: Vec<(&String, &(String, String))> =
+            opts.import_function_node_submodule.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(k, (submod, name))| format!("{}={}:{}", k, submod, name))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("import_fn_node_submodule", &s);
+    }
+    // Issue #841 companion: per-local namespace-to-submodule mapping.
+    {
+        let mut v: Vec<(&String, &String)> = opts.namespace_node_submodules.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(k, vv)| format!("{}={}", k, vv))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("namespace_node_submodules", &s);
+    }
 
     // Imported classes — sort by name. Serialize every field that codegen
     // reads so a changed constructor arity or new method on a re-exported
@@ -586,6 +611,9 @@ mod object_cache_tests {
             import_function_prefixes: std::collections::HashMap::new(),
             import_function_origin_names: std::collections::HashMap::new(),
             import_function_v8_specifiers: std::collections::HashMap::new(),
+            // Issue #841: new submodule registry fields.
+            import_function_node_submodule: std::collections::HashMap::new(),
+            namespace_node_submodules: std::collections::HashMap::new(),
             namespace_member_prefixes: std::collections::HashMap::new(),
             emit_ir_only: false,
             namespace_imports: Vec::new(),

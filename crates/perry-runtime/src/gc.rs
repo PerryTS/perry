@@ -3890,6 +3890,13 @@ pub fn gc_init() {
     gc_register_root_scanner(intern_table_root_scanner);
     gc_register_root_scanner(shadow_stack_root_scanner);
     gc_register_root_scanner(crate::builtins::scan_console_log_singleton_roots);
+    // Issue #841: GC roots for the per-(submodule, export) function
+    // singletons + per-submodule namespace stub objects allocated by
+    // `node_submodules.rs`. Without this scanner the next GC cycle
+    // after first import-binding use would reclaim the singletons
+    // (nothing else holds them — they live for the program's lifetime
+    // via codegen `getter` calls, not via a user-visible JSValue root).
+    gc_register_root_scanner(crate::node_submodules::scan_node_submodule_singleton_roots);
     // Box-capture root scanner (mutable closure captures, esp. the
     // generator state-machine's `__iter` and `__step` boxes that hold
     // the iter object + step closure across awaits).

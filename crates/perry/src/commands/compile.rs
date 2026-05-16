@@ -3391,6 +3391,18 @@ pub fn run_with_parse_cache(
             let mut import_function_v8_specifiers:
                 std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            // Issue #841: named-import → (submodule_key, exported_name)
+            // for the five recognized Node submodules with no perry-stdlib
+            // backing. Populated by a dedicated pass below; consumed by
+            // codegen's `Expr::ExternFuncRef` value-form catch-all.
+            let mut import_function_node_submodule:
+                std::collections::HashMap<String, (String, String)> =
+                std::collections::HashMap::new();
+            // Issue #841 companion: local-namespace → submodule_key for
+            // `import * as ns from "node:<submod>"`.
+            let mut namespace_node_submodules:
+                std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             // Issue #680: per-namespace member resolution. Disambiguates
             // `random.make` vs `tracer.make` when multiple namespaces
             // export the same member name. Keyed by `(namespace_local,
@@ -4211,6 +4223,64 @@ pub fn run_with_parse_cache(
                 }
             }
 
+            // Issue #841: register named + namespace imports from the
+            // five recognized Node submodules — `node:timers/promises`,
+            // `node:readline/promises`, `node:stream/promises`,
+            // `node:stream/consumers`, `node:sys`. These don't resolve
+            // to anything perry-stdlib can back, but the runtime ships
+            // a `js_node_submodule_export_as_function` helper that
+            // returns a function singleton for each known export, plus
+            // `js_node_submodule_namespace` for namespace shapes.
+            //
+            // Without this registration the codegen's `ExternFuncRef`
+            // value-form catch-all fell to TAG_TRUE, so `typeof
+            // setTimeout` (from `node:timers/promises`) reported
+            // `"boolean"` instead of `"function"`. Namespaces were
+            // hard-errored at module-collection time pre-fix
+            // (`collect_modules.rs::known_node_submodule_key`); they
+            // now flow through and land here.
+            for import in &hir_module.imports {
+                if import.type_only {
+                    continue;
+                }
+                let submod_key = match self::collect_modules::known_node_submodule_key(&import.source) {
+                    Some(k) => k.to_string(),
+                    None => continue,
+                };
+                for spec in &import.specifiers {
+                    match spec {
+                        perry_hir::ImportSpecifier::Named { imported, local } => {
+                            import_function_node_submodule.insert(
+                                local.clone(),
+                                (submod_key.clone(), imported.clone()),
+                            );
+                            if local != imported {
+                                import_function_node_submodule.insert(
+                                    imported.clone(),
+                                    (submod_key.clone(), imported.clone()),
+                                );
+                            }
+                        }
+                        perry_hir::ImportSpecifier::Default { local } => {
+                            // Default imports route to "default" — these
+                            // submodules don't have meaningful defaults
+                            // but tracking them keeps the catch-all from
+                            // firing on `import x from "node:..."`.
+                            import_function_node_submodule.insert(
+                                local.clone(),
+                                (submod_key.clone(), "default".to_string()),
+                            );
+                        }
+                        perry_hir::ImportSpecifier::Namespace { local } => {
+                            namespace_node_submodules
+                                .insert(local.clone(), submod_key.clone());
+                            // Already in `namespace_imports` via the
+                            // pre-loop at L3441; nothing else to do.
+                        }
+                    }
+                }
+            }
+
             // Polymorphic-receiver augmentation (issue #240): when this
             // module references a type name that doesn't resolve to any
             // class, interface, enum, or type alias in the program's
@@ -4682,6 +4752,8 @@ pub fn run_with_parse_cache(
                 import_function_prefixes,
                 import_function_origin_names,
                 import_function_v8_specifiers,
+                import_function_node_submodule,
+                namespace_node_submodules,
                 namespace_member_prefixes,
                 emit_ir_only: bitcode_link,
                 namespace_imports,

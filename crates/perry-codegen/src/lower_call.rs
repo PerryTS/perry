@@ -932,6 +932,58 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
             }
             _ => {}
         }
+        // Issue #841: direct call against a named import from one of the
+        // five recognized Node submodules (`import { pipeline } from
+        // "node:stream/promises"; pipeline()`). The HIR registers
+        // `pipeline` as an imported func; without this routing the
+        // catch-all below tries to emit a bare LLVM call to `@pipeline`
+        // and the linker errors with `Undefined symbols: _pipeline`.
+        //
+        // Route to the value-form singleton getter and then dispatch
+        // through the closure-call machinery — the singleton's thunk
+        // throws an "is not yet implemented" Error. Real impls are
+        // tracked separately under #793.
+        if let Some((submod_key, exported_name)) =
+            ctx.import_function_node_submodule.get(name).cloned()
+        {
+            // Lower args for side effects (closure capture collection,
+            // string-literal interning), then discard — the thunk
+            // signature is `(ClosureHeader*, f64) -> f64` and would
+            // ignore them anyway.
+            for a in args {
+                let _ = crate::expr::lower_expr(ctx, a)?;
+            }
+            let submod_label = crate::expr::emit_string_literal_global(ctx, &submod_key);
+            let name_label = crate::expr::emit_string_literal_global(ctx, &exported_name);
+            let submod_len = submod_key.len();
+            let name_len = exported_name.len();
+            ctx.pending_declares.push((
+                "js_node_submodule_export_as_function".to_string(),
+                DOUBLE,
+                vec![PTR, I32, PTR, I32],
+            ));
+            let blk = ctx.block();
+            let closure_value = blk.call(
+                DOUBLE,
+                "js_node_submodule_export_as_function",
+                &[
+                    (PTR, &submod_label),
+                    (I32, &submod_len.to_string()),
+                    (PTR, &name_label),
+                    (I32, &name_len.to_string()),
+                ],
+            );
+            // Drive through the closure-call machinery so the thunk's
+            // `js_throw` actually fires when the user invokes the
+            // value. `js_closure_call0` matches our thunks'
+            // `(ClosureHeader*, f64) -> f64` signature ignoring the
+            // f64 arg (passed as undefined).
+            ctx.pending_declares
+                .push(("js_closure_call0".to_string(), DOUBLE, vec![DOUBLE]));
+            return Ok(ctx
+                .block()
+                .call(DOUBLE, "js_closure_call0", &[(DOUBLE, &closure_value)]));
+        }
         // perry/system dispatch: map JS names (isDarkMode, getDeviceIdiom,
         // keychainSave, etc.) to their perry_system_* / perry_* C symbols.
         // These arrive as ExternFuncRef because perry/system imports aren't

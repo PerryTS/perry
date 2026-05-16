@@ -107,6 +107,29 @@ pub struct CompileOptions {
     /// origin module had been demoted to V8 so it never emitted the
     /// `perry_fn_<src>__<name>` symbol at all.
     pub import_function_v8_specifiers: std::collections::HashMap<String, String>,
+    /// Issue #841: named imports + namespace imports from Node.js
+    /// submodules that Perry knows about at the resolver level but has
+    /// no perry-stdlib / compile-source backing for —
+    /// `node:timers/promises`, `node:readline/promises`,
+    /// `node:stream/promises`, `node:stream/consumers`, `node:sys`.
+    ///
+    /// Keyed by `local_name` → `(submodule_key, exported_name)`. Codegen's
+    /// `Expr::ExternFuncRef` value-form path probes this BEFORE falling
+    /// to the `TAG_TRUE` sentinel and, when hit, emits a call to the
+    /// runtime helper `js_node_submodule_export_as_function(submod, name)`
+    /// which returns a NaN-boxed function singleton. The previous default
+    /// (`TAG_TRUE` → `typeof X === "boolean"`) is what #841 set out to
+    /// fix.
+    pub import_function_node_submodule: std::collections::HashMap<String, (String, String)>,
+    /// Issue #841 companion: per-local-namespace registration for
+    /// `import * as ns from "node:<submodule>"` shapes. Keyed by
+    /// `local_namespace_name` → `submodule_key`. Codegen's namespace
+    /// lowering paths consult this so:
+    ///   - `typeof ns` reports `"object"` via the runtime stub
+    ///   - `ns.X` returns the same function singleton that named-import
+    ///     `import { X }` produces (so `typeof ns.X === "function"` /
+    ///     `ns.X === <named>` both hold)
+    pub namespace_node_submodules: std::collections::HashMap<String, String>,
     /// Issue #680: per-namespace member resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `source_prefix`. Used by
     /// the namespace-member access lowering paths in `expr.rs` and
@@ -417,6 +440,18 @@ pub(crate) struct CrossModuleCtx {
     /// Routes V8-fallback imports through the runtime bridge instead of
     /// the missing `perry_fn_<src>__<name>` extern.
     pub import_function_v8_specifiers: std::collections::HashMap<String, String>,
+    /// Issue #841: see `CompileOptions::import_function_node_submodule`.
+    /// Routes named imports from the five recognized Node submodules
+    /// (`timers/promises`, `readline/promises`, `stream/promises`,
+    /// `stream/consumers`, `sys`) through
+    /// `js_node_submodule_export_as_function` instead of falling to
+    /// the `TAG_TRUE` sentinel.
+    pub import_function_node_submodule: std::collections::HashMap<String, (String, String)>,
+    /// Issue #841 companion: see `CompileOptions::namespace_node_submodules`.
+    /// Routes namespace-import bindings from the five recognized Node
+    /// submodules to a runtime stub object whose properties point at the
+    /// same function singletons named imports produce.
+    pub namespace_node_submodules: std::collections::HashMap<String, String>,
     /// Issue #608 — imported function names whose source-side signature
     /// has a trailing `...rest` parameter. Used by the cross-module call
     /// site in `lower_call.rs` to pack trailing args into a rest array.
@@ -1218,6 +1253,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         imported_func_param_counts: opts.imported_func_param_counts,
         import_function_origin_names: opts.import_function_origin_names.clone(),
         import_function_v8_specifiers: opts.import_function_v8_specifiers.clone(),
+        // Issue #841: see CrossModuleCtx field docs.
+        import_function_node_submodule: opts.import_function_node_submodule.clone(),
+        namespace_node_submodules: opts.namespace_node_submodules.clone(),
         imported_func_has_rest: opts.imported_func_has_rest,
         imported_func_return_types: opts.imported_func_return_types,
         method_param_counts,
@@ -3202,6 +3240,9 @@ fn compile_function(
         import_function_prefixes,
         import_function_origin_names: &cross_module.import_function_origin_names,
         import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
+        // Issue #841: node:submodule named-import + namespace registries.
+        import_function_node_submodule: &cross_module.import_function_node_submodule,
+        namespace_node_submodules: &cross_module.namespace_node_submodules,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,
@@ -3581,6 +3622,9 @@ fn compile_closure(
         import_function_prefixes,
         import_function_origin_names: &cross_module.import_function_origin_names,
         import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
+        // Issue #841: node:submodule named-import + namespace registries.
+        import_function_node_submodule: &cross_module.import_function_node_submodule,
+        namespace_node_submodules: &cross_module.namespace_node_submodules,
         closure_captures,
         current_closure_ptr: Some("%this_closure".to_string()),
         enums,
@@ -3818,6 +3862,9 @@ fn compile_method(
         import_function_prefixes,
         import_function_origin_names: &cross_module.import_function_origin_names,
         import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
+        // Issue #841: node:submodule named-import + namespace registries.
+        import_function_node_submodule: &cross_module.import_function_node_submodule,
+        namespace_node_submodules: &cross_module.namespace_node_submodules,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,
@@ -4293,6 +4340,9 @@ fn compile_module_entry(
             import_function_prefixes,
             import_function_origin_names: &cross_module.import_function_origin_names,
             import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
+            // Issue #841: node:submodule named-import + namespace registries.
+            import_function_node_submodule: &cross_module.import_function_node_submodule,
+            namespace_node_submodules: &cross_module.namespace_node_submodules,
             closure_captures: HashMap::new(),
             current_closure_ptr: None,
             enums,
@@ -4649,6 +4699,9 @@ fn compile_module_entry(
             import_function_prefixes,
             import_function_origin_names: &cross_module.import_function_origin_names,
             import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
+            // Issue #841: node:submodule named-import + namespace registries.
+            import_function_node_submodule: &cross_module.import_function_node_submodule,
+            namespace_node_submodules: &cross_module.namespace_node_submodules,
             closure_captures: HashMap::new(),
             current_closure_ptr: None,
             enums,
@@ -5392,6 +5445,9 @@ fn compile_static_method(
         import_function_prefixes,
         import_function_origin_names: &cross_module.import_function_origin_names,
         import_function_v8_specifiers: &cross_module.import_function_v8_specifiers,
+        // Issue #841: node:submodule named-import + namespace registries.
+        import_function_node_submodule: &cross_module.import_function_node_submodule,
+        namespace_node_submodules: &cross_module.namespace_node_submodules,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,

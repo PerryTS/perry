@@ -66,6 +66,39 @@ pub(crate) fn import_origin_suffix<'a>(
     origin_names.get(name).map(String::as_str).unwrap_or(name)
 }
 
+/// Issue #841: materialize a NUL-terminated rodata constant carrying
+/// `text`'s UTF-8 bytes and return the LLVM IR pointer expression that
+/// names it. Used by the named-import + namespace-import value-form
+/// lowerings to hand a stable `(ptr, len)` pair to the runtime helpers
+/// `js_node_submodule_export_as_function` /
+/// `js_node_submodule_namespace`. The label uses a per-invocation
+/// counter so multiple call sites in the same function don't collide.
+pub(crate) fn emit_string_literal_global(ctx: &mut FnCtx<'_>, text: &str) -> String {
+    let idx = ctx.typed_parse_counter;
+    ctx.typed_parse_counter += 1;
+    let global_name = format!("perry_node_submod_str_{}", idx);
+    let bytes = text.as_bytes();
+    let mut lit = String::with_capacity(bytes.len() + 4);
+    lit.push('c');
+    lit.push('"');
+    for &b in bytes {
+        if (32..127).contains(&b) && b != b'"' && b != b'\\' {
+            lit.push(b as char);
+        } else {
+            lit.push('\\');
+            lit.push_str(&format!("{:02X}", b));
+        }
+    }
+    lit.push_str("\\00\"");
+    ctx.typed_parse_rodata.push(format!(
+        "@{} = private unnamed_addr constant [{} x i8] {}",
+        global_name,
+        bytes.len() + 1,
+        lit
+    ));
+    format!("@{}", global_name)
+}
+
 /// Issue #678 followup: emit a `js_call_v8_export` bridge call for a name
 /// that resolves to a V8-fallback (interpreted) module.
 ///
@@ -354,6 +387,24 @@ pub(crate) struct FnCtx<'a> {
     /// instead — there is no native symbol to call. Sparse map; absent
     /// entries (the common case) mean the import resolves natively.
     pub import_function_v8_specifiers: &'a std::collections::HashMap<String, String>,
+    /// Issue #841: Named-import → `(submodule_key, exported_name)` map
+    /// for the five Node submodules Perry recognizes but has no
+    /// perry-stdlib / compiled-source backing for —
+    /// `node:timers/promises`, `node:readline/promises`,
+    /// `node:stream/promises`, `node:stream/consumers`, `node:sys`.
+    /// The `Expr::ExternFuncRef` value-form catch-all probes this BEFORE
+    /// falling to the `TAG_TRUE` sentinel and, when hit, emits a call to
+    /// `js_node_submodule_export_as_function(submod_bytes, submod_len,
+    /// name_bytes, name_len)` so `typeof X === "function"` holds.
+    pub import_function_node_submodule: &'a std::collections::HashMap<String, (String, String)>,
+    /// Issue #841 companion: Local namespace alias → submodule key for
+    /// `import * as ns from "node:<submod>"`. Codegen's namespace
+    /// lowering paths route through
+    /// `js_node_submodule_namespace(submod_bytes, submod_len)` so the
+    /// namespace value reports `typeof === "object"` and per-property
+    /// accesses (`ns.X`) read the same function singletons named
+    /// imports produce.
+    pub namespace_node_submodules: &'a std::collections::HashMap<String, String>,
     /// Closure capture map: when lowering inside a closure body, this
     /// holds `LocalId → capture_index`. `LocalGet`/`LocalSet`/`Update`
     /// of an id in this map routes through the runtime
@@ -3723,6 +3774,35 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (the registry duplication bug was the first).
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
                 if ctx.namespace_imports.contains(name) {
+                    // Issue #841: namespace member access for the five
+                    // recognized Node submodules — `import * as ns from
+                    // "node:timers/promises"; ns.setTimeout`. Resolve
+                    // directly to the per-(submodule, export) function
+                    // singleton; same value the named-import would
+                    // produce, so `ns.setTimeout === setTimeout` holds.
+                    // Done before the class_ids check below because
+                    // none of the recognized submodules export classes
+                    // by name today; if/when they do (e.g.
+                    // `readline/promises.Interface`), the class_ids
+                    // branch still wins because class names get
+                    // registered into both maps.
+                    if let Some(submod_key) = ctx.namespace_node_submodules.get(name) {
+                        let submod_label = emit_string_literal_global(ctx, submod_key);
+                        let name_label = emit_string_literal_global(ctx, property);
+                        let submod_len = submod_key.len();
+                        let name_len = property.len();
+                        let blk = ctx.block();
+                        return Ok(blk.call(
+                            DOUBLE,
+                            "js_node_submodule_export_as_function",
+                            &[
+                                (PTR, &submod_label),
+                                (I32, &submod_len.to_string()),
+                                (PTR, &name_label),
+                                (I32, &name_len.to_string()),
+                            ],
+                        ));
+                    }
                     // Issue #574: when the namespace member is itself a class
                     // (`import * as Lib from "./lib"; new Lib.A()` /
                     // `class B extends Lib.A {}`), the export-walk above
@@ -11447,6 +11527,50 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let closure_handle =
                     blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
                 return Ok(nanbox_pointer_inline(blk, &closure_handle));
+            }
+            // Issue #841: named imports from the five Node submodules
+            // Perry recognizes but has no perry-stdlib backing for
+            // (`node:timers/promises`, `node:readline/promises`,
+            // `node:stream/promises`, `node:stream/consumers`,
+            // `node:sys`). Pre-fix the catch-all returned TAG_TRUE so
+            // `typeof setTimeout === "boolean"` and the value literally
+            // printed as `true`. Route to the runtime helper
+            // `js_node_submodule_export_as_function` which returns a
+            // NaN-boxed function singleton; the singleton's thunk is a
+            // thrower (a follow-up under #793 wires real impls).
+            if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name)
+            {
+                let submod_label = emit_string_literal_global(ctx, submod_key);
+                let name_label = emit_string_literal_global(ctx, exported_name);
+                let submod_len = submod_key.len();
+                let name_len = exported_name.len();
+                let blk = ctx.block();
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_node_submodule_export_as_function",
+                    &[
+                        (PTR, &submod_label),
+                        (I32, &submod_len.to_string()),
+                        (PTR, &name_label),
+                        (I32, &name_len.to_string()),
+                    ],
+                ));
+            }
+            // Issue #841 companion: namespace imports for the same five
+            // submodules. The `collect_modules.rs` rejection skips
+            // these so the namespace binding flows through HIR and
+            // lands here. Emit a call to `js_node_submodule_namespace`
+            // which returns a per-submodule stub object whose properties
+            // are the function singletons named imports produce.
+            if let Some(submod_key) = ctx.namespace_node_submodules.get(name) {
+                let submod_label = emit_string_literal_global(ctx, submod_key);
+                let submod_len = submod_key.len();
+                let blk = ctx.block();
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_node_submodule_namespace",
+                    &[(PTR, &submod_label), (I32, &submod_len.to_string())],
+                ));
             }
             // Issue #629: namespace imports for unresolved modules
             // (`import * as fsp from "node:fs/promises"`) — when the

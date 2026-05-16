@@ -29,6 +29,27 @@ use super::{
     JsModule, ParseCache,
 };
 
+/// Issue #841: Node.js submodules that Perry knows about at the
+/// resolver level (no perry-stdlib backing, no compiled-source backing)
+/// but for which we still want to provide a minimal import surface so
+/// `typeof import-name === "function"` and `import * as ns` work.
+///
+/// Each entry returns the bare submodule key that matches
+/// `perry_runtime::node_submodules::SUBMODULES[i].key`. Codegen routes
+/// every named/namespace import from these specifiers through the
+/// runtime singleton getters in that module.
+pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
+    let normalized = source.strip_prefix("node:").unwrap_or(source);
+    match normalized {
+        "timers/promises" => Some("timers_promises"),
+        "readline/promises" => Some("readline_promises"),
+        "stream/promises" => Some("stream_promises"),
+        "stream/consumers" => Some("stream_consumers"),
+        "sys" => Some("sys"),
+        _ => None,
+    }
+}
+
 /// Collect all modules to compile (transitive closure of imports)
 pub(super) fn collect_modules(
     entry_path: &PathBuf,
@@ -641,7 +662,14 @@ pub(super) fn collect_modules(
                 .specifiers
                 .iter()
                 .any(|s| matches!(s, perry_hir::ImportSpecifier::Namespace { .. }));
-            if has_namespace_specifier {
+            // Issue #841: known Node submodules (`node:timers/promises`,
+            // `node:readline/promises`, `node:stream/promises`,
+            // `node:stream/consumers`, `node:sys`) have no stdlib backing
+            // but we DO ship a runtime namespace stub for them via
+            // `js_node_submodule_namespace`. Skip the hard-error so the
+            // compile.rs registration loop can wire the namespace local
+            // through to that runtime helper.
+            if has_namespace_specifier && known_node_submodule_key(&import.source).is_none() {
                 return Err(anyhow::anyhow!(
                     "Could not resolve namespace import `import * as ... from \"{source}\"` in {filename}.\n\
                      Perry has no stdlib bindings for this module path, so the namespace would compile to an empty object \
@@ -653,7 +681,7 @@ pub(super) fn collect_modules(
                     filename = filename,
                 ));
             }
-            if !import.is_native {
+            if !import.is_native && known_node_submodule_key(&import.source).is_none() {
                 match format {
                     OutputFormat::Text => {
                         println!(
