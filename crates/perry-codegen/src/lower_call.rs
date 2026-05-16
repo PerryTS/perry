@@ -778,6 +778,46 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 );
                 return Ok(nanbox_pointer_inline(blk, &id));
             }
+            "setImmediate" if !args.is_empty() => {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                if args.len() == 1 {
+                    let blk = ctx.block();
+                    let cb_handle = unbox_to_i64(blk, &cb_box);
+                    let id = blk.call(
+                        I64,
+                        "js_set_timeout_callback",
+                        &[(I64, &cb_handle), (DOUBLE, "0.0")],
+                    );
+                    return Ok(nanbox_pointer_inline(blk, &id));
+                }
+
+                let n = args.len() - 1;
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, a) in args.iter().skip(1).enumerate() {
+                    let v = lower_expr(ctx, a)?;
+                    let blk = ctx.block();
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, &v, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf
+                ));
+                let blk = ctx.block();
+                let cb_handle = unbox_to_i64(blk, &cb_box);
+                let id = blk.call(
+                    I64,
+                    "js_set_timeout_callback_args",
+                    &[
+                        (I64, &cb_handle),
+                        (DOUBLE, "0.0"),
+                        (PTR, &ptr_reg),
+                        (I32, &n.to_string()),
+                    ],
+                );
+                return Ok(nanbox_pointer_inline(blk, &id));
+            }
             // Refs #665: `setTimeout(fn, delay, ...args)` — JS spec forwards
             // the trailing args to `fn` when the timer fires. Pack them into
             // a stack buffer of doubles and hand off to the varargs runtime

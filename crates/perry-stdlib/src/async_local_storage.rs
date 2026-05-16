@@ -3,16 +3,16 @@
 //! Native implementation of Node.js AsyncLocalStorage from `async_hooks`.
 //! Provides run(), getStore(), enterWith(), exit(), and disable().
 
-use perry_runtime::js_closure_call0;
+use perry_runtime::{async_context, js_closure_call0};
 
 use crate::common::{get_handle_mut, register_handle, Handle};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
-/// AsyncLocalStorage handle storing a stack of stores
-pub struct AsyncLocalStorageHandle {
-    stores: Vec<f64>,
-}
+/// AsyncLocalStorage handle. Store stacks live in perry-runtime's active
+/// async context so schedulers can snapshot and restore them across async
+/// boundaries.
+pub struct AsyncLocalStorageHandle;
 
 impl Default for AsyncLocalStorageHandle {
     fn default() -> Self {
@@ -22,7 +22,7 @@ impl Default for AsyncLocalStorageHandle {
 
 impl AsyncLocalStorageHandle {
     pub fn new() -> Self {
-        AsyncLocalStorageHandle { stores: Vec::new() }
+        AsyncLocalStorageHandle
     }
 }
 
@@ -41,9 +41,7 @@ pub unsafe extern "C" fn js_async_local_storage_run(
     store: f64,
     callback: i64,
 ) -> f64 {
-    if let Some(als) = get_handle_mut::<AsyncLocalStorageHandle>(handle) {
-        als.stores.push(store);
-    }
+    async_context::push_store(handle, store);
 
     let result = if callback != 0 {
         js_closure_call0(callback as *const perry_runtime::ClosureHeader)
@@ -51,9 +49,7 @@ pub unsafe extern "C" fn js_async_local_storage_run(
         f64::from_bits(TAG_UNDEFINED)
     };
 
-    if let Some(als) = get_handle_mut::<AsyncLocalStorageHandle>(handle) {
-        als.stores.pop();
-    }
+    async_context::pop_store(handle);
 
     result
 }
@@ -62,8 +58,8 @@ pub unsafe extern "C" fn js_async_local_storage_run(
 /// Returns the current store (top of stack) or undefined
 #[no_mangle]
 pub extern "C" fn js_async_local_storage_get_store(handle: Handle) -> f64 {
-    if let Some(als) = get_handle_mut::<AsyncLocalStorageHandle>(handle) {
-        if let Some(&store) = als.stores.last() {
+    if get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some() {
+        if let Some(store) = async_context::get_store(handle) {
             return store;
         }
     }
@@ -74,8 +70,8 @@ pub extern "C" fn js_async_local_storage_get_store(handle: Handle) -> f64 {
 /// Push store onto stack (caller is responsible for cleanup)
 #[no_mangle]
 pub extern "C" fn js_async_local_storage_enter_with(handle: Handle, store: f64) {
-    if let Some(als) = get_handle_mut::<AsyncLocalStorageHandle>(handle) {
-        als.stores.push(store);
+    if get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some() {
+        async_context::enter_with(handle, store);
     }
 }
 
@@ -83,12 +79,10 @@ pub extern "C" fn js_async_local_storage_enter_with(handle: Handle, store: f64) 
 /// Save current stack, clear it, call callback, restore stack
 #[no_mangle]
 pub unsafe extern "C" fn js_async_local_storage_exit(handle: Handle, callback: i64) -> f64 {
-    let saved = if let Some(als) = get_handle_mut::<AsyncLocalStorageHandle>(handle) {
-        let saved = als.stores.clone();
-        als.stores.clear();
-        saved
+    let saved = if get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some() {
+        Some(async_context::take_store(handle))
     } else {
-        Vec::new()
+        None
     };
 
     let result = if callback != 0 {
@@ -97,8 +91,8 @@ pub unsafe extern "C" fn js_async_local_storage_exit(handle: Handle, callback: i
         f64::from_bits(TAG_UNDEFINED)
     };
 
-    if let Some(als) = get_handle_mut::<AsyncLocalStorageHandle>(handle) {
-        als.stores = saved;
+    if let Some(saved) = saved {
+        async_context::restore_store(handle, saved);
     }
 
     result
@@ -108,7 +102,7 @@ pub unsafe extern "C" fn js_async_local_storage_exit(handle: Handle, callback: i
 /// Clear the store stack
 #[no_mangle]
 pub extern "C" fn js_async_local_storage_disable(handle: Handle) {
-    if let Some(als) = get_handle_mut::<AsyncLocalStorageHandle>(handle) {
-        als.stores.clear();
+    if get_handle_mut::<AsyncLocalStorageHandle>(handle).is_some() {
+        async_context::clear_store(handle);
     }
 }

@@ -167,6 +167,8 @@ struct CallbackTimer {
     /// e.g. `setTimeout(resolve, delay, res)` inside Promise executors).
     /// Refs #665.
     args: Vec<f64>,
+    /// AsyncLocalStorage context captured when the timer was scheduled.
+    context: crate::async_context::AsyncContextSnapshot,
     /// Whether this timer has been cleared
     cleared: bool,
 }
@@ -199,6 +201,7 @@ pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
         deadline,
         callback,
         args: Vec::new(),
+        context: crate::async_context::capture_context(),
         cleared: false,
     });
 
@@ -245,6 +248,7 @@ pub unsafe extern "C" fn js_set_timeout_callback_args(
         deadline,
         callback,
         args,
+        context: crate::async_context::capture_context(),
         cleared: false,
     });
 
@@ -286,6 +290,7 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
         if !timer.cleared {
             let cb = timer.callback as *const crate::closure::ClosureHeader;
             let a = &timer.args;
+            let previous = crate::async_context::enter_context(&timer.context);
             unsafe {
                 match a.len() {
                     0 => {
@@ -323,6 +328,7 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
                     }
                 }
             }
+            crate::async_context::restore_context(previous);
             fired += 1;
         }
     }
@@ -396,6 +402,8 @@ struct IntervalTimer {
     interval_ms: u64,
     /// When this interval should next fire
     next_deadline: Instant,
+    /// AsyncLocalStorage context captured when the interval was scheduled.
+    context: crate::async_context::AsyncContextSnapshot,
     /// Whether this interval has been cleared
     cleared: bool,
 }
@@ -428,6 +436,7 @@ pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
         callback,
         interval_ms: interval,
         next_deadline,
+        context: crate::async_context::capture_context(),
         cleared: false,
     });
 
@@ -456,13 +465,13 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
     let now = Instant::now();
 
     // Collect callbacks to call and update deadlines
-    let callbacks_to_call: Vec<i64> = {
+    let callbacks_to_call: Vec<(i64, crate::async_context::AsyncContextSnapshot)> = {
         let mut timers = INTERVAL_TIMERS.lock().unwrap();
         let mut callbacks = Vec::new();
 
         for timer in timers.iter_mut() {
             if !timer.cleared && timer.next_deadline <= now {
-                callbacks.push(timer.callback);
+                callbacks.push((timer.callback, timer.context.clone()));
                 timer.next_deadline = now + Duration::from_millis(timer.interval_ms);
             }
         }
@@ -474,10 +483,12 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
 
     let mut fired = 0;
     // Call the callbacks outside of the lock
-    for callback in callbacks_to_call {
+    for (callback, context) in callbacks_to_call {
+        let previous = crate::async_context::enter_context(&context);
         unsafe {
             js_closure_call0(callback as *const crate::closure::ClosureHeader);
         }
+        crate::async_context::restore_context(previous);
         fired += 1;
     }
 
@@ -550,6 +561,7 @@ pub fn scan_timer_roots(mark: &mut dyn FnMut(f64)) {
                 );
                 mark(boxed);
             }
+            crate::async_context::scan_snapshot_roots(&timer.context, mark);
         }
     }
 
@@ -563,6 +575,7 @@ pub fn scan_timer_roots(mark: &mut dyn FnMut(f64)) {
                 );
                 mark(boxed);
             }
+            crate::async_context::scan_snapshot_roots(&timer.context, mark);
         }
     }
 }

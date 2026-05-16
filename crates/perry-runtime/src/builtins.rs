@@ -2796,13 +2796,24 @@ pub extern "C" fn js_structured_clone(value: f64) -> f64 {
 /// should print "sync" then "micro", not "micro" then "sync".
 #[no_mangle]
 pub extern "C" fn js_queue_microtask(callback: i64) {
+    let context = crate::async_context::capture_context();
     QUEUED_MICROTASKS.with(|q| {
-        q.borrow_mut().push(callback);
+        q.borrow_mut().push((callback, context));
     });
 }
 
 thread_local! {
-    static QUEUED_MICROTASKS: std::cell::RefCell<Vec<i64>> = const { std::cell::RefCell::new(Vec::new()) };
+    static QUEUED_MICROTASKS: std::cell::RefCell<Vec<(i64, crate::async_context::AsyncContextSnapshot)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static QUEUED_MICROTASK_PREV_CONTEXTS: std::cell::RefCell<Vec<crate::async_context::AsyncContextSnapshot>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub fn restore_queued_microtask_contexts() {
+    QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        while let Some(previous) = stack.pop() {
+            crate::async_context::restore_context(previous);
+        }
+    });
 }
 
 /// Drain queued microtasks. Called by `js_promise_run_microtasks`.
@@ -2819,10 +2830,35 @@ pub extern "C" fn js_drain_queued_microtasks() {
             }
         });
         match task {
-            Some(cb) => unsafe {
-                js_closure_call0(cb as *const crate::closure::ClosureHeader);
-            },
+            Some((cb, context)) => {
+                let previous = crate::async_context::enter_context(&context);
+                QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
+                    stack.borrow_mut().push(previous);
+                });
+                unsafe {
+                    js_closure_call0(cb as *const crate::closure::ClosureHeader);
+                }
+                QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
+                    if let Some(previous) = stack.borrow_mut().pop() {
+                        crate::async_context::restore_context(previous);
+                    }
+                });
+            }
             None => break,
         }
     }
+}
+
+pub fn scan_queued_microtask_roots(mark: &mut dyn FnMut(f64)) {
+    QUEUED_MICROTASKS.with(|q| {
+        for (callback, context) in q.borrow().iter() {
+            if *callback != 0 {
+                let boxed = f64::from_bits(
+                    0x7FFD_0000_0000_0000 | (*callback as u64 & 0x0000_FFFF_FFFF_FFFF),
+                );
+                mark(boxed);
+            }
+            crate::async_context::scan_snapshot_roots(context, mark);
+        }
+    });
 }

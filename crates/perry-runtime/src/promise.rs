@@ -4,8 +4,13 @@
 //! It supports basic resolve/reject and then/catch chaining.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use crate::async_context::{
+    capture_context, enter_context, restore_context, scan_snapshot_roots, AsyncContextSnapshot,
+};
 
 // Cached `PERRY_MT_PROFILE` flag, populated once at process start.
 // All instrumentation counter increments check this first — when
@@ -265,17 +270,17 @@ impl Promise {
 /// result to `next`. Saves one Promise allocation per `await` of a
 /// primitive value, which is the steady-state pattern for the async-to-
 /// generator transform.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Task {
-    Promise(*mut Promise, f64, bool),
-    Inline(ClosurePtr, f64, *mut Promise, bool),
+    Promise(*mut Promise, f64, bool, AsyncContextSnapshot),
+    Inline(ClosurePtr, f64, *mut Promise, bool, AsyncContextSnapshot),
     /// Direct dispatch to a 2-arg async-step closure. Equivalent to
     /// `Inline(then_v_arrow, value, next, true)` where `then_v_arrow`
     /// is a wrapper that calls `step(value, is_error)` — but skips the
     /// then_v_arrow alloc + dispatch by carrying `step_closure` and
     /// the `is_error` flag directly. Saves one closure allocation
     /// per await on the steady-state primitive-await path.
-    AsyncStep(ClosurePtr, f64, *mut Promise, bool),
+    AsyncStep(ClosurePtr, f64, *mut Promise, bool, AsyncContextSnapshot),
 }
 
 // Global task queue for pending promise callbacks. Must be FIFO per
@@ -287,6 +292,18 @@ enum Task {
 thread_local! {
     static TASK_QUEUE: RefCell<std::collections::VecDeque<Task>>
         = const { RefCell::new(std::collections::VecDeque::new()) };
+
+    // TODO: Move this snapshot into `Promise` once generational evacuation
+    // becomes the default. Today promise objects are malloc-GC payloads whose
+    // Rust fields are not dropped during sweep, so a side table lets us clean
+    // pending snapshots from the sweep path. With `PERRY_GEN_GC_EVACUATE=1`,
+    // however, promise addresses can change and this key will not be rewritten,
+    // so a pre-evacuation `.then()` snapshot can be missed after settlement.
+    static PROMISE_CONTEXTS: RefCell<HashMap<usize, AsyncContextSnapshot>> =
+        RefCell::new(HashMap::new());
+
+    static MICROTASK_PREV_CONTEXTS: RefCell<Vec<AsyncContextSnapshot>>
+        = const { RefCell::new(Vec::new()) };
 
     /// Packed `(trap_next, current_step)` for the currently-dispatching
     /// inline-style microtask. Single TLS cell so the hot-path readers
@@ -349,6 +366,66 @@ pub(crate) struct AsyncStepGuard {
 /// and well below the 5.7M observed in #712 — high enough to avoid
 /// false positives, low enough to terminate quickly when the bug fires.
 pub(crate) const ASYNC_STEP_REENTRY_BOUND: u32 = 10_000;
+
+fn set_promise_callback_context(promise: *mut Promise) {
+    if promise.is_null() {
+        return;
+    }
+    let snapshot = capture_context();
+    PROMISE_CONTEXTS.with(|contexts| {
+        contexts.borrow_mut().insert(promise as usize, snapshot);
+    });
+}
+
+fn context_for_promise(promise: *mut Promise) -> AsyncContextSnapshot {
+    if promise.is_null() {
+        return capture_context();
+    }
+    PROMISE_CONTEXTS.with(|contexts| {
+        contexts
+            .borrow()
+            .get(&(promise as usize))
+            .cloned()
+            .unwrap_or_else(capture_context)
+    })
+}
+
+fn clear_promise_context(promise: *mut Promise) {
+    if promise.is_null() {
+        return;
+    }
+    PROMISE_CONTEXTS.with(|contexts| {
+        contexts.borrow_mut().remove(&(promise as usize));
+    });
+}
+
+pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
+    clear_promise_context(promise);
+}
+
+fn enter_microtask_context(snapshot: &AsyncContextSnapshot) {
+    let previous = enter_context(snapshot);
+    MICROTASK_PREV_CONTEXTS.with(|stack| {
+        stack.borrow_mut().push(previous);
+    });
+}
+
+fn restore_microtask_context() {
+    MICROTASK_PREV_CONTEXTS.with(|stack| {
+        if let Some(previous) = stack.borrow_mut().pop() {
+            restore_context(previous);
+        }
+    });
+}
+
+fn restore_all_microtask_contexts() {
+    MICROTASK_PREV_CONTEXTS.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        while let Some(previous) = stack.pop() {
+            restore_context(previous);
+        }
+    });
+}
 
 /// Packed thread-local state for the inline-microtask trap. See
 /// `INLINE_TRAP` for the lifecycle and gating discussion.
@@ -470,8 +547,12 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
         // never settled and `await chained` busy-waited forever.
         if !(*promise).on_fulfilled.is_null() || !(*promise).next.is_null() {
             TASK_QUEUE.with(|q| {
-                q.borrow_mut()
-                    .push_back(Task::Promise(promise, value, true));
+                q.borrow_mut().push_back(Task::Promise(
+                    promise,
+                    value,
+                    true,
+                    context_for_promise(promise),
+                ));
             });
         }
     }
@@ -596,8 +677,12 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         // OR a chained `next` promise to forward to.
         if !(*promise).on_rejected.is_null() || !(*promise).next.is_null() {
             TASK_QUEUE.with(|q| {
-                q.borrow_mut()
-                    .push_back(Task::Promise(promise, reason, false));
+                q.borrow_mut().push_back(Task::Promise(
+                    promise,
+                    reason,
+                    false,
+                    context_for_promise(promise),
+                ));
             });
         }
     }
@@ -623,6 +708,7 @@ pub extern "C" fn js_promise_then(
         (*promise).on_fulfilled = on_fulfilled;
         (*promise).on_rejected = on_rejected;
         (*promise).next = next;
+        set_promise_callback_context(promise);
 
         // If already settled, schedule callback immediately. Same propagation
         // rule as `js_promise_resolve`/`js_promise_reject` (#236): push to the
@@ -634,16 +720,24 @@ pub extern "C" fn js_promise_then(
             PromiseState::Fulfilled => {
                 if !on_fulfilled.is_null() || !next.is_null() {
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut()
-                            .push_back(Task::Promise(promise, (*promise).value, true));
+                        q.borrow_mut().push_back(Task::Promise(
+                            promise,
+                            (*promise).value,
+                            true,
+                            context_for_promise(promise),
+                        ));
                     });
                 }
             }
             PromiseState::Rejected => {
                 if !on_rejected.is_null() || !next.is_null() {
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut()
-                            .push_back(Task::Promise(promise, (*promise).reason, false));
+                        q.borrow_mut().push_back(Task::Promise(
+                            promise,
+                            (*promise).reason,
+                            false,
+                            context_for_promise(promise),
+                        ));
                     });
                 }
             }
@@ -671,22 +765,31 @@ pub(crate) fn js_promise_attach_handlers(
     unsafe {
         (*promise).on_fulfilled = on_fulfilled;
         (*promise).on_rejected = on_rejected;
+        set_promise_callback_context(promise);
         // No next — caller doesn't want a chained promise.
 
         match (*promise).state {
             PromiseState::Fulfilled => {
                 if !on_fulfilled.is_null() {
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut()
-                            .push_back(Task::Promise(promise, (*promise).value, true));
+                        q.borrow_mut().push_back(Task::Promise(
+                            promise,
+                            (*promise).value,
+                            true,
+                            context_for_promise(promise),
+                        ));
                     });
                 }
             }
             PromiseState::Rejected => {
                 if !on_rejected.is_null() {
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut()
-                            .push_back(Task::Promise(promise, (*promise).reason, false));
+                        q.borrow_mut().push_back(Task::Promise(
+                            promise,
+                            (*promise).reason,
+                            false,
+                            context_for_promise(promise),
+                        ));
                     });
                 }
             }
@@ -748,19 +851,28 @@ pub extern "C" fn js_promise_finally(
         (*promise).on_fulfilled = fulfill_wrap;
         (*promise).on_rejected = reject_wrap;
         (*promise).next = ptr::null_mut(); // wrappers own next; runner must not touch it
+        set_promise_callback_context(promise);
 
         // If the promise is already settled, push its task now.
         match (*promise).state {
             PromiseState::Fulfilled => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut()
-                        .push_back(Task::Promise(promise, (*promise).value, true));
+                    q.borrow_mut().push_back(Task::Promise(
+                        promise,
+                        (*promise).value,
+                        true,
+                        context_for_promise(promise),
+                    ));
                 });
             }
             PromiseState::Rejected => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut()
-                        .push_back(Task::Promise(promise, (*promise).reason, false));
+                    q.borrow_mut().push_back(Task::Promise(
+                        promise,
+                        (*promise).reason,
+                        false,
+                        context_for_promise(promise),
+                    ));
                 });
             }
             PromiseState::Pending => {}
@@ -903,9 +1015,6 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     // Process pending thread results (from perry/thread spawn)
     ran += crate::thread::js_thread_process_pending();
 
-    // Drain queued microtasks (from queueMicrotask() calls).
-    crate::builtins::js_drain_queued_microtasks();
-
     // Then process the task queue.
     //
     // ── Exception trap (Issue #...): install ONE setjmp for the WHOLE
@@ -980,6 +1089,8 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     // alive (inside the loop below).
     let jumped = unsafe { setjmp(trap_buf) };
     if jumped != 0 {
+        restore_all_microtask_contexts();
+        crate::builtins::restore_queued_microtask_contexts();
         // A microtask's callback threw and unwound here. Read the
         // exception, clear it, and reject the `next` promise of the
         // microtask that was running. js_try_end is intentionally NOT
@@ -1004,6 +1115,11 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
         }
     }
 
+    // Drain queued microtasks (from queueMicrotask() calls) under the same
+    // trap used for Promise callbacks so context is restored if a callback
+    // throws through the runtime.
+    crate::builtins::js_drain_queued_microtasks();
+
     // Cached profile flag — set once by mt_profile_register() above.
     // Reading the env var directly here was ~30 ns per microtask drain;
     // the atomic load is ~1 ns.
@@ -1021,8 +1137,9 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
 
         match task {
             None => break,
-            Some(Task::Promise(promise, value, is_fulfilled)) => {
+            Some(Task::Promise(promise, value, is_fulfilled, task_context)) => {
                 bump(&MT_RUN_COUNT);
+                enter_microtask_context(&task_context);
                 unsafe {
                     let callback = if is_fulfilled {
                         (*promise).on_fulfilled
@@ -1040,6 +1157,8 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                                 js_promise_reject((*promise).next, value);
                             }
                         }
+                        clear_promise_context(promise);
+                        restore_microtask_context();
                         ran += 1;
                         continue;
                     }
@@ -1072,15 +1191,18 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     if !(*promise).next.is_null() {
                         propagate_callback_result(result, (*promise).next);
                     }
+                    clear_promise_context(promise);
                     if let Some(t) = t2 {
                         MT_TIME_NS_RESOLVE
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     }
                 }
+                restore_microtask_context();
                 ran += 1;
             }
-            Some(Task::Inline(callback, value, next, is_fulfilled)) => {
+            Some(Task::Inline(callback, value, next, is_fulfilled, task_context)) => {
                 bump(&MT_RUN_COUNT);
+                enter_microtask_context(&task_context);
                 // Inline tasks are produced by `js_promise_resolved_then`
                 // (the `Promise.resolve(<primitive>).then(cb_f, cb_e)`
                 // fast path). We've already skipped allocating the
@@ -1094,6 +1216,7 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                             js_promise_reject(next, value);
                         }
                     }
+                    restore_microtask_context();
                     ran += 1;
                     continue;
                 }
@@ -1135,10 +1258,12 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 if let Some(t) = t2 {
                     MT_TIME_NS_RESOLVE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 }
+                restore_microtask_context();
                 ran += 1;
             }
-            Some(Task::AsyncStep(step_closure, value, next, is_error)) => {
+            Some(Task::AsyncStep(step_closure, value, next, is_error, task_context)) => {
                 bump(&MT_RUN_COUNT);
+                enter_microtask_context(&task_context);
                 // Direct dispatch of the async-step closure. Skips the
                 // then_v_arrow / then_e_arrow wrapper that would
                 // otherwise be invoked as the on_fulfilled / on_rejected
@@ -1154,6 +1279,7 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                             js_promise_resolve(next, value);
                         }
                     }
+                    restore_microtask_context();
                     ran += 1;
                     continue;
                 }
@@ -1183,6 +1309,7 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                             let err_val = crate::value::js_nanbox_pointer(err as i64);
                             js_promise_reject(next, err_val);
                         }
+                        restore_microtask_context();
                         ran += 1;
                         continue;
                     }
@@ -1256,6 +1383,7 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 if let Some(t) = t2 {
                     MT_TIME_NS_RESOLVE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 }
+                restore_microtask_context();
                 ran += 1;
             }
         }
@@ -1383,8 +1511,13 @@ pub extern "C" fn js_promise_resolved_then(
         // drain via the `Task::Inline` arm.
         let next = js_promise_new();
         TASK_QUEUE.with(|q| {
-            q.borrow_mut()
-                .push_back(Task::Inline(on_fulfilled, value, next, true));
+            q.borrow_mut().push_back(Task::Inline(
+                on_fulfilled,
+                value,
+                next,
+                true,
+                capture_context(),
+            ));
         });
         crate::event_pump::js_notify_main_thread();
         // Suppress the rejection-handler bookkeeping: it would only
@@ -1524,8 +1657,13 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
     };
 
     TASK_QUEUE.with(|q| {
-        q.borrow_mut()
-            .push_back(Task::AsyncStep(step_closure, queued_value, next, is_error));
+        q.borrow_mut().push_back(Task::AsyncStep(
+            step_closure,
+            queued_value,
+            next,
+            is_error,
+            capture_context(),
+        ));
     });
     crate::event_pump::js_notify_main_thread();
     next
@@ -2809,7 +2947,7 @@ pub fn scan_promise_roots(mark: &mut dyn FnMut(f64)) {
         let q = q.borrow();
         for entry in q.iter() {
             match entry {
-                Task::Promise(promise_ptr, value, _) => {
+                Task::Promise(promise_ptr, value, _, context) => {
                     if !promise_ptr.is_null() {
                         let boxed = f64::from_bits(
                             0x7FFD_0000_0000_0000 | (*promise_ptr as u64 & 0x0000_FFFF_FFFF_FFFF),
@@ -2817,8 +2955,9 @@ pub fn scan_promise_roots(mark: &mut dyn FnMut(f64)) {
                         mark(boxed);
                     }
                     mark(*value);
+                    scan_snapshot_roots(context, mark);
                 }
-                Task::Inline(cb, value, next, _) => {
+                Task::Inline(cb, value, next, _, context) => {
                     if !cb.is_null() {
                         let boxed = f64::from_bits(
                             0x7FFD_0000_0000_0000 | (*cb as u64 & 0x0000_FFFF_FFFF_FFFF),
@@ -2832,8 +2971,9 @@ pub fn scan_promise_roots(mark: &mut dyn FnMut(f64)) {
                         mark(boxed);
                     }
                     mark(*value);
+                    scan_snapshot_roots(context, mark);
                 }
-                Task::AsyncStep(cb, value, next, _) => {
+                Task::AsyncStep(cb, value, next, _, context) => {
                     if !cb.is_null() {
                         let boxed = f64::from_bits(
                             0x7FFD_0000_0000_0000 | (*cb as u64 & 0x0000_FFFF_FFFF_FFFF),
@@ -2847,8 +2987,15 @@ pub fn scan_promise_roots(mark: &mut dyn FnMut(f64)) {
                         mark(boxed);
                     }
                     mark(*value);
+                    scan_snapshot_roots(context, mark);
                 }
             }
+        }
+    });
+
+    PROMISE_CONTEXTS.with(|contexts| {
+        for context in contexts.borrow().values() {
+            scan_snapshot_roots(context, mark);
         }
     });
 

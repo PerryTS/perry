@@ -2977,6 +2977,12 @@ fn sweep_with_age_bump(do_age_bump: bool) -> u64 {
                         }
                         crate::map::drop_map_index(user_ptr as usize);
                     }
+                    if (*header).obj_type == GC_TYPE_PROMISE {
+                        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+                        crate::promise::clear_promise_context_for_gc(
+                            user_ptr as *mut crate::promise::Promise,
+                        );
+                    }
 
                     let layout = Layout::from_size_align(total_size, 8).unwrap();
                     dealloc(header as *mut u8, layout);
@@ -3221,6 +3227,12 @@ pub fn timer_root_scanner(mark: &mut dyn FnMut(f64)) {
 /// Root scanner for current exception
 pub fn exception_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::exception::scan_exception_roots(mark);
+}
+
+/// Root scanner for active AsyncLocalStorage context.
+pub fn async_context_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::async_context::scan_active_context_roots(mark);
+    crate::builtins::scan_queued_microtask_roots(mark);
 }
 
 /// Root scanner for object shape cache (keys arrays shared across objects with same shape)
@@ -3863,6 +3875,7 @@ pub fn gc_init() {
     gc_register_root_scanner(promise_root_scanner);
     gc_register_root_scanner(timer_root_scanner);
     gc_register_root_scanner(exception_root_scanner);
+    gc_register_root_scanner(async_context_root_scanner);
     gc_register_root_scanner(shape_cache_root_scanner);
     gc_register_root_scanner(crate::regex::scan_last_exec_groups_root);
     gc_register_root_scanner(crate::array::scan_template_raw_roots);
