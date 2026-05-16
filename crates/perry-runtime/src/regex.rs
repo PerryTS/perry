@@ -1023,22 +1023,20 @@ pub extern "C" fn js_string_replace_regex_fn(
                 crate::closure::js_closure_call4(closure_ptr, match_nanboxed, p1, p2, offset_f64)
             };
 
-            // Convert the NaN-boxed return value to a string
-            // The callback should return a string (NaN-boxed with STRING_TAG = 0x7FFF)
-            let bits = ret.to_bits();
-            let tag = (bits >> 48) & 0xFFFF;
-            if tag == 0x7FFF {
-                // STRING_TAG: extract pointer from lower 48 bits
-                let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-                if is_valid_ptr(ptr) {
-                    result.push_str(string_as_str(ptr));
-                }
-            } else if tag == 0x7FFD {
-                // POINTER_TAG: might be a string pointer that was NaN-boxed differently
-                let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-                if is_valid_ptr(ptr) {
-                    result.push_str(string_as_str(ptr));
-                }
+            // Convert the NaN-boxed return value to a string. Issue #833:
+            // the previous tag-discriminated decode only handled STRING_TAG
+            // (0x7FFF) and POINTER_TAG (0x7FFD) — it silently dropped
+            // SHORT_STRING_TAG (0x7FF9) SSO values, so any replacer-fn
+            // whose result fit in ≤5 bytes (`s.charAt(0) + s.slice(1)` on
+            // a 5-byte input is exactly the edge case in the bug report)
+            // produced an empty replacement. Route through
+            // `js_get_string_pointer_unified` instead, which handles all
+            // four string representations (heap STRING_TAG, SSO with
+            // heap-materialization, POINTER_TAG, raw pointer) plus the
+            // JS spec's number-to-string coercion for numeric returns.
+            let ptr = crate::value::js_get_string_pointer_unified(ret) as *const StringHeader;
+            if is_valid_ptr(ptr) {
+                result.push_str(string_as_str(ptr));
             }
 
             last_end = full_match.end();
