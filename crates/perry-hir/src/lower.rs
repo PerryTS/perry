@@ -4086,12 +4086,35 @@ Perry does not install decorator return values as class replacements (see \
 docs/src/language/decorators.md). Return `undefined` (or nothing) to keep \
 the decorator running for side effects only."
                 );
-                out.push(Stmt::If {
-                    condition: Expr::Compare {
-                        op: CompareOp::Ne,
-                        left: Box::new(Expr::LocalGet(ret_id)),
-                        right: Box::new(Expr::Undefined),
+                // Issue #832: also accept the identity return (`return target`)
+                // as a no-op — node under `--experimental-strip-types` ignores
+                // decorator return values entirely, and many real-world
+                // decorators (factory output that hasn't been simplified, the
+                // trivial `return target` no-op) hit this. Only the *actual*
+                // class-replacement case (`return SomeOtherFn`) still throws.
+                // The target is the first invocation arg (`Expr::ClassRef` for
+                // class decorators); if it's not available, fall back to the
+                // original strict undefined-only check.
+                let ret_get = Expr::LocalGet(ret_id);
+                let ne_undef = Expr::Compare {
+                    op: CompareOp::Ne,
+                    left: Box::new(ret_get.clone()),
+                    right: Box::new(Expr::Undefined),
+                };
+                let condition = match invocation_args.first() {
+                    Some(target_expr) => Expr::Logical {
+                        op: LogicalOp::And,
+                        left: Box::new(ne_undef),
+                        right: Box::new(Expr::Compare {
+                            op: CompareOp::Ne,
+                            left: Box::new(ret_get),
+                            right: Box::new(target_expr.clone()),
+                        }),
                     },
+                    None => ne_undef,
+                };
+                out.push(Stmt::If {
+                    condition,
                     // Perry has dedicated HIR variants for built-in errors
                     // (`Expr::TypeErrorNew`, etc.); the generic
                     // `Expr::New { class_name: "TypeError" }` path falls

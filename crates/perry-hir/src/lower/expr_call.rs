@@ -994,8 +994,23 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                         }
                     }
 
-                    // Check for Buffer static methods
-                    if obj_name == "Buffer" {
+                    // Check for Buffer static methods. Issue #831: aliased
+                    // imports of Buffer (`import { Buffer as RuntimeBuffer } from
+                    // "node:buffer"`) must route through the same dedicated
+                    // BufferFrom/BufferAlloc/etc HIR variants as the global
+                    // `Buffer`; otherwise the lowering falls through to a
+                    // receiver-less `NativeMethodCall { module: "buffer", method:
+                    // "from", object: None }` for which the codegen has no
+                    // dispatch table entry — it would silently return
+                    // TAG_UNDEFINED, and any caller that subsequently treats the
+                    // result as a Buffer (e.g. `b[0]` → Uint8ArrayGet) segfaults
+                    // on the undefined value.
+                    let is_buffer_ref = obj_name == "Buffer"
+                        || matches!(
+                            ctx.lookup_native_module(&obj_name),
+                            Some(("buffer", Some("Buffer")))
+                        );
+                    if is_buffer_ref {
                         if let ast::MemberProp::Ident(method_ident) = &member.prop {
                             let method_name = method_ident.sym.as_ref();
                             match method_name {
@@ -2775,8 +2790,15 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                         }
                     }
 
-                    // Check for Buffer.methodName() static calls
-                    if obj_name == "Buffer" {
+                    // Check for Buffer.methodName() static calls — also accept
+                    // aliased imports per #831 (see the longer note at the
+                    // first Buffer site above).
+                    let is_buffer_ref = obj_name == "Buffer"
+                        || matches!(
+                            ctx.lookup_native_module(&obj_name),
+                            Some(("buffer", Some("Buffer")))
+                        );
+                    if is_buffer_ref {
                         if let ast::MemberProp::Ident(method_ident) = &member.prop {
                             let method_name = method_ident.sym.as_ref();
                             match method_name {
