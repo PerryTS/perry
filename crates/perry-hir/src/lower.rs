@@ -5351,6 +5351,68 @@ fn lower_module_decl(
                             local: func_name,
                             exported: "default".to_string(),
                         });
+                    } else if fn_expr.function.body.is_some() {
+                        // Anonymous-default-function (zod / vitest blocker):
+                        // `export default function () { ... }` arrives as a
+                        // `DefaultDecl::Fn(FnExpr)` with `fn_expr.ident == None`.
+                        // Pre-fix this branch dropped the body entirely —
+                        // codegen never saw the function, so
+                        // `perry_fn_<src>__default` was never emitted and
+                        // consumers link-failed with `Undefined symbols:
+                        // _perry_fn_<src>__default`. The
+                        // `__perry_wrap_perry_fn_<src>__default` rename
+                        // wrapper added in #837 had nothing to point at
+                        // either.
+                        //
+                        // Synthesize an `FnDecl` with ident `default` so
+                        // the HIR function name (and therefore the LLVM
+                        // symbol) is `perry_fn_<src>__default`, matching
+                        // what consumers ask for. Run the resulting decl
+                        // through the same flow as `ExportDecl::Fn`: lower
+                        // the body, mark `is_exported`, register defaults
+                        // and `exported_functions` so codegen's wrapper-
+                        // emission machinery picks it up.
+                        //
+                        // Scope-narrow: this only changes the
+                        // `fn_expr.ident == None` branch. The named-default
+                        // case above keeps its existing behavior pending a
+                        // separate fix.
+                        let synth_ident = ast::Ident::new(
+                            "default".to_string().into(),
+                            swc_common::DUMMY_SP,
+                            Default::default(),
+                        );
+                        let synth_fn_decl = ast::FnDecl {
+                            ident: synth_ident,
+                            declare: false,
+                            function: fn_expr.function.clone(),
+                        };
+                        let mut func = lower_fn_decl(ctx, &synth_fn_decl)?;
+                        func.is_exported = true;
+                        let func_id = func.id;
+                        // Defaults registration mirrors the `ExportDecl::Fn`
+                        // path so call sites that pad missing args still
+                        // resolve user-written defaults.
+                        let defaults: Vec<Option<Expr>> =
+                            func.params.iter().map(|p| p.default.clone()).collect();
+                        let param_ids: Vec<LocalId> =
+                            func.params.iter().map(|p| p.id).collect();
+                        let rest_idx = func.params.iter().position(|p| p.is_rest);
+                        ctx.func_defaults
+                            .push((func.id, defaults, param_ids, rest_idx));
+                        module.functions.push(func);
+                        // Both the named export entry (so the importer's
+                        // namespace populator sees `default`) and the
+                        // `exported_functions` registry (so codegen's
+                        // alias / wrapper emission treats it as a real
+                        // exported function) are required.
+                        module.exports.push(Export::Named {
+                            local: "default".to_string(),
+                            exported: "default".to_string(),
+                        });
+                        module
+                            .exported_functions
+                            .push(("default".to_string(), func_id));
                     }
                 }
                 ast::DefaultDecl::Class(class_expr) => {
