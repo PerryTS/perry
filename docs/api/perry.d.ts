@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 826 entries across 70 modules
+// Coverage: 833 entries across 70 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -447,6 +447,20 @@ declare module "net" {
   export function connect(p0: any, p1: any, p2: any): any;
   /** stdlib */
   export function createConnection(p0: any, p1: any, p2: any): any;
+  /** stdlib */
+  export function getDefaultAutoSelectFamily(...args: any[]): any;
+  /** stdlib */
+  export function getDefaultAutoSelectFamilyAttemptTimeout(...args: any[]): any;
+  /** stdlib */
+  export function isIP(...args: any[]): any;
+  /** stdlib */
+  export function isIPv4(...args: any[]): any;
+  /** stdlib */
+  export function isIPv6(...args: any[]): any;
+  /** stdlib */
+  export function setDefaultAutoSelectFamily(...args: any[]): any;
+  /** stdlib */
+  export function setDefaultAutoSelectFamilyAttemptTimeout(...args: any[]): any;
 }
 
 declare module "node-cron" {

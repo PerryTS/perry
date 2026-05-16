@@ -488,8 +488,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "isIPv6", false, None),
     method("net", "getDefaultAutoSelectFamily", false, None),
     method("net", "setDefaultAutoSelectFamily", false, None),
-    method("net", "getDefaultAutoSelectFamilyAttemptTimeout", false, None),
-    method("net", "setDefaultAutoSelectFamilyAttemptTimeout", false, None),
+    method(
+        "net",
+        "getDefaultAutoSelectFamilyAttemptTimeout",
+        false,
+        None,
+    ),
+    method(
+        "net",
+        "setDefaultAutoSelectFamilyAttemptTimeout",
+        false,
+        None,
+    ),
     method_sig(
         "tls",
         "connect",

@@ -243,8 +243,7 @@ pub unsafe extern "C" fn js_net_is_ipv6(s_ptr: i64) -> f64 {
 
 // Happy-Eyeballs (auto-select-family) defaults. Process-wide globals
 // that `getDefault*` reads and `setDefault*` writes.
-static AUTO_SELECT_FAMILY: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(true);
+static AUTO_SELECT_FAMILY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 // Node's current default is 500ms (raised from 250 in v20.x); pin to
 // 500 so byte-for-byte parity holds against `node --experimental-strip-types`.
 static AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS: std::sync::atomic::AtomicI32 =
@@ -272,7 +271,11 @@ pub unsafe extern "C" fn js_net_get_default_auto_select_family_attempt_timeout()
 #[no_mangle]
 pub unsafe extern "C" fn js_net_set_default_auto_select_family_attempt_timeout(ms_f64: f64) -> f64 {
     let n = JsValue(ms_f64.to_bits()).to_number();
-    let ms = if n.is_finite() && n >= 0.0 { n as i32 } else { 0 };
+    let ms = if n.is_finite() && n >= 0.0 {
+        n as i32
+    } else {
+        0
+    };
     AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
     f64::from_bits(JsValue::UNDEFINED.0)
 }
