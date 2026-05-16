@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 842 entries across 70 modules.
+Total: 848 entries across 71 modules.
 
 ## Modules
 
@@ -66,6 +66,7 @@ Total: 842 entries across 70 modules.
 - [`slugify`](#slugify)
 - [`stream`](#stream)
 - [`streams`](#streams)
+- [`string_decoder`](#string-decoder)
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
@@ -1219,6 +1220,23 @@ Total: 842 entries across 70 modules.
 - `TextEncoder`
 - `TransformStream`
 - `WritableStream`
+
+## `string_decoder`
+
+### Classes
+
+- `StringDecoder`
+
+### Methods
+
+- `end` — instance *(class: `StringDecoder`)*
+- `write` — instance *(class: `StringDecoder`)*
+
+### Properties
+
+- `lastChar`
+- `lastNeed`
+- `lastTotal`
 
 ## `tls`
 

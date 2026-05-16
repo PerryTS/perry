@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 842 entries across 70 modules
+// Coverage: 848 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -1177,6 +1177,17 @@ declare module "streams" {
   export class TransformStream { [key: string]: any; }
   /** stdlib */
   export class WritableStream { [key: string]: any; }
+}
+
+declare module "string_decoder" {
+  /** stdlib */
+  export class StringDecoder { [key: string]: any; }
+  /** stdlib */
+  export const lastChar: any;
+  /** stdlib */
+  export const lastNeed: any;
+  /** stdlib */
+  export const lastTotal: any;
 }
 
 declare module "tls" {
