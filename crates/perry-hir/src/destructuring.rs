@@ -1233,6 +1233,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             match class_name {
                                 "EventEmitter" => Some("events".to_string()),
                                 "AsyncLocalStorage" => Some("async_hooks".to_string()),
+                                "AsyncResource" => Some("async_hooks".to_string()),
                                 "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
                                 "Redis" => Some("ioredis".to_string()),
                                 "LRUCache" => Some("lru-cache".to_string()),
@@ -1249,6 +1250,28 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 module,
                                 class_name.to_string(),
                             );
+                        }
+                    } else if let ast::Expr::Member(member) = new_expr.callee.as_ref() {
+                        if let (
+                            ast::Expr::Ident(module_ident),
+                            ast::MemberProp::Ident(class_ident),
+                        ) = (member.obj.as_ref(), &member.prop)
+                        {
+                            let module_alias = module_ident.sym.as_ref();
+                            if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
+                                let class_name = class_ident.sym.as_ref();
+                                let is_known_native_class = matches!(
+                                    (module_name, class_name),
+                                    ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
+                                );
+                                if is_known_native_class {
+                                    ctx.register_native_instance(
+                                        name.clone(),
+                                        module_name.to_string(),
+                                        class_name.to_string(),
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -1277,6 +1300,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     match class_name {
                                         "EventEmitter" => Some("events".to_string()),
                                         "AsyncLocalStorage" => Some("async_hooks".to_string()),
+                                        "AsyncResource" => Some("async_hooks".to_string()),
                                         "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
                                         "Redis" => Some("ioredis".to_string()),
                                         "LRUCache" => Some("lru-cache".to_string()),
@@ -1312,6 +1336,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         let method_name = method_ident.sym.as_ref();
                                         // Map factory functions to their class names
                                         let class_name = match (module_name, method_name) {
+                                            ("async_hooks", "createHook") => Some("AsyncHook"),
                                             ("mysql2" | "mysql2/promise", "createPool") => {
                                                 Some("Pool")
                                             }
@@ -1459,6 +1484,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     ("http", "createServer") => Some("HttpServer"),
                                     ("https", "createServer") => Some("HttpsServer"),
                                     ("http2", "createSecureServer") => Some("Http2SecureServer"),
+                                    ("async_hooks", "createHook") => Some("AsyncHook"),
                                     _ => None,
                                 };
                                 if let Some(cn) = http_class {

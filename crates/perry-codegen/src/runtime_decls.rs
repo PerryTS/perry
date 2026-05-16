@@ -817,6 +817,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_text_decoder_decode_llvm", I64, &[DOUBLE]);
     // Microtask queue (queueMicrotask / process.nextTick).
     module.declare_function("js_queue_microtask", VOID, &[I64]);
+    module.declare_function("js_queue_next_tick", VOID, &[I64]);
     module.declare_function("js_drain_queued_microtasks", VOID, &[]);
     // Uint8Array constructor wrapper that flags the resulting buffer so the
     // formatter prints `Uint8Array(N) [ ... ]` instead of `<Buffer ...>`.
@@ -1118,6 +1119,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         "js_set_timeout_callback_args",
         I64,
         &[I64, DOUBLE, crate::types::PTR, I32],
+    );
+    module.declare_function("js_set_immediate_callback", I64, &[I64]);
+    module.declare_function(
+        "js_set_immediate_callback_args",
+        I64,
+        &[I64, crate::types::PTR, I32],
     );
     module.declare_function("setInterval", I64, &[I64, DOUBLE]);
     module.declare_function("clearTimeout", VOID, &[I64]);
@@ -1846,6 +1853,22 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_cron_validate", DOUBLE, &[I64]);
 
     // ========== async_hooks / AsyncLocalStorage ==========
+    module.declare_function("js_async_hooks_create_hook", I64, &[DOUBLE]);
+    module.declare_function("js_async_hooks_execution_async_id", DOUBLE, &[]);
+    module.declare_function("js_async_hooks_trigger_async_id", DOUBLE, &[]);
+    module.declare_function("js_async_hook_enable", I64, &[I64]);
+    module.declare_function("js_async_hook_disable", I64, &[I64]);
+    module.declare_function("js_async_resource_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_async_resource_async_id", DOUBLE, &[I64]);
+    module.declare_function("js_async_resource_trigger_async_id", DOUBLE, &[I64]);
+    module.declare_function("js_async_resource_emit_destroy", I64, &[I64]);
+    module.declare_function(
+        "js_async_resource_run_in_async_scope",
+        DOUBLE,
+        &[I64, I64, DOUBLE, I64],
+    );
+    module.declare_function("js_async_resource_bind", I64, &[I64, I64]);
+    module.declare_function("js_async_resource_static_bind", I64, &[I64, DOUBLE]);
     module.declare_function("js_async_local_storage_disable", VOID, &[I64]);
     module.declare_function("js_async_local_storage_enter_with", VOID, &[I64, DOUBLE]);
     module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, I64]);

@@ -536,11 +536,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("commander", "action", true, None),
     method("commander", "parse", true, None),
     method("commander", "opts", true, None),
+    method("async_hooks", "createHook", false, None),
+    method("async_hooks", "executionAsyncId", false, None),
+    method("async_hooks", "triggerAsyncId", false, None),
+    method("async_hooks", "enable", true, Some("AsyncHook")),
     method("async_hooks", "run", true, None),
     method("async_hooks", "getStore", true, None),
     method("async_hooks", "enterWith", true, None),
     method("async_hooks", "exit", true, None),
     method("async_hooks", "disable", true, None),
+    method("async_hooks", "asyncId", true, Some("AsyncResource")),
+    method("async_hooks", "triggerAsyncId", true, Some("AsyncResource")),
+    method("async_hooks", "emitDestroy", true, Some("AsyncResource")),
+    method(
+        "async_hooks",
+        "runInAsyncScope",
+        true,
+        Some("AsyncResource"),
+    ),
+    method("async_hooks", "bind", true, Some("AsyncResource")),
     // AsyncResource — Nest's `@nestjs/core` request-scoped DI uses
     // this to bind a callback to a synthetic async resource. The
     // stub in `node:async_hooks` JS module satisfies callers that

@@ -1085,16 +1085,95 @@ export function createInflate() { throw new Error('zlib.createInflate not suppor
 export default { gzip, gunzip, gzipSync, gunzipSync, deflate, inflate, deflateSync, inflateSync, brotliCompress, brotliDecompress, brotliCompressSync, brotliDecompressSync, createGzip, createGunzip, createDeflate, createInflate };
 "#.to_string(),
         "async_hooks" => r#"
-// Stub implementation for Node.js 'async_hooks' module
-// Used by @nestjs/core for request-scoped DI context propagation (PR #754).
-// No real async-context tracking here: each AsyncResource is a thin
-// wrapper that just runs the callback in the current context.
+// Lightweight implementation for Node.js 'async_hooks' module.
+// This is intentionally self-contained because built-in modules are loaded as
+// synthetic ESM sources by perry-jsruntime. It models the public lifecycle
+// enough for tracers that use createHook(), AsyncResource, and async ids.
+let __perryNextAsyncId = 1;
+let __perryExecutionAsyncId = 0;
+let __perryTriggerAsyncId = 0;
+let __perryInHookCallback = false;
+const __perryExecutionStack = [];
+const __perryHooks = [];
+
+function __perryEnabledHooks() {
+    return __perryHooks.filter((hook) => hook && hook.enabled);
+}
+
+function __perryEmit(name, ...args) {
+    if (__perryInHookCallback) return;
+    const enabled = __perryEnabledHooks();
+    if (enabled.length === 0) return;
+    __perryInHookCallback = true;
+    try {
+        for (const hook of enabled) {
+            const cb = hook.callbacks && hook.callbacks[name];
+            if (typeof cb === "function") cb(...args);
+        }
+    } finally {
+        __perryInHookCallback = false;
+    }
+}
+
+function __perryEnter(asyncId, triggerAsyncId) {
+    __perryExecutionStack.push([__perryExecutionAsyncId, __perryTriggerAsyncId]);
+    __perryExecutionAsyncId = asyncId;
+    __perryTriggerAsyncId = triggerAsyncId;
+    __perryEmit("before", asyncId);
+}
+
+function __perryLeave(asyncId) {
+    try {
+        __perryEmit("after", asyncId);
+    } finally {
+        const previous = __perryExecutionStack.pop() || [0, 0];
+        __perryExecutionAsyncId = previous[0];
+        __perryTriggerAsyncId = previous[1];
+    }
+}
+
+function __perryAllocateResource(type, resource, triggerAsyncId = __perryExecutionAsyncId) {
+    const asyncId = __perryNextAsyncId++;
+    __perryEmit("init", asyncId, String(type || "AsyncResource"), triggerAsyncId, resource);
+    return { asyncId, triggerAsyncId, destroyed: false };
+}
+
+function __perryDestroy(state) {
+    if (!state || state.destroyed) return;
+    state.destroyed = true;
+    __perryEmit("destroy", state.asyncId);
+}
+
+function __perryWrapCallback(type, callback) {
+    if (typeof callback !== "function") return callback;
+    const state = __perryAllocateResource(type, callback);
+    return function (...args) {
+        __perryEnter(state.asyncId, state.triggerAsyncId);
+        try {
+            return callback.apply(this, args);
+        } finally {
+            __perryLeave(state.asyncId);
+            __perryDestroy(state);
+        }
+    };
+}
+
 export class AsyncResource {
-    constructor(_type, _options) {}
-    runInAsyncScope(fn, thisArg, ...args) { return fn.apply(thisArg, args); }
-    emitDestroy() { return this; }
-    asyncId() { return 0; }
-    triggerAsyncId() { return 0; }
+    constructor(type, options = {}) {
+        const triggerAsyncId = options && Object.prototype.hasOwnProperty.call(options, "triggerAsyncId")
+            ? Number(options.triggerAsyncId)
+            : __perryExecutionAsyncId;
+        this.__perryAsyncState = __perryAllocateResource(type || "AsyncResource", this, triggerAsyncId);
+    }
+    runInAsyncScope(fn, thisArg, ...args) {
+        const state = this.__perryAsyncState;
+        __perryEnter(state.asyncId, state.triggerAsyncId);
+        try { return fn.apply(thisArg, args); }
+        finally { __perryLeave(state.asyncId); }
+    }
+    emitDestroy() { __perryDestroy(this.__perryAsyncState); return this; }
+    asyncId() { return this.__perryAsyncState.asyncId; }
+    triggerAsyncId() { return this.__perryAsyncState.triggerAsyncId; }
     bind(fn) {
         const ar = this;
         return function (...args) { return ar.runInAsyncScope(fn, this, ...args); };
@@ -1104,6 +1183,7 @@ export class AsyncResource {
         return ar.bind(thisArg !== undefined ? fn.bind(thisArg) : fn);
     }
 }
+
 export class AsyncLocalStorage {
     constructor() { this._store = undefined; }
     run(store, fn, ...args) {
@@ -1120,10 +1200,75 @@ export class AsyncLocalStorage {
     enterWith(store) { this._store = store; }
     disable() { this._store = undefined; }
 }
-export function executionAsyncId() { return 0; }
+
+export function executionAsyncId() { return __perryExecutionAsyncId; }
 export function executionAsyncResource() { return {}; }
-export function triggerAsyncId() { return 0; }
-export function createHook() { return { enable() { return this; }, disable() { return this; } }; }
+export function triggerAsyncId() { return __perryTriggerAsyncId; }
+export function createHook(callbacks = {}) {
+    const hook = {
+        callbacks,
+        enabled: false,
+        enable() {
+            if (!__perryHooks.includes(hook)) __perryHooks.push(hook);
+            hook.enabled = true;
+            return hook;
+        },
+        disable() { hook.enabled = false; return hook; },
+    };
+    return hook;
+}
+
+const __perryNativeSetTimeout = globalThis.setTimeout;
+if (typeof __perryNativeSetTimeout === "function" && !__perryNativeSetTimeout.__perryAsyncHooksWrapped) {
+    const wrapped = function (callback, delay, ...args) {
+        return __perryNativeSetTimeout.call(this, __perryWrapCallback("Timeout", callback), delay, ...args);
+    };
+    wrapped.__perryAsyncHooksWrapped = true;
+    globalThis.setTimeout = wrapped;
+}
+
+const __perryNativeSetImmediate = globalThis.setImmediate;
+if (typeof __perryNativeSetImmediate === "function" && !__perryNativeSetImmediate.__perryAsyncHooksWrapped) {
+    const wrapped = function (callback, ...args) {
+        return __perryNativeSetImmediate.call(this, __perryWrapCallback("Immediate", callback), ...args);
+    };
+    wrapped.__perryAsyncHooksWrapped = true;
+    globalThis.setImmediate = wrapped;
+}
+
+if (globalThis.process && typeof globalThis.process.nextTick === "function" && !globalThis.process.nextTick.__perryAsyncHooksWrapped) {
+    const nativeNextTick = globalThis.process.nextTick;
+    const wrapped = function (callback, ...args) {
+        return nativeNextTick.call(this, __perryWrapCallback("TickObject", callback), ...args);
+    };
+    wrapped.__perryAsyncHooksWrapped = true;
+    globalThis.process.nextTick = wrapped;
+}
+
+const __perryNativePromise = globalThis.Promise;
+if (typeof __perryNativePromise === "function" && !__perryNativePromise.__perryAsyncHooksWrapped) {
+    class PerryAsyncHookPromise extends __perryNativePromise {
+        constructor(executor) {
+            let state;
+            super((resolve, reject) => {
+                state = __perryAllocateResource("PROMISE", undefined);
+                const settle = (fn) => (value) => {
+                    if (!state.destroyed) {
+                        __perryEmit("promiseResolve", state.asyncId);
+                        __perryDestroy(state);
+                    }
+                    return fn(value);
+                };
+                return executor(settle(resolve), settle(reject));
+            });
+            this.__perryAsyncState = state;
+        }
+        static get [Symbol.species]() { return __perryNativePromise; }
+    }
+    PerryAsyncHookPromise.__perryAsyncHooksWrapped = true;
+    globalThis.Promise = PerryAsyncHookPromise;
+}
+
 export default { AsyncResource, AsyncLocalStorage, executionAsyncId, executionAsyncResource, triggerAsyncId, createHook };
 "#.to_string(),
         // Issue #755: Node built-in subpath aliases. These ship in real Node
@@ -1448,5 +1593,32 @@ mod tests {
                 name
             );
         }
+    }
+
+    /// Issue #789: the async_hooks builtin must not regress to the old
+    /// structural no-op stub. Tracing libraries need lifecycle callbacks and
+    /// non-zero AsyncResource ids even when Perry is executing JS through the
+    /// embedded V8 runtime.
+    #[test]
+    fn test_async_hooks_stub_exposes_lifecycle_polyfill() {
+        let stub = get_builtin_stub("async_hooks");
+
+        assert!(
+            stub.contains("function __perryEmit"),
+            "async_hooks stub should emit createHook lifecycle callbacks"
+        );
+        assert!(
+            stub.contains("let __perryNextAsyncId = 1"),
+            "async_hooks stub should allocate monotonically increasing ids"
+        );
+        assert!(
+            stub.contains("globalThis.Promise = PerryAsyncHookPromise"),
+            "async_hooks stub should hook Promise settlement for promiseResolve"
+        );
+        assert!(
+            !stub.contains("executionAsyncId() { return 0; }")
+                && !stub.contains("executionAsyncId() {return 0;}"),
+            "async_hooks executionAsyncId must not be the old constant-zero stub"
+        );
     }
 }

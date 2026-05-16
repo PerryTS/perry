@@ -56,6 +56,30 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            let module_alias = obj_ident.sym.as_ref();
+            if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
+                let class_name = prop_ident.sym.as_ref();
+                if matches!(
+                    (module_name, class_name),
+                    ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
+                ) {
+                    let args = new_expr
+                        .args
+                        .as_ref()
+                        .map(|args| {
+                            args.iter()
+                                .map(|a| lower_expr(ctx, &a.expr))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+                    return Ok(Expr::New {
+                        class_name: class_name.to_string(),
+                        args,
+                        type_args: Vec::new(),
+                    });
+                }
+            }
         }
     }
 

@@ -4214,28 +4214,6 @@ See docs/src/language/decorators.md."
     );
 }
 
-/// Emit a one-shot note when the user imports `node:async_hooks`. Perry
-/// ships a structural stub (see crates/perry-jsruntime/src/modules.rs)
-/// now has real AsyncLocalStorage propagation, but the observability
-/// half of async_hooks (createHook lifecycle and real async IDs) is still
-/// tracked separately in #789. Warning at compile time keeps APM/tracing
-/// users from mistaking the remaining stub surface for full Node parity.
-fn emit_async_hooks_shim_note() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static EMITTED: AtomicBool = AtomicBool::new(false);
-    if EMITTED.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    eprintln!(
-        "[perry] note: `import \"node:async_hooks\"` is satisfied by Perry's structural \
-stub plus AsyncLocalStorage context propagation across await/microtasks/timers. \
-Remaining gap: createHook lifecycle callbacks and real executionAsyncId/\
-triggerAsyncId tracking are still stubs, so APM/tracing tools that observe \
-async resource lifecycles are not fully supported yet. See \
-https://github.com/PerryTS/perry/issues/789."
-    );
-}
-
 fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -4254,13 +4232,6 @@ fn lower_module_decl(
             if source == "reflect-metadata" {
                 emit_reflect_metadata_shim_note();
                 return Ok(());
-            }
-
-            if source == "async_hooks" {
-                emit_async_hooks_shim_note();
-                // Fall through — the import still needs to bind
-                // AsyncLocalStorage / AsyncResource so calling code
-                // compiles against the structural stub.
             }
 
             // Check if this is a native module import
@@ -4484,6 +4455,7 @@ fn lower_module_decl(
                                         match class_name {
                                             "EventEmitter" => Some("events".to_string()),
                                             "AsyncLocalStorage" => Some("async_hooks".to_string()),
+                                            "AsyncResource" => Some("async_hooks".to_string()),
                                             "WebSocket" | "WebSocketServer" => {
                                                 Some("ws".to_string())
                                             }
@@ -4532,6 +4504,7 @@ fn lower_module_decl(
                                                 "AsyncLocalStorage" => {
                                                     Some("async_hooks".to_string())
                                                 }
+                                                "AsyncResource" => Some("async_hooks".to_string()),
                                                 "WebSocket" | "WebSocketServer" => {
                                                     Some("ws".to_string())
                                                 }
@@ -4619,6 +4592,9 @@ fn lower_module_decl(
                                                         ("http2", "createSecureServer") => {
                                                             Some("Http2SecureServer")
                                                         }
+                                                        ("async_hooks", "createHook") => {
+                                                            Some("AsyncHook")
+                                                        }
                                                         _ => None,
                                                     };
                                                     if let Some(class_name) = class_name {
@@ -4692,6 +4668,9 @@ fn lower_module_decl(
                                                 }
                                                 ("http2", Some("createSecureServer")) => {
                                                     Some("Http2SecureServer")
+                                                }
+                                                ("async_hooks", Some("createHook")) => {
+                                                    Some("AsyncHook")
                                                 }
                                                 _ => None,
                                             });
@@ -4793,6 +4772,39 @@ fn lower_module_decl(
                                             module_name,
                                             class_name_str.to_string(),
                                         ));
+                                    }
+                                } else if let ast::Expr::Member(member) = new_expr.callee.as_ref() {
+                                    if let (
+                                        ast::Expr::Ident(module_ident),
+                                        ast::MemberProp::Ident(class_ident),
+                                    ) = (member.obj.as_ref(), &member.prop)
+                                    {
+                                        let module_alias = module_ident.sym.as_ref();
+                                        if let Some(module_name) = ctx
+                                            .lookup_native_module(module_alias)
+                                            .map(|(m, _)| m.to_string())
+                                        {
+                                            let class_name_str = class_ident.sym.as_ref();
+                                            let is_known_native_class = matches!(
+                                                (module_name.as_str(), class_name_str),
+                                                (
+                                                    "async_hooks",
+                                                    "AsyncLocalStorage" | "AsyncResource"
+                                                )
+                                            );
+                                            if is_known_native_class {
+                                                ctx.register_native_instance(
+                                                    name.clone(),
+                                                    module_name.clone(),
+                                                    class_name_str.to_string(),
+                                                );
+                                                ctx.module_native_instances.push((
+                                                    name.clone(),
+                                                    module_name,
+                                                    class_name_str.to_string(),
+                                                ));
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -6318,6 +6330,7 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                                     ("http", "createServer") => Some("HttpServer"),
                                     ("https", "createServer") => Some("HttpsServer"),
                                     ("http2", "createSecureServer") => Some("Http2SecureServer"),
+                                    ("async_hooks", "createHook") => Some("AsyncHook"),
                                     _ => None,
                                 };
                                 if let Some(cn) = http_class {
@@ -8196,6 +8209,26 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             if (obj_name == "Object" && is_known_object_static_method(prop_name))
                                 || (obj_name == "Array" && is_known_array_static_method(prop_name))
                             {
+                                return Ok(Expr::String("function".to_string()));
+                            }
+                            if matches!(
+                                ctx.lookup_native_instance(obj_name),
+                                Some(("async_hooks", "AsyncHook"))
+                            ) && matches!(prop_name, "enable" | "disable")
+                            {
+                                return Ok(Expr::String("function".to_string()));
+                            }
+                            if matches!(
+                                ctx.lookup_native_instance(obj_name),
+                                Some(("async_hooks", "AsyncResource"))
+                            ) && matches!(
+                                prop_name,
+                                "asyncId"
+                                    | "triggerAsyncId"
+                                    | "runInAsyncScope"
+                                    | "emitDestroy"
+                                    | "bind"
+                            ) {
                                 return Ok(Expr::String("function".to_string()));
                             }
                             // #677: `typeof Function.prototype` → "object".

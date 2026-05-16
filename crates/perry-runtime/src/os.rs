@@ -473,12 +473,7 @@ pub extern "C" fn js_process_on(
 /// process.nextTick(callback) — schedule callback as a microtask.
 #[no_mangle]
 pub extern "C" fn js_process_next_tick(callback: *const crate::closure::ClosureHeader) {
-    use crate::promise::{js_promise_new, js_promise_schedule_resolve, js_promise_then};
-    use crate::value::JSValue;
-
-    let p = js_promise_new();
-    let _chain = js_promise_then(p, callback, std::ptr::null());
-    js_promise_schedule_resolve(p, f64::from_bits(JSValue::undefined().bits()));
+    crate::builtins::js_queue_next_tick(callback as i64);
 }
 
 /// process.chdir(directory) — change working directory.

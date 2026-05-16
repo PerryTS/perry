@@ -303,6 +303,25 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_async_local_storage_new", &[]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        "AsyncResource" => {
+            let type_value = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let options_value = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            let blk = ctx.block();
+            let handle = blk.call(
+                I64,
+                "js_async_resource_new",
+                &[(DOUBLE, &type_value), (DOUBLE, &options_value)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
         // decimal.js Decimal — `new Decimal(value)` where value is a number,
         // string, or another Decimal. Routes through `js_decimal_coerce_to_handle`
         // which NaN-decodes the JSValue and dispatches to `from_number` /

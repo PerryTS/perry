@@ -800,11 +800,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 if args.len() == 1 {
                     let blk = ctx.block();
                     let cb_handle = unbox_to_i64(blk, &cb_box);
-                    let id = blk.call(
-                        I64,
-                        "js_set_timeout_callback",
-                        &[(I64, &cb_handle), (DOUBLE, "0.0")],
-                    );
+                    let id = blk.call(I64, "js_set_immediate_callback", &[(I64, &cb_handle)]);
                     return Ok(nanbox_pointer_inline(blk, &id));
                 }
 
@@ -825,13 +821,8 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 let cb_handle = unbox_to_i64(blk, &cb_box);
                 let id = blk.call(
                     I64,
-                    "js_set_timeout_callback_args",
-                    &[
-                        (I64, &cb_handle),
-                        (DOUBLE, "0.0"),
-                        (PTR, &ptr_reg),
-                        (I32, &n.to_string()),
-                    ],
+                    "js_set_immediate_callback_args",
+                    &[(I64, &cb_handle), (PTR, &ptr_reg), (I32, &n.to_string())],
                 );
                 return Ok(nanbox_pointer_inline(blk, &id));
             }
@@ -7485,6 +7476,96 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         runtime: "js_async_local_storage_disable",
         args: &[],
         ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: false,
+        method: "createHook",
+        class_filter: None,
+        runtime: "js_async_hooks_create_hook",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: false,
+        method: "executionAsyncId",
+        class_filter: None,
+        runtime: "js_async_hooks_execution_async_id",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: false,
+        method: "triggerAsyncId",
+        class_filter: None,
+        runtime: "js_async_hooks_trigger_async_id",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: true,
+        method: "enable",
+        class_filter: Some("AsyncHook"),
+        runtime: "js_async_hook_enable",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: true,
+        method: "disable",
+        class_filter: Some("AsyncHook"),
+        runtime: "js_async_hook_disable",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: true,
+        method: "asyncId",
+        class_filter: Some("AsyncResource"),
+        runtime: "js_async_resource_async_id",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: true,
+        method: "triggerAsyncId",
+        class_filter: Some("AsyncResource"),
+        runtime: "js_async_resource_trigger_async_id",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: true,
+        method: "emitDestroy",
+        class_filter: Some("AsyncResource"),
+        runtime: "js_async_resource_emit_destroy",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: true,
+        method: "runInAsyncScope",
+        class_filter: Some("AsyncResource"),
+        runtime: "js_async_resource_run_in_async_scope",
+        args: &[NA_PTR, NA_F64, NA_VARARGS],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "async_hooks",
+        has_receiver: true,
+        method: "bind",
+        class_filter: Some("AsyncResource"),
+        runtime: "js_async_resource_bind",
+        args: &[NA_PTR],
+        ret: NR_PTR,
     },
     // ========== decimal.js (arbitrary-precision math) ==========
     // `new Decimal(value)` is dispatched by `lower_builtin_new` (calls

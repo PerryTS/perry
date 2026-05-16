@@ -50,6 +50,62 @@ try {
   console.log("AsyncResource.emitDestroy OK");
 } catch (e: any) { console.log("AsyncResource ERR:", e && e.message); }
 
+try {
+  let parentId = 0;
+  const events: string[] = [];
+  const hook = async_hooks.createHook({
+    init(asyncId: number, type: string, triggerAsyncId: number) {
+      if (type === "ParentResource") events.push(`init-parent:${asyncId > 0}`);
+      if (type === "ChildResource") events.push(`init-child:${triggerAsyncId === parentId}`);
+    },
+    before(asyncId: number) {
+      if (asyncId === parentId) events.push("before-parent");
+    },
+    after(asyncId: number) {
+      if (asyncId === parentId) events.push("after-parent");
+    },
+  });
+  hook.enable();
+  const parent = new async_hooks.AsyncResource("ParentResource");
+  parentId = parent.asyncId();
+  let execMatched = false;
+  let childTriggerMatched = false;
+  const scoped = parent.runInAsyncScope((a: number, b: number) => {
+    execMatched = async_hooks.executionAsyncId() === parentId;
+    const child = new async_hooks.AsyncResource("ChildResource");
+    childTriggerMatched = child.triggerAsyncId() === parentId;
+    child.emitDestroy();
+    return a + b;
+  }, null, 20, 22);
+  parent.emitDestroy();
+  hook.disable();
+  console.log("AsyncResource lifecycle result:", scoped, execMatched, childTriggerMatched, events.join("|"));
+} catch (e: any) { console.log("AsyncResource lifecycle ERR:", e && e.message); }
+
+try {
+  const order: string[] = [];
+  const h1 = async_hooks.createHook({ init(_id: number, type: string) { if (type === "OrderResource") order.push("A"); } });
+  const h2 = async_hooks.createHook({ init(_id: number, type: string) { if (type === "OrderResource") order.push("B"); } });
+  h1.enable();
+  h2.enable();
+  new async_hooks.AsyncResource("OrderResource").emitDestroy();
+  h1.disable();
+  h2.disable();
+  console.log("multiple hooks order:", order.join(""));
+} catch (e: any) { console.log("multiple hooks ERR:", e && e.message); }
+
+try {
+  const seen: string[] = [];
+  const h1 = async_hooks.createHook({ init(_id: number, type: string) { if (type === "DisableResource") seen.push("A"); } });
+  const h2 = async_hooks.createHook({ init(_id: number, type: string) { if (type === "DisableResource") seen.push("B"); } });
+  h1.enable();
+  h2.enable();
+  h1.disable();
+  new async_hooks.AsyncResource("DisableResource").emitDestroy();
+  h2.disable();
+  console.log("disable one hook:", seen.join(""));
+} catch (e: any) { console.log("disable hook ERR:", e && e.message); }
+
 // PERRY-SKIP: AsyncResource.bind / static AsyncResource.bind — newer API surface, not exercised here.
 
 // ── Class: AsyncLocalStorage ──

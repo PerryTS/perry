@@ -6675,7 +6675,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, cb)?;
             let blk = ctx.block();
             let cb_handle = unbox_to_i64(blk, &cb_box);
-            blk.call_void("js_queue_microtask", &[(I64, &cb_handle)]);
+            let runtime = match expr {
+                Expr::QueueMicrotask(_) => "js_queue_microtask",
+                Expr::ProcessNextTick(_) => "js_queue_next_tick",
+                _ => unreachable!(),
+            };
+            blk.call_void(runtime, &[(I64, &cb_handle)]);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
 

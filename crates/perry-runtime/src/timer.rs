@@ -169,6 +169,9 @@ struct CallbackTimer {
     args: Vec<f64>,
     /// AsyncLocalStorage context captured when the timer was scheduled.
     context: crate::async_context::AsyncContextSnapshot,
+    /// async_hooks ids for this timer callback resource.
+    async_id: u64,
+    trigger_async_id: u64,
     /// Whether this timer has been cleared
     cleared: bool,
 }
@@ -184,6 +187,15 @@ static NEXT_CALLBACK_TIMER_ID: Mutex<i64> = Mutex::new(1);
 /// Returns a timer ID
 #[no_mangle]
 pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
+    schedule_callback_timer(callback, delay_ms, Vec::new(), "Timeout")
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
+    schedule_callback_timer(callback, 0.0, Vec::new(), "Immediate")
+}
+
+fn schedule_callback_timer(callback: i64, delay_ms: f64, args: Vec<f64>, type_name: &str) -> i64 {
     ensure_initialized();
 
     let delay = Duration::from_millis(delay_ms.max(0.0) as u64);
@@ -196,12 +208,20 @@ pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
         current
     };
 
+    let ids = crate::async_hooks::init_resource(
+        type_name,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        false,
+    );
+
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
         id,
         deadline,
         callback,
-        args: Vec::new(),
+        args,
         context: crate::async_context::capture_context(),
+        async_id: ids.async_id,
+        trigger_async_id: ids.trigger_async_id,
         cleared: false,
     });
 
@@ -225,34 +245,26 @@ pub unsafe extern "C" fn js_set_timeout_callback_args(
     args_ptr: *const f64,
     n_args: i32,
 ) -> i64 {
-    ensure_initialized();
-
-    let delay = Duration::from_millis(delay_ms.max(0.0) as u64);
-    let deadline = Instant::now() + delay;
-
     let args: Vec<f64> = if args_ptr.is_null() || n_args <= 0 {
         Vec::new()
     } else {
         std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
     };
+    schedule_callback_timer(callback, delay_ms, args, "Timeout")
+}
 
-    let id = {
-        let mut next = NEXT_CALLBACK_TIMER_ID.lock().unwrap();
-        let current = *next;
-        *next += 1;
-        current
+#[no_mangle]
+pub unsafe extern "C" fn js_set_immediate_callback_args(
+    callback: i64,
+    args_ptr: *const f64,
+    n_args: i32,
+) -> i64 {
+    let args: Vec<f64> = if args_ptr.is_null() || n_args <= 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
     };
-
-    CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
-        id,
-        deadline,
-        callback,
-        args,
-        context: crate::async_context::capture_context(),
-        cleared: false,
-    });
-
-    id
+    schedule_callback_timer(callback, 0.0, args, "Immediate")
 }
 
 /// Process any expired callback timers
@@ -291,41 +303,46 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
             let cb = timer.callback as *const crate::closure::ClosureHeader;
             let a = &timer.args;
             let previous = crate::async_context::enter_context(&timer.context);
-            match a.len() {
-                0 => {
-                    js_closure_call0(cb);
-                }
-                1 => {
-                    js_closure_call1(cb, a[0]);
-                }
-                2 => {
-                    js_closure_call2(cb, a[0], a[1]);
-                }
-                3 => {
-                    js_closure_call3(cb, a[0], a[1], a[2]);
-                }
-                4 => {
-                    js_closure_call4(cb, a[0], a[1], a[2], a[3]);
-                }
-                5 => {
-                    js_closure_call5(cb, a[0], a[1], a[2], a[3], a[4]);
-                }
-                6 => {
-                    js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]);
-                }
-                7 => {
-                    js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
-                }
-                8 => {
-                    js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
-                }
-                _ => {
-                    // >= 9 args: clamp to 9. Real-world setTimeout
-                    // rarely exceeds 1-2 trailing args; this is a
-                    // conservative safety net rather than spec coverage.
-                    js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
+            crate::async_hooks::before(timer.async_id, timer.trigger_async_id);
+            unsafe {
+                match a.len() {
+                    0 => {
+                        js_closure_call0(cb);
+                    }
+                    1 => {
+                        js_closure_call1(cb, a[0]);
+                    }
+                    2 => {
+                        js_closure_call2(cb, a[0], a[1]);
+                    }
+                    3 => {
+                        js_closure_call3(cb, a[0], a[1], a[2]);
+                    }
+                    4 => {
+                        js_closure_call4(cb, a[0], a[1], a[2], a[3]);
+                    }
+                    5 => {
+                        js_closure_call5(cb, a[0], a[1], a[2], a[3], a[4]);
+                    }
+                    6 => {
+                        js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]);
+                    }
+                    7 => {
+                        js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+                    }
+                    8 => {
+                        js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+                    }
+                    _ => {
+                        // >= 9 args: clamp to 9. Real-world setTimeout
+                        // rarely exceeds 1-2 trailing args; this is a
+                        // conservative safety net rather than spec coverage.
+                        js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
+                    }
                 }
             }
+            crate::async_hooks::after(timer.async_id);
+            crate::async_hooks::destroy(timer.async_id);
             crate::async_context::restore_context(previous);
             fired += 1;
         }
@@ -483,7 +500,9 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
     // Call the callbacks outside of the lock
     for (callback, context) in callbacks_to_call {
         let previous = crate::async_context::enter_context(&context);
-        js_closure_call0(callback as *const crate::closure::ClosureHeader);
+        unsafe {
+            js_closure_call0(callback as *const crate::closure::ClosureHeader);
+        }
         crate::async_context::restore_context(previous);
         fired += 1;
     }

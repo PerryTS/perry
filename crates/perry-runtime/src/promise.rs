@@ -241,6 +241,10 @@ pub struct Promise {
     pub(crate) on_rejected: ClosurePtr,
     /// Next promise in the chain (for .then())
     pub(crate) next: *mut Promise,
+    /// async_hooks asyncId for this Promise, 0 when hooks were inactive.
+    pub(crate) async_id: u64,
+    /// async_hooks triggerAsyncId captured at Promise creation.
+    pub(crate) trigger_async_id: u64,
 }
 
 impl Promise {
@@ -252,6 +256,8 @@ impl Promise {
             on_fulfilled: ptr::null(),
             on_rejected: ptr::null(),
             next: ptr::null_mut(),
+            async_id: 0,
+            trigger_async_id: 0,
         }
     }
 }
@@ -467,6 +473,13 @@ pub extern "C" fn js_promise_new() -> *mut Promise {
     let promise = raw as *mut Promise;
     unsafe {
         ptr::write(promise, Promise::new());
+        if crate::async_hooks::hooks_active() {
+            let resource =
+                f64::from_bits(0x7FFD_0000_0000_0000 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF));
+            let ids = crate::async_hooks::init_resource("PROMISE", resource, false);
+            (*promise).async_id = ids.async_id;
+            (*promise).trigger_async_id = ids.trigger_async_id;
+        }
     }
     promise
 }
@@ -536,6 +549,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
         }
         (*promise).state = PromiseState::Fulfilled;
         (*promise).value = value;
+        crate::async_hooks::promise_resolve((*promise).async_id);
 
         // Schedule callbacks. Push to TASK_QUEUE whenever there's anything
         // for the microtask runner to do — either invoke the user callback,
@@ -562,6 +576,9 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
     // 1 s idle cap before the loop re-checks promise state. The notify
     // sets the flag so the immediately-following wait returns at once.
     crate::event_pump::js_notify_main_thread();
+    unsafe {
+        crate::async_hooks::destroy((*promise).async_id);
+    }
 }
 
 /// Resolve a promise with another promise (Promise chaining/unwrapping)
@@ -671,6 +688,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         }
         (*promise).state = PromiseState::Rejected;
         (*promise).reason = reason;
+        crate::async_hooks::promise_resolve((*promise).async_id);
 
         // Schedule callbacks. Same propagation rule as `js_promise_resolve`
         // (#236): push to the queue whenever there's a callback to invoke
@@ -688,6 +706,9 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
     }
     // Issue #84: see js_promise_resolve — same wake reasoning.
     crate::event_pump::js_notify_main_thread();
+    unsafe {
+        crate::async_hooks::destroy((*promise).async_id);
+    }
 }
 
 /// Register fulfillment callback, returns a new promise for chaining
@@ -996,6 +1017,8 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     mt_profile_register();
     let mut ran = 0;
 
+    ran += crate::async_hooks::drain_gc_destroy_queue();
+
     // First, tick timers to resolve any expired timer promises
     ran += crate::timer::js_timer_tick();
 
@@ -1168,7 +1191,9 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     } else {
                         None
                     };
+                    crate::async_hooks::before((*promise).async_id, (*promise).trigger_async_id);
                     let result = crate::closure::js_closure_call1(callback, value);
+                    crate::async_hooks::after((*promise).async_id);
                     if let Some(t) = t1 {
                         MT_TIME_NS_CALLBACK
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);

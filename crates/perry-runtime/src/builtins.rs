@@ -2795,14 +2795,29 @@ pub extern "C" fn js_structured_clone(value: f64) -> f64 {
 /// should print "sync" then "micro", not "micro" then "sync".
 #[no_mangle]
 pub extern "C" fn js_queue_microtask(callback: i64) {
+    queue_microtask_with_type(callback, "Microtask");
+}
+
+#[no_mangle]
+pub extern "C" fn js_queue_next_tick(callback: i64) {
+    queue_microtask_with_type(callback, "TickObject");
+}
+
+fn queue_microtask_with_type(callback: i64, type_name: &str) {
     let context = crate::async_context::capture_context();
+    let ids = crate::async_hooks::init_resource(
+        type_name,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        false,
+    );
     QUEUED_MICROTASKS.with(|q| {
-        q.borrow_mut().push((callback, context));
+        q.borrow_mut()
+            .push((callback, context, ids.async_id, ids.trigger_async_id));
     });
 }
 
 thread_local! {
-    static QUEUED_MICROTASKS: std::cell::RefCell<Vec<(i64, crate::async_context::AsyncContextSnapshot)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static QUEUED_MICROTASKS: std::cell::RefCell<Vec<(i64, crate::async_context::AsyncContextSnapshot, u64, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
     static QUEUED_MICROTASK_PREV_CONTEXTS: std::cell::RefCell<Vec<crate::async_context::AsyncContextSnapshot>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -2829,12 +2844,15 @@ pub extern "C" fn js_drain_queued_microtasks() {
             }
         });
         match task {
-            Some((cb, context)) => {
+            Some((cb, context, async_id, trigger_async_id)) => {
                 let previous = crate::async_context::enter_context(&context);
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     stack.borrow_mut().push(previous);
                 });
+                crate::async_hooks::before(async_id, trigger_async_id);
                 js_closure_call0(cb as *const crate::closure::ClosureHeader);
+                crate::async_hooks::after(async_id);
+                crate::async_hooks::destroy(async_id);
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     if let Some(previous) = stack.borrow_mut().pop() {
                         crate::async_context::restore_context(previous);
@@ -2848,7 +2866,7 @@ pub extern "C" fn js_drain_queued_microtasks() {
 
 pub fn scan_queued_microtask_roots(mark: &mut dyn FnMut(f64)) {
     QUEUED_MICROTASKS.with(|q| {
-        for (callback, context) in q.borrow().iter() {
+        for (callback, context, _, _) in q.borrow().iter() {
             if *callback != 0 {
                 let boxed = f64::from_bits(
                     0x7FFD_0000_0000_0000 | (*callback as u64 & 0x0000_FFFF_FFFF_FFFF),
