@@ -334,6 +334,21 @@ pub(super) fn collect_modules(
 
     // Process imports and update their resolved paths and module kinds
     for import in &mut hir_module.imports {
+        // Skip type-only imports — they were recorded for class-metadata flow
+        // (see lower.rs's #446 comment: a per-specifier `import { type Foo }`
+        // is preserved so Foo's class info reaches `imported_classes` for
+        // method dispatch) but they MUST NOT be loaded as runtime modules.
+        // Without this skip, `import type { StandardSchemaV1 } from
+        // "@standard-schema/spec"` (Effect's only `@standard-schema` use,
+        // a type-only reference) queued the package's V8 fallback. The
+        // spec ships an empty `src_exports = {}` at runtime, so any
+        // `something._tag` from the import binding then threw
+        // `TypeError: Cannot read properties of undefined (reading '_tag')`
+        // during Effect's module init. Refs #321, #684.
+        if import.type_only {
+            continue;
+        }
+
         // Apply package alias (e.g., @parse/node-apn → perry-push from perry.packageAliases)
         if let Some(alias) = ctx.package_aliases.get(import.source.as_str()).cloned() {
             import.source = alias;

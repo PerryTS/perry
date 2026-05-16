@@ -230,6 +230,13 @@ pub struct LoweringContext {
     /// the receiver is a tracked instance, avoiding false matches against
     /// CJS-style `module.exports.foo()` patterns.
     pub(crate) wasm_instance_locals: HashSet<String>,
+    /// #809: locals whose initializer is an object literal or
+    /// `Object.create(...)` — i.e. provably a plain object, never a Date.
+    /// Consulted by `static_receiver_class` so `obj.toJSON()` /
+    /// `obj.toString()` / `obj.valueOf()` etc. don't get rewritten to the
+    /// Date intrinsics (which would read the object pointer's bits as a
+    /// timestamp and print `1970-01-01T00:00:00.000Z`).
+    pub(crate) plain_object_locals: HashSet<String>,
     pub(crate) proxy_revoke_locals: HashMap<String, String>,
     /// For `const p = new Proxy(ClassName, handler)`, record the class name
     /// so `new p(args)` can fold to `new ClassName(args)` (pragmatic — lets
@@ -377,6 +384,7 @@ impl LoweringContext {
             regex_exec_locals: HashSet::new(),
             proxy_locals: HashSet::new(),
             wasm_instance_locals: HashSet::new(),
+            plain_object_locals: HashSet::new(),
             proxy_revoke_locals: HashMap::new(),
             proxy_target_classes: HashMap::new(),
             class_expr_aliases: HashMap::new(),
@@ -2319,7 +2327,138 @@ pub fn lower_module_full(
         }
     }
 
+    // Post-pass: infer `extends_name` from `extends_expr` for the bare-factory
+    // shape `class Sub extends makeFactory() {}` where `makeFactory` is a
+    // top-level function whose body trivially returns a static `ClassRef`.
+    // Without this, the codegen chain walks
+    // (`apply_field_initializers_recursive` + the keys-array generator) walk
+    // by `extends_name` only, see `None`, and skip the factory class's
+    // field initializers entirely — `new Sub().kind` reads `undefined`
+    // instead of the parent's `kind = "bare"` literal. Surfaced by the
+    // #806 mixin harness (bare-factory section).
+    infer_dynamic_extends_names(&mut module);
+
     Ok((module, ctx.next_class_id))
+}
+
+/// Fill in `Class::extends_name` for classes whose parent is the result of
+/// calling a statically-resolvable factory function — but ONLY when the
+/// parent's field initializers are closure-free (no `LocalGet` reads). The
+/// post-pass runs after every function and class is in `module`, so
+/// forward-references work (e.g. `class Sub extends makeBare() {}` ahead of
+/// `function makeBare() …` hoisting).
+///
+/// The closure-free guard exists because the field-init pass at codegen
+/// (`apply_field_initializers_recursive`) inlines each chained class's
+/// init expressions directly into the subclass's constructor. That's
+/// correct for pure-literal initializers like `kind = "bare"` but wrong
+/// for `_tag = tag` where `tag` is the factory's parameter — the inlined
+/// `LocalGet(tag)` would re-resolve in the subclass's scope (where `tag`
+/// doesn't exist) and produce garbage. Conservatively skip those: the
+/// subclass's static parent stays None and field-init inheritance only
+/// works for the literal-initialized parents that #806's bare-factory
+/// section needs.
+fn infer_dynamic_extends_names(module: &mut Module) {
+    use std::collections::HashMap;
+    // Build a map of `function_id → returned ClassRef name` for every
+    // function whose body returns a static ClassRef. Only the LAST `Return`
+    // is examined — bodies with multiple Returns to different classes
+    // don't resolve uniquely, and the canonical factory shape has exactly
+    // one Return as its last statement.
+    let mut factory_returns: HashMap<u32, String> = HashMap::new();
+    for func in &module.functions {
+        if let Some(name) = trailing_return_classref(&func.body) {
+            factory_returns.insert(func.id, name);
+        }
+    }
+    // Index classes by name so we can re-resolve transitively (a chain like
+    // `Sub extends A() {}` where `A` returns `__anon_N` and `__anon_N` is
+    // a class we own — we only set `extends_name` for `Sub` here; chain
+    // walks at codegen step through `__anon_N.extends_name` normally).
+    let class_field_inits_pure: HashMap<String, bool> = module
+        .classes
+        .iter()
+        .map(|c| (c.name.clone(), fields_are_pure(c)))
+        .collect();
+    for class in &mut module.classes {
+        if class.extends_name.is_some() {
+            continue;
+        }
+        let Some(expr) = class.extends_expr.as_deref() else {
+            continue;
+        };
+        let Expr::Call { callee, .. } = expr else {
+            continue;
+        };
+        let Expr::FuncRef(func_id) = callee.as_ref() else {
+            continue;
+        };
+        let Some(parent_name) = factory_returns.get(func_id) else {
+            continue;
+        };
+        // Only inherit field-init machinery when the parent's fields are
+        // pure (no `LocalGet`). Methods on the parent are unaffected —
+        // those dispatch through the runtime CLASS_REGISTRY which is
+        // populated by the #826 RegisterClassParentDynamic side effect.
+        if class_field_inits_pure
+            .get(parent_name)
+            .copied()
+            .unwrap_or(false)
+        {
+            class.extends_name = Some(parent_name.clone());
+        }
+    }
+}
+
+/// True when none of the class's field initializers contain a `LocalGet`
+/// (the canonical sign that an initializer closes over its surrounding
+/// scope — function parameters, outer-block lets, etc.).
+fn fields_are_pure(class: &Class) -> bool {
+    for field in &class.fields {
+        if let Some(init) = &field.init {
+            if expr_reads_local(init) {
+                return false;
+            }
+        }
+        if let Some(key) = &field.key_expr {
+            if expr_reads_local(key) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn expr_reads_local(expr: &Expr) -> bool {
+    if matches!(expr, Expr::LocalGet(_)) {
+        return true;
+    }
+    let mut found = false;
+    crate::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_reads_local(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Return `Some(name)` if `body`'s last `Return` statement yields a static
+/// `Expr::ClassRef` (directly or as the last element of an `Expr::Sequence`).
+fn trailing_return_classref(body: &[Stmt]) -> Option<String> {
+    for stmt in body.iter().rev() {
+        if let Stmt::Return(Some(expr)) = stmt {
+            return classref_name(expr);
+        }
+    }
+    None
+}
+
+fn classref_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::ClassRef(name) => Some(name.clone()),
+        Expr::Sequence(parts) => parts.last().and_then(classref_name),
+        _ => None,
+    }
 }
 
 /// Post-lowering pass that widens every `Expr::Closure`'s `mutable_captures`
@@ -8572,8 +8711,31 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             let synthetic_name =
                 ident_name.unwrap_or_else(|| format!("__anon_class_{}", ctx.fresh_class()));
             let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
+            // Mixin factories like `function WithA(B) { return class extends B {} }`
+            // produce a class whose super is the function-parameter `B` — a
+            // runtime value, not a statically-known class. The class-decl arm
+            // at the top of this file only pushes a `RegisterClassParentDynamic`
+            // statement for top-level class declarations; an anonymous class
+            // expression inside a function body never has that side effect
+            // fire, so `new (class extends WithA(Base) {})().baseMethod()`
+            // walks subclass → inner factory class and stops at the unwired
+            // grandparent edge (TypeError on the inherited method). Sequence
+            // the dynamic-parent registration in front of the ClassRef so the
+            // edge is wired every time the factory function executes; the
+            // Sequence yields its last element, so the value remains the
+            // ClassRef the call site expects.
+            let parent_expr = class.extends_expr.clone();
             ctx.pending_classes.push(class);
-            Ok(Expr::ClassRef(synthetic_name))
+            match parent_expr {
+                Some(p) => Ok(Expr::Sequence(vec![
+                    Expr::RegisterClassParentDynamic {
+                        class_name: synthetic_name.clone(),
+                        parent_expr: p,
+                    },
+                    Expr::ClassRef(synthetic_name),
+                ])),
+                None => Ok(Expr::ClassRef(synthetic_name)),
+            }
         }
         ast::Expr::JSXElement(jsx) => lower_jsx_element(ctx, jsx),
         ast::Expr::JSXFragment(jsx) => lower_jsx_fragment(ctx, jsx),

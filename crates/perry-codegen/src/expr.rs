@@ -4062,7 +4062,19 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cache_keys_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
             let cached_keys = ctx.block().load(I64, &cache_keys_ptr);
             let keys_eq = ctx.block().icmp_eq(I64, &keys_val, &cached_keys);
-            let hit = ctx.block().and(I1, &is_object, &keys_eq);
+            // #809: an object with `keys_array == null` (e.g. an
+            // `Object.create(proto)` result, or any object with no own
+            // string props) has no cacheable own-slot. The per-site cache
+            // global is zero-initialized, so `keys_val (0) == cached_keys
+            // (0)` spuriously "hits" and the hit path returns the empty
+            // slot[0] — never invoking the miss handler, so the runtime's
+            // prototype-chain walk in `js_object_get_field_by_name` is
+            // skipped and `Object.create(P).m()` reads `undefined`. Require
+            // a non-null keys_array for a hit so keyless receivers fall to
+            // the slow path (which resolves inherited props correctly).
+            let keys_nonnull = ctx.block().icmp_ne(I64, &keys_val, "0");
+            let hit_keys = ctx.block().and(I1, &is_object, &keys_eq);
+            let hit = ctx.block().and(I1, &hit_keys, &keys_nonnull);
 
             let hit_idx = ctx.new_block("pic.hit");
             let miss_idx = ctx.new_block("pic.miss");

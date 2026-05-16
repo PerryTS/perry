@@ -1089,6 +1089,34 @@ pub(crate) fn lower_var_decl_with_destructuring(
         ast::Pat::Ident(ident) => {
             // Simple binding: let x = expr
             let name = ident.id.sym.to_string();
+
+            // #809: tag locals provably bound to a plain object (an object
+            // literal or `Object.create(...)`). `static_receiver_class`
+            // consults this so `x.toJSON()` / `.toString()` / `.valueOf()`
+            // etc. on such a local fall through to generic dynamic dispatch
+            // instead of the Date intrinsics (which would interpret the
+            // object pointer's bits as a timestamp).
+            if let Some(init_expr) = decl.init.as_deref() {
+                let is_plain_object = match init_expr {
+                    ast::Expr::Object(_) => true,
+                    ast::Expr::Call(call) => {
+                        if let ast::Callee::Expr(callee) = &call.callee {
+                            matches!(
+                                callee.as_ref(),
+                                ast::Expr::Member(m)
+                                    if matches!(m.obj.as_ref(), ast::Expr::Ident(o) if o.sym.as_ref() == "Object")
+                                        && matches!(&m.prop, ast::MemberProp::Ident(p) if p.sym.as_ref() == "create")
+                            )
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                };
+                if is_plain_object {
+                    ctx.plain_object_locals.insert(name.clone());
+                }
+            }
             let mut ty = ident
                 .type_ann
                 .as_ref()

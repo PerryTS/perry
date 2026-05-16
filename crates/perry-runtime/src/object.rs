@@ -1178,6 +1178,37 @@ pub(crate) fn class_prototype_object(class_id: u32) -> *mut ObjectHeader {
     std::ptr::null_mut()
 }
 
+/// #711 / #809: resolve `key` by walking the synthetic-class-id prototype
+/// chain (`CLASS_PROTOTYPE_OBJECTS`), recursing into each prototype object
+/// as a normal field lookup. Used both when a receiver's own keys miss AND
+/// when it has no `keys_array` at all (an `Object.create(proto)` result, or
+/// a `Function.prototype = obj` instance with no own props). Returns the
+/// first defined, non-null field found on the chain.
+unsafe fn resolve_proto_chain_field(
+    class_id: u32,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    let mut cid = class_id;
+    let mut depth = 0usize;
+    while depth < 32 {
+        let proto_obj = class_prototype_object(cid);
+        if !proto_obj.is_null() {
+            let field_val = js_object_get_field_by_name(proto_obj as *const _, key);
+            if !field_val.is_undefined() && !field_val.is_null() {
+                return Some(field_val);
+            }
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
 /// Lookup the synthetic class id for a function value, if one was
 /// registered via `js_set_function_prototype`.
 #[inline]
@@ -3570,6 +3601,17 @@ pub extern "C" fn js_object_get_field_by_name(
         let keys = (*obj).keys_array;
 
         if keys.is_null() {
+            // #809: an object with no own keys (e.g. an `Object.create(proto)`
+            // result, or a `Function.prototype = obj` instance) still has to
+            // resolve inherited props/methods. Pre-fix this returned undefined
+            // here — BEFORE the `class_id` prototype-walk below — so
+            // `Object.create(P).m()` threw `TypeError: m is not a function`.
+            let class_id = (*obj).class_id;
+            if class_id != 0 {
+                if let Some(v) = resolve_proto_chain_field(class_id, key) {
+                    return v;
+                }
+            }
             return JSValue::undefined();
         }
 
@@ -3762,23 +3804,8 @@ pub extern "C" fn js_object_get_field_by_name(
             // object — return its value directly. `pipe`, `[Equal.symbol]`,
             // etc. on Effect's EffectPrototype reach here.
             {
-                let mut cid = class_id;
-                let mut depth = 0usize;
-                while depth < 32 {
-                    let proto_obj = class_prototype_object(cid);
-                    if !proto_obj.is_null() {
-                        let field_val = js_object_get_field_by_name(proto_obj as *const _, key);
-                        if !field_val.is_undefined() && !field_val.is_null() {
-                            return field_val;
-                        }
-                    }
-                    match get_parent_class_id(cid) {
-                        Some(p) if p != 0 && p != cid => {
-                            cid = p;
-                            depth += 1;
-                        }
-                        _ => break,
-                    }
+                if let Some(v) = resolve_proto_chain_field(class_id, key) {
+                    return v;
                 }
             }
 
@@ -6299,6 +6326,34 @@ pub unsafe extern "C" fn js_native_call_method(
                                 _ => break,
                             }
                         }
+                    }
+                }
+                // #809: independent prototype-object resolution. The walk
+                // above only runs when `CLASS_VTABLE_REGISTRY` is `Some` —
+                // a program with no user classes that only does
+                // `Object.create(objLiteral).method()` has an empty/None
+                // registry, so `inst.method()` never reached
+                // `class_prototype_object` and threw `<m> is not a
+                // function`. Resolve the method off the synthetic-class-id
+                // prototype chain directly (reuses the same helper as
+                // `js_object_get_field_by_name`), then invoke it with
+                // `this` bound to the receiver.
+                let method_key = crate::string::js_string_from_bytes(
+                    method_name.as_ptr(),
+                    method_name.len() as u32,
+                );
+                if let Some(field_val) =
+                    resolve_proto_chain_field(class_id, method_key as *const crate::StringHeader)
+                {
+                    if !field_val.is_undefined() && !field_val.is_null() {
+                        let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                        let result = crate::closure::js_native_call_value(
+                            f64::from_bits(field_val.bits()),
+                            args_ptr,
+                            args_len,
+                        );
+                        IMPLICIT_THIS.with(|c| c.set(prev_this));
+                        return result;
                     }
                 }
             }
@@ -9046,8 +9101,46 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
 
 /// Object.create(proto) — create empty object. Perry ignores prototype; Object.create(null) returns {}.
 #[no_mangle]
-pub extern "C" fn js_object_create(_proto_value: f64) -> f64 {
-    let obj = js_object_alloc(0, 0);
+pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
+    // #809: actually wire up the prototype. Pre-fix this ignored its
+    // argument entirely, so `Object.create(Proto)` returned a bare empty
+    // object — `inst.method()` / `inst.prop` saw nothing and threw
+    // `TypeError: <m> is not a function`. Reuse the #711 prototype-object
+    // machinery: allocate a synthetic class_id, map it to `proto` in
+    // CLASS_PROTOTYPE_OBJECTS, and stamp the new object with that id. The
+    // chain walk in `js_object_get_field_by_name` (the `class_id != 0`
+    // branch) then resolves missing own props/methods off `proto`.
+    //
+    // `Object.create(null)` (or a non-object proto / a builtin-backed
+    // Set/Map/Regex source Perry can't model as a prototype) falls back
+    // to the original behavior: a plain prototype-less object.
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    let mut class_id: u32 = 0;
+    let proto_bits = proto_value.to_bits();
+    if (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
+        let proto_ptr = crate::value::js_nanbox_get_pointer(proto_value) as *mut ObjectHeader;
+        if !proto_ptr.is_null() && (proto_ptr as usize) > 0x10000 {
+            let proto_addr = proto_ptr as usize;
+            let modellable = !(crate::set::is_registered_set(proto_addr)
+                || crate::map::is_registered_map(proto_addr)
+                || crate::regex::is_regex_pointer(proto_ptr as *const u8));
+            let valid = modellable && unsafe { is_valid_obj_ptr(proto_ptr as *const u8) };
+            if valid {
+                let cid =
+                    NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                {
+                    let mut write = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
+                    if write.is_none() {
+                        *write = Some(HashMap::new());
+                    }
+                    write.as_mut().unwrap().insert(cid, proto_ptr as usize);
+                }
+                unsafe { js_register_class_id(cid) };
+                class_id = cid;
+            }
+        }
+    }
+    let obj = js_object_alloc(class_id, 0);
     // Return NaN-boxed pointer
     f64::from_bits((obj as u64) | 0x7FFD_0000_0000_0000)
 }

@@ -14,6 +14,12 @@
     "category": "bug-open",
     "reason": "Canonical regression-catcher for issue #655. Flips to PASS when the underlying fix lands. Keep regardless of CI verdict — it's a deliberate failing repro."
   },
+  "test_harness_async_context": {
+    "issue": "788",
+    "added": "2026-05-16",
+    "category": "bug-open",
+    "reason": "#807 harness for AsyncLocalStorage propagation through await/microtask/timer and async_hooks.createHook lifecycle. Today's Perry: sync nested run() works (sections 1, 6, 7) but the store evaporates when crossing an await boundary into a separately-named async fn (sections 2/3) and through queueMicrotask/setTimeout (sections 4/5). createHook returns undefined (section 8). Tracks #788 (AsyncLocalStorage real tracking) and #789 (async_hooks lifecycle); each section flips to PASS independently as those land."
+  },
   "test_harness_class_mixins": {
     "issue": "806",
     "added": "2026-05-16",

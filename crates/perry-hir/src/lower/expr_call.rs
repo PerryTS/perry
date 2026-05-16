@@ -115,8 +115,31 @@ fn static_receiver_class(ctx: &LoweringContext, obj: &ast::Expr) -> Option<&'sta
             };
         }
     }
+    // #809: an object literal receiver, or `Object.create(...)`, is
+    // provably a plain object — never a Date. Returning `Some("Object")`
+    // makes the ambiguous-Date-method gate skip the Date arms for
+    // `({...}).toJSON()` / `Object.create(p).toJSON()` the same way it
+    // does for URL, so the call falls through to generic dynamic dispatch
+    // and finds the object's own method.
+    if matches!(obj, ast::Expr::Object(_)) {
+        return Some("Object");
+    }
+    if let ast::Expr::Call(call) = obj {
+        if let ast::Callee::Expr(callee) = &call.callee {
+            if let ast::Expr::Member(m) = callee.as_ref() {
+                if matches!(m.obj.as_ref(), ast::Expr::Ident(o) if o.sym.as_ref() == "Object")
+                    && matches!(&m.prop, ast::MemberProp::Ident(p) if p.sym.as_ref() == "create")
+                {
+                    return Some("Object");
+                }
+            }
+        }
+    }
     if let ast::Expr::Ident(ident) = obj {
         let name = ident.sym.as_ref();
+        if ctx.plain_object_locals.contains(name) {
+            return Some("Object");
+        }
         if let Some(ty) = ctx.lookup_local_type(name) {
             if let Type::Named(n) = ty {
                 return match n.as_str() {
@@ -3055,7 +3078,9 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                 } else {
                     None
                 };
-                let allow_ambiguous_date = recv_class != Some("URL");
+                // #809: `Some("Object")` (object literal / `Object.create`)
+                // joins URL as a "definitely not a Date" receiver.
+                let allow_ambiguous_date = !matches!(recv_class, Some("URL") | Some("Object"));
                 // Methods we treat as Date-only when the receiver is unambiguously
                 // Date or unknown (current behavior). `toString` / `toJSON` etc.
                 // skip these arms when `recv_class` proves the receiver is NOT a Date.

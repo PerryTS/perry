@@ -481,6 +481,25 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("net", "destroy", true, Some("Socket")),
     method("net", "on", true, Some("Socket")),
     method("net", "upgradeToTLS", true, Some("Socket")),
+    // Issue #811 — IP classification helpers + Happy-Eyeballs default
+    // accessors. Pure string/global-flag functions.
+    method("net", "isIP", false, None),
+    method("net", "isIPv4", false, None),
+    method("net", "isIPv6", false, None),
+    method("net", "getDefaultAutoSelectFamily", false, None),
+    method("net", "setDefaultAutoSelectFamily", false, None),
+    method(
+        "net",
+        "getDefaultAutoSelectFamilyAttemptTimeout",
+        false,
+        None,
+    ),
+    method(
+        "net",
+        "setDefaultAutoSelectFamilyAttemptTimeout",
+        false,
+        None,
+    ),
     method_sig(
         "tls",
         "connect",
