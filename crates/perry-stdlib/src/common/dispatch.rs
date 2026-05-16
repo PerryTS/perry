@@ -224,6 +224,17 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         }
     }
 
+    // Issue #848: StringDecoder write / end. The any-typed receiver path
+    // (`const dec = new StringDecoder("utf8"); dec.write(buf)` where
+    // `dec`'s declared type vanishes after TS stripping in libraries that
+    // re-export it) lands here. Method-name gated to avoid claiming
+    // colliding handle ids whose owners have disjoint method sets.
+    if matches!(method_name, "write" | "end")
+        && crate::string_decoder::is_string_decoder_handle(handle)
+    {
+        return crate::string_decoder::dispatch_string_decoder(handle, method_name, args);
+    }
+
     // Unknown handle type - return undefined
     f64::from_bits(0x7FF8_0000_0000_0001)
 }
@@ -737,6 +748,20 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         if let Some(v) = crate::fetch::dispatch_blob_property(handle as usize, property_name) {
             return v;
         }
+    }
+
+    // Issue #848: StringDecoder reads — state getters `lastNeed` /
+    // `lastTotal` / `lastChar` and the method-as-value reads `write` /
+    // `end` (the latter return a bound-method closure so
+    // `typeof dec.write === "function"` and `const w = dec.write; w(buf)`
+    // both work; see `dispatch_string_decoder_property`). Same disjoint-
+    // property gate as the method-dispatch arm above.
+    if matches!(
+        property_name,
+        "lastNeed" | "lastTotal" | "lastChar" | "write" | "end"
+    ) && crate::string_decoder::is_string_decoder_handle(handle)
+    {
+        return crate::string_decoder::dispatch_string_decoder_property(handle, property_name);
     }
 
     // Unknown handle type - return undefined

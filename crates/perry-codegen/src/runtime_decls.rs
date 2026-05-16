@@ -2268,6 +2268,20 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_remove_all_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_remove_listener", I64, &[I64, I64, I64]);
 
+    // ========== StringDecoder (issue #848) ==========
+    // `js_string_decoder_new` allocates a real handle; `write` / `end`
+    // are reachable both through the static NATIVE_MODULE_TABLE dispatch
+    // (typed-receiver path: `const d = new StringDecoder("utf8");
+    // d.write(buf)`) AND through HANDLE_METHOD_DISPATCH in
+    // perry-stdlib's common/dispatch.rs (any-typed receiver fallback —
+    // `(d as any).write(buf)`, `Map.get(...).write(...)`). Both routes
+    // converge on `dispatch_string_decoder` in the stdlib. Property
+    // getters `lastNeed` / `lastTotal` / `lastChar` only go through
+    // HANDLE_PROPERTY_DISPATCH and need no static-call entry.
+    module.declare_function("js_string_decoder_new", I64, &[I64]);
+    module.declare_function("js_string_decoder_write", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_string_decoder_end", DOUBLE, &[I64, DOUBLE]);
+
     // ========== Fastify ==========
     module.declare_function("js_fastify_add_hook", I32, &[I64, I64, I64]);
     module.declare_function("js_fastify_all", I32, &[I64, I64, I64]);

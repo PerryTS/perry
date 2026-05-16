@@ -83,6 +83,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "fastify",
     "async_hooks",
     "readline",
+    "string_decoder",
     "tty",
     "process",
     "perry/tui",
@@ -1641,6 +1642,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("pg", "Client"),
     class("url", "URL"),
     class("url", "URLSearchParams"),
+    // Issue #848: string_decoder.StringDecoder — handle-based dispatch
+    // for `write` / `end` + `lastNeed` / `lastTotal` / `lastChar` getters.
+    class("string_decoder", "StringDecoder"),
+    method("string_decoder", "write", true, Some("StringDecoder")),
+    method("string_decoder", "end", true, Some("StringDecoder")),
+    property("string_decoder", "lastNeed"),
+    property("string_decoder", "lastTotal"),
+    property("string_decoder", "lastChar"),
     // ===========================================================
     // #513 Phase A: backfill receiver-less surface for modules that
     // previously had zero entries. Without these, `module_has_any_entries`

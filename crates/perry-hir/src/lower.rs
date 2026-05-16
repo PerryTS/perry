@@ -4468,6 +4468,25 @@ fn lower_module_decl(
                                             _ => None,
                                         }
                                     };
+                                    // Issue #848: StringDecoder runs entirely through
+                                    // HANDLE_METHOD_DISPATCH / HANDLE_PROPERTY_DISPATCH
+                                    // — registering it as a typed native instance would
+                                    // re-route `d.write` (property read) through the
+                                    // NativeMethodCall-with-empty-args path that
+                                    // pre-invokes the FFI as a getter, so
+                                    // `typeof d.write === "function"` would silently
+                                    // become `"number"` (the empty-string write return,
+                                    // misclassified). Skipping the registration lets
+                                    // the regular PropertyGet path fall into
+                                    // HANDLE_PROPERTY_DISPATCH which returns the bound-
+                                    // method closure built by `js_class_method_bind` —
+                                    // `typeof` reads `"function"`, and the eventual
+                                    // call routes through HANDLE_METHOD_DISPATCH back
+                                    // to the same `dispatch_string_decoder` impl.
+                                    let module_name = match (class_name, module_name.as_deref()) {
+                                        ("StringDecoder", Some("string_decoder")) => None,
+                                        _ => module_name,
+                                    };
                                     if let Some(native_module) = module_name {
                                         ctx.register_native_instance(
                                             name.clone(),
@@ -4516,6 +4535,17 @@ fn lower_module_decl(
                                                 "BigNumber" => Some("bignumber.js".to_string()),
                                                 _ => None,
                                             }
+                                        };
+                                        // Issue #848: StringDecoder runs entirely through
+                                        // HANDLE_*_DISPATCH (see the gate on the sync path
+                                        // above for the full rationale). Defensive mirror
+                                        // on this awaited-new branch so the same skip
+                                        // applies to `await new StringDecoder(...)` —
+                                        // which is unusual but legal TS.
+                                        let module_name = match (class_name, module_name.as_deref())
+                                        {
+                                            ("StringDecoder", Some("string_decoder")) => None,
+                                            _ => module_name,
                                         };
                                         if let Some(native_module) = module_name {
                                             ctx.register_native_instance(

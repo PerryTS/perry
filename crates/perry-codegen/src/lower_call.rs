@@ -7275,6 +7275,34 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[NA_STR],
         ret: NR_PTR,
     },
+    // ========== StringDecoder (issue #848) ==========
+    // The typed-receiver path: `const d = new StringDecoder("utf8");
+    // d.write(buf)` enters here because `d` is registered as a native
+    // instance in HIR (`("string_decoder", "StringDecoder")`). The
+    // any-typed receiver path (`(d as any).write(buf)` /
+    // `Map.get("d").write(...)`) goes through HANDLE_METHOD_DISPATCH
+    // instead — both routes call the same underlying handle dispatch,
+    // so behavior is identical. `NR_F64` because we return a STRING_TAG-
+    // NaN-boxed value directly from the FFI (NR_STR would re-NaN-box a
+    // raw pointer and produce nonsense).
+    NativeModSig {
+        module: "string_decoder",
+        has_receiver: true,
+        method: "write",
+        class_filter: Some("StringDecoder"),
+        runtime: "js_string_decoder_write",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "string_decoder",
+        has_receiver: true,
+        method: "end",
+        class_filter: Some("StringDecoder"),
+        runtime: "js_string_decoder_end",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // ========== LRU Cache ==========
     NativeModSig {
         module: "lru-cache",

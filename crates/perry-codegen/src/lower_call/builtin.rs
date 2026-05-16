@@ -138,6 +138,27 @@ pub(super) fn lower_builtin_new(
             let handle = blk.call(I64, "js_event_emitter_new", &[]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
+        // string_decoder.StringDecoder — issue #848. `new StringDecoder("utf8")`
+        // pre-fix fell through to the generic `js_object_alloc(0, 0)` placeholder,
+        // so `dec.write` / `dec.end` were `undefined`. Allocate a real handle
+        // here; `common/dispatch.rs` dispatches the instance methods + getters
+        // through HANDLE_METHOD_DISPATCH / HANDLE_PROPERTY_DISPATCH. Encoding
+        // arg is passed through so future non-UTF-8 backends can switch on it;
+        // the current impl only tracks the UTF-8 partial-codepoint state.
+        "StringDecoder" => {
+            let enc_box = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let blk = ctx.block();
+            let enc_handle = unbox_to_i64(blk, &enc_box);
+            let handle = blk.call(I64, "js_string_decoder_new", &[(I64, &enc_handle)]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
         // node:stream — `new Readable(opts)` / `new Writable(opts)` /
         // `new Duplex(opts)` / `new Transform(opts)` / `new PassThrough(opts)`.
         // Issue #631. Pre-fix the generic Expr::New path produced an empty

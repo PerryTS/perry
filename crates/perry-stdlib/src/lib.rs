@@ -74,6 +74,10 @@ pub mod readline;
 // Default-on through `default = ["full"]`.
 #[cfg(feature = "bundled-slugify")]
 pub mod slugify;
+// string_decoder — issue #848. Native StringDecoder with real `write` /
+// `end` methods + `lastNeed` / `lastTotal` / `lastChar` getters wired
+// through HANDLE_METHOD_DISPATCH / HANDLE_PROPERTY_DISPATCH.
+pub mod string_decoder;
 pub mod worker_threads;
 
 // Re-export core
@@ -99,6 +103,7 @@ pub use moment::*;
 pub use readline::*;
 #[cfg(feature = "bundled-slugify")]
 pub use slugify::*;
+pub use string_decoder::*;
 pub use worker_threads::*;
 
 // === HTTP Server ===

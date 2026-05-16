@@ -1244,6 +1244,13 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 _ => None,
                             }
                         };
+                        // Issue #848: StringDecoder dispatches entirely through
+                        // HANDLE_*_DISPATCH; don't register as a typed native
+                        // instance (see the mirroring gate in lower.rs).
+                        let module_name = match (class_name, module_name.as_deref()) {
+                            ("StringDecoder", Some("string_decoder")) => None,
+                            _ => module_name,
+                        };
                         if let Some(module) = module_name {
                             ctx.register_native_instance(
                                 name.clone(),
