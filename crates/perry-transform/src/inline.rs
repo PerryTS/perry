@@ -2305,7 +2305,10 @@ fn collect_closure_captured_local_ids(
                     visit_stmt(s, out);
                 }
             }
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 visit_expr(discriminant, out);
                 for case in cases {
                     if let Some(t) = &case.test {
@@ -4014,9 +4017,7 @@ fn try_inline_simple_call(
                         {
                             shared_param_map.insert(this_id, Expr::LocalGet(obj_id));
                         }
-                        for (param, arg) in
-                            method_candidate.func.params.iter().zip(args.iter())
-                        {
+                        for (param, arg) in method_candidate.func.params.iter().zip(args.iter()) {
                             let needs_let = closure_capt.contains(&param.id)
                                 && !matches!(arg, Expr::LocalGet(_));
                             if needs_let {
@@ -4040,11 +4041,7 @@ fn try_inline_simple_call(
                                 Stmt::Return(None) => {}
                                 Stmt::Expr(e) => {
                                     let mut expr = e.clone();
-                                    substitute_locals(
-                                        &mut expr,
-                                        &shared_param_map,
-                                        next_local_id,
-                                    );
+                                    substitute_locals(&mut expr, &shared_param_map, next_local_id);
                                     if let Some(obj_id) = obj_id_opt {
                                         substitute_this(&mut expr, obj_id);
                                     }
