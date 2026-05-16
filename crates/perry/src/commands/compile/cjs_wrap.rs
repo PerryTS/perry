@@ -52,6 +52,66 @@ pub(super) fn is_commonjs(source: &str) -> bool {
         || (source.contains("require(") && !source.contains("import "))
 }
 
+/// JS reserved words that cannot be used as binding identifiers (e.g.
+/// in `const X = ...`). Used by `extract_exports_from_source` to skip
+/// CJS-style `module.exports.X = ...` patterns where `X` is a keyword —
+/// emitting `export const <keyword> = _cjs.<keyword>;` would fail to
+/// parse. `default` (pino's `module.exports.default = pino` interop
+/// pattern) is the common real-world case; the rest are filtered
+/// defensively. Contextual keywords (`async`, `arguments`, `eval`, `as`,
+/// `from`, `of`) are legal identifiers and not included.
+fn is_js_reserved_word(name: &str) -> bool {
+    matches!(
+        name,
+        "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "null"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "yield"
+            | "let"
+            | "static"
+            | "implements"
+            | "interface"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "await"
+    )
+}
+
 /// Wrap CJS source as ESM. `source_path` is the absolute path of the file
 /// being wrapped — used to resolve `require('./relative')` targets when
 /// peeking at re-export wrappers' transitive named exports.
@@ -708,9 +768,24 @@ fn extract_object_literal_exports_from_require(source: &str) -> Vec<(String, Str
 /// Matches `var` / `const` / `let`. Order is preserved and duplicates
 /// are dropped on the alias name (the first binding wins — matches JS
 /// hoisting semantics for the original source).
+///
+/// Issue #845: the trailing `\s*(?:;|$)` (require a semicolon or
+/// end-of-line in multiline mode) is intentional. Without it,
+/// `const EventEmitter = require('events').EventEmitter;` matches as
+/// `const EventEmitter = require('events')` and the blanking pass at
+/// line 336 above leaves `.EventEmitter;` dangling at column 0 of the
+/// wrapped output, producing a TS1109 ("Expression expected") parse
+/// failure 1000+ bytes past EOF. Only whole-statement aliases (those
+/// whose require call is followed by `;` or end-of-line) are safe to
+/// blank — anything with `.X` trailing member access binds to the
+/// property, not the module object, so the alias-rename pass would
+/// be wrong anyway. Same-line follow-on statements like
+/// `var dep = require('./dep'); module.exports = dep.value;` still
+/// match because the `;` form ends the alias matched region before
+/// the follow-on.
 fn extract_require_aliases_with_ranges(source: &str) -> Vec<(String, String, (usize, usize))> {
     let re = regex::Regex::new(
-        r#"(?m)^\s*(?:var|const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?"#,
+        r#"(?m)^\s*(?:var|const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*(?:;|$)"#,
     )
     .unwrap();
     let mut seen = Vec::new();
@@ -1135,6 +1210,19 @@ fn extract_exports_from_source(source: &str) -> Vec<String> {
     let mut names = Vec::new();
     let push_unique = |names: &mut Vec<String>, name: &str| {
         if name == "__esModule" {
+            return;
+        }
+        // Issue #845: skip JS reserved words. `export const default = _cjs.default;`
+        // (and other reserved-word forms) is invalid syntax — the named-export
+        // emission emits `export const <NAME> = _cjs.<NAME>;`, which fails to
+        // parse if `<NAME>` isn't a valid binding identifier. `default` is the
+        // common real-world case (pino: `module.exports.default = pino` —
+        // ESM-interop convention). The default export is already covered by
+        // the separate `export default _cjs;` statement, so skipping `default`
+        // here doesn't lose any export. Reserved words other than `default`
+        // are extremely rare as CJS export names but would parse-fail the
+        // same way, so filter them all.
+        if is_js_reserved_word(name) {
             return;
         }
         let owned = name.to_string();
@@ -1757,5 +1845,93 @@ mod tests {
             "expected _cjs default on name collision, got:\n{}",
             wrapped
         );
+    }
+
+    #[test]
+    fn require_alias_extract_skips_trailing_member_access() {
+        // Issue #845 — mysql2 sub-bug 2.
+        //
+        // `const EventEmitter = require('events').EventEmitter;` binds the
+        // class, not the module object. The old regex matched it as
+        // `const EventEmitter = require('events')` (optional-`;?` stopping
+        // at `)`) and the blanking pass at wrap_commonjs left `.EventEmitter;`
+        // dangling at column 0 of the wrapped output — TS1109 parse error
+        // 1000+ bytes past the original-file EOF.
+        let src = "class B extends EventEmitter { }\n\
+                   const EventEmitter = require('events').EventEmitter;\n\
+                   const Readable = require('stream').Readable;\n\
+                   const Net = require('net');\n";
+        let aliases = extract_require_aliases_with_ranges(src);
+        // Only `Net` is a whole-statement alias; the other two have
+        // trailing `.X` and must be skipped.
+        assert_eq!(aliases.len(), 1, "expected 1 whole-statement alias, got: {:?}", aliases);
+        assert_eq!(aliases[0].0, "Net");
+        assert_eq!(aliases[0].1, "net");
+    }
+
+    #[test]
+    fn wrap_does_not_dangle_member_access_after_blanking() {
+        // Regression test for issue #845: the wrap output must remain
+        // parseable when a require() has `.X` member access after it,
+        // even in the presence of top-level class declarations (which is
+        // what triggers the blanking pass).
+        let src = "const EventEmitter = require('events').EventEmitter;\n\
+                   class BaseConnection extends EventEmitter {\n\
+                     constructor() { super(); }\n\
+                   }\n\
+                   module.exports = BaseConnection;\n";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
+        // The post-wrap source must NOT contain a stray `.EventEmitter`
+        // sitting at column 0 (or anywhere outside a valid expression).
+        // The simplest invariant: every `.EventEmitter` occurrence must
+        // be preceded by either `_req` (the inner require dispatch) or
+        // a non-whitespace, non-newline byte (a valid receiver).
+        for (i, _) in wrapped.match_indices(".EventEmitter") {
+            let prev_char = wrapped[..i].chars().rev().next().unwrap_or(' ');
+            assert!(
+                prev_char.is_alphanumeric() || prev_char == '_' || prev_char == '$' || prev_char == ')',
+                ".EventEmitter at byte {} has invalid receiver {:?} — would parse-fail:\n{}",
+                i, prev_char, wrapped
+            );
+        }
+        // And it should parse cleanly through SWC.
+        let parsed = perry_parser::parse_typescript(&wrapped, "test.js");
+        assert!(parsed.is_ok(), "wrap output failed to parse: {:?}\nwrapped:\n{}", parsed.err(), wrapped);
+    }
+
+    #[test]
+    fn extract_exports_skips_default_reserved_word() {
+        // Issue #845 — pino: `module.exports.default = pino` flows into the
+        // named-export loop and pre-fix emitted `export const default =
+        // _cjs.default;` (invalid syntax — `default` is a reserved word).
+        // The named-export path must skip reserved words; the separate
+        // `export default _cjs;` machinery covers the default export.
+        let src = "module.exports = function pino(){};\n\
+                   module.exports.default = function pino(){};\n\
+                   module.exports.transport = require('./transport');\n\
+                   module.exports.version = '1.0';\n";
+        let names = extract_exports_from_source(src);
+        assert!(!names.contains(&"default".to_string()), "must skip `default`, got: {:?}", names);
+        assert!(names.contains(&"transport".to_string()));
+        assert!(names.contains(&"version".to_string()));
+    }
+
+    #[test]
+    fn wrap_pino_shape_parses_cleanly() {
+        // Issue #845 — pino sub-bug: end-to-end check that a pino-shaped
+        // CJS module produces parseable wrap output.
+        let src = "function pino() { return {}; }\n\
+                   module.exports = pino;\n\
+                   module.exports.default = pino;\n\
+                   module.exports.pino = pino;\n\
+                   module.exports.version = '1.0';\n";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pino.js"));
+        assert!(
+            !wrapped.contains("export const default"),
+            "must not emit `export const default` (reserved word), got:\n{}",
+            wrapped
+        );
+        let parsed = perry_parser::parse_typescript(&wrapped, "pino.js");
+        assert!(parsed.is_ok(), "pino wrap failed to parse: {:?}\nwrapped:\n{}", parsed.err(), wrapped);
     }
 }
