@@ -2750,6 +2750,191 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
+    // Closes #836: two additional producer-side emissions for cross-module
+    // exports that the regular wrapper/getter/stub loops above leave behind.
+    //
+    // Sub-bug A — sanitize-mismatch raw aliases. The producer side hashes
+    // every export through `sanitize()` (replaces every non-alphanumeric +
+    // non-underscore char with `_`), so `export const $ZodCheck` lands at
+    // `perry_fn_<src>___ZodCheck` (one `_` from the `__` separator, two
+    // from the sanitized `$`). The consumer side, in contrast, builds the
+    // callee symbol with `import_origin_suffix()`, which returns the
+    // exported name VERBATIM — so consumer references read
+    // `perry_fn_<src>__$ZodCheck` and link-fail. The mismatch hits every
+    // export whose name contains `$` (zod's `$ZodCheck`/`$ZodCheckString
+    // Format`/`$constructor` family — ~80 symbols on the zod surface), or
+    // any other character `sanitize()` rewrites. Fix: for every named
+    // export where `sanitize(name) != name`, emit raw-name aliases
+    // forwarding to the sanitized definition.
+    //
+    // Sub-bug B — missing `__perry_wrap_perry_fn_<src>__<exported>` for
+    // `local == exported` non-function exports. Concrete shape:
+    //   import * as z from "./external.js";
+    //   export { z };
+    //   export default z;
+    // The `Export::Named { local: "z", exported: "z" }` entry is skipped
+    // by every loop above because `local == exported` and `z` is not a
+    // HIR function (it's a namespace import alias). A consumer that
+    // imports `{ z }` from this module references the wrapper symbol
+    // when reading `z` as a value (e.g. `console.log(z)` or passing it
+    // as a callback), and link-fails on the missing wrapper. Fix: emit
+    // a no-op wrapper for every named export whose `local==exported`
+    // name is not the body of a HIR function (and where no wrapper has
+    // already been emitted by the regular `__perry_wrap_<fn>` loop).
+    //
+    // Note: anonymous `export default function() {...}` produces zero
+    // exports and zero functions in the HIR today (lower.rs drops it on
+    // the floor — separate bug, will need its own PR to wire up the
+    // synthetic `default` name). That path is OUT OF SCOPE here; the
+    // test below uses a named default to sidestep it.
+    {
+        use std::collections::HashSet;
+        let mut emitted_aliases: HashSet<String> = HashSet::new();
+        let func_by_local_name: HashMap<&str, &perry_hir::Function> =
+            hir.functions.iter().map(|f| (f.name.as_str(), f)).collect();
+        for export in &hir.exports {
+            let perry_hir::Export::Named { local, exported } = export else {
+                continue;
+            };
+            let sanitized = sanitize(exported);
+
+            // Sub-bug A: emit raw-name aliases when the exported name
+            // sanitizes to a different symbol. Two aliases per mismatch:
+            //   * `perry_fn_<src>__<raw_exported>` — value/getter form,
+            //     forwards to the already-emitted sanitized symbol.
+            //   * `__perry_wrap_perry_fn_<src>__<raw_exported>` — closure-
+            //     wrapper form, forwards to the sanitized wrapper if it
+            //     exists, otherwise emits a no-op (matches the variable/
+            //     class branch in the #837 loop above).
+            if sanitized != *exported {
+                let sanitized_target =
+                    format!("perry_fn_{}__{}", module_prefix, sanitized);
+                let raw_target =
+                    format!("perry_fn_{}__{}", module_prefix, exported);
+                if !llmod.has_function(&raw_target) && emitted_aliases.insert(raw_target.clone()) {
+                    // Look up the param count to match the sanitized
+                    // target's arity. Default to 0 — that matches the
+                    // variable-getter shape (zero-arg fetcher) which is
+                    // the common case here. Functions with `$`-prefixed
+                    // names (rare, but possible) need to match arity;
+                    // we look it up from the HIR if the local resolves
+                    // to a known function.
+                    let param_count = func_by_local_name
+                        .get(local.as_str())
+                        .map(|f| f.params.len())
+                        .unwrap_or(0);
+                    let wrap_params: Vec<(LlvmType, String)> = (0..param_count)
+                        .map(|i| (DOUBLE, format!("%a{}", i)))
+                        .collect();
+                    let wf = llmod.define_function(&raw_target, DOUBLE, wrap_params);
+                    let _ = wf.create_block("entry");
+                    let blk = wf.block_mut(0).unwrap();
+                    let arg_names: Vec<String> =
+                        (0..param_count).map(|i| format!("%a{}", i)).collect();
+                    let call_args: Vec<(LlvmType, &str)> = arg_names
+                        .iter()
+                        .map(|s| (DOUBLE, s.as_str()))
+                        .collect();
+                    let result = blk.call(DOUBLE, &sanitized_target, &call_args);
+                    blk.ret(DOUBLE, &result);
+                }
+                let raw_wrap = format!(
+                    "__perry_wrap_perry_fn_{}__{}",
+                    module_prefix, exported
+                );
+                let sanitized_wrap = format!(
+                    "__perry_wrap_perry_fn_{}__{}",
+                    module_prefix, sanitized
+                );
+                if !llmod.has_function(&raw_wrap) && emitted_aliases.insert(raw_wrap.clone()) {
+                    if llmod.has_function(&sanitized_wrap) {
+                        // Forward to the sanitized wrapper. Both have the
+                        // same closure-call ABI: (i64 this_closure, double
+                        // a0, …, double a4).
+                        let wf = llmod.define_function(
+                            &raw_wrap,
+                            DOUBLE,
+                            vec![
+                                (I64, "%this_closure".to_string()),
+                                (DOUBLE, "%a0".to_string()),
+                                (DOUBLE, "%a1".to_string()),
+                                (DOUBLE, "%a2".to_string()),
+                                (DOUBLE, "%a3".to_string()),
+                                (DOUBLE, "%a4".to_string()),
+                            ],
+                        );
+                        let _ = wf.create_block("entry");
+                        let blk = wf.block_mut(0).unwrap();
+                        let result = blk.call(
+                            DOUBLE,
+                            &sanitized_wrap,
+                            &[
+                                (I64, "%this_closure"),
+                                (DOUBLE, "%a0"),
+                                (DOUBLE, "%a1"),
+                                (DOUBLE, "%a2"),
+                                (DOUBLE, "%a3"),
+                                (DOUBLE, "%a4"),
+                            ],
+                        );
+                        blk.ret(DOUBLE, &result);
+                    } else {
+                        // No sanitized wrapper either (variable/class/
+                        // namespace re-export with sanitize-mismatch
+                        // name). Emit a no-op returning undefined.
+                        let wf = llmod.define_function(
+                            &raw_wrap,
+                            DOUBLE,
+                            vec![
+                                (I64, "%this_closure".to_string()),
+                                (DOUBLE, "%a0".to_string()),
+                                (DOUBLE, "%a1".to_string()),
+                                (DOUBLE, "%a2".to_string()),
+                                (DOUBLE, "%a3".to_string()),
+                                (DOUBLE, "%a4".to_string()),
+                            ],
+                        );
+                        let _ = wf.create_block("entry");
+                        let blk = wf.block_mut(0).unwrap();
+                        blk.ret(DOUBLE, "0x7FFC000000000001");
+                    }
+                }
+            }
+
+            // Sub-bug B: emit no-op wrapper for `local==exported` named
+            // exports where local isn't a HIR function and no wrapper
+            // is yet defined. Catches `import * as z; export { z };`
+            // and any `export { ClassName }` or `export { someConst }`
+            // where the consumer reads the value as a closure.
+            if local == exported && !func_by_local_name.contains_key(local.as_str()) {
+                let exported_wrap = format!(
+                    "__perry_wrap_perry_fn_{}__{}",
+                    module_prefix,
+                    sanitize(exported)
+                );
+                if !llmod.has_function(&exported_wrap)
+                    && emitted_aliases.insert(exported_wrap.clone())
+                {
+                    let wf = llmod.define_function(
+                        &exported_wrap,
+                        DOUBLE,
+                        vec![
+                            (I64, "%this_closure".to_string()),
+                            (DOUBLE, "%a0".to_string()),
+                            (DOUBLE, "%a1".to_string()),
+                            (DOUBLE, "%a2".to_string()),
+                            (DOUBLE, "%a3".to_string()),
+                            (DOUBLE, "%a4".to_string()),
+                        ],
+                    );
+                    let _ = wf.create_block("entry");
+                    let blk = wf.block_mut(0).unwrap();
+                    blk.ret(DOUBLE, "0x7FFC000000000001");
+                }
+            }
+        }
+    }
+
     // Issue #774: emit closure-call wrappers for class instance methods
     // so `Expr::SuperPropertyGet` (value-form `super.<method>`) can
     // materialize them via `js_closure_alloc_singleton(@__perry_wrap_<method>)`.
