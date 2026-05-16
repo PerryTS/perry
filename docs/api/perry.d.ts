@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 848 entries across 71 modules
+// Coverage: 864 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -201,6 +201,16 @@ declare module "events" {
   export class EventEmitter { [key: string]: any; }
   /** stdlib */
   export function EventEmitter(...args: any[]): any;
+  /** stdlib */
+  export function getEventListeners(...args: any[]): any;
+  /** stdlib */
+  export function getMaxListeners(...args: any[]): any;
+  /** stdlib */
+  export function listenerCount(...args: any[]): any;
+  /** stdlib */
+  export function once(...args: any[]): any;
+  /** stdlib */
+  export function setMaxListeners(...args: any[]): any;
 }
 
 declare module "exponential-backoff" {

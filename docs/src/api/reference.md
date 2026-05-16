@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 848 entries across 71 modules.
+Total: 864 entries across 71 modules.
 
 ## Modules
 
@@ -345,10 +345,26 @@ Total: 848 entries across 71 modules.
 ### Methods
 
 - `EventEmitter` — module
+- `addListener` — instance
 - `emit` — instance
+- `eventNames` — instance
+- `getEventListeners` — module
+- `getMaxListeners` — instance
+- `getMaxListeners` — module
+- `listenerCount` — instance
+- `listenerCount` — module
+- `listeners` — instance
+- `off` — instance
 - `on` — instance
+- `once` — instance
+- `once` — module
+- `prependListener` — instance
+- `prependOnceListener` — instance
+- `rawListeners` — instance
 - `removeAllListeners` — instance
 - `removeListener` — instance
+- `setMaxListeners` — instance
+- `setMaxListeners` — module
 
 ## `exponential-backoff`
 
