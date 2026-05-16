@@ -8572,8 +8572,31 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             let synthetic_name =
                 ident_name.unwrap_or_else(|| format!("__anon_class_{}", ctx.fresh_class()));
             let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
+            // Mixin factories like `function WithA(B) { return class extends B {} }`
+            // produce a class whose super is the function-parameter `B` — a
+            // runtime value, not a statically-known class. The class-decl arm
+            // at the top of this file only pushes a `RegisterClassParentDynamic`
+            // statement for top-level class declarations; an anonymous class
+            // expression inside a function body never has that side effect
+            // fire, so `new (class extends WithA(Base) {})().baseMethod()`
+            // walks subclass → inner factory class and stops at the unwired
+            // grandparent edge (TypeError on the inherited method). Sequence
+            // the dynamic-parent registration in front of the ClassRef so the
+            // edge is wired every time the factory function executes; the
+            // Sequence yields its last element, so the value remains the
+            // ClassRef the call site expects.
+            let parent_expr = class.extends_expr.clone();
             ctx.pending_classes.push(class);
-            Ok(Expr::ClassRef(synthetic_name))
+            match parent_expr {
+                Some(p) => Ok(Expr::Sequence(vec![
+                    Expr::RegisterClassParentDynamic {
+                        class_name: synthetic_name.clone(),
+                        parent_expr: p,
+                    },
+                    Expr::ClassRef(synthetic_name),
+                ])),
+                None => Ok(Expr::ClassRef(synthetic_name)),
+            }
         }
         ast::Expr::JSXElement(jsx) => lower_jsx_element(ctx, jsx),
         ast::Expr::JSXFragment(jsx) => lower_jsx_fragment(ctx, jsx),
