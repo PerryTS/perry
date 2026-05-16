@@ -178,7 +178,14 @@ pub(super) fn collect_modules(
     let ast_module: &swc_ecma_ast::Module = match parse_cache.as_deref_mut() {
         Some(cache) => match parse_cached(cache, &canonical, &source, filename) {
             Ok(m) => m,
-            Err(e) => return Err(annotate_parse_error(e, &canonical, &source, was_cjs_wrapped)),
+            Err(e) => {
+                return Err(annotate_parse_error(
+                    e,
+                    &canonical,
+                    &source,
+                    was_cjs_wrapped,
+                ))
+            }
         },
         None => match perry_parser::parse_typescript(&source, filename) {
             Ok(m) => {
@@ -1036,7 +1043,12 @@ fn excerpt_around_offset(source: &str, lo: usize) -> Option<String> {
         } else {
             "   "
         };
-        out.push_str(&format!("{} {:>5} | {}\n", marker, line_number_at(cursor), line));
+        out.push_str(&format!(
+            "{} {:>5} | {}\n",
+            marker,
+            line_number_at(cursor),
+            line
+        ));
         if next >= post_line {
             break;
         }

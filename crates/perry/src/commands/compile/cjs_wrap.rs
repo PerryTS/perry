@@ -1864,7 +1864,12 @@ mod tests {
         let aliases = extract_require_aliases_with_ranges(src);
         // Only `Net` is a whole-statement alias; the other two have
         // trailing `.X` and must be skipped.
-        assert_eq!(aliases.len(), 1, "expected 1 whole-statement alias, got: {:?}", aliases);
+        assert_eq!(
+            aliases.len(),
+            1,
+            "expected 1 whole-statement alias, got: {:?}",
+            aliases
+        );
         assert_eq!(aliases[0].0, "Net");
         assert_eq!(aliases[0].1, "net");
     }
@@ -1889,14 +1894,24 @@ mod tests {
         for (i, _) in wrapped.match_indices(".EventEmitter") {
             let prev_char = wrapped[..i].chars().rev().next().unwrap_or(' ');
             assert!(
-                prev_char.is_alphanumeric() || prev_char == '_' || prev_char == '$' || prev_char == ')',
+                prev_char.is_alphanumeric()
+                    || prev_char == '_'
+                    || prev_char == '$'
+                    || prev_char == ')',
                 ".EventEmitter at byte {} has invalid receiver {:?} — would parse-fail:\n{}",
-                i, prev_char, wrapped
+                i,
+                prev_char,
+                wrapped
             );
         }
         // And it should parse cleanly through SWC.
         let parsed = perry_parser::parse_typescript(&wrapped, "test.js");
-        assert!(parsed.is_ok(), "wrap output failed to parse: {:?}\nwrapped:\n{}", parsed.err(), wrapped);
+        assert!(
+            parsed.is_ok(),
+            "wrap output failed to parse: {:?}\nwrapped:\n{}",
+            parsed.err(),
+            wrapped
+        );
     }
 
     #[test]
@@ -1911,7 +1926,11 @@ mod tests {
                    module.exports.transport = require('./transport');\n\
                    module.exports.version = '1.0';\n";
         let names = extract_exports_from_source(src);
-        assert!(!names.contains(&"default".to_string()), "must skip `default`, got: {:?}", names);
+        assert!(
+            !names.contains(&"default".to_string()),
+            "must skip `default`, got: {:?}",
+            names
+        );
         assert!(names.contains(&"transport".to_string()));
         assert!(names.contains(&"version".to_string()));
     }
@@ -1932,6 +1951,11 @@ mod tests {
             wrapped
         );
         let parsed = perry_parser::parse_typescript(&wrapped, "pino.js");
-        assert!(parsed.is_ok(), "pino wrap failed to parse: {:?}\nwrapped:\n{}", parsed.err(), wrapped);
+        assert!(
+            parsed.is_ok(),
+            "pino wrap failed to parse: {:?}\nwrapped:\n{}",
+            parsed.err(),
+            wrapped
+        );
     }
 }
