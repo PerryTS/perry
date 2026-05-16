@@ -4801,6 +4801,14 @@ pub fn run_with_parse_cache(
                     .unwrap_or_default(),
                 deferred_module_prefixes,
                 module_init_deps,
+                // Issue #842: signal side-effect-only dynamic-import
+                // targets to codegen so it still emits
+                // `@__perry_ns_<prefix>` + populator. `dyn_target_paths`
+                // is the authoritative set built from every consumer's
+                // `import.is_dynamic` resolved paths; `namespace_entries`
+                // alone is insufficient because it's empty when the
+                // target has no `export` statements.
+                is_dynamic_import_target: dyn_target_paths.contains(path),
             };
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this
