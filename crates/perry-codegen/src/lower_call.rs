@@ -966,7 +966,13 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         // directly against the runtime library — bypass the import-
         // map lookup and emit a direct LLVM call with an f64/f64 ABI.
         // (The declarations are added centrally in runtime_decls.rs.)
-        if name.starts_with("js_") {
+        //
+        // External `perry.nativeLibrary` packages commonly export their
+        // symbols with the same `js_*` prefix. If the manifest declares
+        // this name, let the native-library path below emit the call and
+        // declaration from `ffi_signatures` instead of treating it as a
+        // runtime builtin.
+        if name.starts_with("js_") && !ctx.ffi_signatures.contains_key(name) {
             let mut lowered: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
                 lowered.push(lower_expr(ctx, a)?);

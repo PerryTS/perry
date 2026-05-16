@@ -44,7 +44,7 @@ my-bindings/
 
 ## 2. Add bindings
 
-Each TypeScript-visible function maps to one `extern "C"` Rust export.
+Each TypeScript-visible function should forward to one `extern "C"` Rust export.
 
 ### `src/lib.rs`
 
@@ -89,10 +89,10 @@ Key rules:
 
 ### `src/index.ts`
 
-Declare the TypeScript surface user code imports. Bodies here only
-run under V8 / Node fallback; Perry's compiler resolves the function
-calls directly to the `js_*` symbols at link time, never executing
-the TS body.
+Declare the FFI symbol from your manifest, then export the TypeScript
+surface user code imports. Perry's FFI dispatch keys on the call-site
+identifier, so the wrapper body must explicitly call the `js_*` symbol
+listed in `perry.nativeLibrary.functions[]`.
 
 ```typescript
 {{#include ../../examples/_fixtures/native-libraries/my-bindings/src/index.ts}}
@@ -108,6 +108,8 @@ The `perry.nativeLibrary` block tells Perry's compiler about every
 {
   "name": "my-bindings",
   "version": "0.1.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
   "perry": {
     "nativeLibrary": {
       "abiVersion": "0.5",

@@ -242,4 +242,16 @@ mod tests {
         assert_eq!(y.len(), 4);
         assert!(y.chars().all(|c| c.is_ascii_digit()));
     }
+
+    #[test]
+    fn package_template_points_resolvers_at_ts_surface() {
+        assert!(TPL_PKG.contains(r#""main": "src/index.ts""#));
+        assert!(TPL_PKG.contains(r#""types": "src/index.ts""#));
+    }
+
+    #[test]
+    fn index_template_forwards_to_manifest_symbol() {
+        assert!(TPL_INDEX_TS.contains("declare function js_{{crate_name}}_hello"));
+        assert!(TPL_INDEX_TS.contains("return js_{{crate_name}}_hello(name);"));
+    }
 }

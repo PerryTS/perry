@@ -27,7 +27,7 @@ console.log(hello("perry"));  // → "Hello, perry!"
 This package was scaffolded by `perry native init`. To add new bindings:
 
 1. Add a `js_<name>` function in `src/lib.rs` with `#[no_mangle] pub extern "C"`. Use only `perry_ffi` types — never reach into `perry-runtime` directly.
-2. Add the matching declaration to `src/index.ts` so user code can import it.
+2. Add the matching `declare function js_<name>(...)` to `src/index.ts`, then export a wrapper that calls that `js_*` symbol.
 3. Add the function to the `perry.nativeLibrary.functions[]` array in `package.json` so the Perry compiler knows the calling convention.
 4. Run `perry native validate` to confirm symbols + signatures match between the three.
 

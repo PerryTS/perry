@@ -1,10 +1,10 @@
 //! Native bindings for {{description}}
 //!
-//! Skeleton emitted by `perry native init`. Each `js_*` function
-//! is what user TypeScript code resolves to via the
+//! Skeleton emitted by `perry native init`. Each TypeScript wrapper
+//! in `src/index.ts` should call a `js_*` symbol declared in the
 //! `perry.nativeLibrary` block in package.json. Add one
-//! `#[no_mangle] pub extern "C"` entry per binding and remove
-//! the `hello` example.
+//! `#[no_mangle] pub extern "C"` entry per binding and remove the
+//! `hello` example.
 
 use perry_ffi::{alloc_string, read_string, JsString, StringHeader};
 

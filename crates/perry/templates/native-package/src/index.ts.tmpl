@@ -1,16 +1,15 @@
 // TypeScript surface for `import { ... } from "{{npm_name}}"`.
 //
-// These declarations describe the FFI signatures user code calls;
-// at compile time Perry resolves them against the `functions[]`
-// block in package.json and links the staticlib directly. The bodies
-// here only run under V8 / Node fallback, never under perry-compiled
-// binaries.
+// Declare each FFI symbol listed in package.json, then export a
+// TypeScript-friendly wrapper that calls it explicitly. Perry keys FFI
+// dispatch on the call-site identifier, so the wrapper body must call
+// the `js_*` symbol named in `perry.nativeLibrary.functions[]`.
+
+declare function js_{{crate_name}}_hello(name: string): string;
 
 /**
  * Example binding. Replace with your own.
  */
 export function hello(name: string): string {
-  // The body is unreachable under perry — it links directly to
-  // `js_{{crate_name}}_hello` instead.
-  return `Hello, ${name}!`;
+  return js_{{crate_name}}_hello(name);
 }
