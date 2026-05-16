@@ -537,7 +537,8 @@ where
     F: Future<Output = Result<u64, String>> + Send + 'static,
 {
     ensure_pump_registered();
-    let ptr = promise_ptr as usize; // Convert to usize for Send
+    // Convert to usize for Send.
+    let ptr = promise_ptr as usize;
     // Issue #859: pin the promise BEFORE crossing the tokio boundary.
     // See `pin_promise_for_native_resolution` for the full rationale.
     pin_promise_for_native_resolution(ptr);
