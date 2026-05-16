@@ -2075,11 +2075,32 @@ pub fn run_with_parse_cache(
     // Build a map of all exported classes from all modules
     // Key: (resolved_path, class_name) -> Class reference
     let mut exported_classes: BTreeMap<(String, String), &perry_hir::Class> = BTreeMap::new();
+    // Issue #489 followup: canonical defining path keyed by class id. The
+    // re-export propagation loop below adds extra `(re_export_path,
+    // class_name)` entries pointing at the same class, and the transitive
+    // parent-class closure later picks `exported_classes`'s first BTreeMap
+    // match by name — which is whichever path sorts earliest, often a
+    // barrel `index.js` rather than the actual defining file. That gives
+    // the imported parent class a `source_prefix` of the barrel, and the
+    // codegen later emits dispatch references to
+    // `perry_method_<barrel>__<Class>__<method>` while the source module
+    // defines the symbol under `perry_method_<origin>__<Class>__<method>`
+    // — undefined-symbol link error. Drizzle hits this:
+    // `mysql-proxy/session.js` calls `.then` on a Promise; perry's name-
+    // based dispatch picks `QueryPromise.then` from the transitive parent
+    // closure (`MySqlPreparedQuery extends QueryPromise`), but the
+    // canonical path is `query-promise.js`, not `index.js` which
+    // re-exports it via `export *`.
+    let mut class_canonical_path: std::collections::HashMap<perry_hir::ClassId, String> =
+        std::collections::HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
         for class in &hir_module.classes {
             if class.is_exported {
                 exported_classes.insert((path_str.clone(), class.name.clone()), class);
+                class_canonical_path
+                    .entry(class.id)
+                    .or_insert_with(|| path_str.clone());
             }
         }
         // Issue #485: handle `export { Local as Exported }` for classes.
@@ -4505,9 +4526,30 @@ pub fn run_with_parse_cache(
                     if visited_imports.contains(&ref_name) {
                         continue;
                     }
+                    // Issue #489: pick the canonical defining path for the
+                    // parent class (where `class N { ... }` actually lives)
+                    // rather than the first BTreeMap match by name (which
+                    // can be a re-export barrel). Without this, drizzle's
+                    // `MySqlPreparedQuery extends QueryPromise` chain pulls
+                    // QueryPromise in under `drizzle-orm/index.js` (because
+                    // `index.js` does `export * from "./query-promise.js"`
+                    // and sorts before `query-promise.js`), and the dispatch
+                    // table emits `perry_method_<index_js>__QueryPromise__then`
+                    // — undefined symbol at link time.
                     let found = exported_classes
                         .iter()
-                        .find(|((_, cname), _)| cname == &ref_name)
+                        .find(|((path, cname), class)| {
+                            cname == &ref_name
+                                && class_canonical_path
+                                    .get(&class.id)
+                                    .map(|cp| cp == path)
+                                    .unwrap_or(true)
+                        })
+                        .or_else(|| {
+                            exported_classes
+                                .iter()
+                                .find(|((_, cname), _)| cname == &ref_name)
+                        })
                         .map(|((path, _), class)| (path.clone(), *class));
                     if let Some((src_path, class)) = found {
                         let class_prefix = compute_module_prefix(&src_path, &ctx.project_root);
