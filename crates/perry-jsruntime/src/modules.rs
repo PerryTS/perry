@@ -955,7 +955,19 @@ export const Buffer = globalThis.Buffer || {
         return result;
     },
 };
-export default { Buffer };
+// Node's buffer.constants — pino / thread-stream read MAX_STRING_LENGTH at
+// module init time (`const MAX_STRING = buffer.constants.MAX_STRING_LENGTH`).
+// Without this, the V8-fallback evaluation throws TypeError at top-level
+// and the whole module namespace is lost — surfaces as
+// `[js_get_export] failed to get namespace: ...MAX_STRING_LENGTH`.
+// Values mirror Node 20+: MAX_LENGTH = 2^53-1, MAX_STRING_LENGTH = 2^29-24.
+export const constants = {
+    MAX_LENGTH: 9007199254740991,
+    MAX_STRING_LENGTH: 536870888,
+};
+export const kMaxLength = constants.MAX_LENGTH;
+export const kStringMaxLength = constants.MAX_STRING_LENGTH;
+export default { Buffer, constants, kMaxLength, kStringMaxLength };
 "#.to_string(),
         "util" => r#"
 // Stub implementation for Node.js 'util' module
@@ -1619,6 +1631,40 @@ mod tests {
             !stub.contains("executionAsyncId() { return 0; }")
                 && !stub.contains("executionAsyncId() {return 0;}"),
             "async_hooks executionAsyncId must not be the old constant-zero stub"
+        );
+    }
+
+    /// Regression for the pino smoke `[js_get_export] failed to get namespace`
+    /// failure downstream of #903. `thread-stream/index.js` reads
+    /// `const MAX_STRING = buffer.constants.MAX_STRING_LENGTH` at top-level
+    /// module init, so the V8-fallback `node:buffer` stub MUST expose
+    /// `constants.MAX_STRING_LENGTH` (and `MAX_LENGTH`). When it didn't, the
+    /// module-init evaluation threw `TypeError: Cannot read properties of
+    /// undefined (reading 'MAX_STRING_LENGTH')`, V8 marked the module as
+    /// failed-to-eval, and `state.runtime.get_module_namespace(module_id)`
+    /// bubbled that error through `js_get_export` for any downstream import
+    /// reaching into thread-stream. Values mirror Node 20+'s
+    /// `buffer.constants` to keep parity with the real Node module.
+    #[test]
+    fn test_buffer_stub_exposes_constants() {
+        let stub = get_builtin_stub("buffer");
+        assert!(
+            stub.contains("export const constants"),
+            "buffer stub must export `constants` (named) for `buffer.constants.X` reads"
+        );
+        assert!(
+            stub.contains("MAX_STRING_LENGTH: 536870888"),
+            "buffer.constants.MAX_STRING_LENGTH must match Node's value (2^29 - 24)"
+        );
+        assert!(
+            stub.contains("MAX_LENGTH: 9007199254740991"),
+            "buffer.constants.MAX_LENGTH must match Node's value (Number.MAX_SAFE_INTEGER)"
+        );
+        // default export must also carry constants so `require('buffer')`
+        // unwrap-via-default and the named-namespace path both work.
+        assert!(
+            stub.contains("export default { Buffer, constants"),
+            "buffer stub default export must carry `constants` for CJS-wrap consumers"
         );
     }
 }

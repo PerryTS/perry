@@ -2,6 +2,42 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.948 — fix(jsruntime): pino smoke `[js_get_export] failed to get namespace: ...MAX_STRING_LENGTH` — `node:buffer` stub now exposes `buffer.constants`
+
+**Symptom.** After v0.5.944's #903 unblocked pino past the `SORTING_ORDER.ASC` site, the smoke (`PERRY_ALLOW_UNIMPLEMENTED=1 ./out`, with `compilePackages: ["pino"]` and `import pino from "pino"`) crashed at runtime with
+
+```
+[js_get_export] failed to get namespace: TypeError: Cannot read properties of undefined (reading 'MAX_STRING_LENGTH')
+    at file:///private/tmp/perry-pino-x2/node_modules/thread-stream/index.js:52:37
+    at file:///private/tmp/perry-pino-x2/node_modules/thread-stream/index.js:681:3
+```
+
+**Root cause.** thread-stream's `index.js` evaluates `const MAX_STRING = buffer.constants.MAX_STRING_LENGTH` at top-level module init. thread-stream sits behind Perry's V8 fallback (the CJS-wrapped module is loaded through `perry-jsruntime`'s `NodeModuleLoader`), and its `require('buffer')` resolves to the `node:buffer` stub at `crates/perry-jsruntime/src/modules.rs`'s `get_builtin_stub("buffer")` arm. That stub exported `Buffer` only — no `constants` namespace. So `buffer.constants` was `undefined`, and reading `.MAX_STRING_LENGTH` on `undefined` threw `TypeError` at top-level.
+
+V8 then marked thread-stream's module record as failed-to-evaluate. The next `state.runtime.get_module_namespace(module_id)` call inside `js_get_export` (`crates/perry-jsruntime/src/interop.rs:1072`) bubbled the same TypeError back across the FFI boundary as the `[js_get_export] failed to get namespace: ...` log line, and the caller saw `undefined` for the thread-stream namespace — collapsing pino's downstream evaluation.
+
+**Fix.** Extend the V8-fallback `node:buffer` stub to export Node's real `buffer.constants` object as both a named export and a default-export member, mirroring Node 20+'s `buffer.constants`:
+
+* `MAX_LENGTH = 9007199254740991` (Number.MAX_SAFE_INTEGER, the largest `Buffer.alloc` size).
+* `MAX_STRING_LENGTH = 536870888` (2^29 - 24, the largest decodable `Buffer.toString()` length).
+* `kMaxLength` / `kStringMaxLength` named aliases included for the older Node-API shape some packages reach for.
+
+After the fix, `buffer.constants.MAX_STRING_LENGTH` evaluates cleanly inside thread-stream's V8-evaluated module, the module record finishes loading, and the smoke advances past the `[js_get_export]` site to the next unrelated downstream gap (`TypeError: (boolean).tracingChannel is not a function` — that's the `diagnostics_channel` stub returning a boolean instead of an object with `.tracingChannel`; tracked as a follow-up, not addressed here per #903's scope notes).
+
+**Scope discipline.** Only the V8-fallback `node:buffer` stub body changed (the `get_builtin_stub("buffer")` arm). Perry's native `node:buffer` import (handled by `js_native_module_property_by_name` + `get_native_module_constant` at `crates/perry-runtime/src/object.rs`) is untouched — adding native `buffer.constants` support is a separate task. The fix is byte-equivalent to what Node ships: tests against Node confirm the new values match (`node -e "console.log(JSON.stringify(require('buffer').constants))"` → `{"MAX_LENGTH":9007199254740991,"MAX_STRING_LENGTH":536870888}`).
+
+**Validation.**
+
+* Rust unit test `test_buffer_stub_exposes_constants` at `crates/perry-jsruntime/src/modules.rs` asserts the stub source carries both the named `constants` export and its presence on the default export, with the exact Node values pinned.
+* `test-files/test_issue_pino_js_get_export.ts` documents the bug shape and exercises a sanity-only `import * as buffer from "node:buffer"` round-trip (the V8 fallback path isn't reachable from a single standalone `.ts` file — it only fires for V8-evaluated modules inside `compilePackages` targets). Compares byte-for-byte against Node.
+* The original pino smoke (`mkdir /tmp/perry-pino-x2 && cd /tmp/perry-pino-x2 && npm install pino && perry main.ts && ./out`) now advances past the `[js_get_export]` log line to the next unrelated downstream error.
+
+**Files touched.**
+
+* `crates/perry-jsruntime/src/modules.rs` — `get_builtin_stub("buffer")` arm (+12 lines body, +6 lines comment) + new `test_buffer_stub_exposes_constants` (+25 lines).
+* `test-files/test_issue_pino_js_get_export.ts` — new doc-style regression test.
+* `Cargo.toml` / `CLAUDE.md` — version bump to 0.5.947.
+
 ## v0.5.947 — fix(compile): #903 follow-up — uuid regression: emit closure-wrapper stubs for failed modules' named exports
 
 **Symptom.** Compiling a project that uses `uuid` under `perry.compilePackages` link-failed at v0.5.946 with:
