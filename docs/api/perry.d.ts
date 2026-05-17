@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 866 entries across 71 modules
+// Coverage: 867 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -1251,6 +1251,8 @@ declare module "util" {
   export function deprecate(...args: any[]): any;
   /** stdlib */
   export function format(...args: any[]): any;
+  /** stdlib */
+  export function formatWithOptions(...args: any[]): any;
   /** stdlib */
   export function inherits(...args: any[]): any;
   /** stdlib */

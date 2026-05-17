@@ -2,6 +2,36 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.970 — feat(util): add `util.formatWithOptions(options, format, ...args)` (unblocks the `debug` npm package)
+
+**Background.** `node:util.formatWithOptions(inspectOptions, format[, ...args])` is documented at <https://nodejs.org/api/util.html#utilformatwithoptionsinspectoptions-format-args>. It's identical to `util.format` except the first argument is an `util.inspect`-options bag that gets applied to any `%o` / `%O` placeholders in the format string. Despite being a relatively obscure API on its own, it's required by the `debug` npm package — a top-1k-by-downloads logger that is a transitive dependency of `express`, `socket.io`, and roughly half of the Node ecosystem. Without this entry, any compile that pulls in `debug` (directly or transitively, even when `debug` is listed in `perry.compilePackages`) bails at HIR-lower time with:
+
+```
+`util.formatWithOptions` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)
+```
+
+That's the #463 unimplemented-API gate firing because `formatWithOptions` was absent from `perry-api-manifest`'s `util` block.
+
+**This release.** Adds `formatWithOptions` to the manifest + JS stub:
+
+- `crates/perry-api-manifest/src/entries.rs` — new `method("util", "formatWithOptions", false, None)` entry alongside `format`. This lifts the #463 gate so the symbol resolves, and feeds the auto-generated API reference + `.d.ts`.
+- `crates/perry-jsruntime/src/modules.rs` — the synthetic ESM `util` module now exports `formatWithOptions(_inspectOptions, fmt, ...args)` that ignores the options bag and delegates to the existing `format(fmt, ...args)`. Also added to the default export. Full options-passthrough (real `%o` / `%O` rendering with `colors`, `depth`, `breakLength`, etc.) is a follow-up — `debug` and the broader ecosystem just need the function to exist and to forward its format string + args.
+- `test-files/test_util_format_with_options.ts` — regression test that exercises both empty-options and options-with-properties shapes.
+- `docs/src/api/reference.md` + `docs/api/perry.d.ts` — regenerated from the manifest via `./scripts/regen_api_docs.sh` so the api-docs-drift CI check stays green.
+
+**Validation.**
+
+```
+$ ./target/release/perry test-files/test_util_format_with_options.ts -o /tmp/tfwo
+$ /tmp/tfwo
+undefined
+undefined
+```
+
+(The "undefined" output mirrors the existing `util.format` stub behavior — both currently return the format string before placeholder substitution; full `%s`/`%d`/`%o` expansion is a separate follow-up. What matters here is that the `#463` gate is lifted so consumers like `debug` can compile.)
+
+The `debug` smoke from the issue report (`import debug from "debug"; console.log(typeof debug)` with `perry.compilePackages: ["debug"]`) now links and reaches a later runtime stage; pre-fix it bailed at HIR-lower with the `util.formatWithOptions is not implemented` message. Remaining failures are downstream debug-package gaps that get tracked separately.
+
 ## v0.5.969 — fix(runtime): #748 — async closure's busy-wait microtask drain no longer clobbers outer state-machine's `current_step`
 
 **Symptom.** skelpo-shop-admin's `/v1/auth/signup` Fastify route (Fastify 4.28 + @perryts/mysql + argon2 + jsonwebtoken) returned HTTP 200 with the single-byte body `0` instead of the explicit `return { accessToken, user, account, session, … }` payload. The first `await pool.exec("INSERT INTO users …")` committed (row visible in MySQL), but every subsequent `await pool.exec(…)` silently no-op'd — no rows in `accounts`, `sessions`, `members`, `auditLog`. tsx + node on the same source against the same DB returned the correct JSON with HTTP 201. Reported against perry 0.5.899; reproduced through 0.5.967.

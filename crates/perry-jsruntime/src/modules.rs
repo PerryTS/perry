@@ -1070,6 +1070,11 @@ export function promisify(fn) { return (...args) => new Promise((resolve, reject
 export function callbackify(fn) { return (...args) => { const cb = args.pop(); fn(...args).then(r => cb(null, r)).catch(cb); }; }
 export function inspect(obj) { return JSON.stringify(obj); }
 export function format(fmt, ...args) { return fmt; }
+// util.formatWithOptions(inspectOptions, format[, ...args]) — identical to
+// util.format with the first arg routed into util.inspect for %o/%O. Our
+// stub ignores the options object and delegates to format(); full
+// options-passthrough is a follow-up. Required by the `debug` npm package.
+export function formatWithOptions(_inspectOptions, fmt, ...args) { return format(fmt, ...args); }
 export function debuglog() { return () => {}; }
 export function deprecate(fn) { return fn; }
 export function inherits(ctor, superCtor) { Object.setPrototypeOf(ctor.prototype, superCtor.prototype); }
@@ -1102,7 +1107,7 @@ export const types = {
     isAnyArrayBuffer: (v) => v instanceof ArrayBuffer,
     isModuleNamespaceObject: () => false,
 };
-export default { promisify, callbackify, inspect, format, debuglog, deprecate, inherits, TextEncoder, TextDecoder, types };
+export default { promisify, callbackify, inspect, format, formatWithOptions, debuglog, deprecate, inherits, TextEncoder, TextDecoder, types };
 "#.to_string(),
         "events" => r#"
 // Stub implementation for Node.js 'events' module

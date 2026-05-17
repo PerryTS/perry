@@ -1728,6 +1728,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     //     the rest are documented stubs) ---
     method("util", "inspect", false, None),
     method("util", "format", false, None),
+    // `util.formatWithOptions(options, format[, ...args])` — identical to
+    // `util.format` except the first arg is an `util.inspect` options bag
+    // applied to any `%o`/`%O` placeholders. Required by the `debug` npm
+    // package (top-1k downloads, transitive dep of express/socket.io). Our
+    // stub ignores the options bag and delegates to `util.format`; full
+    // options-passthrough is a follow-up.
+    method("util", "formatWithOptions", false, None),
     method("util", "promisify", false, None),
     method("util", "callbackify", false, None),
     method("util", "deprecate", false, None),
