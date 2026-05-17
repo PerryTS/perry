@@ -2240,6 +2240,36 @@ impl SH for Expr {
                 signature.as_ref().hash(h);
                 data.as_ref().hash(h);
             }
+            Expr::WebCryptoEncrypt {
+                algorithm,
+                key,
+                data,
+            } => {
+                tag(h, 466);
+                algorithm.as_ref().hash(h);
+                key.as_ref().hash(h);
+                data.as_ref().hash(h);
+            }
+            Expr::WebCryptoDecrypt {
+                algorithm,
+                key,
+                data,
+            } => {
+                tag(h, 467);
+                algorithm.as_ref().hash(h);
+                key.as_ref().hash(h);
+                data.as_ref().hash(h);
+            }
+            Expr::CryptoRandomFillSync {
+                buffer,
+                offset,
+                size,
+            } => {
+                tag(h, 468);
+                buffer.as_ref().hash(h);
+                offset.as_ref().hash(h);
+                size.as_ref().hash(h);
+            }
             Expr::OsPlatform => tag(h, 201),
             Expr::OsArch => tag(h, 202),
             Expr::OsHostname => tag(h, 203),

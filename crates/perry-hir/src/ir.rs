@@ -1612,6 +1612,31 @@ pub enum Expr {
         signature: Box<Expr>,
         data: Box<Expr>,
     },
+    /// `crypto.subtle.encrypt(algorithm, key, data)` -> Promise<ArrayBuffer>
+    ///
+    /// Initial implementation covers AES-GCM (the surface jose's
+    /// `gcmEncrypt` / `rsaes` reach for); AES-CBC, AES-CTR, and
+    /// RSA-OAEP are TODO follow-ups tracked alongside #561.
+    WebCryptoEncrypt {
+        algorithm: Box<Expr>,
+        key: Box<Expr>,
+        data: Box<Expr>,
+    },
+    /// `crypto.subtle.decrypt(algorithm, key, data)` -> Promise<ArrayBuffer>
+    WebCryptoDecrypt {
+        algorithm: Box<Expr>,
+        key: Box<Expr>,
+        data: Box<Expr>,
+    },
+    /// `crypto.randomFillSync(buffer, offset?, size?)` — fills the
+    /// provided Buffer/TypedArray with random bytes in-place and
+    /// returns the same buffer. `offset` and `size` are optional
+    /// JS values (undefined sentinels OK).
+    CryptoRandomFillSync {
+        buffer: Box<Expr>,
+        offset: Box<Expr>,
+        size: Box<Expr>,
+    },
 
     // OS operations
     OsPlatform,          // os.platform() -> string ("darwin", "linux", "win32")

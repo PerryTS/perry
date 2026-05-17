@@ -387,6 +387,29 @@ where
             f(signature);
             f(data);
         }
+        Expr::WebCryptoEncrypt {
+            algorithm,
+            key,
+            data,
+        }
+        | Expr::WebCryptoDecrypt {
+            algorithm,
+            key,
+            data,
+        } => {
+            f(algorithm);
+            f(key);
+            f(data);
+        }
+        Expr::CryptoRandomFillSync {
+            buffer,
+            offset,
+            size,
+        } => {
+            f(buffer);
+            f(offset);
+            f(size);
+        }
 
         // ─── Two-child variants ───────────────────────────────────────────
         Expr::Binary { left, right, .. }
@@ -1670,6 +1693,29 @@ where
             f(key);
             f(signature);
             f(data);
+        }
+        Expr::WebCryptoEncrypt {
+            algorithm,
+            key,
+            data,
+        }
+        | Expr::WebCryptoDecrypt {
+            algorithm,
+            key,
+            data,
+        } => {
+            f(algorithm);
+            f(key);
+            f(data);
+        }
+        Expr::CryptoRandomFillSync {
+            buffer,
+            offset,
+            size,
+        } => {
+            f(buffer);
+            f(offset);
+            f(size);
         }
 
         // ─── Multi-child variants — same shape as the mut variant ─────────

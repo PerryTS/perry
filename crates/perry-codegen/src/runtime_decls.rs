@@ -1056,6 +1056,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    // AES-GCM encrypt / decrypt (issue #561 follow-up). Same Promise
+    // shape as sign/verify; runtime resolves synchronously.
+    module.declare_function("js_webcrypto_encrypt", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_webcrypto_decrypt", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    // crypto.randomFillSync(buf, offset?, size?) → returns the same
+    // NaN-boxed buffer with random bytes written in-place.
+    module.declare_function(
+        "js_crypto_random_fill_sync",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     // Hash-handle form (issue #86): `const h = crypto.createHash(alg);
     // h.update(x); h.digest()`. Returns a NaN-boxed POINTER_TAG handle id;
     // subsequent method dispatch flows through HANDLE_METHOD_DISPATCH.

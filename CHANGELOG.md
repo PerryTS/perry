@@ -2,6 +2,50 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.972 — feat(crypto): randomFillSync + subtle.encrypt/decrypt (AES-GCM) — unblocks axios + jose under `perry.compilePackages`
+
+**Symptom.** Two of the three "compile this npm package natively" smoke tests were hitting the strict-API gate (#463) at the same surface:
+
+```
+$ perry main.ts -o out   # main.ts: `import axios from "axios"`
+Error: `crypto.randomFillSync` is not implemented in Perry
+
+$ perry main.ts -o out   # main.ts: `import * as jose from "jose"`
+Error: `crypto.subtle.encrypt` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify
+```
+
+axios's `lib/platform/node/index.js` builds request IDs via `crypto.randomFillSync(new Uint32Array(size))`. jose's `gcmEncrypt` / `gcmDecrypt` in `dist/webapi/lib/content_encryption.js` route through `crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData, tagLength: 128 }, key, plaintext)` and the matching `decrypt`. Both calls were rejected at HIR-lowering time by the strict-API gate because the manifest didn't declare them and the `crypto.subtle.<method>` chain matcher in `expr_call.rs` only had explicit arms for `digest` / `importKey` / `sign` / `verify`.
+
+**Implementation.**
+
+1. **`crypto.randomFillSync(buffer, offset?, size?)`** —
+   - New `Expr::CryptoRandomFillSync { buffer, offset, size }` IR variant (walker.rs both `walk_expr` arms, stable_hash.rs tag 468).
+   - HIR lowering in `crates/perry-hir/src/lower/expr_call.rs` matches alongside the existing `crypto.randomBytes` / `randomUUID` / `getRandomValues` arms. Missing offset/size lower as `Expr::Undefined` so the runtime defaulting path keeps working.
+   - Codegen in `crates/perry-codegen/src/expr.rs` emits a direct call to the new FFI helper.
+   - Runtime helper `js_crypto_random_fill_sync` in `crates/perry-stdlib/src/crypto.rs` handles **both** the Buffer / Uint8Array path (`BUFFER_REGISTRY`-tagged BufferHeader) and the TypedArrayHeader path (Uint32Array etc — axios's actual shape). Critically, the function accepts the value in two representations: NaN-boxed POINTER_TAG (the form Buffer / Uint8Array arrive as) AND raw heap pointer in the low 48 bits (the form `Expr::TypedArrayNew` codegen emits — see the `bitcast_i64_to_double` in `expr.rs`, no tag). The first iteration missed the raw-pointer case and silently no-op'd on Uint32Array; the probe `crypto.randomFillSync(new Uint32Array(4))` returned all-zeros until I widened the top16 check from `== 0x7FFD` to `>= 0x7FF8`.
+   - Optional `offset`/`size` args go through `nanboxed_to_usize` which handles INT32_TAG, plain `f64`, and the `undefined` / `null` sentinels; out-of-range values are clamped to the buffer's byte length (`resolve_range`) rather than throwing, matching Node's lenient bounds behavior.
+   - Manifest entry `method("crypto", "randomFillSync", false, None)` in `crates/perry-api-manifest/src/entries.rs`.
+
+2. **`crypto.subtle.encrypt(algorithm, key, data)` / `decrypt(...)`** — AES-GCM only this pass; AES-CBC, AES-CTR, and RSA-OAEP are TODO follow-ups tracked alongside #561.
+   - Two new IR variants `Expr::WebCryptoEncrypt` / `Expr::WebCryptoDecrypt` (same 3-arg shape as `WebCryptoSign`).
+   - HIR lowering extends the `crypto.subtle.<method>` chain matcher with `"encrypt"` / `"decrypt"` arms. Updated the "unsupported subtle method" diagnostic to list the new methods.
+   - Codegen mirrors `WebCryptoSign`: each emits a `js_webcrypto_encrypt`/`_decrypt` FFI call and NaN-boxes the returned `*mut Promise` with POINTER_TAG. Runtime helpers declared in `crates/perry-codegen/src/runtime_decls.rs`.
+   - Runtime implementation in `crates/perry-stdlib/src/webcrypto.rs`. Extended the existing `KeyAlgo` enum with `AesGcm` and taught `importKey` to accept either the object form `{ name: "AES-GCM" }` or the shorthand string `"AES-GCM"` (jose passes the shorthand). The encrypt/decrypt FFIs:
+     1. Read the algorithm's `name` via `extract_algo_name` (shared with importKey) — must equal "AES-GCM".
+     2. Read the required `iv` field and the optional `additionalData` field from the algorithm object via `object_field_bytes`.
+     3. Verify the key was imported as AES-GCM (`lookup_crypto_key` + `KeyAlgo::AesGcm` check).
+     4. Route to `aes_gcm_encrypt` / `aes_gcm_decrypt` which dispatch to `Aes128Gcm` or `Aes256Gcm` based on key length (192-bit AES-GCM is intentionally not in the `aes-gcm 0.10` type set; documented + tested as rejected). Output is `ciphertext || tag` per the WebCrypto spec; decrypt expects the same layout.
+   - Anything that doesn't fit the AES-GCM shape resolves to undefined rather than panicking — the existing `digest`/`sign`/`verify` rejection pattern.
+
+**Validation.**
+- New `test-files/test_crypto_randomFillSync.ts` — fills both `Uint8Array(16)` and `Uint32Array(8)`, asserts identity equality of the returned buffer and that the sum of bytes/elements is non-zero (2⁻¹²⁸ false-negative probability).
+- New `test-files/test_crypto_subtle_encrypt_decrypt.ts` — AES-GCM-128 round-trip with a 10-byte plaintext, verifies `ct.length == 26` (10 + 16-byte tag) and that decrypt recovers the plaintext byte-for-byte.
+- Four new unit tests in `webcrypto::tests`: 128-bit and 256-bit AES-GCM round-trips, short-IV rejection, and 192-bit key rejection (regression guard for the `aes-gcm 0.10` type-set decision).
+- Repro for axios now advances past `crypto.randomFillSync` and stops at `zlib.constants` (a separate known unimplemented). Repro for jose now advances past `crypto.subtle.encrypt` and stops at `crypto.subtle.generateKey` (out of scope per #561).
+- Manifest consistency suite + `webcrypto` lib tests green.
+
+**Out of scope.** AES-CBC, AES-CTR, AES-KW, and RSA-OAEP encrypt/decrypt; `subtle.generateKey`, `wrapKey`, `unwrapKey`, `deriveKey`; asymmetric sign/verify (RSA, ECDSA). The diagnostic message names the supported surface so callers see exactly what's missing.
+
 ## v0.5.971 — fix(jsruntime): define `URL` / `URLSearchParams` as V8-fallback globals (unblocks `import "joi"`)
 
 **Symptom.** `import Joi from "joi"` against the V8-fallback jsruntime crashed at module-init with

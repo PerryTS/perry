@@ -8491,6 +8491,58 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &promise))
         }
+        Expr::WebCryptoEncrypt {
+            algorithm,
+            key,
+            data,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, key)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_encrypt",
+                &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoDecrypt {
+            algorithm,
+            key,
+            data,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, key)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_decrypt",
+                &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::CryptoRandomFillSync {
+            buffer,
+            offset,
+            size,
+        } => {
+            // Fill `buffer` (Buffer or TypedArray) with random bytes
+            // in-place; return the same NaN-boxed buffer value. `offset`
+            // and `size` are NaN-boxed JS values (Undefined → use
+            // defaults). The runtime accepts both layouts.
+            let buf_box = lower_expr(ctx, buffer)?;
+            let off_box = lower_expr(ctx, offset)?;
+            let sz_box = lower_expr(ctx, size)?;
+            let blk = ctx.block();
+            let result = blk.call(
+                DOUBLE,
+                "js_crypto_random_fill_sync",
+                &[(DOUBLE, &buf_box), (DOUBLE, &off_box), (DOUBLE, &sz_box)],
+            );
+            Ok(result)
+        }
 
         // -------- arr.indexOf(value) -> number --------
         // Issue #214: route through `_jsvalue` so string elements

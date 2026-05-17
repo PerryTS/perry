@@ -207,6 +207,119 @@ pub extern "C" fn js_crypto_random_uuid() -> *mut StringHeader {
     js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
 }
 
+/// `crypto.randomFillSync(buffer, offset?, size?)` — fills the given
+/// Buffer or TypedArray with cryptographically strong random bytes
+/// in-place and returns the **same** NaN-boxed buffer value.
+///
+/// All three arguments arrive as NaN-boxed `f64`. `offset` and `size`
+/// may be `undefined` (Node's defaults are `offset = 0`, `size =
+/// buffer.byteLength - offset`). Bounds-clamping mirrors Node: out-of-
+/// range offsets/sizes are clamped to the buffer's byte length rather
+/// than throwing, so misuse degrades to "fewer bytes filled" instead
+/// of an opaque crash.
+///
+/// Required by axios (#? jose / axios native compile) — axios's
+/// `generateString` passes a `Uint32Array`; jose can pass a `Buffer`.
+#[no_mangle]
+pub extern "C" fn js_crypto_random_fill_sync(
+    buf_bits: f64,
+    offset_bits: f64,
+    size_bits: f64,
+) -> f64 {
+    let bits = buf_bits.to_bits();
+    // Accept either form the codegen can hand us:
+    //   - NaN-boxed POINTER_TAG (top16 0x7FFD) → Buffer / Uint8Array
+    //   - Raw heap pointer in low 48 bits (top16 == 0) → TypedArray
+    //     (Uint32Array etc — see `Expr::TypedArrayNew` codegen, the
+    //     pointer is `bitcast_i64_to_double` without a tag).
+    let top16 = (bits >> 48) as u16;
+    let raw = if top16 >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        bits as usize
+    };
+    if raw < 0x1000 {
+        return buf_bits;
+    }
+
+    // Read optional numeric args; undefined / NaN → use default.
+    let offset_arg = nanboxed_to_usize(offset_bits);
+    let size_arg = nanboxed_to_usize(size_bits);
+
+    unsafe {
+        // BufferHeader / Uint8Array path.
+        if perry_runtime::buffer::is_registered_buffer(raw) {
+            let buf = raw as *mut perry_runtime::buffer::BufferHeader;
+            let total = (*buf).length as usize;
+            let (start, end) = resolve_range(total, offset_arg, size_arg);
+            if end > start {
+                let data = perry_runtime::buffer::buffer_data_mut(buf);
+                let slice = std::slice::from_raw_parts_mut(data.add(start), end - start);
+                rand::thread_rng().fill_bytes(slice);
+            }
+            // Hand back the same NaN-boxed value the caller passed.
+            return buf_bits;
+        }
+        // TypedArrayHeader path (Uint8Array, Uint32Array, Float32Array, …).
+        if perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some() {
+            let ta = raw as *mut perry_runtime::typedarray::TypedArrayHeader;
+            let len = (*ta).length as usize;
+            let elem_size = (*ta).elem_size as usize;
+            let total = len * elem_size;
+            let (start, end) = resolve_range(total, offset_arg, size_arg);
+            if end > start {
+                let data = (raw as *mut u8).add(std::mem::size_of::<
+                    perry_runtime::typedarray::TypedArrayHeader,
+                >());
+                let slice = std::slice::from_raw_parts_mut(data.add(start), end - start);
+                rand::thread_rng().fill_bytes(slice);
+            }
+            return buf_bits;
+        }
+    }
+
+    // Unsupported value shape — return the original (no-op) rather
+    // than crashing. The HIR-level type check is "any", so the
+    // compiler can't statically rule this out.
+    buf_bits
+}
+
+/// Best-effort extract a non-negative integer from a NaN-boxed `f64`.
+/// `undefined`, `null`, NaN, negatives → `None` (caller picks default).
+fn nanboxed_to_usize(bits: f64) -> Option<usize> {
+    let raw = bits.to_bits();
+    let top16 = (raw >> 48) as u16;
+    // Undefined / null / false / true sentinels.
+    if matches!(raw, 0x7FFC_0000_0000_0001 | 0x7FFC_0000_0000_0002) {
+        return None;
+    }
+    // Int32 tag (0x7FFE).
+    if top16 == 0x7FFE {
+        let i = (raw & 0xFFFF_FFFF) as u32 as i32;
+        if i < 0 {
+            return None;
+        }
+        return Some(i as usize);
+    }
+    // Otherwise treat as plain f64.
+    if bits.is_nan() || bits.is_sign_negative() || bits.is_infinite() {
+        return None;
+    }
+    Some(bits as usize)
+}
+
+/// Resolve `(start, end)` byte indices from Node-style `offset` / `size`
+/// arguments against a buffer of `total` bytes. Out-of-range values are
+/// clamped to `[0, total]`.
+fn resolve_range(total: usize, offset: Option<usize>, size: Option<usize>) -> (usize, usize) {
+    let start = offset.unwrap_or(0).min(total);
+    let end = match size {
+        Some(s) => start.saturating_add(s).min(total),
+        None => total,
+    };
+    (start, end)
+}
+
 /// Create HMAC-SHA256
 /// crypto.createHmac('sha256', key).update(data).digest('hex') -> string
 #[no_mangle]

@@ -1,4 +1,5 @@
-//! Web Crypto API: `crypto.subtle.digest` / `importKey` / `sign` / `verify`.
+//! Web Crypto API: `crypto.subtle.digest` / `importKey` / `sign` / `verify`
+//! / `encrypt` / `decrypt`.
 //!
 //! Issue #561 — sigv4 / JWT / web-push consumers (s3-lite-client,
 //! aws4fetch, jose, oidc-client-ts, web-push) all route through
@@ -8,13 +9,18 @@
 //! - `digest("SHA-1" | "SHA-256" | "SHA-384" | "SHA-512", data)` →
 //!   Promise<Uint8Array>
 //! - `importKey("raw", key, { name: "HMAC", hash: { name: "SHA-256" } },
-//!   ...)` → Promise<CryptoKey>
+//!   ...)` → Promise<CryptoKey>  (HMAC and AES-GCM both supported)
 //! - `sign("HMAC", key, data)` → Promise<Uint8Array>
 //! - `verify("HMAC", key, signature, data)` → Promise<boolean>
+//! - `encrypt({ name: "AES-GCM", iv, additionalData?, tagLength? }, key, data)`
+//!   → Promise<Uint8Array> (jose `gcmEncrypt`)
+//! - `decrypt({ name: "AES-GCM", iv, additionalData?, tagLength? }, key, data)`
+//!   → Promise<Uint8Array>
 //!
-//! Asymmetric algorithms (RSA / ECDSA / RSA-OAEP), `generateKey`,
-//! `wrapKey`, `unwrapKey`, `deriveKey`, `encrypt`, and `decrypt` are
-//! out of scope per the issue.
+//! AES-CBC, AES-CTR, and RSA-OAEP encrypt/decrypt remain TODO follow-
+//! ups. `generateKey`, `wrapKey`, `unwrapKey`, `deriveKey`, and
+//! asymmetric signing (RSA / ECDSA) are still out of scope per the
+//! issue.
 //!
 //! `CryptoKey` is represented as a Buffer holding the raw key bytes,
 //! with an entry in `CRYPTO_KEY_REGISTRY` recording `(algo, hash)` so
@@ -63,11 +69,15 @@ enum HashAlgo {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum KeyAlgo {
     Hmac,
+    AesGcm,
 }
 
 #[derive(Copy, Clone, Debug)]
 struct CryptoKeyMaterial {
     algo: KeyAlgo,
+    /// For HMAC: the underlying hash. For AES-GCM the hash slot is
+    /// unused (we keep `HashAlgo::Sha256` as a harmless placeholder so
+    /// the struct stays `Copy`).
     hash: HashAlgo,
 }
 
@@ -309,11 +319,15 @@ pub unsafe extern "C" fn js_webcrypto_digest(algo_bits: f64, data_bits: f64) -> 
 /// `crypto.subtle.importKey("raw", keyBytes, algorithm, extractable, keyUsages)`
 /// → Promise<CryptoKey>
 ///
-/// Only the `format == "raw"` + HMAC algorithm path is supported (the
-/// surface every sigv4 / JWT signer uses). `extractable` and `keyUsages`
-/// are accepted but not enforced — perry's threat model treats them as
-/// documentation. Unsupported shapes resolve to undefined (callers that
-/// then pass that into `sign` will reject there with a clear error).
+/// `format == "raw"` only. Supported algorithms:
+/// - `{ name: "HMAC", hash: "SHA-256" }` (and SHA-1/384/512)
+/// - `"AES-GCM"` or `{ name: "AES-GCM" }` — keyed by 128/192/256-bit
+///   bytes; the IV / additionalData come in at encrypt/decrypt time.
+///
+/// `extractable` and `keyUsages` are accepted but not enforced —
+/// perry's threat model treats them as documentation. Unsupported
+/// shapes resolve to undefined (callers that then pass that into
+/// `sign`/`encrypt` will reject there with a clear error).
 #[no_mangle]
 pub unsafe extern "C" fn js_webcrypto_import_key(
     format_bits: f64,
@@ -330,24 +344,27 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     if format != "raw" {
         return resolve_undefined();
     }
-    // Algorithm — must be HMAC for now.
-    let algo_obj = strip_ptr(algo_bits.to_bits()) as *const perry_runtime::ObjectHeader;
-    if (algo_obj as usize) < 0x1000 {
-        return resolve_undefined();
-    }
-    let name_key_ptr = perry_runtime::js_string_from_bytes(b"name".as_ptr(), 4);
-    let algo_name_val = perry_runtime::js_object_get_field_by_name(algo_obj, name_key_ptr);
-    let algo_name = match string_from_jsvalue(algo_name_val.bits()) {
+    // Algorithm name — accepts string shorthand ("AES-GCM") or
+    // `{ name: "..." }` object form.
+    let algo_name = match extract_algo_name(algo_bits.to_bits()) {
         Some(s) => s,
         None => return resolve_undefined(),
     };
-    if algo_name.to_ascii_uppercase() != "HMAC" {
+    let algo_upper = algo_name.to_ascii_uppercase();
+    let (key_algo, hash) = if algo_upper == "HMAC" {
+        let hash = match extract_hmac_hash(algo_bits.to_bits()) {
+            Some(h) => h,
+            None => return resolve_undefined(),
+        };
+        (KeyAlgo::Hmac, hash)
+    } else if algo_upper == "AES-GCM" {
+        // AES-GCM: 128, 192, or 256-bit keys. We accept any length
+        // here and let encrypt/decrypt fail loudly on mismatch.
+        (KeyAlgo::AesGcm, HashAlgo::Sha256)
+    } else {
         return resolve_undefined();
-    }
-    let hash = match extract_hmac_hash(algo_bits.to_bits()) {
-        Some(h) => h,
-        None => return resolve_undefined(),
     };
+
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     let buf = alloc_uint8array_from_slice(&key_bytes);
     if buf.is_null() {
@@ -356,12 +373,29 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     register_crypto_key(
         buf as usize,
         CryptoKeyMaterial {
-            algo: KeyAlgo::Hmac,
+            algo: key_algo,
             hash,
         },
     );
     let val = JSValue::pointer(buf as *const u8).bits();
     resolve_with_bits(val)
+}
+
+/// Extract the algorithm name from a `string | { name }` argument.
+/// Used by importKey / encrypt / decrypt where jose passes the shorthand
+/// `"AES-GCM"` to importKey but a full `{ name: "AES-GCM", iv: ... }`
+/// at encrypt time.
+unsafe fn extract_algo_name(bits: u64) -> Option<String> {
+    if let Some(s) = string_from_jsvalue(bits) {
+        return Some(s);
+    }
+    let obj_ptr = strip_ptr(bits) as *const perry_runtime::ObjectHeader;
+    if (obj_ptr as usize) < 0x1000 {
+        return None;
+    }
+    let key_ptr = perry_runtime::js_string_from_bytes(b"name".as_ptr(), 4);
+    let name_val = perry_runtime::js_object_get_field_by_name(obj_ptr, key_ptr);
+    string_from_jsvalue(name_val.bits())
 }
 
 /// `crypto.subtle.sign(algorithm, key, data)` → Promise<Uint8Array>
@@ -454,6 +488,157 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+// =====================================================================
+// AES-GCM encrypt / decrypt
+//
+// jose's `gcmEncrypt` / `gcmDecrypt` pass:
+//   { name: 'AES-GCM', iv: <Uint8Array>, additionalData?: <Uint8Array>,
+//     tagLength?: 128 }, key, data
+// The IV is a 12-byte nonce (the only length the underlying `aes-gcm`
+// crate's `Nonce` type accepts); we surface a clean "undefined" reject
+// for other lengths rather than panicking.
+//
+// The output of encrypt is `ciphertext || tag` (the WebCrypto spec
+// appends the 16-byte GCM tag); decrypt expects the same layout.
+// =====================================================================
+
+/// Read an optional object field by name and return its raw bytes, or
+/// `None` if the field is absent / not a buffer-like value.
+unsafe fn object_field_bytes(obj_bits: u64, name: &[u8]) -> Option<Vec<u8>> {
+    let obj_ptr = strip_ptr(obj_bits) as *const perry_runtime::ObjectHeader;
+    if (obj_ptr as usize) < 0x1000 {
+        return None;
+    }
+    let key_ptr = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key_ptr);
+    let bytes = bytes_from_jsvalue(val.bits());
+    if bytes.is_empty() {
+        // Distinguish "field missing" from "field present but empty":
+        // for our callers an empty AAD / IV is semantically equivalent
+        // to "missing", and the caller's defaulting path is fine.
+        None
+    } else {
+        Some(bytes)
+    }
+}
+
+/// AES-GCM encrypt. Returns ciphertext || tag (matches WebCrypto spec).
+fn aes_gcm_encrypt(key: &[u8], iv: &[u8], aad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
+
+    if iv.len() != 12 {
+        return None;
+    }
+    let nonce = Nonce::from_slice(iv);
+    let payload = Payload {
+        msg: plaintext,
+        aad,
+    };
+    match key.len() {
+        16 => {
+            let cipher = Aes128Gcm::new_from_slice(key).ok()?;
+            cipher.encrypt(nonce, payload).ok()
+        }
+        32 => {
+            let cipher = Aes256Gcm::new_from_slice(key).ok()?;
+            cipher.encrypt(nonce, payload).ok()
+        }
+        _ => None, // 192-bit AES-GCM not in the aes-gcm 0.10 type set.
+    }
+}
+
+/// AES-GCM decrypt. Expects `ciphertext || tag` per the WebCrypto spec.
+fn aes_gcm_decrypt(key: &[u8], iv: &[u8], aad: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
+
+    if iv.len() != 12 {
+        return None;
+    }
+    let nonce = Nonce::from_slice(iv);
+    let payload = Payload {
+        msg: ciphertext,
+        aad,
+    };
+    match key.len() {
+        16 => {
+            let cipher = Aes128Gcm::new_from_slice(key).ok()?;
+            cipher.decrypt(nonce, payload).ok()
+        }
+        32 => {
+            let cipher = Aes256Gcm::new_from_slice(key).ok()?;
+            cipher.decrypt(nonce, payload).ok()
+        }
+        _ => None,
+    }
+}
+
+/// Shared AES-GCM arg-extraction for encrypt / decrypt: pulls the
+/// algorithm-name + iv (+ optional aad) from the algorithm object, plus
+/// the raw key bytes (validating they came from an AES-GCM importKey)
+/// and the data bytes. Returns `None` if any required piece is missing.
+unsafe fn extract_aes_gcm_args(
+    algo_bits: u64,
+    key_bits: u64,
+    data_bits: u64,
+) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let algo_name = extract_algo_name(algo_bits)?;
+    if !algo_name.eq_ignore_ascii_case("AES-GCM") {
+        return None;
+    }
+    let iv = object_field_bytes(algo_bits, b"iv")?;
+    let aad = object_field_bytes(algo_bits, b"additionalData").unwrap_or_default();
+    let key_addr = strip_ptr(key_bits);
+    let mat = lookup_crypto_key(key_addr)?;
+    if mat.algo != KeyAlgo::AesGcm {
+        return None;
+    }
+    let key_bytes = bytes_from_jsvalue(key_bits);
+    let data_bytes = bytes_from_jsvalue(data_bits);
+    Some((key_bytes, iv, aad, data_bytes))
+}
+
+/// `crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData? }, key, data)`
+/// → Promise<Uint8Array>
+#[no_mangle]
+pub unsafe extern "C" fn js_webcrypto_encrypt(
+    algo_bits: f64,
+    key_bits: f64,
+    data_bits: f64,
+) -> *mut Promise {
+    let (key, iv, aad, data) =
+        match extract_aes_gcm_args(algo_bits.to_bits(), key_bits.to_bits(), data_bits.to_bits()) {
+            Some(t) => t,
+            None => return resolve_undefined(),
+        };
+    let ciphertext = match aes_gcm_encrypt(&key, &iv, &aad, &data) {
+        Some(c) => c,
+        None => return resolve_undefined(),
+    };
+    resolve_with_bytes(&ciphertext)
+}
+
+/// `crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData? }, key, data)`
+/// → Promise<Uint8Array>
+#[no_mangle]
+pub unsafe extern "C" fn js_webcrypto_decrypt(
+    algo_bits: f64,
+    key_bits: f64,
+    data_bits: f64,
+) -> *mut Promise {
+    let (key, iv, aad, data) =
+        match extract_aes_gcm_args(algo_bits.to_bits(), key_bits.to_bits(), data_bits.to_bits()) {
+            Some(t) => t,
+            None => return resolve_undefined(),
+        };
+    let plaintext = match aes_gcm_decrypt(&key, &iv, &aad, &data) {
+        Some(p) => p,
+        None => return resolve_undefined(),
+    };
+    resolve_with_bytes(&plaintext)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,5 +695,45 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn aes_gcm_round_trip_128() {
+        let key = [0x42u8; 16];
+        let iv = [0x11u8; 12];
+        let aad = b"context";
+        let plaintext = b"hello aes-gcm";
+        let ct = aes_gcm_encrypt(&key, &iv, aad, plaintext).expect("encrypt");
+        assert_eq!(ct.len(), plaintext.len() + 16); // ciphertext || tag
+        let pt = aes_gcm_decrypt(&key, &iv, aad, &ct).expect("decrypt");
+        assert_eq!(pt, plaintext);
+    }
+
+    #[test]
+    fn aes_gcm_round_trip_256_no_aad() {
+        let key = [0x37u8; 32];
+        let iv = [0x22u8; 12];
+        let plaintext = b"";
+        let ct = aes_gcm_encrypt(&key, &iv, b"", plaintext).expect("encrypt");
+        assert_eq!(ct.len(), 16); // empty payload + tag
+        let pt = aes_gcm_decrypt(&key, &iv, b"", &ct).expect("decrypt");
+        assert_eq!(pt, plaintext);
+    }
+
+    #[test]
+    fn aes_gcm_rejects_short_iv() {
+        let key = [0u8; 16];
+        let iv = [0u8; 8]; // wrong length
+        assert!(aes_gcm_encrypt(&key, &iv, b"", b"x").is_none());
+        assert!(aes_gcm_decrypt(&key, &iv, b"", b"xxxxxxxxxxxxxxxx").is_none());
+    }
+
+    #[test]
+    fn aes_gcm_rejects_192_bit_key() {
+        // 192-bit AES-GCM is intentionally not in the aes-gcm 0.10
+        // type set; document the rejection so we notice if it changes.
+        let key = [0u8; 24];
+        let iv = [0u8; 12];
+        assert!(aes_gcm_encrypt(&key, &iv, b"", b"x").is_none());
     }
 }

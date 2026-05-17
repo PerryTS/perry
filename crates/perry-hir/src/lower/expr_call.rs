@@ -603,6 +603,28 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                                     data: Box::new(data),
                                                 });
                                             }
+                                            "encrypt" if args.len() >= 3 => {
+                                                let mut iter = args.into_iter();
+                                                let algorithm = iter.next().unwrap();
+                                                let key = iter.next().unwrap();
+                                                let data = iter.next().unwrap();
+                                                return Ok(Expr::WebCryptoEncrypt {
+                                                    algorithm: Box::new(algorithm),
+                                                    key: Box::new(key),
+                                                    data: Box::new(data),
+                                                });
+                                            }
+                                            "decrypt" if args.len() >= 3 => {
+                                                let mut iter = args.into_iter();
+                                                let algorithm = iter.next().unwrap();
+                                                let key = iter.next().unwrap();
+                                                let data = iter.next().unwrap();
+                                                return Ok(Expr::WebCryptoDecrypt {
+                                                    algorithm: Box::new(algorithm),
+                                                    key: Box::new(key),
+                                                    data: Box::new(data),
+                                                });
+                                            }
                                             _ => {
                                                 // Unsupported subtle method —
                                                 // fail loudly. The supported
@@ -619,7 +641,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                                 if !allow_unimplemented {
                                                     crate::lower_bail!(
                                                         outer_member.span,
-                                                        "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify (HMAC + SHA-1/256/384/512). \
+                                                        "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify, encrypt, decrypt (HMAC + SHA-1/256/384/512; encrypt/decrypt currently AES-GCM only). \
                                                          See `perry --print-api-manifest` and #561, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore.",
                                                         method,
                                                     );
@@ -2877,6 +2899,27 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                             }),
                                             args: vec![],
                                             type_args: vec![],
+                                        });
+                                    }
+                                }
+                                // `crypto.randomFillSync(buf, offset?, size?)`
+                                // — fills `buf` in-place with random bytes
+                                // and returns it. Handles BufferHeader and
+                                // TypedArrayHeader (Uint8Array, Uint32Array,
+                                // etc — axios uses Uint32Array). The
+                                // offset/size args are optional; absent
+                                // values lower as Undefined and the runtime
+                                // treats them as 0 / full-length.
+                                "randomFillSync" => {
+                                    if !args.is_empty() {
+                                        let mut iter = args.into_iter();
+                                        let buffer = iter.next().unwrap();
+                                        let offset = iter.next().unwrap_or(Expr::Undefined);
+                                        let size = iter.next().unwrap_or(Expr::Undefined);
+                                        return Ok(Expr::CryptoRandomFillSync {
+                                            buffer: Box::new(buffer),
+                                            offset: Box::new(offset),
+                                            size: Box::new(size),
                                         });
                                     }
                                 }

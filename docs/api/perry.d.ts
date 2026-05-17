@@ -136,6 +136,8 @@ declare module "crypto" {
   /** stdlib */
   export function randomBytes(...args: any[]): any;
   /** stdlib */
+  export function randomFillSync(...args: any[]): any;
+  /** stdlib */
   export function randomUUID(...args: any[]): any;
   /** stdlib */
   export function sha256(...args: any[]): any;

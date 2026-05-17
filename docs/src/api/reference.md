@@ -235,6 +235,7 @@ Total: 867 entries across 71 modules.
 - `pbkdf2` — module
 - `pbkdf2Sync` — module
 - `randomBytes` — module
+- `randomFillSync` — module
 - `randomUUID` — module
 - `sha256` — module
 

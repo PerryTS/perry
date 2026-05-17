@@ -1597,6 +1597,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "sha256", false, None),
     method("crypto", "md5", false, None),
     method("crypto", "getRandomValues", false, None),
+    // crypto.randomFillSync(buffer, offset?, size?) — fills the
+    // typed-array / Buffer with cryptographically strong random
+    // bytes in-place and returns the same object. Required by
+    // axios (Uint32Array) for ID generation.
+    method("crypto", "randomFillSync", false, None),
     method("crypto", "createHash", false, None),
     method("crypto", "createHmac", false, None),
     method("crypto", "pbkdf2Sync", false, None),
