@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 864 entries across 71 modules
+// Coverage: 866 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -316,6 +316,10 @@ declare module "http" {
   export class ServerResponse { [key: string]: any; }
   /** stdlib */
   export class ServerResponse { [key: string]: any; }
+  /** stdlib */
+  export const METHODS: any;
+  /** stdlib */
+  export const STATUS_CODES: any;
   /** stdlib */
   export function createServer(...args: any[]): any;
   /** stdlib */

@@ -1787,6 +1787,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "createServer", false, None),
     method("http", "request", false, None),
     method("http", "get", false, None),
+    property("http", "METHODS"),
+    property("http", "STATUS_CODES"),
     class("http", "Server"),
     class("http", "ClientRequest"),
     class("http", "IncomingMessage"),
