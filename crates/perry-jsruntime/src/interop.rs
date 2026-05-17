@@ -12,10 +12,216 @@ use crate::{
     ensure_runtime_initialized, get_tokio_runtime, with_runtime, JsRuntimeState, JS_RUNTIME,
 };
 use deno_core::v8;
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::{c_char, CStr};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Once;
+use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
+
+const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
+const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+struct ForeignPromiseAdapter {
+    handle_id: u64,
+    native_promise: *mut perry_runtime::promise::Promise,
+}
+
+thread_local! {
+    static FOREIGN_PROMISE_ADAPTERS: RefCell<Vec<ForeignPromiseAdapter>> = const { RefCell::new(Vec::new()) };
+}
+
+static JSRUNTIME_PROFILE_ENABLED: AtomicBool = AtomicBool::new(false);
+static JSRUNTIME_PROFILE_REG: Once = Once::new();
+static JSRUNTIME_PUMP_TICKS: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ADAPTERS_CREATED: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ADAPTERS_RESOLVED: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ADAPTERS_REJECTED: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_LEGACY_BLOCKING_AWAITS: AtomicU64 = AtomicU64::new(0);
+
+unsafe extern "C" {
+    fn js_register_jsruntime_pump(f: extern "C" fn() -> i32);
+    fn js_register_jsruntime_has_active(f: extern "C" fn() -> i32);
+}
+
+fn jsruntime_profile_enabled() -> bool {
+    JSRUNTIME_PROFILE_ENABLED.load(Ordering::Relaxed)
+}
+
+fn bump_jsruntime(counter: &AtomicU64) {
+    if jsruntime_profile_enabled() {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+extern "C" fn jsruntime_profile_atexit() {
+    if std::env::var_os("PERRY_JSRUNTIME_PROFILE").is_none() {
+        return;
+    }
+    eprintln!(
+        "[jsruntime-profile] pump_ticks={} adapters_created={} adapters_resolved={} adapters_rejected={} legacy_blocking_awaits={}",
+        JSRUNTIME_PUMP_TICKS.load(Ordering::Relaxed),
+        JSRUNTIME_ADAPTERS_CREATED.load(Ordering::Relaxed),
+        JSRUNTIME_ADAPTERS_RESOLVED.load(Ordering::Relaxed),
+        JSRUNTIME_ADAPTERS_REJECTED.load(Ordering::Relaxed),
+        JSRUNTIME_LEGACY_BLOCKING_AWAITS.load(Ordering::Relaxed),
+    );
+}
+
+fn jsruntime_profile_register() {
+    JSRUNTIME_PROFILE_REG.call_once(|| {
+        let enabled = std::env::var_os("PERRY_JSRUNTIME_PROFILE").is_some();
+        JSRUNTIME_PROFILE_ENABLED.store(enabled, Ordering::Relaxed);
+        if enabled {
+            unsafe {
+                unsafe extern "C" {
+                    fn atexit(cb: extern "C" fn()) -> i32;
+                }
+                atexit(jsruntime_profile_atexit);
+            }
+        }
+    });
+}
+
+fn boxed_native_promise(promise: *mut perry_runtime::promise::Promise) -> f64 {
+    f64::from_bits(POINTER_TAG | (promise as u64 & POINTER_MASK))
+}
+
+fn undefined_value() -> f64 {
+    f64::from_bits(TAG_UNDEFINED_BITS)
+}
+
+unsafe fn notifying_waker_clone(_: *const ()) -> RawWaker {
+    notifying_raw_waker()
+}
+
+unsafe fn notifying_waker_wake(_: *const ()) {
+    perry_runtime::event_pump::js_notify_main_thread();
+}
+
+unsafe fn notifying_waker_wake_by_ref(_: *const ()) {
+    perry_runtime::event_pump::js_notify_main_thread();
+}
+
+unsafe fn notifying_waker_drop(_: *const ()) {}
+
+static NOTIFYING_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
+    notifying_waker_clone,
+    notifying_waker_wake,
+    notifying_waker_wake_by_ref,
+    notifying_waker_drop,
+);
+
+fn notifying_raw_waker() -> RawWaker {
+    RawWaker::new(std::ptr::null(), &NOTIFYING_WAKER_VTABLE)
+}
+
+fn notifying_waker() -> Waker {
+    unsafe { Waker::from_raw(notifying_raw_waker()) }
+}
+
+enum AdapterSettlement {
+    Resolve(*mut perry_runtime::promise::Promise, f64),
+    Reject(*mut perry_runtime::promise::Promise, f64),
+}
+
+fn collect_foreign_promise_settlements(state: &mut JsRuntimeState) -> Vec<AdapterSettlement> {
+    deno_core::scope!(scope, &mut state.runtime);
+    FOREIGN_PROMISE_ADAPTERS.with(|adapters| {
+        let mut adapters = adapters.borrow_mut();
+        let mut settlements = Vec::new();
+        let mut i = 0;
+        while i < adapters.len() {
+            let adapter = &adapters[i];
+            let settlement = match get_js_handle(scope, adapter.handle_id) {
+                Some(v8_val) if v8_val.is_promise() => {
+                    let promise = v8::Local::<v8::Promise>::try_from(v8_val).unwrap();
+                    match promise.state() {
+                        v8::PromiseState::Fulfilled => {
+                            let result = promise.result(scope);
+                            Some(AdapterSettlement::Resolve(
+                                adapter.native_promise,
+                                v8_to_native(scope, result),
+                            ))
+                        }
+                        v8::PromiseState::Rejected => {
+                            let reason = promise.result(scope);
+                            Some(AdapterSettlement::Reject(
+                                adapter.native_promise,
+                                v8_to_native(scope, reason),
+                            ))
+                        }
+                        v8::PromiseState::Pending => None,
+                    }
+                }
+                Some(v8_val) => Some(AdapterSettlement::Resolve(
+                    adapter.native_promise,
+                    v8_to_native(scope, v8_val),
+                )),
+                None => Some(AdapterSettlement::Reject(
+                    adapter.native_promise,
+                    undefined_value(),
+                )),
+            };
+
+            if let Some(settlement) = settlement {
+                settlements.push(settlement);
+                adapters.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        settlements
+    })
+}
+
+fn settle_foreign_promise_adapters(state: &mut JsRuntimeState) -> i32 {
+    let settlements = collect_foreign_promise_settlements(state);
+    let count = settlements.len() as i32;
+    for settlement in settlements {
+        match settlement {
+            AdapterSettlement::Resolve(promise, value) => {
+                bump_jsruntime(&JSRUNTIME_ADAPTERS_RESOLVED);
+                perry_runtime::promise::js_promise_resolve(promise, value);
+            }
+            AdapterSettlement::Reject(promise, reason) => {
+                bump_jsruntime(&JSRUNTIME_ADAPTERS_REJECTED);
+                perry_runtime::promise::js_promise_reject(promise, reason);
+            }
+        }
+    }
+    count
+}
+
+fn poll_v8_event_loop_once(state: &mut JsRuntimeState) -> i32 {
+    let waker = notifying_waker();
+    let mut cx = TaskContext::from_waker(&waker);
+    match state.runtime.poll_event_loop(&mut cx, Default::default()) {
+        Poll::Ready(Ok(())) => 0,
+        Poll::Ready(Err(e)) => {
+            eprintln!("[jsruntime_pump] event loop error: {}", e);
+            1
+        }
+        Poll::Pending => 0,
+    }
+}
+
+extern "C" fn jsruntime_process_pending() -> i32 {
+    jsruntime_profile_register();
+    bump_jsruntime(&JSRUNTIME_PUMP_TICKS);
+    with_runtime(|state| {
+        let mut ran = poll_v8_event_loop_once(state);
+        ran += settle_foreign_promise_adapters(state);
+        ran
+    })
+}
+
+extern "C" fn jsruntime_has_active_handles() -> i32 {
+    FOREIGN_PROMISE_ADAPTERS.with(|adapters| if adapters.borrow().is_empty() { 0 } else { 1 })
+}
 
 /// Convert a NaN-boxed f64 to a V8 value, returning None if the conversion fails
 /// This is specifically for cases where we need to handle the error explicitly
@@ -38,6 +244,7 @@ fn nanbox_to_v8<'s>(
 /// Must be called once before any other jsruntime functions
 #[no_mangle]
 pub extern "C" fn js_runtime_init() {
+    jsruntime_profile_register();
     // Force initialization of the Tokio runtime
     let _ = get_tokio_runtime();
     // Force initialization of the JS runtime on this thread
@@ -52,6 +259,11 @@ pub extern "C" fn js_runtime_init() {
     perry_runtime::js_set_native_module_js_loader(native_module_js_property_loader);
     perry_runtime::js_set_new_from_handle_v8(js_new_from_handle_v8_impl);
     perry_runtime::js_set_handle_typeof(js_handle_typeof);
+    perry_runtime::promise::js_register_foreign_promise_adapter(js_await_any_promise);
+    unsafe {
+        js_register_jsruntime_pump(jsruntime_process_pending);
+        js_register_jsruntime_has_active(jsruntime_has_active_handles);
+    }
 
     with_runtime(install_reflect_metadata_bridge);
 }
@@ -1499,6 +1711,8 @@ pub unsafe extern "C" fn js_should_use_runtime(path_ptr: *const i8, path_len: us
 /// Returns the resolved value as NaN-boxed f64.
 #[no_mangle]
 pub extern "C" fn js_await_js_promise(value: f64) -> f64 {
+    jsruntime_profile_register();
+    bump_jsruntime(&JSRUNTIME_LEGACY_BLOCKING_AWAITS);
     let handle_id = match get_handle_id(value) {
         Some(id) => id,
         None => {
@@ -1587,19 +1801,46 @@ pub extern "C" fn js_await_js_promise(value: f64) -> f64 {
 /// (e.g., generic method dispatch returning either JS or native promises).
 #[no_mangle]
 pub extern "C" fn js_await_any_promise(value: f64) -> f64 {
+    jsruntime_profile_register();
     let bits = value.to_bits();
     let tag = bits >> 48;
 
     if tag == 0x7FFB {
-        // JS_HANDLE_TAG — delegate to js_await_js_promise (runs V8 event loop).
-        // This returns the resolved value directly (not a Promise).
-        // Wrap it in a fulfilled native Promise so the codegen busy-wait loop
-        // can find state=Fulfilled immediately and read the value.
-        let resolved_value = js_await_js_promise(value);
-        let promise_ptr = perry_runtime::promise::js_promise_resolved(resolved_value);
-        // NaN-box with POINTER_TAG so js_nanbox_get_pointer can extract it
-        let ptr_bits = 0x7FFD_0000_0000_0000u64 | (promise_ptr as u64 & 0x0000_FFFF_FFFF_FFFF);
-        return f64::from_bits(ptr_bits);
+        // JS_HANDLE_TAG: if the handle is a V8 Promise, create a native
+        // pending Promise and let the jsruntime pump settle it. This keeps
+        // V8 promise progress inside Perry's existing event pump instead of
+        // blocking inside await lowering.
+        let handle_id = match get_handle_id(value) {
+            Some(id) => id,
+            None => return value,
+        };
+
+        let is_promise = with_runtime(|state| {
+            deno_core::scope!(scope, &mut state.runtime);
+            get_js_handle(scope, handle_id).is_some_and(|v| {
+                if !v.is_promise() {
+                    return false;
+                }
+                let promise = v8::Local::<v8::Promise>::try_from(v).unwrap();
+                promise.mark_as_handled();
+                true
+            })
+        });
+
+        if !is_promise {
+            return value;
+        }
+
+        let native_promise = perry_runtime::promise::js_promise_new();
+        FOREIGN_PROMISE_ADAPTERS.with(|adapters| {
+            adapters.borrow_mut().push(ForeignPromiseAdapter {
+                handle_id,
+                native_promise,
+            });
+        });
+        bump_jsruntime(&JSRUNTIME_ADAPTERS_CREATED);
+        perry_runtime::event_pump::js_notify_main_thread();
+        return boxed_native_promise(native_promise);
     }
 
     // For POINTER_TAG (native promises) and all other values, return as-is.

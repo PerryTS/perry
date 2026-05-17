@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 
 use crate::async_context::{
     capture_context, enter_context, restore_context, scan_snapshot_roots, AsyncContextSnapshot,
@@ -81,6 +81,36 @@ pub static MT_STEP_CHAIN_REUSE_MISS: AtomicU64 = AtomicU64::new(0);
 /// `Promise.resolve(value)` would have done.
 pub static MT_STEP_DONE_REUSE_HIT: AtomicU64 = AtomicU64::new(0);
 pub static MT_STEP_DONE_REUSE_MISS: AtomicU64 = AtomicU64::new(0);
+
+type ForeignPromiseAdapterFn = extern "C" fn(f64) -> f64;
+
+static FOREIGN_PROMISE_ADAPTER_FN: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Register an adapter for Promise-like values owned by another runtime.
+/// perry-jsruntime uses this to turn a V8 `JS_HANDLE_TAG` Promise into a
+/// native pending `Promise` before native await / Promise combinators inspect
+/// the value.
+#[no_mangle]
+pub extern "C" fn js_register_foreign_promise_adapter(f: ForeignPromiseAdapterFn) {
+    FOREIGN_PROMISE_ADAPTER_FN.store(f as *mut (), Ordering::Release);
+}
+
+fn adapt_foreign_promise_value(value: f64) -> f64 {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::JS_HANDLE_TAG {
+        return value;
+    }
+
+    let f = FOREIGN_PROMISE_ADAPTER_FN.load(Ordering::Acquire);
+    if f.is_null() {
+        return value;
+    }
+
+    unsafe {
+        let func: ForeignPromiseAdapterFn = std::mem::transmute(f);
+        func(value)
+    }
+}
 
 extern "C" fn mt_profile_atexit() {
     if std::env::var_os("PERRY_MT_PROFILE").is_none() {
@@ -1447,6 +1477,8 @@ fn propagate_callback_result(result: f64, next: *mut Promise) {
 #[no_mangle]
 pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     bump(&MT_PROMISE_RESOLVED_COUNT);
+    let value = adapt_foreign_promise_value(value);
+
     // FAST PATH: NaN-boxed primitives (numbers, undefined, null, bool,
     // raw f64s) are not pointers to thenables/promises. We can build a
     // pre-fulfilled promise and skip the `is_promise` + `assimilate`
@@ -2284,7 +2316,7 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
 
     // For each promise in the array, attach a .then handler
     for i in 0..count {
-        let promise_f64 = js_array_get_f64(promises_arr, i);
+        let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
 
         // Discriminate via the GC-header obj_type, not via raw pointer
         // extraction: string/bigint NaN-boxed values produce non-null
@@ -2427,7 +2459,7 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
     // causing race / any results to appear too early in the output when compared against
     // Node's microtask-ordered output.
     for i in 0..count {
-        let promise_f64 = js_array_get_f64(promises_arr, i);
+        let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
         // Discriminate via GC-header obj_type — string/bigint NaN-boxed
         // values would otherwise pass through pointer extraction and crash
         // js_promise_then.
@@ -2700,7 +2732,7 @@ pub extern "C" fn js_promise_all_settled(
     js_array_set_f64(state_arr, 0, count as f64);
 
     for i in 0..count {
-        let promise_f64 = js_array_get_f64(promises_arr, i);
+        let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
 
         // Only treat as a Promise if the value is a POINTER_TAG that walks
         // back to a GcHeader with obj_type == GC_TYPE_PROMISE. Otherwise
@@ -2865,7 +2897,7 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
     js_closure_set_capture_ptr(shared_fulfill, 1, state_arr as i64);
 
     for i in 0..count {
-        let promise_f64 = js_array_get_f64(promises_arr, i);
+        let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
         // Discriminate via GC-header obj_type — string/bigint NaN-boxed
         // values would otherwise pass through pointer extraction and crash
         // js_promise_then.

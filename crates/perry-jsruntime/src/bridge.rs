@@ -38,8 +38,11 @@ thread_local! {
     static JS_OBJECT_HANDLES: RefCell<HashMap<u64, v8::Global<v8::Value>>> = RefCell::new(HashMap::new());
     /// Stable V8 constructor-like wrappers for Perry class references.
     static NATIVE_CLASS_HANDLES: RefCell<HashMap<u32, v8::Global<v8::Value>>> = RefCell::new(HashMap::new());
+    /// V8 Promise resolvers waiting on native Perry promises returned through callbacks.
+    static NATIVE_PROMISE_RESOLVERS: RefCell<HashMap<u64, v8::Global<v8::PromiseResolver>>> = RefCell::new(HashMap::new());
     /// Counter for generating unique handle IDs
     static NEXT_HANDLE_ID: Cell<u64> = const { Cell::new(1) };
+    static NEXT_NATIVE_PROMISE_RESOLVER_ID: Cell<u64> = const { Cell::new(1) };
 }
 
 fn native_class_constructor(
@@ -193,6 +196,35 @@ pub fn get_handle_id(value: f64) -> Option<u64> {
 /// Create a NaN-boxed value representing a JS handle
 pub fn make_js_handle_value(handle_id: u64) -> f64 {
     f64::from_bits(JS_HANDLE_TAG | (handle_id & POINTER_MASK))
+}
+
+fn store_native_promise_resolver(
+    scope: &mut v8::PinScope<'_, '_>,
+    resolver: v8::Local<v8::PromiseResolver>,
+) -> u64 {
+    let resolver_id = NEXT_NATIVE_PROMISE_RESOLVER_ID.with(|id| {
+        let current = id.get();
+        id.set(current + 1);
+        current
+    });
+    NATIVE_PROMISE_RESOLVERS.with(|resolvers| {
+        resolvers
+            .borrow_mut()
+            .insert(resolver_id, v8::Global::new(scope, resolver));
+    });
+    resolver_id
+}
+
+fn take_native_promise_resolver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    resolver_id: u64,
+) -> Option<v8::Local<'s, v8::PromiseResolver>> {
+    NATIVE_PROMISE_RESOLVERS.with(|resolvers| {
+        resolvers
+            .borrow_mut()
+            .remove(&resolver_id)
+            .map(|resolver| v8::Local::new(scope, resolver))
+    })
 }
 
 /// Fix up a native value for JS interop boundary.
@@ -426,6 +458,80 @@ fn rust_string_to_native(s: &str) -> *const u8 {
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as *const u8
 }
 
+extern "C" fn native_promise_v8_resolve(
+    closure: *const perry_runtime::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let resolver_id = perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as u64;
+    crate::with_runtime(|state| {
+        deno_core::scope!(scope, &mut state.runtime);
+        if let Some(resolver) = take_native_promise_resolver(scope, resolver_id) {
+            let v8_value = native_to_v8(scope, value);
+            let _ = resolver.resolve(scope, v8_value);
+        }
+    });
+    perry_runtime::event_pump::js_notify_main_thread();
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn native_promise_v8_reject(
+    closure: *const perry_runtime::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let resolver_id = perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as u64;
+    crate::with_runtime(|state| {
+        deno_core::scope!(scope, &mut state.runtime);
+        if let Some(resolver) = take_native_promise_resolver(scope, resolver_id) {
+            let v8_reason = native_to_v8(scope, reason);
+            let _ = resolver.reject(scope, v8_reason);
+        }
+    });
+    perry_runtime::event_pump::js_notify_main_thread();
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn native_promise_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    promise: *mut perry_runtime::promise::Promise,
+) -> v8::Local<'s, v8::Value> {
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        return v8::undefined(scope).into();
+    };
+    let v8_promise = resolver.get_promise(scope);
+    match perry_runtime::promise::js_promise_state(promise) {
+        1 => {
+            let value = perry_runtime::promise::js_promise_value(promise);
+            let v8_value = native_to_v8(scope, value);
+            let _ = resolver.resolve(scope, v8_value);
+        }
+        2 => {
+            let reason = perry_runtime::promise::js_promise_reason(promise);
+            let v8_reason = native_to_v8(scope, reason);
+            let _ = resolver.reject(scope, v8_reason);
+        }
+        _ => {
+            let resolver_id = store_native_promise_resolver(scope, resolver);
+            let resolve_closure =
+                perry_runtime::closure::js_closure_alloc(native_promise_v8_resolve as *const u8, 1);
+            let reject_closure =
+                perry_runtime::closure::js_closure_alloc(native_promise_v8_reject as *const u8, 1);
+            perry_runtime::closure::js_closure_set_capture_f64(
+                resolve_closure,
+                0,
+                resolver_id as f64,
+            );
+            perry_runtime::closure::js_closure_set_capture_f64(
+                reject_closure,
+                0,
+                resolver_id as f64,
+            );
+            let _ =
+                perry_runtime::promise::js_promise_then(promise, resolve_closure, reject_closure);
+        }
+    }
+    v8_promise.into()
+}
+
 /// Convert a native object pointer to a V8 object
 fn native_object_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -441,6 +547,10 @@ fn native_object_to_v8<'s>(
     if gc_header_ptr > 0x1000 {
         let gc_header = unsafe { &*(gc_header_ptr as *const perry_runtime::gc::GcHeader) };
         let is_arena = (gc_header.gc_flags & perry_runtime::gc::GC_FLAG_ARENA) != 0;
+
+        if gc_header.obj_type == perry_runtime::gc::GC_TYPE_PROMISE {
+            return native_promise_to_v8(scope, ptr as *mut perry_runtime::promise::Promise);
+        }
 
         if is_arena && gc_header.obj_type == perry_runtime::gc::GC_TYPE_ARRAY {
             // GC-tracked array: ArrayHeader { length: u32, capacity: u32 } + f64 elements

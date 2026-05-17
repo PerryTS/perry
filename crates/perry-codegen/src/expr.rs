@@ -9985,9 +9985,17 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // and the await would resolve with the object instead of
             // calling its `.then` (drizzle-orm's `QueryPromise.execute()`
             // never ran for `await db.select().from(users)`).
-            let promise_box =
+            let assimilated_box =
                 ctx.block()
                     .call(DOUBLE, "js_assimilate_thenable", &[(DOUBLE, &raw_operand)]);
+            // V8 fallback promises cross into native code as JS_HANDLE_TAG
+            // values. Route the value through the registered adapter before
+            // the native Promise check so await polls a real Perry Promise.
+            let promise_box = ctx.block().call(
+                DOUBLE,
+                "js_await_any_promise",
+                &[(DOUBLE, &assimilated_box)],
+            );
 
             // Defensive guard: if the operand is not actually a
             // Promise (e.g. `await someNumber` or an unsupported
@@ -10073,6 +10081,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // results via queue_promise_resolution and need this pump
             // to actually resolve the promises on the main thread.
             ctx.block().call_void("js_run_stdlib_pump", &[]);
+            ctx.block().call_void("js_run_jsruntime_pump", &[]);
             let _ = ctx.block().call(I32, "js_timer_tick", &[]);
             let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
             let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
