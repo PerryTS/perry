@@ -5373,14 +5373,84 @@ fn lower_module_decl(
             match &export_default.decl {
                 ast::DefaultDecl::Fn(fn_expr) => {
                     if let Some(ref ident) = fn_expr.ident {
-                        // Named function: export default function foo() {}
-                        // Create a function and mark it as default export
+                        // Named function: `export default function foo() {}`.
+                        //
+                        // Pre-fix this branch only pushed an `Export::Named`
+                        // entry and dropped the body — so the consumer's
+                        // `import foo from "./mod"; foo()` resolved to
+                        // `ExternFuncRef { name: "default" }` and link/runtime
+                        // produced `undefined` because no
+                        // `perry_fn_<src>__default` (and no
+                        // `perry_fn_<src>__foo`) symbol was ever emitted.
+                        //
+                        // This was the root cause of the uuid `v4()` smoke-
+                        // test failure: `rng.js` is exactly
+                        // `export default function rng() { ... }`, so the
+                        // imported `rng()` call in `v4.js` returned undefined
+                        // and the downstream `.length` access threw.
+                        //
+                        // Mirror the `ExportDecl::Fn` flow so the function
+                        // body is actually emitted under
+                        // `perry_fn_<src>__<ident>`, then register the
+                        // function under the exported name `"default"`.
+                        // codegen's alias-emission pass (codegen.rs ~L2259)
+                        // sees `exported_name != f.name` and synthesizes the
+                        // `perry_fn_<src>__default` forwarder pointing at
+                        // `perry_fn_<src>__<ident>`.
                         let func_name = ident.sym.to_string();
-                        // TODO: properly lower function expression
-                        module.exports.push(Export::Named {
-                            local: func_name,
-                            exported: "default".to_string(),
-                        });
+                        if fn_expr.function.body.is_some() {
+                            let synth_fn_decl = ast::FnDecl {
+                                ident: ident.clone(),
+                                declare: false,
+                                function: fn_expr.function.clone(),
+                            };
+                            let mut func = lower_fn_decl(ctx, &synth_fn_decl)?;
+                            func.is_exported = true;
+                            let func_id = func.id;
+                            if !matches!(func.return_type, Type::Any) {
+                                ctx.register_func_return_type(
+                                    func_name.clone(),
+                                    func.return_type.clone(),
+                                );
+                            }
+                            if let Some((mod_name, class)) =
+                                native_instance_from_return_type(&func.return_type)
+                            {
+                                ctx.func_return_native_instances.push((
+                                    func_name.clone(),
+                                    mod_name.to_string(),
+                                    class.to_string(),
+                                ));
+                            }
+                            let defaults: Vec<Option<Expr>> =
+                                func.params.iter().map(|p| p.default.clone()).collect();
+                            let param_ids: Vec<LocalId> =
+                                func.params.iter().map(|p| p.id).collect();
+                            let rest_idx = func.params.iter().position(|p| p.is_rest);
+                            ctx.func_defaults
+                                .push((func.id, defaults, param_ids, rest_idx));
+                            module.functions.push(func);
+                            // Register under both names: callable locally as
+                            // `<ident>` (some modules also `export { foo }`
+                            // or call themselves by name) AND as the
+                            // module's `default` export so importers resolve
+                            // through the wrapper.
+                            module.exports.push(Export::Named {
+                                local: func_name.clone(),
+                                exported: "default".to_string(),
+                            });
+                            module
+                                .exported_functions
+                                .push(("default".to_string(), func_id));
+                        } else {
+                            // Body-less form (declaration-only) — keep
+                            // historical behavior of only recording the
+                            // export entry.
+                            module.exports.push(Export::Named {
+                                local: func_name,
+                                exported: "default".to_string(),
+                            });
+                        }
                     } else if fn_expr.function.body.is_some() {
                         // Anonymous-default-function (zod / vitest blocker):
                         // `export default function () { ... }` arrives as a
