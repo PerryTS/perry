@@ -918,6 +918,35 @@ export function randomBytes(size) {
     crypto.getRandomValues(arr);
     return arr;
 }
+// Issue: jose imports `randomFillSync` from `node:crypto` via the V8/JS
+// fallback path. Node's `randomFillSync(buffer, offset?, size?)` fills the
+// given TypedArray/Buffer with cryptographically secure random bytes in
+// place and returns the buffer.
+export function randomFillSync(buf, offset, size) {
+    const o = offset || 0;
+    const len = (buf && typeof buf.length === 'number') ? buf.length : 0;
+    const n = (size != null) ? size : (len - o);
+    let view;
+    if (typeof buf.subarray === 'function') {
+        view = buf.subarray(o, o + n);
+    } else if (buf && buf.buffer) {
+        view = new Uint8Array(buf.buffer, (buf.byteOffset || 0) + o, n);
+    } else {
+        view = buf;
+    }
+    crypto.getRandomValues(view);
+    return buf;
+}
+export function randomUUID() {
+    // RFC 4122 v4 UUID using getRandomValues
+    const b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = [];
+    for (let i = 0; i < 16; i++) h.push((b[i] + 0x100).toString(16).slice(1));
+    return h[0]+h[1]+h[2]+h[3]+'-'+h[4]+h[5]+'-'+h[6]+h[7]+'-'+h[8]+h[9]+'-'+h[10]+h[11]+h[12]+h[13]+h[14]+h[15];
+}
 export function createHash(algorithm) {
     return {
         update(data) { this._data = (this._data || '') + data; return this; },
@@ -932,7 +961,42 @@ export function createHmac(algorithm, key) {
 }
 export function pbkdf2Sync() { return new Uint8Array(32); }
 export function pbkdf2() { return Promise.resolve(new Uint8Array(32)); }
-export default { randomBytes, createHash, createHmac, pbkdf2Sync, pbkdf2 };
+// Best-effort stubs for additional `node:crypto` named exports that
+// libraries like `jose` import at module-init time. Returning sane
+// no-ops lets the import resolve (so ESM linking succeeds and the
+// library can load), even when the underlying primitive isn't wired
+// through Perry's native crypto path. Calling them at runtime in the
+// V8 fallback path will throw or no-op deterministically, NOT crash
+// the JS module loader. Real implementations live behind the native
+// FFI path (`Expr::Crypto*` in HIR / `js_crypto_*` in perry-stdlib).
+export function timingSafeEqual(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    let r = 0;
+    for (let i = 0; i < a.length; i++) r |= a[i] ^ b[i];
+    return r === 0;
+}
+export function createCipheriv() { throw new Error('crypto.createCipheriv not supported in V8 fallback'); }
+export function createDecipheriv() { throw new Error('crypto.createDecipheriv not supported in V8 fallback'); }
+export function createSecretKey(key) { return { _key: key, type: 'secret', asymmetricKeyType: undefined, symmetricKeySize: (key && key.length) || 0, export() { return key; } }; }
+export function createPrivateKey() { throw new Error('crypto.createPrivateKey not supported in V8 fallback'); }
+export function createPublicKey() { throw new Error('crypto.createPublicKey not supported in V8 fallback'); }
+export function generateKeyPair() { throw new Error('crypto.generateKeyPair not supported in V8 fallback'); }
+export function diffieHellman() { throw new Error('crypto.diffieHellman not supported in V8 fallback'); }
+export function publicEncrypt() { throw new Error('crypto.publicEncrypt not supported in V8 fallback'); }
+export function privateDecrypt() { throw new Error('crypto.privateDecrypt not supported in V8 fallback'); }
+export function getCiphers() { return []; }
+export class KeyObject {
+    constructor() { this.type = 'secret'; this.asymmetricKeyType = undefined; this.symmetricKeySize = 0; }
+    export() { return new Uint8Array(0); }
+}
+export const constants = {
+    RSA_PKCS1_PADDING: 1,
+    RSA_PKCS1_OAEP_PADDING: 4,
+    RSA_PSS_SALTLEN_DIGEST: -1,
+    RSA_PSS_SALTLEN_MAX_SIGN: -2,
+    RSA_PSS_SALTLEN_AUTO: -2,
+};
+export default { randomBytes, randomFillSync, randomUUID, createHash, createHmac, pbkdf2Sync, pbkdf2, timingSafeEqual, createCipheriv, createDecipheriv, createSecretKey, createPrivateKey, createPublicKey, generateKeyPair, diffieHellman, publicEncrypt, privateDecrypt, getCiphers, KeyObject, constants };
 "#.to_string(),
         "fs" => r#"
 // Stub implementation for Node.js 'fs' module

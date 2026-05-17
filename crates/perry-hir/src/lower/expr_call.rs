@@ -6456,6 +6456,47 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                             _ => {} // Fall through
                         }
                     }
+
+                    // Named imports from `node:crypto` (e.g.
+                    // `import { randomFillSync, randomUUID, randomBytes }
+                    //  from 'node:crypto'`). Without these arms the bare
+                    // call `randomFillSync(buf)` falls into the generic
+                    // `NativeMethodCall` path, which has no `crypto`
+                    // dispatcher and returns `undefined` — so the buffer
+                    // never gets filled (jose's signing flow silently
+                    // produces all-zero IVs / nonces). Route each call
+                    // straight to the dedicated `Expr::CryptoRandom*`
+                    // variant that the `crypto.xxx(...)` (object-method)
+                    // arm above (line ~3060) uses, so both call shapes
+                    // share one codegen path.
+                    if module_name == "crypto" {
+                        match func_name {
+                            "randomFillSync" => {
+                                if !args.is_empty() {
+                                    let mut iter = args.into_iter();
+                                    let buffer = iter.next().unwrap();
+                                    let offset = iter.next().unwrap_or(Expr::Undefined);
+                                    let size = iter.next().unwrap_or(Expr::Undefined);
+                                    return Ok(Expr::CryptoRandomFillSync {
+                                        buffer: Box::new(buffer),
+                                        offset: Box::new(offset),
+                                        size: Box::new(size),
+                                    });
+                                }
+                            }
+                            "randomUUID" => {
+                                return Ok(Expr::CryptoRandomUUID);
+                            }
+                            "randomBytes" => {
+                                if !args.is_empty() {
+                                    return Ok(Expr::CryptoRandomBytes(Box::new(
+                                        args.into_iter().next().unwrap(),
+                                    )));
+                                }
+                            }
+                            _ => {} // Fall through
+                        }
+                    }
                 }
 
                 // Check if this is a direct call on an aliased named import

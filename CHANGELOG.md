@@ -2,6 +2,38 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.978 — fix(crypto/jsruntime): bare named-import `randomFillSync(buf)` (and `randomUUID()` / `randomBytes(n)`) routes to native FFI + V8 fallback ESM re-export
+
+**Symptom.** `jose` (and any package that does `import { randomFillSync } from 'node:crypto'; randomFillSync(buf)`) silently produced all-zero buffers. v0.5.952 added `randomFillSync` to Perry's native crypto code path via `Expr::CryptoRandomFillSync` → `js_crypto_random_fill_sync`, but that HIR recogniser only fired for the **object-method** form `crypto.randomFillSync(...)` (in `expr_call.rs:3118`, gated on `is_crypto_module && member.prop == "randomFillSync"`). The **bare named-import** form `randomFillSync(buf)` fell through to the generic aliased-named-import arm (`expr_call.rs:6463`) which built `Expr::NativeMethodCall { module: "crypto", method: "randomFillSync", object: None, args: [buf] }`. The codegen `NativeMethodCall` dispatcher has no `crypto` arm, so it lowered to a no-op returning `undefined` — the buffer was never touched, and `jose` happily signed JWTs with all-zero IVs.
+
+Repro before the fix:
+```ts
+import { randomFillSync } from 'node:crypto';
+const buf = new Uint8Array(8);
+randomFillSync(buf);
+console.log(typeof randomFillSync);                 // "object"   (Node: "function")
+console.log(buf[0], buf[1], buf[2], buf[3]);        // 0 0 0 0    (Node: random)
+```
+
+For Hint-1, `typeof === "object"` instead of `"function"` is the same `NativeModuleRef`-without-codegen-arm shape that's bitten `child_process` / `fs` named imports before; the existing pattern in `expr_call.rs` (~line 6150 onwards) routes those through dedicated HIR variants per module.
+
+**Root cause.** The HIR named-import recogniser had arms for `child_process`, `path`, `url`, and `fs` after the `lookup_native_module` check, but no `crypto` arm. The matching `crypto.method()` recogniser exists 3000 lines earlier (line 3060) but only sees object-member calls — bare identifiers from named imports never reach it.
+
+**Fix.**
+1. **`crates/perry-hir/src/lower/expr_call.rs`** — added a `module_name == "crypto"` arm alongside `child_process` / `path` / `url` / `fs` (line ~6458). Handles `randomFillSync` (→ `Expr::CryptoRandomFillSync`), `randomUUID` (→ `Expr::CryptoRandomUUID`), and `randomBytes` (→ `Expr::CryptoRandomBytes`). Mirrors the existing object-method arm at line 3118 so both call shapes share one codegen path. Offset/size args for `randomFillSync` default to `Expr::Undefined` (runtime maps that to "use full buffer").
+2. **`crates/perry-jsruntime/src/modules.rs`** — added `randomFillSync` and `randomUUID` to the V8/JS-runtime fallback's `node:crypto` ESM stub. Required because the fallback path (when a module isn't recognized as a native module, or runs in a non-native-eligible context) re-parses imports against `node_modules`-style ESM exports, and the stub previously only exposed `randomBytes`/`createHash`/`createHmac`/`pbkdf2Sync`/`pbkdf2`. The `randomFillSync` shim delegates to the `globalThis.crypto.getRandomValues` polyfill that `node_polyfills.js` already installs; `randomUUID` derives RFC 4122 v4 from a 16-byte `getRandomValues` block.
+
+**Files.**
+- `crates/perry-hir/src/lower/expr_call.rs` — new `if module_name == "crypto" { ... }` arm in the named-import dispatcher (lines ~6460).
+- `crates/perry-jsruntime/src/modules.rs` — `crypto` ESM stub gains `randomFillSync` + `randomUUID` named exports plus both in the default-export object.
+- `test-files/test_crypto_randomFillSync_esm.ts` — minimal repro that compiles natively, fills an 8-byte Uint8Array via the bare-named-import form, and checks `length` + at-least-one-nonzero-byte via a manual for-loop (Perry's `Uint8Array.prototype.some` is a separate pre-existing gap that returns `undefined`).
+
+**Validation.** Native compile + run of `test-files/test_crypto_randomFillSync_esm.ts` prints `8 true` matching `node --experimental-strip-types`. Probe `typeof randomFillSync` now reports `"function"` from a bare named-import binding.
+
+**Out of scope (follow-ups).**
+- `Uint8Array.prototype.some` returning `undefined` is a separate typed-array method-dispatch gap; track separately.
+- The V8 fallback's `getRandomValues` polyfill in `node_polyfills.js` uses `Math.random()`-derived bytes and is NOT cryptographically secure — the V8 fallback path is for testing/diagnostics only. Real crypto strength is on the native FFI path that this PR also unblocks.
+
 ## v0.5.977 — fix(#957 followup): `Function('return this')()` + bare `RegExp(...)` recognisers — moves real lodash past module-init `TypeError: value is not a function`
 
 **Symptom.** PR #959 closed two of lodash's three module-init bugs (`.call(this)` IIFE bodies + `Expr::IndexUpdate` codegen) but the commit explicitly flagged the next gap: `import _ from "lodash"` still threw
