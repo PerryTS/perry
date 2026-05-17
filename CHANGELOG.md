@@ -36,7 +36,7 @@ After the fix, `buffer.constants.MAX_STRING_LENGTH` evaluates cleanly inside thr
 
 * `crates/perry-jsruntime/src/modules.rs` — `get_builtin_stub("buffer")` arm (+12 lines body, +6 lines comment) + new `test_buffer_stub_exposes_constants` (+25 lines).
 * `test-files/test_issue_pino_js_get_export.ts` — new doc-style regression test.
-* `Cargo.toml` / `CLAUDE.md` — version bump to 0.5.947.
+* `Cargo.toml` / `CLAUDE.md` — version bump to 0.5.948.
 
 ## v0.5.947 — fix(compile): #903 follow-up — uuid regression: emit closure-wrapper stubs for failed modules' named exports
 
