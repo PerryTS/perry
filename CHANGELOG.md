@@ -2,6 +2,25 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.964 — fix(hir): #925 — unimplemented-API errors point at the supported replacement
+
+**Symptom.** Two error-emission paths land users in a 15-minute debug loop because the message is accurate but unhelpful:
+
+1. `crypto.hmacSha256(payload, secret)` (a shortcut Perry recognized in an earlier version) bails with `crypto.hmacSha256 is not implemented in Perry — see perry --print-api-manifest`. The manifest does list `createHmac`, but with `params: []` and `returns: any`, so the actual `crypto.createHmac("sha256", key).update(data).digest("hex")` chain isn't obvious from grepping the output.
+2. `require("jose")` bails with `CommonJS require("jose") is not supported under perry compile — use a static import instead`. The static-import swap *compiles*, but every method call (`jose.importX509`, `jose.jwtVerify`) returns silent `undefined` because `jose` isn't in the stdlib at all — and the user discovers that 5 minutes later at first `TypeError: value is not a function` (cf. #922).
+
+Both reported by Ralph while porting a production service.
+
+**Fix.** New `crates/perry-hir/src/lower/unimpl_hints.rs` keys (module, prop) and require-spec to a small replacement-hint table; the existing three #463 emission sites (`expr_member.rs`'s `lower_member` for property reads, `expr_call.rs`'s 2-deep `mod.method()` and 3-deep `mod.Class.method()` call forms) and the #668 require() rejection in `expr_call.rs` append the hint when one is available. Scope is intentionally narrow — exactly the cases #925 calls out:
+
+- `crypto.hmacSha256` → "Use `crypto.createHmac(\"sha256\", key).update(data).digest(\"hex\")` instead (Perry recognizes this Node-shaped chain). For raw bytes, omit the `\"hex\"` argument to `.digest()`."
+- `require("crypto")` / `require("node:crypto")` → "`crypto` is in Perry's stdlib — switch the `require` call to a static ESM import: `import * as crypto from \"node:crypto\"` (or named: `import { createHmac, randomUUID } from \"node:crypto\"`)."
+- `require("jose")` → "`jose` is not in Perry's stdlib — there is no shim for `importX509` / `jwtVerify` / etc. Switching to a static `import * as jose from \"jose\"` will compile, but every method call will be `undefined` at runtime."
+
+The hint table normalizes `node:` prefixes, so `crypto.hmacSha256` and `node:crypto.hmacSha256` route to the same entry without duplicating rows. Unknown lookups return `None`, so the generic "see `perry --print-api-manifest`" pointer still fires for everything not on the explicit list.
+
+Validation: 7 new unit tests in `lower::unimpl_hints::tests` cover the lookup matrix; end-to-end-verified by compiling fixtures for each shape and inspecting stderr. Test-files fixture `test_issue_925_error_message_replacement.ts` documents the three user-visible shapes (commented blocks — file is meant to be uncommented one block at a time, since each is an intentionally-failing compile).
+
 ## v0.5.963 — fix(runtime): #922 — circuit-breaker for runaway `value is not a function` / `[WARN_NULL_PTR]` loops in async-step driver
 
 **Symptom.** `gscmaster-api` (Fastify + mysql2 + fetch, ~5k LoC) compiled cleanly with Perry HEAD but every `/api/*` request entered a tight loop of:

@@ -28,6 +28,7 @@ mod expr_member;
 mod expr_misc;
 mod expr_new;
 mod expr_object;
+mod unimpl_hints;
 
 /// Context for lowering, tracks variable bindings
 pub struct LoweringContext {

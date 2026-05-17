@@ -266,15 +266,22 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
             {
                 if let ast::Expr::Lit(ast::Lit::Str(s)) = call.args[0].expr.as_ref() {
                     let spec = s.value.as_str().unwrap_or("");
+                    // #925: when we have a module-specific hint (e.g.
+                    // distinguishing "this is in stdlib, just swap to
+                    // ESM" from "this isn't shimmed at all"), append it.
+                    let hint = super::unimpl_hints::require_module_hint(spec)
+                        .map(|h| format!(" {h}"))
+                        .unwrap_or_default();
                     crate::lower_bail!(
                         call.span,
                         "CommonJS `require(\"{}\")` is not supported under `perry compile` \
                          — use a static `import` instead \
                          (e.g. `import * as m from \"{}\"` \
-                         or `import {{ x }} from \"{}\"`). Closes #668.",
+                         or `import {{ x }} from \"{}\"`). Closes #668.{}",
                         spec,
                         spec,
                         spec,
+                        hint,
                     );
                 }
             }
@@ -839,12 +846,21 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     )
                                     .is_none()
                                 {
+                                    // #925: append a replacement hint if
+                                    // we have one for this exact shape.
+                                    let hint = super::unimpl_hints::module_member_hint(
+                                        module_name,
+                                        &class_name,
+                                    )
+                                    .map(|h| format!(" {h}"))
+                                    .unwrap_or_default();
                                     crate::lower_bail!(
                                         outer_member.span,
                                         "`{}.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
-                                         or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)",
+                                         or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
                                         module_name,
                                         class_name,
+                                        hint,
                                     );
                                 }
                                 if !is_sub_namespace {
@@ -1711,12 +1727,21 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     )
                                     .is_none()
                                 {
+                                    // #925: this is the gate that fires
+                                    // for `crypto.hmacSha256(data, key)`.
+                                    let hint = super::unimpl_hints::module_member_hint(
+                                        module_name,
+                                        &method_name,
+                                    )
+                                    .map(|h| format!(" {h}"))
+                                    .unwrap_or_default();
                                     crate::lower_bail!(
                                         member.span,
                                         "`{}.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
-                                         or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)",
+                                         or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
                                         module_name,
                                         method_name,
+                                        hint,
                                     );
                                 }
                                 return Ok(Expr::NativeMethodCall {

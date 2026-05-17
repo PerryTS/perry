@@ -672,12 +672,19 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
             && perry_api_manifest::module_has_any_entries(module)
             && perry_api_manifest::module_has_symbol(module, prop).is_none()
         {
+            // #925: when there's a known supported equivalent for this
+            // shape, append it to the error so the user doesn't have to
+            // grep through the manifest to find the replacement.
+            let hint = super::unimpl_hints::module_member_hint(module, prop)
+                .map(|h| format!(" {h}"))
+                .unwrap_or_default();
             crate::lower_bail!(
                 member.span,
                 "`{}.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
-                 or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)",
+                 or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
                 module,
                 prop,
+                hint,
             );
         }
     }
