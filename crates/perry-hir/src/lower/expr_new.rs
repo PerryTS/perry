@@ -655,6 +655,28 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         .collect()
                 })
                 .unwrap_or_default();
+            // Issue #838 followup (b): when `<Ident>` is NOT a real
+            // class but resolves to a local binding, route through
+            // `Expr::NewDynamic { callee: LocalGet(id), … }` so codegen
+            // reaches the `js_new_function_construct` helper. dayjs's
+            // minified outer `var _ = (function(){function M(){…}; …;
+            // return M; })()` flows here: `_`'s init is a `Call` (not a
+            // raw `Closure`/`FuncRef`), so the `function_valued_locals`
+            // tracking can't prove function-ness at HIR time — but the
+            // runtime helper performs its own `CLOSURE_MAGIC` check
+            // before dispatching the constructor, so non-callable
+            // receivers fall back to a class_id=0 empty-object
+            // allocation that matches the pre-fix baseline. Real
+            // classes still win — the `lookup_class` check above
+            // returns `Expr::New { class_name }` before reaching here.
+            if ctx.lookup_class(&class_name).is_none() {
+                if let Some(local_id) = ctx.lookup_local(&class_name) {
+                    return Ok(Expr::NewDynamic {
+                        callee: Box::new(Expr::LocalGet(local_id)),
+                        args,
+                    });
+                }
+            }
             // Issue #212: classes nested in a function may capture
             // enclosing-scope locals. `lower_class_decl` extended the
             // constructor with one synthesized param per captured id;

@@ -5049,6 +5049,51 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return lower_conditional(ctx, condition, &then_synth, &else_synth);
             }
 
+            // Issue #838 followup (b): callee is a function declaration
+            // (or any expression that evaluates to a callable closure).
+            // Route through the runtime construct helper so the
+            // synthetic class id allocated against the closure's bits
+            // (in `js_register_function_prototype_method`) lands on the
+            // instance header — dispatch then finds the
+            // prototype-registered methods via the regular
+            // `(*obj).class_id → CLASS_PROTOTYPE_METHODS` walk. The
+            // helper also binds `this` to the new instance for the
+            // duration of the constructor call so `this.<field> = …`
+            // writes in the function body land on the instance.
+            //
+            // We use this path for `FuncRef`-callee NewDynamics. Other
+            // dynamic shapes (`new someVar()`, `new someExpr()`) still
+            // fall through to the empty-object placeholder — extending
+            // there is a separate followup (`js_new_dynamic` proper).
+            // Issue #838 followup (b): also route LocalGet callees
+            // through the construct helper. dayjs's outer-scope shape
+            // assigns the IIFE result to a local (`var Klass = (function
+            // (){ function M(){…}; M.prototype.x = fn; return M; })()`),
+            // so `new Klass(args)` reaches here as
+            // `NewDynamic { callee: LocalGet(Klass_id), … }` — the
+            // helper looks up the synthetic class id by NaN-boxed bits,
+            // matching the registration site that used the same local.
+            // Generic NewDynamic callees with unknown closure shape are
+            // also supported because the helper falls back to a
+            // class_id=0 empty-object allocation when no synthetic id
+            // exists (preserves the pre-fix baseline).
+            let routes_through_function_construct =
+                matches!(callee.as_ref(), Expr::FuncRef(_) | Expr::LocalGet(_));
+            if routes_through_function_construct {
+                let func_double = lower_expr(ctx, callee)?;
+                let lowered_args: Vec<String> = args
+                    .iter()
+                    .map(|a| lower_expr(ctx, a))
+                    .collect::<Result<Vec<_>>>()?;
+                let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                let result = ctx.block().call(
+                    DOUBLE,
+                    "js_new_function_construct",
+                    &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+                );
+                return Ok(result);
+            }
+
             // Case 4: best-effort fallback. Lower the callee + args for
             // side effects, then return an empty object as the result.
             let _ = lower_expr(ctx, callee)?;
@@ -10175,6 +10220,38 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ],
                 );
             }
+            Ok(val_double)
+        }
+        // Issue #838 followup (b): the prototype's owner is a function
+        // declaration (Babel's `var Foo = function(){ function Foo(){…};
+        // Foo.prototype.x = fn; return Foo; }()`, also dayjs's minified
+        // form). Hand both the closure value and the method name to the
+        // runtime helper — it allocates (or reuses) a synthetic class id
+        // keyed by the closure's NaN-boxed bits and stores the method
+        // on `CLASS_PROTOTYPE_METHODS[synthetic_cid]`. The paired
+        // `new <FuncRef>(args)` lowering below stamps the same id on
+        // the instance so dispatch finds the method via the regular
+        // `(*obj).class_id` walk.
+        Expr::RegisterFunctionPrototypeMethod {
+            func,
+            method_name,
+            value,
+        } => {
+            let func_double = lower_expr(ctx, func)?;
+            let val_double = lower_expr(ctx, value)?;
+            let key_idx = ctx.strings.intern(method_name);
+            let key_bytes_global = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
+            let key_len = ctx.strings.entry(key_idx).byte_len.to_string();
+            let _ = ctx.block().call(
+                crate::types::I32,
+                "js_register_function_prototype_method",
+                &[
+                    (DOUBLE, &func_double),
+                    (PTR, &key_bytes_global),
+                    (I64, &key_len),
+                    (DOUBLE, &val_double),
+                ],
+            );
             Ok(val_double)
         }
         // `static [Symbol.for("k")] = "v"` — register in the runtime's

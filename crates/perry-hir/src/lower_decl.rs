@@ -4021,6 +4021,7 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 let local_id = ctx
                     .lookup_local(&func_name)
                     .unwrap_or_else(|| ctx.define_local(func_name.clone(), Type::Any));
+                ctx.function_valued_locals.insert(local_id);
                 result.push(Stmt::Let {
                     id: local_id,
                     name: func_name,
@@ -4156,6 +4157,19 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                     .filter(|id| assigned_set.contains(id) || ctx.var_hoisted_ids.contains(id))
                     .copied()
                     .collect();
+
+                // Issue #838 followup (b): tag the function-decl's
+                // local id as function-valued so the assignment
+                // recogniser routes `M.prototype.x = fn` (and the
+                // `var m = M.prototype` aliased form) through the
+                // function-classic prototype-method path. Babel's
+                // class-from-function emit pattern and dayjs's
+                // minified bundle both lower `function M(){}` inside
+                // an IIFE to exactly this `Stmt::Let { init:
+                // Some(Closure{…}) }` shape — the destructuring.rs
+                // path only fires for `var/let/const` lets, so the
+                // tag has to be applied here too.
+                ctx.function_valued_locals.insert(local_id);
 
                 let closure = Expr::Closure {
                     func_id,

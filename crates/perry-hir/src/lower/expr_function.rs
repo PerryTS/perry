@@ -119,6 +119,13 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // Hoist function declarations in block body (JS hoisting semantics).
     // Track the hoisted-id set so we can emit `Stmt::PreallocateBoxes`
     // for sibling/forward captures (issue #633).
+    //
+    // Issue #838 followup (b): see the matching comment in
+    // `lower_fn_expr` for the rationale — only reuse an existing local
+    // id when the binding is in THIS scope, otherwise dayjs's minified
+    // outer-`var M = {…}` / inner-`function M(t){…}` shadow trips the
+    // codegen-side global-promotion analysis.
+    let outer_locals_len = scope_mark.0;
     let mut hoisted_id_set: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
     if let ast::BlockStmtOrExpr::BlockStmt(block) = &*arrow.body {
         for stmt in &block.stmts {
@@ -127,7 +134,14 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
                 // aren't closure-bound at the source position.
                 if fn_decl.function.body.is_some() && !fn_decl.function.is_generator {
                     let name = fn_decl.ident.sym.to_string();
-                    let local_id = if let Some(existing) = ctx.lookup_local(&name) {
+                    let existing_in_scope = ctx
+                        .locals
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(idx, (n, _, _))| n == &name && *idx >= outer_locals_len)
+                        .map(|(_, (_, id, _))| *id);
+                    let local_id = if let Some(existing) = existing_in_scope {
                         existing
                     } else {
                         ctx.define_local(name, Type::Any)
@@ -315,13 +329,98 @@ pub(super) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // Hoist function declarations: pre-register all function declarations in the body
     // so they can be referenced before their lexical position (JS hoisting semantics).
     // Track ids for the prealloc-box analysis (issue #633).
+    //
+    // Issue #838 followup (b): only reuse an existing local id if the
+    // binding is in THIS scope. dayjs's minified bundle has `var M = {…}`
+    // at the outer IIFE scope AND `function M(t){…}` inside the inner
+    // IIFE — `lookup_local("M")` finds the outer M, so without the
+    // scope guard the hoist reused the outer's id for the inner
+    // function. That id is then "locally defined" inside the inner
+    // closure body, which excluded it from `referenced_from_fn` in the
+    // codegen-side `scan_body` (refs-minus-defines analysis). The outer
+    // M's let-init then never got a module global, so the inner Let's
+    // closure-pointer store and the outer prototype-method registration
+    // landed in disjoint stack slots and dispatch missed entirely.
+    //
+    // `scope_mark.0` is `ctx.locals.len()` at scope entry — any local
+    // with that index or higher was defined in the current scope.
+    let outer_locals_len = scope_mark.0;
     let mut hoisted_id_set: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
     if let Some(ref block) = fn_expr.function.body {
+        // Issue #838 followup (b): pre-register top-level `var` decls in
+        // this function body BEFORE lowering any statement. dayjs's
+        // minified outer IIFE is shaped `function() { var ..., M={…}; var
+        // O = function(t){ ...; return new _(n); }; var _ = (function(){
+        // ... return M; })(); … }` — `O`'s body references `_` before
+        // `_`'s let runs in source order. Without this pre-pass, the
+        // recogniser in `lower_new`'s ident arm calls `lookup_local("_")`
+        // while lowering O's body and finds nothing, so the assignment
+        // falls through to `Expr::New { class_name: "_" }` which codegen
+        // then routes to the empty-object placeholder. With the
+        // pre-pass, `_` is a known local at the time O's body lowers,
+        // and the recogniser routes to `Expr::NewDynamic { callee:
+        // LocalGet(_), … }` so `js_new_function_construct` stamps the
+        // shared synthetic class id on the instance and dispatch finds
+        // the prototype methods. Same shallow-walk policy as the
+        // codegen-side `referenced_from_fn` pre-scan.
+        for stmt in &block.stmts {
+            if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
+                if var_decl.kind == ast::VarDeclKind::Var {
+                    for decl in &var_decl.decls {
+                        if let ast::Pat::Ident(ident) = &decl.name {
+                            let name = ident.id.sym.to_string();
+                            let already_in_scope = ctx
+                                .locals
+                                .iter()
+                                .enumerate()
+                                .rev()
+                                .any(|(idx, (n, _, _))| n == &name && idx >= outer_locals_len);
+                            if !already_in_scope {
+                                let id = ctx.define_local(name, Type::Any);
+                                // Mark as hoisted so closures created
+                                // before the var's init expression see
+                                // it through a box (mutable capture),
+                                // not a stale-value snapshot. JS spec:
+                                // `var` declarations are hoisted to the
+                                // top of the enclosing function and
+                                // start as `undefined` until the init
+                                // runs.
+                                ctx.var_hoisted_ids.insert(id);
+                                // Also include the var-hoisted id in
+                                // `hoisted_id_set` so the
+                                // `compute_prealloc_for_hoisted_closures`
+                                // pass (which currently only considers
+                                // FnDecl hoists) emits a
+                                // `Stmt::PreallocateBoxes` at body entry
+                                // when at least one nested closure
+                                // captures this id. Without it, the box
+                                // is lazily created at the late
+                                // `var <name> = …` Let statement —
+                                // by which point any inner closure
+                                // created before the Let has already
+                                // snapshot-captured the slot's zero
+                                // value (issue #569's classic
+                                // sibling-capture symptom, extended to
+                                // forward-var captures).
+                                hoisted_id_set.insert(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for stmt in &block.stmts {
             if let ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) = stmt {
                 if fn_decl.function.body.is_some() && !fn_decl.function.is_generator {
                     let name = fn_decl.ident.sym.to_string();
-                    let local_id = if let Some(existing) = ctx.lookup_local(&name) {
+                    let existing_in_scope = ctx
+                        .locals
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(idx, (n, _, _))| n == &name && *idx >= outer_locals_len)
+                        .map(|(_, (_, id, _))| *id);
+                    let local_id = if let Some(existing) = existing_in_scope {
                         existing
                     } else {
                         ctx.define_local(name, Type::Any)

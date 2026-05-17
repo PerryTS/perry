@@ -1325,6 +1325,163 @@ pub unsafe extern "C" fn js_register_prototype_method(
     js_register_class_id(class_id);
 }
 
+/// Issue #838 followup (b): function-classic prototype-method dispatch.
+/// dayjs's minified bundle declares its instance class via a function
+/// declaration inside an IIFE (`function M(cfg) {…}; var m = M.prototype;
+/// m.format = function(){…}; return M`). At HIR time `M` is a function
+/// (no `class M` block), so the #838 recogniser bailed because
+/// `lookup_class("M")` returned None. This helper closes the gap on the
+/// runtime side: a single call takes the closure value of `M`, allocates
+/// (or reuses) a synthetic class id keyed by the closure's NaN-boxed
+/// bits, registers the method on that synthetic class, and returns the
+/// id so a paired `new <FuncRef>(args)` allocator can stamp the same id
+/// on the instance header. After both arms run, the existing dispatch
+/// hot paths (`js_object_get_field_by_name`, `js_native_call_method`)
+/// find the method without further changes.
+///
+/// `func_value` must be a POINTER_TAG'd ClosureHeader (the shape
+/// `Expr::FuncRef` lowers to via `js_closure_alloc_singleton`). Anything
+/// else is a no-op — preserves the pre-fix baseline where non-callable
+/// `.prototype.m = fn` writes were silent property sets.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_function_prototype_method(
+    func_value: f64,
+    name_ptr: *const u8,
+    name_len: usize,
+    value: f64,
+) -> u32 {
+    let cid = synthetic_class_id_for_function(func_value);
+    if cid == 0 || name_ptr.is_null() || name_len == 0 {
+        return cid;
+    }
+    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+        Ok(s) => s.to_string(),
+        Err(_) => return cid,
+    };
+    let mut guard = CLASS_PROTOTYPE_METHODS.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .entry(cid)
+        .or_insert_with(HashMap::new)
+        .insert(name, value.to_bits());
+    js_register_class_id(cid);
+    cid
+}
+
+/// Get-or-allocate a synthetic class id keyed by a function value's
+/// NaN-boxed bits. Used by `js_register_function_prototype_method` (HIR
+/// "Func.prototype.x = fn" recogniser) and `js_new_function_construct`
+/// (HIR "new Func(args)" allocator) so both sides agree on the same id
+/// — the instance's `(*obj).class_id` lands in the same bucket the
+/// method registration stored against. Returns 0 if `func_value` isn't a
+/// POINTER_TAG'd value (callable shape requirement).
+pub(crate) fn synthetic_class_id_for_function(func_value: f64) -> u32 {
+    let func_bits = func_value.to_bits();
+    // Require a verified closure shape so we don't store arbitrary
+    // POINTER_TAG'd pointers (arrays, objects, etc. all share the tag)
+    // in `FUNCTION_CLASS_IDS`. The bits-as-key invariant only makes
+    // sense for callable values that produced a stable singleton
+    // closure pointer.
+    if !is_callable_function_value(func_value) {
+        return 0;
+    }
+    {
+        let read = FUNCTION_CLASS_IDS.read().unwrap();
+        if let Some(map) = read.as_ref() {
+            if let Some(&existing) = map.get(&func_bits) {
+                return existing;
+            }
+        }
+    }
+    let new_cid = NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    {
+        let mut write = FUNCTION_CLASS_IDS.write().unwrap();
+        if write.is_none() {
+            *write = Some(HashMap::new());
+        }
+        write.as_mut().unwrap().insert(func_bits, new_cid);
+    }
+    unsafe { js_register_class_id(new_cid) };
+    new_cid
+}
+
+/// Issue #838 followup (b): construct an instance from a function value.
+/// Pairs with `js_register_function_prototype_method` — both arms route
+/// through `synthetic_class_id_for_function` so the instance's
+/// `class_id` matches the bucket prototype methods were registered
+/// against. Allocates a fresh object stamped with the synthetic id,
+/// then invokes the function as the constructor with `IMPLICIT_THIS`
+/// bound to the new object so any `this.foo = …` writes in the
+/// function body land on the instance. Returns the NaN-boxed new
+/// instance pointer.
+///
+/// `func_value` must be a POINTER_TAG'd closure. `args_ptr` is a flat
+/// f64 array of length `args_len`. Falls back to a class_id=0
+/// empty-object allocation when the function value isn't a closure
+/// (preserves the pre-fix baseline for misuse).
+#[no_mangle]
+pub unsafe extern "C" fn js_new_function_construct(
+    func_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let cid = synthetic_class_id_for_function(func_value);
+    // Allocate the instance with the synthetic class id (or 0 if the
+    // value isn't callable). The object starts with no own props; the
+    // constructor body fills `this.<field>` writes through
+    // PropertySet, and prototype-method dispatch consults the
+    // synthetic class id's entry in CLASS_PROTOTYPE_METHODS.
+    let obj_ptr = js_object_alloc(cid, 0);
+    let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
+    // Only run the constructor body when the callee is recognised as
+    // a closure shape. The codegen LocalGet path widens the route to
+    // any local-resolved callee, so we have to gate the
+    // `js_native_call_value` dispatch on a verified closure pointer
+    // here — otherwise `new <non-callable>()` would dereference an
+    // arbitrary pointer as a `ClosureHeader` and crash.
+    if is_callable_function_value(func_value) {
+        // Bind `this` to the new instance, dispatch the constructor,
+        // then restore the previous IMPLICIT_THIS. The dispatch
+        // result is discarded — JS `new` semantics use the receiver,
+        // not the returned value (object returns would override, but
+        // dayjs and siblings rely on the receiver mutation pattern).
+        let prev_this = crate::object::js_implicit_this_get();
+        crate::object::js_implicit_this_set(nan_boxed);
+        let _ = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
+        crate::object::js_implicit_this_set(prev_this);
+    }
+    nan_boxed
+}
+
+/// Verify that a JSValue is a NaN-boxed pointer to a registered
+/// closure header. `js_native_call_value` itself doesn't validate the
+/// pointer shape — it dereferences whatever lower-48 bits it gets — so
+/// the `new <LocalGet>(args)` widened path here in
+/// `js_new_function_construct` needs to gate the constructor dispatch
+/// on a real closure to avoid SIGSEGV'ing on non-callable callees
+/// (`new someObject()`, `new someStringVar()`, etc.). Uses the
+/// `_reserved` magic word `crate::closure::CLOSURE_MAGIC` that every
+/// `js_closure_alloc*` site stamps on allocation.
+fn is_callable_function_value(value: f64) -> bool {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer() as *const crate::closure::ClosureHeader;
+    if ptr.is_null() {
+        return false;
+    }
+    if !is_valid_obj_ptr(ptr as *const u8) {
+        return false;
+    }
+    unsafe { (*ptr).type_tag == crate::closure::CLOSURE_MAGIC }
+}
+
 /// Lookup helper: returns the registered prototype-method value for
 /// `(class_id, name)`, or None if no assignment matched. Walks the
 /// parent-class chain so methods registered on a base class are found
@@ -3695,6 +3852,25 @@ pub extern "C" fn js_object_get_field_by_name(
             if class_id != 0 {
                 if let Some(v) = resolve_proto_chain_field(class_id, key) {
                     return v;
+                }
+                // Issue #838 followup (b): same keyless-receiver gap for
+                // JS-classic prototype methods. An instance allocated via
+                // `js_new_function_construct` (no constructor-body write
+                // yet, or a constructor that runs the closures' own
+                // capture writes but never `this.<own field> = …`)
+                // starts with `keys_array == null`. Without this arm
+                // dayjs's `(new _(cfg)).format` returned undefined
+                // because the keyless branch skipped the regular
+                // `CLASS_PROTOTYPE_METHODS` walk reached further down
+                // — see the matching arm at line ~4083.
+                let key_bytes = std::slice::from_raw_parts(
+                    (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                    (*key).byte_len as usize,
+                );
+                if let Ok(name) = std::str::from_utf8(key_bytes) {
+                    if let Some(v) = lookup_prototype_method(class_id, name) {
+                        return JSValue::from_bits(v.to_bits());
+                    }
                 }
             }
             return JSValue::undefined();

@@ -331,8 +331,21 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let method_name = prop_ident.sym.to_string();
                 let obj_unwrapped = unwrap_ts(member.obj.as_ref());
-                let resolved_class: Option<String> = match obj_unwrapped {
+                // Issue #838 followup (b): track whether the recognised
+                // shape resolves to a `class C {}` (HIR class name) or a
+                // `function M() {}` (callable value at runtime). The
+                // two routes diverge in codegen — classes go to
+                // `Expr::RegisterPrototypeMethod` (class_id known at
+                // compile time), function decls go to
+                // `Expr::RegisterFunctionPrototypeMethod` (synthetic id
+                // allocated at runtime against the closure's bits).
+                enum ProtoOwner {
+                    Class(String),
+                    Func(Expr),
+                }
+                let resolved: Option<ProtoOwner> = match obj_unwrapped {
                     // (a) <ClassName>.prototype.<method>
+                    //     <funcName>.prototype.<method>
                     ast::Expr::Member(inner) => {
                         let prop_is_prototype = matches!(
                             &inner.prop,
@@ -342,8 +355,53 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             let inner_obj = unwrap_ts(inner.obj.as_ref());
                             if let ast::Expr::Ident(cls_ident) = inner_obj {
                                 let cls_name = cls_ident.sym.to_string();
+                                // Prefer the LocalGet route whenever `<ident>`
+                                // resolves to a function-valued local — even
+                                // when a sibling FuncRef exists. The inner
+                                // function-decl path in `lower_decl.rs` emits
+                                // a `Stmt::Let { init: Some(Closure{…}) }`
+                                // that the matching `new M(args)` site reads
+                                // via the same LocalGet, so the closure value
+                                // at registration time and construct time
+                                // share NaN-boxed bits (the
+                                // `FUNCTION_CLASS_IDS` key). Routing through
+                                // FuncRef instead would emit a singleton
+                                // wrapper closure at the register site whose
+                                // pointer differs from the function-decl's
+                                // Let closure — registration and construct
+                                // would then key on different bits and
+                                // dispatch would miss.
                                 if ctx.lookup_class(&cls_name).is_some() {
-                                    Some(cls_name)
+                                    Some(ProtoOwner::Class(cls_name))
+                                } else if let Some(local_id) = ctx.lookup_local(&cls_name) {
+                                    if ctx.function_valued_locals.contains(&local_id) {
+                                        // dayjs minified shape (inside IIFE):
+                                        // `function M(){…}` hoists to a
+                                        // `Let M = Closure{…}` inside the
+                                        // function expression body, so `M`
+                                        // resolves as a local whose init is
+                                        // a Closure. Codegen evaluates
+                                        // LocalGet to the same closure
+                                        // pointer the matching `new M(args)`
+                                        // NewDynamic site reads, keying
+                                        // `js_register_function_prototype_method`
+                                        // and `js_new_function_construct`
+                                        // against identical NaN-boxed bits.
+                                        Some(ProtoOwner::Func(Expr::LocalGet(local_id)))
+                                    } else {
+                                        None
+                                    }
+                                } else if let Some(func_id) = ctx.lookup_func(&cls_name) {
+                                    // Top-level / globally-registered function
+                                    // without a corresponding local binding
+                                    // (rare; most function decls also get a
+                                    // local). FuncRef lowering produces the
+                                    // singleton wrapper closure — paired
+                                    // with the matching `new` site that
+                                    // also lowers `<Ident>` through FuncRef
+                                    // (the codegen-side `try_static_class_name`
+                                    // path), the bits agree.
+                                    Some(ProtoOwner::Func(Expr::FuncRef(func_id)))
                                 } else {
                                     None
                                 }
@@ -355,19 +413,48 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                         }
                     }
                     // (b) `<alias>.<method>` where the alias local was
-                    // initialised from `<ClassName>.prototype`.
+                    // initialised from `<ClassName>.prototype` or
+                    // `<funcDecl>.prototype` (#838 followup (b) — Babel's
+                    // `function Foo(){} var _proto = Foo.prototype; _proto.x = fn`
+                    // emit pattern, and dayjs's identical minified form).
                     ast::Expr::Ident(obj_ident) => {
                         let local_id = ctx.lookup_local(obj_ident.sym.as_ref());
-                        local_id.and_then(|id| ctx.prototype_aliases.get(&id).cloned())
+                        if let Some(id) = local_id {
+                            if let Some(class_name) = ctx.prototype_aliases.get(&id).cloned() {
+                                Some(ProtoOwner::Class(class_name))
+                            } else if let Some(func_id) =
+                                ctx.prototype_function_aliases.get(&id).copied()
+                            {
+                                Some(ProtoOwner::Func(Expr::FuncRef(func_id)))
+                            } else if let Some(src_local) =
+                                ctx.prototype_function_locals.get(&id).copied()
+                            {
+                                Some(ProtoOwner::Func(Expr::LocalGet(src_local)))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 };
-                if let Some(class_name) = resolved_class {
-                    return Ok(Expr::RegisterPrototypeMethod {
-                        class_name,
-                        method_name,
-                        value,
-                    });
+                match resolved {
+                    Some(ProtoOwner::Class(class_name)) => {
+                        return Ok(Expr::RegisterPrototypeMethod {
+                            class_name,
+                            method_name,
+                            value,
+                        });
+                    }
+                    Some(ProtoOwner::Func(func_expr)) => {
+                        return Ok(Expr::RegisterFunctionPrototypeMethod {
+                            func: Box::new(func_expr),
+                            method_name,
+                            value,
+                        });
+                    }
+                    None => {}
                 }
             }
 

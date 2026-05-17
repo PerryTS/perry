@@ -814,6 +814,33 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
                 walk(a, out);
             }
         }
+        // Issue #838 followup (b): without this arm
+        // `collect_ref_ids_in_expr`'s catch-all silently skipped the
+        // dynamic-callee + arg subtree, so a module-level `var _ = …;
+        // var O = function(){ return new _(t); }` left `_` out of
+        // `referenced_from_fn` and the module-globalisation pass
+        // skipped it. O's body then read `LocalGet(_)` through the
+        // soft fallback (returns 0.0) and `js_new_function_construct`
+        // saw a NaN-zero callee, allocating a class_id=0 empty object
+        // with no prototype-method dispatch.
+        Expr::NewDynamic { callee, args } => {
+            walk(callee, out);
+            for a in args {
+                walk(a, out);
+            }
+        }
+        // Same gap for `Expr::RegisterFunctionPrototypeMethod` (#838
+        // followup (b)): the recogniser routes `Foo.prototype.x = fn`
+        // (and `var p = Foo.prototype; p.x = fn`) through this node
+        // with the function ref as a subtree. If the function ref is
+        // a module-level local and the surrounding context is a
+        // nested closure, the catch-all dropped the ref and the
+        // globaliser skipped the local — the runtime helper then saw
+        // a NaN-zero callee.
+        Expr::RegisterFunctionPrototypeMethod { func, value, .. } => {
+            walk(func, out);
+            walk(value, out);
+        }
         Expr::MapNew | Expr::SetNew => {}
         Expr::SetNewFromArray(arr) => walk(arr, out),
         Expr::MapSet { map, key, value } => {

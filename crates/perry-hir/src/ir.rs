@@ -1159,6 +1159,26 @@ pub enum Expr {
         value: Box<Expr>,
     },
 
+    // Issue #838 followup (b): function-classic prototype-method dispatch.
+    // dayjs's minified bundle (and Babel's `var Foo = function(){ function
+    // Foo(...){...}; var p = Foo.prototype; p.x = …; return Foo; }()`
+    // emit pattern) declares its instance "class" via a function
+    // declaration, not a `class` block. The #838 recogniser bailed
+    // because `lookup_class("M")` returned None for function decls. This
+    // node carries the function ref so codegen can pass the closure
+    // value to `js_register_function_prototype_method` — the runtime
+    // helper allocates a synthetic class id keyed by the closure's
+    // bits and stores the method on `CLASS_PROTOTYPE_METHODS[cid]`.
+    // Paired with `Expr::NewDynamic` lowering: when the callee is the
+    // same function ref, the new-construct helper stamps the same
+    // synthetic id on the instance, so dispatch finds the method via
+    // the regular `(*obj).class_id → CLASS_PROTOTYPE_METHODS` walk.
+    RegisterFunctionPrototypeMethod {
+        func: Box<Expr>,
+        method_name: String,
+        value: Box<Expr>,
+    },
+
     // Static method call (e.g., Counter.increment())
     StaticMethodCall {
         class_name: String,

@@ -3576,6 +3576,16 @@ impl SH for Expr {
                 method_name.hash(h);
                 value.as_ref().hash(h);
             }
+            Expr::RegisterFunctionPrototypeMethod {
+                func,
+                method_name,
+                value,
+            } => {
+                tag(h, 464);
+                func.as_ref().hash(h);
+                method_name.hash(h);
+                value.as_ref().hash(h);
+            }
             Expr::WebAssemblyValidate(bytes) => {
                 tag(h, 449);
                 bytes.as_ref().hash(h);

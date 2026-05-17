@@ -309,6 +309,33 @@ pub struct LoweringContext {
     /// land in an orphaned object literal and instance reads fall back
     /// to undefined.
     pub(crate) prototype_aliases: HashMap<LocalId, String>,
+    /// Issue #838 followup (b): parallel to `prototype_aliases`, but
+    /// keyed by FuncId for the function-declaration variant. dayjs's
+    /// minified `function M(){…}; var m = M.prototype; m.parse = …`
+    /// path stores `m → fn_id` here so the assignment recogniser in
+    /// `lower/expr_assign.rs` can route to
+    /// `Expr::RegisterFunctionPrototypeMethod` (synthetic class id
+    /// allocated at runtime against the closure's bits) instead of
+    /// dropping the assignment as a no-op PropertySet.
+    pub(crate) prototype_function_aliases: HashMap<LocalId, FuncId>,
+    /// Issue #838 followup (b): set of locals whose initialiser is a
+    /// `Closure` or `FuncRef` — i.e. local-scope bindings that hold a
+    /// callable value at runtime. Babel's class-from-function emit
+    /// pattern (and dayjs's minified bundle) puts the inner constructor
+    /// as a nested `function M(){}` which the HIR lowers to a
+    /// `Let { name: "M", init: Some(Closure{…}) }`. Subsequent
+    /// `M.prototype.x = fn` or `var m = M.prototype; m.x = fn` patterns
+    /// resolve `M` as a `LocalGet(M_id)` — this set is the test that
+    /// gate the function-classic prototype-method route.
+    pub(crate) function_valued_locals: HashSet<LocalId>,
+    /// Issue #838 followup (b): parallel to `prototype_aliases` /
+    /// `prototype_function_aliases`, but for the local-scope shape
+    /// (`var m = M.prototype` where `M` is a `Let M = Closure{…}`).
+    /// Stores `m_id → M_id` so the assignment recogniser can emit
+    /// `RegisterFunctionPrototypeMethod { func: LocalGet(M_id), … }`
+    /// — codegen then dispatches through the same singleton-closure
+    /// path the matching `new M(args)` site uses.
+    pub(crate) prototype_function_locals: HashMap<LocalId, LocalId>,
     /// Issue #444: true when this module is the user-supplied entry file.
     /// Drives `import.meta.main` — Node 24+ / Bun semantics where the entry
     /// module reports `true` and every imported module reports `false`. Set
@@ -407,6 +434,9 @@ impl LoweringContext {
             class_captures: Vec::new(),
             let_class_aliases: Vec::new(),
             prototype_aliases: HashMap::new(),
+            prototype_function_aliases: HashMap::new(),
+            function_valued_locals: HashSet::new(),
+            prototype_function_locals: HashMap::new(),
             is_entry_module: false,
             is_external_module: false,
         }

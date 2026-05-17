@@ -2196,6 +2196,29 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     *existing_ty = ty.clone();
                 }
                 id
+            } else if ctx.var_hoisted_ids.iter().any(|hid| {
+                // Issue #838 followup (b): when the closure-body hoist
+                // in `lower_fn_expr` / `lower_arrow` pre-registered this
+                // `var` (so forward references like `var O = function(){
+                // … _ … }; var _ = …;` resolve before `_`'s let runs),
+                // reuse that pre-hoisted id here. Otherwise the let
+                // defines a fresh id and the pre-hoisted slot stays
+                // uninitialised — closures created before the let see
+                // value-zero through the capture box and dispatch
+                // misses entirely. dayjs's outer IIFE hits this with
+                // `var O = function(t){ return new _(n); }; var _ = ((
+                // function(){ function M(){…}; … return M; })());`.
+                ctx.locals
+                    .iter()
+                    .any(|(n, lid, _)| n == &name && lid == hid)
+            }) {
+                let id = ctx.lookup_local(&name).unwrap();
+                if let Some((_, _, existing_ty)) =
+                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
+                {
+                    *existing_ty = ty.clone();
+                }
+                id
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
@@ -2203,6 +2226,19 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // `new <name>(...)` can resolve captures via the alias chain.
             // Also follow LocalGet aliases for `const B = A` style chains.
             if let Some(init_expr) = &init {
+                // Issue #838 followup (b): tag locals that hold a
+                // callable value at runtime. Inside an IIFE the AST
+                // pattern `function M(t){…}` hoists to a `Let { name:
+                // "M", init: Some(Closure{…}) }`; the matching
+                // `M.prototype.x = fn` site needs to resolve `M`'s
+                // local id through this set so the
+                // prototype-method recogniser routes through the
+                // function-classic path. Also covers
+                // `var Klass = function(){…}` (anonymous function
+                // expression assigned to a local).
+                if matches!(init_expr, Expr::Closure { .. } | Expr::FuncRef(_)) {
+                    ctx.function_valued_locals.insert(id);
+                }
                 match init_expr {
                     Expr::ClassRef(class_name) => {
                         ctx.register_let_class_alias(name.clone(), class_name.clone());
@@ -2224,6 +2260,19 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         if let Some(class_name) = ctx.prototype_aliases.get(src_id).cloned() {
                             ctx.prototype_aliases.insert(id, class_name);
                         }
+                        // Issue #838 followup (b): same chain follow for
+                        // function-decl prototype aliases.
+                        if let Some(func_id) = ctx.prototype_function_aliases.get(src_id).copied() {
+                            ctx.prototype_function_aliases.insert(id, func_id);
+                        }
+                        if let Some(src_local) = ctx.prototype_function_locals.get(src_id).copied()
+                        {
+                            ctx.prototype_function_locals.insert(id, src_local);
+                        }
+                        // Propagate function-valued tag through aliases.
+                        if ctx.function_valued_locals.contains(src_id) {
+                            ctx.function_valued_locals.insert(id);
+                        }
                     }
                     // Issue #838: `var p = <ClassName>.prototype` records
                     // the alias so a later `p.<method> = <fn>` lowers to
@@ -2233,9 +2282,40 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     // alias-tracking the assignments fell through to a
                     // generic PropertySet on the prototype proxy that
                     // nothing downstream observed.
+                    //
+                    // Issue #838 followup (b): same shape but the base is
+                    // a function declaration (Babel's class-from-function
+                    // emit pattern, also what dayjs's minified `function
+                    // M(){}; var m = M.prototype` lowers to). Tracked
+                    // separately in `prototype_function_aliases` so the
+                    // assignment recogniser can route to the
+                    // function-flavoured prototype-method registration
+                    // path (synthetic class id allocated at runtime).
                     Expr::PropertyGet { object, property } if property == "prototype" => {
-                        if let Expr::ClassRef(class_name) = object.as_ref() {
-                            ctx.prototype_aliases.insert(id, class_name.clone());
+                        match object.as_ref() {
+                            Expr::ClassRef(class_name) => {
+                                ctx.prototype_aliases.insert(id, class_name.clone());
+                            }
+                            Expr::FuncRef(func_id) => {
+                                ctx.prototype_function_aliases.insert(id, *func_id);
+                            }
+                            // dayjs's minified IIFE shape lowers the inner
+                            // `function M(t){…}` to a `Let { name: "M", init:
+                            // Some(Closure{…}) }` (function decls inside a
+                            // function expression body become hoisted lets in
+                            // HIR). The subsequent `var m = M.prototype` then
+                            // reads `M` as `LocalGet(M_id)` — match that and
+                            // route the alias through the same function-class
+                            // bucket, storing the receiver local id so the
+                            // recogniser later emits
+                            // `RegisterFunctionPrototypeMethod { func:
+                            // LocalGet(M_id), … }`.
+                            Expr::LocalGet(src_local) => {
+                                if ctx.function_valued_locals.contains(src_local) {
+                                    ctx.prototype_function_locals.insert(id, *src_local);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     _ => {}

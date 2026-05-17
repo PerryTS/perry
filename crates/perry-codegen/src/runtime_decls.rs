@@ -713,6 +713,25 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         VOID,
         &[I32, PTR, I64, DOUBLE],
     );
+    // Issue #838 followup (b): function-classic prototype-method
+    // assignment for Babel's class-from-function emit pattern (and
+    // dayjs's identical minified shape). Takes the callable value
+    // directly — the runtime helper looks up / allocates a synthetic
+    // class id keyed by the closure's NaN-boxed bits, then stores
+    // the method on `CLASS_PROTOTYPE_METHODS[synthetic_cid]`.
+    // Returns the synthetic class id (codegen discards).
+    module.declare_function(
+        "js_register_function_prototype_method",
+        I32,
+        &[DOUBLE, PTR, I64, DOUBLE],
+    );
+    // Issue #838 followup (b): construct an instance from a function
+    // value via the synthetic-class-id path. Allocates an object
+    // stamped with the same synthetic id the
+    // `js_register_function_prototype_method` site used, then
+    // invokes the constructor with IMPLICIT_THIS bound to the new
+    // instance. Returns the NaN-boxed new instance pointer.
+    module.declare_function("js_new_function_construct", DOUBLE, &[DOUBLE, PTR, I64]);
     module.declare_function("js_typeerror_new", I64, &[I64]);
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);
