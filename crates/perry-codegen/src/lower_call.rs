@@ -5906,16 +5906,6 @@ enum NativeArgKind {
     /// `stmt.all(...params)` / `stmt.run(...)` / `stmt.get(...)` that
     /// the runtime consumes as a single `*const ArrayHeader`.
     VarArgsAsArray,
-    /// JSON-stringify the NaN-boxed value (via `js_json_stringify`) and
-    /// pass the resulting `*mut StringHeader` as an i64. Use for runtime
-    /// FFI slots that expect a JSON-encoded payload (e.g. `jsonwebtoken`'s
-    /// `js_jwt_sign` which internally calls `serde_json::from_str` to
-    /// reconstruct the claims object). Strings get JSON-encoded too —
-    /// `"foo"` → `"\"foo\""` — which downstream `serde_json::from_str`
-    /// callers either deserialize as a JSON string or fall back from on
-    /// `Claims` deserialize failure, which matches how the previous
-    /// hand-rolled wrappers were already handling that case.
-    JsonStringify,
 }
 
 /// What the runtime function returns.
@@ -5960,7 +5950,6 @@ const NA_STR: NativeArgKind = NativeArgKind::StrPtr;
 const NA_PTR: NativeArgKind = NativeArgKind::PtrI64;
 const NA_JSV: NativeArgKind = NativeArgKind::JsvalI64;
 const NA_VARARGS: NativeArgKind = NativeArgKind::VarArgsAsArray;
-const NA_JSON: NativeArgKind = NativeArgKind::JsonStringify;
 const NR_PTR: NativeRetKind = NativeRetKind::Ptr;
 const NR_STR: NativeRetKind = NativeRetKind::Str;
 const NR_BIGINT: NativeRetKind = NativeRetKind::BigInt;
@@ -8131,31 +8120,9 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         ret: NR_F64,
     },
     // ========== jsonwebtoken ==========
-    // Issue #915: `js_jwt_sign`'s Rust signature is
-    //   (payload_ptr: *const StringHeader,
-    //    secret_ptr: *const StringHeader,
-    //    expires_in_secs: f64,
-    //    kid_ptr: *const StringHeader) -> i64  (returns nanbox_string_bits)
-    // The previous `[NA_F64, NA_F64, NA_F64], ret: NR_PTR` was a
-    // calling-convention mismatch on multiple fronts: the user's
-    // object/string payload arrived in `d0`/`d1` (float regs) but Rust
-    // read `x0`/`x1` as raw `*const StringHeader` pointers, the 4th
-    // FFI arg (`kid_ptr`) wasn't passed at all (register garbage), and
-    // the return came back as `STRING_TAG | ptr` but got re-boxed as
-    // POINTER (so `token.length` read off an object header that has no
-    // length field). NR_STR's `or i64 raw, STRING_TAG` is idempotent on
-    // the already-tagged return value. NA_JSON serializes object
-    // payloads to JSON before passing — string payloads get
-    // `serde_json::from_str`-friendly JSON encoding for free.
-    NativeModSig {
-        module: "jsonwebtoken",
-        has_receiver: false,
-        method: "sign",
-        class_filter: None,
-        runtime: "js_jwt_sign",
-        args: &[NA_JSON, NA_STR, NA_F64, NA_STR],
-        ret: NR_STR,
-    },
+    // `sign` is intentionally handled in lower_call/native.rs. It needs
+    // option-dependent runtime selection plus an already-NaN-boxed string
+    // return, so the generic table must not grow a second path for it.
     NativeModSig {
         module: "jsonwebtoken",
         has_receiver: false,
@@ -10776,7 +10743,6 @@ fn arg_kind_tag(a: &NativeArgKind) -> &'static str {
         NativeArgKind::PtrI64 => "NA_PTR",
         NativeArgKind::JsvalI64 => "NA_JSV",
         NativeArgKind::VarArgsAsArray => "NA_VARARGS",
-        NativeArgKind::JsonStringify => "NA_JSON",
     }
 }
 
@@ -10902,17 +10868,6 @@ pub(super) fn lower_native_module_dispatch(
                 llvm_args.push((I64, bits));
                 arg_types.push(I64);
             }
-            NativeArgKind::JsonStringify => {
-                // JSON-stringify the value via the runtime helper.
-                // `js_json_stringify(value: f64, type_hint: i32) -> i64`
-                // returns a raw `*mut StringHeader` cast to i64 — exactly
-                // what FFI slots like `js_jwt_sign`'s `payload_ptr` need.
-                // type_hint = 0 means auto-detect from the NaN-boxing tag.
-                let blk = ctx.block();
-                let ptr = blk.call(I64, "js_json_stringify", &[(DOUBLE, &lowered), (I32, "0")]);
-                llvm_args.push((I64, ptr));
-                arg_types.push(I64);
-            }
             NativeArgKind::VarArgsAsArray => unreachable!("handled above"),
         }
         i += 1;
@@ -10927,10 +10882,7 @@ pub(super) fn lower_native_module_dispatch(
                 ));
                 arg_types.push(DOUBLE);
             }
-            NativeArgKind::StrPtr
-            | NativeArgKind::PtrI64
-            | NativeArgKind::JsvalI64
-            | NativeArgKind::JsonStringify => {
+            NativeArgKind::StrPtr | NativeArgKind::PtrI64 | NativeArgKind::JsvalI64 => {
                 llvm_args.push((I64, "0".to_string()));
                 arg_types.push(I64);
             }

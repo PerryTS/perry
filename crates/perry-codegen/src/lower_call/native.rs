@@ -20,7 +20,8 @@ use perry_hir::Expr;
 
 use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::types::{DOUBLE, I64};
+use crate::type_analysis::is_string_expr;
+use crate::types::{DOUBLE, I32, I64};
 
 use super::{
     apply_inline_style, collect_closure_introduced_ids, extract_options_fields,
@@ -236,6 +237,83 @@ fn emit_dim_setter(
     Ok(())
 }
 
+fn lower_jsonwebtoken_payload_ptr(ctx: &mut FnCtx<'_>, payload: &Expr) -> Result<String> {
+    if is_string_expr(ctx, payload) {
+        return get_raw_string_ptr(ctx, payload);
+    }
+
+    let boxed_payload = lower_expr(ctx, payload)?;
+    Ok(ctx.block().call(
+        I64,
+        "js_json_stringify",
+        &[(DOUBLE, &boxed_payload), (I32, "0")],
+    ))
+}
+
+fn lower_jsonwebtoken_sign(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Result<String> {
+    if args.len() < 2 {
+        bail!(
+            "jsonwebtoken.sign(payload, secret, options?) expects at least 2 args, got {}",
+            args.len()
+        );
+    }
+
+    let payload_ptr = lower_jsonwebtoken_payload_ptr(ctx, &args[0])?;
+    let secret_ptr = get_raw_string_ptr(ctx, &args[1])?;
+    let mut runtime = "js_jwt_sign";
+    let mut expires_in = double_literal(0.0);
+    let mut kid_ptr = "0".to_string();
+
+    if let Some(options) = args.get(2) {
+        if let Some(props) = extract_options_fields(ctx, options) {
+            for (key, val) in &props {
+                match key.as_str() {
+                    "algorithm" => {
+                        if let Expr::String(algorithm) = val {
+                            runtime = match algorithm.as_str() {
+                                "ES256" => "js_jwt_sign_es256",
+                                "RS256" => "js_jwt_sign_rs256",
+                                _ => "js_jwt_sign",
+                            };
+                        } else {
+                            let _ = lower_expr(ctx, val)?;
+                        }
+                    }
+                    "expiresIn" => {
+                        expires_in = lower_expr(ctx, val)?;
+                    }
+                    "keyid" | "kid" => {
+                        kid_ptr = get_raw_string_ptr(ctx, val)?;
+                    }
+                    _ => {
+                        let _ = lower_expr(ctx, val)?;
+                    }
+                }
+            }
+        } else {
+            let _ = lower_expr(ctx, options)?;
+        }
+    }
+
+    for extra in args.iter().skip(3) {
+        let _ = lower_expr(ctx, extra)?;
+    }
+
+    ctx.pending_declares
+        .push((runtime.to_string(), I64, vec![I64, I64, DOUBLE, I64]));
+    let raw = ctx.block().call(
+        I64,
+        runtime,
+        &[
+            (I64, &payload_ptr),
+            (I64, &secret_ptr),
+            (DOUBLE, &expires_in),
+            (I64, &kid_ptr),
+        ],
+    );
+    Ok(ctx.block().bitcast_i64_to_double(&raw))
+}
+
 pub(crate) fn lower_native_method_call(
     ctx: &mut FnCtx<'_>,
     module: &str,
@@ -265,6 +343,10 @@ pub(crate) fn lower_native_method_call(
         if let Some(first) = args.first() {
             return lower_expr(ctx, first);
         }
+    }
+
+    if module == "jsonwebtoken" && method == "sign" && object.is_none() {
+        return lower_jsonwebtoken_sign(ctx, args);
     }
 
     // `perry/ui.App({ title, width, height, body, icon? })` — minimum-viable
