@@ -405,7 +405,15 @@ for test_file in "$TEST_DIR"/*.ts; do
     if [[ "$test_name" == test_parity_* ]]; then
         compile_env="PERRY_ALLOW_UNIMPLEMENTED=1"
     fi
-    compile_output=$(env $compile_env "$PERRY_BIN" $BACKEND_FLAG "$test_file" -o "$perry_binary" 2>&1)
+    # #499: the jsruntime parity tests intentionally import .js
+    # fixtures to exercise V8 promise interop; pass --enable-js-runtime
+    # so the host-opt-in gate honors that explicit choice. Other tests
+    # stay native (no flag → smaller binaries, no QuickJS link tax).
+    extra_flags=()
+    if [[ "$test_name" == *jsruntime* ]]; then
+        extra_flags=(--enable-js-runtime)
+    fi
+    compile_output=$(env $compile_env "$PERRY_BIN" $BACKEND_FLAG "${extra_flags[@]}" "$test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
 
     if [[ $compile_exit -ne 0 ]]; then

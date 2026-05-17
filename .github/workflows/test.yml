@@ -455,8 +455,21 @@ jobs:
             # single retry after a brief delay is the cheapest fix
             # without serializing the workers entirely. `||` short-
             # circuits on first success — the success path is unchanged.
-            if "$PERRY" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log" \
-               || (sleep 2 && "$PERRY" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log"); then
+            # #499: the compile-smoke pass mass-compiles every
+            # test-files/*.ts; the test_jsruntime_*,
+            # test_issue_*_jsruntime_* and a handful of others
+            # import .js fixtures, which the new gate refuses
+            # without an explicit opt-in. Smoke is CI
+            # infrastructure — pass `--enable-js-runtime` only
+            # for files matching the jsruntime naming convention
+            # so binaries that don't actually need V8 don't pay
+            # the 40 MB QuickJS-link tax.
+            local flags=()
+            case "$name" in
+              *jsruntime*) flags=(--enable-js-runtime) ;;
+            esac
+            if "$PERRY" "${flags[@]}" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log" \
+               || (sleep 2 && "$PERRY" "${flags[@]}" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log"); then
               : > "$LOGS_DIR/${name}.pass"
               rm -f "/tmp/perry_smoke_${name}" "$err_log"
             else
