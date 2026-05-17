@@ -2,6 +2,45 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.973 — fix(cli): surface compiler panics with an `Error:` prefix instead of a buried abort
+
+**Symptom (ioredis-via-compilePackages).** Configure `perry.compilePackages: ["ioredis"]` in a `package.json`, run `perry main.ts -o out` where `main.ts` does `import Redis from "ioredis"`, and the compiler exits with status 134 — but to a user scanning the tail of the output it looks silent: hundreds of `Warning: unknown identifier '...'` lines from ioredis's CJS bodies drown out the single line at the very end:
+
+```
+thread 'perry-main' (NNNN) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+```
+
+There is no `Error:` prefix anywhere — the libstd guard message is the only signal. Combined with the long trail of warnings, the practical effect is "perry exited non-zero with no error" from the user's POV, which is the worst possible diagnostic. The deeper compile failure is a separate bug (real recursion blow-up somewhere in HIR lower over the ~30 transitive CJS files ioredis pulls in, post-cjs-wrap — tracked separately); this PR fixes the silent-failure half so that any future deep-pipeline panic surfaces clearly.
+
+**Implementation (`crates/perry/src/main.rs`).**
+
+1. **Panic hook (`install_panic_hook`)** — installed at the top of `main()` before the worker thread is spawned. The hook prepends three lines (`Error: perry crashed unexpectedly.` + a "report at github.com/PerryTS/perry/issues" pointer) to the default panic dump, then chains to the previously-registered default hook so `RUST_BACKTRACE=1` / `RUST_BACKTRACE=full` still print the full backtrace. Any panic that goes through Rust's panic machinery (which is the vast majority of "the compiler died" paths — `unwrap()` on a malformed AST, an `unreachable!()` in lower.rs, an `assert!` violation) now produces an obvious `Error:`-prefixed line right at the top of the panic dump, regardless of how much warning noise preceded it.
+
+2. **Join-error branch (`main()` → `handler.join()`)** — rewritten from `handler.join().unwrap()` (which itself panics, producing two stacked panics) to a `match` that:
+   - On `Ok(result)`, returns the worker's `Result<()>` unchanged.
+   - On `Err(payload)`, extracts the panic message via the new `extract_panic_message` helper and returns `Err(anyhow!("perry compiler panicked: {msg}"))`. Anyhow's `Termination` then prints that as a final `Error: perry compiler panicked: <msg>` line — the user gets one more clearly-prefixed line at exit, so they don't need to scroll back through warnings to find the panic body.
+
+3. **`extract_panic_message`** — handles the three real shapes of `JoinHandle::join` payloads: `&'static str` (from `panic!("literal")` / `panic_any("literal")`), `String` (from `panic!("{}", x)` after formatting), and opaque (custom panic-any payloads like `panic_any(42_i32)`). The opaque path falls back to `"no message — see backtrace above"` so the formatted error is still grammatical.
+
+4. **perry-main stack: 64 MB → 128 MB.** Bumped to give honest deep recursion (e.g. SWC parsing of a >10K-LOC bundled file) more headroom before tripping the guard. The ioredis case still overflows at 128 MB — confirming it's an unbounded recursion bug, not just a deep one — but the bump is cheap (virtual reservation only; pages are committed lazily) and removes the floor case where 64 MB is genuinely too small.
+
+**Unit tests.** Three new `#[test]`s in `crates/perry/src/main.rs::tests` cover `extract_panic_message`:
+
+- `extract_panic_message_handles_string_panic` — `panic!("synthetic panic from String")`, payload is a `String`, helper returns the exact message.
+- `extract_panic_message_handles_static_str_panic` — `panic_any("a static str")`, payload is `&'static str`, helper returns the exact message.
+- `extract_panic_message_handles_opaque_payload` — `panic_any(42_i32)`, payload is an i32 that downcast to `&str` / `String` both fail, helper returns the documented `"no message — see backtrace above"` fallback.
+
+These run in `cargo test --release -p perry --bin perry` (~0.00s — they only synthesize threads, no I/O).
+
+**What this PR does NOT fix.** The underlying recursion in the compile pipeline that overflows the stack for `compilePackages: ["ioredis"]` is unchanged. `perry main.ts -o out` against the repro still exits 134; the stack-overflow message is still the libstd one. But the broader class of "compiler crashed and the user sees nothing" — any `unwrap()` / `unreachable!()` / `assert!` panic deep in lower.rs / codegen.rs — now produces a clearly-prefixed `Error:` line that survives any amount of preceding warning output. The stack-overflow-abort path is the one signal-handler-level abort that bypasses panic infrastructure entirely; making that one print a Perry-prefixed message requires installing a custom SIGSEGV handler that runs before libstd's stack-guard handler, which is invasive enough to defer to a follow-up.
+
+**Validation.**
+
+- `cargo test --release -p perry --bin perry -- extract_panic_message` — 3/3 pass.
+- `perry /tmp/nonexistent.ts` — existing anyhow error path still prints `Error: Failed to canonicalize ...`.
+- `perry main.ts -o out` (where main.ts is `console.log("ok")`) — still compiles cleanly to a working binary.
+
 ## v0.5.972 — feat(crypto): randomFillSync + subtle.encrypt/decrypt (AES-GCM) — unblocks axios + jose under `perry.compilePackages`
 
 **Symptom.** Two of the three "compile this npm package natively" smoke tests were hitting the strict-API gate (#463) at the same surface:

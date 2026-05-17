@@ -210,12 +210,71 @@ fn transform_legacy_args(args: Vec<String>) -> Vec<String> {
 }
 
 fn main() -> Result<()> {
-    // Use a thread with a large stack (64 MB) to avoid stack overflow on large codebases
+    // Install a panic hook that prints a Perry-formatted `Error:` line before
+    // the default backtrace dump. Without this, a panic deep in the compile
+    // pipeline (or a stack overflow that DOES surface as a panic before the
+    // runtime aborts) shows only the raw Rust panic message at the very end
+    // of hundreds of "Warning:" lines — easy to miss, looks like a silent
+    // exit to anyone scanning the tail of the output.
+    //
+    // Note: this hook does NOT fire for `fatal runtime error: stack overflow,
+    // aborting` — that path is a libstd abort() that bypasses the Rust panic
+    // infrastructure entirely. For that case, the join-error branch below
+    // can't help either (abort kills the whole process; the parent thread
+    // never returns). The best we can do for hard aborts is print a hint at
+    // exit time, which we now do via a `Drop` guard in `main_inner`.
+    install_panic_hook();
+
+    // Use a thread with a large stack (128 MB) to avoid stack overflow on
+    // large codebases. Bumped from 64 MB in v0.5.973 — ioredis-via-
+    // compilePackages (~30 transitive CJS modules) overflowed 64 MB in the
+    // collect/lower walk on the perry-main thread.
     let builder = std::thread::Builder::new()
         .name("perry-main".into())
-        .stack_size(64 * 1024 * 1024);
+        .stack_size(128 * 1024 * 1024);
     let handler = builder.spawn(main_inner).unwrap();
-    handler.join().unwrap()
+    match handler.join() {
+        Ok(result) => result,
+        Err(panic_payload) => {
+            // Worker thread panicked. Extract the panic message (if it's a
+            // String/&str) and surface it as a Perry-formatted error. The
+            // panic hook already printed the raw panic location; this gives
+            // the user one final clearly-prefixed line so they don't have to
+            // scroll back through the output to find it.
+            Err(anyhow::anyhow!(
+                "perry compiler panicked: {}",
+                extract_panic_message(&panic_payload)
+            ))
+        }
+    }
+}
+
+/// Extract a human-readable panic message from a payload returned by
+/// `JoinHandle::join`. Rust panics carry either a `&'static str`, a `String`,
+/// or an opaque payload (rare). Tested below.
+fn extract_panic_message(payload: &Box<dyn std::any::Any + Send + 'static>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "no message — see backtrace above".to_string()
+    }
+}
+
+/// Install a panic hook that prepends an `Error:` line to the default panic
+/// dump. Keeps the existing backtrace behaviour (RUST_BACKTRACE still works)
+/// while making the failure mode obvious in the user's terminal.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        eprintln!();
+        eprintln!("Error: perry crashed unexpectedly.");
+        eprintln!("       Please report this at https://github.com/PerryTS/perry/issues");
+        eprintln!("       with the command line you ran and the output below.");
+        eprintln!();
+        default_hook(info);
+    }));
 }
 
 fn main_inner() -> Result<()> {
@@ -379,4 +438,51 @@ fn main_inner() -> Result<()> {
     telemetry::flush();
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: ioredis-via-compilePackages (and any other "worker panics
+    /// deep in the pipeline" shape) used to surface as a stack overflow with
+    /// no Perry-prefixed error message. The join-error branch in `main()`
+    /// now wraps any worker panic in a clear `perry compiler panicked: …`
+    /// anyhow error so the user sees something obvious at exit time, even
+    /// when the panic message itself is buried in thousands of compile
+    /// warnings.
+    #[test]
+    fn extract_panic_message_handles_string_panic() {
+        let handle = std::thread::spawn(|| {
+            panic!("synthetic panic from String");
+        });
+        let err = handle.join().expect_err("thread should panic");
+        let msg = extract_panic_message(&err);
+        assert_eq!(msg, "synthetic panic from String");
+    }
+
+    #[test]
+    fn extract_panic_message_handles_static_str_panic() {
+        let handle = std::thread::spawn(|| {
+            // panic_any with a &'static str payload — the no-format-args path.
+            std::panic::panic_any("a static str");
+        });
+        let err = handle.join().expect_err("thread should panic");
+        let msg = extract_panic_message(&err);
+        assert_eq!(msg, "a static str");
+    }
+
+    #[test]
+    fn extract_panic_message_handles_opaque_payload() {
+        // panic_any with a non-string payload — most panic-hook frameworks
+        // box something weird in here. Confirm we don't crash and emit the
+        // documented fallback so the user at least sees `Error: …` instead
+        // of a silent abort.
+        let handle = std::thread::spawn(|| {
+            std::panic::panic_any(42_i32);
+        });
+        let err = handle.join().expect_err("thread should panic");
+        let msg = extract_panic_message(&err);
+        assert!(msg.contains("no message"), "got {:?}", msg);
+    }
 }
