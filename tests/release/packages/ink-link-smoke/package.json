@@ -1,0 +1,17 @@
+{
+  "name": "perry-release-fixture-ink-link-smoke",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tier-3 fixture: compile/link-only Ink smoke for issue #678 V8-fallback symbols.",
+  "dependencies": {
+    "ink": "5.2.1",
+    "react": "18.3.1"
+  },
+  "perry": {
+    "compilePackages": [
+      "react",
+      "ink"
+    ]
+  }
+}
