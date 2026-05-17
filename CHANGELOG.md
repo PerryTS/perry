@@ -2,6 +2,22 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.983 — feat(runtime): `Function.prototype.apply` + `Function.prototype.call` dispatch
+
+**Symptom.** `add.apply(null, [2, 3])` and `add.call(null, 2, 3)` both returned an opaque `[object Object]` stub instead of `5`. The dynamic method-dispatch path (`js_native_call_method` in `crates/perry-runtime/src/object.rs`) had a `bind` arm and the closure dynamic-prop lookup, but no `apply` / `call` arms — so any `fn.apply(thisArg, argsArr)` / `fn.call(thisArg, …)` on a closure receiver fell through the `is_closure` branch and returned the `NULL_OBJECT_BYTES` stub. This is what blocked ramda end-to-end: `_curry1`, `_curry2`, `_curry3` all wrap their bodies in `fn.apply(this, arguments)`, so the very first call to any curried export (`R.sum`, `R.add`, etc.) returned a stub instead of the dispatch result.
+
+**Fix.** Two complementary changes:
+
+1. `crates/perry-runtime/src/object.rs::js_native_call_method` — new `"call"` and `"apply"` arms, guarded on `jsval.is_pointer() && is_closure_ptr(raw_ptr)`. Both rebind `IMPLICIT_THIS` to the first arg, restore it on return, and dispatch through `js_native_call_value`:
+   - `call(thisArg, …rest)` → pass `&args_ptr[1..]` (length `args_len-1`) as positional args.
+   - `apply(thisArg, argsArr)` → if `argsArr` is a pointer to `ArrayHeader`, copy the elements into a `Vec<f64>` and forward; treat `null`/`undefined`/non-array as zero args.
+
+2. `crates/perry-hir/src/lower_decl.rs` — skip TypeScript `this:` type-only annotations at the two `FnDecl` parameter-lowering sites (top-level and nested-decl-inside-function). The `expr_function.rs` site already skipped these per `#915`, but the `lower_decl.rs` sites still treated `function greet(this: …, prefix)` as a 2-arg function, shifting every real param by one. Without this, `greet.call({name:'Bob'}, 'Hi')` bound `prefix=undefined` because the runtime call passed `'Hi'` into the synthetic `this` slot.
+
+**Verification.** `test-files/test_function_apply_call.ts` — 7 assertions covering plain `apply`/`call`, multiple invocations, `this`-rebinding on a method with a TS `this:` annotation, and method calls on arrow functions. All match Node byte-for-byte.
+
+**Ramda status.** Compile succeeds (≈2.6 MB binary). Execution still throws `TypeError: Cannot read properties of undefined (reading 'call')` during ramda's module init — a deeper issue distinct from this fix (likely CommonJS `require()` resolution returning `undefined` for an internal helper before ramda's bootstrap `.call()`s through it). Tracked as the next blocker.
+
 ## v0.5.982 — fix(codegen): `export default <namedFn>` wrapper now forwards to the real body so `const fn = defaultImport; fn(…)` works
 
 **Symptom.** Calling a cross-module default-exported function through a local alias dropped the call. With `function add(a,b){return a+b}; export default add;` in one module and

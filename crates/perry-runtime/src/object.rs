@@ -7055,6 +7055,80 @@ pub unsafe extern "C" fn js_native_call_method(
             return object;
         }
 
+        // Function.prototype.call(thisArg, ...args) — invoke the receiver
+        // closure with `thisArg` bound as `this` and the remaining args
+        // passed positionally. Ramda's curry helpers (`_curry1`, `_curry2`,
+        // `_curry3`) build their dispatch chain around
+        // `fn.apply(this, arguments)` / `fn.call(this, x)`, so without these
+        // arms ramda fails immediately on the first curried export.
+        "call" if jsval.is_pointer() => {
+            let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            if crate::closure::is_closure_ptr(raw_ptr) {
+                let this_arg = if args_len >= 1 && !args_ptr.is_null() {
+                    *args_ptr
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                let rest_ptr = if args_len > 1 && !args_ptr.is_null() {
+                    args_ptr.add(1)
+                } else {
+                    std::ptr::null()
+                };
+                let rest_len = if args_len > 1 { args_len - 1 } else { 0 };
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
+                let result = crate::closure::js_native_call_value(object, rest_ptr, rest_len);
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return result;
+            }
+        }
+
+        // Function.prototype.apply(thisArg, argsArray) — invoke the receiver
+        // closure with `thisArg` bound as `this` and the elements of
+        // `argsArray` spread as positional arguments. `argsArray` may be
+        // null / undefined (treat as no args). Mirrors `js_native_call_method_apply`
+        // but for the `Function.prototype.apply` path rather than the
+        // dynamic-spread method-call codegen path.
+        "apply" if jsval.is_pointer() => {
+            let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            if crate::closure::is_closure_ptr(raw_ptr) {
+                let this_arg = if args_len >= 1 && !args_ptr.is_null() {
+                    *args_ptr
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                let args_arr_val = if args_len >= 2 && !args_ptr.is_null() {
+                    *args_ptr.add(1)
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                let args_arr_jsval = JSValue::from_bits(args_arr_val.to_bits());
+                let buf: Vec<f64> = if args_arr_jsval.is_pointer() {
+                    let arr_ptr = (args_arr_val.to_bits() & 0x0000_FFFF_FFFF_FFFF)
+                        as *const crate::array::ArrayHeader;
+                    if arr_ptr.is_null() {
+                        Vec::new()
+                    } else {
+                        let n = crate::array::js_array_length(arr_ptr) as usize;
+                        (0..n)
+                            .map(|i| crate::array::js_array_get_f64(arr_ptr, i as u32))
+                            .collect()
+                    }
+                } else {
+                    Vec::new()
+                };
+                let (call_args_ptr, call_args_len) = if buf.is_empty() {
+                    (std::ptr::null::<f64>(), 0_usize)
+                } else {
+                    (buf.as_ptr(), buf.len())
+                };
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
+                let result =
+                    crate::closure::js_native_call_value(object, call_args_ptr, call_args_len);
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return result;
+            }
+        }
+
         // Common string methods on string values
         "toString" => {
             if jsval.is_string() {
