@@ -1270,6 +1270,13 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 // valid `*mut Promise`. This is rarely hit (only on
                 // user-throw inside the inline callback) and we can
                 // afford the alloc on the slow path.
+                //
+                // Issue #748: same save/restore reasoning as the
+                // Task::AsyncStep arm below — preserve any outer
+                // INLINE_TRAP (set by an enclosing `js_async_first_call`)
+                // when the runner is invoked re-entrantly from inside
+                // a non-transformed async closure's busy-wait.
+                let prev_trap = INLINE_TRAP.with(|c| c.get());
                 INLINE_TRAP.with(|c| {
                     c.set(InlineTrap {
                         trap_next: next,
@@ -1287,7 +1294,7 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     MT_TIME_NS_CALLBACK.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 }
 
-                INLINE_TRAP.with(|c| c.set(InlineTrap::empty()));
+                INLINE_TRAP.with(|c| c.set(prev_trap));
 
                 let t2 = if prof {
                     Some(std::time::Instant::now())
@@ -1395,6 +1402,30 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                 // path: nested async-fn calls pass a DIFFERENT step
                 // closure → fail the gate → alloc their own next, so
                 // their settlement can't collapse onto the parent's.
+                //
+                // Issue #748: save the previous INLINE_TRAP value and
+                // restore it after step dispatch. The microtask runner
+                // can be called RE-ENTRANTLY from inside an outer
+                // async-step body — specifically when a non-transformed
+                // async closure's `await` busy-waits on
+                // `js_promise_run_microtasks()`. The outer body
+                // (e.g. a top-level async function's state machine
+                // closure) was entered via `js_async_first_call` which
+                // set INLINE_TRAP to `{trap_next: null, current_step:
+                // outer_step}`. Without save/restore, clearing to empty
+                // after the inner Task::AsyncStep dispatch would leak
+                // back to the outer body — `Expr::CurrentStepClosure`
+                // (lowered to `js_get_current_step_closure`) returns
+                // NULL after control returns from the busy-wait, and
+                // the outer's `AsyncStepChain` queues a Task::AsyncStep
+                // with step=NULL. That task hits the null-step short
+                // circuit (line 1316) which only propagates the value
+                // to `next` without ever calling the outer step body's
+                // state-1 code — symptom: the outer body's post-await
+                // statements never execute and the returned Promise
+                // settles with the awaited value rather than the
+                // explicit return expression.
+                let prev_trap = INLINE_TRAP.with(|c| c.get());
                 INLINE_TRAP.with(|c| {
                     c.set(InlineTrap {
                         trap_next: next,
@@ -1417,7 +1448,7 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     MT_TIME_NS_CALLBACK.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 }
 
-                INLINE_TRAP.with(|c| c.set(InlineTrap::empty()));
+                INLINE_TRAP.with(|c| c.set(prev_trap));
 
                 let t2 = if prof {
                     Some(std::time::Instant::now())

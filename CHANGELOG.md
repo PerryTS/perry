@@ -2,6 +2,40 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.969 — fix(runtime): #748 — async closure's busy-wait microtask drain no longer clobbers outer state-machine's `current_step`
+
+**Symptom.** skelpo-shop-admin's `/v1/auth/signup` Fastify route (Fastify 4.28 + @perryts/mysql + argon2 + jsonwebtoken) returned HTTP 200 with the single-byte body `0` instead of the explicit `return { accessToken, user, account, session, … }` payload. The first `await pool.exec("INSERT INTO users …")` committed (row visible in MySQL), but every subsequent `await pool.exec(…)` silently no-op'd — no rows in `accounts`, `sessions`, `members`, `auditLog`. tsx + node on the same source against the same DB returned the correct JSON with HTTP 201. Reported against perry 0.5.899; reproduced through 0.5.967.
+
+**Root cause.** Async closures (arrow / function-expression async functions assigned to consts / map values / object properties) are NOT rewritten by the `async_to_generator` pass — the pre-pass only iterates `module.functions` and skips closures by design (see comment at `crates/perry-transform/src/async_to_generator.rs:47-49`: *"Top-level functions only: nested async closures (arrow/function expressions assigned to locals) are NOT yet rewritten. They keep the pre-fix direct-call/busy-wait behavior. Follow-up."*). When such a closure executes inside an outer top-level async function's state-machine step body, the closure's `Expr::Await` lowers to the busy-wait loop in `crates/perry-codegen/src/expr.rs:10094+`, which polls via `js_promise_run_microtasks()` until the awaited Promise settles.
+
+Inside the microtask runner, every `Task::AsyncStep` dispatch wrote `INLINE_TRAP = {trap_next: next, current_step: step_closure}` before invoking the step and unconditionally cleared `INLINE_TRAP = empty` afterwards (`promise.rs:1407-1429`). That clear was correct in isolation — between dispatches the runner has no active activation — but it leaked back to whatever code had called `js_promise_run_microtasks()`. The outer top-level async function's state-machine step closure was active at the time: it was entered through `js_async_first_call(outer_step)`, which had installed `INLINE_TRAP = {trap_next: null, current_step: outer_step}` on the stack-saved value. Once control returned from the busy-wait, the outer step body's `Expr::CurrentStepClosure` (lowered to `js_get_current_step_closure`) read `INLINE_TRAP.current_step` and saw `0` instead of `outer_step` — because the inner microtask drain had wiped it.
+
+The outer step then returned `Expr::AsyncStepChain { value, step_closure: <NULL> }` for the await of the closure's result. `js_async_step_chain` queued `Task::AsyncStep(NULL, value, next, false)` onto the task queue. When the event loop drained that task, the null-step short-circuit at `promise.rs:1316-1326` fired:
+
+```rust
+if step_closure.is_null() {
+    if !next.is_null() {
+        if is_error { js_promise_reject(next, value); } else { js_promise_resolve(next, value); }
+    }
+    restore_microtask_context();
+    ran += 1;
+    continue;
+}
+```
+
+The outer step body's state-1 code (the `return { … }` and every statement after the first `await`) NEVER ran — `next` settled with whatever the awaited Promise resolved to. In the Fastify signup case that was `{ insertId: <first INSERT>, affectedRows: 1 }`, which `JSON.stringify` rendered as something that ultimately serialized to ASCII `0` (the `next`'s value flowed through Fastify's reply pipeline as the response body). The "subsequent INSERTs silently no-op" symptom is consistent: those `await pool.exec(...)` calls live in state-1+ of the outer step body, which the null-step short-circuit prevented from ever executing — `await pool.exec(...)` and `JSON.stringify` and `void reply.code(201)` and `return {...}` all became dead code at runtime.
+
+**Reproducer (no fastify / no mysql).** `test-files/test_issue_748_multi_step_await_return.ts` exercises the minimum shape: a top-level `async function main()` awaits a `Map<string, Handler>`-stored async arrow closure that itself awaits three async helpers (`createUser` / `createAccount` / `createSession`), each of which awaits a `Pool.exec` async method that awaits a `setTimeout` Promise. Pre-fix the outer `await app.inject(...)` returned `undefined`, the post-await `console.log(out)` printed nothing (the line was dead code). Post-fix it prints the full `{"ok":true,"user":{...},"account":{...},"session":{...}}` JSON byte-identical to `node --experimental-strip-types`.
+
+**Fix.** `crates/perry-runtime/src/promise.rs`: save `INLINE_TRAP` before each `Task::AsyncStep` / `Task::Inline` dispatch and restore it afterwards, instead of unconditionally clearing to empty. In the common case (no outer activation), the saved value IS empty so the restore is a no-op — but when the runner is invoked re-entrantly from inside an outer state-machine step's busy-wait, the outer's `current_step` survives. The outer step's later `Expr::CurrentStepClosure` then sees the correct `outer_step` pointer, `AsyncStepChain` queues `Task::AsyncStep(outer_step, value, next, false)` with a non-null step, and state-1 (the return-value path) runs normally.
+
+**Scope.** Runtime-only change. The fix is in the microtask runner; codegen and HIR are unchanged. The longer-term fix (extending `async_to_generator` to also rewrite async closures so they don't busy-wait at all) is tracked separately — for now this restores correctness for the busy-wait re-entrancy case without touching the transform's scope.
+
+**Validation.**
+- `test-files/test_issue_748_multi_step_await_return.ts` byte-identical to `node --experimental-strip-types`.
+- `test-files/test_issue_256_microtask_ordering.ts` — PARITY (no regression on the original async-step driver fix).
+- `/tmp/run_gap_tests.sh` — 34/36 PASS, same baseline as pre-fix (the 2 failures — `test_gap_class_advanced`, `test_gap_console_methods` — are unrelated pre-existing gaps).
+
 ## v0.5.968 — test(regression): #678 — exhaustive V8-fallback symbol-link coverage
 
 **Background.** Issue #678 reported `Undefined symbols: _perry_fn_node_modules_ink_build_render_js__render` for ink + react when imports landed on the V8 fallback (modules outside `perry.compilePackages`, or modules pulled in transitively where some sibling fell back to V8). Two fixes have already landed:
