@@ -407,13 +407,43 @@ impl ModuleLoader for NodeModuleLoader {
         } else if referrer.starts_with("node:") {
             // If referrer is a built-in, use current directory
             self.base_dir.join("index.js")
+        } else if referrer.starts_with("perry-missing:") {
+            // Missing-stub referrer: anchor further lookups at the project root.
+            self.base_dir.join("index.js")
         } else {
             PathBuf::from(referrer)
         };
 
-        let resolved_path = self
-            .resolve_module_path(specifier, &referrer_path)
-            .map_err(|e| JsErrorBox::generic(e.to_string()))?;
+        let resolved_path = match self.resolve_module_path(specifier, &referrer_path) {
+            Ok(p) => p,
+            Err(e) => {
+                // V8-fallback graceful-degradation: bare specifiers that fail to
+                // resolve in node_modules (common case: optional/peer deps like
+                // debug → `require('supports-color')` inside a try/catch) become
+                // synthetic `perry-missing:<spec>` modules. `load()` returns a
+                // marker stub; the CJS wrapper's `require()` function then
+                // throws a JS MODULE_NOT_FOUND error inside the user's
+                // try/catch instead of aborting the whole module graph at
+                // static-import time. Only applies to bare specifiers (no
+                // ./, ../, /, or file:// prefix) — relative/absolute path
+                // failures stay hard errors.
+                let is_bare = !specifier.starts_with("./")
+                    && !specifier.starts_with("../")
+                    && !specifier.starts_with('/')
+                    && !specifier.starts_with("file://")
+                    && !specifier.contains("://");
+                if is_bare {
+                    log::warn!(
+                        "[js_load_module] missing bare module '{}' — returning soft-throw stub ({})",
+                        specifier,
+                        e
+                    );
+                    return ModuleSpecifier::parse(&format!("perry-missing:{}", specifier))
+                        .map_err(|err| JsErrorBox::generic(err.to_string()));
+                }
+                return Err(JsErrorBox::generic(e.to_string()));
+            }
+        };
 
         let canonical = std::fs::canonicalize(&resolved_path).unwrap_or(resolved_path);
         let canonical = if canonical.is_dir() {
@@ -441,6 +471,30 @@ impl ModuleLoader for NodeModuleLoader {
         if module_specifier.scheme() == "node" {
             let builtin_name = module_specifier.path();
             let stub_code = get_builtin_stub(builtin_name);
+            return ModuleLoadResponse::Sync(Ok(ModuleSource::new(
+                ModuleType::JavaScript,
+                ModuleSourceCode::String(stub_code.into()),
+                module_specifier,
+                None,
+            )));
+        }
+
+        // Handle missing-module stubs. The synthetic `perry-missing:<spec>`
+        // scheme is produced by resolve() when a bare specifier can't be
+        // located in node_modules. The stub exposes a marker so the
+        // wrap_commonjs() generated `require()` can throw a JS
+        // MODULE_NOT_FOUND error (caught by the caller's try/catch)
+        // instead of failing static-import time.
+        if module_specifier.scheme() == "perry-missing" {
+            let spec = module_specifier.path();
+            // Escape single quotes / backslashes for embedding in the JS string.
+            let escaped = spec.replace('\\', "\\\\").replace('\'', "\\'");
+            let stub_code = format!(
+                "export const __perry_missing = true;\n\
+                 export const __perry_specifier = '{}';\n\
+                 export default undefined;\n",
+                escaped
+            );
             return ModuleLoadResponse::Sync(Ok(ModuleSource::new(
                 ModuleType::JavaScript,
                 ModuleSourceCode::String(stub_code.into()),
@@ -595,17 +649,33 @@ fn wrap_commonjs(code: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Generate require() lookup cases
+    // Generate require() lookup cases. Each non-JSON case first checks
+    // whether the imported namespace carries the `perry-missing:` stub
+    // marker — if so we throw a Node-compatible MODULE_NOT_FOUND error
+    // INSIDE the require() function body so a wrapping try/catch (the
+    // optional-dependency pattern used by debug, etc.) can catch it.
     let require_cases = require_specs
         .iter()
         .enumerate()
         .map(|(i, spec)| {
+            let escaped_spec = spec.replace('\\', "\\\\").replace('\'', "\\'");
             if spec.ends_with(".json") {
-                format!("        if (specifier === '{}') return _req_{};", spec, i)
+                format!(
+                    "        if (specifier === '{}') return _req_{};",
+                    escaped_spec, i
+                )
             } else {
                 format!(
-                    "        if (specifier === '{}') return __perry_require_namespace(_req_{});",
-                    spec, i
+                    "        if (specifier === '{spec}') {{\n\
+                     \x20           if (_req_{idx} && _req_{idx}.__perry_missing === true) {{\n\
+                     \x20               var __err = new Error(\"Cannot find module '\" + _req_{idx}.__perry_specifier + \"'\");\n\
+                     \x20               __err.code = 'MODULE_NOT_FOUND';\n\
+                     \x20               throw __err;\n\
+                     \x20           }}\n\
+                     \x20           return __perry_require_namespace(_req_{idx});\n\
+                     \x20       }}",
+                    spec = escaped_spec,
+                    idx = i
                 )
             }
         })

@@ -913,24 +913,40 @@ pub unsafe extern "C" fn js_load_module(path_ptr: *const i8, path_len: usize) ->
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // Try to resolve the module path
-    let resolved_path: PathBuf =
-        if path_str.starts_with("./") || path_str.starts_with("../") || path_str.starts_with('/') {
-            // Relative or absolute path - resolve directly
-            let path = PathBuf::from(path_str);
-            std::fs::canonicalize(&path).unwrap_or(path)
-        } else {
-            // Bare module specifier (like "ethers") - use node_modules resolution
-            let referrer = format!("file://{}/index.js", cwd.display());
-            match loader.resolve(path_str, &referrer, deno_core::ResolutionKind::Import) {
-                Ok(specifier) => specifier
-                    .to_file_path()
-                    .unwrap_or_else(|_| PathBuf::from(path_str)),
-                Err(e) => {
-                    log::error!("Failed to resolve module '{}': {}", path_str, e);
+    let resolved_path: PathBuf = if path_str.starts_with("./")
+        || path_str.starts_with("../")
+        || path_str.starts_with('/')
+    {
+        // Relative or absolute path - resolve directly
+        let path = PathBuf::from(path_str);
+        std::fs::canonicalize(&path).unwrap_or(path)
+    } else {
+        // Bare module specifier (like "ethers") - use node_modules resolution
+        let referrer = format!("file://{}/index.js", cwd.display());
+        match loader.resolve(path_str, &referrer, deno_core::ResolutionKind::Import) {
+            Ok(specifier) => {
+                // Top-level user imports of bare specifiers that the
+                // loader couldn't find produce a `perry-missing:` stub
+                // (so nested V8 graph resolution can soft-throw). At
+                // the top-level entry, a real failure is correct —
+                // surface it as the existing hard error.
+                if specifier.scheme() == "perry-missing" {
+                    eprintln!(
+                            "[js_load_module] FAILED to load '{}': bare module not found in node_modules",
+                            path_str
+                        );
                     return 0;
                 }
+                specifier
+                    .to_file_path()
+                    .unwrap_or_else(|_| PathBuf::from(path_str))
             }
-        };
+            Err(e) => {
+                log::error!("Failed to resolve module '{}': {}", path_str, e);
+                return 0;
+            }
+        }
+    };
 
     let canonical = resolved_path.clone();
 

@@ -2,6 +2,62 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.957 — fix(jsruntime): express smoke `[js_load_module] FAILED to load` — optional/peer `require()` of unresolved bare module now soft-throws inside CJS wrapper
+
+**Symptom.** Express smoke (downstream of #909/#911/#912) aborted at module-load time with:
+
+```
+$ PERRY_ALLOW_UNIMPLEMENTED=1 ./out
+[js_load_module] FAILED to load '/private/tmp/.../express/node_modules/debug/src/index.js':
+    Cannot find module 'supports-color' in node_modules
+TypeError: value is not a function
+    at <anonymous>
+```
+
+The path in the error pointed at express's transitive dep `debug/src/index.js`, which (via `debug/src/node.js`) issues `require('supports-color')` inside a `try/catch` — `supports-color` is declared as an `optionalPeerDependency`, doesn't have to be installed, and `debug` explicitly swallows the resulting `MODULE_NOT_FOUND`. Node.js handles this correctly because `require()` is synchronous and the throw happens at the call site. Perry's V8-fallback layer broke that pattern.
+
+**Root cause.** `crates/perry-jsruntime/src/modules.rs::wrap_commonjs` translates every CJS `require("X")` callsite into a static top-of-file ESM `import * as _req_N from "X";`, then in the wrapped IIFE the synthetic `require(specifier)` returns `_req_N`. This hoist breaks the optional-require pattern: when V8 instantiates the wrapper module, it calls our `ModuleLoader::resolve()` for the bare specifier `"supports-color"`. `resolve_from_node_modules()` walked the tree, found nothing, and returned `Err("Cannot find module 'supports-color' in node_modules")`. That error propagated out of V8 module instantiation and aborted `js_load_module` for the parent module (`debug/src/index.js`) — i.e., before any user JS runs. The CJS try/catch around `require('supports-color')` never had a chance to catch it because the static import failed at link time, not runtime.
+
+**Fix.** Three coordinated changes route missing bare imports through a synthetic stub that defers the throw to the require() callsite:
+
+1. **`NodeModuleLoader::resolve()`** — when `resolve_module_path()` fails for a *bare* specifier (no `./`, `../`, `/`, `file://`, or `<scheme>://` prefix), instead of returning `Err`, return a synthetic `ModuleSpecifier::parse("perry-missing:<spec>")`. Relative/absolute paths and node: builtins are unaffected. A `log::warn!` records the substitution.
+
+2. **`NodeModuleLoader::load()`** — detect `scheme() == "perry-missing"` and synthesize an ESM stub:
+
+   ```js
+   export const __perry_missing = true;
+   export const __perry_specifier = 'supports-color';
+   export default undefined;
+   ```
+
+   This lets `import * as _req_N from 'supports-color'` succeed with a benign namespace carrying a marker.
+
+3. **`wrap_commonjs()` codegen** — the per-specifier require-lookup case is rewritten to consult the marker BEFORE returning the namespace:
+
+   ```js
+   if (specifier === 'supports-color') {
+       if (_req_0 && _req_0.__perry_missing === true) {
+           var __err = new Error("Cannot find module '" + _req_0.__perry_specifier + "'");
+           __err.code = 'MODULE_NOT_FOUND';
+           throw __err;
+       }
+       return __perry_require_namespace(_req_0);
+   }
+   ```
+
+   The throw now happens *inside* the wrapper's `require()` function body, which is called from inside the CJS module's user code — exactly the position where Node would throw, so a wrapping `try/catch` catches it cleanly.
+
+4. **`js_load_module` entry point in `interop.rs`** — the top-level entry where Perry's stub bridges TS `import x from "..."` to V8 must NOT silently substitute missing modules (that would mask legitimate user errors). Added an explicit check: if `loader.resolve()` returns a `perry-missing:` scheme, hard-fail with the original `[js_load_module] FAILED to load '<spec>': bare module not found in node_modules` message. Only nested V8 graph resolution (which originates from the CJS wrapper's hoisted imports) benefits from the soft-throw stub.
+
+**Validation.**
+- `test-files/test_issue_express_js_load_module.ts` + fixture `optional_dep.js` exercise the soft-throw end-to-end: a `.js` module wraps `require("non-existent-optional-pkg-xyz")` in `try/catch`, falls onto the catch arm, and exports a sentinel. Byte-for-byte parity with `node --experimental-strip-types`.
+- Express smoke at the top of this changelog no longer prints `[js_load_module] FAILED to load`. (The downstream `TypeError: value is not a function` is a separate, pre-existing express gap unrelated to module loading.)
+
+**Files touched.**
+- `crates/perry-jsruntime/src/modules.rs` — resolve() bare-miss → `perry-missing:` scheme, load() stub-module emission, wrap_commonjs() per-require marker check
+- `crates/perry-jsruntime/src/interop.rs` — top-level `js_load_module` rejects `perry-missing:` resolutions with the original error message
+- `test-files/test_issue_express_js_load_module.ts` + `test-files/fixtures/issue_express_js_load_module/optional_dep.js` — regression test mirroring debug → supports-color shape
+
 ## v0.5.956 — fix(runtime): #856 — single canonical `_setjmp` extern shared by gc.rs + promise.rs
 
 **Symptom.** `cargo build --release -p perry-runtime` emitted a `clashing_extern_declarations` warning:
