@@ -1311,7 +1311,27 @@ pub fn pointer_in_old_gen(addr: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gc::{GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_STRING};
+    use crate::gc::{GcHeader, GC_FLAG_MARKED, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_STRING};
+
+    fn general_block_index_for(addr: usize) -> Option<usize> {
+        sync_inline_arena_state();
+        ARENA.with(|a| {
+            let arena = unsafe { &*a.get() };
+            arena.blocks.iter().enumerate().find_map(|(idx, block)| {
+                if block.data.is_null() {
+                    return None;
+                }
+                let base = block.data as usize;
+                let end = base + block.size;
+                (addr >= base && addr < end).then_some(idx)
+            })
+        })
+    }
+
+    fn general_block_offset(idx: usize) -> usize {
+        sync_inline_arena_state();
+        ARENA.with(|a| unsafe { (&*a.get()).blocks[idx].offset })
+    }
 
     /// Issue #179: a longlived-arena allocation must not land inside any
     /// general-arena block. This is the architectural guarantee behind
@@ -1350,6 +1370,94 @@ mod tests {
             gen_in_general,
             "general alloc {gen_ptr:#x} not in any general block"
         );
+    }
+
+    #[test]
+    fn test_arena_reset_reuses_dead_general_block_without_touching_live_block() {
+        let full_block_payload = BLOCK_SIZE - GC_HEADER_SIZE;
+        let mut dead_blocks = Vec::new();
+
+        for _ in 0..6 {
+            let ptr = arena_alloc_gc(full_block_payload, 8, GC_TYPE_STRING) as usize;
+            let block_idx =
+                general_block_index_for(ptr).expect("dead allocation should land in general arena");
+            dead_blocks.push(block_idx);
+        }
+
+        dead_blocks.sort_unstable();
+        dead_blocks.dedup();
+        assert!(
+            dead_blocks.len() >= 6,
+            "test setup should force six distinct full general blocks"
+        );
+
+        let live_ptr = arena_alloc_gc(full_block_payload, 8, GC_TYPE_STRING);
+        let live_addr = live_ptr as usize;
+        let live_header_addr = live_addr - GC_HEADER_SIZE;
+        let live_block =
+            general_block_index_for(live_addr).expect("live allocation should be in general arena");
+        let current = ARENA.with(|a| unsafe { (&*a.get()).current });
+        let keep_low = current.saturating_sub(4);
+        let reset_candidate = dead_blocks
+            .iter()
+            .copied()
+            .find(|&idx| idx < keep_low)
+            .expect("test setup should leave at least one dead block outside the keep window");
+
+        let before_offset = general_block_offset(reset_candidate);
+        assert!(
+            before_offset > 0,
+            "reset candidate should contain dead allocations before reset"
+        );
+
+        unsafe {
+            let header = (live_header_addr as *mut u8) as *mut GcHeader;
+            (*header).gc_flags |= GC_FLAG_MARKED;
+            *(live_ptr as *mut u64) = 0xCAFE_BABE_DEAD_BEEF;
+            *(live_ptr.add(8) as *mut u64) = 0x1234_5678_9ABC_DEF0;
+        }
+        let live_header_size = unsafe { (*(live_header_addr as *const GcHeader)).size };
+
+        ARENA.with(|a| unsafe {
+            let arena = &mut *a.get();
+            arena.blocks[reset_candidate].dead_cycles = 0;
+            arena.blocks[live_block].dead_cycles = 0;
+        });
+
+        let mut block_has_live = vec![false; arena_block_count()];
+        block_has_live[live_block] = true;
+        arena_reset_empty_blocks(&block_has_live);
+
+        assert_eq!(
+            general_block_offset(reset_candidate),
+            0,
+            "dead general block should be reset for reuse"
+        );
+        assert!(
+            general_block_offset(live_block) > 0,
+            "live general block should keep its nonzero offset"
+        );
+
+        let blocks_after_reset = general_block_count();
+        let _reused = arena_alloc_gc(24, 8, GC_TYPE_STRING);
+        assert_eq!(
+            general_block_count(),
+            blocks_after_reset,
+            "allocation after reset should reuse existing arena capacity"
+        );
+
+        unsafe {
+            assert_eq!(*(live_ptr as *const u64), 0xCAFE_BABE_DEAD_BEEF);
+            assert_eq!(*(live_ptr.add(8) as *const u64), 0x1234_5678_9ABC_DEF0);
+            let header = (live_header_addr as *mut u8) as *mut GcHeader;
+            assert_eq!((*header).obj_type, GC_TYPE_STRING);
+            assert_eq!(
+                (*header).size,
+                live_header_size,
+                "live header size should not change during reset"
+            );
+            (*header).gc_flags &= !GC_FLAG_MARKED;
+        }
     }
 
     /// Walker + block-index contract: longlived objects get global

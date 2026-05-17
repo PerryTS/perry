@@ -4018,6 +4018,104 @@ mod tests {
     }
 
     #[test]
+    fn test_sweep_removes_unmarked_malloc_object() {
+        let ptr = gc_malloc(64, GC_TYPE_STRING);
+        let header = unsafe { header_from_user_ptr(ptr) };
+        let header_addr = header as usize;
+
+        let tracked_before = MALLOC_STATE.with(|s| {
+            s.borrow()
+                .objects
+                .iter()
+                .any(|&tracked| tracked as usize == header_addr)
+        });
+        assert!(
+            tracked_before,
+            "new gc_malloc object should be tracked before sweep"
+        );
+
+        // Direct sweep is intentionally rootless for this regression. Keep
+        // older test allocations marked so this assertion is about only the
+        // object created above.
+        MALLOC_STATE.with(|s| {
+            for &tracked in s.borrow().objects.iter() {
+                if tracked as usize != header_addr {
+                    unsafe {
+                        (*tracked).gc_flags |= GC_FLAG_MARKED;
+                    }
+                }
+            }
+        });
+        crate::arena::arena_walk_objects(|arena_header| unsafe {
+            (*(arena_header as *mut GcHeader)).gc_flags |= GC_FLAG_MARKED;
+        });
+
+        let freed = sweep();
+        assert!(
+            freed >= (GC_HEADER_SIZE + 64) as u64,
+            "sweep should report at least the target malloc object as freed"
+        );
+
+        let tracked_after = MALLOC_STATE.with(|s| {
+            s.borrow()
+                .objects
+                .iter()
+                .any(|&tracked| tracked as usize == header_addr)
+        });
+        assert!(
+            !tracked_after,
+            "unmarked malloc object should be removed from MALLOC_STATE.objects"
+        );
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
+    fn test_trace_array_marks_child() {
+        clear_marks();
+        clear_mark_seeds();
+
+        let child = crate::string::js_string_from_bytes(b"child".as_ptr(), 5) as *mut u8;
+        let child_header = unsafe { header_from_user_ptr(child) };
+        unsafe {
+            assert_eq!(
+                (*child_header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "child should start unmarked before array tracing"
+            );
+        }
+        let parent = crate::array::js_array_alloc(1);
+
+        unsafe {
+            (*parent).length = 1;
+            let elements = (parent as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
+                as *mut u64;
+            *elements = STRING_TAG | (child as u64 & POINTER_MASK);
+        }
+
+        let valid_ptrs = build_valid_pointer_set();
+        let parent_bits = POINTER_TAG | (parent as u64 & POINTER_MASK);
+        assert!(
+            try_mark_value(parent_bits, &valid_ptrs),
+            "parent array should be marked as a root"
+        );
+
+        trace_marked_objects(&valid_ptrs);
+
+        unsafe {
+            assert_ne!(
+                (*child_header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "tracing the marked array should mark its child element"
+            );
+        }
+
+        clear_marks();
+        clear_mark_seeds();
+    }
+
+    #[test]
     fn test_gc_collect_updates_stats() {
         // Get initial stats
         let initial_count = GC_STATS.with(|s| s.borrow().collection_count);
