@@ -132,6 +132,28 @@ code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' \
     "http://127.0.0.1:$PORT/does-not-exist" || true)"
 check "GET /does-not-exist -> 404" "404" "$code"
 
+# Test 5: sync throw is caught by Fastify boundary and does not kill the server.
+code_and_body="$(curl -s --max-time 5 -o "$TMP_DIR/throw_sync_body" -w '%{http_code}' \
+    "http://127.0.0.1:$PORT/throw-sync" || true)"
+throw_sync_body="$(cat "$TMP_DIR/throw_sync_body" 2>/dev/null || true)"
+check "GET /throw-sync status" "500" "$code_and_body"
+check "GET /throw-sync body" \
+    '{"statusCode":500,"error":"Internal Server Error","message":"sync route boom"}' \
+    "$throw_sync_body"
+
+# Test 6: async throw/rejection follows the same default error response path.
+code_and_body="$(curl -s --max-time 5 -o "$TMP_DIR/throw_async_body" -w '%{http_code}' \
+    "http://127.0.0.1:$PORT/throw-async" || true)"
+throw_async_body="$(cat "$TMP_DIR/throw_async_body" 2>/dev/null || true)"
+check "GET /throw-async status" "500" "$code_and_body"
+check "GET /throw-async body" \
+    '{"statusCode":500,"error":"Internal Server Error","message":"async route boom"}' \
+    "$throw_async_body"
+
+# Test 7: server remains alive after thrown route errors.
+actual="$(curl -s --max-time 5 "http://127.0.0.1:$PORT/hello" || true)"
+check "GET /hello after throw" '{"hello":"world"}' "$actual"
+
 echo
 echo "fastify-tests: $pass passed, $fail failed"
 

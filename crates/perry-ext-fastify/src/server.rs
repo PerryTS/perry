@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::os::raw::c_int;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -33,6 +34,19 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+const GC_HEADER_SIZE: usize = 8;
+const GC_TYPE_ERROR: u8 = 7;
+
+struct ClosureCallResult {
+    value: f64,
+    thrown: Option<f64>,
+}
+
+enum HookOutcome {
+    Continue,
+    Sent,
+    Error(f64),
+}
 
 // Runtime symbols not yet wrapped by perry-ffi — we declare them
 // locally as `extern "C"`. Same pattern perry-ext-{net,http,ws}
@@ -91,12 +105,34 @@ extern "C" {
     fn js_timer_tick() -> i32;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
+
+    fn js_try_push() -> *mut c_int;
+    fn js_try_end();
+    fn js_get_exception() -> f64;
+    fn js_clear_exception();
+    fn js_error_get_message(error: *mut ErrorHeader) -> *mut StringHeader;
+}
+
+#[cfg(target_vendor = "apple")]
+extern "C" {
+    #[link_name = "_setjmp"]
+    fn setjmp(env: *mut c_int) -> c_int;
+}
+
+#[cfg(not(target_vendor = "apple"))]
+extern "C" {
+    fn setjmp(env: *mut c_int) -> c_int;
 }
 
 /// Opaque marker for the runtime's Promise struct. We never read its
 /// fields directly — only pass pointers to runtime helpers above.
 #[repr(C)]
 pub struct Promise {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+pub struct ErrorHeader {
     _opaque: [u8; 0],
 }
 
@@ -428,9 +464,10 @@ fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
 
     // Snapshot hooks + matched route (need to drop the borrow before
     // invoking user closures, which may mutate the app).
-    let (on_request_hooks, pre_handler_hooks, matched_handler): (
+    let (on_request_hooks, pre_handler_hooks, matched_handler, error_handler): (
         Vec<ClosurePtr>,
         Vec<ClosurePtr>,
+        Option<ClosurePtr>,
         Option<ClosurePtr>,
     ) = match get_handle::<FastifyApp>(app_handle) {
         Some(app) => {
@@ -439,9 +476,9 @@ fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
             let matched = app
                 .match_route(&pending.method, &pending.path)
                 .map(|(r, _)| r.handler);
-            (on_req, pre, matched)
+            (on_req, pre, matched, app.error_handler)
         }
-        None => (Vec::new(), Vec::new(), None),
+        None => (Vec::new(), Vec::new(), None, None),
     };
 
     // NaN-box the context handle — POINTER_TAG so codegen-side
@@ -450,16 +487,32 @@ fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
 
     let mut response_sent = false;
     for hook in &on_request_hooks {
-        if call_hook_awaiting(*hook, ctx_f64, ctx_handle) {
-            response_sent = true;
-            break;
+        match call_hook_awaiting(*hook, ctx_f64, ctx_handle) {
+            HookOutcome::Continue => {}
+            HookOutcome::Sent => {
+                response_sent = true;
+                break;
+            }
+            HookOutcome::Error(reason) => {
+                handle_error_response(error_handler, ctx_f64, ctx_handle, reason);
+                response_sent = true;
+                break;
+            }
         }
     }
     if !response_sent {
         for hook in &pre_handler_hooks {
-            if call_hook_awaiting(*hook, ctx_f64, ctx_handle) {
-                response_sent = true;
-                break;
+            match call_hook_awaiting(*hook, ctx_f64, ctx_handle) {
+                HookOutcome::Continue => {}
+                HookOutcome::Sent => {
+                    response_sent = true;
+                    break;
+                }
+                HookOutcome::Error(reason) => {
+                    handle_error_response(error_handler, ctx_f64, ctx_handle, reason);
+                    response_sent = true;
+                    break;
+                }
             }
         }
     }
@@ -467,23 +520,32 @@ fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
     let mut final_result = f64::from_bits(TAG_UNDEFINED);
     if !response_sent {
         if let Some(handler) = matched_handler {
-            let result = unsafe {
+            let call = unsafe {
                 let raw = handler as *const RawClosureHeader;
                 let closure = JsClosure::from_raw(raw);
                 if closure.is_null() {
-                    f64::from_bits(TAG_UNDEFINED)
+                    ClosureCallResult {
+                        value: f64::from_bits(TAG_UNDEFINED),
+                        thrown: None,
+                    }
                 } else {
-                    closure.call2(ctx_f64, ctx_f64)
+                    call_closure2_catching(closure, ctx_f64, ctx_f64)
                 }
             };
+            if let Some(reason) = call.thrown {
+                handle_error_response(error_handler, ctx_f64, ctx_handle, reason);
+                response_sent = true;
+            }
             unsafe {
                 js_promise_run_microtasks();
             }
-            final_result = result;
+            if !response_sent {
+                final_result = call.value;
+            }
 
             // If the handler returned a Promise, wait for it.
-            let jsv = JsValue::from_bits(result.to_bits());
-            if jsv.is_pointer() {
+            let jsv = JsValue::from_bits(call.value.to_bits());
+            if !response_sent && jsv.is_pointer() {
                 let ptr = jsv.as_pointer::<Promise>();
                 if !ptr.is_null() && unsafe { js_is_promise(ptr) } != 0 {
                     wait_for_promise(ptr);
@@ -510,11 +572,8 @@ fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
                         // envelope to avoid spilling raw stack traces
                         // into the wire. Mirrors `fastify`'s default
                         // error handler shape.
-                        if let Some(ctx) = perry_ffi::get_handle_mut::<FastifyContext>(ctx_handle) {
-                            ctx.status_code = 500;
-                            let reason = unsafe { js_promise_reason(ptr) };
-                            ctx.response_body = Some(unsafe { render_rejection_body(reason) });
-                        }
+                        let reason = unsafe { js_promise_reason(ptr) };
+                        handle_error_response(error_handler, ctx_f64, ctx_handle, reason);
                         final_result = f64::from_bits(TAG_UNDEFINED);
                     } else {
                         final_result = unsafe { js_promise_value(ptr) };
@@ -550,33 +609,159 @@ fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
     perry_ffi::drop_handle(ctx_handle);
 }
 
-/// Call a hook closure, await any returned Promise, and return whether
-/// `ctx.sent` is true (i.e. the hook produced a response, e.g. an
-/// auth-middleware 401).
-fn call_hook_awaiting(hook: ClosurePtr, ctx_f64: f64, ctx_handle: Handle) -> bool {
+/// Call a hook closure, await any returned Promise, and report whether it
+/// sent a response or threw/rejected.
+fn call_hook_awaiting(hook: ClosurePtr, ctx_f64: f64, ctx_handle: Handle) -> HookOutcome {
     if hook == 0 {
-        return false;
+        return HookOutcome::Continue;
     }
-    let result = unsafe {
+    let call = unsafe {
         let closure = JsClosure::from_raw(hook as *const RawClosureHeader);
         if closure.is_null() {
-            return false;
+            return HookOutcome::Continue;
         }
-        closure.call2(ctx_f64, ctx_f64)
+        call_closure2_catching(closure, ctx_f64, ctx_f64)
     };
+    if let Some(reason) = call.thrown {
+        return HookOutcome::Error(reason);
+    }
     unsafe {
         js_promise_run_microtasks();
     }
-    let jsv = JsValue::from_bits(result.to_bits());
+    let jsv = JsValue::from_bits(call.value.to_bits());
     if jsv.is_pointer() {
         let ptr = jsv.as_pointer::<Promise>();
         if !ptr.is_null() && unsafe { js_is_promise(ptr) } != 0 {
             wait_for_promise(ptr);
+            if unsafe { js_promise_state(ptr) } == 2 {
+                return HookOutcome::Error(unsafe { js_promise_reason(ptr) });
+            }
         }
     }
-    get_handle::<FastifyContext>(ctx_handle)
+    if get_handle::<FastifyContext>(ctx_handle)
         .map(|c| c.sent)
         .unwrap_or(false)
+    {
+        HookOutcome::Sent
+    } else {
+        HookOutcome::Continue
+    }
+}
+
+unsafe fn call_closure2_catching(closure: JsClosure, arg0: f64, arg1: f64) -> ClosureCallResult {
+    let trap_buf = js_try_push();
+    let jumped = setjmp(trap_buf);
+    if jumped != 0 {
+        let exc = js_get_exception();
+        js_clear_exception();
+        js_try_end();
+        return ClosureCallResult {
+            value: f64::from_bits(TAG_UNDEFINED),
+            thrown: Some(exc),
+        };
+    }
+
+    let value = closure.call2(arg0, arg1);
+    js_try_end();
+    ClosureCallResult {
+        value,
+        thrown: None,
+    }
+}
+
+unsafe fn call_closure3_catching(
+    closure: JsClosure,
+    arg0: f64,
+    arg1: f64,
+    arg2: f64,
+) -> ClosureCallResult {
+    let trap_buf = js_try_push();
+    let jumped = setjmp(trap_buf);
+    if jumped != 0 {
+        let exc = js_get_exception();
+        js_clear_exception();
+        js_try_end();
+        return ClosureCallResult {
+            value: f64::from_bits(TAG_UNDEFINED),
+            thrown: Some(exc),
+        };
+    }
+
+    let value = closure.call3(arg0, arg1, arg2);
+    js_try_end();
+    ClosureCallResult {
+        value,
+        thrown: None,
+    }
+}
+
+fn handle_error_response(
+    error_handler: Option<ClosurePtr>,
+    ctx_f64: f64,
+    ctx_handle: Handle,
+    reason: f64,
+) {
+    if let Some(ctx) = perry_ffi::get_handle_mut::<FastifyContext>(ctx_handle) {
+        ctx.status_code = 500;
+    }
+
+    if let Some(handler) = error_handler {
+        let call = unsafe {
+            let closure = JsClosure::from_raw(handler as *const RawClosureHeader);
+            if closure.is_null() {
+                ClosureCallResult {
+                    value: f64::from_bits(TAG_UNDEFINED),
+                    thrown: Some(reason),
+                }
+            } else {
+                call_closure3_catching(closure, reason, ctx_f64, ctx_f64)
+            }
+        };
+        let mut fallback_reason = call.thrown;
+
+        if fallback_reason.is_none() {
+            unsafe {
+                js_run_stdlib_pump();
+                js_promise_run_microtasks();
+            }
+
+            let mut final_result = call.value;
+            let jsv = JsValue::from_bits(call.value.to_bits());
+            if jsv.is_pointer() {
+                let ptr = jsv.as_pointer::<Promise>();
+                if !ptr.is_null() && unsafe { js_is_promise(ptr) } != 0 {
+                    wait_for_promise(ptr);
+                    if unsafe { js_promise_state(ptr) } == 2 {
+                        fallback_reason = Some(unsafe { js_promise_reason(ptr) });
+                    } else {
+                        final_result = unsafe { js_promise_value(ptr) };
+                    }
+                }
+            }
+
+            if fallback_reason.is_none() {
+                if let Some(ctx) = perry_ffi::get_handle_mut::<FastifyContext>(ctx_handle) {
+                    if ctx.response_body.is_none() {
+                        ctx.response_body = Some(unsafe { build_response_body(final_result) });
+                    }
+                }
+                return;
+            }
+        }
+
+        if let Some(reason) = fallback_reason {
+            apply_default_error_response(ctx_handle, reason);
+        }
+    } else {
+        apply_default_error_response(ctx_handle, reason);
+    }
+}
+
+fn apply_default_error_response(ctx_handle: Handle, reason: f64) {
+    if let Some(ctx) = perry_ffi::get_handle_mut::<FastifyContext>(ctx_handle) {
+        ctx.status_code = 500;
+        ctx.response_body = Some(unsafe { render_rejection_body(reason) });
+    }
 }
 
 /// Wait until a promise settles, driving microtasks, the stdlib pump,
@@ -646,6 +831,14 @@ fn wait_for_promise(promise_ptr: *mut Promise) {
 /// generic envelope if the reason can't be stringified (e.g. opaque
 /// pointer that JSON.stringify rejects).
 unsafe fn render_rejection_body(reason: f64) -> Vec<u8> {
+    if let Some(message) = error_message(reason) {
+        let mut out =
+            b"{\"statusCode\":500,\"error\":\"Internal Server Error\",\"message\":".to_vec();
+        push_json_string(&mut out, message.as_bytes());
+        out.push(b'}');
+        return out;
+    }
+
     // Strings: wrap the user's message verbatim.
     let jsv = JsValue::from_bits(reason.to_bits());
     if jsv.is_string() {
@@ -698,6 +891,51 @@ unsafe fn render_rejection_body(reason: f64) -> Vec<u8> {
     }
     out.push(b'}');
     out
+}
+
+unsafe fn error_message(reason: f64) -> Option<String> {
+    let jsv = JsValue::from_bits(reason.to_bits());
+    if jsv.is_pointer() {
+        let ptr = jsv.as_pointer::<u8>();
+        if gc_obj_type(ptr) == GC_TYPE_ERROR {
+            let msg = js_error_get_message(ptr as *mut ErrorHeader);
+            return string_header_to_string(msg);
+        }
+    }
+    None
+}
+
+unsafe fn gc_obj_type(ptr: *const u8) -> u8 {
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return 0;
+    }
+    *ptr.sub(GC_HEADER_SIZE)
+}
+
+unsafe fn string_header_to_string(ptr: *const StringHeader) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, len);
+    Some(String::from_utf8_lossy(bytes).to_string())
+}
+
+fn push_json_string(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.push(b'"');
+    for &b in bytes {
+        match b {
+            b'"' => out.extend_from_slice(b"\\\""),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            0x00..=0x1f => out.extend_from_slice(format!("\\u{:04x}", b).as_bytes()),
+            _ => out.push(b),
+        }
+    }
+    out.push(b'"');
 }
 
 /// Render the handler return value as response bytes. Handlers can

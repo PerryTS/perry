@@ -10,6 +10,7 @@ use hyper::{body::Incoming, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::os::raw::c_int;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -18,6 +19,17 @@ use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
 
 use super::{ClosurePtr, FastifyApp, FastifyContext};
 use crate::common::{get_handle, register_handle, Handle, RUNTIME};
+
+struct ClosureCallResult {
+    value: f64,
+    thrown: Option<f64>,
+}
+
+enum HookOutcome {
+    Continue,
+    Sent,
+    Error(f64),
+}
 
 /// Server handle for managing the running server
 pub struct FastifyServerHandle {
@@ -306,6 +318,7 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
             let ctx_handle = register_handle(ctx);
 
             // Find matching route and call handler
+            let error_handler = app.error_handler;
             let mut response_sent = false;
 
             // NaN-box the context handle with POINTER_TAG for hook calls
@@ -318,18 +331,44 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
 
             // Run onRequest hooks (e.g., auth middleware, rate limiting, CORS)
             for hook in &on_request_hooks {
-                if unsafe { call_hook_awaiting(*hook, nanboxed_ctx_for_hooks, ctx_handle) } {
-                    response_sent = true;
-                    break;
+                match unsafe { call_hook_awaiting(*hook, nanboxed_ctx_for_hooks, ctx_handle) } {
+                    HookOutcome::Continue => {}
+                    HookOutcome::Sent => {
+                        response_sent = true;
+                        break;
+                    }
+                    HookOutcome::Error(reason) => {
+                        handle_error_response(
+                            error_handler,
+                            nanboxed_ctx_for_hooks,
+                            ctx_handle,
+                            reason,
+                        );
+                        response_sent = true;
+                        break;
+                    }
                 }
             }
 
             // Run preHandler hooks (if no response sent yet)
             if !response_sent {
                 for hook in &pre_handler_hooks {
-                    if unsafe { call_hook_awaiting(*hook, nanboxed_ctx_for_hooks, ctx_handle) } {
-                        response_sent = true;
-                        break;
+                    match unsafe { call_hook_awaiting(*hook, nanboxed_ctx_for_hooks, ctx_handle) } {
+                        HookOutcome::Continue => {}
+                        HookOutcome::Sent => {
+                            response_sent = true;
+                            break;
+                        }
+                        HookOutcome::Error(reason) => {
+                            handle_error_response(
+                                error_handler,
+                                nanboxed_ctx_for_hooks,
+                                ctx_handle,
+                                reason,
+                            );
+                            response_sent = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -348,19 +387,25 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                     let nanboxed_ctx = nanboxed_ctx_for_hooks; // same value, different name for clarity
 
                     // Call handler(request, reply) - both are the context handle
-                    let result = {
+                    let call = {
                         let closure_ptr = handler as *const perry_runtime::ClosureHeader;
-                        perry_runtime::js_closure_call2(closure_ptr, nanboxed_ctx, nanboxed_ctx)
+                        unsafe { call_closure2_catching(closure_ptr, nanboxed_ctx, nanboxed_ctx) }
                     };
+                    if let Some(reason) = call.thrown {
+                        handle_error_response(error_handler, nanboxed_ctx, ctx_handle, reason);
+                        response_sent = true;
+                    }
 
                     // Process any async operations
                     crate::common::js_stdlib_process_pending();
                     perry_runtime::js_promise_run_microtasks();
 
                     // Check if handler returned a promise (NaN-boxed pointer to a Promise)
-                    final_result = result;
-                    let jsv = JSValue::from_bits(result.to_bits());
-                    if jsv.is_pointer() {
+                    if !response_sent {
+                        final_result = call.value;
+                    }
+                    let jsv = JSValue::from_bits(call.value.to_bits());
+                    if !response_sent && jsv.is_pointer() {
                         let ptr = jsv.as_pointer::<perry_runtime::Promise>();
                         // Try to treat it as a promise and wait for it
                         if { perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise) } != 0
@@ -378,17 +423,17 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
                                 perry_runtime::js_promise_state(ptr as *mut perry_runtime::Promise)
                             };
                             if st == 2 {
-                                if let Some(ctx) =
-                                    { crate::common::get_handle_mut::<FastifyContext>(ctx_handle) }
-                                {
-                                    ctx.status_code = 500;
-                                    let reason = {
-                                        perry_runtime::promise::js_promise_reason(
-                                            ptr as *mut perry_runtime::Promise,
-                                        )
-                                    };
-                                    ctx.response_body = Some(render_rejection_body(reason));
-                                }
+                                let reason = {
+                                    perry_runtime::promise::js_promise_reason(
+                                        ptr as *mut perry_runtime::Promise,
+                                    )
+                                };
+                                handle_error_response(
+                                    error_handler,
+                                    nanboxed_ctx,
+                                    ctx_handle,
+                                    reason,
+                                );
                                 final_result = f64::from_bits(0x7FFC_0000_0000_0001);
                             } else {
                                 final_result = {
@@ -434,30 +479,154 @@ fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPending
     }
 }
 
-/// Call a hook closure, await any returned Promise, and return whether ctx.sent is true.
-/// Returns true if the hook sent a response (e.g., 401 from auth middleware).
-unsafe fn call_hook_awaiting(hook: ClosurePtr, ctx_f64: f64, ctx_handle: Handle) -> bool {
+/// Call a hook closure, await any returned Promise, and report whether it
+/// sent a response or threw/rejected.
+unsafe fn call_hook_awaiting(hook: ClosurePtr, ctx_f64: f64, ctx_handle: Handle) -> HookOutcome {
     let closure_ptr = hook as *const perry_runtime::ClosureHeader;
-    let result = perry_runtime::js_closure_call2(closure_ptr, ctx_f64, ctx_f64);
+    let call = call_closure2_catching(closure_ptr, ctx_f64, ctx_f64);
+    if let Some(reason) = call.thrown {
+        return HookOutcome::Error(reason);
+    }
 
     // Process pending async operations
     crate::common::js_stdlib_process_pending();
     perry_runtime::js_promise_run_microtasks();
 
     // If hook returned a Promise, wait for it to resolve/reject
-    let jsv = JSValue::from_bits(result.to_bits());
+    let jsv = JSValue::from_bits(call.value.to_bits());
     if jsv.is_pointer() {
         let ptr = jsv.as_pointer::<perry_runtime::Promise>();
         if perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise) != 0 {
             wait_for_promise(ptr as *mut perry_runtime::Promise);
+            if perry_runtime::js_promise_state(ptr as *mut perry_runtime::Promise) == 2 {
+                return HookOutcome::Error(perry_runtime::promise::js_promise_reason(
+                    ptr as *mut perry_runtime::Promise,
+                ));
+            }
         }
     }
 
     // Return whether the hook sent a response (e.g., auth middleware sent 401)
     if let Some(ctx) = get_handle::<FastifyContext>(ctx_handle) {
-        ctx.sent
+        if ctx.sent {
+            HookOutcome::Sent
+        } else {
+            HookOutcome::Continue
+        }
     } else {
-        false
+        HookOutcome::Continue
+    }
+}
+
+unsafe fn call_closure2_catching(
+    closure_ptr: *const perry_runtime::ClosureHeader,
+    arg0: f64,
+    arg1: f64,
+) -> ClosureCallResult {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
+    if jumped != 0 {
+        let exc = perry_runtime::exception::js_get_exception();
+        perry_runtime::exception::js_clear_exception();
+        perry_runtime::exception::js_try_end();
+        return ClosureCallResult {
+            value: f64::from_bits(0x7FFC_0000_0000_0001),
+            thrown: Some(exc),
+        };
+    }
+
+    let value = perry_runtime::js_closure_call2(closure_ptr, arg0, arg1);
+    perry_runtime::exception::js_try_end();
+    ClosureCallResult {
+        value,
+        thrown: None,
+    }
+}
+
+unsafe fn call_closure3_catching(
+    closure_ptr: *const perry_runtime::ClosureHeader,
+    arg0: f64,
+    arg1: f64,
+    arg2: f64,
+) -> ClosureCallResult {
+    let trap_buf = perry_runtime::exception::js_try_push();
+    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
+    if jumped != 0 {
+        let exc = perry_runtime::exception::js_get_exception();
+        perry_runtime::exception::js_clear_exception();
+        perry_runtime::exception::js_try_end();
+        return ClosureCallResult {
+            value: f64::from_bits(0x7FFC_0000_0000_0001),
+            thrown: Some(exc),
+        };
+    }
+
+    let value = perry_runtime::js_closure_call3(closure_ptr, arg0, arg1, arg2);
+    perry_runtime::exception::js_try_end();
+    ClosureCallResult {
+        value,
+        thrown: None,
+    }
+}
+
+fn handle_error_response(
+    error_handler: Option<ClosurePtr>,
+    ctx_f64: f64,
+    ctx_handle: Handle,
+    reason: f64,
+) {
+    if let Some(ctx) = crate::common::get_handle_mut::<FastifyContext>(ctx_handle) {
+        ctx.status_code = 500;
+    }
+
+    if let Some(handler) = error_handler {
+        let closure_ptr = handler as *const perry_runtime::ClosureHeader;
+        let call = unsafe { call_closure3_catching(closure_ptr, reason, ctx_f64, ctx_f64) };
+        let mut fallback_reason = call.thrown;
+
+        if fallback_reason.is_none() {
+            crate::common::js_stdlib_process_pending();
+            perry_runtime::js_promise_run_microtasks();
+
+            let mut final_result = call.value;
+            let jsv = JSValue::from_bits(call.value.to_bits());
+            if jsv.is_pointer() {
+                let ptr = jsv.as_pointer::<perry_runtime::Promise>();
+                if perry_runtime::js_is_promise(ptr as *mut perry_runtime::Promise) != 0 {
+                    wait_for_promise(ptr as *mut perry_runtime::Promise);
+                    if perry_runtime::js_promise_state(ptr as *mut perry_runtime::Promise) == 2 {
+                        fallback_reason = Some(perry_runtime::promise::js_promise_reason(
+                            ptr as *mut perry_runtime::Promise,
+                        ));
+                    } else {
+                        final_result =
+                            perry_runtime::js_promise_value(ptr as *mut perry_runtime::Promise);
+                    }
+                }
+            }
+
+            if fallback_reason.is_none() {
+                if let Some(ctx) = crate::common::get_handle_mut::<FastifyContext>(ctx_handle) {
+                    if ctx.response_body.is_none() {
+                        ctx.response_body = Some(build_response_body(final_result));
+                    }
+                }
+                return;
+            }
+        }
+
+        if let Some(reason) = fallback_reason {
+            apply_default_error_response(ctx_handle, reason);
+        }
+    } else {
+        apply_default_error_response(ctx_handle, reason);
+    }
+}
+
+fn apply_default_error_response(ctx_handle: Handle, reason: f64) {
+    if let Some(ctx) = crate::common::get_handle_mut::<FastifyContext>(ctx_handle) {
+        ctx.status_code = 500;
+        ctx.response_body = Some(render_rejection_body(reason));
     }
 }
 
@@ -522,6 +691,14 @@ fn wait_for_promise(promise_ptr: *mut perry_runtime::Promise) {
 /// for the 500 response surfaced by the dispatcher on async-handler
 /// rejection (issue #748).
 fn render_rejection_body(reason: f64) -> Vec<u8> {
+    if let Some(message) = error_message(reason) {
+        let mut out =
+            b"{\"statusCode\":500,\"error\":\"Internal Server Error\",\"message\":".to_vec();
+        push_json_string(&mut out, message.as_bytes());
+        out.push(b'}');
+        return out;
+    }
+
     let jsv = JSValue::from_bits(reason.to_bits());
     if jsv.is_string() {
         let s = build_response_body(reason);
@@ -576,6 +753,52 @@ fn render_rejection_body(reason: f64) -> Vec<u8> {
     }
     out.push(b'}');
     out
+}
+
+fn error_message(reason: f64) -> Option<String> {
+    let jsv = JSValue::from_bits(reason.to_bits());
+    if jsv.is_pointer() {
+        let ptr = jsv.as_pointer::<u8>();
+        if unsafe { gc_obj_type(ptr) } == perry_runtime::gc::GC_TYPE_ERROR {
+            let err = ptr as *mut perry_runtime::error::ErrorHeader;
+            let msg = perry_runtime::error::js_error_get_message(err);
+            return unsafe { string_header_to_string(msg) };
+        }
+    }
+    None
+}
+
+unsafe fn gc_obj_type(ptr: *const u8) -> u8 {
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return 0;
+    }
+    *ptr.sub(perry_runtime::gc::GC_HEADER_SIZE)
+}
+
+unsafe fn string_header_to_string(ptr: *const StringHeader) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, len);
+    Some(String::from_utf8_lossy(bytes).to_string())
+}
+
+fn push_json_string(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.push(b'"');
+    for &b in bytes {
+        match b {
+            b'"' => out.extend_from_slice(b"\\\""),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            0x00..=0x1f => out.extend_from_slice(format!("\\u{:04x}", b).as_bytes()),
+            _ => out.push(b),
+        }
+    }
+    out.push(b'"');
 }
 
 /// Build response body from handler return value

@@ -22,6 +22,14 @@ app.post("/echo", async (request, reply) => {
   return { received: request.body };
 });
 
+app.get("/throw-sync", (_request, _reply) => {
+  throw new Error("sync route boom");
+});
+
+app.get("/throw-async", async (_request, _reply) => {
+  throw new Error("async route boom");
+});
+
 app.listen({ port: port }, () => {
   // Sentinel line the harness waits for before starting curl assertions.
   console.log("ready port=" + port);
