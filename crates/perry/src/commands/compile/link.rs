@@ -878,6 +878,42 @@ pub(super) fn build_and_run_link(
             if !is_android && !is_windows {
                 cmd.arg(runtime_lib);
             }
+            // Issue #886 — express (or any compilePackages program that
+            // mixes V8-fallback JS modules with natively-compiled TS that
+            // emits a `perry-ext-*` FFI) reaches this branch. Pre-fix:
+            // jsruntime bundles perry-stdlib at default features but NO
+            // `perry-ext-*` staticlib, so a `js_node_http_create_server`
+            // (or `js_node_http_res_end`, …) reference from express's
+            // compiled `application.js` link-failed even though
+            // `auto-optimize: built …/libperry_ext_http.a` had just run.
+            // The codegen-side FFI provenance registry
+            // (`crates/perry-codegen/src/ext_registry.rs`) drains
+            // `OwnerKind::WellKnown("http")` into
+            // `ctx.native_module_imports`, the auto-optimize layer builds
+            // perry-ext-http.a + puts it into `well_known_libs`, but the
+            // OLD jsruntime arm here completely skipped both `stdlib_lib`
+            // and `well_known_libs`. Mirror the parallel `else if
+            // ctx.needs_stdlib` branch by appending both after jsruntime
+            // + runtime: archive scan is first-definition-wins on Mach-O
+            // and ELF, so jsruntime's bundled-stdlib copies still win for
+            // duplicate `js_*` symbols (yielding the expected
+            // "ld: warning: duplicate symbol" lines this is documented
+            // to produce), and the perry-ext-* libs cover the gaps that
+            // neither jsruntime nor its bundled stdlib carries.
+            //
+            // The auto-optimize stdlib is included alongside well-known
+            // libs because the well-known flip strips features from it
+            // (e.g. `http-client` when routing to perry-ext-http) — the
+            // auto-built stdlib still carries the OTHER stdlib FFIs the
+            // program needs, so including both is safe and necessary.
+            if ctx.needs_stdlib {
+                if let Some(ref stdlib) = stdlib_lib {
+                    cmd.arg(stdlib);
+                }
+                for wk in well_known_libs {
+                    cmd.arg(wk);
+                }
+            }
         } else if ctx.needs_stdlib || is_windows {
             // On Windows/MSVC, always try to link stdlib because codegen unconditionally
             // declares all stdlib extern functions, creating import references that MSVC
