@@ -557,6 +557,19 @@ pub struct CompilationContext {
     /// file lives under `node_modules/<pkg>/...`) is derived at
     /// diagnostic-emission time. Empty until `collect_modules` runs.
     pub js_runtime_importers: Vec<PathBuf>,
+    /// #501: host-controlled per-package capability policy. Map of
+    /// `<package_name>` (or `"*"` for the default) → allowed
+    /// capability token list (e.g. `["fs:read", "net:fetch"]`).
+    /// Parsed from `perry.permissions` in the host package.json.
+    /// Empty means the pass is disabled — every dep gets the
+    /// implicit "no policy = no enforcement" default for backwards
+    /// compatibility.
+    pub permissions: std::collections::BTreeMap<String, Vec<String>>,
+    /// #501: host application's own npm package name (read from its
+    /// own `package.json` `name` field). The capability walker
+    /// grants this package `*` unconditionally — host code is what
+    /// `--lockdown` mode (#496) is for, not per-package policy.
+    pub host_package_name: Option<String>,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -605,6 +618,8 @@ impl CompilationContext {
             allow_dynamic_stdlib_packages: HashSet::new(),
             allow_js_runtime: false,
             js_runtime_importers: Vec::new(),
+            permissions: std::collections::BTreeMap::new(),
+            host_package_name: None,
         }
     }
 }
@@ -1125,6 +1140,44 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
+                // #501: host's own package name. Used by the capability
+                // walker to identify host code (which gets `*`
+                // unconditionally). Falls back to None if the
+                // package.json has no `name`.
+                if let Some(name) = pkg.get("name").and_then(|n| n.as_str()) {
+                    ctx.host_package_name = Some(name.to_string());
+                }
+                // #501: perry.permissions — host-controlled
+                // per-package capability policy.
+                //
+                //   "perry": {
+                //     "permissions": {
+                //       "lodash": [],
+                //       "axios": ["net:fetch"],
+                //       "*": ["crypto"]
+                //     }
+                //   }
+                //
+                // Absent → pass disabled (existing builds compile
+                // unchanged). Present → strict; every dep stdlib call
+                // not in its policy (or the `*` default) fails the
+                // build at the offending source span.
+                if let Some(perms) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("permissions"))
+                    .and_then(|v| v.as_object())
+                {
+                    for (pkg_name, tokens) in perms {
+                        let token_list: Vec<String> = match tokens.as_array() {
+                            Some(arr) => arr
+                                .iter()
+                                .filter_map(|t| t.as_str().map(|s| s.to_string()))
+                                .collect(),
+                            None => continue,
+                        };
+                        ctx.permissions.insert(pkg_name.clone(), token_list);
+                    }
+                }
             }
         }
     }
@@ -1545,6 +1598,69 @@ pub fn run_with_parse_cache(
             );
         }
         OutputFormat::Json => {}
+    }
+
+    // #501: host-controlled per-package capability enforcement. When
+    // `perry.permissions` is set, walk every dep module's HIR and
+    // refuse any stdlib call site whose required capability token
+    // isn't in the dep's allow-list (or the `*` default). Host code
+    // is granted `*` unconditionally — gating host code is the
+    // `--lockdown` mode (#496), not per-package policy. Empty policy
+    // → pass disabled (preserves existing build behavior).
+    if !ctx.permissions.is_empty() {
+        let mut all_violations: Vec<perry_hir::CapabilityViolation> = Vec::new();
+        for (path, hir_module) in &ctx.native_modules {
+            let source = path.to_string_lossy().into_owned();
+            let v = perry_hir::audit_module_capabilities(
+                hir_module,
+                &source,
+                &ctx.permissions,
+                ctx.host_package_name.as_deref(),
+            );
+            all_violations.extend(v);
+        }
+        if !all_violations.is_empty() {
+            let limit = 12usize;
+            let mut detail = String::new();
+            for v in all_violations.iter().take(limit) {
+                let pkg_label = v
+                    .package
+                    .as_deref()
+                    .map(|p| format!("`{}`", p))
+                    .unwrap_or_else(|| "<host>".to_string());
+                detail.push_str(&format!(
+                    "\n  - {pkg} {kind} at {source} requires `{cap}`",
+                    pkg = pkg_label,
+                    kind = v.kind,
+                    source = v.source,
+                    cap = v.required,
+                ));
+            }
+            if all_violations.len() > limit {
+                detail.push_str(&format!(
+                    "\n  ... and {} more",
+                    all_violations.len() - limit
+                ));
+            }
+            anyhow::bail!(
+                "per-package capability policy refused {} stdlib call site(s):{detail}\n\
+                 \n\
+                 `perry.permissions` provides a static guarantee that each\n\
+                 dependency only reaches the stdlib surfaces you've explicitly\n\
+                 granted it. Refusing the build. (#501)\n\
+                 \n\
+                 To fix each violation, either:\n\
+                 - Add the missing capability token to the package's entry in\n\
+                   `perry.permissions` in your host `package.json`, or\n\
+                 - Set `\"*\": [\"<token>\"]` to grant the default, or\n\
+                 - Replace the offending dep with one that doesn't need the\n\
+                   capability.\n\
+                 \n\
+                 Run `perry audit --sbom` (when #495 lands) to see every\n\
+                 stdlib surface each dep would need.",
+                all_violations.len(),
+            );
+        }
     }
 
     if args.enable_geisterhand || args.geisterhand_port.is_some() {

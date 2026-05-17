@@ -4,6 +4,7 @@
 //! that is easier to analyze and transform than the raw AST.
 
 pub mod analysis;
+pub mod capability;
 pub(crate) mod destructuring;
 pub mod dynamic_import;
 pub(crate) mod enums;
@@ -20,6 +21,7 @@ pub mod stable_hash;
 pub mod walker;
 
 pub use analysis::{collect_local_refs_expr, collect_local_refs_stmt};
+pub use capability::{audit_module_capabilities, CapabilityPolicy, CapabilityViolation};
 pub use dynamic_import::{
     collect_module_const_locals, detect_top_level_await, flatten_exports,
     for_each_dynamic_import_mut, resolve_import_path, resolve_import_path_with_consts, FlatExport,
