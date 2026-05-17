@@ -1099,25 +1099,12 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     // BSDs (FreeBSD, NetBSD, OpenBSD) match macOS — they too benefit
     // from `_setjmp`. We gate on `target_vendor = "apple"` for now
     // since that's where we've measured the win.
-    #[cfg(target_vendor = "apple")]
-    extern "C" {
-        // C identifier `_setjmp(3)` — fast variant. The Mach-O linker
-        // symbol is `__setjmp`: the first `_` is the C ABI prefix that
-        // the linker adds to every C function, the second `_` is part
-        // of the function's C name. Verified via
-        //   nm /usr/lib/system/libsystem_platform.dylib | grep setjmp
-        //   T __setjmp        # fast: no sigprocmask/sigaltstack
-        //   T _setjmp         # slow: signal-state-saving setjmp(3)
-        // Rust appends the leading `_` for us when on Apple, so we
-        // pass the C-name `_setjmp` here (with one leading underscore)
-        // and the resulting linker reference is `__setjmp`.
-        #[link_name = "_setjmp"]
-        fn setjmp(env: *mut i32) -> i32;
-    }
-    #[cfg(not(target_vendor = "apple"))]
-    extern "C" {
-        fn setjmp(env: *mut i32) -> i32;
-    }
+    // `setjmp` lives in `crate::ffi::setjmp` — one canonical extern
+    // declaration shared with `gc.rs` (issue #856). The libc-matching
+    // signature is `unsafe extern "C" fn(*mut c_int) -> c_int`; on
+    // Apple it links to the fast `_setjmp(3)` variant, on glibc Linux
+    // to plain `setjmp(3)` which already skips the signal-mask save.
+    use crate::ffi::setjmp::setjmp;
 
     // Install the trap. We set up CURRENT_MICROTASK_PROMISE (or
     // INLINE_TRAP_NEXT for inline-callback tasks) before the callback
@@ -1135,8 +1122,12 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     let trap_buf = crate::exception::js_try_push();
     // SAFETY: The setjmp call must remain in this stack frame; we
     // longjmp to it from `js_throw` only while this frame is still
-    // alive (inside the loop below).
-    let jumped = unsafe { setjmp(trap_buf) };
+    // alive (inside the loop below). The cast `*mut i32 -> *mut c_int`
+    // is a no-op on every Perry-supported target (c_int is i32
+    // everywhere), but it spells the intent at the FFI boundary so
+    // the shared declaration in `ffi::setjmp` stays the single source
+    // of truth for libc's signature.
+    let jumped = unsafe { setjmp(trap_buf as *mut std::os::raw::c_int) };
     if jumped != 0 {
         restore_all_microtask_contexts();
         crate::builtins::restore_queued_microtask_contexts();

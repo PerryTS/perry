@@ -1868,18 +1868,21 @@ fn mark_stack_roots(valid_ptrs: &ValidPointerSet) {
     // save — switch to `_setjmp(3)` (linker symbol `__setjmp`) on
     // Apple targets. See the matching switch in
     // `promise.rs::js_promise_run_microtasks` for the full rationale.
+    //
+    // The `setjmp` extern lives in `crate::ffi::setjmp` so this and
+    // `promise.rs` share one libc-matching declaration (issue #856).
+    // We view the buffer as `u64` slots here because the goal of this
+    // path is to scan register-sized words for potential NaN-boxed /
+    // raw pointers; the cast to `*mut c_int` at the FFI boundary is
+    // the inverse of the cast `promise.rs` does from its `*mut i32`
+    // buffer.
+    //
+    // Size check: 32 * 8 = 256 bytes, which exceeds the darwin arm64
+    // `jmp_buf` (48 * 4 = 192 bytes) and every other platform we
+    // currently support — see `crate::ffi::setjmp::JMP_BUF_MIN_BYTES`.
     let mut jmp_buf = [0u64; 32]; // oversized for safety
     unsafe {
-        #[cfg(target_vendor = "apple")]
-        extern "C" {
-            #[link_name = "_setjmp"]
-            fn setjmp(env: *mut u64) -> i32;
-        }
-        #[cfg(not(target_vendor = "apple"))]
-        extern "C" {
-            fn setjmp(env: *mut u64) -> i32;
-        }
-        setjmp(jmp_buf.as_mut_ptr());
+        crate::ffi::setjmp::setjmp(jmp_buf.as_mut_ptr() as *mut std::os::raw::c_int);
     }
 
     // Scan the register buffer (covers callee-saved regs: x19-x28 on AArch64, rbx/rbp/r12-r15 on x86_64)
@@ -4806,5 +4809,43 @@ mod tests {
                 "mark should be cleared on ptr2"
             );
         }
+    }
+
+    /// Issue #856 regression: `mark_stack_roots` performs a `setjmp`
+    /// into a `u64` register-snapshot buffer, and `promise.rs` does a
+    /// `setjmp` into an `i32` trap buffer. Both used to declare their
+    /// own conflicting `extern "C" fn setjmp(...)` — the Rust compiler
+    /// emitted `clashing_extern_declarations`, and on platforms where
+    /// the ABI didn't happen to round-trip the bits the behaviour was
+    /// UB. The fix routes both through `crate::ffi::setjmp::setjmp`
+    /// with a libc-matching `*mut c_int` signature; this test exists
+    /// to make sure the GC stack-scan path keeps running without
+    /// crashing now that the extern is shared.
+    ///
+    /// `gc_collect_inner` invokes `mark_stack_roots`, which is the
+    /// real production setjmp call site. The matching promise.rs
+    /// trap path is exercised by `crate::ffi::setjmp::tests` and by
+    /// any test that drains microtasks; the regression here is
+    /// specifically the GC half of the pair.
+    #[test]
+    fn test_issue_856_setjmp_stack_scan_does_not_crash() {
+        // A few allocations so `mark_stack_roots` actually has
+        // pointers to consider; the test is about the setjmp not
+        // crashing, not about a specific mark outcome.
+        let _ptr1 = gc_malloc(32, GC_TYPE_STRING);
+        let _ptr2 = gc_malloc(48, GC_TYPE_CLOSURE);
+        let _ptr3 = gc_malloc(16, GC_TYPE_BIGINT);
+
+        // Should complete cleanly. If the shared `_setjmp` extern is
+        // mis-sized, libc will scribble past the 256-byte buffer in
+        // `mark_stack_roots` and corrupt this frame's stack — the
+        // test would crash long before reaching the assert.
+        gc_collect_inner();
+
+        // Sanity: GC ran (count advanced). We don't assert anything
+        // about WHICH allocations survived — that's covered by other
+        // tests.
+        let count = GC_STATS.with(|s| s.borrow().collection_count);
+        assert!(count > 0, "gc_collect_inner should bump collection_count");
     }
 }

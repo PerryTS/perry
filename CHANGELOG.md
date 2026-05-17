@@ -2,6 +2,63 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.956 — fix(runtime): #856 — single canonical `_setjmp` extern shared by gc.rs + promise.rs
+
+**Symptom.** `cargo build --release -p perry-runtime` emitted a `clashing_extern_declarations` warning:
+
+```
+warning: `setjmp` redeclares `_setjmp` with a different signature
+    --> crates/perry-runtime/src/promise.rs:1114:9
+    ::: crates/perry-runtime/src/gc.rs:1875:13
+    = note: expected `unsafe extern "C" fn(*mut u64) -> i32`
+                found `unsafe extern "C" fn(*mut i32) -> i32`
+```
+
+Both files declared their own private `extern "C" fn setjmp(...)` for the same C symbol (`_setjmp` on Apple via `#[link_name = "_setjmp"]`, plain `setjmp` elsewhere). `gc.rs::mark_stack_roots` declared the pointee as `u64` because it views the saved buffer as register-sized words for conservative pointer scanning; `promise.rs::js_promise_run_microtasks` declared it as `i32` because the unwind context comes from `exception.rs`'s `[i32; 64]` `JmpBuf`. The two declarations couldn't both match libc.
+
+**Why it mattered.** Both extern blocks linked the *same* C function (`__setjmp` on darwin arm64, `setjmp@@GLIBC_2.x` on Linux), so one of them necessarily disagreed with libc's real prototype — `int setjmp(int env[_JBLEN])`. On macOS/aarch64 the AAPCS64 ABI passes a single pointer in `x0` regardless of pointee type and the libc body reads/writes a fixed byte count, so the bits round-tripped cleanly and the bug was silent. On any platform where the calling convention differs by pointee, or any future toolchain that uses the Rust-side prototype for pointer-provenance reasoning, the same code would have been undefined behaviour and silent memory corruption.
+
+**Fix.** New module `crates/perry-runtime/src/ffi/setjmp.rs` declares one canonical extern:
+
+```rust
+#[cfg(target_vendor = "apple")]
+extern "C" {
+    #[link_name = "_setjmp"]
+    pub fn setjmp(env: *mut c_int) -> c_int;
+}
+#[cfg(not(target_vendor = "apple"))]
+extern "C" {
+    pub fn setjmp(env: *mut c_int) -> c_int;
+}
+```
+
+Both call sites import this declaration and cast their working buffer to `*mut c_int` at the FFI boundary:
+
+- `gc.rs::mark_stack_roots` keeps its `[0u64; 32]` register-snapshot buffer (256 bytes — exceeds darwin arm64's `_JBLEN * sizeof(int) = 192`) and casts via `as *mut c_int` for the call.
+- `promise.rs::js_promise_run_microtasks` keeps its `*mut i32` `trap_buf` from `exception.rs::js_try_push` (which allocates `JmpBuf { data: [i32; 64] }`, also 256 bytes) and casts via `as *mut c_int`.
+
+The casts are no-ops on every Perry-supported target (`c_int` is `i32` everywhere we ship), but they spell the intent at the boundary and keep the libc-matching declaration the single source of truth.
+
+**Buffer sizing audited.** Per the issue's required check, both call-site buffers are >= libc's `jmp_buf` byte size on every supported platform: macOS arm64 192 B (48 ints), macOS x86_64 ~148 B (37 ints, padded to 156), Linux x86_64 glibc ~152 B, Windows MSVC 256 B. The shared module exposes `JMP_BUF_MIN_BYTES = 192` and a `const _: () = { assert!(...) }` to prevent regressions.
+
+**Apple fast-path preserved.** The whole point of declaring our own extern (rather than calling `libc::setjmp`) is to link the *fast* `_setjmp(3)` variant on Apple — it skips the `sigprocmask` / `__sigaltstack` syscalls that ordinary `setjmp(3)` pays for on darwin. Profiling earlier showed those syscalls accounted for ~43% of CPU time in `js_promise_run_microtasks` (each kernel round-trip is ~25 μs on arm64) and dominated GC stack-scan cost. The shared `ffi::setjmp` module preserves the `#[link_name = "_setjmp"]` gate on `target_vendor = "apple"`; on glibc Linux plain `setjmp` already skips signal-state save (POSIX leaves it implementation-defined; glibc opted for the fast path).
+
+**Regression tests.** Five new unit tests across two modules:
+
+- `ffi::setjmp::tests::setjmp_smoke_via_c_int_buffer` — first-call `setjmp(*mut c_int)` returns 0.
+- `ffi::setjmp::tests::setjmp_via_u64_buffer_cast` — exercises the `gc.rs` viewpoint (cast `[u64; 32]` → `*mut c_int`).
+- `ffi::setjmp::tests::setjmp_via_i32_buffer_cast` — exercises the `promise.rs`/`exception.rs` viewpoint (cast `[i32; 64]` → `*mut c_int`).
+- `ffi::setjmp::tests::issue_856_promise_microtask_setjmp_does_not_crash` — drives `js_promise_run_microtasks` end-to-end so the real `promise.rs` setjmp call fires.
+- `gc::tests::test_issue_856_setjmp_stack_scan_does_not_crash` — allocates a few objects then calls `gc_collect_inner()` so the real `mark_stack_roots()` setjmp call fires.
+
+All five pass on macOS arm64.
+
+**Validation.** `cargo build --release -p perry-runtime` warning count dropped from 51 → 50; the `clashing_extern_declarations` line is gone. `cargo test --release -p perry-runtime --lib -- ffi:: test_issue_856` runs all five new tests green. Full `cargo build --release -p perry-runtime -p perry-stdlib` succeeds.
+
+**Files touched.** New: `crates/perry-runtime/src/ffi/mod.rs`, `crates/perry-runtime/src/ffi/setjmp.rs`. Modified: `crates/perry-runtime/src/lib.rs` (one new `pub mod ffi;`), `crates/perry-runtime/src/gc.rs` (replaced inline extern with shared import + cast; added regression test), `crates/perry-runtime/src/promise.rs` (replaced inline extern with shared import + cast).
+
+**Scope.** Soundness fix only. No behaviour change — both call paths still link to the same C symbol they always did and pass the same buffers; only the Rust-side type declaration is now consistent. The setjmp/longjmp exception architecture is untouched.
+
 ## v0.5.955 — fix(hir): #871 part 2 — `Uint8Array.of(...)` with > 16 args (uuid sha1.js)
 
 **Symptom (#871 part 2).** uuid's `node_modules/uuid/dist/sha1.js` returns its 160-bit SHA-1 result by calling `Uint8Array.of(H[0]>>24, H[0]>>16, H[0]>>8, H[0], H[1]>>24, ..., H[4])` — 20 arguments. Pre-fix the codegen bailed with `perry-codegen: Call callee shape not supported (PropertyGet) with 20 args` from `crates/perry-codegen/src/lower_call.rs::~3226`, the sha1.js module dropped through the failed-modules path, and uuid `v3`/`v5` (which import sha1's default export) saw `undefined` for the hash. v0.5.925 closed the link-side regression that piggybacked on this failure (#837), but the underlying codegen gap stayed open as part 2 of #871.
