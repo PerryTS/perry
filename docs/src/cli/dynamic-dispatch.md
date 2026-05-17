@@ -3,7 +3,7 @@
 Perry refuses compile-time *dynamic dispatch* on Node-core stdlib namespaces.
 A call site like
 
-```ts
+```typescript,no-test
 const m = "exit";
 (process as any)[m](0);
 ```
@@ -32,7 +32,7 @@ Dynamic dispatch is refused when **all** of the following hold:
 
 User-code reflection on user-defined objects is unaffected:
 
-```ts
+```typescript,no-test
 const me = { greet: (n: string) => "hi " + n };
 const k = "greet";
 me[k]("world"); // ✓ user object, not a stdlib namespace
@@ -47,7 +47,7 @@ The error message lists the available opt-outs in priority order:
 The preferred fix. The check exists precisely because static calls are
 auditable.
 
-```ts
+```typescript,no-test
 process.exit(0);                // ✓
 fs.readFileSync("/tmp/x");       // ✓
 ```
@@ -57,7 +57,7 @@ fs.readFileSync("/tmp/x");       // ✓
 For legitimate one-off dispatch, drop a line comment on or immediately
 above the offending site:
 
-```ts
+```typescript,no-test
 const k = pickHandler();
 // @perry-allow-dynamic
 (process as any)[k](0);
