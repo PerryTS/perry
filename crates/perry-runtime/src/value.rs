@@ -1819,11 +1819,36 @@ pub extern "C" fn js_is_truthy(value: f64) -> i32 {
         return if int_val == 0 { 0 } else { 1 };
     }
 
-    // Check for raw pointer bits (from bitcast of string literal)
-    // In a 64-bit system, valid heap pointers are typically in the range
-    // 0x0000_0000_0000_1000 to 0x0000_FFFF_FFFF_FFFF
-    // This handles strings that were compiled as direct pointers, not NaN-boxed
-    if bits > 0x1000 && bits < 0x0001_0000_0000_0000 {
+    // Check for SHORT_STRING_TAG (inline SSO strings): falsy iff length is 0.
+    // Without this branch SSO empties would fall through to the f64 path,
+    // produce a non-zero non-NaN value, and report truthy.
+    if (bits & TAG_MASK) == SHORT_STRING_TAG {
+        let len = (bits & SHORT_STRING_LEN_MASK) >> SHORT_STRING_LEN_SHIFT;
+        return if len == 0 { 0 } else { 1 };
+    }
+
+    // Check for raw pointer bits (from bitcast of string literal). This is a
+    // legacy path for compiled-in string literals that were emitted as raw
+    // pointer bitcasts rather than NaN-boxed STRING_TAG values.
+    //
+    // CAUTION: a plain f64 value (e.g., a denormal like `f64::from_bits(0x646e)`
+    // ≈ 1.27e-319, or any other number whose bit pattern happens to fall in
+    // the userspace pointer range) must NOT be misidentified as a string
+    // pointer — dereferencing it as `*StringHeader` will SIGSEGV. Surfaced by
+    // dayjs which passes `bits=0x646e` through here on a utility-object call.
+    //
+    // Defense in depth:
+    //   1. Reject everything below the smallest realistic heap address. On
+    //      macOS/Linux userspace heaps live well above 0x10_0000 (1 MiB); the
+    //      previous 0x1000 (4 KiB) threshold let small integers (including
+    //      0x646e) through.
+    //   2. Require 8-byte alignment. `StringHeader` is `repr(C)` with at
+    //      least one usize-aligned field, so a valid pointer must have its
+    //      low 3 bits clear. Most small denormal/integer bit patterns fail
+    //      this check.
+    // Both filters together make a false-positive astronomically unlikely
+    // while still preserving the legacy bitcast path for real pointers.
+    if bits >= 0x10_0000 && bits < 0x0001_0000_0000_0000 && (bits & 0x7) == 0 {
         // This could be a raw string pointer - check if it's a valid string
         let str_ptr = bits as *const crate::string::StringHeader;
         // Try to read the string length - empty string is falsy
