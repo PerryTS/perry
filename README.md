@@ -528,7 +528,7 @@ Then compile with `--enable-js-runtime` as usual. Packages in the list are compi
 
 - **Scalar Replacement** — escape analysis identifies non-escaping objects (`let p = new Point(x, y); sum += p.x + p.y`); fields are decomposed into stack allocas that LLVM promotes to registers — zero heap allocation
 - **NaN-Boxing** — all values are 64-bit words (f64/u64); no boxing overhead for numbers
-- **Mark-Sweep GC** — conservative stack scan, arena block walking, 8-byte GcHeader per alloc
+- **Generational Mark-Sweep GC** — per-thread nursery + old-gen arenas, precise shadow stack + conservative stack scan, two-bit aging, 8-byte GcHeader per alloc
 - **Inline Bump Allocator** — objects that do escape use a 13-cycle inline arena bump (no function call on hot path)
 - **Parallel Compilation** — rayon-based module codegen, transform passes, and symbol scanning across CPU cores
 - **FMA / CSE / Loop Unrolling** — fused multiply-add, common subexpression elimination, 8x loop unroll
@@ -693,7 +693,7 @@ perry/
 
 ## Runtime Characteristics
 
-- **Garbage Collection** — mark-sweep GC with conservative stack scanning, arena block walking, 8-byte GcHeader per allocation
+- **Garbage Collection** — generational mark-sweep GC, per-thread nursery + old-gen arenas, precise shadow stack + conservative stack scan, two-bit aging tenures objects after 2 minor cycles, 8-byte GcHeader per allocation
 - **Single-Threaded by Default** — async I/O on Tokio workers, callbacks on main thread. Use `perry/thread` for explicit multi-threading.
 - **No Runtime Type Checking** — types erased at compile time. Use `typeof` and `instanceof` for runtime checks.
 - **Small Binaries** — ~330KB hello world, ~48MB with full stdlib. Automatically stripped.

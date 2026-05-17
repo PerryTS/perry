@@ -141,6 +141,10 @@
 
 ---
 
+# Internals
+
+- [Memory Model](internals/memory-model.md)
+
 # Contributing
 
 - [Architecture](contributing/architecture.md)

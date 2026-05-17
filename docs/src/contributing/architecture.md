@@ -55,7 +55,9 @@ All JavaScript values are represented as 64-bit NaN-boxed values. The upper 16 b
 
 ### Garbage Collection
 
-Mark-sweep GC with conservative stack scanning. Arena-allocated objects (arrays, objects) are found by linear block walking. Malloc-allocated objects (strings, closures, promises) are tracked in a thread-local Vec.
+Generational mark-sweep GC, per-thread arena split into nursery + old-gen. Roots come from a precise shadow stack (emitted by codegen), a conservative native-stack scan, and 9 registered runtime scanners. Two-bit aging tenures objects after surviving 2 minor cycles; a write barrier maintains a remembered set for old → young pointers.
+
+See [Internals → Memory Model](../internals/memory-model.md) for the full picture (NaN-boxing, heap layout, root discovery, generational behaviour, env-var escape hatches).
 
 ### Handle-Based UI
 
