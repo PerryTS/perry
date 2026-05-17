@@ -305,16 +305,31 @@ pub fn drain_input() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
 
-    fn reset() {
+    /// Cargo runs tests in parallel by default. PENDING_BYTES +
+    /// INPUT_HANDLER + EXIT_FLAG are process-wide globals, so two tests
+    /// racing see each other's writes. This mutex serialises tests
+    /// within this module — same shape as `tui::hooks::tests::TEST_LOCK`
+    /// (#862).
+    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
+
+    /// Acquire the test lock and reset all shared state. Returns the
+    /// guard — drop at end of test. Binding the guard to `_g` keeps it
+    /// alive for the duration of the test; making it the return value
+    /// of `reset()` ensures no test can clear globals without first
+    /// taking the lock.
+    fn reset() -> std::sync::MutexGuard<'static, ()> {
+        let g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         PENDING_BYTES.lock().unwrap().clear();
         INPUT_HANDLER.store(0, Ordering::Release);
         EXIT_FLAG.store(false, Ordering::Release);
+        g
     }
 
     #[test]
     fn drain_with_no_handler_still_drains_bytes() {
-        reset();
+        let _g = reset();
         // Inject a byte via direct push since the reader thread isn't
         // running in tests.
         PENDING_BYTES.lock().unwrap().push(b'a');
@@ -329,7 +344,7 @@ mod tests {
 
     #[test]
     fn exit_flag_flips_via_ffi() {
-        reset();
+        let _g = reset();
         assert!(!EXIT_FLAG.load(Ordering::Acquire));
         js_perry_tui_exit();
         assert!(EXIT_FLAG.load(Ordering::Acquire));
@@ -337,7 +352,7 @@ mod tests {
 
     #[test]
     fn use_input_stores_handler() {
-        reset();
+        let _g = reset();
         js_perry_tui_use_input(0xDEADBEEF);
         assert_eq!(INPUT_HANDLER.load(Ordering::Acquire), 0xDEADBEEF);
     }

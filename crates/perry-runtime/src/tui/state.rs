@@ -88,15 +88,29 @@ pub extern "C" fn js_perry_tui_state_set(handle: i64, value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
 
-    fn reset() {
+    /// Cargo runs tests in parallel by default. SLOTS + STATE_DIRTY are
+    /// process-wide globals, so two tests racing see each other's writes.
+    /// This mutex serialises tests within this module — same shape as
+    /// `tui::hooks::tests::TEST_LOCK` (#862).
+    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
+
+    /// Acquire the test lock and reset all shared state. Returns the
+    /// guard — drop at end of test. Binding the guard to `_g` keeps it
+    /// alive for the duration of the test; making it the return value
+    /// of `reset()` ensures no test can clear globals without first
+    /// taking the lock.
+    fn reset() -> std::sync::MutexGuard<'static, ()> {
+        let g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         SLOTS.lock().unwrap().clear();
         STATE_DIRTY.store(false, Ordering::Release);
+        g
     }
 
     #[test]
     fn alloc_returns_sequential_handles() {
-        reset();
+        let _g = reset();
         let h0 = js_perry_tui_state_alloc(0.0);
         let h1 = js_perry_tui_state_alloc(1.0);
         let h2 = js_perry_tui_state_alloc(2.0);
@@ -107,7 +121,7 @@ mod tests {
 
     #[test]
     fn get_returns_initial_value() {
-        reset();
+        let _g = reset();
         let h = js_perry_tui_state_alloc(42.0);
         let v = js_perry_tui_state_get(h);
         assert_eq!(v.to_bits(), 42.0_f64.to_bits());
@@ -115,7 +129,7 @@ mod tests {
 
     #[test]
     fn set_writes_and_get_reads_back() {
-        reset();
+        let _g = reset();
         let h = js_perry_tui_state_alloc(1.0);
         js_perry_tui_state_set(h, 99.0);
         let v = js_perry_tui_state_get(h);
@@ -124,7 +138,7 @@ mod tests {
 
     #[test]
     fn set_flips_dirty_flag_on_change() {
-        reset();
+        let _g = reset();
         let h = js_perry_tui_state_alloc(5.0);
         assert!(!STATE_DIRTY.load(Ordering::Acquire));
         js_perry_tui_state_set(h, 6.0);
@@ -133,7 +147,7 @@ mod tests {
 
     #[test]
     fn set_to_same_value_does_not_flip_dirty() {
-        reset();
+        let _g = reset();
         let h = js_perry_tui_state_alloc(7.0);
         js_perry_tui_state_set(h, 7.0);
         // Same value → no dirty flag.
@@ -142,7 +156,7 @@ mod tests {
 
     #[test]
     fn out_of_range_handle_returns_undefined() {
-        reset();
+        let _g = reset();
         let v = js_perry_tui_state_get(9_999);
         assert_eq!(v.to_bits(), 0x7FFC_0000_0000_0001);
     }
