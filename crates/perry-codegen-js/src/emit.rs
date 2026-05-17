@@ -2708,6 +2708,8 @@ impl JsEmitter {
             Expr::ObjectIsSealed(obj) => { self.output.push_str("Object.isSealed("); self.emit_expr(obj); self.output.push(')'); }
             Expr::ObjectIsExtensible(obj) => { self.output.push_str("Object.isExtensible("); self.emit_expr(obj); self.output.push(')'); }
             Expr::ObjectGetPrototypeOf(obj) => { self.output.push_str("Object.getPrototypeOf("); self.emit_expr(obj); self.output.push(')'); }
+            Expr::ObjectSetPrototypeOf(obj, proto) => { self.output.push_str("Object.setPrototypeOf("); self.emit_expr(obj); self.output.push(','); self.emit_expr(proto); self.output.push(')'); }
+            Expr::ObjectDefineProperties(target, descs) => { self.output.push_str("Object.defineProperties("); self.emit_expr(target); self.output.push(','); self.emit_expr(descs); self.output.push(')'); }
             Expr::ObjectGetOwnPropertySymbols(obj) => { self.output.push_str("Object.getOwnPropertySymbols("); self.emit_expr(obj); self.output.push(')'); }
             // Symbol stubs
             Expr::SymbolNew(desc) => {

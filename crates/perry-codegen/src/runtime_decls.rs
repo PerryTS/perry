@@ -2427,6 +2427,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== Object ==========
     module.declare_function("js_object_delete_dynamic", I32, &[I64, DOUBLE]);
     module.declare_function("js_object_get_prototype_of", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_object_set_prototype_of", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_object_define_properties", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // ========== Math ==========
     module.declare_function("js_math_acos", DOUBLE, &[DOUBLE]);

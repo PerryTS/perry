@@ -3030,7 +3030,12 @@ pub extern "C" fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut Ar
 /// Otherwise (the common case), this returns the stored keys array directly.
 #[no_mangle]
 pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
-    if obj.is_null() {
+    if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
+        // Issue #893: defensive sibling of `js_object_entries`'s
+        // is_valid_obj_ptr filter — `Object.keys(undefined)` /
+        // `Object.keys(ansiStyles)` (cross-module import) previously
+        // dereferenced a low-48-bit-of-undefined pointer (~0x1) and
+        // segfaulted. Return empty array.
         return crate::array::js_array_alloc(0);
     }
     // Issue #323: arrays land here too (the codegen routes every `Object.keys`
@@ -3137,7 +3142,9 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
 /// Returns an array of the object's field values
 #[no_mangle]
 pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader {
-    if obj.is_null() {
+    if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
+        // Issue #893: defensive sibling of `js_object_entries` —
+        // see that function's comment for the rationale.
         return crate::array::js_array_alloc(0);
     }
     unsafe {
@@ -3166,7 +3173,19 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
 /// Returns an array where each element is a 2-element array [key, value]
 #[no_mangle]
 pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeader {
-    if obj.is_null() {
+    if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
+        // Issue #893 lineage: chalk's `Object.entries(ansiStyles)` passed a
+        // value whose unboxed low-48 bits weren't a real heap pointer
+        // (cross-module import where the default-export wrapper hasn't
+        // finished initializing). Pre-fix the `(*obj).keys_array` deref
+        // SIGSEGV'd at 0x14; now we return an empty array so the user's
+        // `for (const [k, v] of Object.entries(undefined)) {}` no-ops the
+        // way the spec's "abstract conversion to object" path would for
+        // an unrecognized receiver. Real JS throws TypeError here; we
+        // prefer the empty-array fallback because Perry doesn't have a
+        // clean "throw at codegen-call boundaries" path for these
+        // pointer-typed entry points and a segfault is strictly worse
+        // for the caller.
         return crate::array::js_array_alloc(0);
     }
     unsafe {
@@ -9650,6 +9669,98 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
         }
     }
     f64::from_bits(TAG_NULL)
+}
+
+/// `Object.defineProperties(target, descriptors)` — iterate the descriptor
+/// object's own keys and invoke `js_object_define_property` for each one.
+/// Used by chalk's `Object.defineProperties(createChalk.prototype, styles)`
+/// where `styles` is built via `Object.create(null)` + dynamic assignment,
+/// so the static `Object(...)` literal desugar in the HIR lowering can't
+/// fire and we fall here.
+///
+/// Returns the target. Spec also returns target — Perry's lowering relies
+/// on that so `const x = Object.defineProperties(...)` still binds `x`.
+#[no_mangle]
+pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> f64 {
+    let desc_obj = unsafe { extract_obj_ptr(descriptors) };
+    if desc_obj.is_null() || !is_valid_obj_ptr(desc_obj as *const u8) {
+        return target;
+    }
+    // Snapshot the descriptor object's own keys array. We collect into a
+    // Vec<f64> first so adding properties via `js_object_define_property`
+    // (which can resize the target's keys_array) can't perturb iteration
+    // — descriptors and target are usually different objects, but a
+    // defensive copy costs ~ngc and protects against a user who passes
+    // `Object.defineProperties(obj, obj)` aliasing.
+    let key_array_ptr: *const crate::array::ArrayHeader = unsafe { (*desc_obj).keys_array };
+    if key_array_ptr.is_null() {
+        return target;
+    }
+    let len = unsafe { crate::array::js_array_length(key_array_ptr) } as usize;
+    let mut keys: Vec<f64> = Vec::with_capacity(len);
+    for i in 0..len {
+        let k = unsafe { crate::array::js_array_get(key_array_ptr, i as u32) };
+        keys.push(f64::from_bits(k.bits()));
+    }
+    for k in keys {
+        let descriptor = unsafe {
+            js_object_get_field_by_name_f64(desc_obj as *const ObjectHeader, str_from_value(k))
+        };
+        if descriptor.to_bits() == TAG_UNDEFINED_LOCAL {
+            continue;
+        }
+        js_object_define_property(target, k, descriptor);
+    }
+    target
+}
+
+const TAG_UNDEFINED_LOCAL: u64 = 0x7FFC_0000_0000_0001;
+
+/// Coerce an arbitrary key value (f64 — usually a STRING_TAG NaN-box) to a
+/// `*const StringHeader` for use with `js_object_get_field_by_name_f64`.
+/// Returns null if the value isn't string-like.
+fn str_from_value(v: f64) -> *const crate::string::StringHeader {
+    let bits = v.to_bits();
+    let top = bits >> 48;
+    if top == 0x7FFF {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader
+    } else {
+        // Try to coerce (handles number keys, etc.).
+        crate::builtins::js_string_coerce(v) as *const crate::string::StringHeader
+    }
+}
+
+/// `Object.setPrototypeOf(obj, proto)` — chalk's callable-with-getter-bag
+/// foundation. Perry's runtime bakes class IDs at allocation time (it
+/// walks `parent_class_id` for INT32-tagged class refs), so we cannot
+/// mutate an existing object's prototype chain in a fully observable
+/// way. What we *can* do is satisfy the spec's "return target" contract
+/// so callers like
+///
+/// ```text
+/// const chalk = (...s) => s.join(' ');
+/// Object.setPrototypeOf(chalk, Foo.prototype);
+/// ```
+///
+/// don't crash with `TypeError: value is not a function` (which is what
+/// the generic `(Object).setPrototypeOf(...)` PropertyGet → Call fallback
+/// used to produce — the property lookup returned undefined and the call
+/// dispatched a non-callable). chalk's module init invokes this exact
+/// pattern; ms / express decorate functions with `Object.assign` instead,
+/// which is already a fast path.
+///
+/// Pragmatically: today this returns the target and otherwise no-ops.
+/// chalk's getters on `createChalk.prototype` won't actually fire under
+/// Perry, but the rest of the program keeps running and chalk's
+/// call-without-properties form (the most common usage) keeps working.
+/// A future change can register the (obj → proto) mapping in a
+/// thread-local side-table so a downstream `Object.getPrototypeOf(obj)`
+/// + inherited property dispatch can consult it.
+#[no_mangle]
+pub extern "C" fn js_object_set_prototype_of(obj_value: f64, _proto: f64) -> f64 {
+    // Spec: `Object.setPrototypeOf(O, proto)` returns O. We deliberately
+    // do nothing else — see the function doc above for the trade-off.
+    obj_value
 }
 
 /// Issue #100: build a module-namespace object (the value an `await

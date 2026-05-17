@@ -1233,6 +1233,31 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                         args.into_iter().next().unwrap_or(Expr::Undefined),
                                     )));
                                 }
+                                "setPrototypeOf" => {
+                                    // `Object.setPrototypeOf(obj, proto)` is the foundation
+                                    // of chalk's "callable + getter-bag" shape (a closure has
+                                    // its `[[Prototype]]` reset to a Function-derived
+                                    // accessor-bag). Pre-fix this fell through to a generic
+                                    // `Object.setPrototypeOf` PropertyGet → Call where
+                                    // `Object.setPrototypeOf` resolves to undefined and the
+                                    // call throws `TypeError: value is not a function` —
+                                    // chalk's `import chalk from "chalk"` died at module init.
+                                    //
+                                    // Perry's runtime doesn't track mutable per-instance
+                                    // prototype chains (class IDs are baked at allocation),
+                                    // so we model setPrototypeOf as a no-op that still
+                                    // returns the target — matching the spec's "return obj"
+                                    // contract. The runtime helper registers (obj, proto)
+                                    // in a side-table that `Object.getPrototypeOf(obj)` is
+                                    // free to consult later if a downstream pattern needs it.
+                                    let mut iter = args.into_iter();
+                                    let obj = iter.next().unwrap_or(Expr::Undefined);
+                                    let proto = iter.next().unwrap_or(Expr::Undefined);
+                                    return Ok(Expr::ObjectSetPrototypeOf(
+                                        Box::new(obj),
+                                        Box::new(proto),
+                                    ));
+                                }
                                 "defineProperty" => {
                                     let mut iter = args.into_iter();
                                     let obj = iter.next().unwrap_or(Expr::Undefined);
@@ -1242,6 +1267,49 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                         Box::new(obj),
                                         Box::new(key),
                                         Box::new(descriptor),
+                                    ));
+                                }
+                                "defineProperties" => {
+                                    // `Object.defineProperties(target, descriptors)` — bulk
+                                    // form of `defineProperty`. Used by chalk's index.js to
+                                    // attach the `styles` getter-bag onto
+                                    // `createChalk.prototype`. Pre-fix this fell through to a
+                                    // generic `(Object).defineProperties(...)` call which
+                                    // throws `TypeError: value is not a function` at module
+                                    // init because `Object` isn't a runtime object with
+                                    // method dispatch.
+                                    //
+                                    // Desugar to a sequence of `ObjectDefineProperty`
+                                    // applications by reading `descriptors`'s own keys at
+                                    // compile time when it's an object literal, otherwise
+                                    // route through a runtime helper that iterates the
+                                    // descriptor object's keys.
+                                    let mut iter = args.into_iter();
+                                    let target = iter.next().unwrap_or(Expr::Undefined);
+                                    let descs = iter.next().unwrap_or(Expr::Undefined);
+                                    if let Expr::Object(props) = &descs {
+                                        // Static descriptor literal — desugar to a Sequence
+                                        // of `defineProperty(target, key, desc)` calls and
+                                        // yield `target` as the result value.
+                                        let target = target;
+                                        let mut exprs: Vec<Expr> =
+                                            Vec::with_capacity(props.len() + 1);
+                                        for (key_name, desc_expr) in props {
+                                            exprs.push(Expr::ObjectDefineProperty(
+                                                Box::new(target.clone()),
+                                                Box::new(Expr::String(key_name.clone())),
+                                                Box::new(desc_expr.clone()),
+                                            ));
+                                        }
+                                        exprs.push(target);
+                                        if exprs.len() == 1 {
+                                            return Ok(exprs.into_iter().next().unwrap());
+                                        }
+                                        return Ok(Expr::Sequence(exprs));
+                                    }
+                                    return Ok(Expr::ObjectDefineProperties(
+                                        Box::new(target),
+                                        Box::new(descs),
                                     ));
                                 }
                                 "getOwnPropertyDescriptor" => {

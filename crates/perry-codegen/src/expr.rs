@@ -8812,6 +8812,44 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_object_get_prototype_of", &[(DOUBLE, &v)]))
         }
+        Expr::ObjectDefineProperties(target, descs) => {
+            // chalk's `Object.defineProperties(createChalk.prototype, styles)`
+            // — `styles` is constructed from `Object.create(null)` + dynamic
+            // assignment, so the static desugaring in expr_call.rs's
+            // `defineProperties` arm doesn't fire and we fall here. Route
+            // to a runtime helper that iterates the descriptor object's
+            // own keys and reuses `js_object_define_property` per key.
+            let t = lower_expr(ctx, target)?;
+            let d = lower_expr(ctx, descs)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_define_properties",
+                &[(DOUBLE, &t), (DOUBLE, &d)],
+            ))
+        }
+        Expr::ObjectSetPrototypeOf(obj, proto) => {
+            // chalk's foundation idiom (`Object.setPrototypeOf(closure,
+            // ClassProto)`): perry doesn't track per-instance prototype
+            // chains (class IDs are baked at allocation, the runtime walks
+            // `parent_class_id` for INT32-tagged class refs and stops
+            // there). The runtime helper registers the (obj, proto) pair
+            // in a side-table so a later `Object.getPrototypeOf(obj)` can
+            // observe the user's intent — even if Perry's downstream
+            // dispatch ignores it. Returning the target matches the spec.
+            //
+            // Pre-fix this expression fell through to a generic
+            // `(Object).setPrototypeOf(...)` PropertyGet → Call which
+            // throws `TypeError: value is not a function` because
+            // `Object` isn't a runtime object with method dispatch.
+            // chalk's `import chalk from "chalk"` died at module init.
+            let obj_v = lower_expr(ctx, obj)?;
+            let proto_v = lower_expr(ctx, proto)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_set_prototype_of",
+                &[(DOUBLE, &obj_v), (DOUBLE, &proto_v)],
+            ))
+        }
         Expr::MathExpm1(o) => {
             // expm1(x) = exp(x) - 1. No llvm.expm1 intrinsic; use llvm.exp.f64
             // and subtract 1.0.

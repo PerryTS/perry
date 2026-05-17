@@ -1343,6 +1343,8 @@ pub enum Expr {
     ObjectIsSealed(Box<Expr>),            // Object.isSealed(obj)
     ObjectIsExtensible(Box<Expr>),        // Object.isExtensible(obj)
     ObjectGetPrototypeOf(Box<Expr>),      // Object.getPrototypeOf(obj)
+    ObjectSetPrototypeOf(Box<Expr>, Box<Expr>), // Object.setPrototypeOf(obj, proto) -> obj
+    ObjectDefineProperties(Box<Expr>, Box<Expr>), // Object.defineProperties(target, descriptors)
     ObjectGetOwnPropertySymbols(Box<Expr>), // Object.getOwnPropertySymbols(obj) -> symbol[]
 
     // Symbol operations

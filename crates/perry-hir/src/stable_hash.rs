@@ -1872,6 +1872,16 @@ impl SH for Expr {
                 tag(h, 118);
                 e.as_ref().hash(h);
             }
+            Expr::ObjectSetPrototypeOf(a, b) => {
+                tag(h, 453);
+                a.as_ref().hash(h);
+                b.as_ref().hash(h);
+            }
+            Expr::ObjectDefineProperties(a, b) => {
+                tag(h, 454);
+                a.as_ref().hash(h);
+                b.as_ref().hash(h);
+            }
             Expr::ObjectGetOwnPropertySymbols(e) => {
                 tag(h, 119);
                 e.as_ref().hash(h);
