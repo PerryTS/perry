@@ -308,6 +308,11 @@ jobs:
       - name: Build compiler
         run: cargo build --release
 
+      - name: Issue #945 scalar method IR guard
+        run: |
+          PERRY_BIN="$PWD/target/release/perry" \
+          scripts/run_issue_945_scalar_method_ir_guard.sh
+
       - name: Native no-fallback gate
         run: |
           PERRY_BIN="$PWD/target/release/perry" \

@@ -1350,6 +1350,37 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     // dispatch (Phase C.2). For PropertyGet receivers, dispatch based
     // on the receiver's static type.
     if let Expr::PropertyGet { object, property } = callee {
+        // Scalar replacement fast path for the common micro-shape:
+        //   const obj = new C(...);
+        //   obj.getValue(); // getValue() { return this.value; }
+        //
+        // General method calls need a heap `this`, so escape analysis keeps
+        // them on the allocation path. The helper proves the narrow exception:
+        // a zero-arg `return this.<field>` method with no instance-field or
+        // accessor shadowing for the method name. That exact shape can be
+        // lowered to the same field alloca load as `obj.value`.
+        if let Expr::LocalGet(id) = object.as_ref() {
+            if let Some(class_name) = ctx.non_escaping_news.get(id) {
+                if let Some(crate::type_analysis::MethodScalarSummary::ReturnThisField { field }) =
+                    crate::type_analysis::method_scalar_summary_for_call(
+                        ctx.classes,
+                        class_name,
+                        property,
+                        args.len(),
+                    )
+                {
+                    if let Some(slot) = ctx
+                        .scalar_replaced
+                        .get(id)
+                        .and_then(|fields| fields.get(&field))
+                        .cloned()
+                    {
+                        return Ok(ctx.block().load(DOUBLE, &slot));
+                    }
+                }
+            }
+        }
+
         // Number.prototype.toFixed(decimals) — call js_number_to_fixed.
         // Receiver is any number-typed value; we don't gate on
         // is_numeric_expr because tests often call it on Any locals.
