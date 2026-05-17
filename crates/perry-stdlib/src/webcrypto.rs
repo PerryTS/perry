@@ -734,6 +734,237 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     resolve_with_bits(val)
 }
 
+// =====================================================================
+// subtle.wrapKey / subtle.unwrapKey
+//
+// jose reaches for these to ship key material between A256GCMKW
+// (AES-GCM wrap) and the symmetric encrypted-payload flow. We
+// support two wrap algorithms:
+//
+//   - `{ name: "AES-KW" }`  (RFC 3394) — the wrappingKey is an
+//     AES key (128/192/256-bit); wrapped output is `keyBytes` + 8.
+//   - `{ name: "AES-GCM", iv, additionalData? }` — same shape the
+//     existing encrypt/decrypt path takes; wrapped output is
+//     `ciphertext || tag`.
+//
+// `format` is currently restricted to `"raw"` — the only format
+// jose uses for symmetric keys. JWK / spki / pkcs8 are TODO follow-
+// ups (they require an asymmetric algorithm we haven't wired yet).
+// =====================================================================
+
+/// AES-KW wrap — RFC 3394. Returns the wrapped key (8 bytes longer
+/// than `plaintext_key`). `aes-kw` 0.3 ships
+/// `KwAes128/192/256`; we support all three lengths the WebCrypto
+/// spec allows for AES-KW.
+fn aes_kw_wrap(wrapping_key: &[u8], plaintext_key: &[u8]) -> Option<Vec<u8>> {
+    use aes_kw::{KeyInit, KwAes128, KwAes192, KwAes256};
+    let mut buf = vec![0u8; plaintext_key.len() + 8];
+    match wrapping_key.len() {
+        16 => {
+            let key_arr: [u8; 16] = wrapping_key.try_into().ok()?;
+            let kek = KwAes128::new(&key_arr.into());
+            kek.wrap_key(plaintext_key, &mut buf).ok()?;
+        }
+        24 => {
+            let key_arr: [u8; 24] = wrapping_key.try_into().ok()?;
+            let kek = KwAes192::new(&key_arr.into());
+            kek.wrap_key(plaintext_key, &mut buf).ok()?;
+        }
+        32 => {
+            let key_arr: [u8; 32] = wrapping_key.try_into().ok()?;
+            let kek = KwAes256::new(&key_arr.into());
+            kek.wrap_key(plaintext_key, &mut buf).ok()?;
+        }
+        _ => return None,
+    }
+    Some(buf)
+}
+
+/// AES-KW unwrap — RFC 3394.
+fn aes_kw_unwrap(wrapping_key: &[u8], wrapped_key: &[u8]) -> Option<Vec<u8>> {
+    use aes_kw::{KeyInit, KwAes128, KwAes192, KwAes256};
+    if wrapped_key.len() < 8 {
+        return None;
+    }
+    let mut buf = vec![0u8; wrapped_key.len() - 8];
+    match wrapping_key.len() {
+        16 => {
+            let key_arr: [u8; 16] = wrapping_key.try_into().ok()?;
+            let kek = KwAes128::new(&key_arr.into());
+            kek.unwrap_key(wrapped_key, &mut buf).ok()?;
+        }
+        24 => {
+            let key_arr: [u8; 24] = wrapping_key.try_into().ok()?;
+            let kek = KwAes192::new(&key_arr.into());
+            kek.unwrap_key(wrapped_key, &mut buf).ok()?;
+        }
+        32 => {
+            let key_arr: [u8; 32] = wrapping_key.try_into().ok()?;
+            let kek = KwAes256::new(&key_arr.into());
+            kek.unwrap_key(wrapped_key, &mut buf).ok()?;
+        }
+        _ => return None,
+    }
+    Some(buf)
+}
+
+/// Resolve the AES-GCM IV / AAD pair from a wrap-algorithm object.
+/// Returns `None` if the IV is missing (the only mandatory field).
+unsafe fn resolve_aes_gcm_iv_aad(algo_bits: u64) -> Option<(Vec<u8>, Vec<u8>)> {
+    let iv = object_field_bytes(algo_bits, b"iv")?;
+    let aad = object_field_bytes(algo_bits, b"additionalData").unwrap_or_default();
+    Some((iv, aad))
+}
+
+/// Read the canonical algorithm-name from an algorithm arg (string or
+/// `{ name }` object), upper-cased for matching.
+unsafe fn wrap_algo_name(algo_bits: u64) -> Option<String> {
+    extract_algo_name(algo_bits).map(|s| s.to_ascii_uppercase())
+}
+
+/// `crypto.subtle.wrapKey(format, key, wrappingKey, wrapAlgorithm)` →
+/// Promise<Uint8Array>
+///
+/// Supported `format`: `"raw"`. Supported `wrapAlgorithm`:
+/// - `{ name: "AES-KW" }` — RFC 3394 (wrappingKey is AES-128/256).
+/// - `{ name: "AES-GCM", iv, additionalData? }` — same shape as
+///   the existing encrypt path; wrapped output is `ciphertext || tag`.
+///
+/// Returns a Uint8Array of the wrapped key bytes. Errors (unsupported
+/// format, missing IV for AES-GCM, key-length mismatch) resolve to
+/// undefined so the caller's `await` rejects with a TypeError.
+#[no_mangle]
+pub unsafe extern "C" fn js_webcrypto_wrap_key(
+    format_bits: f64,
+    key_bits: f64,
+    wrapping_key_bits: f64,
+    wrap_algo_bits: f64,
+) -> *mut Promise {
+    let format = match string_from_jsvalue(format_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    if format != "raw" {
+        return resolve_undefined();
+    }
+    let key_addr = strip_ptr(key_bits.to_bits());
+    if lookup_crypto_key(key_addr).is_none() {
+        return resolve_undefined();
+    }
+    let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
+    let wrapping_key_addr = strip_ptr(wrapping_key_bits.to_bits());
+    if lookup_crypto_key(wrapping_key_addr).is_none() {
+        return resolve_undefined();
+    }
+    let wrapping_key_bytes = bytes_from_jsvalue(wrapping_key_bits.to_bits());
+
+    let upper = match wrap_algo_name(wrap_algo_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    let wrapped = if upper == "AES-KW" {
+        match aes_kw_wrap(&wrapping_key_bytes, &key_bytes) {
+            Some(w) => w,
+            None => return resolve_undefined(),
+        }
+    } else if upper == "AES-GCM" {
+        let (iv, aad) = match resolve_aes_gcm_iv_aad(wrap_algo_bits.to_bits()) {
+            Some(t) => t,
+            None => return resolve_undefined(),
+        };
+        match aes_gcm_encrypt(&wrapping_key_bytes, &iv, &aad, &key_bytes) {
+            Some(c) => c,
+            None => return resolve_undefined(),
+        }
+    } else {
+        return resolve_undefined();
+    };
+    resolve_with_bytes(&wrapped)
+}
+
+/// `crypto.subtle.unwrapKey(format, wrappedKey, unwrappingKey,
+///   unwrapAlgorithm, unwrappedKeyAlgorithm, extractable, usages)` →
+/// Promise<CryptoKey>
+///
+/// Inverts `wrapKey`. The recovered raw bytes are wrapped in a fresh
+/// Buffer + registered with `unwrappedKeyAlgorithm` (currently
+/// AES-GCM) so subsequent `encrypt`/`decrypt` calls find the right
+/// `CryptoKeyMaterial`.
+#[no_mangle]
+pub unsafe extern "C" fn js_webcrypto_unwrap_key(
+    format_bits: f64,
+    wrapped_key_bits: f64,
+    unwrapping_key_bits: f64,
+    unwrap_algo_bits: f64,
+    unwrapped_algo_bits: f64,
+    _extractable_bits: f64,
+    _usages_bits: f64,
+) -> *mut Promise {
+    let format = match string_from_jsvalue(format_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    if format != "raw" {
+        return resolve_undefined();
+    }
+    let wrapped_bytes = bytes_from_jsvalue(wrapped_key_bits.to_bits());
+    let unwrapping_key_addr = strip_ptr(unwrapping_key_bits.to_bits());
+    if lookup_crypto_key(unwrapping_key_addr).is_none() {
+        return resolve_undefined();
+    }
+    let unwrapping_key_bytes = bytes_from_jsvalue(unwrapping_key_bits.to_bits());
+
+    let upper = match wrap_algo_name(unwrap_algo_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    let recovered = if upper == "AES-KW" {
+        match aes_kw_unwrap(&unwrapping_key_bytes, &wrapped_bytes) {
+            Some(r) => r,
+            None => return resolve_undefined(),
+        }
+    } else if upper == "AES-GCM" {
+        let (iv, aad) = match resolve_aes_gcm_iv_aad(unwrap_algo_bits.to_bits()) {
+            Some(t) => t,
+            None => return resolve_undefined(),
+        };
+        match aes_gcm_decrypt(&unwrapping_key_bytes, &iv, &aad, &wrapped_bytes) {
+            Some(p) => p,
+            None => return resolve_undefined(),
+        }
+    } else {
+        return resolve_undefined();
+    };
+
+    // Register the recovered bytes as a CryptoKey under the
+    // unwrappedKeyAlgorithm. Only AES-GCM is honored today — HMAC
+    // and others would need their hash-from-algo extraction wired
+    // through here (TODO follow-up; jose only round-trips AES-GCM
+    // through wrap/unwrap).
+    let unwrapped_name = match wrap_algo_name(unwrapped_algo_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    let key_algo = if unwrapped_name == "AES-GCM" {
+        KeyAlgo::AesGcm
+    } else {
+        return resolve_undefined();
+    };
+    let buf = alloc_uint8array_from_slice(&recovered);
+    if buf.is_null() {
+        return resolve_undefined();
+    }
+    register_crypto_key(
+        buf as usize,
+        CryptoKeyMaterial {
+            algo: key_algo,
+            hash: HashAlgo::Sha256,
+        },
+    );
+    let val = JSValue::pointer(buf as *const u8).bits();
+    resolve_with_bits(val)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1069,6 +1069,26 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Initial implementation covers AES-GCM (128/256-bit) — the shape
     // jose's `generateSecret('A256GCM')` reaches for.
     module.declare_function("js_webcrypto_generate_key", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    // subtle.wrapKey(format, key, wrappingKey, wrapAlgorithm) →
+    // Promise<Uint8Array>. Initial implementation covers AES-KW
+    // (`{ name: 'AES-KW' }`) plus AES-GCM (`{ name: 'AES-GCM', iv }`).
+    // Required by jose's `wrapKey`.
+    module.declare_function(
+        "js_webcrypto_wrap_key",
+        I64,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    // subtle.unwrapKey(format, wrappedKey, unwrappingKey, unwrapAlgorithm,
+    //   unwrappedKeyAlgorithm, extractable, usages) → Promise<CryptoKey>.
+    module.declare_function(
+        "js_webcrypto_unwrap_key",
+        I64,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    // `zlib.createBrotliDecompress(options?)` — axios feature-check
+    // shim. Returns a registered Buffer-shaped handle (NaN-boxed at
+    // the call site).
+    module.declare_function("js_zlib_create_brotli_decompress", I64, &[DOUBLE]);
     // crypto.randomFillSync(buf, offset?, size?) → returns the same
     // NaN-boxed buffer with random bytes written in-place.
     module.declare_function(

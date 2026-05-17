@@ -188,7 +188,7 @@ bundled-mongodb = ["dep:mongodb", "dep:bson", "dep:futures-util", "async-runtime
 # bindings so the well-known flip (#466 Phase 4 step 2) can route them
 # to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
 # the crypto surface offline.
-crypto = ["dep:sha2", "dep:sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:cbc", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:ed25519-dalek", "dep:aes-gcm", "dep:hkdf", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-jsonwebtoken", "bundled-ethers"]
+crypto = ["dep:sha2", "dep:sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:cbc", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:ed25519-dalek", "dep:aes-gcm", "dep:aes-kw", "dep:hkdf", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-jsonwebtoken", "bundled-ethers"]
 bundled-bcrypt = ["dep:bcrypt", "async-runtime"]
 bundled-argon2 = ["dep:argon2", "async-runtime"]
 bundled-jsonwebtoken = ["dep:jsonwebtoken"]
@@ -197,8 +197,10 @@ bundled-jsonwebtoken = ["dep:jsonwebtoken"]
 # routes to perry-ext-ethers when `import 'ethers'` is detected.
 bundled-ethers = []
 
-# Compression (zlib)
-compression = ["dep:flate2"]
+# Compression (zlib + brotli)
+# `brotli` rides under the same `compression` umbrella; needed by
+# axios's `zlib.createBrotliDecompress` feature-check (#axios e2e).
+compression = ["dep:flate2", "dep:brotli"]
 
 # Email (nodemailer) — `email` umbrella retained for
 # backwards-compat; v0.5.558's well-known flip toggles
@@ -316,10 +318,16 @@ base64 = { version = "0.22", optional = true }
 x25519-dalek = { version = "2.0", features = ["static_secrets"], optional = true }
 ed25519-dalek = { version = "2.1", optional = true }
 aes-gcm = { version = "0.10", optional = true }
+# AES-KW (RFC 3394) — used by `crypto.subtle.wrapKey` / `unwrapKey`
+# when the wrap algorithm is `{ name: 'AES-KW' }`. Gated under the
+# `crypto` umbrella so it tracks the rest of the symmetric surface.
+aes-kw = { version = "0.3.0", optional = true }
 hkdf = { version = "0.12", optional = true }
 
 # Compression
 flate2 = { version = "1.0", optional = true }
+# Brotli decompression — feature-checked by axios at module init.
+brotli = { version = "8.0.2", optional = true }
 
 # Email
 lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"], optional = true }

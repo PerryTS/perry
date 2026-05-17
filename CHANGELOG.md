@@ -2,6 +2,43 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.976 — feat(zlib/crypto): `zlib.createBrotliDecompress` + `crypto.subtle.wrapKey`/`unwrapKey` — moves axios + jose past the next compile gates
+
+**Symptom.** After #955 wired `zlib.constants` + `subtle.generateKey`, the two `compilePackages` smoke targets advanced one step and tripped on the next gap:
+
+```
+$ perry main.ts -o out   # main.ts: `import axios from "axios"`
+Error: `zlib.createBrotliDecompress` is not implemented in Perry — ...
+
+$ perry main.ts -o out   # main.ts: `import * as jose from "jose"`
+Error: `crypto.subtle.wrapKey` is not implemented in Perry — ...
+```
+
+Both are module-init feature-check sites — axios checks `typeof zlib.createBrotliDecompress === 'function'` to wire up Brotli decoding only when a server replies with `content-encoding: br`; jose reaches for `wrapKey`/`unwrapKey` for `A256GCMKW` key wrap.
+
+**Fix.**
+
+1. **`zlib.createBrotliDecompress(options?)` — manifest + native shim.**
+   - Manifest entry in `crates/perry-api-manifest/src/entries.rs` (optional `options` param).
+   - `NativeModSig` row in `crates/perry-codegen/src/lower_call.rs` routing to `js_zlib_create_brotli_decompress`.
+   - Runtime: `crates/perry-stdlib/src/zlib.rs` returns a registered Buffer-shaped handle (Uint8Array-marked, 32 bytes capacity, length 0). Sufficient for axios's feature check; the real Brotli decode pipe (`write`/`end`/`on('data')`) is a follow-up — axios only invokes it when `content-encoding: br` actually arrives.
+   - `brotli = "8.0.2"` added under the `compression` feature umbrella.
+
+2. **`crypto.subtle.wrapKey` / `unwrapKey` — full HIR/codegen/runtime path.**
+   - New HIR variants `Expr::WebCryptoWrapKey` and `Expr::WebCryptoUnwrapKey` in `ir.rs`; lowering arms (`>=4` / `>=7` args) in `lower/expr_call.rs`; walker + stable-hash entries (tags 470/471 after #955's 469).
+   - Codegen lowers each to a single extern call (`js_webcrypto_wrap_key` / `js_webcrypto_unwrap_key`) and NaN-boxes the returned Promise pointer.
+   - `collect_modules.rs` flips `needs_stdlib` for both variants so auto-optimize builds perry-stdlib with `crypto`.
+   - Runtime: `crates/perry-stdlib/src/webcrypto.rs` implements AES-KW (RFC 3394 via `aes-kw` 0.3.0 — 128/192/256-bit) and AES-GCM wrap/unwrap (reusing the existing `aes_gcm_encrypt`/`decrypt` helpers). `wrapKey` returns a Uint8Array of wrapped bytes; `unwrapKey` recovers the raw bytes + `register_crypto_key` under the supplied `unwrappedKeyAlgorithm` so subsequent `encrypt`/`decrypt` on the recovered key resolves the right primitive.
+   - `aes-kw = "0.3.0"` added under the `crypto` feature umbrella.
+
+**Validation.**
+
+- `test-files/test_zlib_brotli_decompress.ts` — instantiates via `zlib.createBrotliDecompress({})` and asserts the result is an object. Passes.
+- `test-files/test_crypto_subtle_wrap_unwrap.ts` — generates two AES-GCM keys, encrypts a plaintext with the inner key, wraps the inner key with the KEK (AES-GCM wrap), unwraps to a fresh CryptoKey, then decrypts the original ciphertext with the recovered key and confirms the plaintext round-trips. Prints `hello wrap/unwrap` + `OK`.
+- `test-files/test_crypto_subtle_generateKey.ts` (#955 regression) still passes.
+
+**Files touched.** `crates/perry-api-manifest/src/entries.rs`, `crates/perry-codegen/src/lower_call.rs`, `crates/perry-codegen/src/expr.rs`, `crates/perry-codegen/src/runtime_decls.rs`, `crates/perry-hir/src/ir.rs`, `crates/perry-hir/src/lower/expr_call.rs`, `crates/perry-hir/src/walker.rs`, `crates/perry-hir/src/stable_hash.rs`, `crates/perry/src/commands/compile/collect_modules.rs`, `crates/perry-stdlib/src/webcrypto.rs`, `crates/perry-stdlib/src/zlib.rs`, `crates/perry-stdlib/Cargo.toml`, `docs/api/perry.d.ts`, `docs/src/api/reference.md`, plus the two new test files above.
+
 ## v0.5.975 — fix(#957): CJS IIFE `.call(this)` + `Expr::IndexUpdate` codegen — `import _ from "lodash"` advances past `_.add` undefined
 
 **Symptom.** `import _ from "lodash"; _.add(1, 2)` under `perry.compilePackages: ["lodash"]` threw `TypeError: Cannot read properties of undefined (reading 'add')`. `typeof _` was literally `undefined`: the default import binding was empty.

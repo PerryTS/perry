@@ -8580,6 +8580,61 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &promise))
         }
+        Expr::WebCryptoWrapKey {
+            format,
+            key,
+            wrapping_key,
+            wrap_algorithm,
+        } => {
+            let format_box = lower_expr(ctx, format)?;
+            let key_box = lower_expr(ctx, key)?;
+            let wrapping_key_box = lower_expr(ctx, wrapping_key)?;
+            let wrap_algo_box = lower_expr(ctx, wrap_algorithm)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_wrap_key",
+                &[
+                    (DOUBLE, &format_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &wrapping_key_box),
+                    (DOUBLE, &wrap_algo_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoUnwrapKey {
+            format,
+            wrapped_key,
+            unwrapping_key,
+            unwrap_algorithm,
+            unwrapped_key_algorithm,
+            extractable,
+            usages,
+        } => {
+            let format_box = lower_expr(ctx, format)?;
+            let wrapped_key_box = lower_expr(ctx, wrapped_key)?;
+            let unwrapping_key_box = lower_expr(ctx, unwrapping_key)?;
+            let unwrap_algo_box = lower_expr(ctx, unwrap_algorithm)?;
+            let unwrapped_algo_box = lower_expr(ctx, unwrapped_key_algorithm)?;
+            let extractable_box = lower_expr(ctx, extractable)?;
+            let usages_box = lower_expr(ctx, usages)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_unwrap_key",
+                &[
+                    (DOUBLE, &format_box),
+                    (DOUBLE, &wrapped_key_box),
+                    (DOUBLE, &unwrapping_key_box),
+                    (DOUBLE, &unwrap_algo_box),
+                    (DOUBLE, &unwrapped_algo_box),
+                    (DOUBLE, &extractable_box),
+                    (DOUBLE, &usages_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
         Expr::CryptoRandomFillSync {
             buffer,
             offset,

@@ -2270,6 +2270,36 @@ impl SH for Expr {
                 extractable.as_ref().hash(h);
                 usages.as_ref().hash(h);
             }
+            Expr::WebCryptoWrapKey {
+                format,
+                key,
+                wrapping_key,
+                wrap_algorithm,
+            } => {
+                tag(h, 470);
+                format.as_ref().hash(h);
+                key.as_ref().hash(h);
+                wrapping_key.as_ref().hash(h);
+                wrap_algorithm.as_ref().hash(h);
+            }
+            Expr::WebCryptoUnwrapKey {
+                format,
+                wrapped_key,
+                unwrapping_key,
+                unwrap_algorithm,
+                unwrapped_key_algorithm,
+                extractable,
+                usages,
+            } => {
+                tag(h, 471);
+                format.as_ref().hash(h);
+                wrapped_key.as_ref().hash(h);
+                unwrapping_key.as_ref().hash(h);
+                unwrap_algorithm.as_ref().hash(h);
+                unwrapped_key_algorithm.as_ref().hash(h);
+                extractable.as_ref().hash(h);
+                usages.as_ref().hash(h);
+            }
             Expr::CryptoRandomFillSync {
                 buffer,
                 offset,

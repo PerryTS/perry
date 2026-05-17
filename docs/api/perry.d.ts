@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 869 entries across 71 modules
+// Coverage: 870 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -1318,6 +1318,8 @@ declare module "ws" {
 declare module "zlib" {
   /** stdlib */
   export const constants: any;
+  /** stdlib */
+  export function createBrotliDecompress(options?: any): any;
   /** stdlib */
   export function deflateSync(p0: string): string;
   /** stdlib */

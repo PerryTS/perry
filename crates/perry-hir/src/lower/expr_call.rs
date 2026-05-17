@@ -692,22 +692,55 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                                     usages: Box::new(usages),
                                                 });
                                             }
+                                            "wrapKey" if args.len() >= 4 => {
+                                                let mut iter = args.into_iter();
+                                                let format = iter.next().unwrap();
+                                                let key = iter.next().unwrap();
+                                                let wrapping_key = iter.next().unwrap();
+                                                let wrap_algorithm = iter.next().unwrap();
+                                                return Ok(Expr::WebCryptoWrapKey {
+                                                    format: Box::new(format),
+                                                    key: Box::new(key),
+                                                    wrapping_key: Box::new(wrapping_key),
+                                                    wrap_algorithm: Box::new(wrap_algorithm),
+                                                });
+                                            }
+                                            "unwrapKey" if args.len() >= 7 => {
+                                                let mut iter = args.into_iter();
+                                                let format = iter.next().unwrap();
+                                                let wrapped_key = iter.next().unwrap();
+                                                let unwrapping_key = iter.next().unwrap();
+                                                let unwrap_algorithm = iter.next().unwrap();
+                                                let unwrapped_key_algorithm = iter.next().unwrap();
+                                                let extractable = iter.next().unwrap();
+                                                let usages = iter.next().unwrap();
+                                                return Ok(Expr::WebCryptoUnwrapKey {
+                                                    format: Box::new(format),
+                                                    wrapped_key: Box::new(wrapped_key),
+                                                    unwrapping_key: Box::new(unwrapping_key),
+                                                    unwrap_algorithm: Box::new(unwrap_algorithm),
+                                                    unwrapped_key_algorithm: Box::new(
+                                                        unwrapped_key_algorithm,
+                                                    ),
+                                                    extractable: Box::new(extractable),
+                                                    usages: Box::new(usages),
+                                                });
+                                            }
                                             _ => {
                                                 // Unsupported subtle method —
                                                 // fail loudly. The supported
                                                 // surface is documented in the
                                                 // d.ts and at #561; asymmetric
                                                 // (RSA-PSS / ECDSA / RSA-OAEP),
-                                                // wrap/unwrap, deriveKey are
-                                                // still out of scope per the
-                                                // issue.
+                                                // deriveKey are still out of
+                                                // scope per the issue.
                                                 let allow_unimplemented =
                                                     std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED")
                                                         .is_some();
                                                 if !allow_unimplemented {
                                                     crate::lower_bail!(
                                                         outer_member.span,
-                                                        "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify, encrypt, decrypt, generateKey (HMAC + SHA-1/256/384/512; encrypt/decrypt/generateKey currently AES-GCM only). \
+                                                        "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify, encrypt, decrypt, generateKey, wrapKey, unwrapKey (HMAC + SHA-1/256/384/512; encrypt/decrypt/generateKey/wrapKey currently AES-GCM/AES-KW only). \
                                                          See `perry --print-api-manifest` and #561, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore.",
                                                         method,
                                                     );

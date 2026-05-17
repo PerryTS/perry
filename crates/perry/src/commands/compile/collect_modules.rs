@@ -938,6 +938,8 @@ pub(super) fn collect_modules(
             || hir_debug.contains("WebCryptoEncrypt")
             || hir_debug.contains("WebCryptoDecrypt")
             || hir_debug.contains("WebCryptoGenerateKey")
+            || hir_debug.contains("WebCryptoWrapKey")
+            || hir_debug.contains("WebCryptoUnwrapKey")
         {
             ctx.needs_stdlib = true;
             ctx.uses_crypto_builtins = true;

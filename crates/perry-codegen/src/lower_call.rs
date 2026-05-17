@@ -9193,6 +9193,20 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[NA_STR],
         ret: NR_PTR,
     },
+    // `zlib.createBrotliDecompress(options?)` — axios feature-checks
+    // this at module init. The runtime stub returns a registered
+    // Buffer-shaped handle (NaN-boxed as a pointer) so callers see
+    // a truthy non-null object; the real Brotli decode path is a
+    // follow-up. `options` is NaN-boxed as f64.
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "createBrotliDecompress",
+        class_filter: None,
+        runtime: "js_zlib_create_brotli_decompress",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
     // ========== cron ==========
     // schedule() returns a Handle (i64) → NR_PTR. Instance methods take Handle (i64).
     // Callback arg uses NA_JSV (bitcast) to pass the full NaN-boxed closure i64.

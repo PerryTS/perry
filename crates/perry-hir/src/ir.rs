@@ -1638,6 +1638,32 @@ pub enum Expr {
         extractable: Box<Expr>,
         usages: Box<Expr>,
     },
+    /// `crypto.subtle.wrapKey(format, key, wrappingKey, wrapAlgorithm)`
+    /// → Promise<Uint8Array>. Initial implementation covers AES-KW
+    /// + AES-GCM wrap (the shape jose's `wrapKey` reaches for);
+    /// asymmetric (RSA-OAEP) wrap is a TODO follow-up tracked
+    /// alongside #561.
+    WebCryptoWrapKey {
+        format: Box<Expr>,
+        key: Box<Expr>,
+        wrapping_key: Box<Expr>,
+        wrap_algorithm: Box<Expr>,
+    },
+    /// `crypto.subtle.unwrapKey(format, wrappedKey, unwrappingKey,
+    /// unwrapAlgorithm, unwrappedKeyAlgorithm, extractable, usages)`
+    /// → Promise<CryptoKey>. Mirrors `wrapKey`'s algorithm coverage;
+    /// the resulting CryptoKey is registered with the
+    /// `unwrappedKeyAlgorithm` so subsequent encrypt/decrypt calls
+    /// resolve the right primitive.
+    WebCryptoUnwrapKey {
+        format: Box<Expr>,
+        wrapped_key: Box<Expr>,
+        unwrapping_key: Box<Expr>,
+        unwrap_algorithm: Box<Expr>,
+        unwrapped_key_algorithm: Box<Expr>,
+        extractable: Box<Expr>,
+        usages: Box<Expr>,
+    },
     /// `crypto.randomFillSync(buffer, offset?, size?)` — fills the
     /// provided Buffer/TypedArray with random bytes in-place and
     /// returns the same buffer. `offset` and `size` are optional

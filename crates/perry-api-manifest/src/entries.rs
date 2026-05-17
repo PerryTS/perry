@@ -1103,6 +1103,23 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // by axios for stream wiring. Values are resolved at runtime by
     // `get_native_module_constant` in `perry-runtime/src/object.rs`.
     property("zlib", "constants"),
+    // `zlib.createBrotliDecompress(options?)` — axios feature-checks this
+    // at module init (the typeof === 'function' shape). The native shim
+    // returns a registered Buffer-shaped handle; the real decode path is
+    // only reached when a server actually replies with
+    // `content-encoding: br`, which we leave for a follow-up.
+    method_sig(
+        "zlib",
+        "createBrotliDecompress",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "options",
+            ty: TypeSpec::Any,
+            optional: true,
+        }],
+        TypeSpec::Any,
+    ),
     method_sig(
         "cron",
         "validate",
