@@ -103,6 +103,36 @@ fn toml_build_number(table: &toml::Table) -> Option<i64> {
         .or_else(|| value.as_str().and_then(|s| s.parse::<i64>().ok()))
 }
 
+/// #498: derive the per-target-arch key used in `perry.lock` for the
+/// current build target. Matches the keying used by
+/// `perry.nativeLibrary.targets.<key>` in `package.json` (e.g.
+/// `macos-arm64`, `linux-x86_64`, or the legacy bare form `macos`).
+fn perry_lock_target_arch_key(target: Option<&str>) -> String {
+    let target_key = match target {
+        Some(t) if t == "macos" || t.starts_with("macos") => "macos",
+        Some("ios") | Some("ios-simulator") => "ios",
+        Some("tvos") | Some("tvos-simulator") => "tvos",
+        Some("watchos") | Some("watchos-simulator") => "watchos",
+        Some("visionos") | Some("visionos-simulator") => "visionos",
+        Some("android") => "android",
+        Some("linux") => "linux",
+        Some("windows") => "windows",
+        Some("harmonyos") | Some("harmonyos-simulator") => "harmonyos",
+        None if cfg!(target_os = "macos") => "macos",
+        None if cfg!(target_os = "linux") => "linux",
+        None if cfg!(target_os = "windows") => "windows",
+        _ => "host",
+    };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else {
+        "unknown-arch"
+    };
+    format!("{}-{}", target_key, arch)
+}
+
 fn package_bundle_id_from_input(input: &Path) -> Option<String> {
     let mut dir = input.canonicalize().ok()?;
     if dir.is_file() {
@@ -1348,6 +1378,58 @@ pub fn run_with_parse_cache(
             );
         }
         OutputFormat::Json => {}
+    }
+
+    // #498: pin SHA-256 of every prebuilt `perry.nativeLibrary` archive
+    // we're about to hand to the linker. A swapped or tampered
+    // `.a`/`.lib`/`.dylib` is currently undetectable — the same
+    // attack class `package-lock.json`'s `integrity` field defends
+    // against on the JS side. The MVP covers prebuilt archives only
+    // (single file = single hash); crate-source-built native
+    // libraries are a follow-up.
+    {
+        let target_key = perry_lock_target_arch_key(args.target.as_deref());
+        let mut entries: Vec<crate::commands::perry_lock::ArchiveEntry> = Vec::new();
+        for manifest in &ctx.native_libraries {
+            let Some(target_config) = &manifest.target_config else {
+                continue;
+            };
+            let Some(archive_path) = &target_config.prebuilt else {
+                continue;
+            };
+            entries.push(crate::commands::perry_lock::ArchiveEntry {
+                package: manifest.module.clone(),
+                target_arch: target_key.clone(),
+                archive_path: archive_path.clone(),
+            });
+        }
+        if !entries.is_empty() {
+            let mut lock = crate::commands::perry_lock::read_lock(&ctx.project_root)?;
+            let outcome = crate::commands::perry_lock::verify_and_update(&mut lock, &entries)?;
+            if outcome.modified {
+                crate::commands::perry_lock::write_lock(&ctx.project_root, &lock)?;
+            }
+            if let OutputFormat::Text = format {
+                if !outcome.added.is_empty() {
+                    println!(
+                        "  perry.lock: added {} entr{} for native-library archives",
+                        outcome.added.len(),
+                        if outcome.added.len() == 1 { "y" } else { "ies" }
+                    );
+                }
+                if !outcome.refreshed.is_empty() {
+                    println!(
+                        "  perry.lock: REFRESHED {} entr{} (PERRY_LOCK_REFRESH=1)",
+                        outcome.refreshed.len(),
+                        if outcome.refreshed.len() == 1 {
+                            "y"
+                        } else {
+                            "ies"
+                        }
+                    );
+                }
+            }
+        }
     }
 
     if args.enable_geisterhand || args.geisterhand_port.is_some() {

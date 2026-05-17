@@ -17,6 +17,7 @@ pub mod init;
 pub mod install;
 pub mod login;
 pub mod native;
+pub mod perry_lock;
 pub mod publish;
 pub mod run;
 pub mod setup;
