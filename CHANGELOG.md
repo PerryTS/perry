@@ -2,6 +2,42 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.960 — fix(hir): #923 — block-export of `mysql.createPool` / native-factory const links + runs as value
+
+**Symptom.** Two ways of exporting a module-level binding produced different results, where the spec says they're interchangeable. With `mysql2/promise`:
+
+```ts
+// db.ts — block-export form
+import mysql from "mysql2/promise";
+const pool = mysql.createPool({ ...cfg });
+export async function query<T>(sql: string) {
+  const [rows] = await pool.execute(sql);
+  return rows as T[];
+}
+export { pool };  // ← link error on Linux, "typeof pool === 'function'" on macOS
+
+// db.ts — inline-export form (works)
+export const pool = mysql.createPool({ ...cfg });
+```
+
+Pre-fix the block form link-failed on `__perry_wrap_perry_fn_db_ts__pool` on x86_64 Linux (before #836's Sub-bug B landed) and silently misbehaved on macOS post-#836 — the wrapper-emission loop at `codegen.rs:~2942` emitted a no-op wrapper returning NaN-boxed undefined, so consumers reading `pool` as a value (e.g. `pool.execute(sql)` lowers `pool` to `ExternFuncRef { name: "pool" }`, which goes through `js_closure_alloc_singleton(@__perry_wrap_...)` when the binding isn't in `imported_vars`) got a closure handle instead of the Pool. `typeof pool` read "function" and any property access on it segfaulted.
+
+**Why the two forms diverged.** `export const pool = mysql.createPool(...)` lowers via the `ModuleDecl::ExportDecl` arm in `crates/perry-hir/src/lower.rs:4450`, which unconditionally pushes the binding into `module.exported_objects` at line 5087. That single list controls everything downstream: codegen's `exported_var_names` set keys off it (codegen.rs:1582), which gates both the producer-side global slot (`perry_global_<src>__<id>`) and the value-getter (`perry_fn_<src>__<name>`); and the CLI driver's consumer-side `imported_vars` set (compile.rs:3462) is populated from `exported_var_names` (compile.rs:2306), which controls whether `Expr::ExternFuncRef { name }` lowers to a getter call (expr.rs:11783) or falls through to the closure-wrapper path (expr.rs:11815).
+
+`const pool = ...; export { pool };` lowers via the bare `Stmt::Decl(Decl::Var)` path (the `Let` is pushed first by `lower_stmt` at line 6117) and then the `ModuleDecl::ExportNamed` arm at line 5200. That arm contains an explicit init-expression whitelist at line 5355 — only certain HIR expression shapes register the binding as an exported value. The whitelist covered `Closure / Object / Array / Call / New / JsNew / LocalGet / FuncRef / ExternFuncRef / PropertyGet / String / Number / Bool / BigInt / Null / Undefined / SymbolFor` but NOT `NativeMethodCall`.
+
+`mysql.createPool(...)` lowers to `Expr::NativeMethodCall { module: "mysql2/promise", class_name: None, object: None, method: "createPool", args: [...] }` because `mysql` is a registered native-module alias and the call resolves to the stdlib FFI dispatch. So the `is_exportable` check failed, `pool` never landed in `exported_objects`, no producer-side global / getter was emitted, and consumers fell off the value-getter path into the no-op wrapper — link succeeded post-#836 but runtime was wrong.
+
+**Fix.** Extend the `is_exportable` matcher at `crates/perry-hir/src/lower.rs:5355` with `Expr::NativeMethodCall { .. }`. The block-export form now mirrors the inline-export form for every stdlib factory pattern: `mysql2/promise.createPool` / `createConnection`, `net.createConnection`, `http.createServer`, `pg.connect`, `tls.connect`, `ioredis` constructors, and any other factory `lookup_native_module` resolves.
+
+**Validation.**
+- New regression test `test-files/test_issue_923_block_export_form.ts` + fixture `test-files/fixtures/issue_923_pkg/producer.ts` exercises the producer/consumer shape with a plain const so it stays self-contained (no DB required). Both `pool.<prop>` (value-getter path) and `typeof pool` (closure-singleton path) succeed; `typeof pool` correctly reads `"object"` instead of `"function"`.
+- `test-files/test_issue_836_zod_class_reexports.ts` still passes — the zod namespace-import-re-export and `$`-prefixed sanitize-mismatch paths are untouched.
+- Local repro under `probe_mysql/` (`import mysql from "mysql2/promise"; const pool = mysql.createPool(...); export { pool };`) now reports `typeof pool: object` from a consumer module instead of `function`.
+- `cargo build --release -p perry` clean, `cargo test --release -p perry-hir -p perry-codegen` green.
+
+Refs #836, #890, #905.
+
 ## v0.5.959 — fix(stdlib): #924 — silence happy-path stderr spam from `jwt.verify` + fastify + box/object runtime warns
 
 **Symptom.** Production services built with Perry's stdlib filled their PM2 error logs with per-request stderr lines that buried real crashes. The operator's 7-day sample was 80 MB of error log, ~95% of it stdlib noise. Three sources:

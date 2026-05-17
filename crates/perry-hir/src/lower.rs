@@ -5386,6 +5386,30 @@ fn lower_module_decl(
                                             // pick it up via `imported_vars` (and route through the
                                             // getter, not as a closure pointer).
                                             | Expr::SymbolFor(_)
+                                            // Issue #923: `const pool = mysql.createPool(...)`
+                                            // followed by `export { pool }` lowers the init to
+                                            // `Expr::NativeMethodCall` (not `Expr::Call`) because
+                                            // `mysql` is a registered native-module alias and the
+                                            // factory call resolves to the stdlib FFI dispatch.
+                                            // Without this branch, `pool` never lands in
+                                            // `exported_objects`, the producer-side getter
+                                            // `perry_fn_<src>__pool` is never emitted, and the
+                                            // consumer-side `ExternFuncRef { name: "pool" }` falls
+                                            // through to the closure-wrapper path
+                                            // (`__perry_wrap_perry_fn_<src>__pool`) which #836's
+                                            // Sub-bug B emits as a no-op returning undefined. End
+                                            // result: link succeeds but `typeof pool === "function"`
+                                            // and `pool.execute(...)` segfaults. Mirroring the
+                                            // inline-export shape (`export const pool = ...` at
+                                            // line ~5087) makes both export forms equivalent.
+                                            //
+                                            // Covers every stdlib factory pattern: `mysql2/promise`
+                                            // `createPool` / `createConnection`, `net.createConnection`,
+                                            // `http.createServer`, `pg.connect`, `ioredis`
+                                            // constructors, `tls.connect`, and any other
+                                            // factory the codegen already lowers to a
+                                            // `NativeMethodCall` via lookup_native_module.
+                                            | Expr::NativeMethodCall { .. }
                                     );
                                     if is_exportable {
                                         module.exported_objects.push(exported.clone());
