@@ -554,10 +554,31 @@ fn compute_closure_captures(
         outer_locals.iter().map(|(_, id)| *id).collect();
     let param_ids: std::collections::HashSet<LocalId> = params.iter().map(|p| p.id).collect();
 
-    // Find unique captures: refs that are in outer_locals but not params.
+    // dayjs (issue: format() returned `292278994-08`): local IDs are
+    // scope-local — each function's `fresh_local()` counter starts at 0,
+    // so an inner closure can legitimately reuse an outer-scope id (e.g.
+    // dayjs's minified `parseDate` declares `var i = r[2]-1||0` with id
+    // 10, while the surrounding IIFE has a module-level `var i = "second"`
+    // also at id 10). Without filtering by *inner-declared* ids, the
+    // capture detector misidentifies the inner `i` as a free reference
+    // to the outer constant and the closure ends up reading "second"
+    // where it expected a month. Strip locally-declared ids from the
+    // capture set.
+    let inner_decls: std::collections::HashSet<LocalId> = {
+        let mut s = std::collections::HashSet::new();
+        for stmt in body {
+            crate::lower_decl::collect_let_decls_in_stmt(stmt, &mut s);
+        }
+        s
+    };
+
+    // Find unique captures: refs that are in outer_locals but not params
+    // and not locally re-declared by an inner `let`/`var`.
     let mut captures: Vec<LocalId> = all_refs
         .into_iter()
-        .filter(|id| outer_local_ids.contains(id) && !param_ids.contains(id))
+        .filter(|id| {
+            outer_local_ids.contains(id) && !param_ids.contains(id) && !inner_decls.contains(id)
+        })
         .collect();
     captures.sort();
     captures.dedup();
@@ -571,7 +592,10 @@ fn compute_closure_captures(
     let assigned_set: std::collections::HashSet<LocalId> = all_assigned.into_iter().collect();
     let mutable_captures: Vec<LocalId> = captures
         .iter()
-        .filter(|id| assigned_set.contains(id) || ctx.var_hoisted_ids.contains(id))
+        .filter(|id| {
+            (assigned_set.contains(id) || ctx.var_hoisted_ids.contains(id))
+                && !inner_decls.contains(id)
+        })
         .copied()
         .collect();
 

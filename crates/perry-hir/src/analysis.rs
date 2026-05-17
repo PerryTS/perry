@@ -853,9 +853,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         }
         // Date operations
         Expr::DateNow => {}
-        Expr::DateNew(timestamp) => {
-            if let Some(ts) = timestamp {
-                collect_assigned_locals_expr(ts, assigned);
+        Expr::DateNew(args) => {
+            for a in args {
+                collect_assigned_locals_expr(a, assigned);
             }
         }
         Expr::DateGetTime(date)

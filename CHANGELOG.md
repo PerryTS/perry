@@ -2,6 +2,35 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.961 — fix(codegen+hir): dayjs `format("YYYY-MM")` returned `292278994-08` instead of `2024-01`
+
+**Symptom.** `dayjs("2024-01-02").format("YYYY-MM")` printed `292278994-08` under Perry vs. `2024-01` under Node. dayjs technically passed the smoke (no exception), but every formatted year/month was garbage.
+
+**Root cause** — two compounding bugs:
+
+1. `Expr::DateNew` carried `Option<Box<Expr>>` and `lower_new`'s "Date" arm did `args.into_iter().next().unwrap()` — silently dropping every argument past the first. dayjs's `parseDate` issues `new Date(r[1], i, r[3]||1, r[4]||0, r[5]||0, r[6]||0, s)` (the 7-arg local-time form). Perry compiled that to `new Date(r[1])`, parsing the year string "2024" as 2024 ms-since-epoch and treating the result as a Date.
+
+2. With (1) fixed (multi-arg form lowered to a new `js_date_new_local_components(year, month, day, hour, min, sec, ms)` runtime function), dayjs *still* printed garbage — but now garbage of a different shape, with `$d.getTime() === NaN` and bytes of the strings "millisecond"/"second"/"minute" leaking into the f64 args. Tracing the runtime arrivals showed those strings were being passed where year/month/day belonged. The minified bundle declares module-level constants `var i = "second", s = "minute", r = "millisecond", …`, and inside `parseDate` re-declares `var i = r[2]-1||0` and `var s = (r[7]||"0").substring(0,3)`. `LocalId`s are scope-local — each function's `fresh_local()` counter starts at 0 — so the inner `i` got the same id (`10`) as the outer constant, and the inner `s` got the same id (`11`) as the outer constant. `compute_closure_captures` in `lower/expr_function.rs` filtered the closure's free-variable set by `outer_local_ids` and `param_ids` but did not exclude ids *redeclared* by an inner `let`/`var`/`function` — so the inner closure was wired up to capture the outer constants. The closure body's `LocalGet(10)` then resolved to "second", `LocalGet(11)` to "minute", and the multi-arg `new Date(...)` site (now correctly passing 7 args) handed those strings to the runtime.
+
+**Fix:**
+
+- `crates/perry-hir/src/ir.rs`: change `Expr::DateNew(Option<Box<Expr>>)` to `Expr::DateNew(Vec<Expr>)`. Propagate through `monomorph.rs`, `walker.rs`, `analysis.rs`, `js_transform.rs`, `stable_hash.rs`, `collectors.rs`, plus the JS / WASM emitters.
+- `crates/perry-hir/src/lower/expr_new.rs`: drop the `take-first-arg` collapse and return `Expr::DateNew(args)` with the full lowered arg vector.
+- `crates/perry-codegen/src/expr.rs`: branch on `args.len()` — 0 → `js_date_new`, 1 → `js_date_new_from_value` (preserves existing semantics for `new Date(timestamp)` / `new Date(string)`), `>=2` → `js_date_new_local_components(year, month, day, hour, min, sec, ms)` with padding via NaN-boxed `undefined` for the missing tail.
+- `crates/perry-runtime/src/date.rs`: new `js_date_new_local_components` that coerces NaN-boxed strings via `s.parse::<f64>()` (so dayjs's regex-captured `"2024"` becomes the year `2024`, not a 2024-ms timestamp), folds out-of-range months via `(year*12 + month).div_euclid(12)`, applies the local-tz offset at the local instant, registers the result in `DATE_REGISTRY` so `instanceof Date` keeps working, and remaps the canonical Invalid-Date sentinel for NaN coercion failures.
+- `crates/perry-codegen/src/runtime_decls.rs`: declare `js_date_new_local_components(d, d, d, d, d, d, d) -> d`.
+- `crates/perry-hir/src/lower/expr_function.rs` + `crates/perry-hir/src/lower_decl.rs`: `compute_closure_captures` (the central capture detector used by both arrow and `function` expressions) plus the body-statement arrow handler now filter the capture set by an additional `inner_decls` set computed by a new shared `collect_let_decls_in_stmt` helper. The helper walks the closure body without recursing into nested closures and emits every `Stmt::Let { id, .. }` (plus `For`-init lets and catch-clause params) it finds. The `mutable_captures` filter is updated for the same reason.
+
+The fix is bidirectional — both the multi-arg lowering and the capture detector had to land in the same change because either alone leaves dayjs broken: without the lowering fix, `$d` is `new Date("2024")` (1970 with `getTime() === 2024`); without the capture fix the multi-arg form passes the outer-constant strings as components and `$d.getTime()` is NaN. Together, `dayjs("2024-01-02").format("YYYY-MM")` matches Node byte-for-byte.
+
+**Regression test** — `test-files/test_issue_dayjs_year_overflow.ts` reproduces both shapes: a `parseDate(date: string)` whose local `var i = r[2]-1||0` / `var s = (r[7]||"0").substring(0,3)` shadow same-named outer `i = "outerI"` / `s = "outerS"` constants, plus the bare-number 3-arg `new Date(2024, 0, 2)` and 7-arg `new Date(2024, 5, 15, 12, 30, 45, 500)` calls. Output matches `node --experimental-strip-types` byte-for-byte.
+
+**Validation.**
+
+- `cargo fmt` + `cargo build --release` clean.
+- dayjs smoke (`PERRY_ALLOW_UNIMPLEMENTED=1 perry main.ts -o out`): `2024-01` (was `292278994-08`) — matches Node.
+- Gap suite: 34/36 unchanged from pre-fix baseline; the two pre-existing DIFFs (`test_gap_class_advanced`'s `static block initialized: 0 vs true` boolean→0 coercion + `test_gap_console_methods`'s `console.time` timing skew) are unaffected.
+
 ## v0.5.960 — fix(hir): #923 — block-export of `mysql.createPool` / native-factory const links + runs as value
 
 **Symptom.** Two ways of exporting a module-level binding produced different results, where the spec says they're interchangeable. With `mysql2/promise`:

@@ -2003,16 +2003,16 @@ pub enum Expr {
 
     // Date operations
     DateNow,                        // Date.now() -> number (timestamp in ms)
-    DateNew(Option<Box<Expr>>),     // new Date() or new Date(timestamp) -> Date object
-    DateGetTime(Box<Expr>),         // date.getTime() -> number
-    DateToISOString(Box<Expr>),     // date.toISOString() -> string
-    DateGetFullYear(Box<Expr>),     // date.getFullYear() -> number
-    DateGetMonth(Box<Expr>),        // date.getMonth() -> number (0-11)
-    DateGetDate(Box<Expr>),         // date.getDate() -> number (1-31)
-    DateGetDay(Box<Expr>),          // date.getDay() -> number (0-6, Sunday=0)
-    DateGetHours(Box<Expr>),        // date.getHours() -> number (0-23)
-    DateGetMinutes(Box<Expr>),      // date.getMinutes() -> number (0-59)
-    DateGetSeconds(Box<Expr>),      // date.getSeconds() -> number (0-59)
+    DateNew(Vec<Expr>), // new Date() / new Date(ts) / new Date(year, month, day, h?, m?, s?, ms?) -> Date object
+    DateGetTime(Box<Expr>), // date.getTime() -> number
+    DateToISOString(Box<Expr>), // date.toISOString() -> string
+    DateGetFullYear(Box<Expr>), // date.getFullYear() -> number
+    DateGetMonth(Box<Expr>), // date.getMonth() -> number (0-11)
+    DateGetDate(Box<Expr>), // date.getDate() -> number (1-31)
+    DateGetDay(Box<Expr>), // date.getDay() -> number (0-6, Sunday=0)
+    DateGetHours(Box<Expr>), // date.getHours() -> number (0-23)
+    DateGetMinutes(Box<Expr>), // date.getMinutes() -> number (0-59)
+    DateGetSeconds(Box<Expr>), // date.getSeconds() -> number (0-59)
     DateGetMilliseconds(Box<Expr>), // date.getMilliseconds() -> number (0-999)
 
     // Date static methods

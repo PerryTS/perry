@@ -817,6 +817,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    // `new Date(year, month, day?, hour?, min?, sec?, ms?)` (local time).
+    module.declare_function(
+        "js_date_new_local_components",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_date_set_utc_full_year", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_date_set_utc_month", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_date_set_utc_date", DOUBLE, &[DOUBLE, DOUBLE]);

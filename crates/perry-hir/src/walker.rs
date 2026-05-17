@@ -679,9 +679,9 @@ where
         }
 
         // ─── Date constructors / setters ─────────────────────────────────
-        Expr::DateNew(opt) => {
-            if let Some(v) = opt {
-                f(v);
+        Expr::DateNew(args) => {
+            for a in args {
+                f(a);
             }
         }
         Expr::DateSetUtcFullYear { date, value }
@@ -1955,9 +1955,9 @@ where
                 f(v);
             }
         }
-        Expr::DateNew(opt) => {
-            if let Some(v) = opt {
-                f(v);
+        Expr::DateNew(args) => {
+            for a in args {
+                f(a);
             }
         }
         Expr::DateSetUtcFullYear { date, value }

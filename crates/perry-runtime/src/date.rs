@@ -536,6 +536,112 @@ pub extern "C" fn js_date_utc(
     (secs * 1000 + ms) as f64
 }
 
+/// `new Date(year, month, day?, hour?, minute?, second?, ms?)` — local time.
+///
+/// JS semantics: month is 0-indexed, defaults are day=1, hour/min/sec/ms=0,
+/// year < 100 is rebased to 1900+year. Arguments arrive as NaN-boxed f64
+/// values — strings (which dayjs's parseDate uses, capturing regex groups
+/// `r[1] = "2024"` etc.) need to be coerced via the string→number path so
+/// that the `(year, month, ...)` form is taken instead of falling back to
+/// the single-arg "timestamp" form. Without this, dayjs's `format()` ends
+/// up reading garbage out of a `getTime()` like `1.9e+214` and reports the
+/// year as `292278994`.
+///
+/// Returns a millisecond timestamp; the caller registers it in the
+/// DATE_REGISTRY so future `instanceof Date` checks succeed.
+#[no_mangle]
+pub extern "C" fn js_date_new_local_components(
+    year: f64,
+    month: f64,
+    day: f64,
+    hour: f64,
+    minute: f64,
+    second: f64,
+    millisecond: f64,
+) -> f64 {
+    fn coerce(v: f64, default: f64) -> f64 {
+        let bits = v.to_bits();
+        let tag = (bits >> 48) & 0xFFFF;
+        if tag == 0x7FFF {
+            // NaN-boxed string — parse via the same path Number(str) uses.
+            let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+            if ptr.is_null() || (ptr as usize) < 0x1000 {
+                return f64::NAN;
+            }
+            unsafe {
+                let len = (*ptr).byte_len as usize;
+                let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let bytes = std::slice::from_raw_parts(data, len);
+                match std::str::from_utf8(bytes) {
+                    Ok(s) => {
+                        let s = s.trim();
+                        if s.is_empty() {
+                            default
+                        } else {
+                            s.parse::<f64>().unwrap_or(f64::NAN)
+                        }
+                    }
+                    Err(_) => f64::NAN,
+                }
+            }
+        } else if tag == 0x7FFC && (bits & 0xFF) == 0x01 {
+            // undefined — for required args this is NaN, for optional ones default
+            default
+        } else {
+            v
+        }
+    }
+    let y = coerce(year, f64::NAN);
+    let m = coerce(month, f64::NAN);
+    let d = coerce(day, 1.0);
+    let h = coerce(hour, 0.0);
+    let mi = coerce(minute, 0.0);
+    let s = coerce(second, 0.0);
+    let ms = coerce(millisecond, 0.0);
+    if y.is_nan()
+        || m.is_nan()
+        || d.is_nan()
+        || h.is_nan()
+        || mi.is_nan()
+        || s.is_nan()
+        || ms.is_nan()
+    {
+        return f64::NAN;
+    }
+    let mut year_i = y as i32;
+    // ECMA-262: if 0 <= year < 100, year = 1900 + year.
+    if (0..100).contains(&year_i) {
+        year_i += 1900;
+    }
+    let month_i = m as i32;
+    let day_u = d as u32;
+    let hour_u = h as u32;
+    let minute_u = mi as u32;
+    let second_u = s as u32;
+    let ms_i = ms as i64;
+    // JS month is 0-based; components_to_timestamp wants 1-based. Months
+    // outside 1..=12 normalize (e.g. month=12 → next year January) via
+    // year/month rollover, mirroring the way JS resolves out-of-range
+    // components.
+    let total_months = year_i as i64 * 12 + month_i as i64;
+    let rolled_year = total_months.div_euclid(12) as i32;
+    let rolled_month = (total_months.rem_euclid(12) + 1) as u32;
+    let local_secs =
+        components_to_timestamp(rolled_year, rolled_month, day_u, hour_u, minute_u, second_u);
+    // Reinterpret the local-clock components as UTC by subtracting the
+    // local tz offset at that instant. We find the offset by asking
+    // localtime_r for the local components of the bare `local_secs`
+    // (treated as a UTC epoch); the resulting tz_offset is the delta.
+    let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(local_secs);
+    let utc_secs = local_secs - tz_offset;
+    let result = (utc_secs * 1000 + ms_i) as f64;
+    let result = date_or_invalid(result);
+    if !result.is_nan() {
+        register_date_bits(result.to_bits());
+    }
+    result
+}
+
 // --- UTC getters: same impl as the regular getters since we store UTC internally ---
 
 #[no_mangle]

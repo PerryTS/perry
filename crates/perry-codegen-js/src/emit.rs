@@ -2150,13 +2150,18 @@ impl JsEmitter {
 
             // --- Date ---
             Expr::DateNow => self.output.push_str("Date.now()"),
-            Expr::DateNew(val) => {
-                if let Some(v) = val {
-                    self.output.push_str("new Date(");
-                    self.emit_expr(v);
-                    self.output.push(')');
-                } else {
+            Expr::DateNew(args) => {
+                if args.is_empty() {
                     self.output.push_str("new Date()");
+                } else {
+                    self.output.push_str("new Date(");
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.emit_expr(a);
+                    }
+                    self.output.push(')');
                 }
             }
             Expr::DateGetTime(d) => { self.emit_expr(d); self.output.push_str(".getTime()"); }

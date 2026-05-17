@@ -987,7 +987,11 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
             walk(message, out);
             walk(cause, out);
         }
-        Expr::DateNew(Some(arg)) => walk(arg, out),
+        Expr::DateNew(args) => {
+            for a in args {
+                walk(a, out);
+            }
+        }
         Expr::Uint8ArrayGet { array, index } => {
             walk(array, out);
             walk(index, out);
@@ -3440,7 +3444,11 @@ fn collect_localset_ids_in_expr_filtered(
             walk(message, out);
             walk(cause, out);
         }
-        Expr::DateNew(Some(arg)) => walk(arg, out),
+        Expr::DateNew(args) => {
+            for a in args {
+                walk(a, out);
+            }
+        }
         Expr::Uint8ArrayGet { array, index } => {
             walk(array, out);
             walk(index, out);

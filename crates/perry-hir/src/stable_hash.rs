@@ -2804,9 +2804,9 @@ impl SH for Expr {
                 es.hash(h);
             }
             Expr::DateNow => tag(h, 310),
-            Expr::DateNew(e) => {
+            Expr::DateNew(es) => {
                 tag(h, 311);
-                e.hash(h);
+                es.hash(h);
             }
             Expr::DateGetTime(e) => {
                 tag(h, 312);

@@ -27,6 +27,80 @@ use crate::lower_types::*;
 /// standard `inst.exports.<method>(...)` syntactic match in
 /// `lower/expr_call.rs` doesn't fire on unrelated `obj.exports.method()`
 /// calls (notably CJS aggregator output). Issue #76.
+/// Collect local IDs declared anywhere inside this statement tree (Let
+/// statements, for-init Lets, catch-clause variables, etc.) — but do NOT
+/// recurse into nested closures, since those introduce their own scope.
+///
+/// Used by the closure capture detector to filter out ids that are
+/// shadowed by inner declarations. See the dayjs-#920 comment in the
+/// closure-lowering site for context.
+pub(crate) fn collect_let_decls_in_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
+    match stmt {
+        Stmt::Let { id, .. } => {
+            out.insert(*id);
+        }
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            for s in then_branch {
+                collect_let_decls_in_stmt(s, out);
+            }
+            if let Some(else_stmts) = else_branch {
+                for s in else_stmts {
+                    collect_let_decls_in_stmt(s, out);
+                }
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            for s in body {
+                collect_let_decls_in_stmt(s, out);
+            }
+        }
+        Stmt::Labeled { body, .. } => collect_let_decls_in_stmt(body, out),
+        Stmt::For { init, body, .. } => {
+            if let Some(init_stmt) = init {
+                collect_let_decls_in_stmt(init_stmt, out);
+            }
+            for s in body {
+                collect_let_decls_in_stmt(s, out);
+            }
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                collect_let_decls_in_stmt(s, out);
+            }
+            if let Some(catch_clause) = catch {
+                if let Some((id, _)) = catch_clause.param {
+                    out.insert(id);
+                }
+                for s in &catch_clause.body {
+                    collect_let_decls_in_stmt(s, out);
+                }
+            }
+            if let Some(finally_stmts) = finally {
+                for s in finally_stmts {
+                    collect_let_decls_in_stmt(s, out);
+                }
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases {
+                for s in &case.body {
+                    collect_let_decls_in_stmt(s, out);
+                }
+            }
+        }
+        // Other forms don't introduce new bindings or only have expression payloads.
+        _ => {}
+    }
+}
+
 pub(crate) fn init_is_webassembly_instantiate(expr: &ast::Expr) -> bool {
     let call = match expr {
         ast::Expr::Call(c) => c,
@@ -4137,9 +4211,27 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                 let param_ids: std::collections::HashSet<LocalId> =
                     params.iter().map(|p| p.id).collect();
 
+                // dayjs (issue: format() returned `292278994-08`): local
+                // IDs are scope-local — see expr_function.rs
+                // compute_closure_captures for the long explanation.
+                // Strip locally-declared ids from the capture set so an
+                // inner `var i = ...` doesn't collide with a same-id
+                // outer constant.
+                let inner_decls: std::collections::HashSet<LocalId> = {
+                    let mut s = std::collections::HashSet::new();
+                    for stmt in &body {
+                        collect_let_decls_in_stmt(stmt, &mut s);
+                    }
+                    s
+                };
+
                 let mut captures: Vec<LocalId> = all_refs
                     .into_iter()
-                    .filter(|id| outer_local_ids.contains(id) && !param_ids.contains(id))
+                    .filter(|id| {
+                        outer_local_ids.contains(id)
+                            && !param_ids.contains(id)
+                            && !inner_decls.contains(id)
+                    })
                     .collect();
                 captures.sort();
                 captures.dedup();

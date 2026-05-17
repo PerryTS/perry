@@ -3684,8 +3684,8 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(set);
                 self.collect_strings_in_expr(value);
             }
-            Expr::DateNew(arg) => {
-                if let Some(a) = arg {
+            Expr::DateNew(args) => {
+                for a in args {
                     self.collect_strings_in_expr(a);
                 }
             }
@@ -7903,8 +7903,11 @@ impl<'a> FuncEmitCtx<'a> {
             }
 
             // --- Date ---
-            Expr::DateNew(arg) => {
-                if let Some(a) = arg {
+            // WASM target only handles the 0/1-arg forms. The multi-arg
+            // `new Date(year, month, ...)` form (used by dayjs) is not
+            // supported on this target; we pass the first arg only.
+            Expr::DateNew(args) => {
+                if let Some(a) = args.first() {
                     self.emit_expr(func, a);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));

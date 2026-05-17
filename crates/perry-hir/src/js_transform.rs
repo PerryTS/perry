@@ -1060,8 +1060,10 @@ fn transform_expr(
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         // Date methods
-        Expr::DateNew(Some(e)) => {
-            transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        Expr::DateNew(args) => {
+            for a in args {
+                transform_expr(a, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            }
         }
         Expr::DateGetTime(e) | Expr::DateToISOString(e) | Expr::DateGetFullYear(e) |
         Expr::DateGetMonth(e) | Expr::DateGetDate(e) | Expr::DateGetDay(e) | Expr::DateGetHours(e) |
@@ -1198,7 +1200,7 @@ fn transform_expr(
         Expr::FuncRef(_) | Expr::ClassRef(_) | Expr::EnumMember { .. } |
         Expr::RegExp { .. } | Expr::NativeModuleRef(_) | Expr::StaticFieldGet { .. } |
         Expr::EnvGet(_) | Expr::ProcessUptime | Expr::ProcessMemoryUsage | Expr::ProcessEnv | Expr::MathRandom | Expr::CryptoRandomUUID | Expr::DateNow |
-        Expr::DateNew(None) | Expr::MapNew | Expr::SetNew | Expr::Update { .. } |
+        Expr::MapNew | Expr::SetNew | Expr::Update { .. } |
         Expr::ArrayPop(_) | Expr::ArrayShift(_) |
         // OS module expressions
         Expr::OsPlatform | Expr::OsArch | Expr::OsHostname | Expr::OsType | Expr::OsRelease |

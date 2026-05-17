@@ -1529,10 +1529,10 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
 
         // Date operations
         Expr::DateNow => Expr::DateNow,
-        Expr::DateNew(timestamp) => Expr::DateNew(
-            timestamp
-                .as_ref()
-                .map(|ts| Box::new(substitute_expr(ts, substitutions))),
+        Expr::DateNew(args) => Expr::DateNew(
+            args.iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
         ),
         Expr::DateGetTime(date) => {
             Expr::DateGetTime(Box::new(substitute_expr(date, substitutions)))
@@ -2542,9 +2542,9 @@ fn collect_instantiations_in_expr(
         Expr::CryptoRandomUUID => {}
         // Date operations
         Expr::DateNow => {}
-        Expr::DateNew(timestamp) => {
-            if let Some(ts) = timestamp {
-                collect_instantiations_in_expr(ts, ctx, module, idx);
+        Expr::DateNew(args) => {
+            for a in args {
+                collect_instantiations_in_expr(a, ctx, module, idx);
             }
         }
         Expr::DateGetTime(date)
@@ -3065,9 +3065,9 @@ fn update_call_sites_in_expr(
         Expr::CryptoRandomUUID => {}
         // Date operations
         Expr::DateNow => {}
-        Expr::DateNew(timestamp) => {
-            if let Some(ts) = timestamp {
-                update_call_sites_in_expr(ts, ctx, lookup);
+        Expr::DateNew(args) => {
+            for a in args {
+                update_call_sites_in_expr(a, ctx, lookup);
             }
         }
         Expr::DateGetTime(date)

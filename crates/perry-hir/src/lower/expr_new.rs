@@ -228,7 +228,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 }
             }
             if class_name == "Date" {
-                // new Date() or new Date(timestamp)
+                // new Date() / new Date(ts) / new Date(year, month, day, h?, m?, s?, ms?).
+                // The multi-arg form is what dayjs's parseDate uses
+                // (`new Date(d[1], m, d[3] || 1, ...)`) — without it the
+                // codegen used to silently discard all but the first
+                // argument, so a string year "2024" got parsed as
+                // 2024 ms-since-epoch (issue: dayjs format prints
+                // "292278994-08" because $d.getTime() ends up garbage).
                 let args = new_expr
                     .args
                     .as_ref()
@@ -239,13 +245,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
-                if args.is_empty() {
-                    return Ok(Expr::DateNew(None));
-                } else {
-                    return Ok(Expr::DateNew(Some(Box::new(
-                        args.into_iter().next().unwrap(),
-                    ))));
-                }
+                return Ok(Expr::DateNew(args));
             }
             if class_name == "RegExp" {
                 // new RegExp(pattern[, flags]) — for string-literal args,

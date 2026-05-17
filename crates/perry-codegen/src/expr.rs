@@ -7345,17 +7345,34 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.bitcast_i64_to_double(&result_i64))
         }
 
-        // -------- new Date() --------
-        Expr::DateNew(arg) => {
-            if let Some(ts_expr) = arg {
-                let ts = lower_expr(ctx, ts_expr)?;
+        // -------- new Date() / new Date(ts) / new Date(year, month, ...) --------
+        Expr::DateNew(args) => match args.len() {
+            0 => Ok(ctx.block().call(DOUBLE, "js_date_new", &[])),
+            1 => {
+                let ts = lower_expr(ctx, &args[0])?;
                 Ok(ctx
                     .block()
                     .call(DOUBLE, "js_date_new_from_value", &[(DOUBLE, &ts)]))
-            } else {
-                Ok(ctx.block().call(DOUBLE, "js_date_new", &[]))
             }
-        }
+            _ => {
+                // Multi-arg constructor: `new Date(year, month, day?, hour?,
+                // minute?, second?, ms?)` in local time. dayjs's parseDate
+                // takes this branch with regex-captured string args — see
+                // js_date_new_local_components for the coercion path.
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let mut vals: Vec<String> = Vec::with_capacity(7);
+                for a in args.iter().take(7) {
+                    vals.push(lower_expr(ctx, a)?);
+                }
+                while vals.len() < 7 {
+                    vals.push(undef.clone());
+                }
+                let blk = ctx.block();
+                let call_args: Vec<(crate::types::LlvmType, &str)> =
+                    vals.iter().map(|v| (DOUBLE, v.as_str())).collect();
+                Ok(blk.call(DOUBLE, "js_date_new_local_components", &call_args))
+            }
+        },
 
         // -------- arr.find(cb) / findIndex(cb) / findLast(cb) / findLastIndex(cb) --------
         Expr::ArrayFind { array, callback } => {
