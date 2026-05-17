@@ -1144,7 +1144,34 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
         Expr::RegisterClassParentDynamic { parent_expr, .. } => {
             walk(parent_expr, out);
         }
-        _ => {}
+        // Issue #859: any Expr variant not explicitly listed above descends
+        // through the centralized walker. The pre-fix `_ => {}` catch-all
+        // silently dropped child Exprs of newly-added variants — most
+        // damagingly the async-to-generator transform's `IterResultSet(
+        // value, done)` / `AsyncStepChain { value, step_closure }` /
+        // `AsyncStepDone { value, step_closure }` / `AsyncFirstCall {
+        // step_closure }`, whose inner `value`/`step_closure` boxes are
+        // the *only* place the resumed-step body's `LocalGet(N)` of a
+        // module-level `const` arrow appears in the post-transform HIR.
+        // Skipping the descent meant the module-globals pre-walk in
+        // `compile_module` (line ~1568) never saw the reference, never
+        // emitted `@perry_global_<mod>__N`, and the LocalGet lowering in
+        // `expr.rs` (line ~1268) fell through every check (no local /
+        // capture / module_global / box) to the soft-fallback
+        // `double_literal(0.0)`. Codegen then emitted `js_closure_call1(
+        // 0, arg)` and the runtime SIGSEGVed dereferencing the null
+        // closure pointer (the short-string "Error" address shape in
+        // #859's lldb capture is downstream — the runtime walks the
+        // pending-promise reject chain trying to surface a TypeError
+        // and the next short-string operand lands in x19). The #894
+        // explicit arms above continue to handle their cases first;
+        // every variant they don't list falls through to the walker
+        // here, so RegisterClass family doesn't double-walk.
+        _ => {
+            perry_hir::walker::walk_expr_children(e, &mut |sub| {
+                collect_ref_ids_in_expr(sub, out);
+            });
+        }
     }
 }
 

@@ -603,7 +603,72 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
     {
         let prop = prop_ident.sym.as_ref();
         let allow_unimplemented = std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
+        // Skip the gate when `member.obj` is an Ident that was a
+        // *named* import binding from the module (e.g. `import {
+        // EventEmitter } from "node:events"; EventEmitter.prototype`).
+        // `lookup_native_module(name)` returns `(module, Some(symbol))`
+        // for named imports and `(module, None)` for namespace imports
+        // (`import * as events from "node:events"`). For named imports,
+        // the member access is reading a property of that imported
+        // *value*, not of the module namespace — so the appropriate
+        // manifest entry to consult is the imported symbol itself
+        // (which is already known to exist; that's how the import
+        // resolved). Without this skip, every `EventEmitter.prototype`
+        // / `Buffer.from(...).x` shape tripped the gate even when the
+        // imported symbol was fully manifest-registered, because by
+        // the time we're here the imported Ident has already been
+        // value-form-lowered to `NativeModuleRef(module)` and the
+        // original symbol name is no longer reachable from `object`.
+        // Issue #859 followup: `test_issue_pino_prototype_undefined`
+        // (the v0.5.938 #894 regression) hits exactly this with
+        // `(EventEmitter as any).prototype`.
+        let obj_is_named_import = match member.obj.as_ref() {
+            ast::Expr::Ident(obj_ident) => matches!(
+                ctx.lookup_native_module(obj_ident.sym.as_ref()),
+                Some((_, Some(_)))
+            ),
+            // The `as any` / `as Foo` / `<T>x` casts wrap the Ident in
+            // a TS-cast AST node before it reaches member access. Peel
+            // them so the named-import detection survives the cast.
+            ast::Expr::TsAs(ts_as) => match ts_as.expr.as_ref() {
+                ast::Expr::Ident(obj_ident) => matches!(
+                    ctx.lookup_native_module(obj_ident.sym.as_ref()),
+                    Some((_, Some(_)))
+                ),
+                _ => false,
+            },
+            ast::Expr::TsNonNull(ts_nn) => match ts_nn.expr.as_ref() {
+                ast::Expr::Ident(obj_ident) => matches!(
+                    ctx.lookup_native_module(obj_ident.sym.as_ref()),
+                    Some((_, Some(_)))
+                ),
+                _ => false,
+            },
+            ast::Expr::TsTypeAssertion(ts_ta) => match ts_ta.expr.as_ref() {
+                ast::Expr::Ident(obj_ident) => matches!(
+                    ctx.lookup_native_module(obj_ident.sym.as_ref()),
+                    Some((_, Some(_)))
+                ),
+                _ => false,
+            },
+            ast::Expr::Paren(paren) => match paren.expr.as_ref() {
+                ast::Expr::Ident(obj_ident) => matches!(
+                    ctx.lookup_native_module(obj_ident.sym.as_ref()),
+                    Some((_, Some(_)))
+                ),
+                ast::Expr::TsAs(ts_as) => match ts_as.expr.as_ref() {
+                    ast::Expr::Ident(obj_ident) => matches!(
+                        ctx.lookup_native_module(obj_ident.sym.as_ref()),
+                        Some((_, Some(_)))
+                    ),
+                    _ => false,
+                },
+                _ => false,
+            },
+            _ => false,
+        };
         if !allow_unimplemented
+            && !obj_is_named_import
             && perry_api_manifest::module_has_any_entries(module)
             && perry_api_manifest::module_has_symbol(module, prop).is_none()
         {
