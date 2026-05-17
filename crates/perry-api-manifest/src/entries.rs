@@ -2039,6 +2039,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perry/system", "getBundleId", false, None),
     method("perry/system", "getAppIcon", false, None),
     method("perry/system", "openURL", false, None),
+    // #918 — programmatic screen capture. Returns a base64-encoded
+    // PNG of the key window's contents on platforms with a native
+    // capture path (macOS); other platforms return the empty string
+    // and the runtime emits a one-time stub warning on first call.
+    method("perry/system", "takeScreenshot", false, None),
     method("perry/system", "keychainSave", false, None),
     method("perry/system", "keychainGet", false, None),
     method("perry/system", "keychainDelete", false, None),

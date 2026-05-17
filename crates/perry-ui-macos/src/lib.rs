@@ -1544,6 +1544,79 @@ pub extern "C" fn perry_ui_state_on_change(state_handle: i64, callback: f64) {
 // System APIs (perry/system module)
 // =============================================================================
 
+/// #918 — programmatic screen capture. Renders the key NSWindow's
+/// content view into a bitmap representation, encodes as PNG, and
+/// returns the base64-encoded result as a Perry-managed string
+/// (i64 pointer, returned as the `Str` dispatch shape). Returns the
+/// empty string when there is no key window (e.g. headless tests,
+/// app launching before the window is shown).
+///
+/// AppKit implementation: `bitmapImageRepForCachingDisplayInRect:`
+/// + `cacheDisplayInRect:toBitmapImageRep:` is the documented path
+/// for retina-correct capture of a single view tree.
+#[no_mangle]
+pub extern "C" fn perry_system_take_screenshot() -> i64 {
+    use base64::Engine;
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    let empty = || unsafe { js_string_from_bytes(std::ptr::null(), 0) };
+    unsafe {
+        let app_cls = objc2::runtime::AnyClass::get(c"NSApplication").unwrap();
+        let app: *mut objc2::runtime::AnyObject = objc2::msg_send![app_cls, sharedApplication];
+        if app.is_null() {
+            return empty();
+        }
+        let key_window: *mut objc2::runtime::AnyObject = objc2::msg_send![app, keyWindow];
+        if key_window.is_null() {
+            return empty();
+        }
+        let content_view: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![key_window, contentView];
+        if content_view.is_null() {
+            return empty();
+        }
+        let bounds: objc2_foundation::NSRect = objc2::msg_send![content_view, bounds];
+        let bitmap: *mut objc2::runtime::AnyObject = objc2::msg_send![
+            content_view,
+            bitmapImageRepForCachingDisplayInRect: bounds
+        ];
+        if bitmap.is_null() {
+            return empty();
+        }
+        let _: () = objc2::msg_send![
+            content_view,
+            cacheDisplayInRect: bounds,
+            toBitmapImageRep: bitmap
+        ];
+        // NSBitmapImageRep → PNG NSData. `representationUsingType:properties:`
+        // takes `NSBitmapImageFileTypePNG` (= 4) and an empty
+        // NSDictionary. Spelling the integer directly because the
+        // matching `NSBitmapImageFileType` Rust binding isn't pulled
+        // in by this crate's existing `objc2` surface — it's a
+        // documented stable public constant.
+        const NS_BITMAP_IMAGE_FILE_TYPE_PNG: u64 = 4;
+        let dict_cls = objc2::runtime::AnyClass::get(c"NSDictionary").unwrap();
+        let empty_dict: *mut objc2::runtime::AnyObject = objc2::msg_send![dict_cls, dictionary];
+        let png_data: *mut objc2::runtime::AnyObject = objc2::msg_send![
+            bitmap,
+            representationUsingType: NS_BITMAP_IMAGE_FILE_TYPE_PNG,
+            properties: empty_dict
+        ];
+        if png_data.is_null() {
+            return empty();
+        }
+        let len: usize = objc2::msg_send![png_data, length];
+        let bytes: *const u8 = objc2::msg_send![png_data, bytes];
+        if bytes.is_null() || len == 0 {
+            return empty();
+        }
+        let slice = std::slice::from_raw_parts(bytes, len);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(slice);
+        js_string_from_bytes(encoded.as_ptr(), encoded.len() as i32)
+    }
+}
+
 /// Open a URL in the default browser/app.
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(url_ptr: i64) {

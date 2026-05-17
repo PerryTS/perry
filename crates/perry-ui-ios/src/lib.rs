@@ -1370,6 +1370,25 @@ pub extern "C" fn perry_ui_state_on_change(state_handle: i64, callback: f64) {
 // System APIs (perry/system module)
 // =============================================================================
 
+/// #918 — programmatic screen capture. MVP stub on iOS: returns the
+/// empty string and emits a first-call diagnostic. The native
+/// implementation will use `UIGraphicsImageRenderer` on the key
+/// window's layer (`drawHierarchy:afterScreenUpdates:` for fidelity)
+/// — landed as a follow-up so this PR can stay focused on the API
+/// surface across every platform.
+#[no_mangle]
+pub extern "C" fn perry_system_take_screenshot() -> i64 {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_take_screenshot",
+        "iOS screen capture not yet implemented (#918 follow-up)",
+        Some("#918"),
+    );
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+}
+
 /// Open a URL in the default browser/app.
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(url_ptr: i64) {

@@ -2102,6 +2102,17 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str],
         ret: ReturnKind::Void,
     },
+    // #918 — programmatic screen capture. Returns a NaN-boxed string
+    // pointer (base64-encoded PNG of the key window) on platforms
+    // with a native capture path; empty string on platforms where the
+    // build.rs-generated stub fires (HarmonyOS + every non-Apple
+    // platform UI crate in this MVP).
+    MethodRow {
+        method: "takeScreenshot",
+        runtime: "perry_system_take_screenshot",
+        args: &[],
+        ret: ReturnKind::Str,
+    },
     MethodRow {
         method: "keychainSave",
         runtime: "perry_system_keychain_save",

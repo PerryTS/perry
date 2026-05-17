@@ -1452,6 +1452,21 @@ pub const FEATURES: &[Feature] = &[
         web: S,
         web_name: None,
     },
+    // #918: programmatic screen capture. macOS has the real
+    // AppKit-backed implementation; every other platform is a no-op
+    // stub today (follow-ups will land per-platform native impls
+    // tracked under #918).
+    Feature {
+        name: "perry_system_take_screenshot",
+        category: SystemApi,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: S,
+        web_name: None,
+    },
     Feature {
         name: "perry_system_is_dark_mode",
         category: SystemApi,

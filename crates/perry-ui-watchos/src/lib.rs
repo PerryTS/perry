@@ -1174,6 +1174,21 @@ pub extern "C" fn perry_ui_table_get_selected_row(_h: i64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(_url: i64) {}
+/// #918 — programmatic screen capture stub on watchOS. WatchKit
+/// doesn't expose a public capture API; returns empty string +
+/// first-call warning.
+#[no_mangle]
+pub extern "C" fn perry_system_take_screenshot() -> i64 {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_take_screenshot",
+        "watchOS does not expose a public screen capture API (#918)",
+        Some("#918"),
+    );
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+}
 #[no_mangle]
 pub extern "C" fn perry_system_request_location(_cb: f64) {}
 #[no_mangle]
