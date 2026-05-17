@@ -2,6 +2,44 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.959 — fix(stdlib): #924 — silence happy-path stderr spam from `jwt.verify` + fastify + box/object runtime warns
+
+**Symptom.** Production services built with Perry's stdlib filled their PM2 error logs with per-request stderr lines that buried real crashes. The operator's 7-day sample was 80 MB of error log, ~95% of it stdlib noise. Three sources:
+
+1. **`crates/perry-stdlib/src/jsonwebtoken.rs:215-239`** — every `jwt.verify(token, secret)` call unconditionally printed `[jwt-verify] token_len=… secret_len=…` plus a `success, claims=…` or `error: …` line. Authenticated services call this per request; token scanners hitting bogus tokens generate `Base64 error: Invalid last symbol …` spam. The token/secret length pairing is also a low-grade infoleak — secret length plus known JWT structure narrows the secret-cracking surface.
+2. **`crates/perry-stdlib/src/fastify/server.rs:125`** and **`crates/perry-ext-fastify/src/server.rs:200`** — `Connection error: invalid HTTP version parsed (found HTTP2 preface)` (when an nginx upstream sends h2 to a fastify-h1 listener) and `Connection error: invalid HTTP method parsed` (bot scanners) printed for every malformed client read. Neither is actionable for the application owner — the request never reaches their code.
+3. **`crates/perry-runtime/src/box.rs`** (`js_box_get` / `js_box_set`) and **`crates/perry-runtime/src/object.rs`** (`js_object_set_field` null-POINTER guard) — `[PERRY WARN]` and `[WARN_NULL_PTR]` lines that fire on the happy path of normal request handling. The associated swap-to-NaN / swap-to-undefined logic is correctness-safe; the diagnostic is only useful for bisection.
+
+**Fix.** Each of these `eprintln!` sites is now gated behind `PERRY_DEBUG=1`:
+
+- `js_jwt_verify` — drops the `token_len/secret_len` log entirely from the gated set (infoleak), gates the success-claims and per-error logs. Token-/secret-`null` argument warnings (which can only fire from a runtime invariant violation) are also gated.
+- `js_box_alloc` / `js_box_get` / `js_box_set` (`perry-runtime/src/box.rs`) — all three `[PERRY WARN]` paths gated. The 3-line burst counter is preserved so a `PERRY_DEBUG` bisection run still gets the same diagnostic shape.
+- `js_object_set_field` null-POINTER-replacement (`perry-runtime/src/object.rs`) — gated. The OOB-write warning (a genuine corruption signal) stays unconditional.
+- Both fastify `Connection error:` sites — gated. Hyper still surfaces the error through its own error-handling pipeline; only the stderr duplicate is gone.
+
+The `eprintln!` for `js_box_alloc` OOM and the `js_object_set_field` OOB warning are the only `[PERRY WARN]`-style stderr writes that remain unconditional — both indicate genuine corruption, not happy-path noise.
+
+**Test.** New subprocess-based regression test in `crates/perry-stdlib/src/jsonwebtoken.rs`:
+
+- `verify_valid_token_is_silent` — mints a real HS256 token, calls `js_jwt_verify`, asserts 0 stderr bytes.
+- `verify_invalid_token_is_silent` — passes `"not-a-jwt"`, asserts 0 stderr lines and no `[jwt-verify]` tag.
+- `verify_logs_under_perry_debug` — sets `PERRY_DEBUG=1`, asserts the original `[jwt-verify] success` line returns.
+
+The tests spawn the test binary as a subprocess (`--exact jsonwebtoken::tests::__perry_924_helper --nocapture --quiet`) because cargo-test's harness installs a Rust-level stderr capture that intercepts `eprintln!` before fd 2, making in-process `dup2`-style capture vacuously pass. Subprocess stderr is unaffected by the harness's capture, giving us a real byte stream to count lines against.
+
+**Files changed.**
+
+- `crates/perry-stdlib/src/jsonwebtoken.rs` — gate `[jwt-verify]` eprintlns; drop length log; new subprocess-based stderr-line-count test.
+- `crates/perry-stdlib/src/fastify/server.rs` — gate `Connection error:`.
+- `crates/perry-ext-fastify/src/server.rs` — gate `Connection error:` (matches `perry-stdlib` counterpart).
+- `crates/perry-runtime/src/box.rs` — gate `js_box_alloc` / `js_box_get` / `js_box_set` `[PERRY WARN]` lines.
+- `crates/perry-runtime/src/object.rs` — gate `js_object_set_field` `[WARN_NULL_PTR]` null-POINTER-replacement log.
+
+**Operator-visible behavior.**
+
+- Default: a production Perry binary emits zero stderr lines for normal HTTP requests, jwt verifies, and closure box read/writes. Real crashes still write to stderr.
+- `PERRY_DEBUG=1` restores the previous verbose output for bisection.
+
 ## v0.5.958 — fix(codegen): #915 — `jwt.sign(...)` dispatch table calling-convention mismatch
 
 **Symptom.** A `jsonwebtoken` `sign` call after a resumed async-step body (e.g. a fastify route handler that `await`s a nested user async function and then calls `jwt.sign({sub:"x"}, "secret", {algorithm:"HS256"})`) SIGSEGVed inside the runtime FFI:

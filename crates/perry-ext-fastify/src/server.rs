@@ -197,7 +197,15 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
                                         .serve_connection(io, service)
                                         .await
                                     {
-                                        eprintln!("Connection error: {}", e);
+                                        // perry#924: hyper surfaces every malformed
+                                        // client read as a per-connection error
+                                        // (HTTP/2 prefaces, scanner garbage). The
+                                        // application never sees these requests, so
+                                        // logging them by default just floods PM2
+                                        // error logs. Gate behind `PERRY_DEBUG=1`.
+                                        if std::env::var_os("PERRY_DEBUG").is_some() {
+                                            eprintln!("Connection error: {}", e);
+                                        }
                                     }
                                 });
                             }

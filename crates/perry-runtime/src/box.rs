@@ -47,7 +47,12 @@ pub extern "C" fn js_box_alloc(initial_value: f64) -> *mut Box {
         let layout = Layout::new::<Box>();
         let ptr = alloc(layout) as *mut Box;
         if ptr.is_null() {
-            eprintln!("[PERRY WARN] js_box_alloc: allocation failed — returning null");
+            // perry#924: oom is rare enough that operators see the
+            // downstream crash and react to that; keep the diagnostic
+            // available under `PERRY_DEBUG=1` for bisection.
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                eprintln!("[PERRY WARN] js_box_alloc: allocation failed — returning null");
+            }
             return std::ptr::null_mut();
         }
         (*ptr).value = initial_value;
@@ -93,12 +98,19 @@ pub fn scan_box_roots(mark: &mut dyn FnMut(f64)) {
 pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
     unsafe {
         if !is_plausible_box_ptr(ptr) {
-            let count = BOX_GET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
-            if count < 3 {
-                eprintln!(
-                    "[PERRY WARN] js_box_get: invalid box pointer {:p} #{}",
-                    ptr, count
-                );
+            // perry#924: production services see these in tight bursts of
+            // 3 synced with normal request handling and the operator can't
+            // tell whether anything is wrong. The path is correctness-safe
+            // (we already return NaN to the caller); gate the diagnostic
+            // behind `PERRY_DEBUG=1` so it only surfaces during bisection.
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                let count = BOX_GET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 3 {
+                    eprintln!(
+                        "[PERRY WARN] js_box_get: invalid box pointer {:p} #{}",
+                        ptr, count
+                    );
+                }
             }
             return f64::NAN;
         }
@@ -121,14 +133,20 @@ pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
 pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
     unsafe {
         if !is_plausible_box_ptr(ptr) {
-            let count = BOX_SET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
-            if count < 3 {
-                eprintln!(
-                    "[PERRY WARN] js_box_set: invalid box pointer {:p} #{} (value bits: 0x{:016x})",
-                    ptr,
-                    count,
-                    value.to_bits()
-                );
+            // perry#924: silent-skip is correctness-safe (caller's box
+            // mutation is dropped, which is the same as no closure
+            // capture having existed). Gate diagnostics behind
+            // `PERRY_DEBUG=1` to keep production stderr clean.
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                let count = BOX_SET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 3 {
+                    eprintln!(
+                        "[PERRY WARN] js_box_set: invalid box pointer {:p} #{} (value bits: 0x{:016x})",
+                        ptr,
+                        count,
+                        value.to_bits()
+                    );
+                }
             }
             return;
         }

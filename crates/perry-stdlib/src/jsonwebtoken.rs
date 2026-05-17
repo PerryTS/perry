@@ -196,10 +196,21 @@ pub unsafe extern "C" fn js_jwt_verify(
     token_ptr: *const StringHeader,
     secret_ptr: *const StringHeader,
 ) -> *mut StringHeader {
+    // perry#924: all `[jwt-verify]` eprintln!s are gated behind
+    // `PERRY_DEBUG=1`. Authenticated production services call
+    // `jwt.verify` per request, so the previous unconditional logging
+    // (token length + secret length + claims/error) flooded stderr and
+    // also leaked the secret length, narrowing the cracking surface
+    // when paired with a known JWT structure. The application layer
+    // already logs 401s at a useful granularity.
+    let debug = std::env::var_os("PERRY_DEBUG").is_some();
+
     let token = match string_from_header(token_ptr) {
         Some(t) => t,
         None => {
-            eprintln!("[jwt-verify] token_ptr is null or invalid");
+            if debug {
+                eprintln!("[jwt-verify] token_ptr is null or invalid");
+            }
             return std::ptr::null_mut();
         }
     };
@@ -207,16 +218,12 @@ pub unsafe extern "C" fn js_jwt_verify(
     let secret = match string_from_header(secret_ptr) {
         Some(s) => s,
         None => {
-            eprintln!("[jwt-verify] secret_ptr is null or invalid");
+            if debug {
+                eprintln!("[jwt-verify] secret_ptr is null or invalid");
+            }
             return std::ptr::null_mut();
         }
     };
-
-    eprintln!(
-        "[jwt-verify] token_len={} secret_len={}",
-        token.len(),
-        secret.len()
-    );
 
     let key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
@@ -229,14 +236,18 @@ pub unsafe extern "C" fn js_jwt_verify(
             // Return the claims as JSON
             let json =
                 serde_json::to_string(&token_data.claims).unwrap_or_else(|_| "{}".to_string());
-            eprintln!(
-                "[jwt-verify] success, claims={}",
-                &json[..json.len().min(80)]
-            );
+            if debug {
+                eprintln!(
+                    "[jwt-verify] success, claims={}",
+                    &json[..json.len().min(80)]
+                );
+            }
             js_string_from_bytes(json.as_ptr(), json.len() as u32)
         }
         Err(e) => {
-            eprintln!("[jwt-verify] error: {}", e);
+            if debug {
+                eprintln!("[jwt-verify] error: {}", e);
+            }
             std::ptr::null_mut()
         }
     }
@@ -276,5 +287,154 @@ pub unsafe extern "C" fn js_jwt_decode(token_ptr: *const StringHeader) -> *mut S
             }
         }
         Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    //! perry#924 regression tests — `jwt.verify` MUST be silent on the
+    //! happy path. We exercise the real `js_jwt_verify` FFI in a
+    //! subprocess (spawning the current test binary with a sentinel
+    //! env var) because cargo-test's harness installs a Rust-level
+    //! stderr capture that intercepts `eprintln!` before fd 2, making
+    //! in-process `dup2`-style capture vacuously pass. Subprocess
+    //! stderr is unaffected and gives us a real byte stream to count
+    //! lines against.
+    //!
+    //! Before the fix:
+    //!   • valid token: 3 stderr lines (`token_len=…` + `success, claims=…`)
+    //!   • invalid token: 2 stderr lines (`token_len=…` + `error: …`)
+    //! After the fix (no `PERRY_DEBUG`):
+    //!   • valid token: 0 stderr lines
+    //!   • invalid token: 0 stderr lines
+    //! With `PERRY_DEBUG=1`: original verbose output is restored.
+    use super::*;
+    use perry_runtime::js_string_from_bytes;
+    use std::process::{Command, Stdio};
+
+    /// Sentinel env var: when set, the targeted helper test runs the
+    /// FFI in this process (which is a subprocess of the real test)
+    /// and exits so the subprocess produces a clean, uncaptured
+    /// stderr stream for the parent test to inspect. Spawning is done
+    /// via `--exact …::__perry_924_helper --nocapture --quiet` so
+    /// only the helper test runs and harness stderr capture is off.
+    const HELPER_ENV: &str = "PERRY_924_HELPER";
+
+    /// Hidden helper test — invoked by the real tests via subprocess.
+    /// When `PERRY_924_HELPER` is set, exec the requested FFI scenario
+    /// and exit. Otherwise no-op (so a normal `cargo test` run just
+    /// records this as a trivially-passing test).
+    #[test]
+    fn __perry_924_helper() {
+        let Ok(mode) = std::env::var(HELPER_ENV) else {
+            return;
+        };
+        unsafe { run_helper(&mode) };
+        std::process::exit(0);
+    }
+
+    unsafe fn run_helper(mode: &str) {
+        unsafe fn mk(s: &str) -> *mut StringHeader {
+            js_string_from_bytes(s.as_ptr(), s.len() as u32)
+        }
+
+        match mode {
+            "valid" => {
+                // Mint a real HS256 token, then verify it. Success
+                // path → must not eprintln (unless PERRY_DEBUG set
+                // by parent).
+                let payload = mk(r#"{"sub":"1234","name":"Alice"}"#);
+                let secret = mk("supersecret");
+                let token_bits = js_jwt_sign(
+                    payload as *const _,
+                    secret as *const _,
+                    0.0,
+                    std::ptr::null(),
+                );
+                assert_ne!(token_bits, 0);
+                let raw = (token_bits as u64 & POINTER_MASK) as *mut StringHeader;
+                let len = (*raw).byte_len as usize;
+                let data_ptr = (raw as *const u8).add(std::mem::size_of::<StringHeader>());
+                let token_bytes = std::slice::from_raw_parts(data_ptr, len);
+                let token_str = std::str::from_utf8(token_bytes).unwrap().to_string();
+
+                let token = mk(&token_str);
+                let secret2 = mk("supersecret");
+                let result = js_jwt_verify(token as *const _, secret2 as *const _);
+                assert!(!result.is_null(), "verify must succeed on a valid token");
+            }
+            "invalid" => {
+                // Garbage input → verify must fail silently (no log
+                // unless PERRY_DEBUG set).
+                let token = mk("not-a-jwt");
+                let secret = mk("supersecret");
+                let result = js_jwt_verify(token as *const _, secret as *const _);
+                assert!(result.is_null(), "verify must fail on garbage");
+            }
+            other => panic!("unknown helper mode: {}", other),
+        }
+    }
+
+    fn spawn_helper(mode: &str, debug: bool) -> std::process::Output {
+        let exe = std::env::current_exe().expect("current_exe");
+        let mut cmd = Command::new(exe);
+        cmd.arg("--exact")
+            .arg("jsonwebtoken::tests::__perry_924_helper")
+            .arg("--nocapture")
+            .arg("--quiet")
+            .env(HELPER_ENV, mode)
+            .env_remove("PERRY_DEBUG")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if debug {
+            cmd.env("PERRY_DEBUG", "1");
+        }
+        cmd.output().expect("spawn helper")
+    }
+
+    #[test]
+    fn verify_valid_token_is_silent() {
+        let out = spawn_helper("valid", false);
+        assert!(out.status.success(), "helper exited non-zero: {:?}", out);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.is_empty(),
+            "jwt.verify on a valid token must not log to stderr (perry#924); got: {:?}",
+            stderr
+        );
+    }
+
+    #[test]
+    fn verify_invalid_token_is_silent() {
+        let out = spawn_helper("invalid", false);
+        assert!(out.status.success(), "helper exited non-zero: {:?}", out);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // Application code (e.g. authMiddleware) already logs the
+        // 401 — stdlib must not duplicate. One line maximum if we
+        // ever decide a single error-class summary is worth it.
+        let lines = stderr.lines().count();
+        assert!(
+            lines == 0,
+            "jwt.verify on invalid input must be silent (perry#924), got {} lines: {:?}",
+            lines,
+            stderr
+        );
+        assert!(
+            !stderr.contains("[jwt-verify]"),
+            "no `[jwt-verify]` line may appear without PERRY_DEBUG; got: {:?}",
+            stderr
+        );
+    }
+
+    #[test]
+    fn verify_logs_under_perry_debug() {
+        let out = spawn_helper("valid", true);
+        assert!(out.status.success(), "helper exited non-zero: {:?}", out);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("[jwt-verify] success"),
+            "PERRY_DEBUG=1 must restore verbose logging; got: {:?}",
+            stderr
+        );
     }
 }

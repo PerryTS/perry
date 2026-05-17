@@ -2867,10 +2867,17 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
             );
             return;
         }
-        // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate — replace with undefined
+        // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate — replace with undefined.
+        // perry#924: this triggers on the happy path (e.g. when codegen
+        // emits `undefined` as a freshly-constructed null POINTER_TAG
+        // before the receiver is fully initialized); the swap-to-undefined
+        // fixes it silently so the operator sees nothing useful. Gate the
+        // diagnostic behind `PERRY_DEBUG=1` for bisection.
         let vbits = value.bits();
         let value = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
-            eprintln!("[WARN_NULL_PTR] js_object_set_field: null POINTER_TAG at obj={:p} field_index={} class_id={} — replacing with undefined", obj, field_index, (*obj).class_id);
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                eprintln!("[WARN_NULL_PTR] js_object_set_field: null POINTER_TAG at obj={:p} field_index={} class_id={} — replacing with undefined", obj, field_index, (*obj).class_id);
+            }
             JSValue::undefined()
         } else {
             value
