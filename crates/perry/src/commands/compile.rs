@@ -156,7 +156,12 @@ fn read_app_metadata(
         })
         .or_else(|| package_bundle_id_from_input(input))
         .unwrap_or_else(|| {
-            let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
+            // Issue #500: bundle_id flows into codesign / productbuild
+            // argv. The input file stem is attacker-influenceable
+            // (tooling-chosen paths), so route it through the shared
+            // sanitizer before splicing into the reverse-DNS string.
+            let raw = input.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
+            let stem = crate::commands::sanitize::sanitize_for_bundle_id_component(raw);
             format!("com.perry.{stem}")
         });
 
@@ -5503,11 +5508,19 @@ pub fn run_with_parse_cache(
         None
     };
 
-    let stem = args
+    let raw_stem = args
         .input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("output");
+    // Issue #500: the input file stem flows into argv as `-o <stem>.dylib`
+    // (and friends) to the linker. A pathological input filename like
+    // `@evil.ts` re-triggers the ld64 response-file class of bug
+    // (originally fixed in #467 for `package.json` names only). Route
+    // through the shared sanitizer so the entire char-class is scrubbed
+    // at one fuzz-tested choke point.
+    let stem_owned = super::sanitize::sanitize_for_linker_argv(raw_stem);
+    let stem = stem_owned.as_str();
     let is_dylib = args.output_type == "dylib";
     let exe_path = args.output.unwrap_or_else(|| {
         if is_dylib {
