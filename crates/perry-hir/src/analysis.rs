@@ -949,6 +949,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::ProcessCwd
         | Expr::ProcessMemoryUsage
         | Expr::ProcessEnv
+        | Expr::GlobalThisExpr
         | Expr::NativeModuleRef(_)
         | Expr::RegExp { .. } => {}
         Expr::ObjectKeys(obj) | Expr::ObjectValues(obj) | Expr::ObjectEntries(obj) => {
@@ -968,6 +969,12 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::RegExpTest { regex, string } => {
             collect_assigned_locals_expr(regex, assigned);
             collect_assigned_locals_expr(string, assigned);
+        }
+        Expr::RegExpDynamic { pattern, flags } => {
+            collect_assigned_locals_expr(pattern, assigned);
+            if let Some(f) = flags {
+                collect_assigned_locals_expr(f, assigned);
+            }
         }
         Expr::StringMatch { string, regex } => {
             collect_assigned_locals_expr(string, assigned);

@@ -2,6 +2,41 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.977 — fix(#957 followup): `Function('return this')()` + bare `RegExp(...)` recognisers — moves real lodash past module-init `TypeError: value is not a function`
+
+**Symptom.** PR #959 closed two of lodash's three module-init bugs (`.call(this)` IIFE bodies + `Expr::IndexUpdate` codegen) but the commit explicitly flagged the next gap: `import _ from "lodash"` still threw
+
+```
+TypeError: value is not a function
+    at <anonymous>
+```
+
+from the top-level IIFE before any user code ran, and `_` resolved to `undefined`. Two distinct call sites hit the same null-closure-handle path:
+
+1. **`var root = freeGlobal || freeSelf || Function('return this')();`** (lodash.js line 436) — the canonical "give me whatever the host calls `globalThis` here" idiom every CJS/UMD library copies. The bare `Function` ident lowered to `Expr::GlobalGet(0)` (the no-resolution sentinel; `lower.rs:8174` already lists Function in the no-warn allowlist), so the inner `Function('return this')` lowered to `Call { callee: GlobalGet(0), args: [String("return this")] }`. The generic call path dispatched through `js_closure_call1` with a null closure handle, validated, and threw via `throw_not_callable` (which hard-codes `b"value"` as the property name — hence the "value is not a function" diagnostic with no usable receiver name).
+
+2. **`var reHasEscapedHtml = RegExp(reEscapedHtml.source);`** (lodash.js line 136; ~5 more sibling sites at lines 137 / 154 / 266 / 272 / 275 / 290 / 1499 / 4613) — bare `RegExp(...)` function-call form (not `new RegExp(...)`). The `RegExp` ident lowered the same way as `Function` (GlobalGet(0)), so the call form crashed identically. `new RegExp(<non-literal>)` had a parallel hole: the `expr_new.rs` recogniser only fired for string-literal `pattern` args and otherwise fell through to generic class-instantiation, which produced an empty ObjectHeader placeholder that any subsequent `.test()` / `.exec()` would silently no-op or SIGSEGV on.
+
+**Root cause (1).** Codegen's `Call { callee: Closure }` path goes through `js_closure_callN(closure_handle, args...)` with `unbox_to_i64(callee_value)` as the handle. When the callee is `Expr::GlobalGet(0)` (which lowers to `0.0`), the handle is `0`. `js_closure_callN`'s `get_valid_func_ptr` rejects null and calls `throw_not_callable` → `js_throw_type_error_not_a_function("", "value", 5)` → the user sees the line-less "value is not a function" panic with `at <anonymous>`. Found by `nm`-grepping the debug-symbols binary for `throw_not_callable` and walking up the lldb backtrace inside `perry_closure_node_modules_lodash_lodash_js__3` (the inner IIFE body); the call site disassembled to `RegExp.source → orr STRING_TAG → js_closure_call1(closure=0, source)`.
+
+**Root cause (2).** `RegExp(...)` had no AST-shape recognizer at HIR lower time, so it fell through to the same null-callee path. `new RegExp(<dynExpr>)` was handled at the HIR level (`expr_new.rs::lower_new`) but only fired on string-literal `pattern`; the dynamic-arg case left the comment "That path is currently broken too, but at least doesn't regress on the literal case" — confirmed broken here.
+
+**Fix.**
+
+1. **New `Expr::GlobalThisExpr` HIR variant** in `crates/perry-hir/src/ir.rs` (plus walker, stable_hash tag 474, analysis, collectors arms). Codegen lowers to a single `js_get_global_this()` call — the same lazy singleton `globalThis[X] = V` already writes to (see #611, `crates/perry-runtime/src/object.rs:9767`). The HIR-side recognizer in `crates/perry-hir/src/lower/expr_call.rs` matches `Call { callee: Call { callee: Ident("Function"), args: [Lit::Str(s)] }, args: [] }` where `s.trim().trim_end_matches(';').trim() == "return this"` AND `Function` is not shadowed by a local/func binding. Whitespace and trailing semicolon variants both fold through the same path (covered by the new regression test).
+
+2. **New `Expr::RegExpDynamic { pattern: Box<Expr>, flags: Option<Box<Expr>> }` HIR variant** (walker + stable_hash 475/476/477 + analysis arms). Codegen lowers to `js_regexp_new(pattern_handle, flags_handle)` — the same runtime entry the static `/foo/g` arm uses. Missing flags fall back to interning the empty string at codegen so `js_regexp_new` always sees a real `StringHeader*` (the LLVM type system rejects a `null`-typed `ptr` in the `i64` slot). Two callsites fold into this variant:
+   - `crates/perry-hir/src/lower/expr_call.rs`: `RegExp(pattern[, flags])` with 1 or 2 args, no spread, and `RegExp` not shadowed.
+   - `crates/perry-hir/src/lower/expr_new.rs`: the existing `class_name == "RegExp"` arm now folds through `RegExpDynamic` when the literal-pattern path doesn't match (so `new RegExp(varExpr)` / `new RegExp(varExpr, varFlagsExpr)` work).
+
+**Validation.**
+
+- New regression test `test-files/test_lodash_function_return_this_regexp.ts` — 12 assertions all match `node --experimental-strip-types` byte-for-byte. Exercises `Function('return this')()` identity (the runtime cache must return the same singleton across calls), trailing-semicolon and whitespace variants, write-then-read through the singleton, `RegExp(literal)` / `RegExp(literal, "g")` / `RegExp(varPattern)` / `RegExp(/foo/.source)` (the literal lodash shape), and `new RegExp(varPattern, varFlags)` / `new RegExp(literal)` (regression guard for the path that already worked).
+- Existing `test-files/test_regex.ts` parity output unchanged (20/20 lines match node).
+- `import _ from "lodash"` no longer throws at module init — the IIFE body completes and `module.exports = _` propagates. lodash itself still hits additional unrelated compat gaps further into `runInContext()` (the empty `globalThis` doesn't expose `Array`/`Function`/`Object`/etc. as readable properties, so `var Array = context.Array` reads undefined and the subsequent `Array.prototype` throws "Cannot read properties of undefined (reading 'prototype')"); those are deeper compat work tracked separately. This PR is the IIFE-init slice — the rest of lodash needs `globalThis.Array === Array` and friends, which is its own architectural change.
+
+**Files touched.** `crates/perry-hir/src/ir.rs`, `crates/perry-hir/src/walker.rs`, `crates/perry-hir/src/stable_hash.rs`, `crates/perry-hir/src/analysis.rs`, `crates/perry-hir/src/lower/expr_call.rs`, `crates/perry-hir/src/lower/expr_new.rs`, `crates/perry-codegen/src/collectors.rs`, `crates/perry-codegen/src/expr.rs`, plus the new test fixture.
+
 ## v0.5.976 — feat(zlib/crypto): `zlib.createBrotliDecompress` + `crypto.subtle.wrapKey`/`unwrapKey` — moves axios + jose past the next compile gates
 
 **Symptom.** After #955 wired `zlib.constants` + `subtle.generateKey`, the two `compilePackages` smoke targets advanced one step and tripped on the next gap:

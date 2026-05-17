@@ -6262,6 +6262,42 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
+        // `RegExp(<dynExpr>)` / `RegExp(<dynExpr>, <dynFlagsExpr>)` /
+        // `new RegExp(<non-literal>)`. Folded at HIR (lower/expr_call.rs +
+        // lower/expr_new.rs) from any callsite where the pattern (or
+        // flags) come in as runtime values rather than string literals.
+        // Both `pattern` and `flags` are NaN-boxed strings; missing
+        // flags fall back to interning an empty string at codegen so
+        // `js_regexp_new` always sees a real `StringHeader*`. Followup
+        // to #957 / PR #959.
+        Expr::RegExpDynamic { pattern, flags } => {
+            let pattern_box = lower_expr(ctx, pattern)?;
+            let flags_handle = if let Some(flags_expr) = flags {
+                let flags_box = lower_expr(ctx, flags_expr)?;
+                let blk = ctx.block();
+                unbox_str_handle(blk, &flags_box)
+            } else {
+                // Intern an empty string and use its handle so the
+                // runtime sees a valid `StringHeader*` (the
+                // `is_valid_ptr` check inside `js_regexp_new` already
+                // accepts null, but the LLVM type system needs a real
+                // i64 here, not a `null` typed `ptr`).
+                let empty_idx = ctx.strings.intern("");
+                let empty_global = format!("@{}", ctx.strings.entry(empty_idx).handle_global);
+                let blk = ctx.block();
+                let empty_box = blk.load(DOUBLE, &empty_global);
+                unbox_to_i64(blk, &empty_box)
+            };
+            let blk = ctx.block();
+            let pattern_handle = unbox_str_handle(blk, &pattern_box);
+            let result = blk.call(
+                I64,
+                "js_regexp_new",
+                &[(I64, &pattern_handle), (I64, &flags_handle)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
         // -------- ObjectSpread literal --------
         // `{ ...a, key: val, ...b }`. The HIR carries an ordered
         // Vec<(Option<String>, Expr)>. Static props use the same
@@ -9999,6 +10035,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // first call. Subsequent PropertyGet dispatch on it works
             // via the normal object field path.
             Ok(ctx.block().call(DOUBLE, "js_process_env", &[]))
+        }
+        Expr::GlobalThisExpr => {
+            // `Function('return this')()` (and any other AST shape we
+            // recognise as "get the global this") materialises here as
+            // the runtime's lazily-allocated `globalThis` singleton —
+            // same object that `globalThis[...]= v` writes target via
+            // the IndexSet arm above. Returns an already-NaN-boxed
+            // f64 POINTER_TAG; the property-get arms route through
+            // this same singleton for `globalThis.process.env` etc.
+            Ok(ctx.block().call(DOUBLE, "js_get_global_this", &[]))
         }
         Expr::DateToISOString(d) => {
             let v = lower_expr(ctx, d)?;

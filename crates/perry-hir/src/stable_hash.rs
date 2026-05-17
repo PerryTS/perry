@@ -1637,6 +1637,7 @@ impl SH for Expr {
                 e.as_ref().hash(h);
             }
             Expr::ProcessEnv => tag(h, 55),
+            Expr::GlobalThisExpr => tag(h, 474),
             Expr::ProcessUptime => tag(h, 56),
             Expr::ProcessCwd => tag(h, 57),
             Expr::ProcessArgv => tag(h, 58),
@@ -3217,6 +3218,16 @@ impl SH for Expr {
                 tag(h, 383);
                 pattern.hash(h);
                 flags.hash(h);
+            }
+            Expr::RegExpDynamic { pattern, flags } => {
+                tag(h, 475);
+                pattern.as_ref().hash(h);
+                if let Some(f_box) = flags {
+                    tag(h, 476);
+                    f_box.as_ref().hash(h);
+                } else {
+                    tag(h, 477);
+                }
             }
             Expr::RegExpTest { regex, string } => {
                 tag(h, 384);

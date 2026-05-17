@@ -6234,6 +6234,7 @@ fn check_object_literal_escapes_in_expr(
         | Expr::ProcessVersion | Expr::ProcessVersions | Expr::ProcessHrtimeBigint
         | Expr::ProcessStdin | Expr::ProcessStdout | Expr::ProcessStderr
         | Expr::ProcessEnv
+        | Expr::GlobalThisExpr
         // Path / encoding / OS leaf intrinsics
         | Expr::PathSep | Expr::PathDelimiter
         | Expr::TextEncoderNew | Expr::TextDecoderNew

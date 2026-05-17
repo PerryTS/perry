@@ -1230,6 +1230,19 @@ pub enum Expr {
     // access through `globalThis`/aliases where the static `.KEY` fast
     // path doesn't fire.
     ProcessEnv,
+    // `globalThis` materialized as an actual object value (not the
+    // `Expr::GlobalGet(0)` sentinel — that one routes by property
+    // name from the parent PropertyGet/Call context and lowers to
+    // the `0.0` placeholder when used bare). This variant lowers to
+    // a real `js_get_global_this()` call so that
+    // `Function('return this')()` (the canonical "get globalThis"
+    // idiom every CJS/UMD library copies — lodash, underscore,
+    // Effect, …) actually evaluates to the lazily-allocated global
+    // singleton instead of `undefined`/`0.0`. Without this fold the
+    // double call lowers as `GlobalGet(0)(literal)(): TypeError:
+    // value is not a function` at module init and the import
+    // resolves to undefined. Followup to #957 / PR #959.
+    GlobalThisExpr,
     // Process uptime: process.uptime() -> number (seconds)
     ProcessUptime,
     // Process current working directory: process.cwd() -> string
@@ -2284,6 +2297,25 @@ pub enum Expr {
     RegExp {
         pattern: String,
         flags: String,
+    },
+    /// Dynamic RegExp construction: `RegExp(pattern)` /
+    /// `RegExp(pattern, flags)` / `new RegExp(pattern, flags?)` where the
+    /// pattern (and optional flags) are runtime values, not string
+    /// literals. lodash 4 builds half a dozen of these at module init
+    /// from `someLiteralRegex.source`:
+    ///   var reHasEscapedHtml = RegExp(reEscapedHtml.source);
+    /// Pre-fix the bare `RegExp` ident lowered to `Expr::GlobalGet(0)`
+    /// and the function-call form dispatched to a null closure, which
+    /// `js_closure_call1` rejected as
+    /// `TypeError: value is not a function` at module init. The
+    /// `new RegExp(<non-literal>)` arm in `expr_new.rs` similarly fell
+    /// through to the generic class-instantiation placeholder. Both now
+    /// fold to this variant which lowers to `js_regexp_new(pattern,
+    /// flags)` (the same runtime entrypoint the static `/foo/` arm
+    /// uses). Followup to #957 / PR #959.
+    RegExpDynamic {
+        pattern: Box<Expr>,
+        flags: Option<Box<Expr>>,
     },
     /// regex.test(string) -> boolean
     RegExpTest {

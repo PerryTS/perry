@@ -76,6 +76,7 @@ where
         | Expr::Update { .. }
         | Expr::EnvGet(_)
         | Expr::ProcessEnv
+        | Expr::GlobalThisExpr
         | Expr::ProcessUptime
         | Expr::ProcessCwd
         | Expr::ProcessArgv
@@ -812,6 +813,12 @@ where
             f(regex);
             f(string);
         }
+        Expr::RegExpDynamic { pattern, flags } => {
+            f(pattern);
+            if let Some(flags_box) = flags {
+                f(flags_box);
+            }
+        }
         Expr::RegExpSetLastIndex { regex, value } => {
             f(regex);
             f(value);
@@ -1420,6 +1427,7 @@ where
         | Expr::Update { .. }
         | Expr::EnvGet(_)
         | Expr::ProcessEnv
+        | Expr::GlobalThisExpr
         | Expr::ProcessUptime
         | Expr::ProcessCwd
         | Expr::ProcessArgv
@@ -2141,6 +2149,12 @@ where
         | Expr::StringMatchAll { string, regex } => {
             f(regex);
             f(string);
+        }
+        Expr::RegExpDynamic { pattern, flags } => {
+            f(pattern);
+            if let Some(flags_box) = flags {
+                f(flags_box);
+            }
         }
         Expr::RegExpSetLastIndex { regex, value } => {
             f(regex);

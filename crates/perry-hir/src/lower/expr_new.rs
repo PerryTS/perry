@@ -284,11 +284,26 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         flags: flags_lit,
                     });
                 }
-                // Fall through to generic class instantiation for
-                // non-literal args (e.g. `new RegExp(userInput)`).
-                // That path is currently broken too, but at least
-                // doesn't regress on the literal case which is far
-                // more common.
+                // Dynamic-arg `new RegExp(...)`: pattern (or flags) is
+                // a runtime value. Fold to the same `RegExpDynamic`
+                // variant the bare-call recognizer in expr_call.rs
+                // produces — both lower to `js_regexp_new` with
+                // dynamically-resolved string handles. Followup to
+                // #957 / PR #959.
+                if let Some(args) = args_ast {
+                    if !args.is_empty() && args.iter().all(|a| a.spread.is_none()) {
+                        let pattern = lower_expr(ctx, &args[0].expr)?;
+                        let flags = if args.len() >= 2 {
+                            Some(Box::new(lower_expr(ctx, &args[1].expr)?))
+                        } else {
+                            None
+                        };
+                        return Ok(Expr::RegExpDynamic {
+                            pattern: Box::new(pattern),
+                            flags,
+                        });
+                    }
+                }
             }
             if class_name == "Proxy" {
                 let args = new_expr
