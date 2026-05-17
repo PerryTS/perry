@@ -4764,14 +4764,32 @@ fn check_escapes_in_expr(
         }
         Expr::Call { callee, args, .. } => {
             // Method-call form: `local.method(...)` lowers to
-            // `Call { callee: PropertyGet { LocalGet(id), ... } }`. The
-            // PropertyGet escape check above treats `local.field` reads as
-            // safe, but a method call passes `local` as `this` to a function
-            // that dereferences it as a real object pointer. Scalar
-            // replacement has no pointer to give — mark as escape.
+            // `Call { callee: PropertyGet { LocalGet(id), ... } }`. Most
+            // methods need a real `this` pointer, so scalar replacement has
+            // no receiver to pass. The narrow exception below is a zero-arg
+            // method whose whole body is `return this.<field>`, and whose
+            // class chain has no own-field/accessor shadow for the method
+            // name. Call lowering can satisfy that exact shape directly from
+            // the scalarized field slot.
             if let Expr::PropertyGet { object, .. } = callee.as_ref() {
                 if let Expr::LocalGet(id) = object.as_ref() {
-                    if candidates.contains_key(id) {
+                    if let Some(class_name) = candidates.get(id) {
+                        if let Expr::PropertyGet { property, .. } = callee.as_ref() {
+                            if crate::type_analysis::method_scalar_summary_for_call(
+                                classes,
+                                class_name,
+                                property,
+                                args.len(),
+                            )
+                            .is_some()
+                            {
+                                check_escapes_in_expr(callee, candidates, classes, escaped);
+                                for a in args {
+                                    check_escapes_in_expr(a, candidates, classes, escaped);
+                                }
+                                return;
+                            }
+                        }
                         escaped.insert(*id);
                     }
                 }
@@ -5229,6 +5247,7 @@ fn check_escapes_in_expr(
         | Expr::ExternFuncRef { .. }
         | Expr::GlobalGet(_)
         | Expr::DateNow
+        | Expr::PerformanceNow
         | Expr::MapNew
         | Expr::SetNew
         | Expr::EnumMember { .. }
