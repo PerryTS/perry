@@ -12,6 +12,7 @@ pub mod error;
 pub mod ir;
 pub mod js_transform;
 pub(crate) mod jsx;
+pub mod lockdown;
 pub mod lower;
 pub(crate) mod lower_decl;
 pub(crate) mod lower_patterns;
@@ -33,6 +34,7 @@ pub use js_transform::{
     fix_cross_module_native_instances, fix_local_native_instances, transform_js_imports,
     ExportedNativeInstance,
 };
+pub use lockdown::{audit_module_lockdown, LockdownViolation};
 pub use lower::{
     lower_module, lower_module_full, lower_module_with_class_id,
     lower_module_with_class_id_and_types, lower_module_with_class_id_types_and_seed,

@@ -359,6 +359,17 @@ pub struct CompileArgs {
     /// See `docs/src/cli/emit-sandbox.md`.
     #[arg(long)]
     pub emit_sandbox: bool,
+    /// #496 — fail the build if any of the standard arbitrary-code-
+    /// execution surfaces are reachable: `perry-jsruntime` (QuickJS)
+    /// is in the graph, any `perry.nativeLibrary` archive is
+    /// referenced, or any source module reaches `child_process.*`.
+    /// Most apps need none of these; lockdown is a one-line opt-in
+    /// to "this app is provably free of arbitrary-code-execution
+    /// vectors." Also settable via `PERRY_LOCKDOWN=1` env var or
+    /// `"perry": { "lockdown": true }` in package.json.
+    /// See `docs/src/cli/lockdown.md`.
+    #[arg(long)]
+    pub lockdown: bool,
 
     /// Minimum Windows version the compiled executable must run on.
     /// Accepted values: `7`, `8`, `10` (default `10`). Ignored on every
@@ -620,6 +631,15 @@ pub struct CompilationContext {
     /// invokes the binary via `sandbox-exec -f <binary>.sandbox
     /// <binary>` (documented in docs/src/cli/emit-sandbox.md).
     pub emit_sandbox: bool,
+    /// #496 — `--lockdown` mode. When true, the build refuses to
+    /// link `perry-jsruntime`, refuses any `perry.nativeLibrary`
+    /// archive reference, and refuses any source module that
+    /// reaches `child_process.*`. Sources, last wins:
+    /// `perry.lockdown: true` in package.json → env
+    /// `PERRY_LOCKDOWN=1` → CLI `--lockdown`. The build fails with
+    /// one combined diagnostic naming every offending site so the
+    /// reviewer can fix the whole surface at once.
+    pub lockdown: bool,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -673,6 +693,7 @@ impl CompilationContext {
             allow_unsandboxed_build: Vec::new(),
             emit_attest: false,
             emit_sandbox: false,
+            lockdown: false,
         }
     }
 }
@@ -1262,6 +1283,16 @@ pub fn run_with_parse_cache(
                 {
                     ctx.emit_sandbox = es;
                 }
+                // #496: perry.lockdown — refuse the standard
+                // arbitrary-code-execution surfaces (perry-jsruntime,
+                // perry.nativeLibrary archives, child_process.*).
+                if let Some(ld) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("lockdown"))
+                    .and_then(|v| v.as_bool())
+                {
+                    ctx.lockdown = ld;
+                }
             }
         }
     }
@@ -1334,6 +1365,18 @@ pub fn run_with_parse_cache(
     }
     if args.emit_sandbox {
         ctx.emit_sandbox = true;
+    }
+
+    // #496: `--lockdown` precedence: package.json `perry.lockdown` →
+    // env `PERRY_LOCKDOWN=1` → CLI `--lockdown` (last wins, mirrors
+    // the fast-math knob ladder). `=0` explicitly disables.
+    match std::env::var("PERRY_LOCKDOWN") {
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => ctx.lockdown = true,
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => ctx.lockdown = false,
+        _ => {}
+    }
+    if args.lockdown {
+        ctx.lockdown = true;
     }
 
     // --- i18n: parse [i18n] config from perry.toml and load locale files ---
@@ -1767,6 +1810,89 @@ pub fn run_with_parse_cache(
                  Run `perry audit --sbom` (when #495 lands) to see every\n\
                  stdlib surface each dep would need.",
                 all_violations.len(),
+            );
+        }
+    }
+
+    // #496: `--lockdown` mode — fail the build if any standard
+    // arbitrary-code-execution surface is reachable. The check has
+    // three parts and runs after `collect_modules` so every
+    // dependency-graph signal is settled before we emit the
+    // diagnostic. All three are collected into one combined error
+    // so the reviewer can address every offending site at once.
+    if ctx.lockdown {
+        let mut reasons: Vec<String> = Vec::new();
+
+        if ctx.needs_js_runtime {
+            reasons.push(
+                "perry-jsruntime (QuickJS-based eval-equivalent) is reachable from the \
+                 module graph — see #499 docs for the matching opt-in gate"
+                    .to_string(),
+            );
+        }
+        if !ctx.native_libraries.is_empty() {
+            let mut names: Vec<&str> = ctx
+                .native_libraries
+                .iter()
+                .map(|n| n.module.as_str())
+                .collect();
+            names.sort();
+            names.dedup();
+            reasons.push(format!(
+                "`perry.nativeLibrary` archives referenced by: {}",
+                names.join(", ")
+            ));
+        }
+
+        let mut hir_violations: Vec<perry_hir::LockdownViolation> = Vec::new();
+        for (path, hir_module) in &ctx.native_modules {
+            let source = path.to_string_lossy().into_owned();
+            let v = perry_hir::audit_module_lockdown(hir_module, &source);
+            hir_violations.extend(v);
+        }
+        if !hir_violations.is_empty() {
+            let limit = 12usize;
+            let mut detail = String::new();
+            for v in hir_violations.iter().take(limit) {
+                detail.push_str(&format!("\n      - {}: {}", v.source, v.kind));
+            }
+            if hir_violations.len() > limit {
+                detail.push_str(&format!(
+                    "\n      ... and {} more",
+                    hir_violations.len() - limit
+                ));
+            }
+            reasons.push(format!(
+                "`child_process.*` reached from {} call site(s):{}",
+                hir_violations.len(),
+                detail
+            ));
+        }
+
+        if !reasons.is_empty() {
+            let mut formatted = String::new();
+            for r in &reasons {
+                formatted.push_str(&format!("\n  - {}", r));
+            }
+            anyhow::bail!(
+                "`--lockdown` refused the build because the following \
+                 arbitrary-code-execution surfaces are reachable:{formatted}\n\
+                 \n\
+                 Lockdown is the single-flag opt-in to \"this app is provably \
+                 free of arbitrary-code-execution vectors\" (#496). When set, \
+                 the build refuses to link perry-jsruntime, refuses any \
+                 perry.nativeLibrary archive reference, and refuses any source \
+                 module that reaches child_process.* — all in one combined \
+                 check so reviewers see the whole surface at once.\n\
+                 \n\
+                 To run without lockdown for one build:\n\
+                 - Pass `--lockdown=false` explicitly on the CLI, or\n\
+                 - Set `PERRY_LOCKDOWN=0` in the environment.\n\
+                 \n\
+                 To make the build actually lockdown-clean: remove the \
+                 offending surfaces, or replace them with native Perry \
+                 equivalents (e.g. `perry/thread` for child_process workloads, \
+                 native Perry stdlib for jsruntime-only deps)."
             );
         }
     }

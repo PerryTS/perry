@@ -142,6 +142,7 @@
 - [`PERRY_SANDBOX_BUILDRS`](cli/sandbox-buildrs.md)
 - [`--emit-attest` (binary attestation sidecar)](cli/emit-attest.md)
 - [`--emit-sandbox`](cli/emit-sandbox.md)
+- [`--lockdown`](cli/lockdown.md)
 - [perry.toml Reference](cli/perry-toml.md)
 
 ---
