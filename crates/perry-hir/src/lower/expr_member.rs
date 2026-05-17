@@ -721,9 +721,8 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                         let pkg_allowed = pkg
                             .map(crate::ir::dynamic_stdlib_allowed_for_package)
                             .unwrap_or(false);
-                        let site_allowed = crate::ir::current_module_has_allow_dynamic_at(
-                            member.span.lo.0,
-                        );
+                        let site_allowed =
+                            crate::ir::current_module_has_allow_dynamic_at(member.span.lo.0);
                         if !pkg_allowed && !site_allowed {
                             let pkg_label = pkg
                                 .map(|p| format!(" (in package `{}`)", p))
@@ -890,7 +889,10 @@ pub(super) fn stdlib_namespace_receiver(
     // canonical specifier.
     for (local, module) in ctx.builtin_module_aliases.iter() {
         if local == name {
-            if let Some(canon) = STDLIB_NAMESPACE_NAMES.iter().find(|n| **n == module.as_str()) {
+            if let Some(canon) = STDLIB_NAMESPACE_NAMES
+                .iter()
+                .find(|n| **n == module.as_str())
+            {
                 return Some(*canon);
             }
         }
@@ -900,7 +902,10 @@ pub(super) fn stdlib_namespace_receiver(
     // native_modules entry with method_name = None.
     for (local, module, method) in ctx.native_modules.iter() {
         if local == name && method.is_none() {
-            if let Some(canon) = STDLIB_NAMESPACE_NAMES.iter().find(|n| **n == module.as_str()) {
+            if let Some(canon) = STDLIB_NAMESPACE_NAMES
+                .iter()
+                .find(|n| **n == module.as_str())
+            {
                 return Some(*canon);
             }
         }

@@ -179,9 +179,7 @@ fn package_name_extraction() {
     );
     // Nested node_modules → rightmost wins (matches package resolution).
     assert_eq!(
-        package_name_for_source_path(
-            "/repo/node_modules/outer/node_modules/inner/lib/x.ts"
-        ),
+        package_name_for_source_path("/repo/node_modules/outer/node_modules/inner/lib/x.ts"),
         Some("inner")
     );
     assert_eq!(package_name_for_source_path("/repo/src/main.ts"), None);
