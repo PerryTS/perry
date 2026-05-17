@@ -286,6 +286,17 @@ pub(super) fn collect_modules(
     // immediately after the lower call so it can't leak to subsequent
     // unrelated work on the same thread.
     perry_hir::set_compile_packages_override(ctx.compile_packages.clone());
+    // #503: re-install the dynamic-stdlib-dispatch config on the current
+    // thread before each lower. Driver may be a rayon worker that didn't
+    // inherit the thread-local set on the main thread by `compile.rs`.
+    perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
+    perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
+    // #503: stash the module source text so the dynamic-dispatch check
+    // can look up `// @perry-allow-dynamic` line annotations adjacent to
+    // any violation site without re-reading the file. Cleared right
+    // after the lower call so it can't leak to unrelated work on this
+    // thread.
+    perry_hir::set_current_module_source(source.clone());
     let lower_result = perry_hir::lower_module_full(
         ast_module,
         &module_name,
@@ -297,6 +308,7 @@ pub(super) fn collect_modules(
         is_external_module,
     );
     perry_hir::clear_compile_packages_override();
+    perry_hir::clear_current_module_source();
     let (mut hir_module, new_next_class_id) = lower_result?;
     *next_class_id = new_next_class_id; // Update the global class_id counter
 

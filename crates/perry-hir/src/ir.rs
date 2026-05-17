@@ -73,6 +73,154 @@ pub fn clear_compile_packages_override() {
     COMPILE_PACKAGES_OVERRIDE.with(|cell| cell.borrow_mut().clear());
 }
 
+// ---- #503 dynamic-stdlib-dispatch refusal config ----
+
+thread_local! {
+    /// #503: when true, HIR lowering refuses compile-time `obj[expr]()` /
+    /// `obj[expr]` on known stdlib namespace receivers (`process`, `fs`,
+    /// `crypto`, `child_process`, `net`, `os`, `path`, `http`, `https`,
+    /// `stream`, `url`, `util`, `buffer`, `events`, `dns`, `tls`,
+    /// `querystring`, `zlib`) unless the index is a string literal or
+    /// compile-time-foldable string. Catches the dispatch-by-string class
+    /// of supply-chain evasion. Set to false by `perry.allowDynamicStdlibDispatch: true`
+    /// or `PERRY_ALLOW_DYNAMIC_STDLIB=1`.
+    static REFUSE_DYNAMIC_STDLIB_DISPATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+
+    /// #503: per-thread set of npm package names that opted out of the
+    /// dynamic-stdlib-dispatch refusal (`perry.allowDynamicStdlibDispatch:
+    /// ["@scope/pkg", ...]`). When the currently-lowering source file
+    /// belongs to one of these packages, the check is skipped.
+    static ALLOW_DYNAMIC_STDLIB_PACKAGES: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+
+    /// #503: source text of the module currently being lowered. Used by
+    /// the dynamic-dispatch check to look up `// @perry-allow-dynamic`
+    /// line annotations adjacent to violation sites. Set once per
+    /// `lower_module_full` invocation by the compiler driver.
+    static CURRENT_MODULE_SOURCE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// #503: enable (true) or disable (false) the dynamic-stdlib-dispatch
+/// refusal pass. Default is true (refusal active). The compile driver
+/// calls this once with the resolved configuration before kicking off
+/// HIR lowering for the build.
+pub fn set_refuse_dynamic_stdlib_dispatch(refuse: bool) {
+    REFUSE_DYNAMIC_STDLIB_DISPATCH.with(|c| c.set(refuse));
+}
+
+/// #503: is the dynamic-stdlib-dispatch refusal pass currently enabled
+/// for this thread?
+pub fn refuse_dynamic_stdlib_dispatch_enabled() -> bool {
+    REFUSE_DYNAMIC_STDLIB_DISPATCH.with(|c| c.get())
+}
+
+/// #503: install the per-thread allow-list of package names whose
+/// modules may legitimately use dynamic dispatch on stdlib namespaces.
+pub fn set_allow_dynamic_stdlib_packages(set: std::collections::HashSet<String>) {
+    ALLOW_DYNAMIC_STDLIB_PACKAGES.with(|c| *c.borrow_mut() = set);
+}
+
+/// #503: clear the per-thread allow-list.
+pub fn clear_allow_dynamic_stdlib_packages() {
+    ALLOW_DYNAMIC_STDLIB_PACKAGES.with(|c| c.borrow_mut().clear());
+}
+
+/// #503: is the given package name on the allow-list? `package_name_of`
+/// is the canonical extractor (scope-aware).
+pub fn dynamic_stdlib_allowed_for_package(pkg: &str) -> bool {
+    ALLOW_DYNAMIC_STDLIB_PACKAGES.with(|c| c.borrow().contains(pkg))
+}
+
+/// #503: install the source text of the module about to be lowered.
+/// The dynamic-dispatch check reads this to look up site annotations
+/// without re-reading the file from disk.
+pub fn set_current_module_source(src: String) {
+    CURRENT_MODULE_SOURCE.with(|c| *c.borrow_mut() = Some(src));
+}
+
+/// #503: clear the source-text thread-local.
+pub fn clear_current_module_source() {
+    CURRENT_MODULE_SOURCE.with(|c| *c.borrow_mut() = None);
+}
+
+/// #503: look up `// @perry-allow-dynamic` near `byte_offset` in the
+/// currently-installed module source. Returns true if the annotation
+/// appears on the same line as the offending site, or on any of the
+/// contiguous comment/blank lines immediately above it (so authors can
+/// stack other line comments like `// @ts-ignore` alongside the
+/// annotation without losing the opt-out).
+pub fn current_module_has_allow_dynamic_at(byte_offset: u32) -> bool {
+    CURRENT_MODULE_SOURCE.with(|cell| {
+        let borrowed = cell.borrow();
+        let Some(src) = borrowed.as_ref() else {
+            return false;
+        };
+        let offset = byte_offset as usize;
+        if offset > src.len() {
+            return false;
+        }
+        // Walk back to the start of the line containing `offset`.
+        let line_start = src[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line_end = src[offset..]
+            .find('\n')
+            .map(|i| offset + i)
+            .unwrap_or(src.len());
+        if src[line_start..line_end].contains("@perry-allow-dynamic") {
+            return true;
+        }
+        // Walk up through contiguous comment-only and blank lines.
+        // A "comment-only" line trims to either an empty string or a
+        // string starting with `//`. The walk stops at the first line
+        // that contains executable code — anything stronger would let
+        // an annotation drift arbitrarily far from its target.
+        let mut cursor = line_start;
+        while cursor > 0 {
+            let prev_end = cursor - 1; // index of '\n'
+            let prev_start = src[..prev_end].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let prev = &src[prev_start..prev_end];
+            let trimmed = prev.trim();
+            let is_comment_or_blank = trimmed.is_empty() || trimmed.starts_with("//");
+            if !is_comment_or_blank {
+                return false;
+            }
+            if prev.contains("@perry-allow-dynamic") {
+                return true;
+            }
+            cursor = prev_start;
+        }
+        false
+    })
+}
+
+/// #503: extract the package name from a source file path, if any. The
+/// path is searched for the rightmost `node_modules/` segment; the
+/// segment(s) immediately following it form the package name
+/// (scope-aware). Returns `None` for user-source files (no
+/// `node_modules/` in the path).
+pub fn package_name_for_source_path(source_path: &str) -> Option<&str> {
+    let idx = source_path.rfind("node_modules/")?;
+    let after = &source_path[idx + "node_modules/".len()..];
+    if let Some(stripped) = after.strip_prefix('@') {
+        // Scoped: `@scope/pkg/...` → `@scope/pkg`
+        let mut parts = stripped.splitn(3, '/');
+        let scope = parts.next().unwrap_or("");
+        let pkg = parts.next().unwrap_or("");
+        if scope.is_empty() || pkg.is_empty() {
+            return None;
+        }
+        let end = idx + "node_modules/".len() + 1 + scope.len() + 1 + pkg.len();
+        Some(&source_path[idx + "node_modules/".len()..end])
+    } else {
+        let pkg = after.split('/').next()?;
+        if pkg.is_empty() {
+            None
+        } else {
+            Some(pkg)
+        }
+    }
+}
+
 /// Parse the package name out of an import specifier. Mirrors the
 /// `parse_package_specifier` helper in `crates/perry/src/commands/compile/resolve.rs`
 /// but lives here so `is_native_module` doesn't gain a perry-crate dep.

@@ -499,6 +499,19 @@ pub struct CompilationContext {
     /// rebuild without the `bundled-streams` feature. This set lets
     /// the registry drain inject the missing feature directly.
     pub extra_stdlib_features: BTreeSet<&'static str>,
+    /// #503: when true, HIR lowering refuses dynamic-dispatch on known
+    /// stdlib namespaces (`process[runtimeVar]()` and similar). Default
+    /// true. Sources, last wins: `perry.allowDynamicStdlibDispatch: true`
+    /// in package.json → env `PERRY_ALLOW_DYNAMIC_STDLIB=1` flips this
+    /// off. An array value (`["@scope/pkg", ...]`) keeps refusal on but
+    /// allows the listed packages — captured in
+    /// `allow_dynamic_stdlib_packages`.
+    pub refuse_dynamic_stdlib_dispatch: bool,
+    /// #503: package names whose modules may legitimately use dynamic
+    /// stdlib dispatch (`perry.allowDynamicStdlibDispatch: [...]`).
+    /// Consulted per-module during HIR lowering; ignored when
+    /// `refuse_dynamic_stdlib_dispatch` is false.
+    pub allow_dynamic_stdlib_packages: HashSet<String>,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -543,6 +556,8 @@ impl CompilationContext {
             min_windows_version: "10".to_string(),
             entry_canonical: None,
             extra_stdlib_features: BTreeSet::new(),
+            refuse_dynamic_stdlib_dispatch: true,
+            allow_dynamic_stdlib_packages: HashSet::new(),
         }
     }
 }
@@ -1006,6 +1021,40 @@ pub fn run_with_parse_cache(
                 {
                     ctx.fast_math = fm;
                 }
+                // #503: perry.allowDynamicStdlibDispatch — either a boolean
+                // (`true` disables the refusal globally) or an array of
+                // npm package names allowed to use dynamic dispatch on
+                // stdlib namespaces. Absent / `false` keeps the default
+                // (refusal active for all packages including the host).
+                if let Some(v) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("allowDynamicStdlibDispatch"))
+                {
+                    if let Some(b) = v.as_bool() {
+                        ctx.refuse_dynamic_stdlib_dispatch = !b;
+                        if b {
+                            match format {
+                                OutputFormat::Text => println!(
+                                    "  Dynamic stdlib dispatch: ALLOWED globally (perry.allowDynamicStdlibDispatch: true)"
+                                ),
+                                OutputFormat::Json => {}
+                            }
+                        }
+                    } else if let Some(arr) = v.as_array() {
+                        for entry in arr {
+                            if let Some(name) = entry.as_str() {
+                                match format {
+                                    OutputFormat::Text => println!(
+                                        "  Dynamic stdlib dispatch: ALLOWED for `{}`",
+                                        name
+                                    ),
+                                    OutputFormat::Json => {}
+                                }
+                                ctx.allow_dynamic_stdlib_packages.insert(name.to_string());
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1021,6 +1070,26 @@ pub fn run_with_parse_cache(
     if args.fast_math {
         ctx.fast_math = true;
     }
+
+    // #503: `PERRY_ALLOW_DYNAMIC_STDLIB=1` disables the dynamic-dispatch
+    // refusal pass globally (env var beats package.json). `=0` keeps the
+    // refusal on even if the host has opted out, so CI can enforce.
+    match std::env::var("PERRY_ALLOW_DYNAMIC_STDLIB") {
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => {
+            ctx.refuse_dynamic_stdlib_dispatch = false;
+        }
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => {
+            ctx.refuse_dynamic_stdlib_dispatch = true;
+        }
+        _ => {}
+    }
+    // #503: install the resolved configuration into the HIR thread-locals
+    // before any module lowering begins. Re-installed per-thread by
+    // `collect_modules.rs` (rayon workers don't inherit thread-locals),
+    // but this set covers the driver thread's own lowering work and
+    // serves as documentation of the source of truth.
+    perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
+    perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
 
     // --- i18n: parse [i18n] config from perry.toml and load locale files ---
     let mut i18n_config: Option<perry_transform::i18n::I18nConfig> = None;
