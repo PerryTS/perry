@@ -7217,6 +7217,43 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(if *prefix { new } else { old })
         }
 
+        // -------- arr[idx]++ / arr[idx]-- / ++arr[idx] / --arr[idx] --------
+        //
+        // Issue #957: lodash's `countBy` uses `++result[key]` which previously
+        // bailed `expression IndexUpdate not yet supported` and stubbed the
+        // entire module, leaving `import _ from "lodash"` resolving to
+        // undefined. Lower as a tag-aware read+modify+write through the
+        // `js_dyn_index_get` / `js_dyn_index_set` runtime helpers — they
+        // dispatch by gc_type at runtime, so the same emission works for
+        // arrays, plain objects, and TypedArrays without static type
+        // knowledge. `object` and `index` lower once into SSA registers so
+        // side effects are not re-evaluated.
+        Expr::IndexUpdate {
+            object,
+            index,
+            op,
+            prefix,
+        } => {
+            let obj_box = lower_expr(ctx, object)?;
+            let idx_box = lower_expr(ctx, index)?;
+            let blk = ctx.block();
+            let old = blk.call(
+                DOUBLE,
+                "js_dyn_index_get",
+                &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
+            );
+            let new = match op {
+                BinaryOp::Sub => blk.fsub(&old, "1.0"),
+                _ => blk.fadd(&old, "1.0"),
+            };
+            blk.call(
+                DOUBLE,
+                "js_dyn_index_set",
+                &[(DOUBLE, &obj_box), (DOUBLE, &idx_box), (DOUBLE, &new)],
+            );
+            Ok(if *prefix { new } else { old })
+        }
+
         // -------- path.basename --------
         Expr::PathBasename(p) => {
             let p_box = lower_expr(ctx, p)?;

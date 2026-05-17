@@ -2,6 +2,29 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.975 — fix(#957): CJS IIFE `.call(this)` + `Expr::IndexUpdate` codegen — `import _ from "lodash"` advances past `_.add` undefined
+
+**Symptom.** `import _ from "lodash"; _.add(1, 2)` under `perry.compilePackages: ["lodash"]` threw `TypeError: Cannot read properties of undefined (reading 'add')`. `typeof _` was literally `undefined`: the default import binding was empty.
+
+**Root cause — two distinct bugs surfaced on the same package.**
+
+1. **IIFE `.call(this)` body silently skipped.** Lodash (and every UMD-prelude CJS package) wraps its body in `;(function() { ... }.call(this));`. HIR lowered this as `Call { callee: PropertyGet { object: Closure {...}, property: "call" }, args: [This] }`. Codegen's generic call dispatch read `Closure.call` via `js_native_call_method`, found no `call` method on the closure handle, and silently fell through — the function body never executed. Inside the CJS-wrap's `const _cjs = (function() { ... return module.exports; })()` this meant `module.exports = _` (set by the lodash body inside the inner IIFE) was lost, so `_cjs` came back as the initial `{ exports: {} }` and `export default _cjs` resolved to that empty object. The default import bound to the wrap's *outer* `_cjs` — but accessing `.add` on it of course returned undefined. `fn.call(thisArg, ...args)` was the same shape and equally broken.
+
+2. **`Expr::IndexUpdate` bailed at codegen.** Lodash's `countBy` does `++result[key]`. HIR lowered this as `IndexUpdate { object: result, index: key, op: Add, prefix: true }`. The codegen's catch-all bailed with `perry-codegen Phase 2: expression IndexUpdate not yet supported`, and the entire lodash module got linker-stubbed under `PERRY_ALLOW_UNIMPLEMENTED=1` — so the default-import binding pointed at an empty init stub. Even after fix (1), this gate kept `_` undefined.
+
+**Fix.**
+
+1. **HIR rewrite for inline-function `.call(thisArg, ...args)` IIFE pattern.** In `expr_call.rs::lower_call`, when the callee is `Member { obj: <FnExpr | ArrowExpr>, prop: "call" }` (Paren-unwrapped) and the lowered receiver is a `Closure { captures_this: false, ... }`, rewrite to a direct `Call { callee: closure, args: args[1..] }` — drop the `thisArg`. Safe because `captures_this == false` means the body has no `this` references that depend on the bound value, and Perry has no `this`-binding mechanism through `.call()` for ordinary functions anyway. Class-method `obj.method.call(otherObj, args)` shapes keep their existing semantics (callee is a `PropertyGet`, not an inline function literal).
+
+2. **`Expr::IndexUpdate` LLVM codegen.** Added an arm in `expr.rs` modeled on `Expr::PropertyUpdate`: lower `object` + `index` into SSA registers once, call `js_dyn_index_get(obj, idx)` for the old value, `fadd`/`fsub 1.0` for the new, `js_dyn_index_set(obj, idx, new)` to write back. Return new for prefix (`++x`), old for postfix (`x++`). Added a new `js_dyn_index_set` runtime helper next to `js_dyn_index_get` that routes by `gc_type`: arrays → `js_array_set_index_or_string`, non-array objects → stringify numeric/string-key index + `js_object_set_field_by_name`, strings → no-op (matches strict-mode no-write). Extended `js_dyn_index_get` to handle string-tagged index NaN-box values (route through `js_object_get_field_by_name_f64`) — pre-fix it coerced the string box's bits via `index as i32`, producing garbage offsets, so `++obj["foo"]` returned undefined.
+
+**Validation.**
+
+- `test-files/test_lodash_default_import_methods.ts` — covers both fixes (IIFE writes-outer, IIFE arrow call with args, prefix/postfix inc/dec on object-string-key + array-numeric-index). Byte-matches `node --experimental-strip-types`.
+- The repro from the bug report (`import _ from "lodash"; _.add(1, 2)`) now advances past the `_.add` undefined symptom. Real lodash still hits separate runtime gaps (`Function('return this')()` not callable; bare `global` / `self` lower to `0.0` so `freeGlobal`/`freeSelf` come back false-y; `runInContext()` then throws `value is not a function` on `root.Object()`) — those are tracked downstream and are *not* CJS-default-import bugs.
+
+**Files touched.** `crates/perry-hir/src/lower/expr_call.rs` (IIFE `.call(this)` rewrite), `crates/perry-codegen/src/expr.rs` (`Expr::IndexUpdate` arm), `crates/perry-codegen/src/runtime_decls.rs` (extern decl for `js_dyn_index_set`), `crates/perry-runtime/src/value.rs` (`js_dyn_index_set` helper + string-key handling in `js_dyn_index_get`), `test-files/test_lodash_default_import_methods.ts` (regression).
+
 ## v0.5.974 — feat(zlib/crypto): zlib.constants + subtle.generateKey (AES-GCM) — moves axios + jose past the next compile gates
 
 **Symptom.** After #952 wired `randomFillSync` + `subtle.encrypt`/`decrypt`, the two `compilePackages` smoke targets advanced one step and tripped on the next gap:

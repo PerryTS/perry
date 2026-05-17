@@ -1107,12 +1107,32 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     } else {
         return f64::from_bits(TAG_UNDEFINED);
     };
+    if raw_ptr < 0x10000 {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    // Issue #957: if the index itself is a string, route through the
+    // by-name object getter. Pre-fix, `obj["foo"]` lowered through
+    // `IndexUpdate` re-entered this helper with a NaN-boxed string index
+    // and the `index as i32` coercion produced garbage offsets, so
+    // `++obj["foo"]` silently returned undefined.
+    let idx_bits = index.to_bits();
+    let idx_top16 = idx_bits >> 48;
+    if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+        let key_ptr = js_get_string_pointer_unified(index) as *const crate::StringHeader;
+        if !key_ptr.is_null() {
+            return crate::object::js_object_get_field_by_name_f64(
+                raw_ptr as *const crate::object::ObjectHeader,
+                key_ptr,
+            );
+        }
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     let idx_i32 = if index.is_nan() || index.is_infinite() {
         return f64::from_bits(TAG_UNDEFINED);
     } else {
         index as i32
     };
-    if idx_i32 < 0 || raw_ptr < 0x10000 {
+    if idx_i32 < 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     if raw_ptr >= crate::gc::GC_HEADER_SIZE {
@@ -1134,6 +1154,79 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     v
+}
+
+/// Issue #957 — tag-aware dynamic index write counterpart to
+/// `js_dyn_index_get`. Used by `Expr::IndexUpdate` codegen to write back
+/// the incremented value without duplicating the IndexSet dispatch tree.
+///
+/// Routes by the receiver's `gc_type` byte: arrays go through
+/// `js_array_set_index_or_string` (numeric/string-key spec dispatch);
+/// everything else stringifies the index and routes through
+/// `js_object_set_field_by_name`. Strings are immutable — no-op (matches
+/// strict-mode `s[i] = x` semantics, close enough for the `++result[key]`
+/// pattern this is added for).
+#[no_mangle]
+pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
+    let bits = obj.to_bits();
+    let jsval = JSValue::from_bits(bits);
+    if jsval.is_string() || jsval.is_short_string() {
+        return value;
+    }
+    let raw_ptr = if jsval.is_pointer() {
+        (bits & POINTER_MASK) as usize
+    } else if !obj.is_nan()
+        && bits != 0
+        && bits < 0x0001_0000_0000_0000
+        && (bits & 0x3) == 0
+        && bits >= 0x10000
+    {
+        bits as usize
+    } else {
+        return value;
+    };
+    if raw_ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return value;
+    }
+    let is_array = unsafe {
+        let gc_header =
+            (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+    };
+    if is_array {
+        crate::array::js_array_set_index_or_string(
+            raw_ptr as *mut crate::array::ArrayHeader,
+            index,
+            value,
+        );
+        return value;
+    }
+    // Non-array object: stringify the index and write via the object setter.
+    let bits = index.to_bits();
+    let top16 = bits >> 48;
+    let key_ptr: *const crate::StringHeader = if top16 == 0x7FFF {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader
+    } else if top16 == 0x7FF9 {
+        crate::value::js_get_string_pointer_unified(index) as *const crate::StringHeader
+    } else {
+        // Numeric (or other) index — stringify and intern as a UTF-8 key.
+        let idx_i32 = if index.is_nan() || index.is_infinite() {
+            0
+        } else {
+            index as i32
+        };
+        let s = idx_i32.to_string();
+        crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    };
+    if key_ptr.is_null() {
+        return value;
+    }
+    crate::object::js_object_set_field_by_name(
+        raw_ptr as *mut crate::object::ObjectHeader,
+        key_ptr,
+        value,
+    );
+    value
 }
 
 /// Check if a value should trigger a destructuring default.
