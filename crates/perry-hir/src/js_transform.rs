@@ -1064,7 +1064,7 @@ fn transform_expr(
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         Expr::DateGetTime(e) | Expr::DateToISOString(e) | Expr::DateGetFullYear(e) |
-        Expr::DateGetMonth(e) | Expr::DateGetDate(e) | Expr::DateGetHours(e) |
+        Expr::DateGetMonth(e) | Expr::DateGetDate(e) | Expr::DateGetDay(e) | Expr::DateGetHours(e) |
         Expr::DateGetMinutes(e) | Expr::DateGetSeconds(e) | Expr::DateGetMilliseconds(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }

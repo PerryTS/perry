@@ -863,6 +863,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::DateGetFullYear(date)
         | Expr::DateGetMonth(date)
         | Expr::DateGetDate(date)
+        | Expr::DateGetDay(date)
         | Expr::DateGetHours(date)
         | Expr::DateGetMinutes(date)
         | Expr::DateGetSeconds(date)

@@ -181,6 +181,7 @@ struct RuntimeImports {
     date_get_full_year: u32,
     date_get_month: u32,
     date_get_date: u32,
+    date_get_day: u32,
     date_get_hours: u32,
     date_get_minutes: u32,
     date_get_seconds: u32,
@@ -837,6 +838,7 @@ impl WasmModuleEmitter {
             date_get_full_year: next_import(),
             date_get_month: next_import(),
             date_get_date: next_import(),
+            date_get_day: next_import(),
             date_get_hours: next_import(),
             date_get_minutes: next_import(),
             date_get_seconds: next_import(),
@@ -1086,6 +1088,7 @@ impl WasmModuleEmitter {
             ("date_get_full_year", t_f64_f64),
             ("date_get_month", t_f64_f64),
             ("date_get_date", t_f64_f64),
+            ("date_get_day", t_f64_f64),
             ("date_get_hours", t_f64_f64),
             ("date_get_minutes", t_f64_f64),
             ("date_get_seconds", t_f64_f64),
@@ -3058,6 +3061,7 @@ impl WasmModuleEmitter {
             "date_get_full_year",
             "date_get_month",
             "date_get_date",
+            "date_get_day",
             "date_get_hours",
             "date_get_minutes",
             "date_get_seconds",
@@ -3690,6 +3694,7 @@ impl WasmModuleEmitter {
             | Expr::DateGetFullYear(e)
             | Expr::DateGetMonth(e)
             | Expr::DateGetDate(e)
+            | Expr::DateGetDay(e)
             | Expr::DateGetHours(e)
             | Expr::DateGetMinutes(e)
             | Expr::DateGetSeconds(e)
@@ -7939,6 +7944,11 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, d);
                 self.emit_memcall(func, "date_get_date", 1);
+            }
+            Expr::DateGetDay(d) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, d);
+                self.emit_memcall(func, "date_get_day", 1);
             }
             Expr::DateGetHours(d) => {
                 self.emit_frame_begin(func, 1);

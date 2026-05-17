@@ -2828,6 +2828,10 @@ impl SH for Expr {
                 tag(h, 316);
                 e.as_ref().hash(h);
             }
+            Expr::DateGetDay(e) => {
+                tag(h, 466);
+                e.as_ref().hash(h);
+            }
             Expr::DateGetHours(e) => {
                 tag(h, 317);
                 e.as_ref().hash(h);

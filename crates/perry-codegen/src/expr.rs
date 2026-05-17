@@ -8919,6 +8919,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_date_get_date", &[(DOUBLE, &v)]))
         }
+        Expr::DateGetDay(d) => {
+            let v = lower_expr(ctx, d)?;
+            Ok(ctx.block().call(DOUBLE, "js_date_get_day", &[(DOUBLE, &v)]))
+        }
         Expr::DateGetUtcDate(d) => {
             let v = lower_expr(ctx, d)?;
             Ok(ctx

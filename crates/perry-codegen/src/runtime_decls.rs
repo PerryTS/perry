@@ -568,6 +568,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_get_full_year", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_get_month", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_get_date", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_date_get_day", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_get_hours", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_get_minutes", DOUBLE, &[DOUBLE]);
     module.declare_function("js_date_get_seconds", DOUBLE, &[DOUBLE]);

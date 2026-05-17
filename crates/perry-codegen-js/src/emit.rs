@@ -2164,6 +2164,7 @@ impl JsEmitter {
             Expr::DateGetFullYear(d) => { self.emit_expr(d); self.output.push_str(".getFullYear()"); }
             Expr::DateGetMonth(d) => { self.emit_expr(d); self.output.push_str(".getMonth()"); }
             Expr::DateGetDate(d) => { self.emit_expr(d); self.output.push_str(".getDate()"); }
+            Expr::DateGetDay(d) => { self.emit_expr(d); self.output.push_str(".getDay()"); }
             Expr::DateGetHours(d) => { self.emit_expr(d); self.output.push_str(".getHours()"); }
             Expr::DateGetMinutes(d) => { self.emit_expr(d); self.output.push_str(".getMinutes()"); }
             Expr::DateGetSeconds(d) => { self.emit_expr(d); self.output.push_str(".getSeconds()"); }

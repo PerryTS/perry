@@ -1549,6 +1549,7 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>) -> Expr {
         Expr::DateGetDate(date) => {
             Expr::DateGetDate(Box::new(substitute_expr(date, substitutions)))
         }
+        Expr::DateGetDay(date) => Expr::DateGetDay(Box::new(substitute_expr(date, substitutions))),
         Expr::DateGetHours(date) => {
             Expr::DateGetHours(Box::new(substitute_expr(date, substitutions)))
         }
@@ -2551,6 +2552,7 @@ fn collect_instantiations_in_expr(
         | Expr::DateGetFullYear(date)
         | Expr::DateGetMonth(date)
         | Expr::DateGetDate(date)
+        | Expr::DateGetDay(date)
         | Expr::DateGetHours(date)
         | Expr::DateGetMinutes(date)
         | Expr::DateGetSeconds(date)
@@ -3073,6 +3075,7 @@ fn update_call_sites_in_expr(
         | Expr::DateGetFullYear(date)
         | Expr::DateGetMonth(date)
         | Expr::DateGetDate(date)
+        | Expr::DateGetDay(date)
         | Expr::DateGetHours(date)
         | Expr::DateGetMinutes(date)
         | Expr::DateGetSeconds(date)

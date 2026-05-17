@@ -2009,6 +2009,7 @@ pub enum Expr {
     DateGetFullYear(Box<Expr>),     // date.getFullYear() -> number
     DateGetMonth(Box<Expr>),        // date.getMonth() -> number (0-11)
     DateGetDate(Box<Expr>),         // date.getDate() -> number (1-31)
+    DateGetDay(Box<Expr>),          // date.getDay() -> number (0-6, Sunday=0)
     DateGetHours(Box<Expr>),        // date.getHours() -> number (0-23)
     DateGetMinutes(Box<Expr>),      // date.getMinutes() -> number (0-59)
     DateGetSeconds(Box<Expr>),      // date.getSeconds() -> number (0-59)

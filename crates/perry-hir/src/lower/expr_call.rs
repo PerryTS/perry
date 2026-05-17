@@ -3249,6 +3249,10 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                 let date_expr = lower_expr(ctx, &member.obj)?;
                                 return Ok(Expr::DateGetDate(Box::new(date_expr)));
                             }
+                            "getDay" => {
+                                let date_expr = lower_expr(ctx, &member.obj)?;
+                                return Ok(Expr::DateGetDay(Box::new(date_expr)));
+                            }
                             "getHours" => {
                                 let date_expr = lower_expr(ctx, &member.obj)?;
                                 return Ok(Expr::DateGetHours(Box::new(date_expr)));
