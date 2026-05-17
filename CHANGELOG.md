@@ -2,6 +2,28 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.966 — fix(runtime): #928 — `JSON.stringify(new Error(...))` segfaulted on the built-in Error layout
+
+**Symptom.** `JSON.stringify(new Error("test"))` killed the process with SIGSEGV instead of returning `"{}"`. Same root cause surfaced as the user-visible "throw new Error from Fastify async route handler crashes the server" report in #928: PR #937 ("fix(fastify): catch thrown route errors") fixed the Fastify dispatch path to catch rejections + route them through `render_rejection_body`, but the rejection-body renderer's `js_json_stringify(reason, 0)` fallback still segfaulted on built-in Error reasons. The general `JSON.stringify(error)` call also still crashed, regardless of Fastify.
+
+**Root cause.** `stringify_value` and `stringify_value_depth` in `crates/perry-runtime/src/json.rs` dispatched on `gc_obj_type(ptr)` with arms for `GC_TYPE_ARRAY`, `GC_TYPE_OBJECT`, `GC_TYPE_STRING`, and a catch-all `_ =>`. Built-in `Error` (and `TypeError`/`RangeError`/etc.) allocations use a dedicated `ErrorHeader` struct with `GC_TYPE_ERROR = 7`, and the catch-all routed through `is_object_pointer(ptr)` → `stringify_object`, which assumed the JSObject keys/values layout. `stringify_object` derefed `ErrorHeader::error_kind` (the second u32 of an ErrorHeader) as a `keys_array` pointer and segfaulted on first access.
+
+User-defined subclasses (`class HttpError extends Error`) and primitive throws (`throw "msg"`, `throw { ... }`) all worked because they go through the regular Object/string paths — only the built-in `Error` constructor returns the special `ErrorHeader` layout. That matches the issue body's variant matrix exactly.
+
+**Fix.** `stringify_value` and `stringify_value_depth` add an explicit `GC_TYPE_ERROR` match arm that emits `"{}"`. Node's `JSON.stringify(new Error("x"))` returns `"{}"` (Error's intrinsic props `message`/`name`/`stack` are non-enumerable per spec); mirror that.
+
+**Validation.**
+
+- `JSON.stringify(new Error("test"))` returns `"{}"` (matches Node byte-for-byte).
+- `JSON.stringify(new TypeError("nope"))` returns `"{}"` (same path via `GC_TYPE_ERROR`).
+- Fastify repro from #928 (`throw new Error("Unauthorized")` from `app.get("/go", async () => {...})`) now returns HTTP 500 with `{"statusCode":500,"error":"Internal Server Error","message":"Unauthorized"}` — server stays alive, subsequent `/healthz` still serves 200. (PR #937 added the Fastify try-push + `error_message` short-circuit; this runtime fix closes the `js_json_stringify` fallback hole.)
+- Re-ran `test_compat_async_errors`, `test_edge_error_handling`, `test_gap_error_extensions`, `test_gap_json_advanced`, `test_json_sso_strings`, `test_issue_307_json_stringify_overflow_fields`, `test_issue_639_json_stringify_buffer`, `test_compat_strings_regex_json` — all match Node byte-for-byte.
+
+**Files touched.**
+
+- `crates/perry-runtime/src/json.rs` — explicit `GC_TYPE_ERROR` arm in both `stringify_value` and `stringify_value_depth`.
+- `test-files/test_issue_928_throw_in_async_arrow.ts` — regression test covering (1) async-arrow throw → rejection → catch, (2) `JSON.stringify(new Error(...))`, (3) `JSON.stringify(new TypeError(...))`.
+
 ## v0.5.965 — fix(codegen): #927 — `jwt.verify(token, key, opts)` returns parsed object, not JSON-stringified string
 
 **Symptom.** Authenticated `/api/*` routes in shop-admin's native server returned 401 after the very first request, even though signup itself worked end-to-end (HTTP 201, full JWT JSON written, all 5 tables populated). Minimal repro:

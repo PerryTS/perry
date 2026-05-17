@@ -1813,6 +1813,17 @@ unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut String) {
                     buf.push_str("null");
                 }
             }
+            crate::gc::GC_TYPE_ERROR => {
+                // Issue #928: Built-in Error objects (and subclasses
+                // like TypeError) have a dedicated `ErrorHeader` layout —
+                // not the JSObject keys/values layout. Routing them
+                // through `stringify_object` derefs garbage as a
+                // `keys_array` pointer and segfaults the process.
+                // Node's `JSON.stringify(new Error("x"))` returns "{}"
+                // because Error's intrinsic props (`message`, `name`,
+                // `stack`) are non-enumerable; mirror that.
+                buf.push_str("{}");
+            }
             _ => {
                 // Unknown/untagged pointer: fall back to the structural
                 // heuristics for safety (e.g. pointers to non-GC-tracked
@@ -1926,6 +1937,10 @@ unsafe fn stringify_value_depth(value: f64, type_hint: u32, buf: &mut String, de
                 } else {
                     buf.push_str("null");
                 }
+            }
+            crate::gc::GC_TYPE_ERROR => {
+                // Issue #928: see the matching branch in `stringify_value`.
+                buf.push_str("{}");
             }
             _ => {
                 if is_object_pointer(ptr) {
