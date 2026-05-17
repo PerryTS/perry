@@ -223,6 +223,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // (e.g. `obj.cb(a, b, c)` where `cb` is a class field holding an
     // arrow with `...rest`). Called once per closure body at module init.
     module.declare_function("js_register_closure_rest", VOID, &[PTR, I32]);
+    // Refs #915 (gap 1 from #899): variant that flags the rest param as the
+    // HIR-synthesized `arguments` array — the dispatcher then bundles ALL
+    // passed args into the rest slot, matching JS spec semantics for
+    // `arguments.length` in a `function(a, b) { …arguments… }` returned from
+    // another function.
+    module.declare_function("js_register_closure_synthetic_arguments", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_arity", VOID, &[PTR, I32]);
     module.declare_function("js_closure_call0", DOUBLE, &[I64]);
     module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);

@@ -1981,7 +1981,29 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         // returned value isn't semantically equivalent to Effect's
         // transformed schema, but it unblocks module init for the
         // #321 DoD repro.
-        if let Expr::ClassRef(cls_name) = object.as_ref() {
+        // Resolve the static-method receiver class through one of two
+        // shapes:
+        //   (a) the receiver is `Expr::ClassRef(name)` directly — the
+        //       original #687 case (Effect Schema's
+        //       `BigIntFromSelf.pipe(...)`); and
+        //   (b) the receiver is `Expr::LocalGet(id)` where the local was
+        //       initialised from `Expr::ClassRef` (or from a factory call
+        //       the inliner already collapsed to ClassRef) — Effect's
+        //       `const Tag = make(); Tag.staticMethod(...)`, and more
+        //       generally any
+        //         const C = make();
+        //         C.staticMethod(...)
+        //       Refs #915 (gap 2 from #899). The local→class map is the
+        //       same one `lower_new`'s alias rerouting consults below.
+        let static_dispatch_cls: Option<String> = match object.as_ref() {
+            Expr::ClassRef(cls_name) => Some(cls_name.clone()),
+            Expr::LocalGet(id) => ctx
+                .local_id_to_name
+                .get(id)
+                .and_then(|name| ctx.local_class_aliases.get(name).cloned()),
+            _ => None,
+        };
+        if let Some(cls_name) = static_dispatch_cls {
             let mut resolved: Option<(String, bool)> = None; // (fn_name, is_static)
             let mut cur = Some(cls_name.clone());
             while let Some(c) = cur {
@@ -2005,7 +2027,20 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     .and_then(|cc| cc.extends_name.clone());
             }
             if let Some((fn_name, _is_static)) = resolved {
-                let recv_box = lower_expr(ctx, object)?;
+                // For LocalGet receivers we still want the runtime `this`
+                // to be the underlying ClassRef so the static body's
+                // `this` matches the direct-ClassRef path's semantics.
+                // For ClassRef receivers, `lower_expr(object)` already
+                // yields the INT32-NaN-boxed class id.
+                let recv_box = match object.as_ref() {
+                    Expr::ClassRef(_) => lower_expr(ctx, object)?,
+                    _ => {
+                        // Synthesize a ClassRef NaN-box from the resolved class.
+                        let cid = ctx.class_ids.get(&cls_name).copied().unwrap_or(0);
+                        let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
+                        crate::nanbox::double_literal(f64::from_bits(bits))
+                    }
+                };
                 let mut lowered: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
                     lowered.push(lower_expr(ctx, a)?);
@@ -2024,10 +2059,15 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
             // Lower the args for side effects and return the ClassRef
             // itself so chained `.pipe()` calls keep producing a
             // typed-class-shaped value during module init.
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
+            if matches!(object.as_ref(), Expr::ClassRef(_)) {
+                for a in args {
+                    let _ = lower_expr(ctx, a)?;
+                }
+                return lower_expr(ctx, object);
             }
-            return lower_expr(ctx, object);
+            // For LocalGet receivers that resolve to a class but the
+            // method isn't a static — fall through to the normal
+            // instance/dynamic dispatch tower below.
         }
 
         // Class instance method call. The receiver's static type is

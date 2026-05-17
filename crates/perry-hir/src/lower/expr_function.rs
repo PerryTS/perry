@@ -272,11 +272,25 @@ pub(super) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         .map(|(name, id, _)| (name.clone(), *id))
         .collect();
 
-    // Lower parameters and collect destructuring info
+    // Lower parameters and collect destructuring info.
+    //
+    // Refs #915 (gap 1 from #899 — Effect's `dual(arity, body)`): TypeScript's
+    // fake `this: T` parameter annotation is a TYPE-only marker and has no
+    // runtime existence. SWC emits it as a regular `Param { pat: Ident("this") }`,
+    // so a naive iteration would mint a real local for it, shift every
+    // subsequent positional arg by one, and break call-site arity matching —
+    // `function (this: any, a, b) { ... }` called as `f(3, 4)` would bind
+    // `this=3, a=4, b=undefined`. Skip these entries up-front so the
+    // remaining params are the real runtime ones. (`fn_decl` already has its
+    // own param-lowering site that needs the same fix — handled below.)
     let mut params = Vec::new();
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in &fn_expr.function.params {
         let param_name = get_pat_name(&param.pat)?;
+        if param_name == "this" {
+            // TS `this:` annotation — skip; it's type-only.
+            continue;
+        }
         let param_default = get_param_default(ctx, &param.pat)?;
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), Type::Any);

@@ -1164,7 +1164,52 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             _ => None,
                         }
                     } else {
-                        None
+                        // Refs #915 (gap 2 from #899): `typeof C.staticMethod`
+                        // where `C` is `Expr::ClassRef` or a `LocalGet`
+                        // aliased to a class. Without this fold, the
+                        // generic PropertyGet path returns `undefined`
+                        // for static methods (the runtime `class_has_own_method`
+                        // checks the prototype vtable, not the static
+                        // method registry), so `typeof Cls.pipe` reported
+                        // `"undefined"` instead of `"function"`. The actual
+                        // dispatch fix lives in `lower_call.rs`'s ClassRef
+                        // static-method arm — but a typeof read isn't a
+                        // call, so it needs its own fold here.
+                        let cls_opt: Option<String> = match object.as_ref() {
+                            Expr::ClassRef(cls_name) => Some(cls_name.clone()),
+                            Expr::LocalGet(id) => ctx
+                                .local_id_to_name
+                                .get(id)
+                                .and_then(|name| ctx.local_class_aliases.get(name).cloned()),
+                            _ => None,
+                        };
+                        if let Some(cls) = cls_opt {
+                            // Walk own static methods + extends chain.
+                            let mut cur = Some(cls);
+                            let mut found = false;
+                            while let Some(c) = cur {
+                                if let Some(class_info) = ctx.classes.get(&c) {
+                                    if class_info
+                                        .static_methods
+                                        .iter()
+                                        .any(|m| m.name == *property)
+                                    {
+                                        found = true;
+                                        break;
+                                    }
+                                    cur = class_info.extends_name.clone();
+                                } else {
+                                    break;
+                                }
+                            }
+                            if found {
+                                Some("function")
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
                     }
                 }
                 _ => None,

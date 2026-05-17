@@ -519,16 +519,36 @@ pub unsafe extern "C" fn js_readable_stream_cancel(
     promise
 }
 
+// Refs #915 (effect smoke fallback path): the `crate::fetch::*` helpers
+// referenced below only exist behind the `http-client` feature, so the
+// streams-only auto-optimize build (`bundled-streams` alone, no
+// `http-client`) failed to compile. Gate the two blob/response constructors
+// on `http-client` and provide no-op stubs when it's off — anything that
+// actually needs a Blob/Response went through `http-client` anyway.
+#[cfg(feature = "http-client")]
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_from_blob(blob_id: f64) -> f64 {
     let bytes = crate::fetch::blob_bytes_clone(blob_id as usize).unwrap_or_default();
     alloc_readable_from_bytes(bytes) as f64
 }
 
+#[cfg(not(feature = "http-client"))]
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_from_blob(_blob_id: f64) -> f64 {
+    alloc_readable_from_bytes(Vec::new()) as f64
+}
+
+#[cfg(feature = "http-client")]
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_from_response(resp_id: f64) -> f64 {
     let bytes = crate::fetch::response_bytes_clone(resp_id as usize).unwrap_or_default();
     alloc_readable_from_bytes(bytes) as f64
+}
+
+#[cfg(not(feature = "http-client"))]
+#[no_mangle]
+pub unsafe extern "C" fn js_readable_stream_from_response(_resp_id: f64) -> f64 {
+    alloc_readable_from_bytes(Vec::new()) as f64
 }
 
 // `ReadableStream.from(asyncIterable)` — deferred (issue #237 followup).

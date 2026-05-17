@@ -2164,6 +2164,32 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         })
         .collect();
 
+    // Refs #915 (gap 1 from #899): closures whose rest param is the
+    // HIR-synthesized `arguments` need to bundle ALL passed args into
+    // the rest slot at dispatch time — JS spec semantics for
+    // `arguments.length` count every passed arg, not just the trailing
+    // tail after the fixed params. The runtime side reads this through
+    // `js_register_closure_synthetic_arguments` (vs the regular
+    // `js_register_closure_rest`).
+    let closure_synthetic_arguments: std::collections::HashSet<u32> = closures
+        .iter()
+        .filter_map(|(fid, expr)| {
+            if let perry_hir::Expr::Closure { params, .. } = expr {
+                let last_is_synth_args = params
+                    .last()
+                    .map(|p| p.is_rest && p.name == "arguments")
+                    .unwrap_or(false);
+                if last_is_synth_args {
+                    Some(*fid)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Refs #421: declared param count for every non-rest closure. Used by
     // `emit_string_pool` to register each closure's arity so the runtime can
     // pad missing args with TAG_UNDEFINED in the dynamic-dispatch path.
@@ -3317,6 +3343,30 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         })
         .collect();
 
+    // Refs #915 (gap 1 from #899): wrappers whose underlying function ends in
+    // the HIR-synthesized `arguments` rest param. The wrapper symbol is keyed
+    // the same way (`__perry_wrap_<scoped_name>`) but registered with the
+    // synthetic-arguments runtime fn so `dispatch_rest_bundled` bundles ALL
+    // passed args, matching JS spec semantics for `arguments.length`.
+    let user_fn_wrapper_synthetic_arguments: std::collections::HashSet<String> = hir
+        .functions
+        .iter()
+        .filter_map(|f| {
+            let last_is_synth_args = f
+                .params
+                .last()
+                .map(|p| p.is_rest && p.name == "arguments")
+                .unwrap_or(false);
+            if last_is_synth_args {
+                func_names
+                    .get(&f.id)
+                    .map(|name| format!("__perry_wrap_{}", name))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     emit_string_pool(
         &mut llmod,
         &strings,
@@ -3327,6 +3377,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &closure_rest_params,
         &closure_arities,
         &user_fn_wrapper_rest,
+        &closure_synthetic_arguments,
+        &user_fn_wrapper_synthetic_arguments,
     );
 
     // Emit the buffer alias-scope metadata once per module, covering every
@@ -5258,6 +5310,16 @@ fn emit_string_pool(
     // instead of bundling args[fixed_arity..] into a real array — the rest
     // param then read a single element's bits as if it were the rest array.
     user_fn_wrapper_rest: &[(String, usize)],
+    // Refs #915 (gap 1 from #899): subset of `closure_rest_params` whose
+    // rest param is the HIR-synthesized `arguments` array. These need
+    // `js_register_closure_synthetic_arguments` so the runtime bundles
+    // ALL passed args (not just the trailing tail) into the rest slot —
+    // matching JS spec semantics for `arguments.length`.
+    closure_synthetic_arguments: &std::collections::HashSet<u32>,
+    // Mirror of `closure_synthetic_arguments` for the top-level user-fn
+    // wrapper path: each entry is `wrapper_symbol` whose underlying
+    // function has its synthesized `arguments` rest param.
+    user_fn_wrapper_synthetic_arguments: &std::collections::HashSet<String>,
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -5646,8 +5708,16 @@ fn emit_string_pool(
     for (fid, fixed_arity) in sorted_rest {
         let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
         let func_ref = format!("@{}", closure_sym);
+        // Refs #915 (gap 1 from #899): closures whose rest param is the
+        // synthesized `arguments` use the synthetic-arguments registration
+        // so the runtime bundles ALL args into the rest slot.
+        let runtime_fn = if closure_synthetic_arguments.contains(&fid) {
+            "js_register_closure_synthetic_arguments"
+        } else {
+            "js_register_closure_rest"
+        };
         blk.call_void(
-            "js_register_closure_rest",
+            runtime_fn,
             &[(PTR, &func_ref), (I32, &fixed_arity.to_string())],
         );
     }
@@ -5680,8 +5750,16 @@ fn emit_string_pool(
     sorted_wrappers.sort();
     for (wrap_sym, fixed_arity) in sorted_wrappers {
         let func_ref = format!("@{}", wrap_sym);
+        // Refs #915 (gap 1 from #899): wrappers whose underlying function
+        // declared a synthesized `arguments` rest param need the
+        // synthetic-arguments registration.
+        let runtime_fn = if user_fn_wrapper_synthetic_arguments.contains(&wrap_sym) {
+            "js_register_closure_synthetic_arguments"
+        } else {
+            "js_register_closure_rest"
+        };
         blk.call_void(
-            "js_register_closure_rest",
+            runtime_fn,
             &[(PTR, &func_ref), (I32, &fixed_arity.to_string())],
         );
     }

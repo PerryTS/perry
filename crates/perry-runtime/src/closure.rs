@@ -67,7 +67,13 @@ pub const CLOSURE_MAGIC: u32 = 0x434C_4F53; // "CLOS" in ASCII
 // #29 `perry/thread`) currently don't see the table because they aren't
 // supposed to invoke arbitrary user closures across the boundary anyway.
 thread_local! {
-    static CLOSURE_REST_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
+    /// (fixed_arity, synthetic_arguments) — synthetic_arguments=true means
+    /// the rest param is the synthesized `arguments` array (HIR-injected
+    /// when the body reads `arguments` without a user-declared rest), so
+    /// the runtime must bundle ALL passed args into the rest slot (not
+    /// just trailing ones after `fixed_arity`). Refs #915 (gap 1 from
+    /// #899 — Effect's `dual(arity, body)` arity detection).
+    static CLOSURE_REST_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, (u32, bool)>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
     /// Side-table mapping closure body `func_ptr` -> declared param count
     /// (for closures WITHOUT a rest param — those use CLOSURE_REST_REGISTRY).
@@ -105,8 +111,11 @@ enum DispatchStrategy {
     /// sentinel). Dispatch via `dispatch_bound_method`.
     BoundMethod,
     /// Closure body has a rest param at the given fixed_arity index.
-    /// Dispatch via `dispatch_rest_bundled`.
-    Rest(u32),
+    /// Dispatch via `dispatch_rest_bundled`. The bool flag is true when
+    /// the rest param is the synthesized `arguments` array (HIR-injected
+    /// when the body reads `arguments`); in that case all passed args
+    /// are bundled into the rest slot (not just the trailing tail).
+    Rest(u32, bool),
     /// Closure body declares an arity higher than the call sites use;
     /// dispatch must pad with TAG_UNDEFINED via `dispatch_with_arity`.
     Arity(u32),
@@ -159,8 +168,8 @@ fn resolve_strategy_slow(func_ptr: *const u8) -> DispatchStrategy {
         });
         return DispatchStrategy::BoundMethod;
     }
-    let strategy = if let Some(fixed_arity) = lookup_closure_rest(func_ptr) {
-        DispatchStrategy::Rest(fixed_arity)
+    let strategy = if let Some((fixed_arity, synthetic)) = lookup_closure_rest_full(func_ptr) {
+        DispatchStrategy::Rest(fixed_arity, synthetic)
     } else if let Some(declared) = lookup_closure_arity(func_ptr) {
         DispatchStrategy::Arity(declared)
     } else {
@@ -182,12 +191,42 @@ pub extern "C" fn js_register_closure_rest(func_ptr: *const u8, fixed_arity: u32
         return;
     }
     CLOSURE_REST_REGISTRY.with(|r| {
-        r.borrow_mut().insert(func_ptr as usize, fixed_arity);
+        r.borrow_mut()
+            .insert(func_ptr as usize, (fixed_arity, false));
+    });
+}
+
+/// Like `js_register_closure_rest`, but flags the rest param as the
+/// synthesized `arguments` array. The HIR's `append_synthetic_arguments_param`
+/// helper appends an `arguments` rest param whenever a function body reads
+/// `arguments` and the user hasn't already declared a rest of their own.
+/// JS spec semantics: `arguments.length` counts ALL passed args (data-first
+/// AND any trailing). Without this flag, `dispatch_rest_bundled` was binding
+/// fixed params first and then bundling only the post-`fixed_arity` tail
+/// into the rest, so `function(a, b) { return arguments.length }` called as
+/// `f(10, 20)` saw `arguments.length === 0`. Refs #915 (gap 1 from #899).
+#[no_mangle]
+pub extern "C" fn js_register_closure_synthetic_arguments(func_ptr: *const u8, fixed_arity: u32) {
+    if func_ptr.is_null() {
+        return;
+    }
+    CLOSURE_REST_REGISTRY.with(|r| {
+        r.borrow_mut()
+            .insert(func_ptr as usize, (fixed_arity, true));
     });
 }
 
 #[inline(always)]
 fn lookup_closure_rest(func_ptr: *const u8) -> Option<u32> {
+    CLOSURE_REST_REGISTRY.with(|r| {
+        r.borrow()
+            .get(&(func_ptr as usize))
+            .map(|(arity, _)| *arity)
+    })
+}
+
+#[inline(always)]
+fn lookup_closure_rest_full(func_ptr: *const u8) -> Option<(u32, bool)> {
     CLOSURE_REST_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
 }
 
@@ -241,13 +280,29 @@ unsafe fn dispatch_rest_bundled(
     func_ptr: *const u8,
     args: &[f64],
     fixed_arity: u32,
+    synthetic_arguments: bool,
 ) -> f64 {
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let k = fixed_arity as usize;
     let provided = args.len();
 
-    // Bundle trailing args from index `k` onwards.
-    let rest_slice: &[f64] = if provided > k { &args[k..] } else { &[] };
+    // Bundle args into the rest array.
+    //
+    // For a user-declared `...rest`, this is the trailing tail past the
+    // fixed params. For the HIR-synthesized `arguments` rest, JS spec
+    // semantics require ALL passed args — `arguments.length === args.length`
+    // regardless of how many fixed params the function declared. Refs
+    // #915 (gap 1 from #899): Effect's `dual(arity, body)` checks
+    // `arguments.length` to discriminate data-first vs data-last, and the
+    // body is `function (a, b) { … arguments.length … }` — pre-fix only
+    // post-`b` args showed up, so `dual(2, body)(x, y)` saw 0.
+    let rest_slice: &[f64] = if synthetic_arguments {
+        args
+    } else if provided > k {
+        &args[k..]
+    } else {
+        &[]
+    };
     let rest_double = build_rest_array(rest_slice);
 
     // Read fixed args, padding with undefined when caller under-supplied.
@@ -847,8 +902,8 @@ pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[]) },
-        DispatchStrategy::Rest(fixed_arity) => unsafe {
-            dispatch_rest_bundled(closure, func_ptr, &[], fixed_arity)
+        DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
+            dispatch_rest_bundled(closure, func_ptr, &[], fixed_arity, synth)
         },
         DispatchStrategy::Arity(declared) if declared > 0 => unsafe {
             dispatch_with_arity(closure, func_ptr, &[], declared)
@@ -870,8 +925,8 @@ pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> 
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0]) },
-        DispatchStrategy::Rest(fixed_arity) => unsafe {
-            dispatch_rest_bundled(closure, func_ptr, &[arg0], fixed_arity)
+        DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
+            dispatch_rest_bundled(closure, func_ptr, &[arg0], fixed_arity, synth)
         },
         DispatchStrategy::Arity(declared) if declared > 1 => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0], declared)
@@ -920,8 +975,8 @@ pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0, arg1]) },
-        DispatchStrategy::Rest(fixed_arity) => unsafe {
-            dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1], fixed_arity)
+        DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
+            dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1], fixed_arity, synth)
         },
         DispatchStrategy::Arity(declared) if declared > 2 => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1], declared)
@@ -950,8 +1005,8 @@ pub extern "C" fn js_closure_call3(
         DispatchStrategy::BoundMethod => unsafe {
             dispatch_bound_method(closure, &[arg0, arg1, arg2])
         },
-        DispatchStrategy::Rest(fixed_arity) => unsafe {
-            dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1, arg2], fixed_arity)
+        DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
+            dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1, arg2], fixed_arity, synth)
         },
         DispatchStrategy::Arity(declared) if declared > 3 => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2], declared)
@@ -981,8 +1036,14 @@ pub extern "C" fn js_closure_call4(
         DispatchStrategy::BoundMethod => unsafe {
             dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3])
         },
-        DispatchStrategy::Rest(fixed_arity) => unsafe {
-            dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1, arg2, arg3], fixed_arity)
+        DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
+            dispatch_rest_bundled(
+                closure,
+                func_ptr,
+                &[arg0, arg1, arg2, arg3],
+                fixed_arity,
+                synth,
+            )
         },
         DispatchStrategy::Arity(declared) if declared > 4 => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2, arg3], declared)
@@ -1012,13 +1073,14 @@ pub extern "C" fn js_closure_call5(
     if func_ptr == BOUND_METHOD_FUNC_PTR {
         return unsafe { dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3, arg4]) };
     }
-    if let Some(fixed_arity) = lookup_closure_rest(func_ptr) {
+    if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
         return unsafe {
             dispatch_rest_bundled(
                 closure,
                 func_ptr,
                 &[arg0, arg1, arg2, arg3, arg4],
                 fixed_arity,
+                synth,
             )
         };
     }
@@ -1052,13 +1114,14 @@ pub extern "C" fn js_closure_call6(
     if func_ptr == BOUND_METHOD_FUNC_PTR {
         return unsafe { dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3, arg4, arg5]) };
     }
-    if let Some(fixed_arity) = lookup_closure_rest(func_ptr) {
+    if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
         return unsafe {
             dispatch_rest_bundled(
                 closure,
                 func_ptr,
                 &[arg0, arg1, arg2, arg3, arg4, arg5],
                 fixed_arity,
+                synth,
             )
         };
     }
@@ -1870,7 +1933,7 @@ pub unsafe extern "C" fn js_closure_call_array(
     // entry because `js_closure_call_apply_with_spread`'s caller always
     // resolves a real closure pointer first.
     let fp_for_rest = get_valid_func_ptr(closure);
-    if let Some(fixed_arity) = lookup_closure_rest(fp_for_rest) {
+    if let Some((fixed_arity, synth)) = lookup_closure_rest_full(fp_for_rest) {
         let mut tmp: Vec<f64> = Vec::with_capacity(n);
         if !args_ptr.is_null() && n > 0 {
             for i in 0..n {
@@ -1887,7 +1950,7 @@ pub unsafe extern "C" fn js_closure_call_array(
                 tmp.push(unboxed);
             }
         }
-        return dispatch_rest_bundled(closure, fp_for_rest, &tmp, fixed_arity);
+        return dispatch_rest_bundled(closure, fp_for_rest, &tmp, fixed_arity, synth);
     }
     // Perry's closure-body arithmetic uses plain `fadd`/`fmul`/etc on
     // f64 inputs and assumes its arguments arrive as plain doubles, not
