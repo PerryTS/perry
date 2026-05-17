@@ -2985,6 +2985,24 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // is yet defined. Catches `import * as z; export { z };`
             // and any `export { ClassName }` or `export { someConst }`
             // where the consumer reads the value as a closure.
+            //
+            // Issue #967: when the `local==exported` name IS registered
+            // in `hir.exported_functions` as an alias for a real function
+            // body (the canonical shape: `function add(a,b){…}; export
+            // default add;` lowers to `Export::Named { local: "default",
+            // exported: "default" }` *and* pushes `("default", add_id)`
+            // into `exported_functions`), the no-op wrapper short-circuits
+            // any consumer-side closure dispatch through this default
+            // import. The consumer's
+            // `__perry_wrap_perry_fn_<src>__default` then transmutes a
+            // function pointer that returns `undefined` no matter the args
+            // — `const fn = add; fn(2,3)` evaluates to `undefined` instead
+            // of `5`. Ramda/date-fns trip this on every `var sum =
+            // reduce(add, 0)` style barrel where `add`/`reduce` are
+            // default-exports of locally-named functions. Fix: when
+            // `exported_functions` points the name at a real HIR function,
+            // emit a forwarding wrapper to that function's body (mirrors
+            // the `local != exported` branch at L2792 above).
             if local == exported && !func_by_local_name.contains_key(local.as_str()) {
                 let exported_wrap = format!(
                     "__perry_wrap_perry_fn_{}__{}",
@@ -2994,21 +3012,48 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 if !llmod.has_function(&exported_wrap)
                     && emitted_aliases.insert(exported_wrap.clone())
                 {
-                    let wf = llmod.define_function(
-                        &exported_wrap,
-                        DOUBLE,
-                        vec![
-                            (I64, "%this_closure".to_string()),
-                            (DOUBLE, "%a0".to_string()),
-                            (DOUBLE, "%a1".to_string()),
-                            (DOUBLE, "%a2".to_string()),
-                            (DOUBLE, "%a3".to_string()),
-                            (DOUBLE, "%a4".to_string()),
-                        ],
-                    );
-                    let _ = wf.create_block("entry");
-                    let blk = wf.block_mut(0).unwrap();
-                    blk.ret(DOUBLE, "0x7FFC000000000001");
+                    // Check if this name is registered as an alias
+                    // pointing at a real HIR function (`export default
+                    // <namedFn>` shape).
+                    let aliased_func: Option<&perry_hir::Function> = hir
+                        .exported_functions
+                        .iter()
+                        .find(|(n, _)| n == exported)
+                        .and_then(|(_, fid)| hir.functions.iter().find(|f| f.id == *fid));
+                    if let Some(f) = aliased_func {
+                        let arity = f.params.len().min(5);
+                        let mut wrap_params: Vec<(LlvmType, String)> =
+                            vec![(I64, "%this_closure".to_string())];
+                        for i in 0..arity {
+                            wrap_params.push((DOUBLE, format!("%a{}", i)));
+                        }
+                        let wf = llmod.define_function(&exported_wrap, DOUBLE, wrap_params);
+                        let _ = wf.create_block("entry");
+                        let blk = wf.block_mut(0).unwrap();
+                        let target = scoped_fn_name(&module_prefix, &f.name);
+                        let call_args: Vec<(LlvmType, String)> =
+                            (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
+                        let call_args_ref: Vec<(LlvmType, &str)> =
+                            call_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
+                        let result = blk.call(DOUBLE, &target, &call_args_ref);
+                        blk.ret(DOUBLE, &result);
+                    } else {
+                        let wf = llmod.define_function(
+                            &exported_wrap,
+                            DOUBLE,
+                            vec![
+                                (I64, "%this_closure".to_string()),
+                                (DOUBLE, "%a0".to_string()),
+                                (DOUBLE, "%a1".to_string()),
+                                (DOUBLE, "%a2".to_string()),
+                                (DOUBLE, "%a3".to_string()),
+                                (DOUBLE, "%a4".to_string()),
+                            ],
+                        );
+                        let _ = wf.create_block("entry");
+                        let blk = wf.block_mut(0).unwrap();
+                        blk.ret(DOUBLE, "0x7FFC000000000001");
+                    }
                 }
             }
         }

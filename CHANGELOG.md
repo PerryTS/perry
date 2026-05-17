@@ -2,6 +2,68 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.982 — fix(codegen): `export default <namedFn>` wrapper now forwards to the real body so `const fn = defaultImport; fn(…)` works
+
+**Symptom.** Calling a cross-module default-exported function through a local alias dropped the call. With `function add(a,b){return a+b}; export default add;` in one module and
+
+```ts
+import add from "./add.js";
+const fn = add;
+console.log(fn(2, 3));   // → "undefined" (should be 5)
+```
+
+in the consumer, `add(2, 3)` (direct call) returned `5`, but `fn(2, 3)` (call through a local-bound alias) returned `undefined`. The same shape is the npm-package barrel idiom — `node_modules/ramda/es/*.js`, `node_modules/date-fns/*.js`, `node_modules/lodash-es/**` all stamp out `function NAME(…){…}; export default NAME;` modules, so any code that stores a default-imported function in a local (whether explicitly via `const fn = imported` or implicitly by passing it as a callback that the callee assigns into a closure capture) silently lost the call. Ramda hit it through `var sum = reduce(add, 0)` style top-level binding; date-fns hit it through `format`'s internal `formatters[token[0]](originalDate, …)` indirection.
+
+**Root cause.** Sub-bug B of #836's wrapper-alias loop in `crates/perry-codegen/src/codegen.rs` (around L2988 pre-fix) emitted a NO-OP `__perry_wrap_perry_fn_<src>__<exported>` wrapper for every `Export::Named { local, exported }` where `local == exported` and `local` was not the name of a HIR function. The branch was originally added to make `import * as z; export { z };` (namespace-aliased re-exports) and `export { SomeClass }` style exports link — both shapes have no callable body, so a `→ undefined` wrapper was correct.
+
+But the same `local == exported && !func_by_local_name` condition ALSO fires for the canonical default-export shape:
+
+```js
+function add(a, b) { return a + b; }
+export default add;
+```
+
+The HIR lowerer at `perry-hir/src/lower.rs:5601` resolves the default-expr to `Expr::FuncRef(add_id)` (line 5606 branch) and pushes `module.exports.push(Export::Named { local: "default", exported: "default" })` plus `module.exported_functions.push(("default", add_id))`. The exports entry has `local == exported == "default"`, and `func_by_local_name` is keyed by the FUNCTION's HIR name (`"add"`) — so the no-op branch fired and emitted a wrapper that returned NaN-boxed undefined regardless of its arguments.
+
+Consumer-side, every closure-form access of the default import (`expr.rs:12099` constructs `wrap_name = "__perry_wrap_perry_fn_<src>__default"`, takes its address via `js_closure_alloc_singleton`, NaN-boxes the closure pointer) resolved to the no-op wrapper at link time. Direct calls (`expr.rs::ExternFuncRef`-as-callee path in `lower_call.rs`) routed through a different symbol (`perry_fn_<src>__default`, which IS a forwarding alias to `perry_fn_<src>__add` — emitted by the `exported_functions` loop at L2347) and worked correctly — that's why `add(2, 3)` returned `5` but `fn(2, 3)` (closure call through the alias) returned `undefined`.
+
+**Fix.** Before emitting the no-op wrapper in sub-bug-B's branch, probe `hir.exported_functions` for an alias entry pointing the `local==exported` name at a real HIR function. When found, emit a forwarding wrapper to that function's body (same shape as the `local != exported` branch at L2792, which already handles the renamed-export case correctly). The no-op branch stays as the fallback for genuinely non-callable exports (`export { ImportedNamespace }`, `export { SomeClass }`, etc.).
+
+```rust
+let aliased_func: Option<&perry_hir::Function> = hir
+    .exported_functions
+    .iter()
+    .find(|(n, _)| n == exported)
+    .and_then(|(_, fid)| hir.functions.iter().find(|f| f.id == *fid));
+if let Some(f) = aliased_func {
+    // Emit forwarding wrapper: __perry_wrap_perry_fn_<src>__<exported>(closure, a0…aN)
+    //   → tail-call perry_fn_<src>__<local-fn-name>(a0…aN)
+    let target = scoped_fn_name(&module_prefix, &f.name);
+    …emit forwarder…
+} else {
+    …existing no-op fallback…
+}
+```
+
+**Validation.**
+
+- New `test-files/test_default_import_as_value.ts` + `test_default_import_as_value_helper.ts` (cross-module helpers) exercise four value-position shapes: local alias, function-parameter pass-through, closure-capture, direct call. Perry now prints `5 / 30 / 15 / 5` byte-for-byte against `node --experimental-strip-types`.
+- `test-files/test_lodash_default_import_methods.ts` (issue #957 regression) still passes.
+- `test-files/test_issue_678_reexport_default.ts` still passes.
+
+**Out of scope (related but separate bugs).** With this fix applied, two npm packages from the original compat sweep still don't work fully:
+
+- **ramda's** `R.sum([1..5])` returns `[object Object]` instead of `15` because `Function.prototype.apply` (used by ramda's `_curry1`/`_curry2`/`_curry3` to dispatch `fn.apply(this, arguments)`) doesn't have a runtime handler at all — every `.apply()` call returns the receiver as a stub. Untriaged; will need its own issue.
+- **date-fns's** `format(new Date(), …)` throws `RangeError: Invalid time value` because `Date.prototype.constructor` returns `undefined`, breaking `constructFrom`'s `new date.constructor(value)` cloning path. Untriaged; will need its own issue.
+
+Both packages exercise the default-import-as-value shape internally many times, so this fix is a prerequisite for any future work on them — without it, the closure-dispatch would short-circuit before reaching the `apply`/`constructor` failures.
+
+**Files.**
+
+- `crates/perry-codegen/src/codegen.rs` — alias-loop branch at sub-bug-B now consults `hir.exported_functions` before emitting the no-op wrapper.
+- `test-files/test_default_import_as_value.ts` — new regression test.
+- `test-files/test_default_import_as_value_helper.ts` — cross-module helper exporting `function add` as default.
+
 ## v0.5.981 — feat(manifest): register `stream.on` / `once` / `off` / `emit` / `removeListener` / `removeAllListeners` (+ the rest of the EventEmitter surface) so axios compiles past the #463 gate
 
 **Symptom.** Compiling axios (and any other npm package that extends `stream.Transform` / `stream.Readable` etc. and wires up event listeners on the resulting instance) bailed at HIR-lower with:
@@ -30,7 +92,6 @@ All entries use `has_receiver: true` because every callsite is `<streamInstance>
 **Files.**
 - `crates/perry-api-manifest/src/entries.rs` — 15 new `method("stream", ..., true, None)` rows in the stream block.
 - `test-files/test_stream_on.ts` — repro/regression fixture.
-
 ## v0.5.980 — feat(lodash): add `sum` / `mean` / `sumBy` / `meanBy` / `tail` aggregators to the manifest
 
 **Symptom.** Manifest sweep flagged `_.sum([1,2,3,4])` as missing — `import _ from 'lodash'; _.sum(...)` errored at HIR-lower with `\`lodash.sum\` is not implemented in Perry — see \`perry --print-api-manifest\` for the supported surface`. Same shape for `_.mean`, `_.sumBy`, `_.meanBy`, and `_.tail` (tail's runtime + decl already existed but the manifest + lower_call rows were absent, so call sites couldn't reach the native function).
