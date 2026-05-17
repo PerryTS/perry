@@ -262,6 +262,14 @@ pub(super) fn collect_modules(
                 specifier,
             },
         );
+        // #499: record the file that flipped `needs_js_runtime` on so
+        // the host-opt-in gate (enforced in `compile.rs` after dep
+        // collection) can name the importer(s) in its refusal
+        // diagnostic. De-duplicate by canonical path — many edges may
+        // resolve to the same JS file.
+        if !ctx.js_runtime_importers.iter().any(|p| p == &canonical) {
+            ctx.js_runtime_importers.push(canonical.clone());
+        }
         ctx.needs_js_runtime = true;
 
         // Recurse into each resolved sibling. We re-enter

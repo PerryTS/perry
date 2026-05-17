@@ -103,6 +103,32 @@ fn toml_build_number(table: &toml::Table) -> Option<i64> {
         .or_else(|| value.as_str().and_then(|s| s.parse::<i64>().ok()))
 }
 
+/// #499: extract the owning npm package name from a source-file path
+/// by locating the rightmost `node_modules/` segment. Scope-aware:
+/// `node_modules/@scope/pkg/...` returns `@scope/pkg`. Returns `None`
+/// for user-source files outside `node_modules/`.
+fn package_name_for_path(source_path: &str) -> Option<String> {
+    let idx = source_path.rfind("node_modules/")?;
+    let after = &source_path[idx + "node_modules/".len()..];
+    if let Some(stripped) = after.strip_prefix('@') {
+        let mut parts = stripped.splitn(3, '/');
+        let scope = parts.next().unwrap_or("");
+        let pkg = parts.next().unwrap_or("");
+        if scope.is_empty() || pkg.is_empty() {
+            None
+        } else {
+            Some(format!("@{}/{}", scope, pkg))
+        }
+    } else {
+        let pkg = after.split('/').next()?;
+        if pkg.is_empty() {
+            None
+        } else {
+            Some(pkg.to_string())
+        }
+    }
+}
+
 fn package_bundle_id_from_input(input: &Path) -> Option<String> {
     let mut dir = input.canonicalize().ok()?;
     if dir.is_file() {
@@ -517,6 +543,20 @@ pub struct CompilationContext {
     /// Consulted per-module during HIR lowering; ignored when
     /// `refuse_dynamic_stdlib_dispatch` is false.
     pub allow_dynamic_stdlib_packages: HashSet<String>,
+    /// #499: explicit host opt-in to link `perry-jsruntime` (QuickJS-based
+    /// eval-equivalent runtime). Default false. Sources, last wins:
+    /// `perry.allowJsRuntime: true` in host package.json → CLI flag
+    /// `--enable-js-runtime` implicitly opts in. Without the opt-in,
+    /// any transitive dep that introduces a `.js` file under
+    /// `node_modules/` fails the build with a diagnostic that names
+    /// the offending file(s).
+    pub allow_js_runtime: bool,
+    /// #499: source files that flipped `needs_js_runtime` to true.
+    /// Used to name the offending importer(s) in the refusal
+    /// diagnostic. Records canonical path; the package name (if the
+    /// file lives under `node_modules/<pkg>/...`) is derived at
+    /// diagnostic-emission time. Empty until `collect_modules` runs.
+    pub js_runtime_importers: Vec<PathBuf>,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -563,6 +603,8 @@ impl CompilationContext {
             extra_stdlib_features: BTreeSet::new(),
             refuse_dynamic_stdlib_dispatch: true,
             allow_dynamic_stdlib_packages: HashSet::new(),
+            allow_js_runtime: false,
+            js_runtime_importers: Vec::new(),
         }
     }
 }
@@ -1060,6 +1102,29 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
+                // #499: perry.allowJsRuntime — explicit host opt-in to link
+                // perry-jsruntime (QuickJS-based eval-equivalent). Off by
+                // default: a transitive dep pulling in a `.js` file under
+                // `node_modules/` would otherwise silently link the
+                // JS-eval runtime into the binary, defeating Perry's
+                // structural advantage over Node. With `false` (or absent),
+                // the build fails and names the offending file(s) so the
+                // user can decide whether to opt in.
+                if let Some(allow) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("allowJsRuntime"))
+                    .and_then(|v| v.as_bool())
+                {
+                    ctx.allow_js_runtime = allow;
+                    if allow {
+                        match format {
+                            OutputFormat::Text => {
+                                println!("  JS runtime: ALLOWED (perry.allowJsRuntime: true)")
+                            }
+                            OutputFormat::Json => {}
+                        }
+                    }
+                }
             }
         }
     }
@@ -1095,6 +1160,20 @@ pub fn run_with_parse_cache(
     // serves as documentation of the source of truth.
     perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
     perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
+
+    // #499: `PERRY_ALLOW_JS_RUNTIME=1` opts in to perry-jsruntime
+    // linkage from the environment (CI-friendly knob without touching
+    // package.json). `=0` keeps the refusal on even if package.json
+    // opted in — useful for an enforcement gate on a CI matrix entry.
+    match std::env::var("PERRY_ALLOW_JS_RUNTIME") {
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => {
+            ctx.allow_js_runtime = true;
+        }
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => {
+            ctx.allow_js_runtime = false;
+        }
+        _ => {}
+    }
 
     // --- i18n: parse [i18n] config from perry.toml and load locale files ---
     let mut i18n_config: Option<perry_transform::i18n::I18nConfig> = None;
@@ -1362,6 +1441,50 @@ pub fn run_with_parse_cache(
                 }
             }
         }
+    }
+
+    // #499: gate `perry-jsruntime` linkage on explicit host opt-in.
+    // The runtime is the one remaining vector in a Perry-compiled
+    // binary for executing arbitrary JS — defeating Perry's primary
+    // structural advantage over Node. Without the gate, any transitive
+    // dep that ships a `.js` file under `node_modules/` would silently
+    // pull QuickJS into the binary and the host author would never
+    // know. The check fires after dep collection so the diagnostic
+    // can name every file that introduced the dependency.
+    //
+    // Treats `--enable-js-runtime` CLI as an explicit opt-in
+    // (semantically equivalent to setting `perry.allowJsRuntime: true`
+    // for this one build) so we don't regress that workflow.
+    if ctx.needs_js_runtime && !ctx.allow_js_runtime && !args.enable_js_runtime {
+        let importers = &ctx.js_runtime_importers;
+        let mut detail = String::new();
+        // Cap the printed list at the first eight importers — pathological
+        // builds can pull in dozens of node_modules JS files and we'd
+        // rather show the head of the list than a 60-line error.
+        let limit = 8usize;
+        for path in importers.iter().take(limit) {
+            let pkg = package_name_for_path(&path.to_string_lossy())
+                .map(|s| format!(" [{}]", s))
+                .unwrap_or_default();
+            detail.push_str(&format!("\n  - {}{}", path.display(), pkg));
+        }
+        if importers.len() > limit {
+            detail.push_str(&format!("\n  ... and {} more", importers.len() - limit));
+        }
+        anyhow::bail!(
+            "build pulled in `perry-jsruntime` (QuickJS-based eval-equivalent \
+             runtime) via the following file(s):{detail}\n\
+             \n\
+             `perry-jsruntime` is treated as a privileged dependency on par \
+             with adding a JIT to the binary — it re-introduces arbitrary \
+             runtime code execution and defeats Perry's structural advantage \
+             over Node. Refusing to link by default. (#499)\n\
+             \n\
+             To enable, set `perry.allowJsRuntime: true` in the host \
+             package.json, or pass `--enable-js-runtime` on the CLI for a \
+             one-off build. (Falls under `--lockdown` deny set when that \
+             flag ships — see #496.)"
+        );
     }
 
     // Recompute project_root as the common ancestor of all module paths.
@@ -7600,5 +7723,66 @@ bundle_id = "com.example.project"
         assert_eq!(metadata.version, "1.0.0");
         assert_eq!(metadata.build_number, 1);
         assert_eq!(metadata.bundle_id, "com.example.pkg");
+    }
+}
+
+#[cfg(test)]
+mod js_runtime_gate_tests {
+    //! #499 — coverage for the helper that names the offending
+    //! package in the perry-jsruntime refusal diagnostic.
+    //!
+    //! The end-to-end gate fires deep inside `compile_command` after
+    //! `collect_modules` runs and exits via `anyhow::bail!`; building
+    //! a unit test that drives it requires a full project on disk
+    //! (tested via the smoke test in the PR description). Here we
+    //! pin the importer-attribution helper that the diagnostic uses
+    //! — the part that historically rotted in #467's
+    //! `sanitize_app_name` because no test covered it.
+
+    use super::package_name_for_path;
+
+    #[test]
+    fn unscoped_package_under_node_modules() {
+        assert_eq!(
+            package_name_for_path("/repo/node_modules/lodash/lib/index.js"),
+            Some("lodash".to_string())
+        );
+    }
+
+    #[test]
+    fn scoped_package_under_node_modules() {
+        assert_eq!(
+            package_name_for_path("/repo/node_modules/@scope/pkg/src/index.js"),
+            Some("@scope/pkg".to_string())
+        );
+    }
+
+    #[test]
+    fn nested_node_modules_returns_innermost() {
+        // Bun/pnpm-style nested node_modules: the rightmost segment
+        // is the one that actually resolved.
+        assert_eq!(
+            package_name_for_path("/repo/node_modules/outer/node_modules/inner/lib/index.js"),
+            Some("inner".to_string())
+        );
+    }
+
+    #[test]
+    fn user_source_returns_none() {
+        assert_eq!(package_name_for_path("/repo/src/main.ts"), None);
+    }
+
+    #[test]
+    fn malformed_scope_returns_none() {
+        // `@/foo` is malformed (empty scope) — don't claim a package
+        // name we can't actually quote back to the user.
+        assert_eq!(
+            package_name_for_path("/repo/node_modules/@/foo/index.js"),
+            None
+        );
+        // Empty segment immediately after `node_modules/` — defensive
+        // coverage; the diagnostic falls through to printing only the
+        // raw path.
+        assert_eq!(package_name_for_path("/repo/node_modules/"), None);
     }
 }
