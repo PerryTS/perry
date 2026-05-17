@@ -8459,6 +8459,19 @@ unsafe fn get_native_module_constant(
             _ => None,
         },
         "crypto.constants" => crypto_const(property),
+        // Issue #912 (#909 follow-up): express reads
+        // `const { METHODS } = require('node:http')` at module init and
+        // immediately calls `METHODS.map(...)` — pre-fix METHODS resolved
+        // to undefined and threw `TypeError: Cannot read properties of
+        // undefined (reading 'map')`. Node's `http.METHODS` is a sorted
+        // array of HTTP verb strings sourced from llhttp (only exposed
+        // on `node:http`, not on `https`/`http2`). We materialize the
+        // array once (`http_methods_array` caches the long-lived
+        // pointer) and hand it back for every read.
+        "http" => match property {
+            "METHODS" => Some(unsafe { http_methods_array() }),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -8468,6 +8481,72 @@ unsafe fn get_native_module_constant(
 /// property accesses like `fs.constants.O_RDONLY` work through the dispatch table.
 fn create_sub_namespace(name: &str) -> f64 {
     js_create_native_module_namespace(name.as_ptr(), name.len())
+}
+
+/// Issue #912 (#909 follow-up): cached `http.METHODS` array. Matches
+/// Node 22's exposed list (alphabetically sorted, derived from llhttp's
+/// HTTP method table). The array is allocated in the longlived arena so
+/// it survives every GC sweep — the cached pointer is shared across
+/// every `http.METHODS` / `https.METHODS` / `http2.METHODS` read.
+unsafe fn http_methods_array() -> f64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CACHED: AtomicU64 = AtomicU64::new(0);
+    let cached = CACHED.load(Ordering::Relaxed);
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+    // Node 22 `require('node:http').METHODS` snapshot.
+    const METHODS: &[&str] = &[
+        "ACL",
+        "BIND",
+        "CHECKOUT",
+        "CONNECT",
+        "COPY",
+        "DELETE",
+        "GET",
+        "HEAD",
+        "LINK",
+        "LOCK",
+        "M-SEARCH",
+        "MERGE",
+        "MKACTIVITY",
+        "MKCALENDAR",
+        "MKCOL",
+        "MOVE",
+        "NOTIFY",
+        "OPTIONS",
+        "PATCH",
+        "POST",
+        "PROPFIND",
+        "PROPPATCH",
+        "PURGE",
+        "PUT",
+        "QUERY",
+        "REBIND",
+        "REPORT",
+        "SEARCH",
+        "SOURCE",
+        "SUBSCRIBE",
+        "TRACE",
+        "UNBIND",
+        "UNLINK",
+        "UNLOCK",
+        "UNSUBSCRIBE",
+    ];
+    let arr = crate::array::js_array_alloc_with_length_longlived(METHODS.len() as u32);
+    let elements_ptr = (arr as *mut u8).add(8) as *mut f64;
+    for (i, m) in METHODS.iter().enumerate() {
+        let bytes = m.as_bytes();
+        let str_ptr =
+            crate::string::js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32);
+        let nanboxed = f64::from_bits(
+            crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
+        );
+        *elements_ptr.add(i) = nanboxed;
+    }
+    let value = crate::value::js_nanbox_pointer(arr as i64);
+    CACHED.store(value.to_bits(), Ordering::Relaxed);
+    value
 }
 
 /// Create (and cache) the fs.constants object with POSIX file system constants.

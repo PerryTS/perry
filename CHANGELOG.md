@@ -2,6 +2,46 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.952 — fix(runtime+jsruntime): #912 — express smoke `Cannot read properties of undefined (reading 'map')` — `node:http` now exposes `METHODS`
+
+**Symptom.** Downstream of #911 (the express `value is not a function` fix). The same express smoke (`mkdir /tmp/perry-express-x && npm install express && perry main.ts -o out && ./out` for `import express from "express"; console.log("smoke:", typeof express);`) now advances past the previous failure but immediately dies at module init with:
+
+```
+TypeError: Cannot read properties of undefined (reading 'map')
+    at <anonymous>
+```
+
+**Root cause.** Two co-located gaps in Perry's `node:http` import surface.
+
+`node_modules/express/lib/utils.js` reads:
+
+```js
+var { METHODS } = require('node:http');
+exports.methods = METHODS.map((method) => method.toLowerCase());
+```
+
+After #911's cjs_wrap pass the wrap rewrites `require('node:http')` as `import _req_0 from 'node:http';` plus a dispatch shim. Perry's `lookup_native_module` resolves `_req_0` to `NativeModuleRef("http")`, codegen emits `js_create_native_module_namespace("http", ...)`, and `_req_0.METHODS` lowers to a property read on a `NATIVE_MODULE_CLASS_ID`-tagged ObjectHeader → `js_object_get_field_by_name` → `get_native_module_constant("http", "METHODS", ...)`. Pre-fix that function had no `"http"` arm so it fell through to the `_ => None` default and the read returned `undefined`. The next line, `METHODS.map(...)`, then threw the spec TypeError.
+
+`router/index.js` (pulled in transitively by express but NOT in `compilePackages` — the package.json from the repro only lists `["express"]`) is routed through perry-jsruntime instead. Its module-init body reads `const { METHODS } = require('node:http')` against the jsruntime's built-in `node:http` stub at `perry-jsruntime/src/modules.rs:808`, which exported `{ IncomingMessage, ServerResponse, Agent, request, get, createServer, createSecureServer }` — no `METHODS`. Same destructuring → undefined, same `.map(...)` → same TypeError on the *jsruntime* side. So the express smoke crashes via the jsruntime path while Perry's native CJS-wrap path also would have crashed if it got run first.
+
+**Fix.** Two surfaces, one Node-22 array snapshot, shared semantics:
+
+1. `crates/perry-runtime/src/object.rs::get_native_module_constant` grows an `"http"` arm whose `"METHODS"` branch calls a new `http_methods_array()` helper. The helper builds a longlived-arena array once (`js_array_alloc_with_length_longlived` + `js_string_from_bytes_longlived`, cached behind `AtomicU64` so subsequent reads share the same pointer) and hands back the NaN-boxed array f64. Long-lived arena placement matches the existing fs-constants / shape-cache pattern — the array survives every GC sweep without needing a custom root scanner.
+
+2. `crates/perry-jsruntime/src/modules.rs`'s `"http" | "https" | "http2"` stub grows `export const METHODS = [...]` plus a minimal `STATUS_CODES` map. Both surfaces use the same Node 22 verb list (35 entries from llhttp). The stub fires when a jsruntime-hosted module reads `require('node:http').METHODS`.
+
+**Validation.**
+
+- `test-files/test_issue_express_map_undefined.ts` covers the native surface: `Array.isArray(http.METHODS) === true`, `length === 35`, `includes("GET")`, `includes("POST")`, `includes("DELETE")`, `.map((s) => s.toLowerCase())` reproduces the express invocation pattern, destructuring (`const { METHODS } = http`) matches the express CJS shape. Output is byte-identical to `node --experimental-strip-types`.
+- The express smoke (`/tmp/perry-express-x`) now advances past `(undefined).map`. The next failure mode is unrelated — `debug/src/index.js` can't find its sibling `supports-color` package — and is downstream of this fix.
+
+**Files touched.**
+
+- `crates/perry-runtime/src/object.rs` — new `"http"` match arm + `http_methods_array()` helper.
+- `crates/perry-jsruntime/src/modules.rs` — `METHODS` / `STATUS_CODES` exports added to the `http`/`https`/`http2` stub.
+- `test-files/test_issue_express_map_undefined.ts` — new regression test.
+- `Cargo.toml`, `CLAUDE.md`, `CHANGELOG.md` — version bump + this entry.
+
 ## v0.5.951 — fix(hir): #911 — express smoke `TypeError: value is not a function` — function decls in `fn-expr` bodies now hoist BEFORE var initializers
 
 **Symptom.** With `perry.compilePackages: ["express"]`, the express smoke (`mkdir /tmp/perry-express-x && npm install express && perry main.ts -o out && ./out` for `import express from "express"; console.log(typeof express)`) died at module init with:

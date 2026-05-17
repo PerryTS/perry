@@ -810,11 +810,36 @@ export default { TLSSocket, connect, createSecureContext };
 export class IncomingMessage {}
 export class ServerResponse {}
 export class Agent {}
+// Issue #912 (#909 follow-up): express/router read `const { METHODS } =
+// require('node:http')` at module init and immediately call `METHODS.map(...)`.
+// Pre-fix METHODS was undefined and threw `TypeError: Cannot read properties
+// of undefined (reading 'map')`. Mirrors `http_methods_array` in
+// perry-runtime/src/object.rs (Node 22 snapshot).
+export const METHODS = [
+    'ACL', 'BIND', 'CHECKOUT', 'CONNECT', 'COPY', 'DELETE', 'GET', 'HEAD',
+    'LINK', 'LOCK', 'M-SEARCH', 'MERGE', 'MKACTIVITY', 'MKCALENDAR', 'MKCOL',
+    'MOVE', 'NOTIFY', 'OPTIONS', 'PATCH', 'POST', 'PROPFIND', 'PROPPATCH',
+    'PURGE', 'PUT', 'QUERY', 'REBIND', 'REPORT', 'SEARCH', 'SOURCE',
+    'SUBSCRIBE', 'TRACE', 'UNBIND', 'UNLINK', 'UNLOCK', 'UNSUBSCRIBE'
+];
+// Node also exposes a `STATUS_CODES` map keyed by integer code. Expose a
+// minimal subset so consumers that read `STATUS_CODES[500]` at module init
+// don't crash with the same "undefined" pattern.
+export const STATUS_CODES = {
+    100: 'Continue', 101: 'Switching Protocols', 200: 'OK', 201: 'Created',
+    202: 'Accepted', 204: 'No Content', 301: 'Moved Permanently',
+    302: 'Found', 304: 'Not Modified', 400: 'Bad Request', 401: 'Unauthorized',
+    403: 'Forbidden', 404: 'Not Found', 405: 'Method Not Allowed',
+    408: 'Request Timeout', 409: 'Conflict', 410: 'Gone', 413: 'Payload Too Large',
+    414: 'URI Too Long', 415: 'Unsupported Media Type', 429: 'Too Many Requests',
+    500: 'Internal Server Error', 501: 'Not Implemented', 502: 'Bad Gateway',
+    503: 'Service Unavailable', 504: 'Gateway Timeout'
+};
 export function request() { throw new Error('http.request not supported in this environment'); }
 export function get() { throw new Error('http.get not supported in this environment'); }
 export function createServer() { throw new Error('http.createServer not supported in this environment'); }
 export function createSecureServer() { throw new Error('http2.createSecureServer not supported in this environment'); }
-export default { IncomingMessage, ServerResponse, Agent, request, get, createServer, createSecureServer };
+export default { IncomingMessage, ServerResponse, Agent, METHODS, STATUS_CODES, request, get, createServer, createSecureServer };
 "#.to_string(),
         "crypto" => r#"
 // Stub implementation for Node.js 'crypto' module
