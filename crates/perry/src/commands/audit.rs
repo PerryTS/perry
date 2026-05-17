@@ -41,6 +41,15 @@ pub struct AuditArgs {
     /// Verify service URL
     #[arg(long, default_value = "https://verify.perryts.com")]
     pub verify_url: String,
+
+    /// #495: print the local behavioral SBOM produced at the last
+    /// compile (`.perry-cache/audit.json` under the current project
+    /// root). Per-module list of stdlib symbols actually called,
+    /// keyed by source file with the owning npm package name when
+    /// the source lives under `node_modules/<pkg>/...`. When this
+    /// flag is set, the remote security scan is *not* invoked.
+    #[arg(long)]
+    pub sbom: bool,
 }
 
 // --- Response types matching perry-verify/src/audit/types.ts ---
@@ -340,7 +349,99 @@ fn display_audit_results(audit: &AuditResponse, fail_on: &str) {
 }
 
 /// Entry point for `perry audit` command
+/// #495: print the local behavioral SBOM emitted by the last
+/// `perry compile`/`perry run` into `<project>/.perry-cache/audit.json`.
+/// In Text mode, formats a per-module breakdown grouped by owning npm
+/// package; in JSON mode, dumps the raw manifest. Returns a clear
+/// error if the manifest doesn't exist yet (build first).
+fn print_local_sbom(path_arg: &str, format: OutputFormat) -> Result<()> {
+    let root = std::path::PathBuf::from(path_arg);
+    let root = root.canonicalize().unwrap_or(root);
+    // Walk up to find a directory containing `.perry-cache/audit.json`
+    // — same shape `perry compile` walks up to find `package.json`,
+    // so `perry audit --sbom` works from anywhere in the project tree.
+    let manifest_path = {
+        let mut dir = root.clone();
+        loop {
+            let candidate = dir.join(".perry-cache").join("audit.json");
+            if candidate.exists() {
+                break Some(candidate);
+            }
+            if !dir.pop() {
+                break None;
+            }
+        }
+    };
+    let Some(manifest_path) = manifest_path else {
+        bail!(
+            "no .perry-cache/audit.json found under `{}` — run `perry compile` or `perry run` first; the manifest is written on every successful build.",
+            root.display()
+        );
+    };
+    let raw = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+    let manifest: perry_hir::AuditManifest = serde_json::from_str(&raw)
+        .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+
+    match format {
+        OutputFormat::Json => {
+            // Pretty-print so `perry audit --sbom --format json | jq` is
+            // pleasant; downstream tools that need compact output can
+            // re-serialize.
+            println!("{}", serde_json::to_string_pretty(&manifest)?);
+        }
+        OutputFormat::Text => {
+            print_sbom_text(&manifest);
+        }
+    }
+    Ok(())
+}
+
+/// Human-readable SBOM summary. Groups modules by owning package
+/// (host source is reported under `<host>`), then lists each module's
+/// stdlib calls as `<namespace>: method1, method2, ...`.
+fn print_sbom_text(manifest: &perry_hir::AuditManifest) {
+    use std::collections::BTreeMap;
+
+    println!("Behavioral SBOM (perry audit --sbom)");
+    println!("  manifest version: {}", manifest.version);
+    println!("  modules: {}", manifest.modules.len());
+    println!();
+
+    // Group by package; None → host source bucket.
+    let mut by_pkg: BTreeMap<Option<String>, Vec<&perry_hir::ModuleAudit>> = BTreeMap::new();
+    for module in &manifest.modules {
+        by_pkg
+            .entry(module.package.clone())
+            .or_default()
+            .push(module);
+    }
+    for (pkg, modules) in &by_pkg {
+        match pkg {
+            None => println!("== <host source> =="),
+            Some(name) => println!("== {} ==", name),
+        }
+        for module in modules {
+            if module.stdlib.is_empty() {
+                println!("  {} (no stdlib calls)", module.source);
+                continue;
+            }
+            println!("  {}", module.source);
+            for (ns, methods) in &module.stdlib {
+                println!("    {}: {}", ns, methods.join(", "));
+            }
+        }
+        println!();
+    }
+}
+
 pub fn run(args: AuditArgs, format: OutputFormat, _use_color: bool) -> Result<()> {
+    // #495: `--sbom` switches to the local behavioral-SBOM viewer.
+    // No tokio runtime needed — we just read a JSON file and print
+    // it. Short-circuits before the remote-scan path below.
+    if args.sbom {
+        return print_local_sbom(&args.path, format);
+    }
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let path = std::path::PathBuf::from(&args.path);

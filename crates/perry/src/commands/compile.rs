@@ -130,6 +130,29 @@ fn package_name_for_path(source_path: &str) -> Option<String> {
     }
 }
 
+/// #495: serialize the per-module behavioral SBOM to
+/// `.perry-cache/audit.json` under the current project root. Walks
+/// every collected native HIR module (skips JS-runtime modules — they
+/// don't have HIR), groups records by stable canonical-path order
+/// so the JSON is byte-deterministic across builds.
+fn write_audit_manifest(ctx: &CompilationContext) -> std::io::Result<()> {
+    let mut manifest = perry_hir::AuditManifest::new();
+    // BTreeMap iteration is sorted by key; native_modules is keyed by
+    // PathBuf so the resulting Vec is in stable filesystem order.
+    for (path, hir_module) in &ctx.native_modules {
+        let source = path.to_string_lossy().into_owned();
+        let record = perry_hir::audit_module(hir_module, &source);
+        manifest.modules.push(record);
+    }
+    let dir = ctx.project_root.join(".perry-cache");
+    fs::create_dir_all(&dir)?;
+    let path = dir.join("audit.json");
+    let json = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    fs::write(&path, json)?;
+    Ok(())
+}
+
 fn package_bundle_id_from_input(input: &Path) -> Option<String> {
     let mut dir = input.canonicalize().ok()?;
     if dir.is_file() {
@@ -2019,6 +2042,23 @@ pub fn run_with_parse_cache(
                  equivalents (e.g. `perry/thread` for child_process workloads, \
                  native Perry stdlib for jsruntime-only deps)."
             );
+        }
+    }
+
+    // #495: emit a behavioral SBOM at `.perry-cache/audit.json`. The
+    // manifest captures, per source module, the stdlib symbols
+    // actually called from the lowered HIR. Foundation for the
+    // host-controlled per-package capability enforcement issue (#501)
+    // and for `perry audit --diff` change review. Best-effort write
+    // — a missing directory or filesystem error is logged but
+    // doesn't fail the build, since the SBOM is observational
+    // metadata, not a correctness gate.
+    if let Err(e) = write_audit_manifest(&ctx) {
+        match format {
+            OutputFormat::Text => {
+                eprintln!("warning: failed to write .perry-cache/audit.json: {}", e);
+            }
+            OutputFormat::Json => {}
         }
     }
 

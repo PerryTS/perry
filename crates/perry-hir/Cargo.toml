@@ -14,6 +14,8 @@ swc_common.workspace = true
 
 thiserror.workspace = true
 anyhow.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 perry-parser.workspace = true

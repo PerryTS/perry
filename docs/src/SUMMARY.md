@@ -145,6 +145,7 @@
 - [`--lockdown`](cli/lockdown.md)
 - [Egress Allowlist (`allowedHosts`)](cli/allowed-hosts.md)
 - [Per-Package Capabilities (`perry.permissions`)](cli/capabilities.md)
+- [`perry audit --sbom`](cli/perry-audit-sbom.md)
 - [perry.toml Reference](cli/perry-toml.md)
 
 ---
