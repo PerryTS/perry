@@ -2770,6 +2770,24 @@ pub extern "C" fn js_array_join(
             let element_bits = (*elements_ptr.add(i)).to_bits();
             let jsvalue = JSValue::from_bits(element_bits);
 
+            // Issue #907: `Array(n)` initializes slots to TAG_HOLE
+            // (see `js_array_alloc_with_length`). Per ES2015 §22.1.3.13
+            // (Array.prototype.join), holes go through Get which returns
+            // undefined → the spec's ToString step turns them into the
+            // empty string. Without this check the catch-all below
+            // emitted "[object Object]", so `Array(3).join("0")` returned
+            // `"[object Object]0[object Object]0[object Object]"` instead
+            // of `"00"`. dayjs's `m(t,e,n)` pad utility builds the UTC
+            // offset string via `Array(e+1-r.length).join(n)` and the
+            // result silently corrupted `b.z(this)` (the format `i`
+            // capture), which downstream triggered
+            // `TypeError: (number).replace is not a function` once the
+            // catch-all fallthrough reached `i.replace(":","")`.
+            if element_bits == crate::value::TAG_HOLE {
+                // hole → empty string per spec
+                continue;
+            }
+
             // Convert element to string based on its type
             if jsvalue.is_string() {
                 let str_ptr = jsvalue.as_pointer() as *const StringHeader;

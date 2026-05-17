@@ -2,6 +2,7 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+<<<<<<< HEAD
 ## v0.5.949 — fix(runtime): pino smoke `(boolean).tracingChannel is not a function` — `node:diagnostics_channel` joins the node-submodule stub table
 
 **Symptom.** After v0.5.948's #906 unblocked pino past the `buffer.constants.MAX_STRING_LENGTH` site, the smoke (`PERRY_ALLOW_UNIMPLEMENTED=1 ./out`, with `compilePackages: ["pino"]` and `import pino from "pino"`) crashed at runtime with
@@ -56,6 +57,34 @@ const asJsonChan = diagChan.tracingChannel('pino_asJson')  // throws here
 * `crates/perry/src/commands/compile.rs` — `if submod_key == "diagnostics_channel"` branch in the default-import registration loop (+15 lines).
 * `test-files/test_issue_pino_tracing_channel.ts` — new doc-style regression test.
 * `Cargo.toml` / `CLAUDE.md` — version bump to 0.5.949.
+=======
+## v0.5.950 — fix(codegen+runtime): #908 — dayjs `format("YYYY-MM")` no longer throws `TypeError: (number).replace is not a function`
+
+**Symptom.** After v0.5.948's #904 unblocked dayjs past the bare `Array(...)` call inside its `padStart`-style `m(t,e,n)` utility, the smoke (`PERRY_ALLOW_UNIMPLEMENTED=1 ./out`, with `compilePackages: ["dayjs"]` and `import dayjs from "dayjs"; dayjs("2024-01-02").format("YYYY-MM")`) crashed at runtime with
+
+```
+TypeError: (number).replace is not a function
+    at <anonymous>
+```
+
+**Diagnosis.** Two cooperating bugs were at play, both surfaced by dayjs's `format()` method:
+
+1. **`Array(n).join(sep)` emitted `"[object Object]"` for each hole slot.** `js_array_alloc_with_length` initialises every slot to `TAG_HOLE` (`0x7FFC_0000_0000_0010` — a NaN-boxed sentinel distinct from UNDEFINED). The hole-aware reader `js_array_get_f64` already translates `TAG_HOLE → TAG_UNDEFINED` on read, but `js_array_join` (`crates/perry-runtime/src/array.rs:2734`) had no `TAG_HOLE` arm in its type-dispatch chain, so every hole fell through to the catch-all `else` branch that emits the literal `"[object Object]"` placeholder. dayjs's `m(t,e,n)` pads a number to width `e` via `"" + Array(e+1-r.length).join(n) + t`, so `Array(2).join("0")` returned `"[object Object]0[object Object]"` instead of `"00"`. This silently corrupted `b.z(this)` (the UTC offset zone string `"+02:00"` that gets captured as `i` inside `format`) into something like `"+[object Object]0[object Object]2:..."`. Still a string, still nominally valid — but…
+
+2. **The module-wide `boxed_vars` set missed every `Stmt::PreallocateBoxes` inside a closure registered via `Expr::RegisterFunctionPrototypeMethod`.** The HIR lowers `Constructor.prototype.method = function () {...}` (dayjs's class-method-via-prototype pattern) to `Expr::RegisterFunctionPrototypeMethod { func, method_name, value: Closure { ... } }`. `crates/perry-codegen/src/boxed_vars.rs::collect_nested_closure_boxed_vars_in_expr` had an unconditional `_ => {}` catch-all that silently skipped this Expr variant, so the format closure's body — which holds `Stmt::PreallocateBoxes([147, 148, 149, 150, 151, 152, ...])` for `var e, n, r, i, s, u, a, ...` — never had its boxed-let ids unioned into `module_boxed_vars`. At codegen time the inner replace-callback closure (`r.replace(y, function(t,r){... return ... || i.replace(":","")})`) then saw `boxed_vars.contains(150 /* outer `i` */) == false`, took the raw-f64 capture path instead of `js_box_get(box_ptr)`, and the box-pointer bits leaked through `typeof` as a tiny denormal `number` (≈ `1.08e-311`, raw bits `0x0000020000c70858`). The replace callback's `i.replace(":","")` fallback path then dispatched on a number-typed receiver and threw the `TypeError: (number).replace is not a function` from runtime/string.rs.
+
+The two bugs reinforced each other: bug 1 corrupted the captured string's content (visible to outside-the-callback reads), bug 2 corrupted the captured value's TYPE (visible only inside the callback). Either alone would have produced a wrong-but-different result; together they synthesised the precise "(number).replace" shape.
+
+**Fixes.**
+
+1. `crates/perry-runtime/src/array.rs` — `js_array_join` now early-`continue`s on `element_bits == TAG_HOLE` so holes contribute the empty string per ES2015 §22.1.3.13 step 7. Already-known undefined/null arms keep their existing empty-string emit, so the JS-spec semantics for non-hole undefineds are preserved.
+
+2. `crates/perry-codegen/src/boxed_vars.rs` — `collect_nested_closure_boxed_vars_in_expr`'s catch-all now delegates to `perry_hir::walker::walk_expr_children` (matching the pattern the sibling collectors `collect_closure_refs_and_writes_in_expr`, `collect_outer_writes_in_expr`, and `collect_write_ids_in_expr` already use). The walker covers `Register{,Function}PrototypeMethod`, `Switch`-discriminant, `Await`, `Yield`, `TypeOf`, `Void`, `InstanceOf`, etc., so future Expr additions automatically inherit traversal — no more silent skips when a new lowering shape ships.
+
+**Validation.** New regression test `test-files/test_issue_dayjs_number_replace.ts` exercises both shapes with plain TypeScript (no dayjs dependency): the `Array(n).join(sep)` sparse-hole semantics for `n ∈ {0,1,2,3}`, a `pad`-style helper that mirrors dayjs's `m`, and a `Constructor.prototype.format = function (t) {...}` whose inner replace callback asserts `typeof i === "string"` and would throw if the captured string-typed local degraded to a number. Both perry and `node --experimental-strip-types` produce byte-identical output for the test. The original `dayjs("2024-01-02").format("YYYY-MM")` smoke no longer throws — it now reaches the dayjs `Date` parse path and emits a (separate, downstream) wrong-year result (`"292278994-08"`), tracked as the next dayjs gap, not addressed here.
+
+**Scope discipline.** Two narrow changes: one hole-check arm in `js_array_join`, one catch-all fallback in `collect_nested_closure_boxed_vars_in_expr`. No HIR or transform changes. The boxed-vars walker change widens coverage (more ids may now be boxed) — this is monotone-safe: every previously-boxed id stays boxed, and the newly-boxed ids match a `Stmt::PreallocateBoxes` that the HIR explicitly emitted because the body needs them boxed.
+>>>>>>> 30239667 (fix(codegen+runtime): #907 — dayjs `format("YYYY-MM")` no longer throws `TypeError: (number).replace is not a function`)
 
 ## v0.5.948 — fix(jsruntime): pino smoke `[js_get_export] failed to get namespace: ...MAX_STRING_LENGTH` — `node:buffer` stub now exposes `buffer.constants`
 

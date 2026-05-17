@@ -374,7 +374,29 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
                 collect_nested_closure_boxed_vars_in_expr(init, out);
             }
         }
-        _ => {}
+        // Issue #907: fall back to the walker for every other Expr
+        // variant so newly-added shapes inherit traversal automatically.
+        // Pre-fix the catch-all `_ => {}` skipped `Expr::Register
+        // FunctionPrototypeMethod` (the v0.5-era constructor.prototype
+        // assignment lowering), so dayjs's `m.format = function(t){...}`
+        // — whose body holds a `Stmt::PreallocateBoxes([147, 148, 149,
+        // 150, ...])` for `var r,i,s,u,a,...` — never had its boxed-let
+        // ids unioned into `module_boxed_vars`. At codegen time the
+        // inner replace-callback closure then saw `boxed_vars.contains
+        // (150) == false`, took the raw-f64 capture path instead of
+        // `js_box_get(box_ptr)`, and the box-pointer bits leaked through
+        // `typeof` as a tiny denormal `number` — manifesting as
+        // `TypeError: (number).replace is not a function` on the
+        // `i.replace(":","")` zoneStr fallback inside `format`.
+        // `walk_expr_children` is the single source of truth for child
+        // traversal and already handles `Register{,Function}Prototype
+        // Method`, `Await`, `Yield`, `TypeOf`, `Void`, `InstanceOf`,
+        // `Switch` discriminants, etc.
+        _ => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_nested_closure_boxed_vars_in_expr(child, out);
+            });
+        }
     }
 }
 
