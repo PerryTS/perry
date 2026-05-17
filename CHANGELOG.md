@@ -2,6 +2,51 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.968 — test(regression): #678 — exhaustive V8-fallback symbol-link coverage
+
+**Background.** Issue #678 reported `Undefined symbols: _perry_fn_node_modules_ink_build_render_js__render` for ink + react when imports landed on the V8 fallback (modules outside `perry.compilePackages`, or modules pulled in transitively where some sibling fell back to V8). Two fixes have already landed:
+
+- v0.5.785 — `fix(codegen): #678 — re-export rename resolves to origin export name` (suffix tracking across `export { default as X } from "./Y.js"` barrels).
+- v0.5.796 followup (`fix(codegen): #678 — V8-fallback callsites route through V8 bridge`) — every consumer-side codegen site that previously formed a bare `perry_fn_<v8src>__<name>` extern now consults `import_function_v8_specifiers` first and short-circuits to `js_call_v8_export(specifier, name, args, argc)` when the source module was demoted to `ModuleKind::Interpreted`.
+
+The ink + react repro from the issue now links cleanly (the link-error symptom is gone; the entry binary fails downstream on a React-internal `Activity` runtime gap, which is a separate issue).
+
+**This release.** Adds `test-files/test_issue_678_v8_fallback_symbols.ts` — an exhaustive regression test that exercises every codegen site the V8-bridge fix has to cover so a future refactor can't silently regress one shape:
+
+1. **Named import + direct call** — `greet(...)`, `add(...)` from `./fixtures/issue_678_v8/mod.js`. Hits `lower_call.rs:~1197` (the `import_function_v8_specifiers.get(name)` short-circuit before forming `perry_fn_<src>__<name>`).
+2. **Default import + direct call** — `defaultFn(...)` from `./fixtures/issue_678_v8/default_mod.js`. Same call-site, but with `name == "default"`; pre-fix this formed `perry_fn_<default_mod_js>__default` and link-failed.
+3. **Namespace import + member call** — `ns.greet(...)` / `ns.add(...)` from `import * as ns from "./mod.js"`. Hits the separate codegen path at `lower_call.rs:~560` (member-access through a registered namespace).
+4. **Function-as-value (closure-wrapper)** — `apply1(greet, "world")`, `apply2(add, 100, 23)`. Forces the codegen to materialise `js_closure_alloc_singleton(@__perry_wrap_perry_fn_<src>__<name>)`; pre-fix the wrapper stub symbol referenced here was also missing for V8-routed imports.
+
+Paired with a new fixture `test-files/fixtures/issue_678_v8/default_mod.js` (default function export + a named export) alongside the existing `mod.js` (named-only). Both fixtures are `.js` files outside `perry.compilePackages`, so the import-collection pass mandatorily lands them in `ModuleKind::Interpreted`.
+
+**Validation.**
+
+```
+$ ./target/release/perry compile test-files/test_issue_678_v8_fallback_symbols.ts -o /tmp/t678s
+Found 3 module(s): 1 native, 2 JavaScript
+Wrote executable: /tmp/t678s
+$ diff <(/tmp/t678s) <(node --experimental-strip-types test-files/test_issue_678_v8_fallback_symbols.ts) && echo OK
+OK
+```
+
+Output:
+
+```
+named: hello perry
+named-arity2: 42
+default: v8-default: hi
+default-mod-named: v8-named: ho
+ns-named: hello ns
+ns-arity2: 30
+apply-named: hello world
+apply-default: v8-default: world
+apply-add: 123
+done
+```
+
+The existing `test-files/test_issue_678_v8_fallback.ts` (named-only smoke) and `test-files/test_issue_678_reexport_default.ts` (re-export rename) still pass unchanged. Ink + react also links cleanly (`Found 91 module(s): 68 native, 23 JavaScript` → `Wrote executable: counter`); the React `Activity` runtime gap that surfaces post-link is a separate issue.
+
 ## v0.5.967 — fix(codegen): #321 — factory-returned-class `.staticMethod(args)` bundles args into synthetic `arguments` rest
 
 **Symptom.** `import { Effect } from "effect"; console.log("smoke:", typeof (Effect as any).succeed)` advanced through Schema.ts module init past the post-#912 (gap 1 + gap 2) sites but still threw
