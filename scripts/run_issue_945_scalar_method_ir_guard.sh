@@ -82,6 +82,12 @@ fi
 MAIN_IR="$TMPDIR/main_fn.ll"
 awk '/^define double @perry_fn_main_ts__main\(/,/^}/' "$IR_FILE" > "$MAIN_IR"
 
+if [ ! -s "$MAIN_IR" ] || ! grep -q '^define double @perry_fn_main_ts__main(' "$MAIN_IR"; then
+  echo "FAIL: expected main() LLVM function was not found in emitted IR"
+  grep -En '^define .*@perry_fn_main_ts__main\(' "$IR_FILE" || true
+  exit 1
+fi
+
 if grep -Eq 'call .*@(js_inline_arena_state|js_object_alloc|js_object_alloc_class|perry_method_.*MyClass.*getValue|js_native_call_method)' "$MAIN_IR"; then
   echo "FAIL: scalar field-return method still allocates or dispatches"
   grep -En 'call .*@(js_inline_arena_state|js_object_alloc|js_object_alloc_class|perry_method_.*MyClass.*getValue|js_native_call_method)' "$MAIN_IR" || true

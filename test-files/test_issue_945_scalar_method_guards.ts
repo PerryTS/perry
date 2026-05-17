@@ -12,7 +12,11 @@ class PositiveScalarMethod {
     return this.value;
   }
 }
-console.log("positive:", new PositiveScalarMethod(11).getValue());
+function positiveScalarMethod(): number {
+  const obj = new PositiveScalarMethod(11);
+  return obj.getValue();
+}
+console.log("positive:", positiveScalarMethod());
 
 class SameClassFieldShadow {
   value = 1;
@@ -21,7 +25,11 @@ class SameClassFieldShadow {
     return this.value;
   }
 }
-console.log("same-class field shadow:", new SameClassFieldShadow().getValue());
+function sameClassFieldShadow(): number {
+  const obj = new SameClassFieldShadow();
+  return obj.getValue();
+}
+console.log("same-class field shadow:", sameClassFieldShadow());
 
 class ParentFieldShadow {
   getValue = () => 33;
@@ -32,7 +40,11 @@ class ChildMethodShadow extends ParentFieldShadow {
     return this.value;
   }
 }
-console.log("inherited field shadow:", new ChildMethodShadow().getValue());
+function inheritedFieldShadow(): number {
+  const obj = new ChildMethodShadow();
+  return obj.getValue();
+}
+console.log("inherited field shadow:", inheritedFieldShadow());
 
 class BaseFieldReturn {
   value = 44;
@@ -41,7 +53,11 @@ class BaseFieldReturn {
   }
 }
 class ChildInheritedMethod extends BaseFieldReturn {}
-console.log("inherited method:", new ChildInheritedMethod().getValue());
+function inheritedMethod(): number {
+  const obj = new ChildInheritedMethod();
+  return obj.getValue();
+}
+console.log("inherited method:", inheritedMethod());
 
 class ParamMethod {
   value = 50;
@@ -49,7 +65,11 @@ class ParamMethod {
     return this.value + delta;
   }
 }
-console.log("method params:", new ParamMethod().getValue(5));
+function methodParams(): number {
+  const obj = new ParamMethod();
+  return obj.getValue(5);
+}
+console.log("method params:", methodParams());
 
 let extraArgCount = 0;
 function bumpExtraArg(): number {
@@ -62,7 +82,11 @@ class ExtraArgMethod {
     return this.value;
   }
 }
-console.log("extra arg:", (new ExtraArgMethod() as any).getValue(bumpExtraArg()));
+function extraArgMethod(): number {
+  const obj = new ExtraArgMethod();
+  return (obj as any).getValue(bumpExtraArg());
+}
+console.log("extra arg:", extraArgMethod());
 console.log("extra arg side effect:", extraArgCount);
 
 class NontrivialMethod {
@@ -72,7 +96,11 @@ class NontrivialMethod {
     return local;
   }
 }
-console.log("nontrivial body:", new NontrivialMethod().getValue());
+function nontrivialMethod(): number {
+  const obj = new NontrivialMethod();
+  return obj.getValue();
+}
+console.log("nontrivial body:", nontrivialMethod());
 
 class AccessorBackedMethod {
   private _value = 88;
@@ -86,6 +114,9 @@ class AccessorBackedMethod {
     return this.value;
   }
 }
-const accessorBacked = new AccessorBackedMethod();
-accessorBacked.value = 89;
-console.log("accessor-backed field:", accessorBacked.getValue());
+function accessorBackedMethod(): number {
+  const obj = new AccessorBackedMethod();
+  obj.value = 89;
+  return obj.getValue();
+}
+console.log("accessor-backed field:", accessorBackedMethod());
