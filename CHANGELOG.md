@@ -2,6 +2,47 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.965 — fix(codegen): #927 — `jwt.verify(token, key, opts)` returns parsed object, not JSON-stringified string
+
+**Symptom.** Authenticated `/api/*` routes in shop-admin's native server returned 401 after the very first request, even though signup itself worked end-to-end (HTTP 201, full JWT JSON written, all 5 tables populated). Minimal repro:
+
+```ts
+import jwt from "jsonwebtoken";
+const TOK = jwt.sign({ sub: "u-001" }, "secret", { algorithm: "HS256" });
+const decoded = jwt.verify(TOK, "secret", { algorithms: ["HS256"] }) as any;
+console.log("typeof:", typeof decoded);  // Perry: string,    Node: object
+console.log("sub:",    decoded.sub);     // Perry: undefined, Node: u-001
+```
+
+Perry's binding successfully decoded the JWT internally (the `[jwt-verify] success, claims={"acc":"a-001","sub":"u-001"}` log line under `PERRY_DEBUG=1` shows the right claim shape) but handed the JSON *text* back to user code instead of a parsed object. `decoded.sub` therefore read `undefined`, the auth middleware's `typeof decoded.sub !== "string"` short-circuit fired, `req.user` never got populated, and `requireUser(req)` threw on every authenticated route.
+
+**Root cause.** The `jsonwebtoken.verify` entry in `NATIVE_MODULE_TABLE` (crates/perry-codegen/src/lower_call.rs) was the symmetric counterpart of #915's argument-side bug:
+
+```rust
+NativeModSig {
+    module: "jsonwebtoken",
+    method: "verify",
+    runtime: "js_jwt_verify",
+    args: &[NA_STR, NA_STR],
+    ret: NR_STR,                 // <-- treated the JSON-text return as a plain string.
+},
+```
+
+`js_jwt_verify` (`crates/perry-ext-jsonwebtoken/src/lib.rs`) decodes the token, calls `serde_json::to_string(&token_data.claims)`, and returns a `*mut StringHeader` holding that JSON text. The `NR_STR` dispatch arm in `lower_native_module_dispatch` then NaN-boxed the pointer with `STRING_TAG` and handed it back as a string. The comment on the row even acknowledged the gap: "Caller must JSON.parse the result." — but user code per the jsonwebtoken README expects a parsed object, not the JSON text.
+
+**Fix.** Add a new return-kind tag `NR_OBJ_FROM_JSON_STR` (variant `NativeRetKind::ObjFromJsonStr`) that automatically pipes the runtime's `*mut StringHeader` JSON-text result through a JSON-parse on the way out, then flips the `jsonwebtoken.verify` and `jsonwebtoken.decode` rows from `NR_STR` to the new return kind. Symmetric to the `NA_JSON` arg coercion that #915 added on the call-in side.
+
+To keep failure-mode behavior intact (`jwt.verify` returns a null `*mut StringHeader` for bad signatures), the dispatch routes the parse through a new `js_json_parse_or_null` shim in `crates/perry-runtime/src/json.rs` that returns `JSValue::null()` for null input instead of throwing `Unexpected end of JSON input` like plain `js_json_parse` does. Without the shim, calling `js_json_parse(null)` triggers `js_throw` with no surrounding try/catch, which exits the process — exactly the wrong behavior for an authentication path.
+
+**Files touched.**
+
+- `crates/perry-codegen/src/lower_call.rs` — new `NativeRetKind::ObjFromJsonStr` variant + `NR_OBJ_FROM_JSON_STR` const + dispatch arm in `lower_native_module_dispatch`; `jsonwebtoken.verify` and `jsonwebtoken.decode` table rows flipped from `NR_STR` to the new kind.
+- `crates/perry-runtime/src/json.rs` — `js_json_parse_or_null` shim that returns null instead of throwing on null input.
+- `crates/perry-codegen/src/runtime_decls.rs` — declare `js_json_parse_or_null` in the global runtime symbol table.
+- `test-files/test_issue_927_jwt_verify_returns_object.ts` — regression: round-trip HS256 sign+verify, asserts `typeof decoded === "object"` and `decoded.sub === "u-001"`.
+
+**Validation.** Compile + run the regression fixture under release perry. Bad-signature path still surfaces `null` to user code (no thrown exception that aborts the process); happy path now produces the expected `{ sub: "u-001", acc: "a-001", iat: ... }` shape with `.sub` indexable. Unblocks the shop-admin auth middleware and any other consumer of `jwt.verify(token, key, opts).<claim>` property access.
+
 ## v0.5.964 — fix(hir): #925 — unimplemented-API errors point at the supported replacement
 
 **Symptom.** Two error-emission paths land users in a 15-minute debug loop because the message is accurate but unhelpful:

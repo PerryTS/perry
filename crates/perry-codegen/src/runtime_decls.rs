@@ -792,6 +792,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // JSON.parse returns JSValue (u64) via integer register on ARM64,
     // not f64. Use I64 return + bitcast to avoid ABI mismatch crash.
     module.declare_function("js_json_parse", I64, &[I64]);
+    // JSON.parse(text) shim that returns `null` for a null `text_ptr`
+    // instead of throwing. Used by NR_OBJ_FROM_JSON_STR dispatch rows
+    // (e.g. `jwt.verify` on bad signature) — see issue #927.
+    module.declare_function("js_json_parse_or_null", I64, &[I64]);
     // JSON.parse<T[]> schema-directed parse: same return semantics.
     // Args: text_ptr (i64), packed_keys (i64), packed_keys_len (i32),
     // field_count (i32).

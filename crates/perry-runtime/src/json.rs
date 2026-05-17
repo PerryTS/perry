@@ -1020,6 +1020,24 @@ impl<'a> DirectParser<'a> {
 
 // ─── JSON.parse ───────────────────────────────────────────────────────────────
 
+/// JSON.parse(text) shim that returns `null` for a null input instead
+/// of throwing `Unexpected end of JSON input`. Used by codegen dispatch
+/// rows whose runtime FFI returns `*mut StringHeader` containing JSON
+/// for the success path and a null pointer for the failure path (e.g.
+/// `jwt.verify` on a bad signature). User code expects a null-return,
+/// not an uncaught exception that aborts the process. Issue #927.
+///
+/// # Safety
+///
+/// `text_ptr` must be null or a Perry-runtime `StringHeader`.
+#[no_mangle]
+pub unsafe extern "C" fn js_json_parse_or_null(text_ptr: *const StringHeader) -> JSValue {
+    if text_ptr.is_null() {
+        return JSValue::null();
+    }
+    js_json_parse(text_ptr)
+}
+
 /// JSON.parse(text) -> any
 ///
 /// Uses a direct recursive-descent parser that constructs Perry JSValues

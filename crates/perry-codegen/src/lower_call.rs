@@ -5918,6 +5918,13 @@ enum NativeRetKind {
     /// caller (and `JSON.stringify`, string-comparison, etc.) needs the
     /// STRING_TAG to recognize it as a string rather than a heap object.
     Str,
+    /// Returns `*mut StringHeader` containing JSON → automatically pipe
+    /// through `js_json_parse` so the user-visible value is a parsed
+    /// object/array, not the JSON-encoded string. Symmetric to `NA_JSON`
+    /// on the argument side (#915). Null pointer → TAG_NULL so a failed
+    /// verify (`jwt.verify` on bad signature) still reads as `null`
+    /// rather than dereferencing a dangling pointer. Issue #927.
+    ObjFromJsonStr,
     /// Returns `*mut BigIntHeader` → NaN-box as BIGINT (0x7FFA tag). Use
     /// for functions like `parseEther`/`parseUnits` that return bigint values.
     BigInt,
@@ -5952,6 +5959,7 @@ const NA_JSV: NativeArgKind = NativeArgKind::JsvalI64;
 const NA_VARARGS: NativeArgKind = NativeArgKind::VarArgsAsArray;
 const NR_PTR: NativeRetKind = NativeRetKind::Ptr;
 const NR_STR: NativeRetKind = NativeRetKind::Str;
+const NR_OBJ_FROM_JSON_STR: NativeRetKind = NativeRetKind::ObjFromJsonStr;
 const NR_BIGINT: NativeRetKind = NativeRetKind::BigInt;
 const NR_F64: NativeRetKind = NativeRetKind::F64;
 const NR_I32: NativeRetKind = NativeRetKind::I32Void;
@@ -8130,11 +8138,13 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_jwt_verify",
         // js_jwt_verify(token_ptr: *const StringHeader, secret_ptr: *const StringHeader)
-        // -> *mut StringHeader (JSON of claims). NA_F64/NR_F64 caused
-        // calling-convention mismatch on both args and return; NA_STR/NR_STR
-        // matches the actual Rust ABI. Caller must JSON.parse the result.
+        // -> *mut StringHeader (JSON of claims). NR_OBJ_FROM_JSON_STR pipes
+        // the returned JSON through js_json_parse so the value visible to
+        // user code is a real object (decoded.sub works), not the JSON
+        // text. Per the jsonwebtoken README, `jwt.verify` returns the
+        // payload as an object. Issue #927.
         args: &[NA_STR, NA_STR],
-        ret: NR_STR,
+        ret: NR_OBJ_FROM_JSON_STR,
     },
     NativeModSig {
         module: "jsonwebtoken",
@@ -8142,9 +8152,10 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         method: "decode",
         class_filter: None,
         runtime: "js_jwt_decode",
-        // js_jwt_decode(token_ptr) -> *mut StringHeader (JSON). Same fix.
+        // js_jwt_decode(token_ptr) -> *mut StringHeader (JSON of payload).
+        // Mirror `verify` — returns an object to user code. Issue #927.
         args: &[NA_STR],
-        ret: NR_STR,
+        ret: NR_OBJ_FROM_JSON_STR,
     },
     // ========== nodemailer ==========
     NativeModSig {
@@ -10750,6 +10761,7 @@ fn ret_kind_tag(r: &NativeRetKind) -> &'static str {
     match r {
         NativeRetKind::Ptr => "NR_PTR",
         NativeRetKind::Str => "NR_STR",
+        NativeRetKind::ObjFromJsonStr => "NR_OBJ_FROM_JSON_STR",
         NativeRetKind::BigInt => "NR_BIGINT",
         NativeRetKind::F64 => "NR_F64",
         NativeRetKind::I32Void => "NR_I32",
@@ -10897,7 +10909,10 @@ pub(super) fn lower_native_module_dispatch(
 
     // Determine return type for the declare
     let ret_type = match sig.ret {
-        NativeRetKind::Ptr | NativeRetKind::Str | NativeRetKind::BigInt => I64,
+        NativeRetKind::Ptr
+        | NativeRetKind::Str
+        | NativeRetKind::ObjFromJsonStr
+        | NativeRetKind::BigInt => I64,
         NativeRetKind::F64 => DOUBLE,
         NativeRetKind::I32Void => I32,
         NativeRetKind::Void => crate::types::VOID,
@@ -10927,6 +10942,28 @@ pub(super) fn lower_native_module_dispatch(
             let boxed = nanbox_string_inline(blk, &raw);
             let null_val = double_literal(f64::from_bits(crate::nanbox::TAG_NULL));
             Ok(blk.select(crate::types::I1, &is_null, DOUBLE, &null_val, &boxed))
+        }
+        NativeRetKind::ObjFromJsonStr => {
+            // Returned raw *mut StringHeader containing JSON — pipe
+            // through `js_json_parse_or_null` so user code sees a real
+            // object (e.g. `jwt.verify(...).sub` works). Symmetric
+            // counterpart to the NA_JSON arg coercion landed in #915.
+            // Null pointer (failure mode — e.g. `jwt.verify` on a bad
+            // signature) is returned as TAG_NULL without throwing,
+            // matching the previous NR_STR null-handling. #927.
+            //
+            // `js_json_parse_or_null` takes `*const StringHeader` (i64
+            // on the FFI side) and returns the NaN-boxed JSValue bits
+            // as i64. It returns TAG_NULL for null input (instead of
+            // the throw that plain `js_json_parse` does). Declare
+            // BEFORE grabbing `blk` so the mutable borrow on
+            // pending_declares doesn't overlap the block borrow.
+            ctx.pending_declares
+                .push(("js_json_parse_or_null".to_string(), I64, vec![I64]));
+            let blk = ctx.block();
+            let raw = blk.call(I64, sig.runtime, &arg_slices);
+            let parsed_bits = blk.call(I64, "js_json_parse_or_null", &[(I64, &raw)]);
+            Ok(blk.bitcast_i64_to_double(&parsed_bits))
         }
         NativeRetKind::BigInt => {
             // Returned raw *mut BigIntHeader — NaN-box with BIGINT_TAG (0x7FFA).
