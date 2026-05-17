@@ -2,6 +2,35 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.981 — feat(manifest): register `stream.on` / `once` / `off` / `emit` / `removeListener` / `removeAllListeners` (+ the rest of the EventEmitter surface) so axios compiles past the #463 gate
+
+**Symptom.** Compiling axios (and any other npm package that extends `stream.Transform` / `stream.Readable` etc. and wires up event listeners on the resulting instance) bailed at HIR-lower with:
+
+```
+`stream.on` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)
+```
+
+The runtime already supports the full EventEmitter surface on every node:stream object — `js_node_stream_readable_new` / `_writable_new` / `_duplex_new` / `_transform_new` / `_passthrough_new` (see `crates/perry-runtime/src/node_stream.rs`) each build an `ObjectHeader` carrying NaN-boxed closure pointers for `on`, `once`, `off`, `pipe`, `read`, `write`, `end`, etc. The closures `bind` the host stream so `r.on('data', fn).on('end', fn)` chains return `this` (issue #631). What was missing was the **manifest-side** entry: the #463 unimplemented-API gate (`crates/perry-hir/src/lower/expr_member.rs::670`) walks `module_has_symbol("stream", "on")` for every `stream.on(...)` / `stream.once(...)` / etc. call site, and absent a hit it errors out before the call can resolve to the runtime closure.
+
+**Fix.** `crates/perry-api-manifest/src/entries.rs` — added 15 new `method("stream", ..., true, None)` rows covering the full Node EventEmitter surface that ships on stream instances:
+
+- `on` / `once` / `off` / `addListener` / `removeListener` / `removeAllListeners`
+- `emit` / `prependListener` / `prependOnceListener`
+- `listenerCount` / `listeners` / `rawListeners` / `eventNames`
+- `setMaxListeners` / `getMaxListeners`
+
+All entries use `has_receiver: true` because every callsite is `<streamInstance>.on(...)`, never `stream.on(...)` as a module-level helper. The matching runtime closures already exist on the per-instance ObjectHeader, so dispatch happens through the regular `PropertyGet` → `Call` path — no new `NATIVE_MODULE_TABLE` rows or new runtime symbols required.
+
+**Why this stayed missing.** The `events.on` / `events.emit` / etc. cluster was registered when the EventEmitter base class was wired (the `events` block at lines 512-527), but the node:stream classes inherit EventEmitter at runtime via constructor-time closure injection rather than through a class hierarchy the manifest tracks. The manifest's `module_has_symbol` check is keyed by `(module, name)` only — a Readable instance reads `.on` against `module: "stream"`, not `module: "events"`, so the entry has to live on `stream`.
+
+**Validation.**
+- `test-files/test_stream_on.ts` (new): `new Readable({ read() { this.push('hi'); this.push(null); } })` + `r.on('data', ...)` + `r.on('end', ...)` compiles and runs.
+- axios 1.7.7 compile-smoke: `import axios from 'axios'; console.log(typeof axios.get);` past the `stream.on is not implemented` gate (any remaining axios-internal blockers are tracked separately).
+
+**Files.**
+- `crates/perry-api-manifest/src/entries.rs` — 15 new `method("stream", ..., true, None)` rows in the stream block.
+- `test-files/test_stream_on.ts` — repro/regression fixture.
+
 ## v0.5.980 — feat(lodash): add `sum` / `mean` / `sumBy` / `meanBy` / `tail` aggregators to the manifest
 
 **Symptom.** Manifest sweep flagged `_.sum([1,2,3,4])` as missing — `import _ from 'lodash'; _.sum(...)` errored at HIR-lower with `\`lodash.sum\` is not implemented in Perry — see \`perry --print-api-manifest\` for the supported surface`. Same shape for `_.mean`, `_.sumBy`, `_.meanBy`, and `_.tail` (tail's runtime + decl already existed but the manifest + lower_call rows were absent, so call sites couldn't reach the native function).

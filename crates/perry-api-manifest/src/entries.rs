@@ -1822,6 +1822,36 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.
     method("stream", "from", false, None),
+    // EventEmitter methods on stream instances. node:stream extends
+    // EventEmitter — every Readable/Writable/Duplex/Transform/PassThrough
+    // exposes the full `.on('data'|'end'|'error'|'close'|...)` /
+    // `.once` / `.off` / `.removeListener` / `.emit` /
+    // `.removeAllListeners` / `.addListener` / `.prependListener` /
+    // `.prependOnceListener` / `.listenerCount` / `.listeners` /
+    // `.eventNames` / `.setMaxListeners` / `.getMaxListeners` surface.
+    // The runtime closures are built by `js_node_stream_*_new` (see
+    // `crates/perry-runtime/src/node_stream.rs`); these entries exist so
+    // the #463 unimplemented-API gate accepts `stream.on(...)` /
+    // `stream.once(...)` / etc. in user code (e.g. axios's
+    // `AxiosTransformStream extends stream.Transform` + downstream
+    // event wiring). Has_receiver=true because every call site reads
+    // `<instance>.on(...)`, not `stream.on(...)` as a module-level
+    // helper.
+    method("stream", "on", true, None),
+    method("stream", "once", true, None),
+    method("stream", "off", true, None),
+    method("stream", "addListener", true, None),
+    method("stream", "removeListener", true, None),
+    method("stream", "removeAllListeners", true, None),
+    method("stream", "emit", true, None),
+    method("stream", "prependListener", true, None),
+    method("stream", "prependOnceListener", true, None),
+    method("stream", "listenerCount", true, None),
+    method("stream", "listeners", true, None),
+    method("stream", "rawListeners", true, None),
+    method("stream", "eventNames", true, None),
+    method("stream", "setMaxListeners", true, None),
+    method("stream", "getMaxListeners", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---
     method("child_process", "exec", false, None),
