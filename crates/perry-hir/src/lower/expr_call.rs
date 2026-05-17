@@ -1114,6 +1114,25 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     let data = args.first().cloned().unwrap_or(Expr::Undefined);
                                     return Ok(Expr::Uint8ArrayFrom(Box::new(data)));
                                 }
+                                // Issue #871 (part 2): `Uint8Array.of(a, b, c, ...)` —
+                                // uuid's `sha1.js` calls this with 20 args (the SHA-1
+                                // hash output, byte by byte), which hit the
+                                // `Call callee shape not supported (PropertyGet) with N args`
+                                // bail in `crates/perry-codegen/src/lower_call.rs::~3226`
+                                // because the receiver `Uint8Array` lowers to `GlobalGet(0)`
+                                // (which `lower_expr` evaluates to `0.0`) so the closure-call
+                                // fallback at `~3167` skipped past it, and there's no
+                                // `js_closure_call17..20` to dispatch ≥17-arg calls anyway.
+                                //
+                                // Per ECMAScript: `Uint8Array.of(...items)` is `Uint8Array.from([...items])`
+                                // — same shape as the existing `from` arm above, just wrap the
+                                // varargs in an array literal first. Routes through `Expr::Array`
+                                // → `Expr::Uint8ArrayFrom` which already lowers correctly for any
+                                // arity (it's just `js_uint8array_from_array`-or-equivalent on the
+                                // packed array). Mirrors the `Array.of` arm at :1618.
+                                "of" => {
+                                    return Ok(Expr::Uint8ArrayFrom(Box::new(Expr::Array(args))));
+                                }
                                 _ => {} // Fall through to generic handling
                             }
                         }
