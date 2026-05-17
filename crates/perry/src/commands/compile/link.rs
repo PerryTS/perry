@@ -919,6 +919,24 @@ pub(super) fn build_and_run_link(
             // declares all stdlib extern functions, creating import references that MSVC
             // won't dead-strip. On macOS/Linux, the linker ignores unreferenced archives.
             if let Some(ref stdlib) = stdlib_lib {
+                // Windows: link the standalone perry_runtime.lib FIRST so
+                // its symbols win lld-link's /FORCE:MULTIPLE "first
+                // definition wins" rule over the perry-runtime copies
+                // *bundled* inside perry_stdlib.lib and the
+                // /WHOLEARCHIVE'd perry_ui_windows.lib. Auto-optimize
+                // refreshes perry-runtime + perry-stdlib but NOT
+                // perry-ui-windows, so the UI lib's bundled runtime is
+                // perpetually stale; the /WHOLEARCHIVE force-includes its
+                // js_* symbols, and without this the stale copy shadows a
+                // genuine runtime fix (e.g. the js_shadow_frame_pop bounds
+                // guard, #880) — the crash it fixes still fires because the
+                // guarded function never gets linked. The standalone
+                // runtime_lib is the canonical / auto-optimize-fresh
+                // source; making it authoritative on Windows matches every
+                // other platform (all of which already link runtime_lib).
+                if is_windows {
+                    cmd.arg(runtime_lib);
+                }
                 cmd.arg(stdlib);
                 // #466 Phase 4 step 2: well-known bindings join the
                 // link line right after perry-stdlib so they cover
