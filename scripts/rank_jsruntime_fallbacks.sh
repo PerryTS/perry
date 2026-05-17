@@ -178,6 +178,7 @@ check_fixture_semantics() {
             require_stdout_line "$name" "$stdout_path" "function: function:ok" || return 1
             require_stdout_line "$name" "$stdout_path" "promise: promise:ok" || return 1
             require_stdout_line "$name" "$stdout_path" "symbol: symbol:ok" || return 1
+            require_stdout_line "$name" "$stdout_path" "deep: deep-leaf" || return 1
             require_stdout_line "$name" "$stdout_path" "tampered-intrinsics: own:tampered-proto:added" || return 1
             ;;
     esac

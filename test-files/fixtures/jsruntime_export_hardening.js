@@ -104,6 +104,28 @@ originalObject.defineProperty(tamperedIntrinsicsData, "own", {
 
 export const TAMPERED_INTRINSICS_DATA = tamperedIntrinsicsData;
 
+// A 5-deep frozen tree — exceeds the depth=4 cap in
+// `v8_plain_data_object_to_native`. The snapshot path should refuse this
+// (return None) and fall through to a JS handle, so the consumer can still
+// read every leaf via V8 fallback. Pinning this prevents a regression
+// where someone bumps the depth limit (or removes it) and quietly pulls
+// arbitrarily-deep object graphs into native memory at module-load time.
+export const DEEP_DATA = Object.freeze({
+  l1: Object.freeze({
+    l2: Object.freeze({
+      l3: Object.freeze({
+        l4: Object.freeze({
+          l5: "deep-leaf",
+        }),
+      }),
+    }),
+  }),
+});
+
+export function readDeep(value) {
+  return value.l1.l2.l3.l4.l5;
+}
+
 globalThis.Object = {
   prototype: tamperedPrototype,
   isFrozen() {

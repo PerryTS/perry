@@ -58,6 +58,17 @@ struct ExportSnapshotIntrinsics {
 
 pub fn capture_export_snapshot_intrinsics(scope: &mut v8::PinScope<'_, '_>) {
     let Some(intrinsics) = load_export_snapshot_intrinsics(scope) else {
+        // If the lookup of `globalThis.Object` / its `prototype` / `isFrozen`
+        // ever fails at runtime init, every export-data-object fast-path
+        // eligibility check will silently return false (`is_plain_object`
+        // requires the intrinsics cell to be set). That would manifest as a
+        // perf cliff rather than a correctness bug — surface it loudly so
+        // regressions don't hide as "slow but still working".
+        eprintln!(
+            "perry-jsruntime: failed to capture Object intrinsics at init; \
+             JS export-data-object snapshot fast path disabled \
+             (every export read will go through V8 fallback)"
+        );
         return;
     };
     EXPORT_SNAPSHOT_INTRINSICS.with(|cell| {

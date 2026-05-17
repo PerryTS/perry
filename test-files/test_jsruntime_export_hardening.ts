@@ -2,6 +2,7 @@ import {
   ACCESSOR_DATA,
   ARRAY_DATA,
   CUSTOM_PROTO_DATA,
+  DEEP_DATA,
   FUNCTION_DATA,
   MUTABLE_DATA,
   PROMISE_DATA,
@@ -13,6 +14,7 @@ import {
   readAccessorTwice,
   readArray,
   readCustomProto,
+  readDeep,
   readSymbol,
   readMutable,
   readProxyTwice,
@@ -37,4 +39,5 @@ console.log("array:", readArray(ARRAY_DATA));
 console.log("function:", FUNCTION_DATA());
 console.log("promise:", await PROMISE_DATA);
 console.log("symbol:", readSymbol(SYMBOL_DATA));
+console.log("deep:", readDeep(DEEP_DATA));
 console.log("tampered-intrinsics:", readTamperedIntrinsics(TAMPERED_INTRINSICS_DATA));
