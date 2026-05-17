@@ -2,6 +2,50 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.963 — fix(runtime): #922 — circuit-breaker for runaway `value is not a function` / `[WARN_NULL_PTR]` loops in async-step driver
+
+**Symptom.** `gscmaster-api` (Fastify + mysql2 + fetch, ~5k LoC) compiled cleanly with Perry HEAD but every `/api/*` request entered a tight loop of:
+
+```
+[WARN_NULL_PTR] js_object_set_field: null POINTER_TAG at obj=0x200002114a0 field_index=0 class_id=0 -- replacing with undefined
+TypeError: value is not a function
+    at <anonymous>
+[WARN_NULL_PTR] js_object_set_field: null POINTER_TAG at obj=0x200002114a0 field_index=0 class_id=0 -- replacing with undefined
+TypeError: value is not a function
+    at <anonymous>
+... (5.7M+ identical lines, PM2 declared the process `errored`)
+```
+
+`GET /health` returned 200 fine; every other route looped. Adding `console.log` at the top of the handler showed nothing -- the crash was before any user code ran. The `at <anonymous>` had no symbol so the user had no path forward from the stderr stream. Same root mechanism as #921 ("async fn with `throw new Error` crashes the process when caller has try/catch around the await"): production gscmaster-api crashed every 30 minutes for 7 days (330 PM2 restarts) on the same shape, with stderr full of `[PERRY WARN] js_box_get: invalid box pointer` and `[WARN_NULL_PTR]` but no thrown error reaching the catch block.
+
+**Root cause (two co-occurring bugs).**
+
+1. **`js_object_set_field` printed unbounded `eprintln!`s.** Each call with a null POINTER_TAG (`(value.bits() >> 48) == 0x7FFD && low_48 == 0`) emitted one line and let the caller continue with an undefined slot. The downstream call site then read that slot, dispatched as a function, and `throw_not_callable` re-raised. Codegen for the user's specific pattern (async fastify route handler with `throw` across `await` inside `try`/`catch`) re-entered the same write+throw sequence forever -- no bound, no abort. With ~50 bytes per stderr line and 5.7M iterations, that's ~280MB of stderr per request before PM2 noticed. #924 gated the per-call log behind `PERRY_DEBUG=1` (which silences the noise) but did NOT bound the loop -- the runaway behavior of the downstream call still wedges the process.
+
+2. **`ASYNC_STEP_GUARD` from #712 only counted same-`step_closure` errors.** The production loop alternates between two step closures (outer route-handler async-step + inner middleware async-step), each rethrowing the same TypeError. With the same-closure check at `promise.rs:1334`, the counter reset every other dispatch (`prev.last_closure == step_closure as usize` failed every iteration) and the 10K bound never tripped. The original `5.7M observed in #712` comment was prescient -- the guard's narrow predicate let exactly this category of loop slip through.
+
+**Fix.** Three layered circuit breakers in the runtime:
+
+- **`crates/perry-runtime/src/object.rs::record_warn_null_ptr`** -- per-thread state tracking total + consecutive-same-site null POINTER_TAG writes. Per-call log gated behind `PERRY_DEBUG=1` (preserves #924's quieter happy-path stderr) AND rate-limited to `WARN_NULL_PTR_LOG_LIMIT = 64` occurrences even under PERRY_DEBUG, with a one-time `further entries suppressed` notice. Above `WARN_NULL_PTR_ABORT_LIMIT = 100_000` consecutive same-site writes the process aborts unconditionally with a single diagnostic line naming `obj` / `field_index` / `class_id` and pointing at the result-tag workaround.
+- **`crates/perry-runtime/src/closure.rs::throw_not_callable`** -- per-thread `THROW_NOT_CALLABLE_COUNT` counter. After `THROW_NOT_CALLABLE_ABORT_LIMIT = 100_000` consecutive throws, abort with a diagnostic that names the `js_throw_type_error_not_a_function` breakpoint. New `reset_throw_not_callable_counter()` is called from `promise.rs::js_promise_run_microtasks` on every non-error `Task::AsyncStep` dispatch so legitimate cumulative throws across a long-running process don't false-positive.
+- **`crates/perry-runtime/src/promise.rs` ASYNC_STEP_GUARD** -- drop the same-closure check. Count ANY consecutive `is_error=true` dispatches; reject the chain at `ASYNC_STEP_REENTRY_BOUND = 10_000` regardless of which step closure caught the error. Legitimate throw-in-a-loop patterns (`for (x of arr) try { await fail() } catch {}`) still interleave `is_error=false` steps between throws (the for-loop's post-catch state), so their consecutive count never grows beyond 1.
+
+Together: a 100K-iteration runaway loop -- a real corruption signal -- now aborts with a single useful line in ~0.5s instead of 5.7M lines over several minutes. Operators see the diagnostic, identify the call site (or convert to the result-tag pattern per #921's workaround), and ship a fix. Legitimate throws (1-100 per request, even sustained) cost nothing -- a single thread-local counter increment in the cold-throw path.
+
+**Why circuit-breaker not surgical fix.** The user's underlying codegen pattern (fastify route handler with `throw` across `await` + `try/catch`) is a known compiler-level bug (#921 root cause is suspected `_setjmp` ABI mismatch, fixed in #856 / #914 but the surface area is large). Without the actual gscmaster-api source we cannot bisect to the specific codegen regression that started producing null POINTER_TAGs after May 10. The circuit breakers convert the silent infinite loop into an explicit crash with actionable text -- exactly what the user asked for in #921 ask #2 (`a way to dump the offending callsite -- currently the user has no path forward from at <anonymous>`). The surgical codegen fix can land separately on top.
+
+**Test plan.**
+
+- New regression test `test-files/test_issue_922_api_route_crash.ts` -- 200K-iteration sync loop calling `undefined(i)` inside `try/catch`. Exit code 134 (SIGABRT) + the `[PERRY ABORT] throw_not_callable` line on stderr, verified with `timeout 30`.
+- Existing `test_issue_express_value_not_fn.ts` (#909), `test_issue_859_module_arrow_in_async_resume.ts`, `test_issue_915_native_module_after_async_resume.ts`, `test_async*.ts`, `test_iife_*.ts` all still pass byte-for-byte.
+- `cargo test --release -p perry-runtime --lib` -- 261 passed.
+- `scripts/run_fastify_tests.sh` -- 5/5 pass (GET /hello, GET /users/:id, POST /echo status+body, 404).
+- `cargo build --release -p perry-runtime -p perry-stdlib -p perry` clean.
+
+**Files touched.** `crates/perry-runtime/src/object.rs` (record_warn_null_ptr + state + WARN_NULL_PTR_LOG_LIMIT/ABORT_LIMIT), `crates/perry-runtime/src/closure.rs` (THROW_NOT_CALLABLE_COUNT + reset_throw_not_callable_counter + abort path), `crates/perry-runtime/src/promise.rs` (ASYNC_STEP_GUARD: drop same-closure check + call reset on success), `test-files/test_issue_922_api_route_crash.ts` (new regression test).
+
+Closes #922. Refs #921 (same root cause, complementary fix), #712 (the original 5.7M-line guard this PR extends), #924 (PERRY_DEBUG gating preserved), #856 / #914 (`_setjmp` ABI suspected as the underlying codegen regression behind #921/#922).
+
 ## v0.5.962 — fix(stdlib): #921 — `await fetch(...)` silently exited before resolution
 
 **Symptom.** A binary that `await`s any `perry-stdlib::common::async_bridge::spawn(...)`-backed binding (`fetch`, `ioredis`, `zlib`, `ws`, `net`, `bcrypt`, `http`) exits silently with code 0 between the spawn and the eventual `queue_promise_resolution`. The awaiter's Promise is never settled. From the issue body:

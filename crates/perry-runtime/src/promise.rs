@@ -1325,17 +1325,29 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                     ran += 1;
                     continue;
                 }
-                // Issue #712 defensive guard. Track consecutive
-                // same-closure is_error=true dispatches; reject the
-                // chain if it crosses ASYNC_STEP_REENTRY_BOUND. See
-                // the `ASYNC_STEP_GUARD` doc comment for the rationale.
+                // Issue #712 + #921 + #922 defensive guard. Track
+                // consecutive is_error=true dispatches; reject the
+                // chain if it crosses ASYNC_STEP_REENTRY_BOUND.
+                //
+                // Originally (#712) the guard required SAME `step_closure`
+                // to count up — but the #921/#922 production loops
+                // (gscmaster-api Fastify route handlers) alternate
+                // between two async-step closures (route handler ↔
+                // middleware ↔ inner await), each one rethrowing the
+                // same TypeError. With the same-closure check, the
+                // counter resets every other dispatch and the loop
+                // never trips the guard — the user observed 5.7M
+                // identical `value is not a function` lines before PM2
+                // restarted the process.
+                //
+                // Drop the same-closure check: count ANY consecutive
+                // run of `is_error=true` dispatches. A legitimate
+                // throw-in-a-loop pattern interleaves `is_error=false`
+                // steps (the loop's post-catch state) between throws,
+                // so its consecutive count never grows beyond 1.
                 if is_error {
                     let prev = ASYNC_STEP_GUARD.with(|c| c.get());
-                    let new_count = if prev.last_closure == step_closure as usize {
-                        prev.consecutive_error_count.saturating_add(1)
-                    } else {
-                        1
-                    };
+                    let new_count = prev.consecutive_error_count.saturating_add(1);
                     if new_count > ASYNC_STEP_REENTRY_BOUND {
                         ASYNC_STEP_GUARD.with(|c| {
                             c.set(AsyncStepGuard {
@@ -1344,7 +1356,7 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                             })
                         });
                         if !next.is_null() {
-                            let msg = b"async step driver detected runaway re-entry (issue #712 guard); rejecting Promise to prevent unbounded loop";
+                            let msg = b"async step driver detected runaway re-entry (issue #712/#921/#922 guard); rejecting Promise to prevent unbounded loop. Common cause: throw across an await boundary inside try/catch; convert to a result-tag pattern.";
                             let msg_str =
                                 crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
                             let err = crate::error::js_typeerror_new(msg_str);
@@ -1368,6 +1380,13 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
                             consecutive_error_count: 0,
                         })
                     });
+                    // Issue #922: a non-error step dispatched, signalling
+                    // forward progress through the user's async state
+                    // machine. Reset the throw_not_callable counter so a
+                    // legitimate later throw-in-a-loop doesn't trip the
+                    // circuit breaker just because the program threw
+                    // 100_000 cumulative times across the whole run.
+                    crate::closure::reset_throw_not_callable_counter();
                 }
                 // Stash both trap_next + current_step in a single TLS
                 // write so the hot path doesn't pay two `.with()` calls

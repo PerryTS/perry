@@ -2830,6 +2830,99 @@ pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32
     }
 }
 
+// Issue #922: Rate-limit and bound the [WARN_NULL_PTR] message stream
+// + abort the process when a runaway loop is detected.
+//
+// Background: when codegen emits an `Expr::New { ... }` whose constructor
+// args include a NULL POINTER_TAG (typically the result of a cross-module
+// reference to an export that didn't link, or an async-step rejected-
+// before-resolved capture), every constructor invocation calls
+// `js_object_set_field` once per field. Each call previously emitted one
+// `eprintln!` line. The gscmaster-api production loop (#922) printed
+// 5.7M+ identical lines on a single Fastify route hit before PM2
+// declared the process dead -- actionable signal drowned in noise.
+//
+// Hard limits + circuit breaker:
+//   * The per-call [WARN_NULL_PTR] log line is gated behind PERRY_DEBUG=1
+//     (issue #924) and ALSO rate-limited to `WARN_NULL_PTR_LOG_LIMIT`
+//     (=64) per thread under PERRY_DEBUG so even debug runs don't drown
+//     in noise. After the limit a one-time `...further entries suppressed`
+//     notice fires.
+//   * `WARN_NULL_PTR_ABORT_LIMIT` (=100_000) -- if the SAME obj+
+//     field_index has been written with a null POINTER_TAG this many
+//     times consecutively, eprintln a one-line diagnostic and trigger
+//     `std::process::abort()`. This is UNCONDITIONAL (not gated by
+//     PERRY_DEBUG) because a 100K-iteration same-site loop is real
+//     corruption, not happy-path noise. The async-step reentry guard
+//     at `crates/perry-runtime/src/promise.rs::ASYNC_STEP_REENTRY_BOUND`
+//     bounds the loop at 10K iterations BEFORE this fires in the normal
+//     case; this is the catch-all for paths the async-step guard misses
+//     (e.g. sync `throw_not_callable` inside a non-async fastify hook).
+const WARN_NULL_PTR_LOG_LIMIT: u64 = 64;
+const WARN_NULL_PTR_ABORT_LIMIT: u64 = 100_000;
+
+thread_local! {
+    static WARN_NULL_PTR_STATE: std::cell::Cell<WarnNullPtrState>
+        = const { std::cell::Cell::new(WarnNullPtrState {
+            total_count: 0,
+            last_obj: 0,
+            last_field_index: u32::MAX,
+            consecutive_same_site: 0,
+        }) };
+}
+
+#[derive(Copy, Clone)]
+struct WarnNullPtrState {
+    total_count: u64,
+    last_obj: usize,
+    last_field_index: u32,
+    consecutive_same_site: u64,
+}
+
+#[cold]
+#[inline(never)]
+fn record_warn_null_ptr(obj: *mut ObjectHeader, field_index: u32, class_id: u32) {
+    let (total_count, should_abort) = WARN_NULL_PTR_STATE.with(|cell| {
+        let mut s = cell.get();
+        s.total_count = s.total_count.saturating_add(1);
+        let same_site = s.last_obj == obj as usize && s.last_field_index == field_index;
+        s.consecutive_same_site = if same_site {
+            s.consecutive_same_site.saturating_add(1)
+        } else {
+            1
+        };
+        s.last_obj = obj as usize;
+        s.last_field_index = field_index;
+        let total = s.total_count;
+        let abort = s.consecutive_same_site >= WARN_NULL_PTR_ABORT_LIMIT;
+        cell.set(s);
+        (total, abort)
+    });
+    // perry#924: the per-call log is gated behind PERRY_DEBUG=1. Even
+    // under PERRY_DEBUG we cap at WARN_NULL_PTR_LOG_LIMIT occurrences
+    // per thread (issue #922 -- the production loop produced 5.7M of
+    // these and the actionable signal got buried).
+    if total_count <= WARN_NULL_PTR_LOG_LIMIT && std::env::var_os("PERRY_DEBUG").is_some() {
+        eprintln!(
+            "[WARN_NULL_PTR] js_object_set_field: null POINTER_TAG at obj={:p} field_index={} class_id={} -- replacing with undefined",
+            obj, field_index, class_id
+        );
+        if total_count == WARN_NULL_PTR_LOG_LIMIT {
+            eprintln!(
+                "[WARN_NULL_PTR] further entries suppressed after {} occurrences -- this usually indicates an unresolved import or an uninitialized cross-module export being constructed into an object field",
+                WARN_NULL_PTR_LOG_LIMIT
+            );
+        }
+    }
+    if should_abort {
+        eprintln!(
+            "[PERRY ABORT] js_object_set_field: detected runaway null POINTER_TAG writes at obj={:p} field_index={} class_id={} ({}+ consecutive same-site writes -- issue #922 circuit breaker). Common cause: an async function throws across an await boundary inside try/catch AND the catch arm re-enters the same await, OR an unresolved import was constructed into a field. Convert to a result-tag pattern (see issue #921 workaround) or check perry --print-hir for an uninitialized capture.",
+            obj, field_index, class_id, WARN_NULL_PTR_ABORT_LIMIT
+        );
+        std::process::abort();
+    }
+}
+
 /// Set a field on an object by index
 #[no_mangle]
 pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, value: JSValue) {
@@ -2867,17 +2960,15 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
             );
             return;
         }
-        // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate — replace with undefined.
-        // perry#924: this triggers on the happy path (e.g. when codegen
-        // emits `undefined` as a freshly-constructed null POINTER_TAG
-        // before the receiver is fully initialized); the swap-to-undefined
-        // fixes it silently so the operator sees nothing useful. Gate the
-        // diagnostic behind `PERRY_DEBUG=1` for bisection.
+        // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate -- replace with undefined.
+        // The diagnostic + circuit breaker live in `record_warn_null_ptr` (issue #922).
+        // perry#924: the [WARN_NULL_PTR] log line itself is gated behind
+        // `PERRY_DEBUG=1` inside `record_warn_null_ptr`; the circuit
+        // breaker abort path is unconditional (it's a real corruption
+        // signal, not happy-path noise).
         let vbits = value.bits();
         let value = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
-            if std::env::var_os("PERRY_DEBUG").is_some() {
-                eprintln!("[WARN_NULL_PTR] js_object_set_field: null POINTER_TAG at obj={:p} field_index={} class_id={} — replacing with undefined", obj, field_index, (*obj).class_id);
-            }
+            record_warn_null_ptr(obj, field_index, (*obj).class_id);
             JSValue::undefined()
         } else {
             value
