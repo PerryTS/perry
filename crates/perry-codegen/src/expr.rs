@@ -8523,6 +8523,26 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &promise))
         }
+        Expr::WebCryptoGenerateKey {
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let extractable_box = lower_expr(ctx, extractable)?;
+            let usages_box = lower_expr(ctx, usages)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_generate_key",
+                &[
+                    (DOUBLE, &algo_box),
+                    (DOUBLE, &extractable_box),
+                    (DOUBLE, &usages_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
         Expr::CryptoRandomFillSync {
             buffer,
             offset,

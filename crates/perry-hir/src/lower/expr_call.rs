@@ -625,15 +625,25 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                                     data: Box::new(data),
                                                 });
                                             }
+                                            "generateKey" if args.len() >= 3 => {
+                                                let mut iter = args.into_iter();
+                                                let algorithm = iter.next().unwrap();
+                                                let extractable = iter.next().unwrap();
+                                                let usages = iter.next().unwrap();
+                                                return Ok(Expr::WebCryptoGenerateKey {
+                                                    algorithm: Box::new(algorithm),
+                                                    extractable: Box::new(extractable),
+                                                    usages: Box::new(usages),
+                                                });
+                                            }
                                             _ => {
                                                 // Unsupported subtle method —
                                                 // fail loudly. The supported
                                                 // surface is documented in the
                                                 // d.ts and at #561; asymmetric
                                                 // (RSA-PSS / ECDSA / RSA-OAEP),
-                                                // generateKey, wrap/unwrap,
-                                                // deriveKey, encrypt/decrypt
-                                                // are out of scope per the
+                                                // wrap/unwrap, deriveKey are
+                                                // still out of scope per the
                                                 // issue.
                                                 let allow_unimplemented =
                                                     std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED")
@@ -641,7 +651,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                                 if !allow_unimplemented {
                                                     crate::lower_bail!(
                                                         outer_member.span,
-                                                        "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify, encrypt, decrypt (HMAC + SHA-1/256/384/512; encrypt/decrypt currently AES-GCM only). \
+                                                        "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify, encrypt, decrypt, generateKey (HMAC + SHA-1/256/384/512; encrypt/decrypt/generateKey currently AES-GCM only). \
                                                          See `perry --print-api-manifest` and #561, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore.",
                                                         method,
                                                     );

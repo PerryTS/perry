@@ -1628,6 +1628,16 @@ pub enum Expr {
         key: Box<Expr>,
         data: Box<Expr>,
     },
+    /// `crypto.subtle.generateKey(algorithm, extractable, keyUsages)` ->
+    /// Promise<CryptoKey>. Initial implementation covers symmetric
+    /// AES-GCM (the shape jose's `generateSecret('A256GCM')` reaches
+    /// for); asymmetric and other algorithms are TODO follow-ups
+    /// tracked alongside #561.
+    WebCryptoGenerateKey {
+        algorithm: Box<Expr>,
+        extractable: Box<Expr>,
+        usages: Box<Expr>,
+    },
     /// `crypto.randomFillSync(buffer, offset?, size?)` — fills the
     /// provided Buffer/TypedArray with random bytes in-place and
     /// returns the same buffer. `offset` and `size` are optional

@@ -2,6 +2,33 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.974 — feat(zlib/crypto): zlib.constants + subtle.generateKey (AES-GCM) — moves axios + jose past the next compile gates
+
+**Symptom.** After #952 wired `randomFillSync` + `subtle.encrypt`/`decrypt`, the two `compilePackages` smoke targets advanced one step and tripped on the next gap:
+
+```
+$ perry main.ts -o out   # main.ts: `import axios from "axios"`
+Error: `zlib.constants` is not implemented in Perry — see `perry --print-api-manifest` ...
+
+$ perry main.ts -o out   # main.ts: `import * as jose from "jose"`
+Error: `crypto.subtle.generateKey` is not implemented in Perry ...
+```
+
+**Fix.** Two same-family additions:
+
+1. **`zlib.constants`** — Node exposes ~50 constants (`Z_*`, flush/return codes, mode tags `DEFLATE`/`INFLATE`/`GZIP`/`BROTLI_*`/`ZSTD_*`) on `require('node:zlib').constants`. Added the property entry to the manifest and the value table to `get_native_module_constant` in `perry-runtime/src/object.rs`, routed through the existing `crypto.constants` / `os.constants` sub-namespace plumbing. Values match Node byte-for-byte (sourced from upstream zlib + Node's `lib/zlib.js` constant export). Axios's stream wiring reads these directly.
+
+2. **`crypto.subtle.generateKey(algorithm, extractable, keyUsages)`** — initial AES-GCM coverage (128 / 256 bit; 192-bit explicitly rejected to mirror the existing encrypt/decrypt path that's keyed on `aes-gcm` 0.10's `Aes128Gcm`/`Aes256Gcm` type set). Adds `Expr::WebCryptoGenerateKey`, the `js_webcrypto_generate_key` extern, and an HIR-lowering arm in `expr_call.rs` next to the existing `subtle.*` chain matchers. The returned `CryptoKey` is registered in `CRYPTO_KEY_REGISTRY` as `(AesGcm, Sha256)` so the existing `subtle.encrypt`/`decrypt` path round-trips on it without further work. Asymmetric algorithms (RSA / ECDSA / ECDH), `wrapKey`/`unwrapKey`, `deriveKey`, and `HMAC` keygen remain TODO follow-ups tracked alongside #561.
+
+**Validation.**
+
+- `test-files/test_zlib_constants.ts` — reads `constants.Z_NO_COMPRESSION` … `constants.BROTLI_DEFAULT_QUALITY`, output byte-matches Node.
+- `test-files/test_crypto_subtle_generateKey.ts` — generates a 256-bit AES-GCM key, encrypts + decrypts a plaintext, asserts round-trip equality + ciphertext-length-equals-plaintext-plus-16-byte-tag.
+- Axios repro (`import axios from "axios"`) advances past the `zlib.constants` gate (next gap: `zlib.createBrotliDecompress`, follow-up).
+- Jose repro (`import * as jose from "jose"`) advances past the `subtle.generateKey` gate (next gap: `subtle.wrapKey`, follow-up).
+
+**Files touched.** `crates/perry-api-manifest/src/entries.rs` (property entry), `crates/perry-hir/src/{ir,walker,stable_hash}.rs` + `lower/expr_call.rs` (`WebCryptoGenerateKey` variant + HIR lowering), `crates/perry-codegen/src/{expr,runtime_decls}.rs` (codegen + extern decl), `crates/perry-stdlib/src/webcrypto.rs` (runtime impl), `crates/perry-runtime/src/object.rs` (`zlib`/`zlib.constants` sub-namespace + `zlib_const` table), `crates/perry/src/commands/compile/collect_modules.rs` (auto-stdlib trigger picks up the three new variants).
+
 ## v0.5.973 — fix(cli): surface compiler panics with an `Error:` prefix instead of a buried abort
 
 **Symptom (ioredis-via-compilePackages).** Configure `perry.compilePackages: ["ioredis"]` in a `package.json`, run `perry main.ts -o out` where `main.ts` does `import Redis from "ioredis"`, and the compiler exits with status 134 — but to a user scanning the tail of the output it looks silent: hundreds of `Warning: unknown identifier '...'` lines from ioredis's CJS bodies drown out the single line at the very end:

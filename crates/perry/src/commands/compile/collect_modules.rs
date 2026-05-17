@@ -935,6 +935,9 @@ pub(super) fn collect_modules(
             || hir_debug.contains("WebCryptoImportKey")
             || hir_debug.contains("WebCryptoSign")
             || hir_debug.contains("WebCryptoVerify")
+            || hir_debug.contains("WebCryptoEncrypt")
+            || hir_debug.contains("WebCryptoDecrypt")
+            || hir_debug.contains("WebCryptoGenerateKey")
         {
             ctx.needs_stdlib = true;
             ctx.uses_crypto_builtins = true;

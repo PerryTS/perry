@@ -8491,6 +8491,144 @@ unsafe fn get_native_module_constant(
         }
     };
 
+    // `zlib.constants` — the Z_*/DEFLATE/INFLATE/GZIP/BROTLI_*/ZSTD_*
+    // table Node exposes on `require('node:zlib').constants`. Values
+    // are taken straight from `node-internal/zlib/constants.h` (the
+    // upstream lib snapshots) so reads are byte-identical to Node.
+    // Required by axios for its stream wiring.
+    let zlib_const = |prop: &str| -> Option<f64> {
+        let v: i64 = match prop {
+            // Compression levels
+            "Z_NO_COMPRESSION" => 0,
+            "Z_BEST_SPEED" => 1,
+            "Z_BEST_COMPRESSION" => 9,
+            "Z_DEFAULT_COMPRESSION" => -1,
+            // Compression strategies
+            "Z_FILTERED" => 1,
+            "Z_HUFFMAN_ONLY" => 2,
+            "Z_RLE" => 3,
+            "Z_FIXED" => 4,
+            "Z_DEFAULT_STRATEGY" => 0,
+            // Flush values
+            "Z_NO_FLUSH" => 0,
+            "Z_PARTIAL_FLUSH" => 1,
+            "Z_SYNC_FLUSH" => 2,
+            "Z_FULL_FLUSH" => 3,
+            "Z_FINISH" => 4,
+            "Z_BLOCK" => 5,
+            "Z_TREES" => 6,
+            // Return codes
+            "Z_OK" => 0,
+            "Z_STREAM_END" => 1,
+            "Z_NEED_DICT" => 2,
+            "Z_ERRNO" => -1,
+            "Z_STREAM_ERROR" => -2,
+            "Z_DATA_ERROR" => -3,
+            "Z_MEM_ERROR" => -4,
+            "Z_BUF_ERROR" => -5,
+            "Z_VERSION_ERROR" => -6,
+            // Min/Max window bits and memlevel
+            "Z_MIN_WINDOWBITS" => 8,
+            "Z_MAX_WINDOWBITS" => 15,
+            "Z_DEFAULT_WINDOWBITS" => 15,
+            "Z_MIN_CHUNK" => 64,
+            "Z_MAX_CHUNK" => 0x7fff_ffff,
+            "Z_DEFAULT_CHUNK" => 16384,
+            "Z_MIN_MEMLEVEL" => 1,
+            "Z_MAX_MEMLEVEL" => 9,
+            "Z_DEFAULT_MEMLEVEL" => 8,
+            "Z_MIN_LEVEL" => -1,
+            "Z_MAX_LEVEL" => 9,
+            "Z_DEFAULT_LEVEL" => -1,
+            // Mode (zlib stream modes — used by zlib.createDeflate etc.)
+            "DEFLATE" => 1,
+            "INFLATE" => 2,
+            "GZIP" => 3,
+            "GUNZIP" => 4,
+            "DEFLATERAW" => 5,
+            "INFLATERAW" => 6,
+            "UNZIP" => 7,
+            "BROTLI_DECODE" => 8,
+            "BROTLI_ENCODE" => 9,
+            "ZSTD_COMPRESS" => 10,
+            "ZSTD_DECOMPRESS" => 11,
+            // Brotli operation/parameter constants — match Node's
+            // `zlib.constants` exactly (these are the BrotliEncoder/
+            // BrotliDecoder parameter ids the underlying brotli library
+            // exposes).
+            "BROTLI_OPERATION_PROCESS" => 0,
+            "BROTLI_OPERATION_FLUSH" => 1,
+            "BROTLI_OPERATION_FINISH" => 2,
+            "BROTLI_OPERATION_EMIT_METADATA" => 3,
+            "BROTLI_PARAM_MODE" => 0,
+            "BROTLI_MODE_GENERIC" => 0,
+            "BROTLI_MODE_TEXT" => 1,
+            "BROTLI_MODE_FONT" => 2,
+            "BROTLI_DEFAULT_MODE" => 0,
+            "BROTLI_PARAM_QUALITY" => 1,
+            "BROTLI_MIN_QUALITY" => 0,
+            "BROTLI_MAX_QUALITY" => 11,
+            "BROTLI_DEFAULT_QUALITY" => 11,
+            "BROTLI_PARAM_LGWIN" => 2,
+            "BROTLI_MIN_WINDOW_BITS" => 10,
+            "BROTLI_MAX_WINDOW_BITS" => 24,
+            "BROTLI_LARGE_MAX_WINDOW_BITS" => 30,
+            "BROTLI_DEFAULT_WINDOW" => 22,
+            "BROTLI_PARAM_LGBLOCK" => 3,
+            "BROTLI_MIN_INPUT_BLOCK_BITS" => 16,
+            "BROTLI_MAX_INPUT_BLOCK_BITS" => 24,
+            "BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING" => 4,
+            "BROTLI_PARAM_SIZE_HINT" => 5,
+            "BROTLI_PARAM_LARGE_WINDOW" => 6,
+            "BROTLI_PARAM_NPOSTFIX" => 7,
+            "BROTLI_PARAM_NDIRECT" => 8,
+            "BROTLI_DECODER_RESULT_ERROR" => 0,
+            "BROTLI_DECODER_RESULT_SUCCESS" => 1,
+            "BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT" => 2,
+            "BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT" => 3,
+            "BROTLI_DECODER_PARAM_DISABLE_RING_BUFFER_REALLOCATION" => 0,
+            "BROTLI_DECODER_PARAM_LARGE_WINDOW" => 1,
+            // Zstd parameter ids — match Node's `zlib.constants`.
+            "ZSTD_e_continue" => 0,
+            "ZSTD_e_flush" => 1,
+            "ZSTD_e_end" => 2,
+            "ZSTD_fast" => 1,
+            "ZSTD_dfast" => 2,
+            "ZSTD_greedy" => 3,
+            "ZSTD_lazy" => 4,
+            "ZSTD_lazy2" => 5,
+            "ZSTD_btlazy2" => 6,
+            "ZSTD_btopt" => 7,
+            "ZSTD_btultra" => 8,
+            "ZSTD_btultra2" => 9,
+            "ZSTD_c_compressionLevel" => 100,
+            "ZSTD_c_windowLog" => 101,
+            "ZSTD_c_hashLog" => 102,
+            "ZSTD_c_chainLog" => 103,
+            "ZSTD_c_searchLog" => 104,
+            "ZSTD_c_minMatch" => 105,
+            "ZSTD_c_targetLength" => 106,
+            "ZSTD_c_strategy" => 107,
+            "ZSTD_c_enableLongDistanceMatching" => 160,
+            "ZSTD_c_ldmHashLog" => 161,
+            "ZSTD_c_ldmMinMatch" => 162,
+            "ZSTD_c_ldmBucketSizeLog" => 163,
+            "ZSTD_c_ldmHashRateLog" => 164,
+            "ZSTD_c_contentSizeFlag" => 200,
+            "ZSTD_c_checksumFlag" => 201,
+            "ZSTD_c_dictIDFlag" => 202,
+            "ZSTD_c_nbWorkers" => 400,
+            "ZSTD_c_jobSize" => 401,
+            "ZSTD_c_overlapLog" => 402,
+            "ZSTD_d_windowLogMax" => 100,
+            "ZSTD_CLEVEL_DEFAULT" => 3,
+            "ZSTD_MINCLEVEL" => -131072,
+            "ZSTD_MAXCLEVEL" => 22,
+            _ => return None,
+        };
+        Some(v as f64)
+    };
+
     match module_name {
         "path" => match property {
             "sep" => {
@@ -8557,6 +8695,13 @@ unsafe fn get_native_module_constant(
             _ => None,
         },
         "crypto.constants" => crypto_const(property),
+        // `zlib.constants` and the top-level Z_*/DEFLATE/INFLATE shortcuts
+        // Node also exposes directly on `require('node:zlib')`.
+        "zlib" => match property {
+            "constants" => Some(create_sub_namespace("zlib.constants")),
+            _ => zlib_const(property),
+        },
+        "zlib.constants" => zlib_const(property),
         // Issue #912 (#909 follow-up): express reads
         // `const { METHODS } = require('node:http')` at module init and
         // immediately calls `METHODS.map(...)` — pre-fix METHODS resolved

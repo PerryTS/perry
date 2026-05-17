@@ -639,6 +639,101 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
     resolve_with_bytes(&plaintext)
 }
 
+/// Read a numeric field from an algorithm object (`{ name, length }`).
+/// Returns `None` if the field is absent or not a number. Required by
+/// `generateKey({ name: 'AES-GCM', length: 256 }, ...)` — the spec
+/// allows 128, 192, or 256 here but we only honor 128 and 256 (the
+/// `aes-gcm` 0.10 crate doesn't ship a 192-bit type, matching the
+/// existing encrypt/decrypt rejection at line ~547).
+unsafe fn object_field_number(obj_bits: u64, name: &[u8]) -> Option<u32> {
+    let obj_ptr = strip_ptr(obj_bits) as *const perry_runtime::ObjectHeader;
+    if (obj_ptr as usize) < 0x1000 {
+        return None;
+    }
+    let key_ptr = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key_ptr);
+    let bits = val.bits();
+    let top16 = (bits >> 48) as u16;
+    if top16 == 0x7FFE {
+        // INT32_TAG — lower 32 bits as a signed int.
+        let raw = (bits & 0xFFFF_FFFF) as i32;
+        if raw >= 0 {
+            return Some(raw as u32);
+        }
+        return None;
+    }
+    // Treat as f64. NaN-boxed primitives (undef, null) have non-finite
+    // bits — reject them explicitly so callers fall back to the default.
+    let f = f64::from_bits(bits);
+    if f.is_finite() && f >= 0.0 && f <= u32::MAX as f64 {
+        Some(f as u32)
+    } else {
+        None
+    }
+}
+
+/// `crypto.subtle.generateKey(algorithm, extractable, keyUsages)` →
+/// Promise<CryptoKey>
+///
+/// Supported `algorithm` shapes:
+/// - `{ name: "AES-GCM", length: 128 | 256 }` — generates a random
+///   AES key. (192-bit is rejected: the `aes-gcm` 0.10 crate doesn't
+///   ship `Aes192Gcm`, matching the existing encrypt/decrypt path.)
+/// - String shorthand `"AES-GCM"` defaults to 256-bit per the WebCrypto
+///   convention (jose's `generateSecret('A256GCM')` reaches this).
+///
+/// Asymmetric algorithms (RSA-OAEP, RSA-PSS, ECDSA, ECDH) and HMAC
+/// keygen are TODO follow-ups — `extractable` and `keyUsages` are
+/// accepted but not enforced (perry's threat model treats them as
+/// documentation, matching `importKey`).
+#[no_mangle]
+pub unsafe extern "C" fn js_webcrypto_generate_key(
+    algo_bits: f64,
+    _extractable_bits: f64,
+    _usages_bits: f64,
+) -> *mut Promise {
+    let algo_name = match extract_algo_name(algo_bits.to_bits()) {
+        Some(s) => s,
+        None => return resolve_undefined(),
+    };
+    let algo_upper = algo_name.to_ascii_uppercase();
+    if algo_upper != "AES-GCM" {
+        // Other algorithms (HMAC, RSA-*, ECDSA, ECDH) are not yet
+        // implemented; reject with an undefined-resolved Promise so the
+        // caller sees a clear "TypeError" downstream.
+        return resolve_undefined();
+    }
+    // Read `length` from the algorithm object; default to 256 for the
+    // string-shorthand form.
+    let length = object_field_number(algo_bits.to_bits(), b"length").unwrap_or(256);
+    let byte_len = match length {
+        128 => 16,
+        256 => 32,
+        // 192 intentionally rejected — see encrypt/decrypt path above.
+        _ => return resolve_undefined(),
+    };
+    // Pull cryptographically strong random bytes for the key.
+    let mut key_bytes = vec![0u8; byte_len];
+    use rand::RngCore;
+    rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+
+    // Allocate the CryptoKey-shaped buffer + register it as AES-GCM so
+    // the importKey/encrypt/decrypt path works on the result.
+    let buf = alloc_uint8array_from_slice(&key_bytes);
+    if buf.is_null() {
+        return resolve_undefined();
+    }
+    register_crypto_key(
+        buf as usize,
+        CryptoKeyMaterial {
+            algo: KeyAlgo::AesGcm,
+            hash: HashAlgo::Sha256,
+        },
+    );
+    let val = JSValue::pointer(buf as *const u8).bits();
+    resolve_with_bits(val)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

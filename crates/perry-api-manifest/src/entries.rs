@@ -1098,6 +1098,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     method_sig("zlib", "gzip", false, None, &[p_str("p0")], TypeSpec::Any),
     method_sig("zlib", "gunzip", false, None, &[p_str("p0")], TypeSpec::Any),
+    // `zlib.constants` — the ~50 Z_*/DEFLATE/INFLATE/GZIP/BROTLI_*/ZSTD_*
+    // constants Node exposes on `require('node:zlib').constants`. Required
+    // by axios for stream wiring. Values are resolved at runtime by
+    // `get_native_module_constant` in `perry-runtime/src/object.rs`.
+    property("zlib", "constants"),
     method_sig(
         "cron",
         "validate",

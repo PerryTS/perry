@@ -2260,6 +2260,16 @@ impl SH for Expr {
                 key.as_ref().hash(h);
                 data.as_ref().hash(h);
             }
+            Expr::WebCryptoGenerateKey {
+                algorithm,
+                extractable,
+                usages,
+            } => {
+                tag(h, 469);
+                algorithm.as_ref().hash(h);
+                extractable.as_ref().hash(h);
+                usages.as_ref().hash(h);
+            }
             Expr::CryptoRandomFillSync {
                 buffer,
                 offset,

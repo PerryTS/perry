@@ -401,6 +401,15 @@ where
             f(key);
             f(data);
         }
+        Expr::WebCryptoGenerateKey {
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            f(algorithm);
+            f(extractable);
+            f(usages);
+        }
         Expr::CryptoRandomFillSync {
             buffer,
             offset,
@@ -1707,6 +1716,15 @@ where
             f(algorithm);
             f(key);
             f(data);
+        }
+        Expr::WebCryptoGenerateKey {
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            f(algorithm);
+            f(extractable);
+            f(usages);
         }
         Expr::CryptoRandomFillSync {
             buffer,

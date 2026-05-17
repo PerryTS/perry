@@ -1060,6 +1060,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // shape as sign/verify; runtime resolves synchronously.
     module.declare_function("js_webcrypto_encrypt", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_webcrypto_decrypt", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    // subtle.generateKey(algorithm, extractable, usages) → Promise<CryptoKey>.
+    // Initial implementation covers AES-GCM (128/256-bit) — the shape
+    // jose's `generateSecret('A256GCM')` reaches for.
+    module.declare_function("js_webcrypto_generate_key", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     // crypto.randomFillSync(buf, offset?, size?) → returns the same
     // NaN-boxed buffer with random bytes written in-place.
     module.declare_function(
