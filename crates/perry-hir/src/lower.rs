@@ -336,6 +336,20 @@ pub struct LoweringContext {
     /// — codegen then dispatches through the same singleton-closure
     /// path the matching `new M(args)` site uses.
     pub(crate) prototype_function_locals: HashMap<LocalId, LocalId>,
+    /// Issue #886: locals whose initializer is `Object.<staticMethod>`
+    /// (e.g. `const __defProp = Object.defineProperty;`). esbuild's
+    /// CJS-bundle prelude aliases the static method to a short local
+    /// and calls it indirectly (`__defProp(target, name, descriptor)`).
+    /// Pre-fix the indirect call fell through to a generic
+    /// `LocalGet(__defProp)(...)` dispatch where the captured value
+    /// resolves to undefined (the recogniser only fires on the literal
+    /// `Object.<method>` AST shape at the call site) and throws
+    /// `TypeError: value is not a function`. Stores `id → "defineProperty"`
+    /// etc. so the call lowering can synthesize the matching dedicated
+    /// HIR variant when the callee is `LocalGet(id)`. Only populated
+    /// for methods that already have a dedicated recogniser arm — see
+    /// `lower/expr_call.rs` for the dispatch list.
+    pub(crate) object_static_method_aliases: HashMap<LocalId, String>,
     /// Issue #444: true when this module is the user-supplied entry file.
     /// Drives `import.meta.main` — Node 24+ / Bun semantics where the entry
     /// module reports `true` and every imported module reports `false`. Set
@@ -437,6 +451,7 @@ impl LoweringContext {
             prototype_function_aliases: HashMap::new(),
             function_valued_locals: HashSet::new(),
             prototype_function_locals: HashMap::new(),
+            object_static_method_aliases: HashMap::new(),
             is_entry_module: false,
             is_external_module: false,
         }

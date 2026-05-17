@@ -350,6 +350,40 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
         }
     }
 
+    // --- Issue #886: indirect call through an `Object.<staticMethod>` alias.
+    //
+    // esbuild's CJS-bundle prelude emits a constant-aliased dispatch table
+    // at the top of every bundled package:
+    //   var __defProp = Object.defineProperty;
+    //   var __export = (target, all) => {
+    //     for (var name in all) __defProp(target, name, { get: all[name], enumerable: true });
+    //   };
+    // Pre-fix the `__defProp(...)` call fell through to the generic
+    // `LocalGet(__defProp)(args)` codegen path which evaluates the LocalGet
+    // to whatever the init lowering produced — a PropertyGet on the
+    // undefined-at-runtime `Object` constructor reference — and then tries
+    // to invoke an undefined value, throwing `TypeError: value is not a
+    // function`. The recogniser below for the literal `Object.defineProperty
+    // (...)` shape (added by #891) didn't fire because the callee isn't a
+    // member expression, just a local ident.
+    //
+    // The alias is populated in `destructuring.rs` when the AST shape is
+    // `const X = Object.<method>` and `<method>` is in the whitelist of
+    // methods that already have a dedicated HIR variant. Route here to
+    // synthesize the same Expr the literal recogniser would produce.
+    if !has_spread {
+        if let ast::Callee::Expr(callee_expr) = &call.callee {
+            if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
+                let name = ident.sym.to_string();
+                if let Some(id) = ctx.lookup_local(&name) {
+                    if let Some(method) = ctx.object_static_method_aliases.get(&id).cloned() {
+                        return Ok(build_object_static_method_call(&method, args));
+                    }
+                }
+            }
+        }
+    }
+
     // --- Object.hasOwnProperty.call(obj, key) → js_object_has_own(obj, key) ---
     //
     // Current NestJS `@Module()` uses this inherited Object.prototype helper
@@ -6404,4 +6438,96 @@ fn take_reflect_tp_args(args: Vec<Expr>) -> (Expr, Option<Box<Expr>>) {
     let target = it.next().unwrap_or(Expr::Undefined);
     let property_key = it.next().map(Box::new);
     (target, property_key)
+}
+
+/// Issue #886: synthesize the dedicated HIR variant for an indirect call
+/// through an `Object.<staticMethod>` alias. Mirrors the literal-callee
+/// recogniser in `lower_call` (the `obj_name == "Object"` arm) but skips
+/// the AST-shape sub-cases that depend on argument-AST inspection
+/// (`Object.assign({}, …)` fresh-target ObjectSpread fold,
+/// `Object.defineProperties` static-descriptor sequence fold). The aliased
+/// shape can't benefit from those AST-time folds anyway — the literal
+/// recogniser has the original arg expressions, this path only has the
+/// already-lowered HIR — so we always emit the general HIR variant which
+/// preserves spec semantics at runtime, just without the constant-fold
+/// optimisations.
+///
+/// The whitelist here MUST stay in sync with the `is_supported` filter in
+/// `destructuring.rs::lower_var_decl_with_destructuring` — methods missing
+/// from the dispatch below will be tagged as aliases and then fall through
+/// to the original generic call path that throws `TypeError: value is not
+/// a function`, regressing the very pattern this fix is supposed to fix.
+fn build_object_static_method_call(method: &str, args: Vec<Expr>) -> Expr {
+    let mut iter = args.into_iter();
+    match method {
+        "defineProperty" => {
+            let obj = iter.next().unwrap_or(Expr::Undefined);
+            let key = iter.next().unwrap_or(Expr::Undefined);
+            let descriptor = iter.next().unwrap_or(Expr::Undefined);
+            Expr::ObjectDefineProperty(Box::new(obj), Box::new(key), Box::new(descriptor))
+        }
+        "defineProperties" => {
+            let target = iter.next().unwrap_or(Expr::Undefined);
+            let descs = iter.next().unwrap_or(Expr::Undefined);
+            Expr::ObjectDefineProperties(Box::new(target), Box::new(descs))
+        }
+        "setPrototypeOf" => {
+            let obj = iter.next().unwrap_or(Expr::Undefined);
+            let proto = iter.next().unwrap_or(Expr::Undefined);
+            Expr::ObjectSetPrototypeOf(Box::new(obj), Box::new(proto))
+        }
+        "getPrototypeOf" => {
+            Expr::ObjectGetPrototypeOf(Box::new(iter.next().unwrap_or(Expr::Undefined)))
+        }
+        "getOwnPropertyDescriptor" => {
+            let obj = iter.next().unwrap_or(Expr::Undefined);
+            let key = iter.next().unwrap_or(Expr::Undefined);
+            Expr::ObjectGetOwnPropertyDescriptor(Box::new(obj), Box::new(key))
+        }
+        "getOwnPropertyNames" => {
+            Expr::ObjectGetOwnPropertyNames(Box::new(iter.next().unwrap_or(Expr::Undefined)))
+        }
+        "getOwnPropertySymbols" => {
+            Expr::ObjectGetOwnPropertySymbols(Box::new(iter.next().unwrap_or(Expr::Undefined)))
+        }
+        "keys" => Expr::ObjectKeys(Box::new(iter.next().unwrap_or(Expr::Undefined))),
+        "values" => Expr::ObjectValues(Box::new(iter.next().unwrap_or(Expr::Undefined))),
+        "entries" => Expr::ObjectEntries(Box::new(iter.next().unwrap_or(Expr::Undefined))),
+        "assign" => {
+            let target = iter.next().unwrap_or(Expr::Object(Vec::new()));
+            let sources: Vec<Expr> = iter.collect();
+            Expr::ObjectAssign {
+                target: Box::new(target),
+                sources,
+            }
+        }
+        "fromEntries" => Expr::ObjectFromEntries(Box::new(iter.next().unwrap_or(Expr::Undefined))),
+        "create" => Expr::ObjectCreate(Box::new(iter.next().unwrap_or(Expr::Undefined))),
+        "freeze" => Expr::ObjectFreeze(Box::new(iter.next().unwrap_or(Expr::Undefined))),
+        "seal" => Expr::ObjectSeal(Box::new(iter.next().unwrap_or(Expr::Undefined))),
+        "preventExtensions" => {
+            Expr::ObjectPreventExtensions(Box::new(iter.next().unwrap_or(Expr::Undefined)))
+        }
+        "isFrozen" => Expr::ObjectIsFrozen(Box::new(iter.next().unwrap_or(Expr::Undefined))),
+        "isSealed" => Expr::ObjectIsSealed(Box::new(iter.next().unwrap_or(Expr::Undefined))),
+        "isExtensible" => {
+            Expr::ObjectIsExtensible(Box::new(iter.next().unwrap_or(Expr::Undefined)))
+        }
+        "hasOwn" => {
+            let obj = iter.next().unwrap_or(Expr::Undefined);
+            let key = iter.next().unwrap_or(Expr::Undefined);
+            Expr::ObjectHasOwn(Box::new(obj), Box::new(key))
+        }
+        "is" => {
+            let a = iter.next().unwrap_or(Expr::Undefined);
+            let b = iter.next().unwrap_or(Expr::Undefined);
+            Expr::ObjectIs(Box::new(a), Box::new(b))
+        }
+        // Unreachable in practice — the whitelist in destructuring.rs
+        // gates which methods reach this dispatch. The fall-through is
+        // defensive: an unrecognised method shouldn't have been tagged
+        // as an alias, but if it slips through we emit Undefined rather
+        // than panic-ing the compiler.
+        _ => Expr::Undefined,
+    }
 }

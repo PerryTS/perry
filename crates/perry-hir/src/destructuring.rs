@@ -2222,6 +2222,77 @@ pub(crate) fn lower_var_decl_with_destructuring(
             } else {
                 ctx.define_local(name.clone(), ty.clone())
             };
+            // Issue #886: detect `let/const/var <name> = Object.<staticMethod>`
+            // from the raw AST so a subsequent indirect call `<name>(args)`
+            // can route to the dedicated HIR variant the literal
+            // `Object.<staticMethod>(args)` already uses. The detection runs
+            // from the AST (rather than the lowered `init`) because the init
+            // lowering erases the `Object` qualifier into a generic
+            // PropertyGet that resolves to undefined at codegen. esbuild's
+            // CJS-bundle prelude emits this pattern verbatim for every
+            // bundled package:
+            //   var __defProp = Object.defineProperty;
+            //   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+            //   var __getOwnPropNames = Object.getOwnPropertyNames;
+            //   var __getProtoOf = Object.getPrototypeOf;
+            //   var __defProps = Object.defineProperties;
+            // — so anything that imports an esbuild-bundled package threw
+            // `TypeError: value is not a function` at module init pre-fix.
+            let object_method_alias: Option<String> =
+                decl.init.as_deref().and_then(|init_ast| match init_ast {
+                    ast::Expr::Member(member) => match (member.obj.as_ref(), &member.prop) {
+                        (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(method_ident))
+                            if obj_ident.sym.as_ref() == "Object" =>
+                        {
+                            let method_name = method_ident.sym.as_ref();
+                            // Whitelist of static methods that already have
+                            // a dedicated HIR variant in `lower/expr_call.rs`.
+                            // Methods not on this list intentionally fall
+                            // through to the generic PropertyGet path so we
+                            // don't change behaviour for unsupported ones.
+                            let is_supported = matches!(
+                                method_name,
+                                "defineProperty"
+                                    | "defineProperties"
+                                    | "setPrototypeOf"
+                                    | "getPrototypeOf"
+                                    | "getOwnPropertyDescriptor"
+                                    | "getOwnPropertyNames"
+                                    | "getOwnPropertySymbols"
+                                    | "keys"
+                                    | "values"
+                                    | "entries"
+                                    | "assign"
+                                    | "fromEntries"
+                                    | "create"
+                                    | "freeze"
+                                    | "seal"
+                                    | "preventExtensions"
+                                    | "isFrozen"
+                                    | "isSealed"
+                                    | "isExtensible"
+                                    | "hasOwn"
+                                    | "is"
+                            );
+                            if is_supported {
+                                Some(method_name.to_string())
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                });
+
+            // Issue #886: register the alias once `id` is bound, so the
+            // call-side recogniser in `lower/expr_call.rs` can route
+            // `LocalGet(id)(args)` to the dedicated HIR variant the literal
+            // `Object.<method>(args)` shape already uses.
+            if let Some(method_name) = object_method_alias {
+                ctx.object_static_method_aliases.insert(id, method_name);
+            }
+
             // Issue #740: track `let/const/var <name> = ClassRef(...)` so
             // `new <name>(...)` can resolve captures via the alias chain.
             // Also follow LocalGet aliases for `const B = A` style chains.
@@ -2272,6 +2343,15 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         // Propagate function-valued tag through aliases.
                         if ctx.function_valued_locals.contains(src_id) {
                             ctx.function_valued_locals.insert(id);
+                        }
+                        // Issue #886: propagate the Object-static-method alias
+                        // through `const B = A` chains so re-aliased copies
+                        // (`const __defProp2 = __defProp;`) still route to the
+                        // dedicated HIR variant at the indirect call site.
+                        if let Some(method_name) =
+                            ctx.object_static_method_aliases.get(src_id).cloned()
+                        {
+                            ctx.object_static_method_aliases.insert(id, method_name);
                         }
                     }
                     // Issue #838: `var p = <ClassName>.prototype` records
