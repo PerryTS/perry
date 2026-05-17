@@ -4,8 +4,8 @@
 //! Provides array, object, string, and utility operations.
 
 use perry_runtime::{
-    js_array_alloc, js_array_get, js_array_length, js_array_push, js_string_from_bytes,
-    ArrayHeader, JSValue, StringHeader,
+    js_array_alloc, js_array_get, js_array_length, js_array_push, js_object_get_field_by_name,
+    js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
 };
 use std::collections::HashSet;
 
@@ -877,4 +877,116 @@ pub unsafe extern "C" fn js_lodash_size(collection_f: f64) -> f64 {
         }
     }
     0.0
+}
+
+// ============================================================================
+// Aggregators (sum/mean) — issue #793 follow-up
+// ============================================================================
+
+/// Coerce a JS array element to f64 per lodash's `baseSum`: skip
+/// `undefined` (treated as 0 contribution) and `NaN` is propagated by
+/// caller summation. lodash uses `current === current` for the NaN check;
+/// here we just lean on f64 NaN arithmetic which preserves NaN propagation.
+#[inline]
+fn lodash_to_number(v: JSValue) -> f64 {
+    if v.is_undefined() {
+        0.0
+    } else {
+        v.to_number()
+    }
+}
+
+/// _.sum(array) -> number
+///
+/// Sum the numeric values of the array. Returns 0 for null/empty.
+#[no_mangle]
+pub unsafe extern "C" fn js_lodash_sum(arr_ptr: *mut ArrayHeader) -> f64 {
+    if arr_ptr.is_null() {
+        return 0.0;
+    }
+    let len = js_array_length(arr_ptr);
+    let mut sum = 0.0;
+    for i in 0..len {
+        sum += lodash_to_number(js_array_get(arr_ptr, i));
+    }
+    sum
+}
+
+/// _.mean(array) -> number
+///
+/// Arithmetic mean. lodash returns NaN for empty arrays (0/0).
+#[no_mangle]
+pub unsafe extern "C" fn js_lodash_mean(arr_ptr: *mut ArrayHeader) -> f64 {
+    if arr_ptr.is_null() {
+        return f64::NAN;
+    }
+    let len = js_array_length(arr_ptr);
+    if len == 0 {
+        return f64::NAN;
+    }
+    let mut sum = 0.0;
+    for i in 0..len {
+        sum += lodash_to_number(js_array_get(arr_ptr, i));
+    }
+    sum / (len as f64)
+}
+
+/// _.sumBy(collection, iteratee) -> number
+///
+/// Like `sum`, but iteratee is invoked per element. Today we only
+/// support the property-shorthand form (`'name'`) since native function
+/// iteratees would require closure-call plumbing. A function iteratee
+/// silently returns NaN to mirror lodash's behaviour when the iteratee
+/// is unusable.
+#[no_mangle]
+pub unsafe extern "C" fn js_lodash_sum_by(arr_ptr: *mut ArrayHeader, iteratee_f: f64) -> f64 {
+    if arr_ptr.is_null() {
+        return 0.0;
+    }
+    let iteratee = JSValue::from_bits(iteratee_f.to_bits());
+    // Property-shorthand only: iteratee must be a string key.
+    if !iteratee.is_string() {
+        return f64::NAN;
+    }
+    let key_ptr = iteratee.as_pointer::<StringHeader>();
+    let len = js_array_length(arr_ptr);
+    let mut sum = 0.0;
+    for i in 0..len {
+        let elem = js_array_get(arr_ptr, i);
+        if elem.is_pointer() {
+            let obj_ptr = elem.as_pointer::<ObjectHeader>();
+            let prop = js_object_get_field_by_name(obj_ptr, key_ptr);
+            sum += lodash_to_number(prop);
+        }
+    }
+    sum
+}
+
+/// _.meanBy(collection, iteratee) -> number
+///
+/// Same restriction as `sumBy`: property-shorthand iteratee only.
+#[no_mangle]
+pub unsafe extern "C" fn js_lodash_mean_by(arr_ptr: *mut ArrayHeader, iteratee_f: f64) -> f64 {
+    if arr_ptr.is_null() {
+        return f64::NAN;
+    }
+    let len = js_array_length(arr_ptr);
+    if len == 0 {
+        return f64::NAN;
+    }
+    let iteratee = JSValue::from_bits(iteratee_f.to_bits());
+    if !iteratee.is_string() {
+        return f64::NAN;
+    }
+    let key_ptr = iteratee.as_pointer::<StringHeader>();
+    let mut sum = 0.0;
+    for i in 0..len {
+        let elem = js_array_get(arr_ptr, i);
+        if elem.is_pointer() {
+            let obj_ptr = elem.as_pointer::<ObjectHeader>();
+            let prop = js_object_get_field_by_name(obj_ptr, key_ptr);
+            sum += lodash_to_number(prop);
+        }
+    }
+    sum / (len as f64)
 }

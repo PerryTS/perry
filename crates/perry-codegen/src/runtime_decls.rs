@@ -2332,6 +2332,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_lodash_last", DOUBLE, &[I64]);
     module.declare_function("js_lodash_lower_case", I64, &[I64]);
     module.declare_function("js_lodash_lower_first", I64, &[I64]);
+    module.declare_function("js_lodash_mean", DOUBLE, &[I64]);
+    module.declare_function("js_lodash_mean_by", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_lodash_pad", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_pad_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_pad_start", I64, &[I64, DOUBLE]);
@@ -2344,6 +2346,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_lodash_split", I64, &[I64, I64]);
     module.declare_function("js_lodash_start_case", I64, &[I64]);
     module.declare_function("js_lodash_starts_with", DOUBLE, &[I64, I64]);
+    module.declare_function("js_lodash_sum", DOUBLE, &[I64]);
+    module.declare_function("js_lodash_sum_by", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_lodash_tail", I64, &[I64]);
     module.declare_function("js_lodash_take", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_take_right", I64, &[I64, DOUBLE]);

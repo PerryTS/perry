@@ -2,6 +2,26 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.980 — feat(lodash): add `sum` / `mean` / `sumBy` / `meanBy` / `tail` aggregators to the manifest
+
+**Symptom.** Manifest sweep flagged `_.sum([1,2,3,4])` as missing — `import _ from 'lodash'; _.sum(...)` errored at HIR-lower with `\`lodash.sum\` is not implemented in Perry — see \`perry --print-api-manifest\` for the supported surface`. Same shape for `_.mean`, `_.sumBy`, `_.meanBy`, and `_.tail` (tail's runtime + decl already existed but the manifest + lower_call rows were absent, so call sites couldn't reach the native function).
+
+**Fix.** Added five new lodash bindings following the existing `chunk`/`compact`/`take`/etc. pattern:
+
+- `crates/perry-stdlib/src/lodash.rs` — new `js_lodash_sum`, `js_lodash_mean`, `js_lodash_sum_by`, `js_lodash_mean_by` runtime exports. All four iterate over `*mut ArrayHeader` via `js_array_get`/`js_array_length` and accumulate via `JSValue::to_number()` (with `undefined` treated as 0 to match lodash's `baseSum`). `mean`/`meanBy` return `NaN` for empty/null arrays (0/0 case). `sumBy`/`meanBy` accept the property-shorthand iteratee form only (a string key); function iteratees return `NaN` to mirror lodash's "unusable iteratee" behaviour — closure-call plumbing across the FFI boundary is its own follow-up. Property lookup uses `js_object_get_field_by_name`.
+- `crates/perry-api-manifest/src/entries.rs` — five new `method_sig` rows (`sum`, `mean`, `sumBy`, `meanBy`, `tail`). The first four return `TypeSpec::Number` so HIR knows the return type without inference; `tail` returns `TypeSpec::Any` like the rest of the array-returning helpers.
+- `crates/perry-codegen/src/lower_call.rs` — five new `NativeModSig` rows in the lodash block of `NATIVE_MODULE_TABLE`. `sum`/`mean` take `&[NA_PTR]` → `NR_F64`; `sumBy`/`meanBy` take `&[NA_PTR, NA_F64]` → `NR_F64` (iteratee passed as a NaN-boxed `f64` and re-bit-cast to `JSValue` inside the runtime); `tail` takes `&[NA_PTR]` → `NR_PTR`.
+- `crates/perry-codegen/src/runtime_decls.rs` — four new `declare_function` rows for the new symbols (`js_lodash_sum`/`_sum_by`/`_mean`/`_mean_by`). `js_lodash_tail` was already declared.
+
+**Validation.** `test-files/test_lodash_sum.ts` (new) prints `10 / 2.5 / 3 / 1 / 3` and matches `node --experimental-strip-types` byte-for-byte. Tested via the standard manifest-route (no `compilePackages` config) since the `compilePackages: ["lodash"]` path is still blocked on a separate module-init `TypeError: Cannot read properties of undefined (reading 'prototype')` regression that pre-dates this work (reproducible with just `_.head([1,2,3])` after enabling compilePackages — not in scope here).
+
+**Files.**
+- `crates/perry-stdlib/src/lodash.rs` — new aggregator exports + helper `lodash_to_number`.
+- `crates/perry-api-manifest/src/entries.rs` — five new manifest rows.
+- `crates/perry-codegen/src/lower_call.rs` — five new `NativeModSig` rows.
+- `crates/perry-codegen/src/runtime_decls.rs` — four new symbol decls.
+- `test-files/test_lodash_sum.ts` — repro/regression fixture.
+
 ## v0.5.979 — feat(globalThis): expose built-in constructors as properties so `globalThis.Array`, `context.Object`, etc. stop returning `undefined`
 
 **Symptom.** PR #963 (v0.5.977) closed the `Function('return this')()` recogniser, so the lodash module-init IIFE no longer threw `TypeError: value is not a function`. The next blocker surfaced one frame down, inside `runInContext`:
