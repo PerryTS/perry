@@ -147,6 +147,123 @@ thunk!(thunk_sys_promisify, "node:sys.promisify is not yet implemented in Perry 
 thunk!(thunk_sys_callbackify, "node:sys.callbackify is not yet implemented in Perry (use node:util.callbackify; node:sys is deprecated).");
 thunk!(thunk_sys_isArray, "node:sys.isArray is not yet implemented in Perry (use node:util.isArray; node:sys is deprecated).");
 
+// ----- node:diagnostics_channel thunks (#906 follow-up) -----
+//
+// Pino reads `require('node:diagnostics_channel').tracingChannel('pino_asJson')`
+// at top-level module init in `lib/tools.js`. Without these, the codegen
+// catch-all returned TAG_TRUE so `diagChan.tracingChannel(...)` threw
+// `TypeError: (boolean).tracingChannel is not a function` before any of
+// pino's actual logging logic ran. Two of the thunks here construct
+// non-trivial return values:
+//
+//   - `tracingChannel(name)` returns a TracingChannel-shaped stub object
+//     whose `hasSubscribers` is `false`. Pino tests that property before
+//     entering the tracing branch (`lib/tools.js::asJson`):
+//         if (asJsonChan.hasSubscribers === false) {
+//             return _asJson.call(this, obj, msg, num, time)
+//         }
+//     so the fast path is taken and `traceSync` is never invoked. The
+//     returned object also carries `subscribe` / `unsubscribe` / `traceSync` /
+//     `tracePromise` / `traceCallback` slots set to no-op closures, just
+//     in case a consumer doesn't gate on `hasSubscribers`.
+//
+//   - `channel(name)` mirrors the same shape with `hasSubscribers: false`
+//     and a `publish` no-op — same minimal "satisfies type probe" goal.
+//
+// Other entries (`subscribe`, `unsubscribe`, `publish`, `hasSubscribers`)
+// surface as no-op thrower thunks the same way the other submodules do —
+// real-tracing semantics are a follow-up under #793.
+
+extern "C" fn thunk_diag_noop(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+    f64::from_bits(crate::value::JSValue::undefined().bits())
+}
+
+/// `tracingChannel(name)` — pino-shaped stub. See module comment above.
+extern "C" fn thunk_diag_tracing_channel(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+    let obj = build_tracing_channel_stub();
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+/// `channel(name)` — Channel-shaped stub with `hasSubscribers: false` and a
+/// no-op `publish`. Symmetric with `tracingChannel` so anyone who reaches
+/// for the lighter API gets the same fast-path-friendly shape.
+extern "C" fn thunk_diag_channel(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+    let obj = build_channel_stub();
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+thunk!(
+    thunk_diag_has_subscribers,
+    "node:diagnostics_channel.hasSubscribers is not yet implemented in Perry (returns no-op stubs; tracked by issue #793)."
+);
+
+/// Build a fresh TracingChannel-shaped stub object. Each call returns a
+/// new object so concurrent tracers don't share state. The function-shaped
+/// fields are no-op closures with `typeof === "function"`.
+fn build_tracing_channel_stub() -> *mut ObjectHeader {
+    let obj = js_object_alloc(0, 8);
+    let noop_closure = ensure_diag_noop_closure();
+    let noop_value = f64::from_bits(JSValue::pointer(noop_closure as *const u8).bits());
+    let false_value = f64::from_bits(JSValue::bool(false).bits());
+
+    unsafe {
+        set_named_field(obj, "hasSubscribers", false_value);
+        set_named_field(obj, "subscribe", noop_value);
+        set_named_field(obj, "unsubscribe", noop_value);
+        set_named_field(obj, "traceSync", noop_value);
+        set_named_field(obj, "tracePromise", noop_value);
+        set_named_field(obj, "traceCallback", noop_value);
+        // Pre-#906 the test_parity_diagnostics_channel TODO list also
+        // mentioned start/end/asyncStart/asyncEnd/error subscriber hooks;
+        // expose them as no-op functions so `typeof` probes don't read
+        // undefined.
+        set_named_field(obj, "start", noop_value);
+        set_named_field(obj, "end", noop_value);
+    }
+    obj
+}
+
+fn build_channel_stub() -> *mut ObjectHeader {
+    let obj = js_object_alloc(0, 4);
+    let noop_closure = ensure_diag_noop_closure();
+    let noop_value = f64::from_bits(JSValue::pointer(noop_closure as *const u8).bits());
+    let false_value = f64::from_bits(JSValue::bool(false).bits());
+
+    unsafe {
+        set_named_field(obj, "hasSubscribers", false_value);
+        set_named_field(obj, "subscribe", noop_value);
+        set_named_field(obj, "unsubscribe", noop_value);
+        set_named_field(obj, "publish", noop_value);
+    }
+    obj
+}
+
+unsafe fn set_named_field(obj: *mut ObjectHeader, name: &str, value: f64) {
+    let bytes = name.as_bytes();
+    let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    crate::object::js_object_set_field_by_name(obj, header, value);
+}
+
+// One singleton no-op closure shared by every "function" field on the
+// tracingChannel / channel stubs. Kept alive for the process's lifetime
+// via the same GC root scanner that protects the other submodule
+// singletons (see `scan_node_submodule_singleton_roots`).
+thread_local! {
+    static DIAG_NOOP_CLOSURE: RefCell<Option<*mut ClosureHeader>> = const { RefCell::new(None) };
+}
+
+fn ensure_diag_noop_closure() -> *mut ClosureHeader {
+    DIAG_NOOP_CLOSURE.with(|slot| {
+        if let Some(ptr) = *slot.borrow() {
+            return ptr;
+        }
+        let allocated = js_closure_alloc(thunk_diag_noop as *const u8, 0);
+        *slot.borrow_mut() = Some(allocated);
+        ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
+        allocated
+    })
+}
+
 // ----- submodule table -----
 
 const SUBMODULES: &[SubmoduleSpec] = &[
@@ -263,6 +380,40 @@ const SUBMODULES: &[SubmoduleSpec] = &[
             },
         ],
     },
+    // #906 follow-up: pino reads `tracingChannel('pino_asJson')` at
+    // module init time. The thunks here return useful stub values
+    // (an object with `hasSubscribers: false`) instead of throwing,
+    // so pino's "no subscribers → fast path" branch is taken and the
+    // tracing machinery never enters.
+    SubmoduleSpec {
+        key: "diagnostics_channel",
+        exports: &[
+            ExportSpec {
+                name: "tracingChannel",
+                thunk: thunk_diag_tracing_channel,
+            },
+            ExportSpec {
+                name: "channel",
+                thunk: thunk_diag_channel,
+            },
+            ExportSpec {
+                name: "subscribe",
+                thunk: thunk_diag_noop,
+            },
+            ExportSpec {
+                name: "unsubscribe",
+                thunk: thunk_diag_noop,
+            },
+            ExportSpec {
+                name: "publish",
+                thunk: thunk_diag_noop,
+            },
+            ExportSpec {
+                name: "hasSubscribers",
+                thunk: thunk_diag_has_subscribers,
+            },
+        ],
+    },
 ];
 
 fn find_submodule(key: &str) -> Option<&'static SubmoduleSpec> {
@@ -367,6 +518,16 @@ pub fn scan_node_submodule_singleton_roots(mark: &mut dyn FnMut(f64)) {
             mark(f64::from_bits(v.bits()));
         }
     });
+    // #906 follow-up: the no-op closure shared by every TracingChannel /
+    // Channel stub field also needs pinning against the next sweep. The
+    // returned stub objects themselves are caller-owned (we don't cache
+    // them) so they're traced through normal allocator roots.
+    DIAG_NOOP_CLOSURE.with(|slot| {
+        if let Some(ptr) = *slot.borrow() {
+            let v = JSValue::pointer(ptr as *const u8);
+            mark(f64::from_bits(v.bits()));
+        }
+    });
 }
 
 // ----- FFI entry points -----
@@ -468,6 +629,7 @@ mod tests {
             "stream_promises",
             "stream_consumers",
             "sys",
+            "diagnostics_channel",
         ] {
             assert!(
                 find_submodule(key).is_some(),
@@ -480,5 +642,23 @@ mod tests {
     #[test]
     fn find_submodule_for_unknown_key_returns_none() {
         assert!(find_submodule("not_a_real_submodule").is_none());
+    }
+
+    /// #906 follow-up — pino reads `tracingChannel('pino_asJson').hasSubscribers`
+    /// before deciding whether to enter the tracing branch. The stub MUST
+    /// expose `tracingChannel` as a callable thunk in the SUBMODULES table
+    /// so the namespace singleton's field is a function (not TAG_TRUE).
+    #[test]
+    fn diagnostics_channel_exposes_tracingChannel_export() {
+        let submod = find_submodule("diagnostics_channel")
+            .expect("diagnostics_channel must be in SUBMODULES");
+        let names: Vec<&str> = submod.exports.iter().map(|e| e.name).collect();
+        for required in ["tracingChannel", "channel", "subscribe", "unsubscribe"] {
+            assert!(
+                names.contains(&required),
+                "diagnostics_channel must export `{}` for pino's `require('node:diagnostics_channel')` to keep working",
+                required
+            );
+        }
     }
 }

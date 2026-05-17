@@ -4324,14 +4324,36 @@ pub fn run_with_parse_cache(
                             }
                         }
                         perry_hir::ImportSpecifier::Default { local } => {
-                            // Default imports route to "default" — these
-                            // submodules don't have meaningful defaults
-                            // but tracking them keeps the catch-all from
-                            // firing on `import x from "node:..."`.
-                            import_function_node_submodule.insert(
-                                local.clone(),
-                                (submod_key.clone(), "default".to_string()),
-                            );
+                            // For `node:diagnostics_channel`, the CJS-wrap
+                            // converts `require('node:diagnostics_channel')`
+                            // into `import diagChan from 'node:diagnostics_channel'`
+                            // and pino then reads `diagChan.tracingChannel(...)`.
+                            // Route the default-import local to the namespace
+                            // stub so the receiver is a real object whose
+                            // `tracingChannel` slot is a callable thunk —
+                            // not the function-singleton form, which would
+                            // produce `(function).tracingChannel is not a
+                            // function` because functions don't carry the
+                            // module's exported methods. The four pre-#906
+                            // submodules (`timers/promises` etc.) keep the
+                            // function-singleton routing because no real
+                            // code reads them as namespace objects.
+                            if submod_key == "diagnostics_channel" {
+                                namespace_node_submodules
+                                    .insert(local.clone(), submod_key.clone());
+                                if !namespace_imports.contains(local) {
+                                    namespace_imports.push(local.clone());
+                                }
+                            } else {
+                                // Default imports route to "default" — these
+                                // submodules don't have meaningful defaults
+                                // but tracking them keeps the catch-all from
+                                // firing on `import x from "node:..."`.
+                                import_function_node_submodule.insert(
+                                    local.clone(),
+                                    (submod_key.clone(), "default".to_string()),
+                                );
+                            }
                         }
                         perry_hir::ImportSpecifier::Namespace { local } => {
                             namespace_node_submodules

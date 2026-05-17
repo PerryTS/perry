@@ -2,6 +2,61 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.949 — fix(runtime): pino smoke `(boolean).tracingChannel is not a function` — `node:diagnostics_channel` joins the node-submodule stub table
+
+**Symptom.** After v0.5.948's #906 unblocked pino past the `buffer.constants.MAX_STRING_LENGTH` site, the smoke (`PERRY_ALLOW_UNIMPLEMENTED=1 ./out`, with `compilePackages: ["pino"]` and `import pino from "pino"`) crashed at runtime with
+
+```
+TypeError: (boolean).tracingChannel is not a function
+    at <anonymous>
+```
+
+at top-level module init of `pino/lib/tools.js`:
+
+```js
+const diagChan = require('node:diagnostics_channel')
+// ...
+const asJsonChan = diagChan.tracingChannel('pino_asJson')  // throws here
+```
+
+**Root cause.** Two problems compounded:
+
+1. **No submodule registration.** `crates/perry/src/commands/compile/collect_modules.rs::known_node_submodule_key` only recognized five Node submodules (`timers/promises`, `readline/promises`, `stream/promises`, `stream/consumers`, `sys`). `node:diagnostics_channel` was unknown, so the codegen `Expr::ExternFuncRef` catch-all in `crates/perry-codegen/src/expr.rs` (line 11862) fell to `TAG_TRUE` for the local `diagChan` — exactly the `boolean`-as-receiver shape that produces `(boolean).<X> is not a function` per `crates/perry-runtime/src/error.rs::format_not_a_function`.
+
+2. **Default imports of submodules wouldn't reach the namespace anyway.** Pino reaches `node:diagnostics_channel` via CJS `require()`, which `crates/perry/src/commands/compile/cjs_wrap.rs` rewrites as `import diagChan from 'node:diagnostics_channel'` (a default import, NOT a namespace import). Even if `diagnostics_channel` were in `known_node_submodule_key`, the existing registration loop at `crates/perry/src/commands/compile.rs:4326` routes default imports through `import_function_node_submodule` (function-singleton form). That makes `diagChan` a closure, not the module object — so `diagChan.tracingChannel(...)` would still fail because the receiver is a function pointer with no `.tracingChannel` property.
+
+**Fix.** Three coordinated edits, none of which touch the existing five-submodule behavior:
+
+* `crates/perry/src/commands/compile/collect_modules.rs` — add `"diagnostics_channel" => Some("diagnostics_channel")` to `known_node_submodule_key`. This lets the import flow past the collect-modules unresolved warning and into the runtime singleton machinery.
+
+* `crates/perry/src/commands/compile.rs` — special-case default imports of `diagnostics_channel` in the L4326 registration loop. Instead of `import_function_node_submodule.insert(local, (key, "default"))`, route to `namespace_node_submodules.insert(local, key)` and add the local to `namespace_imports`. The result: `diagChan` is value-form-loaded via `js_node_submodule_namespace`, returning a real ObjectHeader whose fields point at function singletons for each known export. The other four submodules keep their function-singleton routing (no real code reads them as namespace objects today).
+
+* `crates/perry-runtime/src/node_submodules.rs` — add a `diagnostics_channel` `SubmoduleSpec` with `tracingChannel`, `channel`, `subscribe`, `unsubscribe`, `publish`, `hasSubscribers` exports. Two of these need non-trivial return values:
+
+  - `tracingChannel(name)` calls `build_tracing_channel_stub()` which allocates a fresh ObjectHeader and populates it with `hasSubscribers: false`, plus `subscribe` / `unsubscribe` / `traceSync` / `tracePromise` / `traceCallback` / `start` / `end` slots set to a process-singleton no-op closure. The crucial property is `hasSubscribers === false`: pino's `lib/tools.js::asJson` reads it before deciding whether to enter the tracing branch (`if (asJsonChan.hasSubscribers === false) return _asJson.call(this, ...)`), so the fast path is taken and `traceSync` is never actually invoked.
+  - `channel(name)` mirrors the same shape with `publish` / `subscribe` / `unsubscribe` no-ops and `hasSubscribers: false`.
+
+  The shared no-op closure singleton is rooted via `DIAG_NOOP_CLOSURE` (a `thread_local!` slot) and walked in the existing `scan_node_submodule_singleton_roots` GC scanner so it survives sweeps.
+
+**Why the special-case for default imports.** The existing four submodules (`timers/promises` etc.) all expose function-style APIs that no real package consumes as `const t = require('node:timers/promises'); t.setTimeout(...)`. They're either named-imported (`import { setTimeout } from "node:timers/promises"`) or namespace-imported (`import * as t from "node:timers/promises"`). The pino pattern — bind the whole module to a name and call methods on it — is what `node:diagnostics_channel` actually gets in real codebases, so routing its default import to the namespace stub matches Node's actual `require()` semantics for this specific module. Generalizing the routing to all five submodules is a follow-up under #793; doing it here would silently change the value-form behavior of the existing four for no benefit.
+
+**Validation.**
+
+* `test-files/test_issue_pino_tracing_channel.ts` — new regression. Walks the whole pino-shaped access pattern: `typeof diagnostics_channel`, `typeof diagnostics_channel.tracingChannel`, `tc.hasSubscribers === false`, `typeof tc.traceSync`, plus the `channel(name)` shape. Each line previously threw `(boolean).<X>` or returned `undefined` / `boolean`.
+* Rust unit test `diagnostics_channel_exposes_tracingChannel_export` at `crates/perry-runtime/src/node_submodules.rs` pins the SUBMODULES table entry so a future edit can't silently drop `tracingChannel` / `channel` / `subscribe` / `unsubscribe`.
+* `find_submodule_for_known_keys` test extended with the new key.
+* The original pino smoke (`mkdir /tmp/perry-pino-x && cd /tmp/perry-pino-x && npm install pino && perry main.ts && ./out`) now advances past `(boolean).tracingChannel` to the next unrelated downstream pino gap.
+
+**Scope discipline.** Only the diagnostics_channel surface changed in `node_submodules.rs`; the four pre-existing submodule entries are untouched. The codegen catch-all at `crates/perry-codegen/src/expr.rs:11862` is unchanged — this fix moves the binding through earlier so it never reaches the catch-all. Real `diagnostics_channel` semantics (publishing messages, subscribe/unsubscribe round-trips, AsyncLocalStorage bindings, traceSync invoking the wrapped function) are explicitly NOT in scope; the stubs satisfy the `typeof` + `hasSubscribers === false` gates that real consumers actually check, and any code that depends on subscribers receiving messages would have observed `seen.length === 0` on Node too if no subscriber had been registered. Full functional impl tracked under the #793 Node-compat roadmap.
+
+**Files touched.**
+
+* `crates/perry-runtime/src/node_submodules.rs` — new `diagnostics_channel` SubmoduleSpec + thunks + `build_tracing_channel_stub` / `build_channel_stub` / `set_named_field` / `DIAG_NOOP_CLOSURE` / `ensure_diag_noop_closure` helpers + GC root pin + 2 new tests (+114 lines).
+* `crates/perry/src/commands/compile/collect_modules.rs` — one `match` arm in `known_node_submodule_key` (+11 lines including comment).
+* `crates/perry/src/commands/compile.rs` — `if submod_key == "diagnostics_channel"` branch in the default-import registration loop (+15 lines).
+* `test-files/test_issue_pino_tracing_channel.ts` — new doc-style regression test.
+* `Cargo.toml` / `CLAUDE.md` — version bump to 0.5.949.
+
 ## v0.5.948 — fix(jsruntime): pino smoke `[js_get_export] failed to get namespace: ...MAX_STRING_LENGTH` — `node:buffer` stub now exposes `buffer.constants`
 
 **Symptom.** After v0.5.944's #903 unblocked pino past the `SORTING_ORDER.ASC` site, the smoke (`PERRY_ALLOW_UNIMPLEMENTED=1 ./out`, with `compilePackages: ["pino"]` and `import pino from "pino"`) crashed at runtime with

@@ -46,6 +46,18 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         "stream/promises" => Some("stream_promises"),
         "stream/consumers" => Some("stream_consumers"),
         "sys" => Some("sys"),
+        // Pino downstream (#906 follow-up): `require('node:diagnostics_channel')`
+        // returns the module exports object. The CJS-wrap rewrites this as
+        // `import diagChan from 'node:diagnostics_channel'`. Pre-fix the
+        // codegen catch-all returned TAG_TRUE for that ExternFuncRef, so
+        // `diagChan.tracingChannel(...)` threw
+        // `TypeError: (boolean).tracingChannel is not a function`. Routing
+        // through the namespace stub gives `diagChan` a real object whose
+        // `tracingChannel` field is a callable thunk that hands back a
+        // TracingChannel-shaped stub object — enough for pino to read
+        // `asJsonChan.hasSubscribers === false` and take the fast path
+        // without ever entering the tracing-instrumentation branch.
+        "diagnostics_channel" => Some("diagnostics_channel"),
         _ => None,
     }
 }
