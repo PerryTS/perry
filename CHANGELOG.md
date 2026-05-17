@@ -2,6 +2,41 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.947 — fix(compile): #903 follow-up — uuid regression: emit closure-wrapper stubs for failed modules' named exports
+
+**Symptom.** Compiling a project that uses `uuid` under `perry.compilePackages` link-failed at v0.5.946 with:
+
+```
+Undefined symbols for architecture arm64:
+  "___perry_wrap_perry_fn_node_modules_uuid_dist_sha1_js__default", referenced from:
+      ___perry_wrap_perry_fn_node_modules_uuid_dist_v5_js__v5 in node_modules_uuid_dist_v5_js.o
+ld: symbol(s) not found for architecture arm64
+```
+
+The minimal repro is the `package.json` `"perry": { "compilePackages": ["uuid"] }` + `import { v4 } from "uuid"; console.log(v4());`. Pre-#903 the binary linked and `v4()` produced a real UUID.
+
+**Root cause.** Two-layer interaction between PR #903 (the same-file default-import collision fix) and a preexisting codegen bug.
+
+- uuid's `sha1.js` defines `function sha1(bytes) { ... return Uint8Array.of(H[0]>>24, ..., H[4]); }` (20 args) and then `export default sha1;`. `Uint8Array.of` with > 16 args hits the bail at `crates/perry-codegen/src/lower_call.rs:~3226` (`Call callee shape not supported (PropertyGet) with 20 args`). The whole module's codegen bails before reaching the wrapper-emission loops at `crates/perry-codegen/src/codegen.rs:~2697` / `~2810`, so `__perry_wrap_perry_fn_<sha1>__default` is never defined.
+
+- uuid's `v5.js` does `import sha1 from './sha1.js'; import v35 from './v35.js'` — two default imports of different modules. Pre-#903 both registered under the literal key `"default"` in the CLI's flat `import_function_prefixes` HashMap. Whichever insert landed last won, and the consumer-side `sha1` reference accidentally resolved to v35.js's wrapper — which exists because v35.js compiles fine. The link succeeded "by accident"; the runtime sha1 path was already wrong but uuid `v4()` never exercised it.
+
+#903 corrected the resolution so each default import tracks its own source. The collision is gone, the consumer-side reference correctly points at sha1.js's wrapper, and sha1.js's preexisting codegen failure surfaced as the hard link error above.
+
+**Fix.** Extend the failed-module stub block at `crates/perry/src/commands/compile.rs:~5518` so it also emits closure-wrapper stubs (`__perry_wrap_perry_fn_<src>__<name>`) and direct-call stubs (`perry_fn_<src>__<name>`) for each `Export::Named` of every failed module. Each stub returns NaN-boxed `TAG_UNDEFINED` — same inert shape the existing `__init` stub uses for the module body. Consumers that never invoke the failed module link cleanly and run correctly; consumers that DO call in observe undefined (still surfacing the underlying codegen-fail, just not at link time).
+
+`crates/perry-codegen/src/stubs.rs` gains a new `generate_stub_object_full` taking a fourth bucket for wrapper-shaped symbols (`double name(i64, double, double, double, double, double)` matching the closure-call ABI at `expr.rs:~11783`). The old 3-arg `generate_stub_object` forwards through it so existing call sites are unaffected.
+
+**Validation.**
+
+- `uuid` smoke test (`PERRY_ALLOW_UNIMPLEMENTED=1 perry main.ts -o out && ./out`) now links and prints a real UUID (`smoke: ff93849b-5541-4059-803a-552f9b3ecf3e`).
+- New regression test `test-files/test_issue_uuid_sha1_default_export_regression.ts` + fixture `test-files/fixtures/issue_uuid_sha1_default_export_regression/producer.ts` exercises the named-default-decl shape (#890) post-#903 and byte-matches Node at `sha1-ok`.
+- `test_issue_uuid_cross_module_fn.ts` (the original #890 regression), `test_issue_anonymous_default_export.ts` (#785), `test_issue_678_reexport_default.ts` (#678), and `test_issue_pino_sorting_order_undefined.ts` (#903) all still pass unchanged.
+- `cargo build --release -p perry-runtime -p perry-stdlib -p perry` clean.
+- `cargo test --release -p perry-codegen --lib stubs` — 3 passed (new `closure_wrapper_stubs` test included).
+
+Underlying root cause (sha1.js's `Uint8Array.of(20 args)` bail) remains open and is tracked separately; this fix unblocks every uuid consumer that doesn't exercise sha1/sha1-derived APIs (v3, v5 paths). Refs #903, #890.
+
 ## v0.5.946 — fix(hir): #904 — bare `Array(n)` no longer throws `TypeError: value is not a function`
 
 **Symptom.** Downstream of the v0.5.943 (#902) `getDay` fix, dayjs's `format("YYYY-MM")` advanced into its `padStart` utility and then threw `TypeError: value is not a function` on the bare `Array(...)` call:

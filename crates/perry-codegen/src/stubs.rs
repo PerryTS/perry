@@ -17,7 +17,7 @@ use crate::nanbox::TAG_UNDEFINED;
 
 /// Generate a stub object file for missing symbols from unresolved imports.
 ///
-/// Three kinds of stubs are produced:
+/// Four kinds of stubs are produced:
 ///
 /// 1. **Data symbols** — exported `i64` globals initialized to NaN-boxed
 ///    `TAG_UNDEFINED`. Used when an `extern` data slot is referenced but
@@ -27,6 +27,13 @@ use crate::nanbox::TAG_UNDEFINED;
 /// 3. **Identity functions** — `double(double)` functions that pass their
 ///    argument through unchanged. Used for `js_await_any_promise` and
 ///    similar pass-through points where the V8 runtime is not present.
+/// 4. **Closure-wrapper symbols** — `double(i64, double, double, double,
+///    double, double, double)` functions returning NaN-boxed `TAG_UNDEFINED`.
+///    Match the closure-call ABI emitted by `expr.rs:~11783` for cross-
+///    module function-VALUE references (`__perry_wrap_perry_fn_<src>__<name>`).
+///    Used when a non-entry module fails to compile under `--allow-unimplemented`
+///    so the link still succeeds; consumers that read the import as a closure
+///    handle observe a singleton wrapping the undefined-return stub.
 ///
 /// `target` is a Perry short target name (`macos`, `ios`, `android`,
 /// `linux`, `windows`, …) and is forwarded to clang via `-target` so the
@@ -35,6 +42,24 @@ pub fn generate_stub_object(
     missing_data_symbols: &[String],
     missing_func_symbols: &[String],
     identity_func_symbols: &[String],
+    target: Option<&str>,
+) -> Result<Vec<u8>> {
+    generate_stub_object_full(
+        missing_data_symbols,
+        missing_func_symbols,
+        identity_func_symbols,
+        &[],
+        target,
+    )
+}
+
+/// Same as [`generate_stub_object`], plus a fourth bucket for closure-
+/// wrapper symbols. Split out so the existing 3-arg callers don't break.
+pub fn generate_stub_object_full(
+    missing_data_symbols: &[String],
+    missing_func_symbols: &[String],
+    identity_func_symbols: &[String],
+    wrapper_func_symbols: &[String],
     target: Option<&str>,
 ) -> Result<Vec<u8>> {
     let mut ll = String::new();
@@ -80,12 +105,39 @@ pub fn generate_stub_object(
         ));
     }
 
+    // 4. Closure-wrapper stubs — match the closure-call ABI emitted at
+    //    `crates/perry-codegen/src/expr.rs:~11783` for cross-module
+    //    function-VALUE references: `double name(i64 closure, double a0,
+    //    double a1, double a2, double a3, double a4)`. Return NaN-boxed
+    //    TAG_UNDEFINED. The 5-double arg list covers the max-arity 5
+    //    that `js_closure_call0..5` dispatches through; signature shape
+    //    matches the no-op variable/class branch at codegen.rs:~2750.
+    //
+    //    Used by the failed-module stub block at
+    //    `crates/perry/src/commands/compile.rs:~5518` so consumers that
+    //    reference `__perry_wrap_perry_fn_<src>__<name>` for a module
+    //    whose codegen failed under `--allow-unimplemented` still link.
+    //    Without this the link error pre-#903 was masked by the
+    //    same-file-default-import collision pointing the consumer at
+    //    a SIBLING module's wrapper (e.g. uuid v5.js's `import sha1
+    //    from './sha1.js'` plus `import v35 from './v35.js'` both
+    //    resolved to v35.js's wrapper); post-#903 the collision is
+    //    gone and the missing wrapper surfaces as an undefined symbol.
+    //    Refs #903 / uuid `__perry_wrap_perry_fn_...sha1_js__default`.
+    for name in wrapper_func_symbols {
+        ll.push_str(&format!(
+            "define double @{}(i64 %0, double %1, double %2, double %3, double %4, double %5) {{\n  ret double {}\n}}\n\n",
+            name, undef_hex
+        ));
+    }
+
     // If absolutely nothing was requested, emit a single dummy symbol so
     // the resulting object isn't empty (some linkers complain about empty
     // objects).
     if missing_data_symbols.is_empty()
         && missing_func_symbols.is_empty()
         && identity_func_symbols.is_empty()
+        && wrapper_func_symbols.is_empty()
     {
         ll.push_str("@__perry_stubs_placeholder = global i64 0, align 8\n");
     }
@@ -119,6 +171,19 @@ mod tests {
         let funcs = vec!["js_missing_helper".to_string()];
         let id = vec!["js_await_any_promise".to_string()];
         let bytes = generate_stub_object(&data, &funcs, &id, None).unwrap();
+        assert!(bytes.len() > 64);
+    }
+
+    #[test]
+    fn closure_wrapper_stubs() {
+        // Regression for the uuid `__perry_wrap_perry_fn_<src>__default`
+        // link error masked pre-#903 by the same-file default-import
+        // collision: the wrapper signature must match the closure-call
+        // ABI (i64 closure + up to 5 doubles), and the body returns
+        // NaN-boxed undefined.
+        let wrappers =
+            vec!["__perry_wrap_perry_fn_node_modules_uuid_dist_sha1_js__default".to_string()];
+        let bytes = generate_stub_object_full(&[], &[], &[], &wrappers, None).unwrap();
         assert!(bytes.len() > 64);
     }
 }

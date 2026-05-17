@@ -5538,18 +5538,109 @@ pub fn run_with_parse_cache(
         // module-failure: the binary still links, the stubbed module
         // body is inert, and any actual call into the missing exports
         // remains the symptom that surfaces the real bug.
+        let sanitize_module_name = |m: &str| -> String {
+            let mut out: String = m
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                out.insert(0, '_');
+            }
+            out
+        };
         let stub_init_names: Vec<String> = failed_modules
             .iter()
-            .map(|m| {
-                let sanitized = m.replace(|c: char| !c.is_alphanumeric() && c != '_', "_");
-                format!("{}__init", sanitized)
-            })
+            .map(|m| format!("{}__init", sanitize_module_name(m)))
             .collect();
-        if !stub_init_names.is_empty() {
-            let stub_bytes = perry_codegen::stubs::generate_stub_object(
+        // #903 follow-up (uuid regression): also emit closure-wrapper
+        // stubs for the named exports of each failed module. Pre-#903 a
+        // consumer's `import sha1 from "./sha1.js"` collided in the
+        // shared `import_function_prefixes["default"]` slot with the
+        // same file's `import v35 from "./v35.js"`, so the consumer-
+        // side reference resolved to v35.js's wrapper symbol — which
+        // existed because v35.js compiles fine. #903 corrected the
+        // resolution so each default binding tracks its own source,
+        // which surfaced uuid's preexisting sha1.js codegen failure
+        // (`Uint8Array.of` with 20 args bails at lower_call.rs:~3226)
+        // as a link error: `__perry_wrap_perry_fn_<sha1.js>__default`
+        // is referenced by v5.js but never defined because sha1.js's
+        // compile aborted before reaching the wrapper-emission loops
+        // in codegen.rs:~2697 / ~2810.
+        //
+        // The link error is the symptom; the root cause (sha1.js
+        // codegen) stays open. Emit no-op wrapper stubs so the link
+        // succeeds — consumers that never call into the failed module
+        // (uuid `v4()` is the canonical case; it doesn't use sha1)
+        // run correctly, and consumers that DO call in observe a
+        // NaN-boxed undefined return value (matching the inert
+        // `__init` behavior).
+        let mut stub_wrapper_names: Vec<String> = Vec::new();
+        let mut stub_func_names: Vec<String> = Vec::new();
+        for module_name in &failed_modules {
+            let prefix = sanitize_module_name(module_name);
+            // Look up the module's HIR (parse + lower succeeded; only
+            // codegen failed, so the exports are known). The
+            // `failed_modules` entry is `hir.name` from the codegen
+            // error message at the par_iter site, not the original
+            // path key, so iterate the native_modules map to find
+            // the matching HIR.
+            let Some(hir) = ctx.native_modules.values().find(|h| h.name == *module_name) else {
+                continue;
+            };
+            for export in &hir.exports {
+                if let perry_hir::Export::Named { exported, .. } = export {
+                    let sanitized_exp = exported
+                        .chars()
+                        .map(|c| {
+                            if c.is_ascii_alphanumeric() || c == '_' {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect::<String>();
+                    // Closure-wrapper form: consumer reads the import
+                    // as a function value (`js_closure_alloc_singleton(
+                    // @__perry_wrap_perry_fn_<src>__<name>)`).
+                    let wrap_sym = format!("__perry_wrap_perry_fn_{}__{}", prefix, sanitized_exp);
+                    stub_wrapper_names.push(wrap_sym);
+                    // Direct-call form: consumer invokes the import
+                    // by name (`perry_fn_<src>__<name>(args…)`). For
+                    // a failed module the function never received a
+                    // body, so emit a nullary stub returning undefined.
+                    // The link only cares about the symbol existing;
+                    // an arity mismatch at the call site lowers to an
+                    // LLVM `call` with whatever args the consumer
+                    // pushed — the body just discards them and
+                    // returns undefined. Same fallback shape the
+                    // empty `<prefix>__init` stub uses.
+                    let direct_sym = format!("perry_fn_{}__{}", prefix, sanitized_exp);
+                    stub_func_names.push(direct_sym);
+                }
+            }
+        }
+        // Combine the `__init` stubs and the direct-call stubs into
+        // one `missing_func_symbols` bucket — both share the nullary-
+        // returning-undefined shape. Dedup to keep LLVM from
+        // complaining about duplicate definitions in case the same
+        // export is named twice (e.g. an alias).
+        stub_func_names.extend(stub_init_names);
+        stub_func_names.sort();
+        stub_func_names.dedup();
+        stub_wrapper_names.sort();
+        stub_wrapper_names.dedup();
+        if !stub_func_names.is_empty() || !stub_wrapper_names.is_empty() {
+            let stub_bytes = perry_codegen::stubs::generate_stub_object_full(
                 &[],
-                &stub_init_names,
+                &stub_func_names,
                 &[],
+                &stub_wrapper_names,
                 target.as_deref(),
             )?;
             let stub_path = PathBuf::from("_perry_failed_stubs.o");
