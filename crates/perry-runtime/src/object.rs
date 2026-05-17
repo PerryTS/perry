@@ -2968,7 +2968,16 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     } else {
         tgt_bits as usize
     };
-    if tgt_raw < 0x10000 {
+    // A real `ObjectHeader` is heap-allocated and #[repr(C)] with u64 /
+    // pointer fields, so a valid object pointer is always 8-byte aligned.
+    // The tag / `< 0x10000` checks let an untagged, unaligned bit pattern
+    // through (observed on Windows: a non-pointer value reaches here as
+    // `source`, e.g. 0x1d81ff6950a). Dereferencing it as `*ObjectHeader`
+    // is a misaligned read — a hard abort under debug pointer-alignment
+    // checks, silent memory corruption (→ later GC out-of-bounds) in
+    // release. Treat a misaligned value as a non-object and skip, exactly
+    // the documented behaviour for `Object.assign(t, <non-object>)`.
+    if tgt_raw < 0x10000 || tgt_raw % 8 != 0 {
         return target_f64;
     }
 
@@ -2983,7 +2992,10 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     } else {
         src_bits as usize
     };
-    if src_raw < 0x10000 || src_raw == tgt_raw {
+    // Same alignment guard as the target above — `src` is dereferenced at
+    // `(*src).keys_array` just below; an unaligned non-object source must
+    // be skipped, not dereferenced.
+    if src_raw < 0x10000 || src_raw % 8 != 0 || src_raw == tgt_raw {
         return target_f64;
     }
 
