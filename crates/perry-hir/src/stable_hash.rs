@@ -3571,6 +3571,16 @@ impl SH for Expr {
                 class_name.hash(h);
                 parent_expr.as_ref().hash(h);
             }
+            Expr::RegisterClassStaticSymbol {
+                class_name,
+                key_expr,
+                value_expr,
+            } => {
+                tag(h, 465);
+                class_name.hash(h);
+                key_expr.as_ref().hash(h);
+                value_expr.as_ref().hash(h);
+            }
             Expr::SetFunctionPrototype { func, proto } => {
                 tag(h, 448);
                 func.as_ref().hash(h);

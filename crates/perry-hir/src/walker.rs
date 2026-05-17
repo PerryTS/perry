@@ -405,6 +405,14 @@ where
         Expr::RegisterClassParentDynamic { parent_expr, .. } => {
             f(parent_expr);
         }
+        Expr::RegisterClassStaticSymbol {
+            key_expr,
+            value_expr,
+            ..
+        } => {
+            f(key_expr);
+            f(value_expr);
+        }
         Expr::SetFunctionPrototype { func, proto } => {
             f(func);
             f(proto);
@@ -1679,6 +1687,14 @@ where
         }
         Expr::RegisterClassParentDynamic { parent_expr, .. } => {
             f(parent_expr);
+        }
+        Expr::RegisterClassStaticSymbol {
+            key_expr,
+            value_expr,
+            ..
+        } => {
+            f(key_expr);
+            f(value_expr);
         }
         Expr::SetFunctionPrototype { func, proto } => {
             f(func);

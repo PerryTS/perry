@@ -1128,6 +1128,22 @@ pub enum Expr {
         parent_expr: Box<Expr>,
     },
 
+    /// Issue #894: `class C { static [keyExpr] = initExpr }` where the
+    /// class is returned from a factory function body. The static-Symbol
+    /// registration must re-run each time the factory is called, with
+    /// the key/init evaluated against the current scope (closure
+    /// captures + module lets that may have been assigned by user code
+    /// between the class's HIR hoisting and the factory call).
+    /// Sequenced in front of the `ClassRef` returned from the
+    /// `ast::Expr::Class` lowering, parallel to
+    /// `RegisterClassParentDynamic`. Codegen emits a call to
+    /// `js_class_register_static_symbol(class_id, key, value)`.
+    RegisterClassStaticSymbol {
+        class_name: String,
+        key_expr: Box<Expr>,
+        value_expr: Box<Expr>,
+    },
+
     // Issue #711 part 2: `<func_expr>.prototype = <obj_expr>` pattern,
     // used by Effect's effectable.ts to declare prototype-based
     // classes. Codegen emits a call to `js_set_function_prototype`

@@ -8,7 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.938
+<<<<<<< HEAD
+**Current Version:** 0.5.940
+=======
+**Current Version:** 0.5.940
+>>>>>>> 408d8acb (fix(codegen): #894 — class-expression static [Symbol] sees populated module lets)
 
 
 ## TypeScript Parity Status

@@ -6331,6 +6331,48 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 for a in args {
                     lowered.push(lower_expr(ctx, a)?);
                 }
+                // Issue #894: static methods with synthetic `...arguments`
+                // rest params (or any user-declared rest param) need their
+                // trailing args bundled into an array. Without this,
+                // `Cls.pipe(a, b)` on a body that reads `arguments`
+                // emits a 2-scalar call against a 1-rest-array signature,
+                // leaving `arguments` bound to whichever scalar landed
+                // in the rest slot — `arguments.length` then reads garbage
+                // or hits the codegen-fallback undefined.
+                let has_rest = ctx.method_has_rest.get(&key).copied().unwrap_or(false);
+                if has_rest {
+                    let declared_count = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
+                    if declared_count > 0 {
+                        let fixed = declared_count.saturating_sub(1);
+                        if lowered.len() >= fixed {
+                            let trailing: Vec<String> = lowered.split_off(fixed);
+                            let arr_handle = ctx.block().call(
+                                I64,
+                                "js_array_alloc",
+                                &[(I32, &trailing.len().to_string())],
+                            );
+                            // js_array_push_f64 may realloc and return a
+                            // possibly-new handle; thread it.
+                            let mut handle_cur = arr_handle;
+                            for v in &trailing {
+                                handle_cur = ctx.block().call(
+                                    I64,
+                                    "js_array_push_f64",
+                                    &[(I64, &handle_cur), (DOUBLE, v)],
+                                );
+                            }
+                            let arr_box = nanbox_pointer_inline(ctx.block(), &handle_cur);
+                            lowered.push(arr_box);
+                        }
+                        // Pad fixed slots with undefined when caller under-supplied.
+                        while lowered.len() < declared_count {
+                            // Insert undefined at the rest-slot's predecessor.
+                            let undef = double_literal(f64::from_bits(0x7FFC_0000_0000_0001));
+                            let idx = lowered.len().saturating_sub(1);
+                            lowered.insert(idx, undef);
+                        }
+                    }
+                }
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
                 return Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices));
@@ -10212,6 +10254,37 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Yield undefined — this expression is always wrapped in
             // `Stmt::Expr` for its side effect; the return value isn't
             // observable to user code.
+            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        }
+        // Issue #894: `static [Symbol.for("k")] = init` inside a
+        // class expression returned from a factory function. Emitted
+        // by HIR lowering as a `Sequence([…, RegisterClassStaticSymbol,
+        // ClassRef])` so each factory invocation re-registers the
+        // (class_id, sym_key) → value entry. Without this, the
+        // registration would only happen at module-init time when
+        // referenced free variables may not yet be assigned, and
+        // `isSchema(C)` (which checks `TypeId in C`) returns false on
+        // a freshly-returned class.
+        Expr::RegisterClassStaticSymbol {
+            class_name,
+            key_expr,
+            value_expr,
+        } => {
+            let key_v = lower_expr(ctx, key_expr)?;
+            let val_v = lower_expr(ctx, value_expr)?;
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                if class_id != 0 {
+                    let cid_str = class_id.to_string();
+                    ctx.block().call_void(
+                        "js_class_register_static_symbol",
+                        &[
+                            (crate::types::I32, &cid_str),
+                            (DOUBLE, &key_v),
+                            (DOUBLE, &val_v),
+                        ],
+                    );
+                }
+            }
             Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
         }
         // Issue #711 part 2: `<expr>.prototype = <expr>` pattern.

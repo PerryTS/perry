@@ -8997,16 +8997,47 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             // Sequence yields its last element, so the value remains the
             // ClassRef the call site expects.
             let parent_expr = class.extends_expr.clone();
+            // Issue #894: collect computed-Symbol-key static fields so
+            // codegen emits a `RegisterClassStaticSymbol` registration
+            // sequenced in front of the ClassRef. Without this, the
+            // registration happens at module init via
+            // `init_static_fields_late` — but the values referenced by
+            // the key/init may not be valid yet (the factory hasn't been
+            // called, so any function-local captures are zero) or the
+            // class lookup may happen BEFORE module init's late phase
+            // (within the same module's top-level expressions). Effect's
+            // `make()` factory's `static [TypeId] = variance` is the
+            // canonical case: `isSchema(C)` was called from Schema.ts's
+            // own top-level `class extends transform(...)` chains, which
+            // run before the module's `init_static_fields_late`.
+            let static_symbol_registrations: Vec<(Expr, Expr)> = class
+                .static_fields
+                .iter()
+                .filter_map(|sf| match (sf.key_expr.as_ref(), sf.init.as_ref()) {
+                    (Some(k), Some(v)) => Some((k.clone(), v.clone())),
+                    _ => None,
+                })
+                .collect();
             ctx.pending_classes.push(class);
-            match parent_expr {
-                Some(p) => Ok(Expr::Sequence(vec![
-                    Expr::RegisterClassParentDynamic {
-                        class_name: synthetic_name.clone(),
-                        parent_expr: p,
-                    },
-                    Expr::ClassRef(synthetic_name),
-                ])),
-                None => Ok(Expr::ClassRef(synthetic_name)),
+            let mut seq: Vec<Expr> = Vec::new();
+            if let Some(p) = parent_expr {
+                seq.push(Expr::RegisterClassParentDynamic {
+                    class_name: synthetic_name.clone(),
+                    parent_expr: p,
+                });
+            }
+            for (k, v) in static_symbol_registrations {
+                seq.push(Expr::RegisterClassStaticSymbol {
+                    class_name: synthetic_name.clone(),
+                    key_expr: Box::new(k),
+                    value_expr: Box::new(v),
+                });
+            }
+            if seq.is_empty() {
+                Ok(Expr::ClassRef(synthetic_name))
+            } else {
+                seq.push(Expr::ClassRef(synthetic_name));
+                Ok(Expr::Sequence(seq))
             }
         }
         ast::Expr::JSXElement(jsx) => lower_jsx_element(ctx, jsx),

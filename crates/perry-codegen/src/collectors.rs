@@ -1127,6 +1127,23 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
                 walk(e, out);
             }
         }
+        // Issue #894: prepended to the Sequence wrapping `Expr::ClassRef`
+        // for class expressions returned from factory functions. The
+        // key/value reference module-level (or function-local) lets;
+        // collecting their refs here is what causes the surrounding
+        // function-body scan to add those lets to `referenced_from_fn`,
+        // which is what `module_globals` is built from.
+        Expr::RegisterClassStaticSymbol {
+            key_expr,
+            value_expr,
+            ..
+        } => {
+            walk(key_expr, out);
+            walk(value_expr, out);
+        }
+        Expr::RegisterClassParentDynamic { parent_expr, .. } => {
+            walk(parent_expr, out);
+        }
         _ => {}
     }
 }

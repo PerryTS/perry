@@ -1233,6 +1233,21 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 method_has_rest.insert((cls.name.clone(), m.name.clone()), true);
             }
         }
+        // Issue #894: track static methods too. Effect's `static pipe()` /
+        // `static annotations()` synthesize a trailing `...arguments` rest
+        // param when the body reads `arguments`. The StaticMethodCall
+        // lowering at `expr.rs::Expr::StaticMethodCall` reads
+        // `method_has_rest` to decide whether to bundle trailing args into
+        // a rest array; without this, `Cls.pipe(a, b)` calls the method
+        // with 2 scalar args while the signature expects (rest_array),
+        // and `arguments.length` reads garbage / undefined.
+        for sm in &cls.static_methods {
+            method_param_counts.insert((cls.name.clone(), sm.name.clone()), sm.params.len());
+            let has_rest = sm.params.iter().any(|p| p.is_rest);
+            if has_rest {
+                method_has_rest.insert((cls.name.clone(), sm.name.clone()), true);
+            }
+        }
     }
     for ic in &opts.imported_classes {
         let effective_name = ic.local_alias.as_deref().unwrap_or(&ic.name).to_string();
@@ -1665,8 +1680,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     for c in &hir.classes {
         for sf in &c.static_fields {
             // Computed-key static fields (`static [Symbol.for(...)] = init`)
-            // are stored in a runtime side table by `init_static_fields`;
-            // they don't get a string-named global. Refs #420.
+            // are stored in a runtime side table by
+            // `init_static_fields_late`; they don't get a string-named
+            // global. Refs #420, #894.
             if sf.key_expr.is_some() {
                 continue;
             }
@@ -4731,9 +4747,16 @@ fn compile_module_entry(
         register_module_globals_as_gc_roots(&mut ctx, module_globals);
         // Initialize static class fields with their declared init
         // expressions. Runs once at the top of main, before user code.
-        init_static_fields(&mut ctx, hir)?;
+        //
+        // Split into two phases (#894): early emits the bits that don't
+        // read user-let values (Error-extending class registry, well-
+        // known symbol method hooks); late runs AFTER user init so
+        // computed-Symbol-key static fields whose key/init reference
+        // module-level lets see populated slots.
+        init_static_fields_early(&mut ctx, hir)?;
         stmt::lower_stmts(&mut ctx, &hir.init)
             .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
+        init_static_fields_late(&mut ctx, hir)?;
 
         // Issue #100: populate `@__perry_ns_<module_prefix>` from the
         // namespace_entries list AFTER user init has run (so every
@@ -5095,13 +5118,18 @@ fn compile_module_entry(
         // right after js_gc_init, so by the time any user code executes
         // every module's globals are already GC-rooted.
         register_module_globals_as_gc_roots(&mut ctx, module_globals);
-        init_static_fields(&mut ctx, hir)?;
+        // Issue #894: split into early/late around `lower_stmts` so a
+        // computed-Symbol-key static field whose key/init reference
+        // top-level module lets (e.g. effect's `make()` factory:
+        // `static [TypeId] = variance`) sees populated globals.
+        init_static_fields_early(&mut ctx, hir)?;
         stmt::lower_stmts(&mut ctx, &hir.init).with_context(|| {
             format!(
                 "lowering init statements of non-entry module '{}'",
                 hir.name
             )
         })?;
+        init_static_fields_late(&mut ctx, hir)?;
 
         // Issue #100: populate `@__perry_ns_<module_prefix>` from the
         // namespace_entries list at the tail of the non-entry __init.
@@ -5919,12 +5947,17 @@ fn register_module_globals_as_gc_roots(
     }
 }
 
-/// Initialize each class's static fields with their declared init
-/// expressions. Called at the top of compile_module_entry's main /
-/// __init function. The static field globals were registered in
-/// compile_module — this just emits the per-field "store init value
-/// to global" sequence.
-fn init_static_fields(ctx: &mut crate::expr::FnCtx<'_>, hir: &HirModule) -> Result<()> {
+/// Early static-field setup: registrations that don't read any
+/// module-level binding's value (Error-extending classes, well-known
+/// symbol method hooks). Safe to emit before `stmt::lower_stmts` —
+/// values referenced are either compile-time constants (class ids,
+/// function pointers) or computed entirely from `hir` metadata.
+///
+/// The split (early vs. late) was introduced for issue #894 (effect's
+/// `make()` factory's `static [TypeId] = variance` — both the key and
+/// the init reference module-level lets that haven't been initialized
+/// at the point the old combined `init_static_fields` ran).
+fn init_static_fields_early(ctx: &mut crate::expr::FnCtx<'_>, hir: &HirModule) -> Result<()> {
     // Phase C.3: register user classes that extend the built-in Error
     // (or any of its subclasses) with the runtime, so `instanceof Error`
     // walks the chain and returns true. Without this, `new HttpError(...)
@@ -6002,6 +6035,27 @@ fn init_static_fields(ctx: &mut crate::expr::FnCtx<'_>, hir: &HirModule) -> Resu
             &[(crate::types::I32, &cid_str), (I64, &func_ptr_i64)],
         );
     }
+    Ok(())
+}
+
+/// Late static-field setup: per-class static-field initializer evaluation,
+/// computed-Symbol-key registration, and static-block invocation. Must
+/// run AFTER `stmt::lower_stmts` so module-level lets referenced by
+/// these initializers (e.g. `static [TypeId] = variance` where both
+/// `TypeId` and `variance` are top-level `const`s) read their populated
+/// global slots rather than the zero default.
+///
+/// Issue #894: effect's `function make(ast) { return class { static
+/// [TypeId] = variance } }` factory pattern hit this; the `TypeId`
+/// symbol and `variance` value were both top-level module lets, and
+/// the pre-#894 combined `init_static_fields` ran before user init,
+/// so `js_class_register_static_symbol(class_id, 0.0, 0.0)` registered
+/// nothing reachable. `isSchema(C)` then returned false on a class
+/// returned from `make`, dual()'s predicate failed, and the failing
+/// `.annotations({...})` chain eventually fed `undefined` to a `make`
+/// call that read `ast._tag` → `TypeError: Cannot read properties of
+/// undefined (reading '_tag')` during Schema.ts module init.
+fn init_static_fields_late(ctx: &mut crate::expr::FnCtx<'_>, hir: &HirModule) -> Result<()> {
     // Issue #685: nested classes (declared as expressions inside a
     // factory function body, e.g. `return class X extends Y { static
     // params = params.slice() }` in effect's `TemplateLiteralParser`)

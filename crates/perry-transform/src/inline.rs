@@ -1066,6 +1066,28 @@ fn specialize_captured_class_factories(module: &mut Module) {
                     base_class_counter_seed,
                 );
             }
+            Expr::RegisterClassStaticSymbol {
+                key_expr,
+                value_expr,
+                ..
+            } => {
+                rewrite_call_init(
+                    key_expr,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
+                rewrite_call_init(
+                    value_expr,
+                    factory_targets,
+                    classes,
+                    new_classes,
+                    next_class_counter,
+                    base_class_counter_seed,
+                );
+            }
             Expr::New { args, .. } => {
                 for a in args.iter_mut() {
                     rewrite_call_init(
@@ -1966,6 +1988,7 @@ fn body_references_class_in_set(stmts: &[Stmt], set: &HashSet<String>) -> bool {
             | Expr::StaticFieldSet { class_name, .. }
             | Expr::ClassStaticSymbolSet { class_name, .. }
             | Expr::RegisterClassParentDynamic { class_name, .. }
+            | Expr::RegisterClassStaticSymbol { class_name, .. }
             | Expr::StaticMethodCall { class_name, .. } => {
                 if set.contains(class_name) {
                     return true;
