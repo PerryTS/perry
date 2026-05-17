@@ -5592,6 +5592,32 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                             return Ok(Expr::Bool(false));
                         }
                     }
+                    "Array"
+                        if ctx.lookup_local("Array").is_none()
+                            && ctx.lookup_func("Array").is_none()
+                            && ctx.lookup_imported_func("Array").is_none() =>
+                    {
+                        // Issue #904: `Array(n)` (bare call, no `new`) must
+                        // behave identically to `new Array(n)` per spec
+                        // (ES2015 §22.1.1.1 / §22.1.1.2). Pre-fix the call
+                        // fell through to the unknown-ident sentinel path,
+                        // which lowers to `Call { callee: GlobalGet(0), ... }`
+                        // and explodes at runtime via `js_closure_callN`'s
+                        // `throw_not_callable` → `TypeError: value is not a
+                        // function`. dayjs's `format()` hits this through
+                        // `padStart`'s `Array(length + 1 - s.length).join(pad)`
+                        // every time it formats a sub-10 number (e.g. month
+                        // "07" in "YYYY-MM"). Route through `Expr::New` so the
+                        // existing Array-constructor codegen in
+                        // `crates/perry-codegen/src/lower_call/builtin.rs`
+                        // handles it. Shadow-safe: only fires when no local
+                        // / user fn / imported fn named `Array` is in scope.
+                        return Ok(Expr::New {
+                            class_name: "Array".to_string(),
+                            args,
+                            type_args: Vec::new(),
+                        });
+                    }
                     "isNaN" => {
                         if !args.is_empty() {
                             return Ok(Expr::IsNaN(Box::new(args.remove(0))));

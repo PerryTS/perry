@@ -2,6 +2,54 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.946 — fix(hir): #904 — bare `Array(n)` no longer throws `TypeError: value is not a function`
+
+**Symptom.** Downstream of the v0.5.943 (#902) `getDay` fix, dayjs's `format("YYYY-MM")` advanced into its `padStart` utility and then threw `TypeError: value is not a function` on the bare `Array(...)` call:
+
+```js
+var padStart = function padStart(string, length, pad) {
+  var s = String(string);
+  if (!s || s.length >= length) return string;
+  return "" + Array(length + 1 - s.length).join(pad) + string;
+};
+```
+
+Every 2-digit format token (`MM`, `DD`, `HH`, `mm`, `ss`) hits `Array(2 + 1 - s.length).join(pad)` when the source number is single-digit, so the throw fired the first time `format` had to zero-pad anything sub-10 — i.e. for any date in the first 9 months / first 9 days / etc.
+
+**Root cause.** HIR lowering at `crates/perry-hir/src/lower/expr_call.rs`'s "global built-in function calls" arm (the `parseInt` / `Number` / `String` / `Boolean` / `isNaN` family) listed every primitive coercer except `Array`. ES2015 §22.1.1.1–§22.1.1.2 mandates that `Array(...)` and `new Array(...)` produce identical results, but bare `Array(n)` fell through to the unknown-ident sentinel path that issue #668's comment documents: `Call { callee: GlobalGet(0), args: [...] }`. The runtime closure-call dispatcher (`crates/perry-runtime/src/closure.rs`) then validated the closure pointer, found it wasn't a real `ClosureHeader` (it was just the synthetic GlobalGet-0 sentinel), and routed through `throw_not_callable` → `js_throw_type_error_not_a_function(null, 0, b"value", 5)` → `TypeError: value is not a function`.
+
+The runtime-side closure validator is doing the right thing (issue #648 hardened it to throw rather than silently no-op), so the fix has to land at the HIR layer: recognise bare `Array(...)` as a global built-in call and route it through the same `Expr::New { class_name: "Array", ... }` HIR variant that `new Array(...)` already uses. The downstream codegen at `crates/perry-codegen/src/lower_call/builtin.rs:363` ("Array" arm) is shared and handles the no-arg / single-numeric-arg cases identically for both syntactic shapes.
+
+**Fix.** One new arm in `crates/perry-hir/src/lower/expr_call.rs`'s ident-callee match (sibling to `Number` / `String` / `Boolean`):
+
+```rust
+"Array"
+    if ctx.lookup_local("Array").is_none()
+        && ctx.lookup_func("Array").is_none()
+        && ctx.lookup_imported_func("Array").is_none() =>
+{
+    return Ok(Expr::New {
+        class_name: "Array".to_string(),
+        args,
+        type_args: Vec::new(),
+    });
+}
+```
+
+The shadow guard (lookups for a local / user function / imported function named `Array`) preserves user-shadowing semantics: `function Array(...) { ... }; Array(3)` still resolves to the user's `Array` rather than the built-in.
+
+**Scope discipline.** Per the issue's "don't expand scope; just get past this one error" constraint, the dayjs smoke after this fix now hits a separate downstream error — `TypeError: (number).replace is not a function` — which is a different perry bug in the same `format()` execution path (presumably in how the regex-callback's return value is coerced before re-entering `str.replace`'s slot-substitution machinery). That follow-up is tracked separately. The pre-existing `Array(n).join(pad)` semantics gap (the runtime's `join` walks the f64 slots without checking the empty/undefined sentinel and produces `"[object Object]0[object Object]0[object Object]"` instead of `"00"`) was already present for `new Array(n).join(pad)` and is left untouched here — that's an `Array.prototype.join` runtime fix, not part of the `Array` callable-vs-new front-end.
+
+**Validation.**
+
+* New regression test `test-files/test_issue_dayjs_format_value_not_fn.ts` mirrors the padStart shape standalone: a bare `Array(n)` with `.length` readback, a bare `Array()` with zero args, and the full padStart loop wrapped in a try/catch. Pre-fix the second call threw the value-is-not-a-function TypeError immediately; post-fix all three calls execute and the `threw:` line prints `false`. Byte-for-byte matches `node --experimental-strip-types` output.
+* The dayjs smoke (`/tmp/perry-dayjs-x/main.ts` from the issue body) advances past the `value is not a function` throw and now hits the unrelated `(number).replace is not a function` downstream — confirming the fix is targeted and the error class moved past this site.
+
+**Files touched.**
+
+* `crates/perry-hir/src/lower/expr_call.rs` — new `"Array"` arm in the ident-callee match (~12 LOC + comment).
+* `test-files/test_issue_dayjs_format_value_not_fn.ts` — new regression test.
+
 ## v0.5.945 — hotfix: resolve stray Cargo.toml + CLAUDE.md conflict markers from #903 squash-merge that left the workspace unbuildable (`cargo metadata` errored with `key with no value, expected =` at Cargo.toml:193). Direct-push admin hotfix; no code change.
 
 ## v0.5.944 — fix(hir+cli): #901 — two same-file default imports no longer collide on the literal `"default"` key
