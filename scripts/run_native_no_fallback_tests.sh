@@ -27,18 +27,94 @@ else
     PERRY_CMD=(cargo run --quiet --bin perry --)
 fi
 
-DEFAULT_FIXTURES=(
+DEFAULT_FIXTURE_NAMES=(
+    async
+    edge-promises
+    microtask-07-promise-all-mixed
+    spread
+    math
+    async-chain
+    microtask-01
+    microtask-02
+    microtask-03
+    microtask-04
+    microtask-05
+    microtask-06
+    edge-arrays
+    edge-objects-records
+    edge-classes
+    edge-closures
+    edge-control-flow
+    edge-destructuring
+    edge-map-set
+    edge-json-regex
+    edge-strings
+    edge-type-coercion
+    optional-chain
+    try-catch
+    map
+    set
+    json
+    rest-params
+    multi-basic
+    multi-edge
+    jsruntime-stub-no-v8
+    compat-core
+    compat-objects-symbols
+    compat-strings-regex-json
+    compat-url-date-math
+)
+
+DEFAULT_FIXTURE_PATHS=(
     test-files/test_async.ts
     test-files/test_edge_promises.ts
     test-files/test_microtask_inv_07_promise_all_mixed.ts
     test-files/test_spread.ts
     test-files/test_math.ts
+    test-files/test_async_chain.ts
+    test-files/test_microtask_inv_01_two_fn_interleave.ts
+    test-files/test_microtask_inv_02_then_vs_await_fifo.ts
+    test-files/test_microtask_inv_03_chained_then_interleave.ts
+    test-files/test_microtask_inv_04_await_caller_callee.ts
+    test-files/test_microtask_inv_05_nested_promise_unwrap.ts
+    test-files/test_microtask_inv_06_finally_after_await.ts
+    test-files/test_edge_arrays.ts
+    test-files/test_edge_objects_records.ts
+    test-files/test_edge_classes.ts
+    test-files/test_edge_closures.ts
+    test-files/test_edge_control_flow.ts
+    test-files/test_edge_destructuring.ts
+    test-files/test_edge_map_set.ts
+    test-files/test_edge_json_regex.ts
+    test-files/test_edge_strings.ts
+    test-files/test_edge_type_coercion.ts
+    test-files/test_optional_chain.ts
+    test-files/test_try_catch.ts
+    test-files/test_map.ts
+    test-files/test_set.ts
+    test-files/test_json.ts
+    test-files/test_rest_params.ts
+    test-files/multi/index.ts
+    test-files/multi-edge/index.ts
+    test-files/test_issue_257_jsruntime_stub_no_v8.ts
+    test-files/test_compat_core_surface.ts
+    test-files/test_compat_objects_symbols.ts
+    test-files/test_compat_strings_regex_json.ts
+    test-files/test_compat_url_date_math.ts
 )
 
-if [[ "$#" -gt 0 ]]; then
-    FIXTURES=("$@")
-else
-    FIXTURES=("${DEFAULT_FIXTURES[@]}")
+EXCLUDED_FALLBACK_FIXTURES=(
+    test-files/test_jsruntime_*.ts
+    test-files/test_issue_248_phase2_js_interop.ts
+    test-files/test_issue_248_phase2b_js_callback.ts
+    test-files/test_issue_255_jsruntime_reentrancy.ts
+    test-files/test_issue_678_v8_fallback.ts
+    test-files/test_decorators_nest_js_common_canary.ts
+)
+
+if [[ "${#DEFAULT_FIXTURE_NAMES[@]}" -ne "${#DEFAULT_FIXTURE_PATHS[@]}" ]]; then
+    echo "error: native no-fallback manifest names/paths length mismatch" >&2
+    exit 2
 fi
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/perry-native-no-fallback.XXXXXX")"
@@ -55,9 +131,8 @@ dump_file() {
 }
 
 run_fixture() {
-    local src_path="$1"
-    local name
-    name="$(basename "${src_path%.ts}")"
+    local name="$1"
+    local src_path="$2"
 
     local bin="$TMP_DIR/$name"
     local compile_log="$TMP_DIR/$name.compile.log"
@@ -114,9 +189,20 @@ run_fixture() {
     PASS=$((PASS + 1))
 }
 
-for fixture in "${FIXTURES[@]}"; do
-    run_fixture "$fixture"
-done
+if [[ "$#" -gt 0 ]]; then
+    for fixture in "$@"; do
+        run_fixture "$(basename "${fixture%.ts}")" "$fixture"
+    done
+else
+    echo "native-no-fallback excluded fallback fixtures:"
+    for fixture in "${EXCLUDED_FALLBACK_FIXTURES[@]}"; do
+        echo "  $fixture"
+    done
+    echo
+    for i in "${!DEFAULT_FIXTURE_PATHS[@]}"; do
+        run_fixture "${DEFAULT_FIXTURE_NAMES[$i]}" "${DEFAULT_FIXTURE_PATHS[$i]}"
+    done
+fi
 
 echo
 echo "native-no-fallback-tests: $PASS passed, $FAIL failed"

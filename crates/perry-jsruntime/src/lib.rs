@@ -32,7 +32,9 @@ use deno_core::{JsRuntime, RuntimeOptions};
 use once_cell::sync::OnceCell;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use tokio::runtime::Runtime as TokioRuntime;
 
 /// Global Tokio runtime for async operations
@@ -76,8 +78,16 @@ pub struct JsRuntimeState {
     pub runtime: JsRuntime,
     /// Map of loaded module paths to their V8 module IDs
     pub loaded_modules: HashMap<PathBuf, deno_core::ModuleId>,
+    /// Module evaluation futures started by `js_load_module` and driven by
+    /// Perry's jsruntime pump instead of a blocking V8 event loop.
+    pub pending_module_evaluations: HashMap<deno_core::ModuleId, PendingModuleEvaluation>,
     /// Whether the runtime has been initialized
     pub initialized: bool,
+}
+
+pub struct PendingModuleEvaluation {
+    pub canonical_path: PathBuf,
+    pub future: Pin<Box<dyn Future<Output = Result<(), deno_core::error::CoreError>>>>,
 }
 
 impl JsRuntimeState {
@@ -110,6 +120,7 @@ impl JsRuntimeState {
         Self {
             runtime,
             loaded_modules: HashMap::new(),
+            pending_module_evaluations: HashMap::new(),
             initialized: true,
         }
     }

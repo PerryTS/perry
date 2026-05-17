@@ -5,6 +5,7 @@
 use deno_core::{extension, op2};
 use deno_error::JsErrorBox;
 use std::collections::HashMap;
+use std::io::{self, Write};
 
 #[op2]
 #[string]
@@ -22,6 +23,13 @@ fn op_perry_call_native(
     log::debug!("Native call: {} with {} args", func_name, args.len());
     // TODO: Look up function in registry and call it
     serde_json::Value::Null
+}
+
+#[op2(fast)]
+fn op_perry_print(#[string] message: String) {
+    let mut stdout = io::stdout();
+    let _ = writeln!(stdout, "{}", message);
+    let _ = stdout.flush();
 }
 
 /// Synchronous HTTP fetch op for V8's fetch() polyfill.
@@ -90,5 +98,10 @@ fn op_perry_fetch(
 
 extension!(
     perry_ops,
-    ops = [op_perry_log, op_perry_call_native, op_perry_fetch,],
+    ops = [
+        op_perry_log,
+        op_perry_call_native,
+        op_perry_print,
+        op_perry_fetch,
+    ],
 );

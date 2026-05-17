@@ -5,7 +5,7 @@
 
 use crate::bridge::{
     fixup_native_for_v8, get_handle_id, get_js_handle, is_js_handle, make_js_handle_value,
-    native_to_v8, store_js_handle, v8_to_native, v8_to_native_metadata_target,
+    native_to_v8, release_js_handle, store_js_handle, v8_to_native, v8_to_native_metadata_target,
     v8_to_native_metadata_value,
 };
 use crate::{
@@ -32,6 +32,7 @@ struct ForeignPromiseAdapter {
 
 thread_local! {
     static FOREIGN_PROMISE_ADAPTERS: RefCell<Vec<ForeignPromiseAdapter>> = const { RefCell::new(Vec::new()) };
+    static PENDING_JSRUNTIME_TICKS: RefCell<Vec<v8::Global<v8::PromiseResolver>>> = const { RefCell::new(Vec::new()) };
 }
 
 static JSRUNTIME_PROFILE_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -40,7 +41,14 @@ static JSRUNTIME_PUMP_TICKS: AtomicU64 = AtomicU64::new(0);
 static JSRUNTIME_ADAPTERS_CREATED: AtomicU64 = AtomicU64::new(0);
 static JSRUNTIME_ADAPTERS_RESOLVED: AtomicU64 = AtomicU64::new(0);
 static JSRUNTIME_ADAPTERS_REJECTED: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_MODULE_EVALS_STARTED: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_MODULE_EVALS_RESOLVED: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_MODULE_EVALS_REJECTED: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_BLOCKING_MODULE_EVALS: AtomicU64 = AtomicU64::new(0);
 static JSRUNTIME_LEGACY_BLOCKING_AWAITS: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_HANDLES_STORED: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_HANDLES_RELEASED: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_FOREIGN_PROMISE_HANDLES_RELEASED: AtomicU64 = AtomicU64::new(0);
 static JSRUNTIME_V8_ENTRIES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static JSRUNTIME_ENTRY_RUNTIME_INIT: AtomicU64 = AtomicU64::new(0);
 static JSRUNTIME_ENTRY_RUNTIME_SHUTDOWN: AtomicU64 = AtomicU64::new(0);
@@ -147,17 +155,42 @@ pub(crate) fn bump_v8_entry(kind: V8EntryKind) {
     });
 }
 
+pub(crate) fn bump_js_handle_stored() {
+    jsruntime_profile_register();
+    bump_jsruntime(&JSRUNTIME_HANDLES_STORED);
+}
+
+pub(crate) fn bump_js_handle_released() {
+    jsruntime_profile_register();
+    bump_jsruntime(&JSRUNTIME_HANDLES_RELEASED);
+}
+
 extern "C" fn jsruntime_profile_atexit() {
     if std::env::var_os("PERRY_JSRUNTIME_PROFILE").is_none() {
         return;
     }
+    let handles_stored = JSRUNTIME_HANDLES_STORED.load(Ordering::Relaxed);
+    let handles_released = JSRUNTIME_HANDLES_RELEASED.load(Ordering::Relaxed);
+    let handles_retained = handles_stored.saturating_sub(handles_released);
+    let foreign_promise_handles_retained = JSRUNTIME_ADAPTERS_CREATED
+        .load(Ordering::Relaxed)
+        .saturating_sub(JSRUNTIME_FOREIGN_PROMISE_HANDLES_RELEASED.load(Ordering::Relaxed));
     eprintln!(
-        "[jsruntime-profile] pump_ticks={} adapters_created={} adapters_resolved={} adapters_rejected={} legacy_blocking_awaits={} v8_entries_total={} runtime_inits={} runtime_shutdowns={} module_loads={} export_gets={} function_calls={} v8_export_calls={} method_calls={} value_calls={} array_gets={} array_lengths={} object_property_gets={} handle_to_strings={} property_sets={} new_instances={} new_from_handles={} callback_creates={} native_function_registers={} callback_invokes={} native_module_property_loads={} typeof_probes={} handle_constructors={} should_use_runtime={} native_promise_resolves={} native_promise_rejects={} foreign_promise_adapters={} legacy_blocking_await_entries={}",
+        "[jsruntime-profile] pump_ticks={} adapters_created={} adapters_resolved={} adapters_rejected={} module_evals_started={} module_evals_resolved={} module_evals_rejected={} blocking_module_evals={} legacy_blocking_awaits={} handles_stored={} handles_released={} handles_retained={} foreign_promise_handles_released={} foreign_promise_handles_retained={} v8_entries_total={} runtime_inits={} runtime_shutdowns={} module_loads={} export_gets={} function_calls={} v8_export_calls={} method_calls={} value_calls={} array_gets={} array_lengths={} object_property_gets={} handle_to_strings={} property_sets={} new_instances={} new_from_handles={} callback_creates={} native_function_registers={} callback_invokes={} native_module_property_loads={} typeof_probes={} handle_constructors={} should_use_runtime={} native_promise_resolves={} native_promise_rejects={} foreign_promise_adapters={} legacy_blocking_await_entries={}",
         JSRUNTIME_PUMP_TICKS.load(Ordering::Relaxed),
         JSRUNTIME_ADAPTERS_CREATED.load(Ordering::Relaxed),
         JSRUNTIME_ADAPTERS_RESOLVED.load(Ordering::Relaxed),
         JSRUNTIME_ADAPTERS_REJECTED.load(Ordering::Relaxed),
+        JSRUNTIME_MODULE_EVALS_STARTED.load(Ordering::Relaxed),
+        JSRUNTIME_MODULE_EVALS_RESOLVED.load(Ordering::Relaxed),
+        JSRUNTIME_MODULE_EVALS_REJECTED.load(Ordering::Relaxed),
+        JSRUNTIME_BLOCKING_MODULE_EVALS.load(Ordering::Relaxed),
         JSRUNTIME_LEGACY_BLOCKING_AWAITS.load(Ordering::Relaxed),
+        handles_stored,
+        handles_released,
+        handles_retained,
+        JSRUNTIME_FOREIGN_PROMISE_HANDLES_RELEASED.load(Ordering::Relaxed),
+        foreign_promise_handles_retained,
         JSRUNTIME_V8_ENTRIES_TOTAL.load(Ordering::Relaxed),
         JSRUNTIME_ENTRY_RUNTIME_INIT.load(Ordering::Relaxed),
         JSRUNTIME_ENTRY_RUNTIME_SHUTDOWN.load(Ordering::Relaxed),
@@ -241,8 +274,8 @@ fn notifying_waker() -> Waker {
 }
 
 enum AdapterSettlement {
-    Resolve(*mut perry_runtime::promise::Promise, f64),
-    Reject(*mut perry_runtime::promise::Promise, f64),
+    Resolve(u64, *mut perry_runtime::promise::Promise, f64),
+    Reject(u64, *mut perry_runtime::promise::Promise, f64),
 }
 
 fn collect_foreign_promise_settlements(state: &mut JsRuntimeState) -> Vec<AdapterSettlement> {
@@ -260,6 +293,7 @@ fn collect_foreign_promise_settlements(state: &mut JsRuntimeState) -> Vec<Adapte
                         v8::PromiseState::Fulfilled => {
                             let result = promise.result(scope);
                             Some(AdapterSettlement::Resolve(
+                                adapter.handle_id,
                                 adapter.native_promise,
                                 v8_to_native(scope, result),
                             ))
@@ -267,6 +301,7 @@ fn collect_foreign_promise_settlements(state: &mut JsRuntimeState) -> Vec<Adapte
                         v8::PromiseState::Rejected => {
                             let reason = promise.result(scope);
                             Some(AdapterSettlement::Reject(
+                                adapter.handle_id,
                                 adapter.native_promise,
                                 v8_to_native(scope, reason),
                             ))
@@ -275,10 +310,12 @@ fn collect_foreign_promise_settlements(state: &mut JsRuntimeState) -> Vec<Adapte
                     }
                 }
                 Some(v8_val) => Some(AdapterSettlement::Resolve(
+                    adapter.handle_id,
                     adapter.native_promise,
                     v8_to_native(scope, v8_val),
                 )),
                 None => Some(AdapterSettlement::Reject(
+                    adapter.handle_id,
                     adapter.native_promise,
                     undefined_value(),
                 )),
@@ -300,11 +337,17 @@ fn settle_foreign_promise_adapters(state: &mut JsRuntimeState) -> i32 {
     let count = settlements.len() as i32;
     for settlement in settlements {
         match settlement {
-            AdapterSettlement::Resolve(promise, value) => {
+            AdapterSettlement::Resolve(handle_id, promise, value) => {
+                if release_js_handle(handle_id) {
+                    bump_jsruntime(&JSRUNTIME_FOREIGN_PROMISE_HANDLES_RELEASED);
+                }
                 bump_jsruntime(&JSRUNTIME_ADAPTERS_RESOLVED);
                 perry_runtime::promise::js_promise_resolve(promise, value);
             }
-            AdapterSettlement::Reject(promise, reason) => {
+            AdapterSettlement::Reject(handle_id, promise, reason) => {
+                if release_js_handle(handle_id) {
+                    bump_jsruntime(&JSRUNTIME_FOREIGN_PROMISE_HANDLES_RELEASED);
+                }
                 bump_jsruntime(&JSRUNTIME_ADAPTERS_REJECTED);
                 perry_runtime::promise::js_promise_reject(promise, reason);
             }
@@ -326,18 +369,98 @@ fn poll_v8_event_loop_once(state: &mut JsRuntimeState) -> i32 {
     }
 }
 
+fn resolve_pending_jsruntime_ticks(state: &mut JsRuntimeState) -> i32 {
+    let resolvers =
+        PENDING_JSRUNTIME_TICKS.with(|ticks| ticks.borrow_mut().drain(..).collect::<Vec<_>>());
+    if resolvers.is_empty() {
+        return 0;
+    }
+
+    let count = resolvers.len() as i32;
+    deno_core::scope!(scope, &mut state.runtime);
+    let undefined = v8::undefined(scope).into();
+    for resolver in resolvers {
+        let resolver = v8::Local::new(scope, resolver);
+        let _ = resolver.resolve(scope, undefined);
+    }
+    scope.perform_microtask_checkpoint();
+    count
+}
+
+fn poll_pending_module_evaluations(state: &mut JsRuntimeState) -> i32 {
+    let waker = notifying_waker();
+    let mut cx = TaskContext::from_waker(&waker);
+    let mut completed = Vec::new();
+
+    for (module_id, pending) in state.pending_module_evaluations.iter_mut() {
+        match pending.future.as_mut().poll(&mut cx) {
+            Poll::Ready(Ok(())) => {
+                completed.push((
+                    *module_id,
+                    pending.canonical_path.display().to_string(),
+                    None,
+                ));
+            }
+            Poll::Ready(Err(e)) => {
+                completed.push((
+                    *module_id,
+                    pending.canonical_path.display().to_string(),
+                    Some(e.to_string()),
+                ));
+            }
+            Poll::Pending => {}
+        }
+    }
+
+    let count = completed.len() as i32;
+    for (module_id, path, error) in completed {
+        state.pending_module_evaluations.remove(&module_id);
+        match error {
+            Some(error) => {
+                bump_jsruntime(&JSRUNTIME_MODULE_EVALS_REJECTED);
+                eprintln!(
+                    "[jsruntime_pump] module evaluation error for '{}': {}",
+                    path, error
+                );
+            }
+            None => {
+                bump_jsruntime(&JSRUNTIME_MODULE_EVALS_RESOLVED);
+            }
+        }
+    }
+    count
+}
+
 extern "C" fn jsruntime_process_pending() -> i32 {
     jsruntime_profile_register();
     bump_jsruntime(&JSRUNTIME_PUMP_TICKS);
     with_runtime(|state| {
         let mut ran = poll_v8_event_loop_once(state);
+        let resolved_ticks = resolve_pending_jsruntime_ticks(state);
+        ran += resolved_ticks;
+        if resolved_ticks > 0 {
+            ran += poll_v8_event_loop_once(state);
+        }
+        ran += poll_pending_module_evaluations(state);
         ran += settle_foreign_promise_adapters(state);
         ran
     })
 }
 
 extern "C" fn jsruntime_has_active_handles() -> i32 {
-    FOREIGN_PROMISE_ADAPTERS.with(|adapters| if adapters.borrow().is_empty() { 0 } else { 1 })
+    let has_foreign_adapters =
+        FOREIGN_PROMISE_ADAPTERS.with(|adapters| !adapters.borrow().is_empty());
+    let has_pending_ticks = PENDING_JSRUNTIME_TICKS.with(|ticks| !ticks.borrow().is_empty());
+    let has_module_evaluations = JS_RUNTIME.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|state| !state.pending_module_evaluations.is_empty())
+    });
+    if has_foreign_adapters || has_pending_ticks || has_module_evaluations {
+        1
+    } else {
+        0
+    }
 }
 
 /// Convert a NaN-boxed f64 to a V8 value, returning None if the conversion fails
@@ -427,6 +550,7 @@ fn install_reflect_metadata_bridge(state: &mut JsRuntimeState) {
         "__perryReflectDeleteMetadata",
         reflect_delete_metadata_bridge
     );
+    define_global_function!("__perryAsyncTick", perry_async_tick_bridge);
 
     let Some(source) = v8::String::new(
         scope,
@@ -524,6 +648,23 @@ fn install_reflect_metadata_bridge(state: &mut JsRuntimeState) {
         return;
     };
     let _ = v8::Script::compile(scope, source, None).and_then(|script| script.run(scope));
+}
+
+fn perry_async_tick_bridge(
+    scope: &mut v8::PinScope<'_, '_>,
+    _args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        retval.set(v8::undefined(scope).into());
+        return;
+    };
+    let promise = resolver.get_promise(scope);
+    PENDING_JSRUNTIME_TICKS.with(|ticks| {
+        ticks.borrow_mut().push(v8::Global::new(scope, resolver));
+    });
+    perry_runtime::event_pump::js_notify_main_thread();
+    retval.set(promise.into());
 }
 
 fn reflect_define_metadata_bridge(
@@ -745,7 +886,6 @@ pub extern "C" fn js_runtime_shutdown() {
 /// Returns 0 on failure
 #[no_mangle]
 pub unsafe extern "C" fn js_load_module(path_ptr: *const i8, path_len: usize) -> u64 {
-    bump_v8_entry(V8EntryKind::ModuleLoad);
     let path_slice = if path_ptr.is_null() {
         return 0;
     } else if path_len > 0 {
@@ -846,6 +986,7 @@ export * from {target:?};
             if let Some(&module_id) = state.loaded_modules.get(&canonical) {
                 return Ok(module_id as u64);
             }
+            bump_v8_entry(V8EntryKind::ModuleLoad);
 
             // Use a dedicated current-thread Tokio runtime to avoid thread pool starvation deadlock.
             tokio::task::block_in_place(|| {
@@ -870,27 +1011,23 @@ export * from {target:?};
                         }
                     };
 
-                    // Evaluate the module
-                    let result = state.runtime.mod_evaluate(module_id);
-                    if let Err(e) = state.runtime.run_event_loop(Default::default()).await {
-                        eprintln!(
-                            "[js_load_module] event loop error for '{}': {}",
-                            path_str, e
-                        );
-                        return Err(());
-                    }
-                    if let Err(e) = result.await {
-                        eprintln!(
-                            "[js_load_module] evaluation error for '{}': {}",
-                            path_str, e
-                        );
-                        return Err(());
-                    }
+                    // Start evaluation, but let Perry's main event loop drive
+                    // the returned future via js_run_jsruntime_pump().
+                    let eval_future = state.runtime.mod_evaluate(module_id);
+                    state.pending_module_evaluations.insert(
+                        module_id,
+                        crate::PendingModuleEvaluation {
+                            canonical_path: canonical.clone(),
+                            future: Box::pin(eval_future),
+                        },
+                    );
+                    bump_jsruntime(&JSRUNTIME_MODULE_EVALS_STARTED);
 
-                    install_reflect_metadata_bridge(state);
-
-                    // Cache the module
+                    // Cache the module immediately so repeated imports reuse
+                    // the same module id while evaluation is pump-driven.
                     state.loaded_modules.insert(canonical.clone(), module_id);
+                    perry_runtime::event_pump::js_notify_main_thread();
+                    let _ = poll_pending_module_evaluations(state);
 
                     Ok(module_id as u64)
                 })
@@ -1845,13 +1982,17 @@ pub unsafe extern "C" fn js_should_use_runtime(path_ptr: *const i8, path_len: us
 
 /// Await a V8 JavaScript Promise that was returned as a JS handle.
 /// Takes a NaN-boxed f64 containing a JS handle to a V8 Promise.
-/// Runs the V8 event loop until the Promise settles, then returns the resolved value.
+/// Legacy/debug path: when explicitly enabled, runs the V8 event loop until
+/// the Promise settles, then returns the resolved value.
 /// If the value is not a Promise, returns it as-is.
 /// Returns the resolved value as NaN-boxed f64.
 #[no_mangle]
 pub extern "C" fn js_await_js_promise(value: f64) -> f64 {
     jsruntime_profile_register();
     bump_v8_entry(V8EntryKind::LegacyBlockingAwait);
+    if std::env::var_os("PERRY_JSRUNTIME_ENABLE_LEGACY_BLOCKING_AWAIT").is_none() {
+        return js_await_any_promise(value);
+    }
     bump_jsruntime(&JSRUNTIME_LEGACY_BLOCKING_AWAITS);
     let handle_id = match get_handle_id(value) {
         Some(id) => id,
@@ -1955,26 +2096,26 @@ pub extern "C" fn js_await_any_promise(value: f64) -> f64 {
             None => return value,
         };
 
-        let is_promise = with_runtime(|state| {
+        let adapter_handle_id = with_runtime(|state| {
             deno_core::scope!(scope, &mut state.runtime);
-            get_js_handle(scope, handle_id).is_some_and(|v| {
+            get_js_handle(scope, handle_id).and_then(|v| {
                 if !v.is_promise() {
-                    return false;
+                    return None;
                 }
                 let promise = v8::Local::<v8::Promise>::try_from(v).unwrap();
                 promise.mark_as_handled();
-                true
+                Some(store_js_handle(scope, v))
             })
         });
 
-        if !is_promise {
+        let Some(adapter_handle_id) = adapter_handle_id else {
             return value;
-        }
+        };
 
         let native_promise = perry_runtime::promise::js_promise_new();
         FOREIGN_PROMISE_ADAPTERS.with(|adapters| {
             adapters.borrow_mut().push(ForeignPromiseAdapter {
-                handle_id,
+                handle_id: adapter_handle_id,
                 native_promise,
             });
         });

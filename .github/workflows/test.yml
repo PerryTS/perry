@@ -314,6 +314,12 @@ jobs:
           PERRY_NO_AUTO_OPTIMIZE=1 \
           scripts/run_native_no_fallback_tests.sh
 
+      - name: Jsruntime promise gate
+        run: |
+          PERRY_BIN="$PWD/target/release/perry" \
+          PERRY_NO_AUTO_OPTIMIZE=1 \
+          scripts/run_jsruntime_promise_tests.sh
+
       - name: Compile all test files
         run: |
           set -uo pipefail

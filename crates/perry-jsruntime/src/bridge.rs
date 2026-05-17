@@ -14,7 +14,7 @@ use perry_runtime::JSValue;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use crate::interop::{bump_v8_entry, V8EntryKind};
+use crate::interop::{bump_js_handle_released, bump_js_handle_stored, bump_v8_entry, V8EntryKind};
 
 // NaN-boxing constants (must match perry-runtime/src/value.rs)
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -158,6 +158,7 @@ pub fn store_js_handle(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<v8::Va
     JS_OBJECT_HANDLES.with(|handles| {
         handles.borrow_mut().insert(handle_id, global);
     });
+    bump_js_handle_stored();
     handle_id
 }
 
@@ -176,7 +177,11 @@ pub fn get_js_handle<'s>(
 
 /// Release a V8 handle from the table
 pub fn release_js_handle(handle: u64) -> bool {
-    JS_OBJECT_HANDLES.with(|handles| handles.borrow_mut().remove(&handle).is_some())
+    let released = JS_OBJECT_HANDLES.with(|handles| handles.borrow_mut().remove(&handle).is_some());
+    if released {
+        bump_js_handle_released();
+    }
+    released
 }
 
 /// Check if a NaN-boxed value is a JS handle
@@ -504,11 +509,13 @@ fn native_promise_to_v8<'s>(
     let v8_promise = resolver.get_promise(scope);
     match perry_runtime::promise::js_promise_state(promise) {
         1 => {
+            bump_v8_entry(V8EntryKind::NativePromiseResolve);
             let value = perry_runtime::promise::js_promise_value(promise);
             let v8_value = native_to_v8(scope, value);
             let _ = resolver.resolve(scope, v8_value);
         }
         2 => {
+            bump_v8_entry(V8EntryKind::NativePromiseReject);
             let reason = perry_runtime::promise::js_promise_reason(promise);
             let v8_reason = native_to_v8(scope, reason);
             let _ = resolver.reject(scope, v8_reason);
