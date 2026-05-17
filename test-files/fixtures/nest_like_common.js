@@ -1,7 +1,7 @@
-export const MODULE_METADATA = {
+export const MODULE_METADATA = Object.freeze({
   PROVIDERS: "providers",
   CONTROLLERS: "controllers",
-};
+});
 
 export const PATH_METADATA = "path";
 export const METHOD_METADATA = "method";

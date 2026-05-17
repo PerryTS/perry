@@ -4,8 +4,9 @@
 //! JavaScript modules loaded in the V8 runtime.
 
 use crate::bridge::{
-    fixup_native_for_v8, get_handle_id, get_js_handle, is_js_handle, make_js_handle_value,
-    native_to_v8, release_js_handle, store_js_handle, v8_to_native, v8_to_native_metadata_target,
+    capture_export_snapshot_intrinsics, fixup_native_for_v8, get_handle_id, get_js_handle,
+    is_js_handle, make_js_handle_value, native_to_v8, release_js_handle, store_js_handle,
+    v8_to_native, v8_to_native_export_value, v8_to_native_metadata_target,
     v8_to_native_metadata_value,
 };
 use crate::{
@@ -507,6 +508,12 @@ pub extern "C" fn js_runtime_init() {
     }
 
     with_runtime(install_reflect_metadata_bridge);
+    with_runtime(capture_intrinsics_for_export_snapshots);
+}
+
+fn capture_intrinsics_for_export_snapshots(state: &mut JsRuntimeState) {
+    deno_core::scope!(scope, &mut state.runtime);
+    capture_export_snapshot_intrinsics(scope);
 }
 
 fn install_reflect_metadata_bridge(state: &mut JsRuntimeState) {
@@ -1089,7 +1096,7 @@ pub unsafe extern "C" fn js_get_export(
             None => return f64::from_bits(0x7FFC_0000_0000_0001),
         };
 
-        v8_to_native(scope, value)
+        v8_to_native_export_value(scope, value)
     })
 }
 
