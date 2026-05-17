@@ -19,8 +19,13 @@ console.log("inv instanceof Date:", inv instanceof Date); // true
 console.log("inv instanceof Object:", inv instanceof Object); // true
 console.log("inv.getTime() isNaN:", Number.isNaN(inv.getTime())); // true
 console.log("inv.getFullYear() isNaN:", Number.isNaN(inv.getFullYear())); // true
-console.log("String(inv):", String(inv.toISOString())); // Invalid Date
+try {
+  console.log("inv.toISOString():", inv.toISOString());
+} catch (e: any) {
+  console.log("inv.toISOString error:", e.name, e.message); // RangeError Invalid time value
+}
 console.log("inv.toDateString():", inv.toDateString()); // Invalid Date
+console.log("inv.toJSON():", inv.toJSON()); // null
 console.log("JSON.stringify(inv):", JSON.stringify(inv)); // null
 console.log("JSON.stringify({d:inv}):", JSON.stringify({ d: inv })); // {"d":null}
 
@@ -52,10 +57,10 @@ console.log("v typeof:", typeof v); // object
 console.log("v instanceof Date:", v instanceof Date); // true
 console.log("v instanceof Object:", v instanceof Object); // true
 console.log("v.getFullYear():", v.getUTCFullYear()); // 2026
-console.log("v.getTime():", v.getTime()); // 1778880575402
+console.log("v.getTime():", v.getTime()); // 1778866175402
 console.log("v.toISOString():", v.toISOString()); // 2026-05-15T17:29:35.402Z
 console.log("JSON.stringify(v):", JSON.stringify(v)); // "2026-05-15T17:29:35.402Z"
-const n = 1778880575402; // plain number equal to v's millis must stay a number
+const n = 1778880575402; // plain millisecond-shaped number must stay a number
 console.log("plain number typeof:", typeof n); // number
 console.log("Date.now() typeof:", typeof Date.now()); // number
 console.log("(new Date()) instanceof Date:", new Date() instanceof Date); // true

@@ -9365,7 +9365,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();
             let handle = blk.call(I64, "js_date_to_json", &[(DOUBLE, &v)]);
-            Ok(nanbox_string_inline(blk, &handle))
+            let is_null = blk.icmp_eq(I64, &handle, "0");
+            let as_string = nanbox_string_inline(blk, &handle);
+            let str_bits = blk.bitcast_double_to_i64(&as_string);
+            let selected = blk.select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &str_bits);
+            Ok(blk.bitcast_i64_to_double(&selected))
         }
         Expr::ArrayWith {
             array,
@@ -9826,7 +9830,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::DateToISOString(d) => {
             let v = lower_expr(ctx, d)?;
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_date_to_iso_string", &[(DOUBLE, &v)]);
+            let handle = blk.call(I64, "js_date_to_iso_string_or_throw", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
         // #600: `(12345).toLocaleString()` and `date.toLocaleString()`

@@ -74,6 +74,14 @@ fn invalid_date_string() -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
+fn throw_invalid_time_value() -> ! {
+    let msg = "Invalid time value";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_rangeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
+}
+
 /// Mark `bits` as a Date so future `instanceof Date` checks can recognize it.
 pub fn register_date_bits(bits: u64) {
     DATE_REGISTRY.with(|r| {
@@ -374,6 +382,16 @@ pub extern "C" fn js_date_to_iso_string(timestamp: f64) -> *mut crate::StringHea
     );
 
     crate::string::js_string_from_bytes(iso_string.as_ptr(), iso_string.len() as u32)
+}
+
+/// Date.prototype.toISOString() — unlike the shared ISO formatter used by
+/// JSON internals, the public method must throw RangeError for Invalid Date.
+#[no_mangle]
+pub extern "C" fn js_date_to_iso_string_or_throw(timestamp: f64) -> *mut crate::StringHeader {
+    if timestamp.is_nan() {
+        throw_invalid_time_value();
+    }
+    js_date_to_iso_string(timestamp)
 }
 
 /// Get the full year (date.getFullYear()) in LOCAL time.
@@ -1019,9 +1037,12 @@ pub extern "C" fn js_date_to_locale_string(timestamp: f64) -> *mut crate::String
     alloc_runtime_string(&s)
 }
 
-/// date.toJSON() — same as toISOString() per ECMA-262.
+/// date.toJSON() — null for Invalid Date, otherwise the ISO string.
 #[no_mangle]
 pub extern "C" fn js_date_to_json(timestamp: f64) -> *mut crate::StringHeader {
+    if timestamp.is_nan() {
+        return std::ptr::null_mut();
+    }
     js_date_to_iso_string(timestamp)
 }
 
