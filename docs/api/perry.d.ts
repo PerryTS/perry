@@ -370,7 +370,7 @@ declare module "jsonwebtoken" {
   /** stdlib */
   export function decode(token: string): any;
   /** stdlib */
-  export function sign(payload: any, secret: string, options: any): any;
+  export function sign(payload: any, secret: string, options?: any, kid?: string): string;
   /** stdlib */
   export function verify(token: string, secret: string): any;
 }

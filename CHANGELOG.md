@@ -2,6 +2,80 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.958 — fix(codegen): #915 — `jwt.sign(...)` dispatch table calling-convention mismatch
+
+**Symptom.** A `jsonwebtoken` `sign` call after a resumed async-step body (e.g. a fastify route handler that `await`s a nested user async function and then calls `jwt.sign({sub:"x"}, "secret", {algorithm:"HS256"})`) SIGSEGVed inside the runtime FFI:
+
+```
+EXC_BAD_ACCESS (code=1, address=0x39edd942)
+    frame #0: jwt-min + 0x10000a4b0    ldr w1, [x0, #0x4]
+(lldb) register read x0
+      x0 = 0x0000000039edd93e   ← small-int garbage interpreted as a *StringHeader
+```
+
+The 11-line standalone repro from #915 reliably crashed with curl returning `(52) Empty reply from server`. The same crash signature appeared in the user's shop-admin signup flow at `issueAccessToken`.
+
+**Why it crashed.** `NATIVE_MODULE_TABLE`'s row for `jsonwebtoken::sign` was
+
+```rust
+NativeModSig {
+    module: "jsonwebtoken",
+    method: "sign",
+    runtime: "js_jwt_sign",
+    args: &[NA_F64, NA_F64, NA_F64],
+    ret: NR_PTR,
+}
+```
+
+but the Rust FFI `js_jwt_sign` (both in `perry-stdlib` and `perry-ext-jsonwebtoken`) is
+
+```rust
+unsafe extern "C" fn js_jwt_sign(
+    payload_ptr: *const StringHeader,
+    secret_ptr:  *const StringHeader,
+    expires_in_secs: f64,
+    kid_ptr: *const StringHeader,
+) -> i64  // returns nanbox_string_bits(token)
+```
+
+so on aarch64 the call passed the NaN-boxed payload and secret in `d0`/`d1` (float-arg registers) while the Rust body read `x0`/`x1` as raw `*const StringHeader` pointers — whatever happened to be in those integer regs from the caller's prologue. `read_str(payload_ptr)` then dereferenced that garbage at offset 4 (`byte_len`) and crashed. The fourth FFI arg (`kid_ptr`) wasn't passed by the dispatch table at all, so even a "lucky" run with zeroed `x0`/`x1` would still read register garbage for `kid_ptr`. The `i64` return path was also wrong: the FFI returns `STRING_TAG | (ptr & POINTER_MASK)` (already NaN-boxed as STRING), but `NR_PTR` re-boxed it as POINTER — so `typeof token === "object"` and `token.length === undefined` masked the bug as "null token" for callers that didn't crash outright.
+
+The reason validator.isEmail (also a `NATIVE_MODULES` binding) in the same async-resume shape didn't crash is that validator's dispatch row was already correct: `args: &[NA_STR], ret: NR_F64` matches `js_validator_is_email(*const StringHeader) -> f64`.
+
+**Fix.** Three coordinated changes:
+
+1. **New `NativeArgKind::JsonStringify` (`NA_JSON`).** Lowers an arg to `js_json_stringify(value: f64, type_hint: i32) -> i64` returning a raw `*mut StringHeader`. Use this for FFI slots that expect a JSON-encoded payload — strings get JSON-quoted (which `serde_json::from_str` rejects for `Claims` so the FFI falls back to an empty claims object, matching the previous string-payload behaviour) and objects get serialized to real JSON the FFI can parse back. Padding for unsupplied args treats `NA_JSON` like `NA_STR`/`NA_PTR`: zero (null pointer).
+
+2. **Updated dispatch row for `jsonwebtoken::sign`:**
+
+   ```rust
+   NativeModSig {
+       module: "jsonwebtoken",
+       method: "sign",
+       runtime: "js_jwt_sign",
+       args: &[NA_JSON, NA_STR, NA_F64, NA_STR],  // matches the 4-arg FFI
+       ret:  NR_STR,                              // STRING_TAG | ptr (idempotent OR)
+   }
+   ```
+
+   The 4-arg slice mirrors the FFI exactly; `NA_STR` for the secret hands `js_get_string_pointer_unified` the NaN-boxed string and extracts the raw header pointer; `NA_F64` for `expires_in_secs` correctly routes through `d0` (with TAG_UNDEFINED padding when the user doesn't pass an options-options like `expiresIn`); `NA_STR` for the optional `kid` pads to null when absent. `NR_STR` does `or i64 raw, STRING_TAG` which is idempotent on an already-tagged return value, so no double-NaN-boxing.
+
+3. **Manifest sync (#512).** `entries.rs`'s jsonwebtoken.sign row grew a 4th param (`kid: string`, optional) and the return narrowed to `String` so the `manifest_param_counts_match_dispatch_table` consistency test stays green.
+
+**Files**:
+
+- `crates/perry-codegen/src/lower_call.rs` — new `JsonStringify` arm in `NativeArgKind`, `NA_JSON` const, lowering case, padding case, `arg_kind_tag` case, updated jsonwebtoken row.
+- `crates/perry-codegen/src/lib.rs` — doc comment lists `"NA_JSON"` in the kind-tag set.
+- `crates/perry-api-manifest/src/entries.rs` — 4-param jsonwebtoken.sign signature.
+- `test-files/test_issue_915_native_module_after_async_resume.ts` — standalone regression test (no fastify) that mirrors the async-resume shape and asserts `typeof token === "string"`, length, and `eyJ` JWT prefix.
+
+**Validation.**
+
+- Standalone test passes: `{"ok":true,"len":96,"prefix":"eyJ"}`.
+- 11-line fastify repro from #915 now returns `HTTP/1.1 201 Created` with `{"ok":true,"len":96}`.
+- `cargo test --release -p perry-codegen --test manifest_consistency` — all 4 tests green (drift assertions preserved).
+- #859 regression test (`test_issue_859_module_arrow_in_async_resume.ts`) still passes — the new `NA_JSON` path is additive and the existing arrow-callee fix from PR #910 is untouched.
+
 ## v0.5.957 — fix(jsruntime): express smoke `[js_load_module] FAILED to load` — optional/peer `require()` of unresolved bare module now soft-throws inside CJS wrapper
 
 **Symptom.** Express smoke (downstream of #909/#911/#912) aborted at module-load time with:

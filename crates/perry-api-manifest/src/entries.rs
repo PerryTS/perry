@@ -641,10 +641,20 @@ pub static API_MANIFEST: &[ApiEntry] = &[
             ParamSpec::Named {
                 name: "options",
                 ty: TypeSpec::Any,
-                optional: false,
+                optional: true,
+            },
+            // #915: FFI's 4th arg is `kid_ptr: *const StringHeader` — the
+            // dispatch table padding zeroes it when the user doesn't pass
+            // it. Surfacing the slot in the manifest keeps the
+            // #512 arity-drift assertion happy without forcing every
+            // caller to write a 4th positional arg.
+            ParamSpec::Named {
+                name: "kid",
+                ty: TypeSpec::String,
+                optional: true,
             },
         ],
-        TypeSpec::Any,
+        TypeSpec::String,
     ),
     method_sig(
         "jsonwebtoken",
