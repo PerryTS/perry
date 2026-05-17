@@ -431,43 +431,52 @@ pub(super) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         }
     }
 
-    // Lower body with JS hoisting: only `var` declarations and function
-    // declarations are hoisted per JS semantics. `let`/`const` MUST remain
-    // at their lexical position because their init expressions are only
-    // evaluated when control flow reaches them — hoisting `const x = fn()`
-    // out of a conditional branch would eagerly run the call.
+    // Lower body with JS hoisting: only function declarations are fully
+    // hoisted per JS semantics (binding + initialization at function
+    // entry). `var` bindings are also hoisted, but their *initializer*
+    // expressions run at source position — pre-allocating the slot is
+    // already handled by `var_hoisted_ids` + the `PreallocateBoxes` pass
+    // below. `let`/`const` MUST remain at their lexical position because
+    // their init expressions are only evaluated when control flow reaches
+    // them — hoisting `const x = fn()` out of a conditional branch would
+    // eagerly run the call.
+    //
+    // Issue #911: previously this pass split `var` declarations into a
+    // separate `var_hoisted` bucket and emitted them BEFORE function
+    // declarations, so the express CJS-wrap shape
+    //   function require(s) { ... }
+    //   var { METHODS } = require('node:http');
+    // ran the `require('node:http')` call before `require` was bound and
+    // threw `TypeError: value is not a function`. Function declarations
+    // must run before any var-init in the body, then var-inits and other
+    // executable statements run in source order.
     let mut body = if let Some(ref block) = fn_expr.function.body {
-        let mut var_hoisted = Vec::new();
         let mut func_decls = Vec::new();
         let mut exec_stmts = Vec::new();
         for stmt in &block.stmts {
             let lowered = crate::lower_decl::lower_body_stmt(ctx, stmt)?;
             match stmt {
                 ast::Stmt::Decl(ast::Decl::Fn(_)) => func_decls.extend(lowered),
-                ast::Stmt::Decl(ast::Decl::Var(var_decl))
-                    if var_decl.kind == ast::VarDeclKind::Var =>
-                {
-                    var_hoisted.extend(lowered);
-                }
                 _ => exec_stmts.extend(lowered),
             }
         }
-        var_hoisted.extend(func_decls);
-        var_hoisted.extend(exec_stmts);
+        let mut combined: Vec<Stmt> = Vec::with_capacity(func_decls.len() + exec_stmts.len());
+        combined.extend(func_decls);
+        combined.extend(exec_stmts);
         // Issue #633: prealloc-box for sibling/forward captures.
         if !hoisted_id_set.is_empty() {
             let prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
-                &var_hoisted,
+                &combined,
                 &hoisted_id_set,
             );
             if !prealloc.is_empty() {
-                let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(var_hoisted.len() + 1);
+                let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 1);
                 with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
-                with_prealloc.extend(var_hoisted);
-                var_hoisted = with_prealloc;
+                with_prealloc.extend(combined);
+                combined = with_prealloc;
             }
         }
-        var_hoisted
+        combined
     } else {
         Vec::new()
     };
