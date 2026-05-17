@@ -143,6 +143,7 @@
 - [`--emit-attest` (binary attestation sidecar)](cli/emit-attest.md)
 - [`--emit-sandbox`](cli/emit-sandbox.md)
 - [`--lockdown`](cli/lockdown.md)
+- [Egress Allowlist (`allowedHosts`)](cli/allowed-hosts.md)
 - [perry.toml Reference](cli/perry-toml.md)
 
 ---

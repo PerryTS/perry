@@ -640,6 +640,20 @@ pub struct CompilationContext {
     /// one combined diagnostic naming every offending site so the
     /// reviewer can fix the whole surface at once.
     pub lockdown: bool,
+    /// #502: host-controlled URL/host egress allowlist
+    /// (`perry.allowedHosts: [...]` in `package.json`). When
+    /// non-empty, the compile-time egress pass walks every
+    /// `fetch(url)` / `net.connect(host, …)` call site and refuses
+    /// any literal URL/host that doesn't match a pattern in this
+    /// list. Empty = pass disabled (opt-in only — see
+    /// `perry-hir::egress` for the rationale).
+    pub allowed_hosts: Vec<String>,
+    /// #502: explicit host opt-in to non-literal egress arguments
+    /// (`fetch(someVar)` and friends). Default false: a variable URL
+    /// would otherwise defeat the static `grep`-the-binary egress
+    /// guarantee. Source: `perry.allowDynamicHosts: true` in host
+    /// `package.json`.
+    pub allow_dynamic_hosts: bool,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -694,6 +708,8 @@ impl CompilationContext {
             emit_attest: false,
             emit_sandbox: false,
             lockdown: false,
+            allowed_hosts: Vec::new(),
+            allow_dynamic_hosts: false,
         }
     }
 }
@@ -1265,6 +1281,25 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
+                // #502: perry.allowedHosts — host-controlled
+                // egress allowlist. When set, every literal URL/host
+                // in `fetch(...)` and `net.connect(...)` call sites
+                // must match a pattern here (exact host,
+                // `*.subdomain.example.com`, `https://.../path/*`
+                // URL prefix, or `*` universal). When unset, the
+                // pass is disabled and existing builds compile
+                // unchanged.
+                if let Some(arr) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("allowedHosts"))
+                    .and_then(|v| v.as_array())
+                {
+                    for entry in arr {
+                        if let Some(s) = entry.as_str() {
+                            ctx.allowed_hosts.push(s.to_string());
+                        }
+                    }
+                }
                 // #504: perry.emitAttest — emit binary attestation
                 // sidecar at compile time. See docs/src/cli/emit-attest.md.
                 if let Some(ea) = pkg
@@ -1292,6 +1327,29 @@ pub fn run_with_parse_cache(
                     .and_then(|v| v.as_bool())
                 {
                     ctx.lockdown = ld;
+                }
+                // #502: perry.allowedHosts — compile-time URL/host
+                // egress allowlist. Patterns: exact host, "*.foo.com"
+                // subdomain wildcard, "https://host/prefix*" URL
+                // prefix, or "*" universal escape hatch. Empty list
+                // disables the pass entirely.
+                if let Some(arr) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("allowedHosts"))
+                    .and_then(|v| v.as_array())
+                {
+                    for entry in arr {
+                        if let Some(s) = entry.as_str() {
+                            ctx.allowed_hosts.push(s.to_string());
+                        }
+                    }
+                }
+                if let Some(b) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("allowDynamicHosts"))
+                    .and_then(|v| v.as_bool())
+                {
+                    ctx.allow_dynamic_hosts = b;
                 }
             }
         }
@@ -1809,6 +1867,73 @@ pub fn run_with_parse_cache(
                  \n\
                  Run `perry audit --sbom` (when #495 lands) to see every\n\
                  stdlib surface each dep would need.",
+                all_violations.len(),
+            );
+        }
+    }
+
+    // #502: compile-time URL/host egress allowlist. When the host
+    // has opted in via `perry.allowedHosts`, walk every HIR module
+    // and refuse any literal URL/host that doesn't match a pattern
+    // there. Non-literal URLs/hosts are refused unless
+    // `perry.allowDynamicHosts: true`. All violations across all
+    // modules are collected and surfaced in a single diagnostic so
+    // the user can fix every site at once.
+    if !ctx.allowed_hosts.is_empty() {
+        let mut all_violations: Vec<perry_hir::EgressViolation> = Vec::new();
+        for (path, hir_module) in &ctx.native_modules {
+            let source = path.to_string_lossy().into_owned();
+            let v = perry_hir::audit_module_egress(
+                hir_module,
+                &source,
+                &ctx.allowed_hosts,
+                ctx.allow_dynamic_hosts,
+            );
+            all_violations.extend(v);
+        }
+        if !all_violations.is_empty() {
+            let mut detail = String::new();
+            let limit = 12usize;
+            for v in all_violations.iter().take(limit) {
+                let lit = match v.literal.as_deref() {
+                    Some(s) => format!("\"{}\"", s),
+                    None => "<non-literal>".to_string(),
+                };
+                let why = match v.reason {
+                    perry_hir::EgressRefusalReason::LiteralNotAllowed => {
+                        "literal host not in `perry.allowedHosts`"
+                    }
+                    perry_hir::EgressRefusalReason::NonLiteralAndDynamicForbidden => {
+                        "non-literal URL/host (`perry.allowDynamicHosts: true` not set)"
+                    }
+                };
+                detail.push_str(&format!(
+                    "\n  - {}: {} → {} ({})",
+                    v.source, v.kind, lit, why
+                ));
+            }
+            if all_violations.len() > limit {
+                detail.push_str(&format!(
+                    "\n  ... and {} more",
+                    all_violations.len() - limit
+                ));
+            }
+            anyhow::bail!(
+                "egress allowlist refused {} call site(s):{detail}\n\
+                 \n\
+                 `perry.allowedHosts` provides a static guarantee that this binary's\n\
+                 outbound network surface matches the declared list. Refusing the build.\n\
+                 (#502)\n\
+                 \n\
+                 Options:\n\
+                 - Add the offending host(s) to `perry.allowedHosts` in your host\n\
+                   `package.json` (exact `\"api.example.com\"`, subdomain wildcard\n\
+                   `\"*.cdn.example.com\"`, or URL-prefix `\"https://.../path/*\"`).\n\
+                 - Set `\"*\"` in `allowedHosts` to disable host gating (escape hatch\n\
+                   that defeats the static guarantee — use only for migration).\n\
+                 - For non-literal URLs, set `perry.allowDynamicHosts: true` if the\n\
+                   computed shape is intentional. Code review then has to trust the\n\
+                   value of every variable that reaches `fetch(...)`.",
                 all_violations.len(),
             );
         }

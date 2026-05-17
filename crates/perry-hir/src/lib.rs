@@ -7,6 +7,7 @@ pub mod analysis;
 pub mod capability;
 pub(crate) mod destructuring;
 pub mod dynamic_import;
+pub mod egress;
 pub(crate) mod enums;
 pub mod error;
 pub mod ir;
@@ -28,6 +29,7 @@ pub use dynamic_import::{
     for_each_dynamic_import_mut, resolve_import_path, resolve_import_path_with_consts, FlatExport,
     Resolution, DYNAMIC_IMPORT_PATH_CAP,
 };
+pub use egress::{audit_module_egress, EgressRefusalReason, EgressViolation};
 pub use enums::fix_imported_enums;
 pub use ir::*;
 pub use js_transform::{
