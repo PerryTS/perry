@@ -2,6 +2,37 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.971 — fix(jsruntime): define `URL` / `URLSearchParams` as V8-fallback globals (unblocks `import "joi"`)
+
+**Symptom.** `import Joi from "joi"` against the V8-fallback jsruntime crashed at module-init with
+
+```
+[js_get_export] failed to get namespace: ReferenceError: URL is not defined
+    at file:///.../node_modules/@hapi/hoek/lib/types.js:32:10
+    at file:///.../node_modules/@hapi/hoek/lib/types.js:77:3
+TypeError: Cannot read properties of undefined (reading 'assert')
+    at <anonymous>
+```
+
+before any user code ran. `@hapi/hoek` (transitive dep of joi) reads `URL.prototype` as a top-level expression, and modern Node exposes `URL` as a global. Perry's V8-fallback runtime (deno_core without the `deno_url` extension) does not, so the lookup throws.
+
+**Fix.** `crates/perry-jsruntime/src/node_polyfills.js` now installs `globalThis.URL` and `globalThis.URLSearchParams` alongside the existing `Buffer` / `TextEncoder` / `TextDecoder` / `fetch` polyfills. The URL polyfill is a roughly-WHATWG-compatible parser covering the access pattern that joi/hoek and friends actually use: constructor with optional `base`, `href` / `origin` / `protocol` / `username` / `password` / `host` / `hostname` / `port` / `pathname` / `search` / `hash` getters and setters, `searchParams` with live-sync back into `_search`, plus static `URL.canParse` / `URL.parse`. `URLSearchParams` is a complete implementation (string / array-of-pairs / object init forms; `append`, `delete`, `get`, `getAll`, `has`, `set`, `sort`, `forEach`, `keys`, `values`, `entries`, `size`, `toString`, `Symbol.iterator`). Polyfills are gated on `typeof globalThis.URL === 'undefined'` so they no-op if a future deno_core upgrade ships built-in URL globals.
+
+Scope is narrow: joi still fails further into its init with `TypeError: Cannot read properties of undefined (reading 'template')`, which is a separate downstream gap left as a follow-up. This release only addresses the `URL is not defined` crash.
+
+**Validation.** New `test-files/joi_url_v8_global/` fixture forces the V8 fallback path (no `compilePackages` entry, a `.js` package in `node_modules`) and exercises `URL.prototype`, `new URL(href)`, all property getters, and `URLSearchParams` stringification — output:
+
+```
+urlProto type: object
+protocol: https:
+hostname: example.com
+pathname: /api/v1
+search: ?x=1&y=2
+search-stringify: a=1&b=2
+```
+
+Native-compile path is unaffected — perry-runtime's own `js_url_*` impl still owns native URL semantics. Manual repro (`/tmp/perry-joi-916`, `import Joi from "joi"`) confirms the V8 binary now passes the `URL is not defined` error and reaches the next downstream blocker.
+
 ## v0.5.970 — feat(util): add `util.formatWithOptions(options, format, ...args)` (unblocks the `debug` npm package)
 
 **Background.** `node:util.formatWithOptions(inspectOptions, format[, ...args])` is documented at <https://nodejs.org/api/util.html#utilformatwithoptionsinspectoptions-format-args>. It's identical to `util.format` except the first argument is an `util.inspect`-options bag that gets applied to any `%o` / `%O` placeholders in the format string. Despite being a relatively obscure API on its own, it's required by the `debug` npm package — a top-1k-by-downloads logger that is a transitive dependency of `express`, `socket.io`, and roughly half of the Node ecosystem. Without this entry, any compile that pulls in `debug` (directly or transitively, even when `debug` is listed in `perry.compilePackages`) bails at HIR-lower time with:

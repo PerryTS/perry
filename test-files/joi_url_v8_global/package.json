@@ -1,0 +1,5 @@
+{
+  "name": "joi-url-v8-global-probe",
+  "version": "0.0.1",
+  "perry": { "compilePackages": [] }
+}
