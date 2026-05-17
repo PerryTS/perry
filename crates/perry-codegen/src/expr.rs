@@ -1168,8 +1168,21 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // (Buffer, Promise, URL, etc.) intentionally fall
                         // through so `typeof Buffer === "function"` keeps
                         // working through the existing class-ref path.
+                        //
+                        // lodash followup: built-in constructors exposed on
+                        // globalThis (`Array`, `Object`, `Function`, …) now
+                        // also lower the bare PropertyGet to a real value
+                        // (a backing-object pointer materialized by
+                        // `js_get_global_this`'s singleton populator).
+                        // Without the typeof short-circuit, `typeof
+                        // globalThis.Array` would read "object" (the value
+                        // is a real pointer); spec says "function". Math /
+                        // JSON / Reflect stay "object" — they're namespaces,
+                        // not constructors.
                         match property.as_str() {
                             "process" | "console" | "globalThis" | "performance" => Some("object"),
+                            "Math" | "JSON" | "Reflect" => Some("object"),
+                            n if is_global_this_builtin_function_name(n) => Some("function"),
                             _ => None,
                         }
                     } else {
@@ -3808,6 +3821,37 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         vec![],
                     ));
                     return Ok(ctx.block().call(DOUBLE, "js_console_log_as_closure", &[]));
+                }
+                // Built-in constructors / namespaces exposed on globalThis
+                // (`Array`, `Object`, `Math`, `JSON`, ...): route the read
+                // through the singleton so `globalThis.Array` (and the
+                // identical `(globalThis as any).X` shape) returns the
+                // pre-populated constructor backing-object instead of the
+                // `0.0` no-value placeholder. Mirrors the IndexGet arm above
+                // (Expr::IndexGet at ~2381) which already routes
+                // `globalThis[<string>]` through `js_get_global_this`. The
+                // runtime populates these on first init — see
+                // `populate_global_this_builtins` in
+                // crates/perry-runtime/src/object.rs. Unblocks lodash's
+                // `runInContext` (`var Array = context.Array; var arrayProto
+                // = Array.prototype`) — the prior `0.0` placeholder caused
+                // the `.prototype` chained read on the locally-bound
+                // alias to throw `Cannot read properties of undefined`.
+                if is_global_this_builtin_name(property) {
+                    let global_box = ctx.block().call(DOUBLE, "js_get_global_this", &[]);
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let obj_handle = unbox_to_i64(blk, &global_box);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &obj_handle), (I64, &key_raw)],
+                    ));
                 }
                 return Ok(double_literal(0.0));
             }
@@ -13536,6 +13580,84 @@ fn lower_js_args_array(ctx: &mut FnCtx<'_>, lowered_args: &[String]) -> (String,
 pub(crate) fn unbox_to_i64(blk: &mut LlBlock, boxed: &str) -> String {
     let bits = blk.bitcast_double_to_i64(boxed);
     blk.and(I64, &bits, POINTER_MASK_I64)
+}
+
+/// Built-in constructor / namespace names that the runtime pre-populates
+/// on the globalThis singleton (`populate_global_this_builtins` in
+/// crates/perry-runtime/src/object.rs). Used by codegen to decide whether
+/// `globalThis.<Name>` should route through `js_get_global_this`
+/// (returning the populated backing-object) or fall through to the `0.0`
+/// no-value placeholder. Keep this list in sync with
+/// `GLOBAL_THIS_BUILTIN_CONSTRUCTORS` + `GLOBAL_THIS_BUILTIN_NAMESPACES`
+/// in object.rs — the codegen check and the runtime population together
+/// implement the lodash `runInContext` blocker fix.
+pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
+    matches!(
+        name,
+        // Constructors (typeof === "function" in spec).
+        "Array"
+            | "Object"
+            | "String"
+            | "Number"
+            | "Boolean"
+            | "Function"
+            | "RegExp"
+            | "Date"
+            | "Error"
+            | "TypeError"
+            | "RangeError"
+            | "SyntaxError"
+            | "ReferenceError"
+            | "EvalError"
+            | "URIError"
+            | "Symbol"
+            | "Promise"
+            | "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "WeakRef"
+            | "Proxy"
+            | "BigInt"
+            | "Uint8Array"
+            | "Int8Array"
+            | "Uint16Array"
+            | "Int16Array"
+            | "Uint32Array"
+            | "Int32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "Uint8ClampedArray"
+            | "BigInt64Array"
+            | "BigUint64Array"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "DataView"
+            | "TextEncoder"
+            | "TextDecoder"
+            | "URL"
+            | "URLSearchParams"
+            | "AbortController"
+            | "AbortSignal"
+            | "FormData"
+            | "Headers"
+            | "Request"
+            | "Response"
+            | "FinalizationRegistry"
+            // Namespaces (typeof === "object" in spec).
+            | "Math"
+            | "JSON"
+            | "Reflect"
+    )
+}
+
+/// Subset of `is_global_this_builtin_name` whose `typeof` is `"function"`
+/// in spec (constructors). Used by the `Expr::TypeOf` short-circuit so
+/// `typeof globalThis.Array === "function"`. Math/JSON/Reflect are
+/// namespaces — they keep `typeof === "object"` via the existing match
+/// arms.
+pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
+    is_global_this_builtin_name(name) && !matches!(name, "Math" | "JSON" | "Reflect")
 }
 
 /// SSO-safe variant of `unbox_to_i64` for NaN-boxed string operands.

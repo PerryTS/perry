@@ -2,6 +2,37 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.979 — feat(globalThis): expose built-in constructors as properties so `globalThis.Array`, `context.Object`, etc. stop returning `undefined`
+
+**Symptom.** PR #963 (v0.5.977) closed the `Function('return this')()` recogniser, so the lodash module-init IIFE no longer threw `TypeError: value is not a function`. The next blocker surfaced one frame down, inside `runInContext`:
+
+```js
+var Array  = context.Array,   // context is `globalThis`
+    Object = context.Object,
+    ...
+var arrayProto = Array.prototype;   // TypeError: Cannot read properties of undefined (reading 'prototype')
+```
+
+`context` resolved to the `js_get_global_this()` singleton (the same object `globalThis[k] = v` writes target after #611). But the built-in constructors — `Array`, `Object`, `Function`, `RegExp`, `Math`, `JSON`, ... — were never *registered* as properties on that singleton, so every `context.X` read returned `undefined`. The follow-on `.prototype` access tripped the spec-shaped `TypeError: Cannot read properties of undefined (reading 'prototype')` gate (`crates/perry-runtime/src/error.rs::js_throw_type_error_property_access`) and the program exited 1 before any user code executed.
+
+The same gap surfaced through the static AST shape too: `globalThis.Array` (and `(globalThis as any).Array`) lowered to `Expr::PropertyGet { GlobalGet(0), "Array" }` and the codegen `Expr::PropertyGet` arm in `expr.rs` returned the `0.0` no-value placeholder for every property except `log` (the lone special-cased `console.log`-as-closure singleton from #236).
+
+**Fix.** Two coordinated pieces — runtime population + codegen routing — turn `globalThis.X` reads into a non-`undefined` value for the canonical JS built-ins:
+
+1. **Runtime** (`crates/perry-runtime/src/object.rs`): on first access, `js_get_global_this`'s CAS winner now calls `populate_global_this_builtins(singleton)`. Constructors (~50 names from the standard ECMA-262 list + Node / web platform globals) get a `ClosureHeader`-backed sentinel via `js_closure_alloc(global_this_builtin_noop_thunk, 0)`; namespaces (`Math` / `JSON` / `Reflect`) get a plain `js_object_alloc(0, 0)`. Each constructor closure carries a `prototype` dynamic property pointing at an empty ObjectHeader so the lodash `var arrayProto = Array.prototype` chained read sees a real pointer instead of throwing. The thunk itself is a deliberate no-op returning `undefined` — bare `new Array(n)` continues to flow through codegen's existing `lower_new` arm, so callers using the spec-canonical `new <Ident>(...)` shape are unaffected.
+
+2. **Codegen** (`crates/perry-codegen/src/expr.rs`): the `Expr::PropertyGet { GlobalGet(_), <name> }` arm now consults `is_global_this_builtin_name(<name>)` before falling through to the `0.0` placeholder. When the name matches, it routes the read through `js_get_global_this` + `js_object_get_field_by_name_f64` (same shape as the existing IndexGet arm at line ~2381 that handles `globalThis[<string>]` reads from #611). The `typeof PropertyGet { GlobalGet, X }` short-circuit gains a parallel arm: constructor names return `"function"`, the three namespace names stay `"object"`.
+
+**Why a closure, not a plain object?** `js_value_typeof` for pointer values walks the CLOSURE_MAGIC tag at offset 12 — closures report `"function"` for free, a regular `ObjectHeader` would report `"object"`. Picking a closure backing also future-proofs the call form (`globalThis.Array(3)` as a function-call rather than `new Array(3)`); right now the thunk is a no-op, but later PRs can make it dispatch into the right constructor without changing how callers see the value.
+
+**Caveats / known follow-ups.** The backing objects are *sentinels*, not the real constructors. Reading deep into them returns `undefined`:
+
+- `Array.prototype.toString` is `undefined` (real Node returns a function). lodash's `var funcToString = funcProto.toString; funcToString.call(Object)` therefore still throws — but at a later line than before. The blocker after this PR is `Cannot read properties of undefined (reading 'call')` from `lodash.js` line 1493 (`var objectCtorString = funcToString.call(Object)`), which needs real `Function.prototype.toString` support to clear.
+- `globalThis.Array === Array` is `false`. Bare `Array` still lowers to `Expr::GlobalGet(0)` → `0.0`; the singleton form returns a closure pointer. Unifying these would require widening Perry's first-class representation of built-in constructors (or rewriting bare `Array` to read off the singleton) — a separate, wider change.
+- `Math.PI` / `Number.MAX_SAFE_INTEGER` and the other static-resolution shapes are unchanged. The HIR-level constant fold in `expr_member.rs` (lines ~262-318) still fires before this codegen path is reached.
+
+**Validation.** `test-files/test_globalthis_builtins.ts` covers `typeof globalThis.{Array,Object,Function,Math,JSON}` + `Array.prototype` + `new Array(3).length` and matches `node --experimental-strip-types` byte-for-byte. The lodash `_.chunk([1,2,3,4], 2)` repro (`/tmp/perry-lodash-2`) still fails to load `_` at module init, but the throw point moved from `var arrayProto = Array.prototype` (line 1463) to `var objectCtorString = funcToString.call(Object)` (line 1493) — three property reads + one call deeper into `runInContext`.
+
 ## v0.5.978 — fix(crypto/jsruntime): bare named-import `randomFillSync(buf)` (and `randomUUID()` / `randomBytes(n)`) routes to native FFI + V8 fallback ESM re-export
 
 **Symptom.** `jose` (and any package that does `import { randomFillSync } from 'node:crypto'; randomFillSync(buf)`) silently produced all-zero buffers. v0.5.952 added `randomFillSync` to Perry's native crypto code path via `Expr::CryptoRandomFillSync` → `js_crypto_random_fill_sync`, but that HIR recogniser only fired for the **object-method** form `crypto.randomFillSync(...)` (in `expr_call.rs:3118`, gated on `is_crypto_module && member.prop == "randomFillSync"`). The **bare named-import** form `randomFillSync(buf)` fell through to the generic aliased-named-import arm (`expr_call.rs:6463`) which built `Expr::NativeMethodCall { module: "crypto", method: "randomFillSync", object: None, args: [buf] }`. The codegen `NativeMethodCall` dispatcher has no `crypto` arm, so it lowered to a no-op returning `undefined` — the buffer was never touched, and `jose` happily signed JWTs with all-zero IVs.
@@ -33,7 +64,6 @@ For Hint-1, `typeof === "object"` instead of `"function"` is the same `NativeMod
 **Out of scope (follow-ups).**
 - `Uint8Array.prototype.some` returning `undefined` is a separate typed-array method-dispatch gap; track separately.
 - The V8 fallback's `getRandomValues` polyfill in `node_polyfills.js` uses `Math.random()`-derived bytes and is NOT cryptographically secure — the V8 fallback path is for testing/diagnostics only. Real crypto strength is on the native FFI path that this PR also unblocks.
-
 ## v0.5.977 — fix(#957 followup): `Function('return this')()` + bare `RegExp(...)` recognisers — moves real lodash past module-init `TypeError: value is not a function`
 
 **Symptom.** PR #959 closed two of lodash's three module-init bugs (`.call(this)` IIFE bodies + `Expr::IndexUpdate` codegen) but the commit explicitly flagged the next gap: `import _ from "lodash"` still threw

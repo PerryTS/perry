@@ -9776,11 +9776,164 @@ pub extern "C" fn js_get_global_this() -> f64 {
         // both threads see the winner's pointer afterward via CAS.
         let new_ptr = js_object_alloc(0, 0) as i64;
         match GLOBAL_THIS_PTR.compare_exchange(0, new_ptr, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => new_ptr,
+            Ok(_) => {
+                // Winner: populate built-in constructor properties on the
+                // singleton so `globalThis.Array` / `context.Array` (lodash's
+                // `runInContext` pattern) return non-undefined values. Each
+                // value is a tiny ObjectHeader carrying a `prototype` field
+                // pointing at another empty object — enough that
+                // `var arrayProto = Array.prototype` doesn't throw and the
+                // chained `.toString` reads return undefined rather than
+                // tripping the "Cannot read properties of undefined" gate at
+                // module-init time. Full constructor dispatch on these
+                // sentinels still falls through to existing code paths (bare
+                // `new Array(n)` continues to work through `lower_new`); the
+                // goal here is just to unblock libraries that read the
+                // constructors off `globalThis` as values. Refs lodash
+                // `runInContext` blocker after PR #963.
+                populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+                new_ptr
+            }
             Err(other) => other,
         }
     };
     crate::value::js_nanbox_pointer(ptr)
+}
+
+/// JS built-in constructor names exposed on `globalThis`. Pre-populated by
+/// the singleton init in `js_get_global_this` so libraries that read these
+/// off the global (lodash's `var Array = context.Array; var arrayProto =
+/// Array.prototype`, the same `(globalThis as any).X` read shape) see a
+/// non-undefined backing object. Codegen mirrors this list in
+/// `perry-codegen/src/expr.rs::is_global_this_builtin_name` to decide when
+/// `globalThis.<Name>` should route through the singleton instead of the
+/// legacy `0.0` no-value placeholder.
+pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
+    "Array",
+    "Object",
+    "String",
+    "Number",
+    "Boolean",
+    "Function",
+    "RegExp",
+    "Date",
+    "Error",
+    "TypeError",
+    "RangeError",
+    "SyntaxError",
+    "ReferenceError",
+    "EvalError",
+    "URIError",
+    "Symbol",
+    "Promise",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "WeakRef",
+    "Proxy",
+    "BigInt",
+    "Uint8Array",
+    "Int8Array",
+    "Uint16Array",
+    "Int16Array",
+    "Uint32Array",
+    "Int32Array",
+    "Float32Array",
+    "Float64Array",
+    "Uint8ClampedArray",
+    "BigInt64Array",
+    "BigUint64Array",
+    "ArrayBuffer",
+    "SharedArrayBuffer",
+    "DataView",
+    "TextEncoder",
+    "TextDecoder",
+    "URL",
+    "URLSearchParams",
+    "AbortController",
+    "AbortSignal",
+    "FormData",
+    "Headers",
+    "Request",
+    "Response",
+    "FinalizationRegistry",
+];
+
+/// JS built-in namespaces (typeof === "object", not "function"). Same
+/// shape on the singleton — a backing object with `prototype` so chained
+/// reads degrade gracefully — but typeof reports "object".
+pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &["Math", "JSON", "Reflect"];
+
+/// No-op thunk used as the function body for the singleton globalThis
+/// built-in constructor values. Lets `globalThis.Array` carry a real
+/// ClosureHeader (so `typeof globalThis.Array === "function"`) without
+/// implementing actual constructor dispatch through this path — bare
+/// `new Array(n)` continues to flow through codegen's `lower_new` arm and
+/// the runtime `js_array_alloc` machinery, so callers that follow the
+/// usual `new <Ident>(...)` pattern are unaffected. Calling these
+/// sentinels directly (e.g. `globalThis.Array(3)`) returns undefined —
+/// best-effort no-op rather than throwing — and is a known gap for
+/// libraries that rely on call-form constructors after re-binding the
+/// global to a local.
+extern "C" fn global_this_builtin_noop_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Populate the freshly-allocated globalThis singleton with built-in
+/// constructor / namespace properties. Called exactly once from the CAS
+/// winner in `js_get_global_this`. Constructors get a ClosureHeader-
+/// backed value so `typeof globalThis.Array === "function"`; namespaces
+/// (`Math`, `JSON`, `Reflect`) get a plain ObjectHeader (`typeof ===
+/// "object"`). Both shapes carry a `prototype` dynamic property pointing
+/// at an empty object so `<Builtin>.prototype` reads return a real
+/// pointer instead of undefined, which is what unblocks lodash's
+/// `var arrayProto = Array.prototype` chained read inside
+/// `runInContext`.
+fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
+    if singleton.is_null() {
+        return;
+    }
+    let proto_key_bytes = b"prototype";
+    let proto_key =
+        crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
+    // Constructors: ClosureHeader-backed so typeof is "function".
+    for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
+        let closure_ptr =
+            crate::closure::js_closure_alloc(global_this_builtin_noop_thunk as *const u8, 0);
+        if closure_ptr.is_null() {
+            continue;
+        }
+        // Stash `prototype` on the closure's dynamic-prop side table.
+        // `js_object_set_field_by_name` detects the CLOSURE_MAGIC tag
+        // at offset 12 and dispatches into `closure_set_dynamic_prop`
+        // for us; both reads and writes share that side table.
+        let proto_obj = js_object_alloc(0, 0);
+        if !proto_obj.is_null() {
+            let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
+            js_object_set_field_by_name(closure_ptr as *mut ObjectHeader, proto_key, proto_value);
+        }
+        let name_bytes = name.as_bytes();
+        let name_key =
+            crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+        let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
+        js_object_set_field_by_name(singleton, name_key, ctor_value);
+    }
+    // Namespaces: plain ObjectHeader so typeof is "object" per spec.
+    for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
+        let ns_obj = js_object_alloc(0, 0);
+        if ns_obj.is_null() {
+            continue;
+        }
+        let name_bytes = name.as_bytes();
+        let name_key =
+            crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+        let ns_value = crate::value::js_nanbox_pointer(ns_obj as i64);
+        js_object_set_field_by_name(singleton, name_key, ns_value);
+    }
 }
 
 /// Object.getOwnPropertyNames(obj) — returns all own property names (including non-enumerable).
