@@ -190,7 +190,11 @@ opt-level = "s"       # Optimize for size in stdlib
 opt-level = 3
 
 [workspace.package]
-version = "0.5.943"
+<<<<<<< HEAD
+version = "0.5.944"
+=======
+version = "0.5.944"
+>>>>>>> 5a61b96c (fix(hir+cli): #901 — same-file default imports no longer collide on "default" key)
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"

@@ -3873,6 +3873,35 @@ pub fn run_with_parse_cache(
                         }
                     }
 
+                    // Issue #901: companion to the HIR-side change at
+                    // `crates/perry-hir/src/lower.rs`'s Default specifier
+                    // (which now registers `(local, local)` instead of
+                    // `(local, "default")`). The HIR's `ExternFuncRef` now
+                    // carries the LOCAL name (unique per import site), so
+                    // `import_function_prefixes.get(local)` resolves to the
+                    // right source module. But the symbol the codegen emits
+                    // must still be `perry_fn_<src>__default` (or whatever
+                    // origin-name the source actually exports default as),
+                    // not `perry_fn_<src>__<local>` — the source module emits
+                    // its default-export symbol under the literal "default"
+                    // suffix. Insert the local→"default" override (or the
+                    // resolved origin name, when a re-export renamed it) so
+                    // every `perry_fn_<src>__<suffix>` construction site
+                    // probing `import_function_origin_names` picks the right
+                    // suffix. Pre-fix two same-file default imports of
+                    // different modules collided on the "default" key and
+                    // pino's `SORTING_ORDER.ASC` threw because `_req_9`
+                    // (`./lib/constants`) and `_req_10` (`./lib/tools`) both
+                    // resolved to `./lib/tools`. Pairs with the HIR change;
+                    // both must land for the resolution to be correct.
+                    if matches!(spec, perry_hir::ImportSpecifier::Default { .. }) {
+                        let suffix = resolved_origin_name
+                            .clone()
+                            .unwrap_or_else(|| exported_name.clone());
+                        import_function_origin_names
+                            .insert(local_name.clone(), suffix);
+                    }
+
                     // Imported variables (not functions) — ExternFuncRef-as-value
                     // should call the getter, not wrap as closure. Look up by the
                     // ORIGIN path (where the `Let X = ...` actually lives), not

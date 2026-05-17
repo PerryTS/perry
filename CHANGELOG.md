@@ -2,6 +2,36 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.944 — fix(hir+cli): #901 — two same-file default imports no longer collide on the literal `"default"` key
+
+**Symptom.** Pino's CJS-bundle module-init phase threw `TypeError: Cannot read properties of undefined (reading 'ASC')` at v0.5.941. The minimal repro is two `import X from "./a"; import Y from "./b"` in the same `.ts` file, where each source has `export default <obj>`: at runtime `X.value` and `Y.value` BOTH printed `Y`'s value (the second default's value — its module's prefix overwrote the first under the shared key in `import_function_prefixes`).
+
+**Root cause.** HIR lowering at `crates/perry-hir/src/lower.rs`'s `ImportSpecifier::Default` arm called `ctx.register_imported_func(local, "default")` — using the literal string `"default"` as the imported-name marker for every default import. The codegen looks up the resulting `Expr::ExternFuncRef { name: "default" }` against the CLI's flat `HashMap<String, String>` `import_function_prefixes`. Two default imports in the same file both inserted `"default" → prefix_X`, and HashMap insert overwrites — whichever module's prefix landed last won. Both `X` and `Y` then routed to the SAME `perry_fn_<src>__default` symbol at codegen, so both bindings observed the SECOND source's default-exported object.
+
+Pino exposed this because its CJS-to-ESM wrap at `crates/perry/src/commands/compile/cjs_wrap.rs` hoists every `require("./X")` to an `import _req_N from "./X"`. pino.js's `const { DEFAULT_LEVELS, SORTING_ORDER } = require('./lib/constants')` and `const { createArgsNormalizer, ... } = require('./lib/tools')` became `import _req_9 from './lib/constants'; import _req_10 from './lib/tools'`. Both default imports collided on the literal `"default"` key, so the IIFE's `require('./lib/constants')` returned `_req_10`'s value (tools' exports object). Destructuring `SORTING_ORDER` from tools' namespace bound `undefined`. Reading `.ASC` on `undefined` threw the spec-mandated TypeError above.
+
+**Fix.** Two coordinated changes.
+
+1. `crates/perry-hir/src/lower.rs`'s `ImportSpecifier::Default` arm now calls `register_imported_func(local, local)` (identity registration) instead of `register_imported_func(local, "default")`. The local name is unique per import site, so every reference lowers to `ExternFuncRef { name: <local> }` — distinct keys for distinct imports, no map collision. The CLI driver already inserts `local_name → effective_prefix` into `import_function_prefixes` (the `if local_name != exported_name` branch in `crates/perry/src/commands/compile.rs`), so the lookup resolves correctly without further wiring on the prefix side.
+
+2. `crates/perry/src/commands/compile.rs` — companion insert added right after the existing `import_function_origin_names` re-export-rename handling. For `ImportSpecifier::Default` specs, always insert `local_name → <resolved_origin_name || "default">` into `import_function_origin_names`. The codegen's `import_origin_suffix()` lookup (consulted at every `perry_fn_<src>__<suffix>` symbol-construction site in `lower_call.rs` / `expr.rs`) then resolves the local name back to `"default"` — matching what the source module actually emits — so the emitted call symbol stays `perry_fn_<src>__default` rather than the nonsensical `perry_fn_<src>__<local>`.
+
+Both changes must land together: the HIR change alone would break symbol construction (lookups against `import_function_prefixes` succeed, but the emitted symbol suffix would be `<local>`, link-failing); the CLI change alone is a no-op (the HIR still feeds `"default"` into both lookups).
+
+**Scope discipline.** Pino's smoke now advances past `SORTING_ORDER.ASC` and hits two unrelated downstream errors (`MAX_STRING_LENGTH` from thread-stream's V8 bundle, `(boolean).tracingChannel is not a function` from a Node API stub) — both follow-ups, not regressions from this fix. Named imports (`import { Foo } from "./X"`) already used the local name as the identity marker, so they were unaffected by the bug and are unaffected by the fix. Namespace imports (`import * as ns from "./X"`) route through `namespace_member_prefixes` (the per-namespace 2-tuple map added under #680) and are also unaffected. Re-export renames (`import X from "./re_exports"` where `re_exports.js` does `export { default as foo }`) still work because the CLI's `resolved_origin_name` lookup runs first and populates the same `local_name` key — the new `Default`-specific insert only fires when no origin override is already present, so re-export-rename precedence is preserved.
+
+**Validation.** The new regression test `test-files/test_issue_pino_sorting_order_undefined.ts` (paired with `_a.ts` / `_b.ts`) exercises the exact bug shape with pure TypeScript — two default imports, two different source modules, per-default property access on each binding. Pre-fix both `a.value` and `b.value` printed `BBB` (the second module's value). Post-fix `a.value` is `AAA`, `b.value` is `BBB`. The existing `test-files/test_issue_pino_prototype_undefined.ts` (which covers the v0.5.940 pino fix), `test_issue_678_reexport_default.ts`, `test_issue_anonymous_default_export.ts`, `test_issue_645_default_fill_positional.ts`, `test_issue_392_cross_module_method_dispatch.ts`, and `test_issue_431_cross_module_class_collision.ts` all pass unchanged. The original pino smoke (`/tmp/perry-pino-x/main.ts`) now advances past the `SORTING_ORDER.ASC` site.
+
+**Files touched.**
+
+* `crates/perry-hir/src/lower.rs` — `ImportSpecifier::Default` arm (1 line, +25 lines comment).
+* `crates/perry/src/commands/compile.rs` — companion `import_function_origin_names` insert (5 lines, +20 lines comment).
+* `test-files/test_issue_pino_sorting_order_undefined.ts` — new regression test (entry).
+* `test-files/test_issue_pino_sorting_order_undefined_a.ts` — first default-export pair file.
+* `test-files/test_issue_pino_sorting_order_undefined_b.ts` — second default-export pair file.
+
+Refs #898 (v0.5.940 pino fix for `EventEmitter.prototype` undefined), #678 (re-export rename), #680 (`namespace_member_prefixes` — same flat-map-collision pattern for namespace member access), #793 (Node.js + TypeScript compatibility roadmap). Closes #901.
+
 ## v0.5.943 — fix(hir): `date.getDay()` resolves through the static Date-method dispatch list instead of falling through to runtime dynamic dispatch
 
 **Symptom.** Compiling `dayjs` (configured via `perry.compilePackages`) and calling `dayjs("2024-01-02").format("YYYY-MM")` threw `TypeError: (number).getDay is not a function` from inside dayjs's `_proto.init` / `_proto.format` paths where the library reads `this.$d.getDay()` on the internally-stored Date. The smaller standalone shape — a class with a `Date` field, where a method reads `this.$d.getDay()` — reproduced the same error.

@@ -4377,9 +4377,36 @@ fn lower_module_decl(
                             // Default exports don't have a method name
                             ctx.register_native_module(local.clone(), source.clone(), None);
                         } else {
-                            // Default import from JS module - register so calls resolve to ExternFuncRef
-                            // Use "default" as the original name since default imports map to the "default" export
-                            ctx.register_imported_func(local.clone(), "default".to_string());
+                            // Default import from JS module — register so calls resolve to
+                            // ExternFuncRef. Use the LOCAL name as the original-name marker
+                            // (identity registration) so the resulting ExternFuncRef carries a
+                            // per-import-site UNIQUE name. Before this, every default import
+                            // registered `(local, "default")`, so two `import X from "./a";
+                            // import Y from "./b"` in the same file both lowered to
+                            // `ExternFuncRef { name: "default" }` and the codegen's flat
+                            // `import_function_prefixes` lookup keyed on "default" collided —
+                            // whichever module's prefix landed last in the HashMap won, and
+                            // both `X` and `Y` resolved to the SAME source module. Pino's
+                            // CJS wrap exposed this: `const { SORTING_ORDER } =
+                            // require('./lib/constants')` and `const { ... } =
+                            // require('./lib/tools')` get hoisted as
+                            // `import _req_9 from './lib/constants'; import _req_10 from
+                            // './lib/tools'`, and pino.js's IIFE call `require('./lib/constants')`
+                            // returned tools' exports, throwing
+                            // `TypeError: Cannot read properties of undefined (reading 'ASC')`.
+                            //
+                            // The local name is unique per import site, so the resulting
+                            // `ExternFuncRef { name: <local> }` looks up correctly against the
+                            // CLI's `import_function_prefixes` (which already inserts both
+                            // `exported_name="default"` AND `local_name=<unique>`). The CLI's
+                            // companion insert at `crates/perry/src/commands/compile.rs`
+                            // (right after the `import_function_prefixes` insert pair for
+                            // Default specifiers) places `local_name → "default"` into
+                            // `import_function_origin_names`, so the codegen's symbol
+                            // construction at `lower_call.rs` / `expr.rs` builds
+                            // `perry_fn_<src>__default` — matching what the origin module
+                            // actually emits. Closes #901.
+                            ctx.register_imported_func(local.clone(), local.clone());
                         }
                         specifiers.push(ImportSpecifier::Default { local });
                     }
