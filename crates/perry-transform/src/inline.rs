@@ -17,6 +17,10 @@ pub struct MethodCandidate {
     pub func: Function,
     /// The index of the `this` parameter (if present)
     pub this_param_id: Option<LocalId>,
+    /// True only when a direct prototype-method inline preserves normal
+    /// property lookup for this method name. Instance fields, computed fields,
+    /// and accessors can all shadow `obj.method` before the prototype method.
+    pub method_lookup_safe: bool,
     /// `Expr::ExternFuncRef` names referenced inside the body, paired with
     /// the `resolved_path` of the source module that originally exported
     /// each name. Empty for methods harvested via `gather_cross_module_methods`
@@ -447,6 +451,11 @@ pub fn inline_functions(
                     MethodCandidate {
                         func: method.clone(),
                         this_param_id: None,
+                        method_lookup_safe: method_lookup_is_unshadowed(
+                            &module.classes,
+                            &class.name,
+                            &method.name,
+                        ),
                         required_extern_imports: Vec::new(),
                     },
                 );
@@ -1597,6 +1606,41 @@ fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
     stmts.iter().any(|s| check_stmt(s, target_id))
 }
 
+/// Return true only when direct method inlining preserves JS method lookup.
+///
+/// A call `obj.method()` checks own properties before prototype methods.
+/// Instance fields (`method = ...`), computed instance fields (`[expr] = ...`),
+/// and accessors can all shadow the prototype method that the HIR inliner is
+/// about to substitute directly. If we cannot prove the class chain is free of
+/// those hazards, keep the call intact for the normal dispatch path.
+fn method_lookup_is_unshadowed(classes: &[Class], class_name: &str, method_name: &str) -> bool {
+    let mut cur = Some(class_name);
+    let mut depth = 0usize;
+    while let Some(name) = cur {
+        let Some(class) = classes.iter().find(|c| c.name == name) else {
+            return false;
+        };
+        if class
+            .fields
+            .iter()
+            .any(|f| f.key_expr.is_some() || f.name == method_name)
+        {
+            return false;
+        }
+        if class.getters.iter().any(|(n, _)| n == method_name)
+            || class.setters.iter().any(|(n, _)| n == method_name)
+        {
+            return false;
+        }
+        cur = class.extends_name.as_deref();
+        depth += 1;
+        if depth > 32 {
+            return false;
+        }
+    }
+    true
+}
+
 /// Returns true iff `body` only references symbols whose resolution stays
 /// stable across modules. Concretely: the body must not contain any of
 /// `Expr::FuncRef` (callee bound to a same-module function id), `Expr::ExternFuncRef`
@@ -1736,6 +1780,11 @@ pub fn gather_cross_module_methods(module: &Module) -> HashMap<(String, String),
                 MethodCandidate {
                     func: method.clone(),
                     this_param_id: None,
+                    method_lookup_safe: method_lookup_is_unshadowed(
+                        &module.classes,
+                        &class.name,
+                        &method.name,
+                    ),
                     required_extern_imports: Vec::new(),
                 },
             );
@@ -1832,6 +1881,11 @@ pub fn gather_cross_module_methods_with_extern_imports(
                 MethodCandidate {
                     func: method.clone(),
                     this_param_id: None,
+                    method_lookup_safe: method_lookup_is_unshadowed(
+                        &module.classes,
+                        &class.name,
+                        &method.name,
+                    ),
                     required_extern_imports: required,
                 },
             );
@@ -3748,6 +3802,14 @@ fn try_inline_simple_call(
         // Check for regular function call
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             if let Some(func) = func_candidates.get(func_id) {
+                // Extra actual args are evaluated before a JS call even when
+                // the callee declares fewer params. The current inliner maps
+                // params with zip(), so it cannot preserve those trailing
+                // side effects. Keep the call intact instead.
+                if args.len() > func.params.len() {
+                    return None;
+                }
+
                 // Pattern 1: single Return(expr)
                 if func.body.len() == 1 {
                     if let Stmt::Return(Some(return_expr)) = &func.body[0] {
@@ -3950,6 +4012,16 @@ fn try_inline_simple_call(
                 if let Some(method_candidate) =
                     method_candidates.get(&(class_name, method_name.clone()))
                 {
+                    // Preserve normal `obj.method` lookup and argument
+                    // evaluation. Direct substitution would bypass
+                    // own-property/accessor shadows and zip() would drop
+                    // extra actual args plus their side effects.
+                    if !method_candidate.method_lookup_safe
+                        || args.len() > method_candidate.func.params.len()
+                    {
+                        return None;
+                    }
+
                     // Check for single return statement
                     if method_candidate.func.body.len() == 1 {
                         if let Stmt::Return(Some(return_expr)) = &method_candidate.func.body[0] {
@@ -4104,6 +4176,14 @@ fn try_inline_call(
         // Handle regular function calls
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             if let Some(func) = func_candidates.get(func_id) {
+                // Extra actual args are evaluated before a JS call even when
+                // the callee declares fewer params. The current inliner maps
+                // params with zip(), so it cannot preserve those trailing
+                // side effects. Keep the call intact instead.
+                if args.len() > func.params.len() {
+                    return None;
+                }
+
                 let mut setup_stmts: Vec<Stmt> = Vec::new();
                 let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
 
@@ -4225,6 +4305,16 @@ fn try_inline_call(
                 if let Some(method_candidate) =
                     method_candidates.get(&(class_name, method_name.clone()))
                 {
+                    // Preserve normal `obj.method` lookup and argument
+                    // evaluation. Direct substitution would bypass
+                    // own-property/accessor shadows and zip() would drop
+                    // extra actual args plus their side effects.
+                    if !method_candidate.method_lookup_safe
+                        || args.len() > method_candidate.func.params.len()
+                    {
+                        return None;
+                    }
+
                     let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
 
                     // Map 'this' parameter to the receiver object (if present
