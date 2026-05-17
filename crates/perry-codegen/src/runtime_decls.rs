@@ -1556,6 +1556,13 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[PTR, I64, PTR, I64],
     );
+    // Issue #894: materialize a NATIVE_MODULE_CLASS_ID-tagged namespace
+    // object for `Expr::NativeModuleRef` when it reaches the value-form
+    // fallback path (the require-call-result-then-member-access shape
+    // produced by `compilePackages` CJS wrapping). Pre-fix the value
+    // lowered to `0.0` and any subsequent member access returned
+    // undefined, tripping the spec property-access throw.
+    module.declare_function("js_create_native_module_namespace", DOUBLE, &[PTR, I64]);
     module.declare_function("js_object_get_field_ic_miss", DOUBLE, &[I64, I64, PTR]);
     // Object rest destructuring: copy all properties from src except excluded keys.
     // Takes a src object ptr and an array of NaN-boxed strings (the excluded keys),

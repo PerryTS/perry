@@ -10323,7 +10323,42 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             Ok(val_v)
         }
-        Expr::NativeModuleRef(_) => Ok(double_literal(0.0)),
+        // Issue #894: when `NativeModuleRef` reaches this fallback path
+        // (i.e. its parent isn't one of the dedicated fast-paths above —
+        // for example it's the *return value* of a CJS-wrap synthesized
+        // `require()` call, then stashed in a local and member-accessed
+        // later: `const { EventEmitter } = require('node:events')` →
+        // `Let { id: 6, init: Call(require, "node:events") }` followed by
+        // `Let { id: 7, init: PropertyGet { LocalGet(6), "EventEmitter" } }`),
+        // pre-fix the value lowered to the literal `0.0`. `0.0` is plain
+        // f64 zero (not the NaN-boxed `undefined` tag), so a subsequent
+        // `PropertyGet { LocalGet(6), "X" }` slow-pathed into
+        // `js_object_get_field_by_name` with a null receiver and returned
+        // `undefined` — and a then-chained `PropertyGet { LocalGet(7),
+        // "prototype" }` on that `undefined` tripped the spec
+        // "Cannot read properties of undefined (reading 'prototype')"
+        // throw (pino's `lib/proto.js` exact shape).
+        //
+        // Materialize a real NATIVE_MODULE_CLASS_ID-tagged ObjectHeader
+        // here so the downstream property-by-name path routes through the
+        // namespace's NATIVE_MODULE_CLASS_ID arm in
+        // `js_object_get_field_by_name` — that consults
+        // `get_native_module_constant` and `is_native_module_callable_export`
+        // exactly as the direct-NativeModuleRef fast path does. The two
+        // paths now converge: `import * as fs from "node:fs"; fs.constants`
+        // (direct AST shape, fast-path at line 3615) and `const fs =
+        // require("node:fs"); fs.constants` (call-result shape, fallback
+        // path here) both produce a real namespace object.
+        Expr::NativeModuleRef(name) => {
+            let mod_idx = ctx.strings.intern(name);
+            let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
+            let mod_len_str = name.len().to_string();
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_create_native_module_namespace",
+                &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],
+            ))
+        }
 
         // ObjectRest is the `...rest` capture in destructuring:
         // `const { a, b, ...rest } = obj` — `rest` must be a clone of

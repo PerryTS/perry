@@ -3829,6 +3829,38 @@ pub extern "C" fn js_object_get_field_by_name(
                 if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
                     return JSValue::from_bits(val.to_bits());
                 }
+                // Issue #894: parity with the direct-NativeModuleRef
+                // fast path (`js_native_module_property_by_name`). For
+                // (module, prop) pairs whose property-read should
+                // produce a callable handle — e.g.
+                // `("events", "EventEmitter")` — synthesize the same
+                // BOUND_METHOD_FUNC_PTR closure so the require-then-
+                // member-access shape (`const { EventEmitter } =
+                // require("node:events")`) matches the direct
+                // namespace-import shape (`import { EventEmitter } from
+                // "node:events"`). Pre-fix the slow path returned
+                // undefined here, and the downstream
+                // `EventEmitter.prototype` read tripped the spec
+                // "Cannot read properties of undefined" throw.
+                if is_native_module_callable_export(module_name, property_name) {
+                    let prop_bytes = property_name.as_bytes();
+                    let heap_name = {
+                        let layout =
+                            std::alloc::Layout::from_size_align(prop_bytes.len().max(1), 1)
+                                .unwrap();
+                        let ptr = std::alloc::alloc(layout);
+                        std::ptr::copy_nonoverlapping(prop_bytes.as_ptr(), ptr, prop_bytes.len());
+                        ptr
+                    };
+                    let closure =
+                        crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
+                    crate::closure::js_closure_set_capture_f64(closure, 0, nb_ptr);
+                    crate::closure::js_closure_set_capture_ptr(closure, 1, heap_name as i64);
+                    crate::closure::js_closure_set_capture_ptr(closure, 2, prop_bytes.len() as i64);
+                    return JSValue::from_bits(
+                        crate::value::js_nanbox_pointer(closure as i64).to_bits(),
+                    );
+                }
                 return JSValue::undefined();
             }
         }
@@ -7834,10 +7866,27 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
 /// Needed so `typeof tty.ReadStream === "function"` matches Node — the
 /// method-call form (`tty.isatty(0)`) is already handled by a dedicated
 /// codegen path, this just keeps the property-read form coherent.
+///
+/// Issue #894: also list `("events", "EventEmitter")` here so pino's
+/// `const { EventEmitter } = require('node:events'); /* ... */
+/// Object.setPrototypeOf(prototype, EventEmitter.prototype)` survives —
+/// pre-fix `EventEmitter` was `undefined`, and the subsequent
+/// `EventEmitter.prototype` read threw a spec TypeError at module init.
+/// Returning a callable closure makes `EventEmitter` truthy and gives
+/// `typeof EventEmitter === "function"` (matching Node); the chained
+/// `.prototype` read on a closure pointer returns `undefined` (no method
+/// dispatch table tracks `.prototype` on closures), which
+/// `Object.setPrototypeOf` then ignores (Perry's runtime helper is a
+/// no-op anyway). `new EventEmitter()` still routes through the dedicated
+/// builtin path at lower_call/builtin.rs that allocates a real
+/// `EventEmitterHandle`, so dispatch coherence is preserved.
 fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
     matches!(
         (module, prop),
-        ("tty", "isatty") | ("tty", "ReadStream") | ("tty", "WriteStream")
+        ("tty", "isatty")
+            | ("tty", "ReadStream")
+            | ("tty", "WriteStream")
+            | ("events", "EventEmitter")
     )
 }
 
