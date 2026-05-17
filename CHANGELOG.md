@@ -2,6 +2,55 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.967 — fix(codegen): #321 — factory-returned-class `.staticMethod(args)` bundles args into synthetic `arguments` rest
+
+**Symptom.** `import { Effect } from "effect"; console.log("smoke:", typeof (Effect as any).succeed)` advanced through Schema.ts module init past the post-#912 (gap 1 + gap 2) sites but still threw
+
+```
+TypeError: Cannot read properties of undefined (reading '_tag')
+    at <anonymous>
+```
+
+before either `console.log` line ran. Bisection (PERRY_DBG_PROPERTY_ACCESS + symbolicated backtrace + per-statement console.log probes in Schema.ts) traced the throw to `getDefaultTypeLiteralAST` inside Schema.ts's top-level `const DurationValueMillis = TaggedStruct("Millis", { millis: NonNegativeInt })`. The crashing line is
+
+```ts
+const ast: PropertySignature.AST = field.ast
+switch (ast._tag) { … }
+```
+
+where `field` is the value at key `"_tag"` inside `TaggedStruct`'s synthesized object `{ _tag: tag(value), ...fields }`. The probes showed `field` was a `function` (not a `PropertySignature` object), which percolated from `tag("Millis") = Literal("Millis").pipe(propertySignature, withConstructorDefault(() => "Millis"))` returning the inner curried function instead of a real `PropertySignature`. The curry came from `dual(2, body)`'s `if (arguments.length >= 2) { return body(a, b) } return function (self) { return body(self, a) }` arm taking the wrong branch.
+
+**Root cause (this gap, "gap 3" in the #321 numbering).** Effect's `Literal(value)` is a factory that returns `class LiteralClass extends make(ast) {}`. The base class is itself returned by `make(ast)` and has a `static pipe() { return pipeArguments(this, arguments) }` method whose body reads `arguments`. The HIR's `lower_class_method` + `append_synthetic_arguments_param` (#677 / #899 / #912 gap 1) correctly appends a synthesized `arguments` rest param to the static method's HIR `Function`, but the static-method dispatch path in `crates/perry-codegen/src/lower_call.rs` (added by #912 gap 2 for the `const C = make(); C.pipe(...)` shape) had three gaps:
+
+1. **Receiver-shape recognition.** The pre-fix `static_dispatch_cls` only matched `Expr::ClassRef(name)` and `Expr::LocalGet(id)` (resolved via `local_class_aliases`). Effect's `Literal(value).pipe(...)` arrives at the call site as `Expr::Call { callee: FuncRef(Literal), … }`, or — when the inliner collapses the factory body inline — as `Expr::Sequence([RegisterClassParentDynamic, ClassRef])`. Neither shape matched, so dispatch fell through to dynamic dispatch and the static body never ran (the dispatch tower returned a default value like `2` or `undefined`).
+
+2. **Synthetic-arguments rest bundling at the call site.** Even when the static dispatch tower DID resolve (the post-#912 LocalGet path), the args were forwarded 1-to-1 to the underlying function. The static `pipe()` body declares a single synthetic-arguments rest param, so `Cls.pipe(f1, f2)` was emitting `perry_static_…__pipe(f1, f2)` — the function received `arg0 = f1` and the body read `.length` on that double (a function → `undefined`). Mirror the existing arg-bundling logic from the regular `Call` lowering (lines ~720–765 of `lower_call.rs`) so the synth-args slot receives a real Array of all call args.
+
+3. **Receiver `this` for dynamic factory results.** For Call / Sequence receivers, each `Literal(value)` call returns a fresh anonymous class with unique static fields (`static literals = [...]`, `static ast = ...`). The pre-existing LocalGet branch synthesizes a ClassRef NaN-box from the resolved class name — that's correct for `const C = make()` (where the ClassRef identity is the only thing static bodies read), but wrong for factory-call receivers because it loses the per-call data. Use `lower_expr(object)` to capture the actual runtime class value for `Call` / `Sequence` receivers.
+
+**Fix.**
+
+- `crates/perry-codegen/src/codegen.rs` — fixed-point pass over `hir.functions` that tags functions whose body unconditionally returns a `ClassRef` (or a `Call` / `Conditional` / `Sequence` shape that transitively resolves to one). Exposes the resulting map as `CrossModuleCtx::func_returns_class` so per-`FnCtx` lowering can consult it. The pass handles transitive chains (`Literal` → `makeLiteralClass` → returns class) and the inliner-collapsed `Sequence([…, ClassRef])` shape; `Conditional` is included because Effect's actual `Literal` body is `isNonEmptyReadonlyArray(literals) ? makeLiteralClass(literals) : Never` — both branches resolve to a class. Disqualifies functions whose returns are mixed (some class, some not) so we don't mis-classify a non-factory.
+
+- `crates/perry-codegen/src/lower_call.rs::lower_call`'s static-method dispatch tower:
+  - Extends `static_dispatch_cls` to recognise `Expr::Call { callee: FuncRef(fid) }` (consults `func_returns_class`) and `Expr::Sequence` (walks the trailing expression). Refactored into a small recursive helper so the resolver composes correctly for nested Sequence / Call wrapping.
+  - Adds synth-args rest bundling (and the non-synthetic rest path for completeness): when the resolved static method ends in a rest param, allocate a `js_array_alloc` array, push every call arg via `js_array_push_f64`, and pass the resulting NaN-boxed pointer as the single rest slot.
+  - For `Call` / `Sequence` receivers, lowers the object expression directly so the runtime `this` carries the per-call factory result. For `ClassRef` / `LocalGet`, retains the pre-existing ClassRef-NaN-box synthesis.
+
+- `crates/perry-codegen/src/expr.rs::FnCtx` — new `func_returns_class: &'a HashMap<u32, String>` field backed by `cross_module.func_returns_class`.
+
+**Test plan.**
+
+- `test-files/test_issue_effect_tag_deeper.ts` — three patterns standalone:
+  1. Direct factory + static-method `Literal(value).pipe(f1, f2)` exercises the new `Expr::Call` recognition + arg bundling.
+  2. Two-deep factory chain `Outer(value).pipe(…)` exercises the fixed-point pass.
+  3. Pre-existing `const C = make(); C.pipe(…)` (post-#912 gap 2) — regression guard.
+  All 5 assertions match Node `--experimental-strip-types` output byte-for-byte.
+- `test-files/test_issue_effect_arguments_length_returned_fn.ts` (#912 gap 1) — still passes.
+- `test-files/test_issue_effect_factory_static_dispatch.ts` (#912 gap 2) — still passes.
+
+**Known next blocker (documented in the test file, not closed in this PR).** The Effect `typeof (Effect as any).succeed` smoke STILL fails after this lands, with the same `_tag` error but at a different site: `Predicate.hasProperty(field, PropertySignatureTypeId)` from inside `isPropertySignature(field)`. `hasProperty` is exported as `const hasProperty = dual(2, body)` — a const-bound closure. The cross-module ExternFuncRef dispatch for `hasProperty` doesn't bundle args into the closure's synthetic-arguments rest, so the dual-returned function sees `arguments.length === 1` (or undefined) and takes the curried path. The likely fix is in the ExternFuncRef call site in `lower_call.rs` (~line 1260): when the imported binding's source is a `dual(...)`-shaped closure with synth-args, emit the same bundling the FuncRef + static-method paths now do. Or emit a thin LLVM wrapper at the export side that performs the bundling before forwarding to the closure body. Filed as a follow-up under #321.
+
 ## v0.5.966 — fix(runtime): #928 — `JSON.stringify(new Error(...))` segfaulted on the built-in Error layout
 
 **Symptom.** `JSON.stringify(new Error("test"))` killed the process with SIGSEGV instead of returning `"{}"`. Same root cause surfaced as the user-visible "throw new Error from Fastify async route handler crashes the server" report in #928: PR #937 ("fix(fastify): catch thrown route errors") fixed the Fastify dispatch path to catch rejections + route them through `render_rejection_body`, but the rejection-body renderer's `js_json_stringify(reason, 0)` fallback still segfaulted on built-in Error reasons. The general `JSON.stringify(error)` call also still crashed, regardless of Fastify.

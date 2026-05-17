@@ -453,6 +453,15 @@ pub(crate) struct FnCtx<'a> {
     /// every actual argument while fixed parameters still receive their
     /// normal positional values.
     pub func_synthetic_arguments: &'a std::collections::HashSet<u32>,
+    /// Refs #915 (gap 3 / #321 follow-up): factory functions in THIS
+    /// module — those whose body unconditionally returns a `ClassRef`
+    /// (or transitively returns another such factory). Maps function
+    /// id → produced class name. Lets `lower_call`'s static-method
+    /// dispatch tower recognise `Literal(...).pipe(...)` (where
+    /// `Literal` is a factory) and route the `.pipe` lookup through
+    /// the produced class's static methods, matching the post-#912
+    /// `Cls = make(); Cls.pipe(...)` shape.
+    pub func_returns_class: &'a std::collections::HashMap<u32, String>,
     /// LocalIds that must be stored in heap boxes (`js_box_alloc`)
     /// instead of stack allocas. A local gets boxed when at least
     /// one closure captures it AND it's written to (either by the

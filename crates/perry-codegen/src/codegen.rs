@@ -468,6 +468,15 @@ pub(crate) struct CrossModuleCtx {
     /// site in `lower_call.rs` to pack trailing args into a rest array.
     pub imported_func_has_rest: std::collections::HashSet<String>,
     pub imported_func_return_types: std::collections::HashMap<String, perry_types::Type>,
+    /// Refs #915 (gap 3 / #321 follow-up): function ids in THIS module
+    /// whose body unconditionally returns a `ClassRef` (or transitively
+    /// returns another such factory). Maps function id → produced
+    /// class name. Lets `lower_call`'s static-method dispatch tower
+    /// recognise `Literal(...).pipe(...)` (where `Literal` is a
+    /// factory) and route the `.pipe` lookup through the produced
+    /// class's static methods. Built once in `compile_module` via a
+    /// fixed-point pass over `hir.functions`.
+    pub func_returns_class: std::collections::HashMap<u32, String>,
     /// Per-method explicit param counts, keyed by `(class_name, method_name)`.
     /// Built once in `compile_module` from BOTH local `hir.classes` AND
     /// `opts.imported_classes`. Used at every method-call dispatch site in
@@ -1274,6 +1283,42 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
+    // Refs #915 (gap 3 / #321 follow-up): tag functions whose body
+    // unconditionally returns a `ClassRef` (or transitively returns
+    // another such factory) so call sites of the form
+    // `Literal(value).pipe(...)` can dispatch the `.pipe` lookup as a
+    // static-method call on the returned class. Iterate until
+    // fixed-point so `Literal(value)` (which calls `makeLiteralClass`)
+    // resolves to the same class as `makeLiteralClass(...)`.
+    let mut func_returns_class_map: std::collections::HashMap<u32, String> =
+        std::collections::HashMap::new();
+    let n_funcs_for_factory_pass = hir.functions.len();
+    for _ in 0..n_funcs_for_factory_pass {
+        let mut changed = false;
+        for f in &hir.functions {
+            if func_returns_class_map.contains_key(&f.id) {
+                continue;
+            }
+            let mut produced: Option<String> = None;
+            let mut disqualified = false;
+            collect_return_class(
+                &f.body,
+                &mut produced,
+                &mut disqualified,
+                &func_returns_class_map,
+            );
+            if !disqualified {
+                if let Some(class_name) = produced {
+                    func_returns_class_map.insert(f.id, class_name);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
     // Build the cross-module context bundle from CompileOptions.
     let cross_module = CrossModuleCtx {
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
@@ -1289,6 +1334,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         namespace_node_submodules: opts.namespace_node_submodules.clone(),
         imported_func_has_rest: opts.imported_func_has_rest,
         imported_func_return_types: opts.imported_func_return_types,
+        func_returns_class: func_returns_class_map,
         method_param_counts,
         method_has_rest,
         class_keys_globals: class_keys_globals_map,
@@ -3630,6 +3676,7 @@ fn compile_function(
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
+        func_returns_class: &cross_module.func_returns_class,
         boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
         closure_rest_params,
@@ -4019,6 +4066,7 @@ fn compile_closure(
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
+        func_returns_class: &cross_module.func_returns_class,
         boxed_vars: closure_boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
         closure_rest_params,
@@ -4252,6 +4300,7 @@ fn compile_method(
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
+        func_returns_class: &cross_module.func_returns_class,
         boxed_vars: method_boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
         closure_rest_params,
@@ -4730,6 +4779,7 @@ fn compile_module_entry(
             imported_class_ctors: &cross_module.imported_class_ctors,
             func_signatures,
             func_synthetic_arguments,
+            func_returns_class: &cross_module.func_returns_class,
             boxed_vars: main_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
             closure_rest_params: closure_rest_params,
@@ -5109,6 +5159,7 @@ fn compile_module_entry(
             imported_class_ctors: &cross_module.imported_class_ctors,
             func_signatures,
             func_synthetic_arguments,
+            func_returns_class: &cross_module.func_returns_class,
             boxed_vars: init_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
             closure_rest_params: closure_rest_params,
@@ -5893,6 +5944,7 @@ fn compile_static_method(
         imported_class_ctors: &cross_module.imported_class_ctors,
         func_signatures,
         func_synthetic_arguments,
+        func_returns_class: &cross_module.func_returns_class,
         boxed_vars: static_boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
         closure_rest_params,
@@ -6418,6 +6470,133 @@ fn emit_namespace_populator(
 
 fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
     format!("perry_fn_{}__{}", module_prefix, sanitize(hir_name))
+}
+
+/// Walk a function body looking for `Return(Some(expr))` shapes that
+/// identify the function as a factory returning a class. Sets
+/// `*produced` to the resolved class name when the first qualifying
+/// return is seen; sets `*disqualified` when a return points at
+/// something we can't classify as a class. Used by
+/// `func_returns_class_map` fixed-point in `compile_module` to recognise
+/// Effect's `Literal` / `makeLiteralClass` / `make` factories. Refs
+/// #915 (gap 3 / #321 follow-up).
+///
+/// Recognised return shapes:
+///   - `Return(Some(ClassRef(name)))` — direct class literal return.
+///   - `Return(Some(Call { callee: FuncRef(other_fid), .. }))` — call
+///     to another already-tagged factory (transitive).
+///   - `Return(Some(Conditional { then, else, .. }))` — both branches
+///     must independently resolve to the same class. Effect's
+///     `Literal(...)` has this shape — the body is
+///     `array_.isNonEmptyReadonlyArray(literals) ? makeLiteralClass(literals) : Never`.
+///   - `Return(Some(Sequence([..., ClassRef(name)])))` — the HIR's
+///     inliner sometimes collapses a factory call to
+///     `Sequence([RegisterClassParentDynamic, ClassRef(name)])`. Treat
+///     the trailing class as the produced value.
+///
+/// Anything else inside a `Return(Some(_))` disqualifies the function:
+/// we'd rather miss a factory than mis-classify a non-factory.
+/// Returns inside nested closures are SKIPPED — those belong to the
+/// inner function (the walker doesn't recurse into Expr).
+fn collect_return_class(
+    stmts: &[perry_hir::Stmt],
+    produced: &mut Option<String>,
+    disqualified: &mut bool,
+    func_returns_class: &std::collections::HashMap<u32, String>,
+) {
+    use perry_hir::{Expr, Stmt};
+
+    fn resolve_class(
+        expr: &perry_hir::Expr,
+        func_returns_class: &std::collections::HashMap<u32, String>,
+    ) -> Option<String> {
+        match expr {
+            Expr::ClassRef(name) => Some(name.clone()),
+            Expr::Call { callee, .. } => match callee.as_ref() {
+                Expr::FuncRef(fid) => func_returns_class.get(fid).cloned(),
+                _ => None,
+            },
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                let lhs = resolve_class(then_expr, func_returns_class)?;
+                let rhs = resolve_class(else_expr, func_returns_class)?;
+                if lhs == rhs {
+                    Some(lhs)
+                } else {
+                    None
+                }
+            }
+            Expr::Sequence(exprs) => exprs
+                .last()
+                .and_then(|e| resolve_class(e, func_returns_class)),
+            _ => None,
+        }
+    }
+
+    for stmt in stmts {
+        if *disqualified {
+            return;
+        }
+        match stmt {
+            Stmt::Return(Some(expr)) => {
+                let resolved = resolve_class(expr, func_returns_class);
+                match resolved {
+                    Some(name) => match produced {
+                        None => *produced = Some(name),
+                        Some(existing) if *existing == name => {}
+                        Some(_) => {
+                            // Mixed return shapes — bail.
+                            *disqualified = true;
+                        }
+                    },
+                    None => {
+                        *disqualified = true;
+                    }
+                }
+            }
+            Stmt::Return(None) => {
+                // Returning undefined — disqualify (caller can't
+                // depend on the receiver being a class).
+                *disqualified = true;
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_return_class(then_branch, produced, disqualified, func_returns_class);
+                if let Some(eb) = else_branch {
+                    collect_return_class(eb, produced, disqualified, func_returns_class);
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_return_class(body, produced, disqualified, func_returns_class);
+                if let Some(cc) = catch {
+                    collect_return_class(&cc.body, produced, disqualified, func_returns_class);
+                }
+                if let Some(blk) = finally {
+                    collect_return_class(blk, produced, disqualified, func_returns_class);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_return_class(&case.body, produced, disqualified, func_returns_class);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                let slice = std::slice::from_ref(body.as_ref());
+                collect_return_class(slice, produced, disqualified, func_returns_class);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Mangle a class method name into an LLVM symbol, scoped by module

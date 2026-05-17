@@ -1995,28 +1995,77 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         //         C.staticMethod(...)
         //       Refs #915 (gap 2 from #899). The local→class map is the
         //       same one `lower_new`'s alias rerouting consults below.
-        let static_dispatch_cls: Option<String> = match object.as_ref() {
-            Expr::ClassRef(cls_name) => Some(cls_name.clone()),
-            Expr::LocalGet(id) => ctx
-                .local_id_to_name
-                .get(id)
-                .and_then(|name| ctx.local_class_aliases.get(name).cloned()),
-            _ => None,
-        };
+        // Refs #915 (gap 3 / #321 follow-up): walk the receiver to
+        // recognise the "static-method on a class produced by a
+        // factory" pattern. Covered shapes:
+        //   - `Expr::ClassRef(name)` — direct class literal.
+        //   - `Expr::LocalGet(id)` whose let-init was a ClassRef (the
+        //     post-#912 `const Cls = make(); Cls.foo(...)` shape).
+        //   - `Expr::Call { callee: FuncRef(fid) }` where `fid` is a
+        //     factory function tagged via `func_returns_class`. The
+        //     HIR inliner sometimes leaves these calls in place
+        //     (Effect's `Literal(value).pipe(...)`); the
+        //     `func_returns_class` fixed-point pass tags Literal,
+        //     makeLiteralClass, make, etc.
+        //   - `Expr::Sequence` whose trailing expression itself
+        //     resolves to a class. The inliner sometimes collapses
+        //     `Literal(value)` to
+        //     `Sequence([RegisterClassParentDynamic, ClassRef(L)])`
+        //     so the call site sees the class without an outer Call.
+        fn resolve_static_dispatch_cls(
+            expr: &Expr,
+            local_id_to_name: &std::collections::HashMap<u32, String>,
+            local_class_aliases: &std::collections::HashMap<String, String>,
+            func_returns_class: &std::collections::HashMap<u32, String>,
+        ) -> Option<String> {
+            match expr {
+                Expr::ClassRef(name) => Some(name.clone()),
+                Expr::LocalGet(id) => local_id_to_name
+                    .get(id)
+                    .and_then(|name| local_class_aliases.get(name).cloned()),
+                Expr::Call { callee, .. } => match callee.as_ref() {
+                    Expr::FuncRef(fid) => func_returns_class.get(fid).cloned(),
+                    _ => None,
+                },
+                Expr::Sequence(exprs) => exprs.last().and_then(|e| {
+                    resolve_static_dispatch_cls(
+                        e,
+                        local_id_to_name,
+                        local_class_aliases,
+                        func_returns_class,
+                    )
+                }),
+                _ => None,
+            }
+        }
+        let static_dispatch_cls: Option<String> = resolve_static_dispatch_cls(
+            object,
+            &ctx.local_id_to_name,
+            &ctx.local_class_aliases,
+            ctx.func_returns_class,
+        );
         if let Some(cls_name) = static_dispatch_cls {
-            let mut resolved: Option<(String, bool)> = None; // (fn_name, is_static)
+            // (fn_name, is_static, declared_param_count, has_rest, is_synthetic_arguments)
+            let mut resolved: Option<(String, bool, usize, bool, bool)> = None;
             let mut cur = Some(cls_name.clone());
             while let Some(c) = cur {
                 if let Some(class_info) = ctx.classes.get(&c) {
-                    let is_static = class_info
+                    let sm = class_info
                         .static_methods
                         .iter()
-                        .any(|m| m.name == *property);
-                    if is_static {
+                        .find(|m| m.name == *property);
+                    if let Some(sm) = sm {
                         if let Some(fname) =
                             ctx.methods.get(&(c.clone(), property.clone())).cloned()
                         {
-                            resolved = Some((fname, true));
+                            let declared = sm.params.len();
+                            let has_rest = sm.params.last().map(|p| p.is_rest).unwrap_or(false);
+                            let is_synth_args = sm
+                                .params
+                                .last()
+                                .map(|p| p.is_rest && p.name == "arguments")
+                                .unwrap_or(false);
+                            resolved = Some((fname, true, declared, has_rest, is_synth_args));
                             break;
                         }
                     }
@@ -2026,14 +2075,28 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     .get(&c.clone())
                     .and_then(|cc| cc.extends_name.clone());
             }
-            if let Some((fn_name, _is_static)) = resolved {
-                // For LocalGet receivers we still want the runtime `this`
-                // to be the underlying ClassRef so the static body's
-                // `this` matches the direct-ClassRef path's semantics.
-                // For ClassRef receivers, `lower_expr(object)` already
-                // yields the INT32-NaN-boxed class id.
+            if let Some((fn_name, _is_static, declared, has_rest, is_synth_args)) = resolved {
+                // Receiver-box selection (`this` inside the static body):
+                //   - `ClassRef`: `lower_expr` already yields the
+                //     INT32-NaN-boxed class id; `this === ClassRef`.
+                //   - `Call` (factory return): `lower_expr` returns the
+                //     dynamic class produced by the factory, so each
+                //     `Literal(value)` / `make(ast)` call carries
+                //     unique static fields (`static literals = […]`,
+                //     `static ast = …`). The static body reads those
+                //     through `this.<field>`, so passing the synthesized
+                //     ClassRef would lose the per-call data — use the
+                //     actual lowered call result instead.
+                //   - Everything else (`LocalGet` after a
+                //     `const Cls = make()` collapse, etc.): synthesize
+                //     a fresh ClassRef NaN-box. The static body's
+                //     `this.<field>` then dispatches through the
+                //     ClassRef's class-keys + class-field side-table,
+                //     which is the post-#912 (gap 2) shape.
                 let recv_box = match object.as_ref() {
                     Expr::ClassRef(_) => lower_expr(ctx, object)?,
+                    Expr::Call { .. } => lower_expr(ctx, object)?,
+                    Expr::Sequence(_) => lower_expr(ctx, object)?,
                     _ => {
                         // Synthesize a ClassRef NaN-box from the resolved class.
                         let cid = ctx.class_ids.get(&cls_name).copied().unwrap_or(0);
@@ -2041,9 +2104,55 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                         crate::nanbox::double_literal(f64::from_bits(bits))
                     }
                 };
+                // Refs #915 (gap 3 / #321 follow-up): Effect's `class
+                // SchemaClass { static pipe() { ... arguments ... } }`
+                // factory returns an anon class whose `pipe` reads
+                // `arguments.length` to dispatch. The HIR appends a
+                // synthesized `arguments` rest param (#677 / #899). The
+                // direct-call dispatch here previously forwarded the
+                // call args 1:1 to the function whose only declared
+                // parameter is the rest array — so for
+                // `Cls.pipe(f1, f2)` the function got `arg0 = f1` (then
+                // read .length = "function" → undefined). Mirror the
+                // arg-bundling logic from the regular Call lowering
+                // (lines ~720–765) so the rest slot receives a real
+                // array of all call args, matching JS `arguments`
+                // semantics. The non-synthetic rest path (e.g.
+                // `static foo(a, ...rest)`) follows the same shape:
+                // pass the first `declared-1` positional args as-is,
+                // then bundle the trailing args into an Array.
                 let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-                for a in args {
-                    lowered.push(lower_expr(ctx, a)?);
+                if has_rest && is_synth_args {
+                    let cap = (args.len() as u32).to_string();
+                    let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    for a in args {
+                        let v = lower_expr(ctx, a)?;
+                        let blk = ctx.block();
+                        current =
+                            blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
+                    }
+                    let arguments_box = nanbox_pointer_inline(ctx.block(), &current);
+                    lowered.push(arguments_box);
+                } else if has_rest {
+                    let fixed_count = declared.saturating_sub(1);
+                    for a in args.iter().take(fixed_count) {
+                        lowered.push(lower_expr(ctx, a)?);
+                    }
+                    let rest_count = args.len().saturating_sub(fixed_count);
+                    let cap = (rest_count as u32).to_string();
+                    let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                    for a in args.iter().skip(fixed_count) {
+                        let v = lower_expr(ctx, a)?;
+                        let blk = ctx.block();
+                        current =
+                            blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
+                    }
+                    let rest_box = nanbox_pointer_inline(ctx.block(), &current);
+                    lowered.push(rest_box);
+                } else {
+                    for a in args {
+                        lowered.push(lower_expr(ctx, a)?);
+                    }
                 }
                 let prev_this =
                     ctx.block()
