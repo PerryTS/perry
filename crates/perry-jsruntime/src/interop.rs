@@ -41,10 +41,67 @@ static JSRUNTIME_ADAPTERS_CREATED: AtomicU64 = AtomicU64::new(0);
 static JSRUNTIME_ADAPTERS_RESOLVED: AtomicU64 = AtomicU64::new(0);
 static JSRUNTIME_ADAPTERS_REJECTED: AtomicU64 = AtomicU64::new(0);
 static JSRUNTIME_LEGACY_BLOCKING_AWAITS: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_V8_ENTRIES_TOTAL: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_RUNTIME_INIT: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_RUNTIME_SHUTDOWN: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_MODULE_LOAD: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_EXPORT_GET: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_FUNCTION_CALL: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_V8_EXPORT_CALL: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_METHOD_CALL: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_VALUE_CALL: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_ARRAY_GET: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_ARRAY_LENGTH: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_OBJECT_PROPERTY_GET: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_HANDLE_TO_STRING: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_PROPERTY_SET: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_NEW_INSTANCE: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_NEW_FROM_HANDLE: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_CALLBACK_CREATE: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_NATIVE_FUNCTION_REGISTER: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_CALLBACK_INVOKE: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_NATIVE_MODULE_PROPERTY_LOAD: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_TYPEOF_PROBE: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_HANDLE_CONSTRUCTOR: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_SHOULD_USE_RUNTIME: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_NATIVE_PROMISE_RESOLVE: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_NATIVE_PROMISE_REJECT: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_FOREIGN_PROMISE_ADAPTER: AtomicU64 = AtomicU64::new(0);
+static JSRUNTIME_ENTRY_LEGACY_BLOCKING_AWAIT: AtomicU64 = AtomicU64::new(0);
 
 unsafe extern "C" {
     fn js_register_jsruntime_pump(f: extern "C" fn() -> i32);
     fn js_register_jsruntime_has_active(f: extern "C" fn() -> i32);
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum V8EntryKind {
+    RuntimeInit,
+    RuntimeShutdown,
+    ModuleLoad,
+    ExportGet,
+    FunctionCall,
+    V8ExportCall,
+    MethodCall,
+    ValueCall,
+    ArrayGet,
+    ArrayLength,
+    ObjectPropertyGet,
+    HandleToString,
+    PropertySet,
+    NewInstance,
+    NewFromHandle,
+    CallbackCreate,
+    NativeFunctionRegister,
+    CallbackInvoke,
+    NativeModulePropertyLoad,
+    TypeofProbe,
+    HandleConstructor,
+    ShouldUseRuntime,
+    NativePromiseResolve,
+    NativePromiseReject,
+    ForeignPromiseAdapter,
+    LegacyBlockingAwait,
 }
 
 fn jsruntime_profile_enabled() -> bool {
@@ -57,17 +114,77 @@ fn bump_jsruntime(counter: &AtomicU64) {
     }
 }
 
+pub(crate) fn bump_v8_entry(kind: V8EntryKind) {
+    jsruntime_profile_register();
+    bump_jsruntime(&JSRUNTIME_V8_ENTRIES_TOTAL);
+    bump_jsruntime(match kind {
+        V8EntryKind::RuntimeInit => &JSRUNTIME_ENTRY_RUNTIME_INIT,
+        V8EntryKind::RuntimeShutdown => &JSRUNTIME_ENTRY_RUNTIME_SHUTDOWN,
+        V8EntryKind::ModuleLoad => &JSRUNTIME_ENTRY_MODULE_LOAD,
+        V8EntryKind::ExportGet => &JSRUNTIME_ENTRY_EXPORT_GET,
+        V8EntryKind::FunctionCall => &JSRUNTIME_ENTRY_FUNCTION_CALL,
+        V8EntryKind::V8ExportCall => &JSRUNTIME_ENTRY_V8_EXPORT_CALL,
+        V8EntryKind::MethodCall => &JSRUNTIME_ENTRY_METHOD_CALL,
+        V8EntryKind::ValueCall => &JSRUNTIME_ENTRY_VALUE_CALL,
+        V8EntryKind::ArrayGet => &JSRUNTIME_ENTRY_ARRAY_GET,
+        V8EntryKind::ArrayLength => &JSRUNTIME_ENTRY_ARRAY_LENGTH,
+        V8EntryKind::ObjectPropertyGet => &JSRUNTIME_ENTRY_OBJECT_PROPERTY_GET,
+        V8EntryKind::HandleToString => &JSRUNTIME_ENTRY_HANDLE_TO_STRING,
+        V8EntryKind::PropertySet => &JSRUNTIME_ENTRY_PROPERTY_SET,
+        V8EntryKind::NewInstance => &JSRUNTIME_ENTRY_NEW_INSTANCE,
+        V8EntryKind::NewFromHandle => &JSRUNTIME_ENTRY_NEW_FROM_HANDLE,
+        V8EntryKind::CallbackCreate => &JSRUNTIME_ENTRY_CALLBACK_CREATE,
+        V8EntryKind::NativeFunctionRegister => &JSRUNTIME_ENTRY_NATIVE_FUNCTION_REGISTER,
+        V8EntryKind::CallbackInvoke => &JSRUNTIME_ENTRY_CALLBACK_INVOKE,
+        V8EntryKind::NativeModulePropertyLoad => &JSRUNTIME_ENTRY_NATIVE_MODULE_PROPERTY_LOAD,
+        V8EntryKind::TypeofProbe => &JSRUNTIME_ENTRY_TYPEOF_PROBE,
+        V8EntryKind::HandleConstructor => &JSRUNTIME_ENTRY_HANDLE_CONSTRUCTOR,
+        V8EntryKind::ShouldUseRuntime => &JSRUNTIME_ENTRY_SHOULD_USE_RUNTIME,
+        V8EntryKind::NativePromiseResolve => &JSRUNTIME_ENTRY_NATIVE_PROMISE_RESOLVE,
+        V8EntryKind::NativePromiseReject => &JSRUNTIME_ENTRY_NATIVE_PROMISE_REJECT,
+        V8EntryKind::ForeignPromiseAdapter => &JSRUNTIME_ENTRY_FOREIGN_PROMISE_ADAPTER,
+        V8EntryKind::LegacyBlockingAwait => &JSRUNTIME_ENTRY_LEGACY_BLOCKING_AWAIT,
+    });
+}
+
 extern "C" fn jsruntime_profile_atexit() {
     if std::env::var_os("PERRY_JSRUNTIME_PROFILE").is_none() {
         return;
     }
     eprintln!(
-        "[jsruntime-profile] pump_ticks={} adapters_created={} adapters_resolved={} adapters_rejected={} legacy_blocking_awaits={}",
+        "[jsruntime-profile] pump_ticks={} adapters_created={} adapters_resolved={} adapters_rejected={} legacy_blocking_awaits={} v8_entries_total={} runtime_inits={} runtime_shutdowns={} module_loads={} export_gets={} function_calls={} v8_export_calls={} method_calls={} value_calls={} array_gets={} array_lengths={} object_property_gets={} handle_to_strings={} property_sets={} new_instances={} new_from_handles={} callback_creates={} native_function_registers={} callback_invokes={} native_module_property_loads={} typeof_probes={} handle_constructors={} should_use_runtime={} native_promise_resolves={} native_promise_rejects={} foreign_promise_adapters={} legacy_blocking_await_entries={}",
         JSRUNTIME_PUMP_TICKS.load(Ordering::Relaxed),
         JSRUNTIME_ADAPTERS_CREATED.load(Ordering::Relaxed),
         JSRUNTIME_ADAPTERS_RESOLVED.load(Ordering::Relaxed),
         JSRUNTIME_ADAPTERS_REJECTED.load(Ordering::Relaxed),
         JSRUNTIME_LEGACY_BLOCKING_AWAITS.load(Ordering::Relaxed),
+        JSRUNTIME_V8_ENTRIES_TOTAL.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_RUNTIME_INIT.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_RUNTIME_SHUTDOWN.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_MODULE_LOAD.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_EXPORT_GET.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_FUNCTION_CALL.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_V8_EXPORT_CALL.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_METHOD_CALL.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_VALUE_CALL.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_ARRAY_GET.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_ARRAY_LENGTH.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_OBJECT_PROPERTY_GET.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_HANDLE_TO_STRING.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_PROPERTY_SET.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_NEW_INSTANCE.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_NEW_FROM_HANDLE.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_CALLBACK_CREATE.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_NATIVE_FUNCTION_REGISTER.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_CALLBACK_INVOKE.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_NATIVE_MODULE_PROPERTY_LOAD.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_TYPEOF_PROBE.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_HANDLE_CONSTRUCTOR.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_SHOULD_USE_RUNTIME.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_NATIVE_PROMISE_RESOLVE.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_NATIVE_PROMISE_REJECT.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_FOREIGN_PROMISE_ADAPTER.load(Ordering::Relaxed),
+        JSRUNTIME_ENTRY_LEGACY_BLOCKING_AWAIT.load(Ordering::Relaxed),
     );
 }
 
@@ -245,6 +362,7 @@ fn nanbox_to_v8<'s>(
 #[no_mangle]
 pub extern "C" fn js_runtime_init() {
     jsruntime_profile_register();
+    bump_v8_entry(V8EntryKind::RuntimeInit);
     // Force initialization of the Tokio runtime
     let _ = get_tokio_runtime();
     // Force initialization of the JS runtime on this thread
@@ -507,6 +625,7 @@ fn reflect_delete_metadata_bridge(
 /// 0 for everything else. Wired into `js_value_typeof` so user-visible `typeof gp`
 /// returns `"function"` when `gp` is a V8 callable handle. (Issue #258.)
 unsafe extern "C" fn js_handle_typeof(value: f64) -> i32 {
+    bump_v8_entry(V8EntryKind::TypeofProbe);
     with_runtime(|state| {
         deno_core::scope!(scope, &mut state.runtime);
         let v = native_to_v8(scope, value);
@@ -525,6 +644,7 @@ unsafe extern "C" fn js_new_from_handle_v8_impl(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::HandleConstructor);
     let args = if args_ptr.is_null() || args_len == 0 {
         Vec::new()
     } else {
@@ -571,6 +691,7 @@ unsafe extern "C" fn native_module_js_property_loader(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::NativeModulePropertyLoad);
     let module_name =
         std::str::from_utf8_unchecked(std::slice::from_raw_parts(module_name_ptr, module_name_len));
     let property_name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(
@@ -614,6 +735,7 @@ unsafe extern "C" fn native_module_js_property_loader(
 /// Shutdown the JavaScript runtime and release resources
 #[no_mangle]
 pub extern "C" fn js_runtime_shutdown() {
+    bump_v8_entry(V8EntryKind::RuntimeShutdown);
     // The runtime will be cleaned up when the thread exits
     log::debug!("JS runtime shutdown requested");
 }
@@ -623,6 +745,7 @@ pub extern "C" fn js_runtime_shutdown() {
 /// Returns 0 on failure
 #[no_mangle]
 pub unsafe extern "C" fn js_load_module(path_ptr: *const i8, path_len: usize) -> u64 {
+    bump_v8_entry(V8EntryKind::ModuleLoad);
     let path_slice = if path_ptr.is_null() {
         return 0;
     } else if path_len > 0 {
@@ -786,6 +909,7 @@ pub unsafe extern "C" fn js_get_export(
     export_name_ptr: *const i8,
     export_name_len: usize,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::ExportGet);
     let name_slice = if export_name_ptr.is_null() {
         return f64::from_bits(0x7FFC_0000_0000_0001); // undefined
     } else if export_name_len > 0 {
@@ -842,6 +966,7 @@ pub unsafe extern "C" fn js_call_function(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::FunctionCall);
     let name_slice = if func_name_ptr.is_null() {
         return f64::from_bits(0x7FFC_0000_0000_0001); // undefined
     } else if func_name_len > 0 {
@@ -896,6 +1021,7 @@ pub unsafe extern "C" fn js_call_v8_export(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::V8ExportCall);
     let module_handle = js_load_module(specifier_ptr, specifier_len);
     if module_handle == 0 {
         return f64::from_bits(0x7FFC_0000_0000_0001);
@@ -1008,6 +1134,7 @@ pub unsafe extern "C" fn js_call_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::MethodCall);
     let name_slice = if method_name_ptr.is_null() {
         return f64::from_bits(0x7FFC_0000_0000_0001);
     } else if method_name_len > 0 {
@@ -1089,6 +1216,7 @@ pub unsafe extern "C" fn js_call_value(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::ValueCall);
     let args = if args_ptr.is_null() || args_len == 0 {
         Vec::new()
     } else {
@@ -1165,6 +1293,7 @@ pub unsafe extern "C" fn js_register_native_function(
     func_ptr: *const u8,
     param_count: usize,
 ) {
+    bump_v8_entry(V8EntryKind::NativeFunctionRegister);
     let name_slice = if name_ptr.is_null() {
         return;
     } else if name_len > 0 {
@@ -1194,6 +1323,7 @@ pub unsafe extern "C" fn js_register_native_function(
 /// Returns the element value as a NaN-boxed f64
 #[no_mangle]
 pub extern "C" fn js_handle_array_get(array_handle: f64, index: i32) -> f64 {
+    bump_v8_entry(V8EntryKind::ArrayGet);
     with_runtime(|state| {
         deno_core::scope!(scope, &mut state.runtime);
 
@@ -1221,6 +1351,7 @@ pub extern "C" fn js_handle_array_get(array_handle: f64, index: i32) -> f64 {
 /// Returns the length as i32
 #[no_mangle]
 pub extern "C" fn js_handle_array_length(array_handle: f64) -> i32 {
+    bump_v8_entry(V8EntryKind::ArrayLength);
     with_runtime(|state| {
         deno_core::scope!(scope, &mut state.runtime);
 
@@ -1258,6 +1389,7 @@ pub extern "C" fn js_handle_object_get_property(
     property_name_ptr: *const i8,
     property_name_len: usize,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::ObjectPropertyGet);
     let name_slice = if property_name_ptr.is_null() {
         return f64::from_bits(0x7FFC_0000_0000_0001); // undefined
     } else if property_name_len > 0 {
@@ -1323,6 +1455,7 @@ fn get_property_with_scope(
 /// Returns a pointer to a native StringHeader
 #[no_mangle]
 pub extern "C" fn js_handle_to_string(handle: f64) -> *mut perry_runtime::string::StringHeader {
+    bump_v8_entry(V8EntryKind::HandleToString);
     with_runtime(|state| {
         deno_core::scope!(scope, &mut state.runtime);
 
@@ -1358,6 +1491,7 @@ pub unsafe extern "C" fn js_set_property(
     property_name_len: usize,
     value: f64,
 ) {
+    bump_v8_entry(V8EntryKind::PropertySet);
     let name_slice = if property_name_ptr.is_null() {
         return;
     } else if property_name_len > 0 {
@@ -1407,6 +1541,7 @@ pub unsafe extern "C" fn js_new_instance(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::NewInstance);
     let name_slice = if class_name_ptr.is_null() {
         return f64::from_bits(0x7FFC_0000_0000_0001); // undefined
     } else if class_name_len > 0 {
@@ -1489,6 +1624,7 @@ pub unsafe extern "C" fn js_new_from_handle(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::NewFromHandle);
     let ctor_bits = constructor_handle.to_bits();
     let tag = ctor_bits >> 48;
 
@@ -1556,6 +1692,7 @@ pub unsafe extern "C" fn js_create_callback(
     closure_env: i64,
     param_count: i64,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::CallbackCreate);
     // Store the callback info
     let callback_id = NEXT_CALLBACK_ID.with(|id| {
         let current = id.get();
@@ -1603,6 +1740,7 @@ fn native_callback_trampoline(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
+    bump_v8_entry(V8EntryKind::CallbackInvoke);
     // Get the callback ID and param count from the data
     let data = args.data();
     if !data.is_array() {
@@ -1667,6 +1805,7 @@ fn native_callback_trampoline(
 /// Returns 1 if it should use JS runtime, 0 if it should be compiled natively
 #[no_mangle]
 pub unsafe extern "C" fn js_should_use_runtime(path_ptr: *const i8, path_len: usize) -> i32 {
+    bump_v8_entry(V8EntryKind::ShouldUseRuntime);
     let path_slice = if path_ptr.is_null() {
         return 0;
     } else if path_len > 0 {
@@ -1712,6 +1851,7 @@ pub unsafe extern "C" fn js_should_use_runtime(path_ptr: *const i8, path_len: us
 #[no_mangle]
 pub extern "C" fn js_await_js_promise(value: f64) -> f64 {
     jsruntime_profile_register();
+    bump_v8_entry(V8EntryKind::LegacyBlockingAwait);
     bump_jsruntime(&JSRUNTIME_LEGACY_BLOCKING_AWAITS);
     let handle_id = match get_handle_id(value) {
         Some(id) => id,
@@ -1838,6 +1978,7 @@ pub extern "C" fn js_await_any_promise(value: f64) -> f64 {
                 native_promise,
             });
         });
+        bump_v8_entry(V8EntryKind::ForeignPromiseAdapter);
         bump_jsruntime(&JSRUNTIME_ADAPTERS_CREATED);
         perry_runtime::event_pump::js_notify_main_thread();
         return boxed_native_promise(native_promise);

@@ -14,6 +14,8 @@ use perry_runtime::JSValue;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
+use crate::interop::{bump_v8_entry, V8EntryKind};
+
 // NaN-boxing constants (must match perry-runtime/src/value.rs)
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
@@ -462,6 +464,7 @@ extern "C" fn native_promise_v8_resolve(
     closure: *const perry_runtime::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::NativePromiseResolve);
     let resolver_id = perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as u64;
     crate::with_runtime(|state| {
         deno_core::scope!(scope, &mut state.runtime);
@@ -478,6 +481,7 @@ extern "C" fn native_promise_v8_reject(
     closure: *const perry_runtime::closure::ClosureHeader,
     reason: f64,
 ) -> f64 {
+    bump_v8_entry(V8EntryKind::NativePromiseReject);
     let resolver_id = perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as u64;
     crate::with_runtime(|state| {
         deno_core::scope!(scope, &mut state.runtime);

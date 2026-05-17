@@ -93,6 +93,13 @@ run_fixture() {
         return
     fi
 
+    if ! grep -Eq '(^|[[:space:]])v8_entries_total=[1-9][0-9]*([[:space:]]|$)' "$profile_path"; then
+        echo "FAIL $name: v8_entries_total was missing or zero"
+        dump_file "$profile_path"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
     echo "PASS $name"
     PASS=$((PASS + 1))
 }
