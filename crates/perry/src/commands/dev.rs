@@ -295,6 +295,7 @@ fn build_once(
         geisterhand_port: None,
         minimal_stdlib: false,
         no_auto_optimize: false,
+        debug_symbols: false,
         no_cache: false,
         fast_math: false,
         min_windows_version: "10".to_string(),

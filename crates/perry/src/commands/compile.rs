@@ -269,6 +269,18 @@ pub struct CompileArgs {
     #[arg(long)]
     pub no_auto_optimize: bool,
 
+    /// Retain debug symbols in the output binary instead of stripping
+    /// them for size. On Windows this adds `/DEBUG` to the lld-link
+    /// invocation so a `.pdb` is emitted and `RUST_BACKTRACE` panics in
+    /// the compiled app (including perry-runtime frames) symbolize to
+    /// `file:line` — essential for diagnosing runtime crashes that are
+    /// otherwise an unreadable wall of `<unknown>`. Also skips `/OPT:ICF`
+    /// (identical-COMDAT folding) so distinct functions don't collapse
+    /// to one symbol in the backtrace. Larger binary; off by default.
+    /// (Non-Windows targets: reserved — no behavior change today.)
+    #[arg(long)]
+    pub debug_symbols: bool,
+
     /// Disable the per-module object cache at `.perry-cache/objects/`.
     /// By default Perry caches each module's object bytes keyed by a
     /// hash of the source plus every `CompileOptions` field that can
@@ -5720,6 +5732,7 @@ pub fn run_with_parse_cache(
         &wasm_host_lib,
         &exe_path,
         format,
+        args.debug_symbols,
     )?;
 
     // HarmonyOS: emit the ArkTS EntryAbility + Index page next to the .so,

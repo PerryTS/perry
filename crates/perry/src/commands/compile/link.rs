@@ -60,6 +60,9 @@ pub(super) fn build_and_run_link(
     wasm_host_lib: &Option<PathBuf>,
     exe_path: &Path,
     format: OutputFormat,
+    // `--debug-symbols`: keep symbols / emit a PDB so RUST_BACKTRACE
+    // panics in the compiled app symbolize. Windows-active today.
+    debug_symbols: bool,
 ) -> Result<()> {
     let is_ios = matches!(target, Some("ios-simulator") | Some("ios"));
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
@@ -827,7 +830,20 @@ pub(super) fn build_and_run_link(
         // These are documented as defaults under /RELEASE, but Perry doesn't
         // pass /RELEASE so the linker falls back to /OPT:NOREF, pulling in the
         // entire perry-stdlib archive even when only a fraction is used.
-        cmd.arg("/OPT:REF").arg("/OPT:ICF");
+        cmd.arg("/OPT:REF");
+        if debug_symbols {
+            // `/DEBUG` makes lld-link emit a PDB next to the .exe from the
+            // debug info already present in the input objects/libs. Without
+            // it, perry binaries have no symbol table and a RUST_BACKTRACE
+            // panic is an unreadable list of `<unknown>` — there is no other
+            // way to diagnose a runtime crash in a compiled Windows app.
+            // Skip /OPT:ICF here: COMDAT folding collapses distinct
+            // identical-bodied functions to one symbol, which would make the
+            // very backtrace this flag exists to produce ambiguous.
+            cmd.arg("/DEBUG");
+        } else {
+            cmd.arg("/OPT:ICF");
+        }
     }
 
     // Link libraries - jsruntime bundles V8 + stdlib; runtime provides base FFI symbols.
