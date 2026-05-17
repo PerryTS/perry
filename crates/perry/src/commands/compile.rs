@@ -153,6 +153,39 @@ fn write_audit_manifest(ctx: &CompilationContext) -> std::io::Result<()> {
     Ok(())
 }
 
+/// #497: does `name` match any entry in the host allowlist?
+///
+/// Pattern syntax:
+/// - exact match (`"lodash"`, `"@perryts/perry-prisma"`)
+/// - scope wildcard (`"@scope/*"` matches any package under `@scope/`)
+/// - universal `"*"` escape hatch (matches every name)
+///
+/// Empty allowlists never match anything — the supply-chain default
+/// is "nothing allowed" per the issue's "Default behavior on
+/// greenfield projects" acceptance bullet.
+pub(crate) fn allowlist_matches(name: &str, patterns: &[String]) -> bool {
+    for pat in patterns {
+        if pat == "*" {
+            return true;
+        }
+        if pat == name {
+            return true;
+        }
+        // Scope wildcard `@scope/*` — matches anything under `@scope/`.
+        if let Some(prefix) = pat.strip_suffix("/*") {
+            // Both `prefix/anything` and the bare prefix (an unscoped
+            // package author publishing `@scope` itself, rare but
+            // representable) match.
+            if let Some(rest) = name.strip_prefix(prefix) {
+                if rest.starts_with('/') || rest.is_empty() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn package_bundle_id_from_input(input: &Path) -> Option<String> {
     let mut dir = input.canonicalize().ok()?;
     if dir.is_file() {
@@ -677,6 +710,20 @@ pub struct CompilationContext {
     /// guarantee. Source: `perry.allowDynamicHosts: true` in host
     /// `package.json`.
     pub allow_dynamic_hosts: bool,
+    /// #497: host-controlled allowlist for transitive deps that ship a
+    /// `perry.nativeLibrary` manifest. Default empty = nothing allowed.
+    /// Read from `perry.allow.nativeLibrary` (array of strings) in the
+    /// host's `package.json` only. Patterns: exact match, prefix `*`
+    /// (allow-all escape hatch), or scope-style `@scope/*`.
+    pub allow_native_library: Vec<String>,
+    /// #497: host-controlled allowlist for package names that may be
+    /// added to `perry.compilePackages`. Default empty = nothing
+    /// allowed. Same pattern syntax as `allow_native_library`. Each
+    /// entry the user puts in `perry.compilePackages` must also be
+    /// matched by an entry here, otherwise the build refuses. This
+    /// makes the dangerous "compile this random npm package into the
+    /// binary" surface a two-key opt-in.
+    pub allow_compile_packages: Vec<String>,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -733,6 +780,8 @@ impl CompilationContext {
             lockdown: false,
             allowed_hosts: Vec::new(),
             allow_dynamic_hosts: false,
+            allow_native_library: Vec::new(),
+            allow_compile_packages: Vec::new(),
         }
     }
 }
@@ -1171,11 +1220,41 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
+                // #497: host-controlled allowlists for the two
+                // attack surfaces Perry itself introduced over Node:
+                // `perry.nativeLibrary` (transitive deps that link
+                // arbitrary native code) and `perry.compilePackages`
+                // (compiling untrusted TS into the binary). Both
+                // arrays default empty (= nothing allowed); patterns
+                // accept exact names, scope wildcards (`@scope/*`),
+                // or the universal `*` escape hatch.
+                if let Some(allow) = pkg.get("perry").and_then(|p| p.get("allow")) {
+                    if let Some(arr) = allow.get("nativeLibrary").and_then(|v| v.as_array()) {
+                        for entry in arr {
+                            if let Some(s) = entry.as_str() {
+                                ctx.allow_native_library.push(s.to_string());
+                            }
+                        }
+                    }
+                    if let Some(arr) = allow.get("compilePackages").and_then(|v| v.as_array()) {
+                        for entry in arr {
+                            if let Some(s) = entry.as_str() {
+                                ctx.allow_compile_packages.push(s.to_string());
+                            }
+                        }
+                    }
+                }
                 if let Some(compile_pkgs) = pkg
                     .get("perry")
                     .and_then(|p| p.get("compilePackages"))
                     .and_then(|a| a.as_array())
                 {
+                    // #497: collect compilePackages entries here but
+                    // defer the allowlist check until after env-var
+                    // overrides apply (otherwise
+                    // `PERRY_ALLOW_PERRY_FEATURES=1` couldn't unblock
+                    // a build whose host hasn't opted in via
+                    // package.json yet).
                     for pkg_name in compile_pkgs {
                         if let Some(name) = pkg_name.as_str() {
                             match format {
@@ -1424,6 +1503,27 @@ pub fn run_with_parse_cache(
         _ => {}
     }
 
+    // #497: `PERRY_ALLOW_PERRY_FEATURES=1` opts every name into both
+    // host allowlists at once — emergency escape hatch for builds
+    // where editing `package.json` isn't an option (one-off CI run,
+    // bisect script, etc.). `=0` enforces the refusal even when
+    // `package.json` opted in (fail-closed CI gate).
+    match std::env::var("PERRY_ALLOW_PERRY_FEATURES") {
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => {
+            if !ctx.allow_native_library.iter().any(|s| s == "*") {
+                ctx.allow_native_library.push("*".to_string());
+            }
+            if !ctx.allow_compile_packages.iter().any(|s| s == "*") {
+                ctx.allow_compile_packages.push("*".to_string());
+            }
+        }
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => {
+            ctx.allow_native_library.clear();
+            ctx.allow_compile_packages.clear();
+        }
+        _ => {}
+    }
+
     // #504 — precedence ladder (last wins): package.json
     // `perry.emitAttest` → env `PERRY_EMIT_ATTEST=1` → CLI
     // `--emit-attest`.
@@ -1458,6 +1558,37 @@ pub fn run_with_parse_cache(
     }
     if args.lockdown {
         ctx.lockdown = true;
+    }
+
+    // #497: deferred allowlist check for `perry.compilePackages` (the
+    // parse loop populated `ctx.compile_packages` above; we validate
+    // after env-var overrides). Every entry that flowed in needs a
+    // match in `ctx.allow_compile_packages` — the two-key opt-in.
+    // Default-empty allowlist = nothing allowed = matches the
+    // "greenfield projects: nothing allowed" acceptance bullet.
+    for name in ctx.compile_packages.iter() {
+        if !allowlist_matches(name, &ctx.allow_compile_packages) {
+            anyhow::bail!(
+                "package `{name}` is in `perry.compilePackages` but not in \
+                 `perry.allow.compilePackages` — compiling untrusted TS into the \
+                 binary is a privileged operation and requires explicit host \
+                 opt-in. (#497)\n\
+                 \n\
+                 Review the package, then add it to your host `package.json`:\n\
+                 \n\
+                   {{\n\
+                     \"perry\": {{\n\
+                       \"allow\": {{ \"compilePackages\": [\"{name}\"] }}\n\
+                     }}\n\
+                   }}\n\
+                 \n\
+                 Scope wildcard (`\"@scope/*\"`) and the universal `\"*\"` escape \
+                 hatch are both supported.\n\
+                 \n\
+                 For a one-off build, set `PERRY_ALLOW_PERRY_FEATURES=1` in the \
+                 environment."
+            );
+        }
     }
 
     // --- i18n: parse [i18n] config from perry.toml and load locale files ---
@@ -8360,5 +8491,82 @@ mod js_runtime_gate_tests {
         // coverage; the diagnostic falls through to printing only the
         // raw path.
         assert_eq!(package_name_for_path("/repo/node_modules/"), None);
+    }
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    //! #497 — coverage for the host-allowlist matcher used to gate
+    //! `perry.nativeLibrary` and `perry.compilePackages`.
+    use super::allowlist_matches;
+
+    fn pats(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn empty_allowlist_blocks_everything() {
+        // Acceptance bullet: "Default behavior on greenfield
+        // projects: nothing allowed." The empty list never matches.
+        assert!(!allowlist_matches("lodash", &[]));
+        assert!(!allowlist_matches("@scope/pkg", &[]));
+        assert!(!allowlist_matches("", &[]));
+    }
+
+    #[test]
+    fn exact_match() {
+        let allow = pats(&["lodash", "@scope/pkg"]);
+        assert!(allowlist_matches("lodash", &allow));
+        assert!(allowlist_matches("@scope/pkg", &allow));
+        assert!(!allowlist_matches("not-listed", &allow));
+        assert!(!allowlist_matches("lodash-suffix", &allow));
+    }
+
+    #[test]
+    fn universal_wildcard() {
+        // Emergency escape hatch. Matches every name including the
+        // empty string (defensive).
+        let allow = pats(&["*"]);
+        assert!(allowlist_matches("anything", &allow));
+        assert!(allowlist_matches("@scope/whatever", &allow));
+        assert!(allowlist_matches("", &allow));
+    }
+
+    #[test]
+    fn scope_wildcard() {
+        // `@scope/*` matches any package under the scope, but NOT
+        // arbitrary other scopes or unrelated names.
+        let allow = pats(&["@perryts/*"]);
+        assert!(allowlist_matches("@perryts/perry-prisma", &allow));
+        assert!(allowlist_matches("@perryts/redis", &allow));
+        // Subpath-style names within the scope: `@perryts/foo/bar` is
+        // *not* a valid npm package name, but if someone slips one
+        // through the patterns still match the leading scope.
+        assert!(allowlist_matches("@perryts/foo/bar", &allow));
+        // Different scope must not match.
+        assert!(!allowlist_matches("@other/pkg", &allow));
+        // Unscoped names must not match a scoped pattern.
+        assert!(!allowlist_matches("perryts-redis", &allow));
+        // Bare scope must not match `@perryts-foo` (different scope).
+        assert!(!allowlist_matches("@perryts-foo/pkg", &allow));
+    }
+
+    #[test]
+    fn non_scoped_wildcards_dont_match() {
+        // Only the slash-anchored `prefix/*` shape is supported. A
+        // freeform `lodash-*` pattern matches nothing — kept simple
+        // on purpose so reviewers can read the rule at a glance:
+        // exact, universal, or scope-wildcard.
+        let allow = pats(&["lodash-*", "*-tests"]);
+        assert!(!allowlist_matches("lodash-es", &allow));
+        assert!(!allowlist_matches("foo-tests", &allow));
+    }
+
+    #[test]
+    fn multiple_patterns_or_together() {
+        let allow = pats(&["lodash", "@scope/*"]);
+        assert!(allowlist_matches("lodash", &allow));
+        assert!(allowlist_matches("@scope/anything", &allow));
+        assert!(!allowlist_matches("other-pkg", &allow));
     }
 }

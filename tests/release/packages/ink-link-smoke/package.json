@@ -12,6 +12,12 @@
     "compilePackages": [
       "react",
       "ink"
-    ]
+    ],
+    "allow": {
+      "compilePackages": [
+        "react",
+        "ink"
+      ]
+    }
   }
 }

@@ -8,6 +8,9 @@
     "hono": "^4.6.0"
   },
   "perry": {
-    "compilePackages": ["hono"]
+    "compilePackages": ["hono"],
+    "allow": {
+      "compilePackages": ["hono"]
+    }
   }
 }

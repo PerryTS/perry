@@ -8,6 +8,9 @@
     "axios": "^1.7.0"
   },
   "perry": {
-    "compilePackages": ["axios"]
+    "compilePackages": ["axios"],
+    "allow": {
+      "compilePackages": ["axios"]
+    }
   }
 }

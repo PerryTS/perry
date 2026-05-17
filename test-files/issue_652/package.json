@@ -1,5 +1,8 @@
 {
   "name": "issue-652-probe",
   "version": "0.0.1",
-  "perry": { "compilePackages": ["minilib"] }
+  "perry": {
+    "compilePackages": ["minilib"],
+    "allow": { "compilePackages": ["minilib"] }
+  }
 }

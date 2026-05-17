@@ -722,6 +722,39 @@ pub(super) fn collect_modules(
                                     {
                                         return Err(anyhow::anyhow!("{}", msg));
                                     }
+                                    // #497: gate transitive
+                                    // `perry.nativeLibrary` linkage on
+                                    // host-controlled allowlist. The
+                                    // package declared the manifest
+                                    // itself; the host must
+                                    // explicitly allow it.
+                                    if !super::allowlist_matches(
+                                        &manifest.module,
+                                        &ctx.allow_native_library,
+                                    ) {
+                                        anyhow::bail!(
+                                            "package `{}` declares `perry.nativeLibrary` \
+                                             (links arbitrary native code into the binary) \
+                                             but is not in your host \
+                                             `perry.allow.nativeLibrary`. Review the package, \
+                                             then add it to your host `package.json`:\n\
+                                             \n\
+                                               {{\n\
+                                                 \"perry\": {{\n\
+                                                   \"allow\": {{ \"nativeLibrary\": [\"{}\"] }}\n\
+                                                 }}\n\
+                                               }}\n\
+                                             \n\
+                                             Scope wildcard (`\"@scope/*\"`) and the universal \
+                                             `\"*\"` escape hatch are both supported.\n\
+                                             \n\
+                                             For a one-off build, set \
+                                             `PERRY_ALLOW_PERRY_FEATURES=1` in the environment. \
+                                             (#497)",
+                                            manifest.module,
+                                            manifest.module,
+                                        );
+                                    }
                                     match format {
                                         OutputFormat::Text => println!(
                                             "  Native library: {} ({} FFI functions)",
@@ -791,6 +824,39 @@ pub(super) fn collect_modules(
                                         super::resolve::validate_abi_version(&manifest)
                                     {
                                         return Err(anyhow::anyhow!("{}", msg));
+                                    }
+                                    // #497: gate transitive
+                                    // `perry.nativeLibrary` linkage on
+                                    // host-controlled allowlist. The
+                                    // package declared the manifest
+                                    // itself; the host must
+                                    // explicitly allow it.
+                                    if !super::allowlist_matches(
+                                        &manifest.module,
+                                        &ctx.allow_native_library,
+                                    ) {
+                                        anyhow::bail!(
+                                            "package `{}` declares `perry.nativeLibrary` \
+                                             (links arbitrary native code into the binary) \
+                                             but is not in your host \
+                                             `perry.allow.nativeLibrary`. Review the package, \
+                                             then add it to your host `package.json`:\n\
+                                             \n\
+                                               {{\n\
+                                                 \"perry\": {{\n\
+                                                   \"allow\": {{ \"nativeLibrary\": [\"{}\"] }}\n\
+                                                 }}\n\
+                                               }}\n\
+                                             \n\
+                                             Scope wildcard (`\"@scope/*\"`) and the universal \
+                                             `\"*\"` escape hatch are both supported.\n\
+                                             \n\
+                                             For a one-off build, set \
+                                             `PERRY_ALLOW_PERRY_FEATURES=1` in the environment. \
+                                             (#497)",
+                                            manifest.module,
+                                            manifest.module,
+                                        );
                                     }
                                     match format {
                                         OutputFormat::Text => println!(

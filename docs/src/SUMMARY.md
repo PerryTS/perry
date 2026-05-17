@@ -146,6 +146,7 @@
 - [Egress Allowlist (`allowedHosts`)](cli/allowed-hosts.md)
 - [Per-Package Capabilities (`perry.permissions`)](cli/capabilities.md)
 - [`perry audit --sbom`](cli/perry-audit-sbom.md)
+- [Host Allowlist (nativeLibrary, compilePackages)](cli/allow-perry-features.md)
 - [perry.toml Reference](cli/perry-toml.md)
 
 ---

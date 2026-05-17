@@ -18,6 +18,13 @@
       "@nestjs/platform-express",
       "reflect-metadata",
       "rxjs"
-    ]
+    ],
+    "allow": {
+      "compilePackages": [
+        "@nestjs/*",
+        "reflect-metadata",
+        "rxjs"
+      ]
+    }
   }
 }

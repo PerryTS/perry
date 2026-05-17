@@ -9,6 +9,9 @@
     "better-sqlite3": "^11.0.0"
   },
   "perry": {
-    "compilePackages": ["drizzle-orm"]
+    "compilePackages": ["drizzle-orm"],
+    "allow": {
+      "compilePackages": ["drizzle-orm"]
+    }
   }
 }

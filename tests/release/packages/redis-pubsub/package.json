@@ -8,6 +8,9 @@
     "redis": "^4.7.0"
   },
   "perry": {
-    "compilePackages": ["redis"]
+    "compilePackages": ["redis"],
+    "allow": {
+      "compilePackages": ["redis"]
+    }
   }
 }
