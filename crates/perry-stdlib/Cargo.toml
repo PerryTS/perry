@@ -191,7 +191,7 @@ bundled-mongodb = ["dep:mongodb", "dep:bson", "dep:futures-util", "async-runtime
 crypto = ["dep:sha2", "dep:sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:cbc", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:ed25519-dalek", "dep:aes-gcm", "dep:aes-kw", "dep:hkdf", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-jsonwebtoken", "bundled-ethers"]
 bundled-bcrypt = ["dep:bcrypt", "async-runtime"]
 bundled-argon2 = ["dep:argon2", "async-runtime"]
-bundled-jsonwebtoken = ["dep:jsonwebtoken"]
+bundled-jsonwebtoken = ["dep:jsonwebtoken", "dep:p256", "dep:rsa", "dep:spki"]
 # ethers blockchain utilities — pure Rust, no extra deps. Default-on
 # through `crypto` umbrella; the well-known flip strips this and
 # routes to perry-ext-ethers when `import 'ethers'` is detected.
@@ -309,6 +309,9 @@ hex = { version = "0.4", optional = true }
 hmac = { version = "0.12", optional = true }
 bcrypt = { version = "0.17", optional = true }
 jsonwebtoken = { version = "10.4", optional = true, default-features = false, features = ["rust_crypto", "use_pem"] }
+p256 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa"] }
+rsa = { version = "0.9", optional = true, default-features = false, features = ["pem"] }
+spki = { version = "0.7", optional = true, default-features = false, features = ["pem", "alloc"] }
 aes = { version = "0.8", optional = true }
 cbc = { version = "0.1", optional = true }
 scrypt = { version = "0.11", optional = true }

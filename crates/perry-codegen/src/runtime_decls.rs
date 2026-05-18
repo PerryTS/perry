@@ -1942,6 +1942,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_jwt_sign_es256", I64, &[I64, I64, DOUBLE, I64]);
     module.declare_function("js_jwt_sign_rs256", I64, &[I64, I64, DOUBLE, I64]);
     module.declare_function("js_jwt_verify", I64, &[I64, I64]);
+    module.declare_function("js_jwt_verify_es256", I64, &[I64, I64]);
+    module.declare_function("js_jwt_verify_rs256", I64, &[I64, I64]);
 
     // ========== axios / node-fetch ==========
     module.declare_function("js_axios_create", DOUBLE, &[I64]);

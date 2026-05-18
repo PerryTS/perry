@@ -141,7 +141,29 @@ pub unsafe extern "C" fn js_jwt_sign_es256(
         Some(p) => p,
         None => return 0,
     };
-    let key = match EncodingKey::from_ec_pem(pem.as_bytes()) {
+    // jsonwebtoken's `EncodingKey::from_ec_pem` only accepts PKCS#8
+    // (`-----BEGIN PRIVATE KEY-----`). openssl's default
+    // `ecparam -genkey -name prime256v1` emits SEC1
+    // (`-----BEGIN EC PRIVATE KEY-----`), which is the form most users
+    // start with. Convert SEC1 → PKCS#8 transparently so both PEM
+    // forms work. Same ergonomic story as the verify side's
+    // `ec_pem_to_public_pem` helper.
+    let pkcs8_pem = if pem.contains("EC PRIVATE KEY") {
+        use p256::pkcs8::EncodePrivateKey;
+        match p256::SecretKey::from_sec1_pem(&pem)
+            .ok()
+            .and_then(|k| k.to_pkcs8_pem(Default::default()).ok())
+        {
+            Some(p) => p.to_string(),
+            None => {
+                eprintln!("[jwt-sign-es256] could not convert SEC1 EC PEM to PKCS#8");
+                return 0;
+            }
+        }
+    } else {
+        pem
+    };
+    let key = match EncodingKey::from_ec_pem(pkcs8_pem.as_bytes()) {
         Ok(k) => k,
         Err(e) => {
             eprintln!("[jwt-sign-es256] invalid EC PEM key: {}", e);
@@ -189,7 +211,43 @@ pub unsafe extern "C" fn js_jwt_sign_rs256(
     )
 }
 
-/// Verify and decode a JWT
+/// Shared verify path — runs the decode + returns claims as JSON, or
+/// a null pointer on any failure. `debug` mirrors the gating in
+/// `js_jwt_verify` (perry#924) so all three verify entry points emit
+/// the same `[jwt-verify]` log lines under `PERRY_DEBUG=1`.
+unsafe fn verify_decode(
+    token: &str,
+    key: &DecodingKey,
+    algorithm: Algorithm,
+    debug: bool,
+) -> *mut StringHeader {
+    let mut validation = Validation::new(algorithm);
+    // Don't require exp claim - tokens may not have expiry set
+    validation.required_spec_claims = std::collections::HashSet::new();
+    validation.validate_exp = false;
+
+    match decode::<Claims>(token, key, &validation) {
+        Ok(token_data) => {
+            let json =
+                serde_json::to_string(&token_data.claims).unwrap_or_else(|_| "{}".to_string());
+            if debug {
+                eprintln!(
+                    "[jwt-verify] success, claims={}",
+                    &json[..json.len().min(80)]
+                );
+            }
+            js_string_from_bytes(json.as_ptr(), json.len() as u32)
+        }
+        Err(e) => {
+            if debug {
+                eprintln!("[jwt-verify] error: {}", e);
+            }
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Verify and decode an HS256 JWT
 /// jwt.verify(token, secret) -> object (payload)
 #[no_mangle]
 pub unsafe extern "C" fn js_jwt_verify(
@@ -226,31 +284,173 @@ pub unsafe extern "C" fn js_jwt_verify(
     };
 
     let key = DecodingKey::from_secret(secret.as_bytes());
-    let mut validation = Validation::new(Algorithm::HS256);
-    // Don't require exp claim - tokens may not have expiry set
-    validation.required_spec_claims = std::collections::HashSet::new();
-    validation.validate_exp = false;
+    verify_decode(&token, &key, Algorithm::HS256, debug)
+}
 
-    match decode::<Claims>(&token, &key, &validation) {
-        Ok(token_data) => {
-            // Return the claims as JSON
-            let json =
-                serde_json::to_string(&token_data.claims).unwrap_or_else(|_| "{}".to_string());
+/// Coerce an EC PEM (public *or* private, SEC1 or PKCS#8) into a
+/// PKCS#8 PUBLIC KEY PEM that `DecodingKey::from_ec_pem` accepts.
+/// Mirrors Node's `jsonwebtoken` ergonomics: the user can pass the
+/// same PEM to `sign` and `verify` without having to extract the
+/// public key separately. perry#927 follow-up — without this, ES256
+/// `verify` rejected the very PEM the matching `sign` accepted,
+/// breaking the shop-admin auth path even after the JSON-parse
+/// return-shape fix.
+fn ec_pem_to_public_pem(pem: &str) -> Option<String> {
+    use p256::pkcs8::{DecodePrivateKey, EncodePublicKey};
+
+    if pem.contains("PUBLIC KEY") {
+        return Some(pem.to_string());
+    }
+
+    // Try PKCS#8 private (`-----BEGIN PRIVATE KEY-----`) first,
+    // then SEC1 (`-----BEGIN EC PRIVATE KEY-----`).
+    let secret = p256::SecretKey::from_pkcs8_pem(pem)
+        .or_else(|_| p256::SecretKey::from_sec1_pem(pem))
+        .ok()?;
+    secret
+        .public_key()
+        .to_public_key_pem(Default::default())
+        .ok()
+}
+
+/// Verify and decode an ES256 JWT.
+/// `pem_ptr` may contain either a PUBLIC key PEM (SPKI) or the
+/// matching PRIVATE key PEM (PKCS#8 or SEC1) — the latter is
+/// auto-converted via `ec_pem_to_public_pem` so callers can reuse
+/// their signing key.
+/// jwt.verify(token, pem, { algorithms: ['ES256'] }) -> object
+#[no_mangle]
+pub unsafe extern "C" fn js_jwt_verify_es256(
+    token_ptr: *const StringHeader,
+    pem_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    let debug = std::env::var_os("PERRY_DEBUG").is_some();
+
+    let token = match string_from_header(token_ptr) {
+        Some(t) => t,
+        None => {
             if debug {
-                eprintln!(
-                    "[jwt-verify] success, claims={}",
-                    &json[..json.len().min(80)]
-                );
+                eprintln!("[jwt-verify-es256] token_ptr is null or invalid");
             }
-            js_string_from_bytes(json.as_ptr(), json.len() as u32)
+            return std::ptr::null_mut();
         }
+    };
+
+    let pem = match string_from_header(pem_ptr) {
+        Some(p) => p,
+        None => {
+            if debug {
+                eprintln!("[jwt-verify-es256] pem_ptr is null or invalid");
+            }
+            return std::ptr::null_mut();
+        }
+    };
+
+    let public_pem = match ec_pem_to_public_pem(&pem) {
+        Some(p) => p,
+        None => {
+            if debug {
+                eprintln!("[jwt-verify-es256] could not derive EC public key from PEM");
+            }
+            return std::ptr::null_mut();
+        }
+    };
+
+    let key = match DecodingKey::from_ec_pem(public_pem.as_bytes()) {
+        Ok(k) => k,
         Err(e) => {
             if debug {
-                eprintln!("[jwt-verify] error: {}", e);
+                eprintln!("[jwt-verify-es256] invalid EC PEM key: {}", e);
             }
-            std::ptr::null_mut()
+            return std::ptr::null_mut();
         }
+    };
+
+    verify_decode(&token, &key, Algorithm::ES256, debug)
+}
+
+/// Coerce an RSA PEM (public *or* private, PKCS#1 or PKCS#8) into a
+/// PEM that `DecodingKey::from_rsa_pem` accepts. Matches Node's
+/// `jsonwebtoken` behavior of accepting either side of the keypair
+/// on verify.
+fn rsa_pem_to_public_pem(pem: &str) -> Option<String> {
+    use rsa::pkcs1::EncodeRsaPublicKey;
+    use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey};
+
+    if pem.contains("PUBLIC KEY") {
+        // Either PKCS#1 `RSA PUBLIC KEY` or PKCS#8 `PUBLIC KEY` —
+        // both consumed directly by `DecodingKey::from_rsa_pem`.
+        return Some(pem.to_string());
     }
+
+    // Try PKCS#8 (`-----BEGIN PRIVATE KEY-----`) then PKCS#1
+    // (`-----BEGIN RSA PRIVATE KEY-----`).
+    let priv_key = rsa::RsaPrivateKey::from_pkcs8_pem(pem)
+        .or_else(|_| {
+            use rsa::pkcs1::DecodeRsaPrivateKey;
+            rsa::RsaPrivateKey::from_pkcs1_pem(pem)
+        })
+        .ok()?;
+    let pub_key = priv_key.to_public_key();
+    pub_key
+        .to_public_key_pem(Default::default())
+        .ok()
+        .or_else(|| pub_key.to_pkcs1_pem(Default::default()).ok())
+}
+
+/// Verify and decode an RS256 JWT.
+/// `pem_ptr` may contain either a PUBLIC key PEM (PKCS#1 or PKCS#8)
+/// or the matching PRIVATE key PEM (auto-converted via
+/// `rsa_pem_to_public_pem`).
+/// jwt.verify(token, pem, { algorithms: ['RS256'] }) -> object
+#[no_mangle]
+pub unsafe extern "C" fn js_jwt_verify_rs256(
+    token_ptr: *const StringHeader,
+    pem_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    let debug = std::env::var_os("PERRY_DEBUG").is_some();
+
+    let token = match string_from_header(token_ptr) {
+        Some(t) => t,
+        None => {
+            if debug {
+                eprintln!("[jwt-verify-rs256] token_ptr is null or invalid");
+            }
+            return std::ptr::null_mut();
+        }
+    };
+
+    let pem = match string_from_header(pem_ptr) {
+        Some(p) => p,
+        None => {
+            if debug {
+                eprintln!("[jwt-verify-rs256] pem_ptr is null or invalid");
+            }
+            return std::ptr::null_mut();
+        }
+    };
+
+    let public_pem = match rsa_pem_to_public_pem(&pem) {
+        Some(p) => p,
+        None => {
+            if debug {
+                eprintln!("[jwt-verify-rs256] could not derive RSA public key from PEM");
+            }
+            return std::ptr::null_mut();
+        }
+    };
+
+    let key = match DecodingKey::from_rsa_pem(public_pem.as_bytes()) {
+        Ok(k) => k,
+        Err(e) => {
+            if debug {
+                eprintln!("[jwt-verify-rs256] invalid RSA PEM key: {}", e);
+            }
+            return std::ptr::null_mut();
+        }
+    };
+
+    verify_decode(&token, &key, Algorithm::RS256, debug)
 }
 
 /// Decode a JWT without verification (just parse the payload)

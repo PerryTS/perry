@@ -8531,24 +8531,10 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         ret: NR_F64,
     },
     // ========== jsonwebtoken ==========
-    // `sign` is intentionally handled in lower_call/native.rs. It needs
-    // option-dependent runtime selection plus an already-NaN-boxed string
-    // return, so the generic table must not grow a second path for it.
-    NativeModSig {
-        module: "jsonwebtoken",
-        has_receiver: false,
-        method: "verify",
-        class_filter: None,
-        runtime: "js_jwt_verify",
-        // js_jwt_verify(token_ptr: *const StringHeader, secret_ptr: *const StringHeader)
-        // -> *mut StringHeader (JSON of claims). NR_OBJ_FROM_JSON_STR pipes
-        // the returned JSON through js_json_parse so the value visible to
-        // user code is a real object (decoded.sub works), not the JSON
-        // text. Per the jsonwebtoken README, `jwt.verify` returns the
-        // payload as an object. Issue #927.
-        args: &[NA_STR, NA_STR],
-        ret: NR_OBJ_FROM_JSON_STR,
-    },
+    // `sign` and `verify` are intentionally handled in
+    // lower_call/native.rs — both need option-dependent runtime
+    // selection (HS256 / ES256 / RS256) that the generic table can't
+    // express. `decode` stays here because it has no algorithm options.
     NativeModSig {
         module: "jsonwebtoken",
         has_receiver: false,
@@ -8556,7 +8542,9 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_jwt_decode",
         // js_jwt_decode(token_ptr) -> *mut StringHeader (JSON of payload).
-        // Mirror `verify` — returns an object to user code. Issue #927.
+        // NR_OBJ_FROM_JSON_STR pipes the returned JSON through
+        // js_json_parse_or_null so user code sees an object (mirrors
+        // `verify`'s post-#927 contract). Issue #927.
         args: &[NA_STR],
         ret: NR_OBJ_FROM_JSON_STR,
     },

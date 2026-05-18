@@ -314,6 +314,93 @@ fn lower_jsonwebtoken_sign(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Result<String>
     Ok(ctx.block().bitcast_i64_to_double(&raw))
 }
 
+/// Dispatch `jsonwebtoken.verify(token, secret_or_pem, options?)` to
+/// the right runtime (HS256 / ES256 / RS256) based on the
+/// `algorithms: ['…']` (or singular `algorithm: '…'`) option.
+/// Mirrors `lower_jsonwebtoken_sign`.
+///
+/// perry#927 follow-up: the generic NativeModSig table picked
+/// `js_jwt_verify` (HS256-only) for every algorithm, so ES256 / RS256
+/// tokens silently failed verification (returning `null` to user
+/// code, breaking the shop-admin auth middleware after a successful
+/// signup). Verify needs the same option-aware routing that `sign`
+/// already has.
+///
+/// Return shape matches the old `NR_OBJ_FROM_JSON_STR`: the runtime
+/// hands back a JSON-text `*mut StringHeader` (or null), which we
+/// pipe through `js_json_parse_or_null` so user code sees a real
+/// object on success and `null` on failure (no throw).
+fn lower_jsonwebtoken_verify(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Result<String> {
+    if args.len() < 2 {
+        bail!(
+            "jsonwebtoken.verify(token, secret, options?) expects at least 2 args, got {}",
+            args.len()
+        );
+    }
+
+    let token_ptr = get_raw_string_ptr(ctx, &args[0])?;
+    let secret_ptr = get_raw_string_ptr(ctx, &args[1])?;
+    let mut runtime = "js_jwt_verify";
+
+    if let Some(options) = args.get(2) {
+        if let Some(props) = extract_options_fields(ctx, options) {
+            for (key, val) in &props {
+                match key.as_str() {
+                    // `algorithm: 'ES256'` (singular) — accepted for
+                    // symmetry with `sign`'s option name.
+                    "algorithm" => {
+                        if let Expr::String(algorithm) = val {
+                            runtime = match algorithm.as_str() {
+                                "ES256" => "js_jwt_verify_es256",
+                                "RS256" => "js_jwt_verify_rs256",
+                                _ => "js_jwt_verify",
+                            };
+                        } else {
+                            let _ = lower_expr(ctx, val)?;
+                        }
+                    }
+                    // `algorithms: ['ES256']` (plural array) — the
+                    // canonical Node `jsonwebtoken.verify` shape.
+                    // First entry decides routing; the underlying Rust
+                    // jsonwebtoken crate's verify is single-algorithm,
+                    // so multi-algorithm fallback isn't honored.
+                    "algorithms" => {
+                        if let Expr::Array(elems) = val {
+                            if let Some(Expr::String(algorithm)) = elems.first() {
+                                runtime = match algorithm.as_str() {
+                                    "ES256" => "js_jwt_verify_es256",
+                                    "RS256" => "js_jwt_verify_rs256",
+                                    _ => "js_jwt_verify",
+                                };
+                            }
+                        } else {
+                            let _ = lower_expr(ctx, val)?;
+                        }
+                    }
+                    _ => {
+                        let _ = lower_expr(ctx, val)?;
+                    }
+                }
+            }
+        } else {
+            let _ = lower_expr(ctx, options)?;
+        }
+    }
+
+    for extra in args.iter().skip(3) {
+        let _ = lower_expr(ctx, extra)?;
+    }
+
+    ctx.pending_declares
+        .push((runtime.to_string(), I64, vec![I64, I64]));
+    ctx.pending_declares
+        .push(("js_json_parse_or_null".to_string(), I64, vec![I64]));
+    let blk = ctx.block();
+    let raw = blk.call(I64, runtime, &[(I64, &token_ptr), (I64, &secret_ptr)]);
+    let parsed_bits = blk.call(I64, "js_json_parse_or_null", &[(I64, &raw)]);
+    Ok(blk.bitcast_i64_to_double(&parsed_bits))
+}
+
 pub(crate) fn lower_native_method_call(
     ctx: &mut FnCtx<'_>,
     module: &str,
@@ -347,6 +434,9 @@ pub(crate) fn lower_native_method_call(
 
     if module == "jsonwebtoken" && method == "sign" && object.is_none() {
         return lower_jsonwebtoken_sign(ctx, args);
+    }
+    if module == "jsonwebtoken" && method == "verify" && object.is_none() {
+        return lower_jsonwebtoken_verify(ctx, args);
     }
 
     // `perry/ui.App({ title, width, height, body, icon? })` — minimum-viable
