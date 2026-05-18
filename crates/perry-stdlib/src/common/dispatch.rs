@@ -81,6 +81,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "status"
             | "code"
             | "header"
+            | "type"
             | "method"
             | "url"
             | "body"
@@ -430,6 +431,17 @@ unsafe fn dispatch_fastify_context(handle: i64, method: &str, args: &[f64]) -> f
             let value = args[1].to_bits() as i64;
             let result = crate::fastify::js_fastify_reply_header(handle, name, value);
             // Return the handle for chaining
+            f64::from_bits(0x7FFD_0000_0000_0000 | (result as u64 & 0x0000_FFFF_FFFF_FFFF))
+        }
+        // `reply.type(value)` — chainable alias for setting content-type.
+        // Without this arm, chained `.code().type().send()` returned
+        // TAG_UNDEFINED for `.type()` and the next chain step failed with
+        // `(number).send is not a function` (#1048). The chain takes this
+        // path (rather than NATIVE_MODULE_TABLE static dispatch) because
+        // the HIR loses the static type after the first call in the chain.
+        "type" if !args.is_empty() => {
+            let value = args[0].to_bits() as i64;
+            let result = crate::fastify::js_fastify_reply_type(handle, value);
             f64::from_bits(0x7FFD_0000_0000_0000 | (result as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
         // Request methods

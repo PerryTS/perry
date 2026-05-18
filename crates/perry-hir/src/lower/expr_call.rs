@@ -2189,7 +2189,27 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                 | "parse"
                                 | "opts"
                         );
-                        if (is_math_lib && is_math_method) || (is_commander && is_commander_method)
+                        // #1048 — fastify Reply chainable methods. `reply.code(201)
+                        // .type("application/json").send(payload)` ships every method
+                        // returning the same reply handle for chaining; without this
+                        // branch only the inner `.code(...)` resolved as a
+                        // NativeMethodCall and the rest of the chain fell through to
+                        // the generic Call+PropertyGet path. That path routes through
+                        // `js_native_call_method` → HANDLE_METHOD_DISPATCH, which has
+                        // no fastify arm when the well-known flip strips
+                        // `bundled-fastify` from stdlib — so `.type(...)` returned an
+                        // untagged NaN that the next chain step read as a number
+                        // ("(number).send is not a function"). Static NATIVE_MODULE_TABLE
+                        // dispatch covers it correctly.
+                        let is_fastify_reply = module.as_str() == "fastify"
+                            && class_name.as_deref() == Some("Reply");
+                        let is_fastify_reply_chain_method = matches!(
+                            method_name.as_str(),
+                            "code" | "status" | "header" | "type" | "send"
+                        );
+                        if (is_math_lib && is_math_method)
+                            || (is_commander && is_commander_method)
+                            || (is_fastify_reply && is_fastify_reply_chain_method)
                         {
                             return Ok(Expr::NativeMethodCall {
                                 module: module.clone(),

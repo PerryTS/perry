@@ -6620,6 +6620,11 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
     // function existed in `runtime_decls.rs` but no NativeModSig routed
     // user code at it. CORS hooks, Cache-Control, and content-type
     // overrides all evaporated.
+    //
+    // `ret: NR_PTR` is critical — the Rust impl returns `Handle` (i64).
+    // Previously `NR_F64` caused chained `.header(...).send(...)` to read
+    // an uninitialized XMM0/D0 register as the receiver, producing
+    // `(number).send is not a function` errors (#1048).
     NativeModSig {
         module: "fastify",
         has_receiver: true,
@@ -6627,10 +6632,11 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_fastify_reply_header",
         args: &[NA_JSV, NA_JSV],
-        ret: NR_F64,
+        ret: NR_PTR,
     },
     // `reply.type(value)` — Fastify alias for setting `content-type`.
     // Routes to `js_fastify_reply_type` (thin wrapper over reply_header).
+    // `ret: NR_PTR` for the same reason as `reply.header` above (#1048).
     NativeModSig {
         module: "fastify",
         has_receiver: true,
@@ -6638,7 +6644,7 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_fastify_reply_type",
         args: &[NA_JSV],
-        ret: NR_F64,
+        ret: NR_PTR,
     },
     // Fastify context methods (Hono-style)
     NativeModSig {
