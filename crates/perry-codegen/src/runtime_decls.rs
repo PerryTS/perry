@@ -2355,8 +2355,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_lodash_last", DOUBLE, &[I64]);
     module.declare_function("js_lodash_lower_case", I64, &[I64]);
     module.declare_function("js_lodash_lower_first", I64, &[I64]);
+    module.declare_function("js_lodash_max", DOUBLE, &[I64]);
+    module.declare_function("js_lodash_max_by", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_lodash_mean", DOUBLE, &[I64]);
     module.declare_function("js_lodash_mean_by", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_lodash_min", DOUBLE, &[I64]);
+    module.declare_function("js_lodash_min_by", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_lodash_pad", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_pad_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_pad_start", I64, &[I64, DOUBLE]);

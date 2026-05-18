@@ -990,3 +990,151 @@ pub unsafe extern "C" fn js_lodash_mean_by(arr_ptr: *mut ArrayHeader, iteratee_f
     }
     sum / (len as f64)
 }
+
+// ============================================================================
+// Extrema (max/min/maxBy/minBy) — issue #793 follow-up
+// ============================================================================
+
+/// _.max(array) -> element | undefined
+///
+/// Returns the largest numeric element, or `undefined` for empty/null
+/// inputs (matching lodash's behaviour). Non-numeric / undefined elements
+/// are skipped per `baseExtremum`.
+///
+/// Returns f64 (NaN-boxed bits) — see `js_lodash_first` for the ABI note.
+#[no_mangle]
+pub unsafe extern "C" fn js_lodash_max(arr_ptr: *mut ArrayHeader) -> f64 {
+    if arr_ptr.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let len = js_array_length(arr_ptr);
+    let mut best: Option<JSValue> = None;
+    let mut best_n = f64::NEG_INFINITY;
+    for i in 0..len {
+        let elem = js_array_get(arr_ptr, i);
+        if elem.is_undefined() {
+            continue;
+        }
+        let n = elem.to_number();
+        if n.is_nan() {
+            continue;
+        }
+        if best.is_none() || n > best_n {
+            best = Some(elem);
+            best_n = n;
+        }
+    }
+    let v = best.unwrap_or_else(JSValue::undefined);
+    f64::from_bits(v.bits())
+}
+
+/// _.min(array) -> element | undefined
+#[no_mangle]
+pub unsafe extern "C" fn js_lodash_min(arr_ptr: *mut ArrayHeader) -> f64 {
+    if arr_ptr.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let len = js_array_length(arr_ptr);
+    let mut best: Option<JSValue> = None;
+    let mut best_n = f64::INFINITY;
+    for i in 0..len {
+        let elem = js_array_get(arr_ptr, i);
+        if elem.is_undefined() {
+            continue;
+        }
+        let n = elem.to_number();
+        if n.is_nan() {
+            continue;
+        }
+        if best.is_none() || n < best_n {
+            best = Some(elem);
+            best_n = n;
+        }
+    }
+    let v = best.unwrap_or_else(JSValue::undefined);
+    f64::from_bits(v.bits())
+}
+
+/// _.maxBy(collection, iteratee) -> element | undefined
+///
+/// Property-shorthand iteratee only (matches `sumBy` restriction).
+/// Returns the original ELEMENT (not the iteratee value) with the
+/// largest iteratee result, or `undefined` if the collection is empty.
+#[no_mangle]
+pub unsafe extern "C" fn js_lodash_max_by(arr_ptr: *mut ArrayHeader, iteratee_f: f64) -> f64 {
+    if arr_ptr.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let len = js_array_length(arr_ptr);
+    if len == 0 {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let iteratee = JSValue::from_bits(iteratee_f.to_bits());
+    if !iteratee.is_string() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let key_ptr = iteratee.as_pointer::<StringHeader>();
+    let mut best: Option<JSValue> = None;
+    let mut best_n = f64::NEG_INFINITY;
+    for i in 0..len {
+        let elem = js_array_get(arr_ptr, i);
+        if !elem.is_pointer() {
+            continue;
+        }
+        let obj_ptr = elem.as_pointer::<ObjectHeader>();
+        let prop = js_object_get_field_by_name(obj_ptr, key_ptr);
+        if prop.is_undefined() {
+            continue;
+        }
+        let n = prop.to_number();
+        if n.is_nan() {
+            continue;
+        }
+        if best.is_none() || n > best_n {
+            best = Some(elem);
+            best_n = n;
+        }
+    }
+    let v = best.unwrap_or_else(JSValue::undefined);
+    f64::from_bits(v.bits())
+}
+
+/// _.minBy(collection, iteratee) -> element | undefined
+#[no_mangle]
+pub unsafe extern "C" fn js_lodash_min_by(arr_ptr: *mut ArrayHeader, iteratee_f: f64) -> f64 {
+    if arr_ptr.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let len = js_array_length(arr_ptr);
+    if len == 0 {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let iteratee = JSValue::from_bits(iteratee_f.to_bits());
+    if !iteratee.is_string() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let key_ptr = iteratee.as_pointer::<StringHeader>();
+    let mut best: Option<JSValue> = None;
+    let mut best_n = f64::INFINITY;
+    for i in 0..len {
+        let elem = js_array_get(arr_ptr, i);
+        if !elem.is_pointer() {
+            continue;
+        }
+        let obj_ptr = elem.as_pointer::<ObjectHeader>();
+        let prop = js_object_get_field_by_name(obj_ptr, key_ptr);
+        if prop.is_undefined() {
+            continue;
+        }
+        let n = prop.to_number();
+        if n.is_nan() {
+            continue;
+        }
+        if best.is_none() || n < best_n {
+            best = Some(elem);
+            best_n = n;
+        }
+    }
+    let v = best.unwrap_or_else(JSValue::undefined);
+    f64::from_bits(v.bits())
+}

@@ -2,6 +2,43 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.988 — feat(lodash): add max/min/maxBy/minBy/clamp/inRange/random to manifest
+
+Direct follow-up to PR #966 (sum/mean/sumBy/meanBy/head/last/tail). After #966 unblocked `lodash.sum`, the next bare-lodash sweep tripped on `_.max` — the runtime helpers for `clamp`/`inRange`/`random` already existed (and `clamp` had a `NativeModSig`), but no manifest entry, and the four extrema (`max`/`min`/`maxBy`/`minBy`) didn't exist at all. This PR fills the gap end-to-end.
+
+**Runtime additions (`crates/perry-stdlib/src/lodash.rs`):**
+
+- `js_lodash_max(arr) -> f64` and `js_lodash_min(arr) -> f64` — return the original `JSValue` element (NaN-boxed in f64 bits, same ABI workaround as `js_lodash_first`). `undefined`/`NaN` elements are skipped per lodash's `baseExtremum`. Empty/null arrays return `undefined`.
+- `js_lodash_max_by(arr, iteratee) -> f64` and `js_lodash_min_by(arr, iteratee) -> f64` — same restriction as `sumBy`/`meanBy`: property-shorthand iteratee only (a string key). Returns the original element with the largest/smallest iteratee value, or `undefined` for empty input. Function iteratees return `undefined` until closure-call plumbing across the FFI boundary lands as a follow-up.
+
+The existing `js_lodash_clamp`, `js_lodash_in_range`, and `js_lodash_random` helpers were already present in `perry-stdlib/src/lodash.rs` since well before #966; they just weren't fully wired through the manifest + dispatch table.
+
+**Wiring (the rest of the recipe from #966):**
+
+- `crates/perry-api-manifest/src/entries.rs` — seven new `method_sig` rows: `max`, `min`, `maxBy`, `minBy`, `clamp`, `inRange`, `random`.
+- `crates/perry-codegen/src/lower_call.rs` — six new `NativeModSig` rows (clamp was already present). `max`/`min` take `[NA_PTR]`, `maxBy`/`minBy` take `[NA_PTR, NA_F64]`, `inRange` takes `[NA_F64, NA_F64, NA_F64]` returning `NR_F64` (NaN-boxed true/false).
+- `crates/perry-codegen/src/runtime_decls.rs` — four new `declare_function` rows: `js_lodash_max`, `js_lodash_max_by`, `js_lodash_min`, `js_lodash_min_by` (clamp/in_range/random were already declared).
+
+**Validation.**
+
+`test-files/test_lodash_max_min.ts` (new, nine `console.log` lines) matches `node --experimental-strip-types` byte-for-byte:
+
+```
+5
+1
+{ n: 5 }
+{ n: 1 }
+5
+0
+3
+true
+false
+```
+
+PR #966's `test-files/test_lodash_sum.ts` still passes unchanged (`10 / 2.5 / 3 / 1 / 3`) — no regression on the previously-landed aggregators.
+
+**Known follow-up — `compilePackages: ["lodash"]` path.** With `compilePackages` set to compile lodash from `node_modules` instead of routing through native, the test crashes at runtime with `TypeError: Cannot read properties of undefined (reading 'call')` — same V8-fallback-style issue that's blocking other compile-as-package smokes (#678 territory). The bare-import path (which is what the manifest + native dispatch is actually for) works correctly.
+
 ## v0.5.987 — fix(hir+runtime): Constructor.prototype method dispatch for computed keys + read-side introspection (ramda transducer pattern)
 
 **Symptom.** `XWrap.prototype['@@transducer/step'] = function(acc, x) { … }` — ramda's transducer scaffolding (`_xwrap.js`) plus any pre-ES6 library that attaches instance methods through a computed string-literal key — pre-fix silently fell through to a generic `PropertySet` because the assignment-side recogniser in `lower/expr_assign.rs` only matched the `MemberProp::Ident` shape (`.method = fn`). Subsequent `(new XWrap(fn))['@@transducer/step'](acc, x)` then threw `undefined is not a function` even though the dispatch hot path was perfectly capable of finding the method via `CLASS_PROTOTYPE_METHODS` — the side-table just never got populated.

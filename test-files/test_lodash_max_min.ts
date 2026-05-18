@@ -1,0 +1,10 @@
+import _ from 'lodash';
+console.log(_.max([1, 5, 3, 2, 4]));
+console.log(_.min([1, 5, 3, 2, 4]));
+console.log(_.maxBy([{n:1},{n:5},{n:3}], 'n'));
+console.log(_.minBy([{n:1},{n:5},{n:3}], 'n'));
+console.log(_.clamp(10, 0, 5));
+console.log(_.clamp(-3, 0, 5));
+console.log(_.clamp(3, 0, 5));
+console.log(_.inRange(3, 0, 10));
+console.log(_.inRange(15, 0, 10));
