@@ -105,6 +105,73 @@ fn native_class_constructor(
     retval.set(v8::Object::new(scope).into());
 }
 
+// Issue: Effect.pipe(map) chain — when a Perry closure (raw `*const
+// ClosureHeader` pointer that's been NaN-boxed with POINTER_TAG) crosses
+// into V8 as an argument, it must surface as a real v8::Function so JS
+// code can invoke it. Without this wrapper, V8 saw a string/object proxy
+// (from `native_object_to_v8`'s fallback paths) and threw "f is not a
+// function" when Effect's internal pipeline tried to call the mapping
+// function.
+//
+// Mirrors `native_callback_trampoline` (interop.rs) but stores the
+// closure pointer directly in the v8::Function's `data` slot instead of
+// going through the NATIVE_CALLBACKS registry — we already have the
+// closure pointer in hand and don't need a stable callback_id for it.
+fn perry_closure_v8_trampoline(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let data = args.data();
+    if !data.is_external() {
+        retval.set(v8::undefined(scope).into());
+        return;
+    }
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let closure_ptr = external.value() as i64;
+    if closure_ptr == 0 {
+        retval.set(v8::undefined(scope).into());
+        return;
+    }
+
+    let arg_count = args.length();
+    let mut native_args: Vec<f64> = Vec::with_capacity(arg_count as usize);
+    for i in 0..arg_count {
+        let arg = args.get(i);
+        native_args.push(v8_to_native(scope, arg));
+    }
+
+    let _scope_guard = crate::stash_trampoline_scope(scope);
+
+    type ClosureCallFn = unsafe extern "C" fn(i64, *const f64, i64) -> f64;
+    let func: ClosureCallFn = perry_runtime::closure::js_closure_call_array;
+    let result = unsafe { func(closure_ptr, native_args.as_ptr(), native_args.len() as i64) };
+
+    let v8_result = native_to_v8(scope, result);
+    retval.set(v8_result);
+}
+
+/// Wrap a Perry closure (raw pointer to a `ClosureHeader` with
+/// `CLOSURE_MAGIC` at offset 12) as a `v8::Function`. Used by
+/// `native_object_to_v8` when an argument passed to V8 turns out to be a
+/// native closure — typically when a `LocalGet` holding an arrow function
+/// is passed to a V8-imported call site like `Effect.map(fn)`.
+fn native_closure_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    ptr: *const u8,
+) -> Option<v8::Local<'s, v8::Value>> {
+    if ptr.is_null() {
+        return None;
+    }
+    // Closure pointer is *const ClosureHeader. Stash the raw address in a
+    // v8::External so the trampoline can recover it on invocation.
+    let external = v8::External::new(scope, ptr as *mut std::ffi::c_void);
+    let function = v8::Function::builder(perry_closure_v8_trampoline)
+        .data(external.into())
+        .build(scope)?;
+    Some(function.into())
+}
+
 fn native_class_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     class_id: u32,
@@ -849,6 +916,23 @@ fn native_object_to_v8<'s>(
 
         if gc_header.obj_type == perry_runtime::gc::GC_TYPE_PROMISE {
             return native_promise_to_v8(scope, ptr as *mut perry_runtime::promise::Promise);
+        }
+
+        // Issue: Effect.pipe(map) chain — a Perry closure passed to V8 as
+        // an arg (e.g. `Effect.map(fn)` where `fn` is a local arrow) lands
+        // here with POINTER_TAG. Confirm the `CLOSURE_MAGIC` tag before
+        // wrapping so we don't misidentify a generic native object as a
+        // closure. The HIR-level `JsCreateCallback` rewrite handles inline
+        // `Closure` literals; this is the LocalGet / FuncRef fallback
+        // path.
+        if gc_header.obj_type == perry_runtime::gc::GC_TYPE_CLOSURE {
+            const CLOSURE_TYPE_TAG_OFFSET: usize = 12;
+            let type_tag = unsafe { *(ptr.add(CLOSURE_TYPE_TAG_OFFSET) as *const u32) };
+            if type_tag == perry_runtime::closure::CLOSURE_MAGIC {
+                if let Some(func_value) = native_closure_to_v8(scope, ptr) {
+                    return func_value;
+                }
+            }
         }
 
         if is_arena && gc_header.obj_type == perry_runtime::gc::GC_TYPE_ARRAY {

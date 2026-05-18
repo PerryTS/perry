@@ -912,9 +912,51 @@ fn transform_expr(
                 }
             }
         }
-        Expr::StaticMethodCall { args, .. } => {
-            for arg in args {
-                transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        Expr::StaticMethodCall {
+            class_name, args, ..
+        } => {
+            // Issue: Effect.pipe(map) chain — when `class_name` is a JS-imported
+            // value (e.g. `import { Effect } from 'effect'`), the
+            // StaticMethodCall is routed through `js_call_v8_member_method`
+            // (see emit_v8_member_method_call). Any Closure args need to be
+            // wrapped in JsCreateCallback so V8 sees a real v8::Function
+            // instead of a raw native function pointer. Without this,
+            // `Effect.map((x) => x + 1)` passed the arrow as a number/pointer
+            // and Effect's internal `f` ended up "not a function".
+            if extern_func_to_js.contains_key(class_name) {
+                for arg in args.iter_mut() {
+                    if let Expr::Closure { params, body, .. } = arg {
+                        let param_count = params.len();
+                        let mut closure_tracker = tracker.clone();
+                        for param in params.iter() {
+                            closure_tracker.mark_js_local(param.id);
+                        }
+                        transform_stmts(
+                            body,
+                            js_imports,
+                            extern_func_to_js,
+                            local_name_to_js,
+                            &mut closure_tracker,
+                        );
+                        let owned = std::mem::replace(arg, Expr::Undefined);
+                        *arg = Expr::JsCreateCallback {
+                            closure: Box::new(owned),
+                            param_count,
+                        };
+                    } else {
+                        transform_expr(
+                            arg,
+                            js_imports,
+                            extern_func_to_js,
+                            local_name_to_js,
+                            tracker,
+                        );
+                    }
+                }
+            } else {
+                for arg in args {
+                    transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
+                }
             }
         }
         Expr::StaticFieldSet { value, .. } => {

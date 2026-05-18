@@ -2,6 +2,88 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1002 — fix(jsruntime): Effect.pipe(map) chain composition
+
+`Effect.runSync(Effect.succeed(42).pipe(Effect.map(x => x + 1)))` returned
+`undefined` (with `[JS-INTEROP] 'Effect.runSync' threw: (FiberFailure)
+TypeError: f is not a function`) instead of `43`. PR #992 fixed
+`Effect.succeed(42)` by routing `StaticMethodCall` for V8-named imports
+through `js_call_v8_member_method`, but the follow-on `Effect.map(fn)`
+still failed because the Perry closure argument never reached V8 as a
+real `v8::Function`.
+
+**Root cause — two layers**
+
+1. **HIR**: `js_transform`'s `Closure` → `JsCreateCallback` wrap ran in
+   the `JsCallMethod` / `JsCallFunction` / callable-JS-value arms only.
+   The `StaticMethodCall { class_name, args, .. }` arm just recursed on
+   args without rewriting them, so `Effect.map((x) => x + 1)` shipped
+   the raw `Closure` literal as a positional arg.
+
+2. **Codegen → bridge**: `emit_v8_member_method_call` lowers args
+   through `lower_expr` and packs them into a `[N x double]` alloca that
+   `js_call_v8_member_method` then forwards to V8 via
+   `native_to_v8(scope, fixup_native_for_v8(a))`. A raw closure pointer
+   has bits in the heap-pointer range `0x0000_0001_xxxx_xxxx`, so
+   `fixup_native_for_v8` tagged it as `POINTER_TAG`. `native_to_v8` then
+   dispatched to `native_object_to_v8`, which read the `GcHeader` —
+   recognized `GC_TYPE_PROMISE`/`ARRAY`/`OBJECT`, but had NO arm for
+   `GC_TYPE_CLOSURE`. The fallback paths (string-header sniff, array
+   heuristic) misidentified the closure and surfaced as a string-ish or
+   array-ish proxy object to V8. Effect's pipeline read `f =
+   transformer._op_action_fn`, found a non-function, and threw inside
+   `runSync`.
+
+**Fix**
+
+- `crates/perry-hir/src/js_transform.rs` (StaticMethodCall arm):
+  when the class name is a JS-imported value (`extern_func_to_js`
+  contains it), iterate the args and wrap any `Closure` literal in
+  `JsCreateCallback { closure, param_count }`. Inline closure params are
+  marked as JS values in a forked tracker so the body's `LocalGet`s of
+  those params route back through V8 (mirrors the existing
+  `JsCallMethod` arm).
+
+- `crates/perry-jsruntime/src/bridge.rs`:
+  - Add `perry_closure_v8_trampoline` + `native_closure_to_v8` — a
+    `v8::Function` whose `data` slot holds the closure's
+    `*const ClosureHeader` (in a `v8::External`); on invocation the
+    trampoline marshals args via `v8_to_native`, stashes the scope for
+    nested FFI, calls `js_closure_call_array(closure_env, args_ptr,
+    args_len)`, and routes the result back through `native_to_v8`.
+  - In `native_object_to_v8`, before the GC_TYPE_PROMISE/ARRAY/OBJECT
+    arms, add a `GC_TYPE_CLOSURE` arm gated on `CLOSURE_MAGIC` at
+    offset 12 (the same tag `js_value_typeof` uses). This is the
+    LocalGet / FuncRef fallback path — covers
+    `const fn = (x) => x + 1; Effect.map(fn)` patterns where the HIR
+    transform sees only a `LocalGet`, not a `Closure` literal.
+
+**Validation**
+
+```
+mkdir -p /tmp/perry-effect-2 && cd /tmp/perry-effect-2
+cat > test.ts <<'EOF'
+import { Effect } from 'effect';
+const result = Effect.runSync(
+  Effect.succeed(42).pipe(Effect.map((x: number) => x + 1)),
+);
+console.log('out=' + result);
+EOF
+echo '{ "name": "test", "type": "module", "dependencies": { "effect": "3.10.0" } }' > package.json
+npm install --silent
+perry test.ts -o out && ./out
+# pre-fix: out=undefined  (TypeError: f is not a function)
+# post-fix: out=43
+```
+
+Also validated the named-local case (`const fn = (x) => x + 1;
+Effect.map(fn)`) through the bridge's GC_TYPE_CLOSURE path: closure body
+runs, `fn called with: 42` prints, result is `43`. Gap suite unchanged
+(30 pass / 6 pre-existing fails). All four `test_issue_effect_*`
+fixtures pass.
+
+Fixture: `test-files/test_effect_pipe_map.ts` (chain repro).
+
 ## v0.5.1001 — fix(jsruntime/http): V8 listen keepalive + express handler smoke
 
 Post-#994 the V8-fallback `http.createServer().listen(port, cb)` smoke
