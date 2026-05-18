@@ -364,13 +364,181 @@
         globalThis.clearImmediate = function(id) {};
     }
 
+    // Headers polyfill -- needed independently of fetch by libraries like hono
+    // that reference `new Headers()` / `instanceof Headers` at module-init time.
+    // deno_core does not provide these as globals; without this `import "hono"`
+    // crashes with `ReferenceError: Headers is not defined`.
+    if (typeof globalThis.Headers === 'undefined') {
+        globalThis.Headers = class Headers {
+            constructor(init) {
+                this._map = {};
+                if (init === undefined || init === null) return;
+                if (init instanceof Headers) {
+                    init.forEach((v, k) => { this._map[k.toLowerCase()] = String(v); });
+                } else if (Array.isArray(init)) {
+                    for (const [k, v] of init) {
+                        this._map[k.toLowerCase()] = String(v);
+                    }
+                } else if (typeof init === 'object') {
+                    for (const [k, v] of Object.entries(init)) {
+                        this._map[k.toLowerCase()] = String(v);
+                    }
+                }
+            }
+            get(name) { return this._map[name.toLowerCase()] ?? null; }
+            set(name, value) { this._map[name.toLowerCase()] = String(value); }
+            has(name) { return name.toLowerCase() in this._map; }
+            delete(name) { delete this._map[name.toLowerCase()]; }
+            append(name, value) {
+                const k = name.toLowerCase();
+                if (k in this._map) {
+                    this._map[k] = this._map[k] + ', ' + String(value);
+                } else {
+                    this._map[k] = String(value);
+                }
+            }
+            forEach(cb, thisArg) {
+                for (const [k, v] of Object.entries(this._map)) cb.call(thisArg, v, k, this);
+            }
+            *entries() { for (const e of Object.entries(this._map)) yield e; }
+            *keys() { for (const k of Object.keys(this._map)) yield k; }
+            *values() { for (const v of Object.values(this._map)) yield v; }
+            [Symbol.iterator]() { return this.entries(); }
+            get [Symbol.toStringTag]() { return 'Headers'; }
+        };
+    }
+
+    // Response polyfill -- needed by hono and other Web-Fetch-API libraries that
+    // construct Response objects at module-init time. Minimal Web Fetch API shape.
+    if (typeof globalThis.Response === 'undefined') {
+        globalThis.Response = class Response {
+            constructor(body, init) {
+                this._body = body == null ? '' : body;
+                init = init || {};
+                this.status = init.status != null ? init.status : 200;
+                this.statusText = init.statusText != null ? String(init.statusText) : '';
+                this.headers = init.headers instanceof globalThis.Headers
+                    ? init.headers
+                    : new globalThis.Headers(init.headers);
+                this.ok = this.status >= 200 && this.status < 300;
+                this.redirected = false;
+                this.type = 'default';
+                this.url = '';
+                this.bodyUsed = false;
+            }
+            get body() { return this._body; }
+            async text() {
+                this.bodyUsed = true;
+                const b = this._body;
+                if (b == null) return '';
+                if (typeof b === 'string') return b;
+                if (b instanceof Uint8Array) return new TextDecoder().decode(b);
+                if (b instanceof ArrayBuffer) return new TextDecoder().decode(new Uint8Array(b));
+                return String(b);
+            }
+            async json() { return JSON.parse(await this.text()); }
+            async arrayBuffer() {
+                this.bodyUsed = true;
+                const b = this._body;
+                if (b instanceof ArrayBuffer) return b;
+                if (b instanceof Uint8Array) return b.buffer;
+                return new TextEncoder().encode(typeof b === 'string' ? b : String(b ?? '')).buffer;
+            }
+            async blob() { return { size: 0, type: '' }; }
+            clone() {
+                const r = new Response(this._body, { status: this.status, statusText: this.statusText, headers: this.headers });
+                r.url = this.url;
+                return r;
+            }
+            static error() {
+                const r = new Response(null, { status: 0 });
+                r.type = 'error';
+                return r;
+            }
+            static redirect(url, status) {
+                const r = new Response(null, { status: status || 302 });
+                r.headers.set('location', String(url));
+                return r;
+            }
+            static json(data, init) {
+                const headers = new globalThis.Headers((init && init.headers) || {});
+                if (!headers.has('content-type')) headers.set('content-type', 'application/json');
+                return new Response(JSON.stringify(data), {
+                    status: init && init.status != null ? init.status : 200,
+                    statusText: init && init.statusText,
+                    headers,
+                });
+            }
+            get [Symbol.toStringTag]() { return 'Response'; }
+        };
+    }
+
+    // Request polyfill -- needed by hono's app.fetch(req) entry point and any
+    // server library accepting a Request object.
+    if (typeof globalThis.Request === 'undefined') {
+        globalThis.Request = class Request {
+            constructor(input, init) {
+                init = init || {};
+                if (input instanceof Request) {
+                    this.url = input.url;
+                    this.method = init.method != null ? String(init.method).toUpperCase() : input.method;
+                    this.headers = init.headers ? new globalThis.Headers(init.headers) : new globalThis.Headers(input.headers);
+                    this._body = init.body != null ? init.body : input._body;
+                } else {
+                    this.url = String(input);
+                    this.method = init.method != null ? String(init.method).toUpperCase() : 'GET';
+                    this.headers = init.headers instanceof globalThis.Headers
+                        ? init.headers
+                        : new globalThis.Headers(init.headers);
+                    this._body = init.body != null ? init.body : null;
+                }
+                this.credentials = init.credentials || 'same-origin';
+                this.cache = init.cache || 'default';
+                this.redirect = init.redirect || 'follow';
+                this.referrer = init.referrer || '';
+                this.integrity = init.integrity || '';
+                this.signal = init.signal || null;
+                this.bodyUsed = false;
+                this.mode = init.mode || 'cors';
+            }
+            get body() { return this._body; }
+            async text() {
+                this.bodyUsed = true;
+                const b = this._body;
+                if (b == null) return '';
+                if (typeof b === 'string') return b;
+                if (b instanceof Uint8Array) return new TextDecoder().decode(b);
+                if (b instanceof ArrayBuffer) return new TextDecoder().decode(new Uint8Array(b));
+                return String(b);
+            }
+            async json() { return JSON.parse(await this.text()); }
+            async arrayBuffer() {
+                this.bodyUsed = true;
+                const b = this._body;
+                if (b instanceof ArrayBuffer) return b;
+                if (b instanceof Uint8Array) return b.buffer;
+                return new TextEncoder().encode(typeof b === 'string' ? b : String(b ?? '')).buffer;
+            }
+            async formData() { return new globalThis.URLSearchParams(await this.text()); }
+            async blob() { return { size: 0, type: '' }; }
+            clone() {
+                return new Request(this.url, {
+                    method: this.method,
+                    headers: this.headers,
+                    body: this._body,
+                });
+            }
+            get [Symbol.toStringTag]() { return 'Request'; }
+        };
+    }
+
     // fetch() polyfill using op_perry_fetch Deno op
     if (typeof globalThis.fetch === 'undefined') {
         const core = Deno.core;
         globalThis.fetch = async function(input, init) {
             const url = typeof input === 'string' ? input : input.url;
-            const method = (init && init.method) || 'GET';
-            let body = (init && init.body) || '';
+            const method = (init && init.method) || (input && input.method) || 'GET';
+            let body = (init && init.body) || (input && input._body) || '';
             // Convert Uint8Array/ArrayBuffer body to string (ethers.js sends Uint8Array)
             if (body && typeof body !== 'string') {
                 if (body instanceof Uint8Array || body instanceof ArrayBuffer) {
@@ -382,11 +550,13 @@
             }
             const headers = {};
             if (init && init.headers) {
-                if (init.headers instanceof Headers) {
+                if (init.headers instanceof globalThis.Headers) {
                     init.headers.forEach((v, k) => { headers[k] = v; });
                 } else if (typeof init.headers === 'object') {
                     Object.assign(headers, init.headers);
                 }
+            } else if (input && input.headers instanceof globalThis.Headers) {
+                input.headers.forEach((v, k) => { headers[k] = v; });
             }
             // op_perry_fetch is async (returns a Promise). Awaiting here
             // yields back to the V8 event loop, which is required for
@@ -395,41 +565,12 @@
             // the yield the JS-side accept loop never starts polling
             // op_perry_http_accept and the request deadlocks.
             const result = await core.ops.op_perry_fetch(url, method, body, headers);
-            return {
-                ok: result.status >= 200 && result.status < 300,
+            return new globalThis.Response(result.body, {
                 status: result.status,
                 statusText: result.statusText,
-                headers: new Headers(result.headers),
-                text: async () => result.body,
-                json: async () => JSON.parse(result.body),
-                arrayBuffer: async () => new TextEncoder().encode(result.body).buffer,
-            };
+                headers: result.headers,
+            });
         };
-        // Headers polyfill if needed
-        if (typeof globalThis.Headers === 'undefined') {
-            globalThis.Headers = class Headers {
-                constructor(init) {
-                    this._map = {};
-                    if (Array.isArray(init)) {
-                        for (const [k, v] of init) {
-                            this._map[k.toLowerCase()] = String(v);
-                        }
-                    } else if (init && typeof init === 'object') {
-                        for (const [k, v] of Object.entries(init)) {
-                            this._map[k.toLowerCase()] = String(v);
-                        }
-                    }
-                }
-                get(name) { return this._map[name.toLowerCase()] || null; }
-                set(name, value) { this._map[name.toLowerCase()] = value; }
-                has(name) { return name.toLowerCase() in this._map; }
-                delete(name) { delete this._map[name.toLowerCase()]; }
-                forEach(cb) { for (const [k, v] of Object.entries(this._map)) cb(v, k, this); }
-                entries() { return Object.entries(this._map)[Symbol.iterator](); }
-                keys() { return Object.keys(this._map)[Symbol.iterator](); }
-                values() { return Object.values(this._map)[Symbol.iterator](); }
-            };
-        }
     }
 
     // AbortController polyfill

@@ -2,6 +2,59 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1006 — feat(jsruntime): Response / Request / Headers Web Fetch API globals in V8 fallback
+
+The next hono blocker after the SIGSEGV fix (v0.5.1005) was:
+
+```
+file:///private/tmp/perry-compat-sweep/hono/node_modules/hono/dist/context.js:353:
+Uncaught ReferenceError: Response is not defined
+```
+
+`deno_core` (the V8 fallback embedded by `perry-jsruntime`) does not
+expose `Response`, `Request`, or `Headers` as globals. PR #950 added URL
+/ URLSearchParams polyfills in `node_polyfills.js` and a `Headers`
+polyfill nested *inside* the `if (typeof fetch === 'undefined')` block —
+fine for when `globalThis.fetch` is missing, but the V8 build *does*
+already have its own `fetch`, so the entire branch (including the
+`Headers` class) was being skipped. Result: hono's `context.js` hit
+`new Response(...)` / `new Headers()` at module-init time and threw.
+
+This commit hoists `Headers` out of the `fetch` guard, makes it
+unconditional, and adds polyfills for `Response` and `Request` that
+implement the minimal Web Fetch API surface hono and similar libraries
+need:
+
+- `new Response(body?, init?)` — `status`, `statusText`, `headers`,
+  `ok`, `body`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`,
+  `clone()`, plus the static `Response.error()`, `Response.redirect()`,
+  `Response.json()`.
+- `new Request(input, init?)` — `url`, `method`, `headers`, `body`,
+  `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, plus
+  shape-only fields (`credentials`, `cache`, `redirect`, `mode`,
+  `signal`, ...) so hono's defensive property reads don't NPE.
+- `Headers` now lifts to be created unconditionally and supports
+  `append()`, copy-construction from another `Headers`, generator-style
+  `entries()` / `keys()` / `values()` (so `for (const [k,v] of h)` works
+  via `Symbol.iterator`), and `Symbol.toStringTag`.
+
+The existing `fetch()` polyfill now also returns a real `Response`
+instance (instead of an ad-hoc object literal) and reads request shape
+fields from a passed-in `Request` when no `init` is supplied.
+
+Validation:
+
+- `test-files/test_v8_response_request.ts` — Perry's *native* path
+  (`Response` / `Request` / `Headers` are already wired to `fetch` ops
+  in `perry-stdlib`), prints `200`, `hello`, `http://example.com/`,
+  `POST`, `text/plain`.
+- `/tmp/perry-compat-sweep/hono/entry.ts` rebuilt with
+  `--enable-js-runtime`. Previously crashed with `ReferenceError:
+  Response is not defined`. Now completes the full hono round-trip:
+  `app.get("/ping", c => c.text("pong"))` → `await app.fetch(new
+  Request("http://localhost:18933/ping"))` → `await res.text()` →
+  prints `body=pong`, matching `expected.txt`.
+
 ## v0.5.1005 — fix(jsruntime): hono `app.fetch(req)` SIGSEGV — guard small-handle pointers in `native_object_to_v8`
 
 Hono's compat-sweep fixture
