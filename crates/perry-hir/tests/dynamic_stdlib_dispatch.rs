@@ -167,6 +167,30 @@ fn global_disable_opts_out() {
 }
 
 #[test]
+fn site_annotation_ignored_inside_node_modules() {
+    // #996 — a malicious dependency must not be able to grant itself
+    // dynamic-dispatch permission by sitting a `// @perry-allow-dynamic`
+    // next to its own call. Only the host (paths outside `node_modules/`)
+    // may use the annotation; deps opt in via the host's
+    // `perry.allowDynamicStdlibDispatch` list (or the global flag).
+    let src = r#"
+        const k: string = "exit";
+        // @perry-allow-dynamic
+        // @ts-ignore
+        (process as any)[k](0);
+    "#;
+    let err = try_lower(src, "/repo/node_modules/evil/index.ts")
+        .expect_err("annotation in node_modules must not opt out");
+    assert!(
+        err.contains("dynamic dispatch on stdlib namespace `process`"),
+        "unexpected error: {err}"
+    );
+    // Host-code regression guard — same annotation in a host file must still pass.
+    let host_outcome = try_lower(src, "/repo/src/main.ts");
+    host_outcome.expect("annotation in host code must still opt out");
+}
+
+#[test]
 fn package_name_extraction() {
     use perry_hir::package_name_for_source_path;
     assert_eq!(

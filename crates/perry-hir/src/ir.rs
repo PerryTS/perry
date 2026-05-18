@@ -79,11 +79,15 @@ thread_local! {
     /// #503: when true, HIR lowering refuses compile-time `obj[expr]()` /
     /// `obj[expr]` on known stdlib namespace receivers (`process`, `fs`,
     /// `crypto`, `child_process`, `net`, `os`, `path`, `http`, `https`,
-    /// `stream`, `url`, `util`, `buffer`, `events`, `dns`, `tls`,
-    /// `querystring`, `zlib`) unless the index is a string literal or
-    /// compile-time-foldable string. Catches the dispatch-by-string class
-    /// of supply-chain evasion. Set to false by `perry.allowDynamicStdlibDispatch: true`
-    /// or `PERRY_ALLOW_DYNAMIC_STDLIB=1`.
+    /// `http2`, `stream`, `url`, `util`, `events`, `dns`, `tls`,
+    /// `querystring`, `zlib`, `async_hooks`, `readline`, `string_decoder`,
+    /// `tty`, `worker_threads`) unless the index is a string literal or
+    /// compile-time-foldable string. (`buffer` is intentionally excluded —
+    /// `Buffer` is a constructor, not a namespace object.) Catches the
+    /// dispatch-by-string class of supply-chain evasion. The canonical
+    /// list lives in `lower/expr_member.rs::STDLIB_NAMESPACE_NAMES`. Set
+    /// to false by `perry.allowDynamicStdlibDispatch: true` or
+    /// `PERRY_ALLOW_DYNAMIC_STDLIB=1`.
     static REFUSE_DYNAMIC_STDLIB_DISPATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 
     /// #503: per-thread set of npm package names that opted out of the

@@ -833,8 +833,14 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
                         let pkg_allowed = pkg
                             .map(crate::ir::dynamic_stdlib_allowed_for_package)
                             .unwrap_or(false);
-                        let site_allowed =
-                            crate::ir::current_module_has_allow_dynamic_at(member.span.lo.0);
+                        // #996: `// @perry-allow-dynamic` is host-code only.
+                        // A malicious npm package can write the annotation next
+                        // to its own call to defeat the refusal — closing the
+                        // hole means dependencies must be opted in by the host
+                        // via `perry.allowDynamicStdlibDispatch` (the
+                        // `pkg_allowed` branch above), never by themselves.
+                        let site_allowed = pkg.is_none()
+                            && crate::ir::current_module_has_allow_dynamic_at(member.span.lo.0);
                         if !pkg_allowed && !site_allowed {
                             let pkg_label = pkg
                                 .map(|p| format!(" (in package `{}`)", p))

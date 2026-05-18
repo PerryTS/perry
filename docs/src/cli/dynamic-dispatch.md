@@ -52,10 +52,10 @@ process.exit(0);                // ✓
 fs.readFileSync("/tmp/x");       // ✓
 ```
 
-### 2. `// @perry-allow-dynamic` annotation
+### 2. `// @perry-allow-dynamic` annotation (host code only)
 
-For legitimate one-off dispatch, drop a line comment on or immediately
-above the offending site:
+For legitimate one-off dispatch in your own code, drop a line comment
+on or immediately above the offending site:
 
 ```typescript,no-test
 const k = pickHandler();
@@ -65,6 +65,13 @@ const k = pickHandler();
 
 Contiguous comment lines above the call also count, so the annotation
 can sit alongside an `// @ts-ignore` or similar.
+
+The annotation is honored **only in host source files** (anything not
+under `node_modules/`). A dependency cannot grant itself the opt-out by
+writing `// @perry-allow-dynamic` next to its own call — that would
+defeat the supply-chain defense the check exists for. Dependencies opt
+in via the host's per-package allow list (below) or the global flag.
+Tracked in [#996](https://github.com/PerryTS/perry/issues/996).
 
 ### 3. Per-package allow list in `package.json`
 
