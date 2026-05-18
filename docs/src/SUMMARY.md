@@ -144,6 +144,7 @@
 - [`--emit-sandbox`](cli/emit-sandbox.md)
 - [`--lockdown`](cli/lockdown.md)
 - [Egress Allowlist (`allowedHosts`)](cli/allowed-hosts.md)
+- [Per-Package Capabilities (`perry.permissions`)](cli/capabilities.md)
 - [perry.toml Reference](cli/perry-toml.md)
 
 ---

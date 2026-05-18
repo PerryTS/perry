@@ -18,6 +18,14 @@ export function getDeviceModel(): string;
 /** Returns the BCP 47 locale tag for the device's primary language (e.g. "en-US", "fr-FR"). */
 export function getLocale(): string;
 
+/**
+ * Returns a stable, human-readable OS-version string for the current
+ * platform (e.g. `"15.2"`, `"macOS 14.5"`, `"Android 14"`). Common need
+ * for crash-report and telemetry payloads; pairs with
+ * `getDeviceModel()` / `getAppVersion()`.
+ */
+export function getOSVersion(): string;
+
 /** Returns `perry.toml :: project.version` (e.g. "1.2.6"). */
 export function getAppVersion(): string;
 
@@ -42,6 +50,51 @@ export function getAppIcon(path: string): import("perry/ui").Widget;
 
 /** Open a URL in the default browser or system handler. */
 export function openURL(url: string): void;
+
+// ---------------------------------------------------------------------------
+// System share sheet (#917)
+// ---------------------------------------------------------------------------
+
+/**
+ * Present the platform share sheet for plain text.
+ *
+ * Maps to `UIActivityViewController` on iOS, `NSSharingServicePicker`
+ * on macOS, and `Intent.ACTION_SEND` on Android. The optional `title`
+ * is the suggested subject/heading; pass `""` to omit. No-op on
+ * platforms without a system share UI.
+ */
+export function shareText(text: string, title?: string): void;
+
+/**
+ * Present the platform share sheet for a URL. Identical surface to
+ * `shareText` but the body is treated as a URL so the OS picks
+ * URL-aware activities (Mail with a link, Messages with a preview,
+ * etc.).
+ */
+export function shareUrl(url: string, title?: string): void;
+
+// ---------------------------------------------------------------------------
+// App Group / cross-process shared storage (#675)
+// ---------------------------------------------------------------------------
+
+/**
+ * Write a value into the App Group's shared key-value store. Visible
+ * to widget extensions, share extensions, watchOS targets, and other
+ * processes belonging to the same App Group identifier. On Apple
+ * platforms backed by `UserDefaults(suiteName:)`; other platforms
+ * fall back to an in-process HashMap so the API surface is
+ * exercisable in dev/tests (not actually cross-process there).
+ */
+export function appGroupSet(key: string, value: string): void;
+
+/**
+ * Read a value previously written via `appGroupSet`. Returns the
+ * empty string when the key is absent.
+ */
+export function appGroupGet(key: string): string;
+
+/** Remove a key from the App Group store. */
+export function appGroupDelete(key: string): void;
 
 // ---------------------------------------------------------------------------
 // Keychain (secure credential storage)
