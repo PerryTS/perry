@@ -3813,3 +3813,25 @@ describe('formatDate', () => {\n\
 })();
 
 })();
+
+// ── perry/system stubs added with the recent perry-ext landings ────
+// These mirror the recently-merged FEATURES matrix entries:
+//   #917 (share sheet), #675 (App Group), #976 (getOSVersion).
+// Web has no native share/group equivalents; stubs are no-ops to
+// satisfy the matrix-drift gate. Real Web Share API integration
+// (navigator.share) is a follow-up.
+
+function perry_system_share_text(_text, _title) {}
+function perry_system_share_url(_url, _title) {}
+function perry_system_app_group_set(key, value) {
+    localStorage.setItem("perry_app_group_" + key, value);
+}
+function perry_system_app_group_get(key) {
+    return localStorage.getItem("perry_app_group_" + key) || "";
+}
+function perry_system_app_group_delete(key) {
+    localStorage.removeItem("perry_app_group_" + key);
+}
+function perry_system_get_os_version() {
+    return (typeof navigator !== "undefined" && navigator.userAgent) || "";
+}
