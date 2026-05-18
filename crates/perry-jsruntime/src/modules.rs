@@ -11,7 +11,165 @@ use deno_core::{
 use deno_error::JsErrorBox;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::collections::HashMap;
+use std::ffi::{c_char, CStr};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+
+// Issue #818 follow-up: embedded module map for self-contained V8-fallback
+// binaries. The compile pipeline emits a generated `.c` file (one entry per
+// JS module pulled into the bundle by `collect_js_module_imports`) whose
+// `__attribute__((constructor))` calls `js_register_embedded_module` for
+// each `(canonical_path, source)` pair plus `js_register_embedded_alias`
+// for each `(bare_specifier, canonical_path)` import edge. At runtime the
+// `NodeModuleLoader` consults these maps BEFORE touching `node_modules/`,
+// so the resulting binary boots correctly even when shipped without the
+// source tree's `node_modules/` directory.
+//
+// Keys are kept as build-time canonical path strings — they don't need to
+// exist on the runtime filesystem. The loader uses them as opaque
+// identifiers; only the source string and the import-edge alias map are
+// consulted on the load hot path.
+static EMBEDDED_MODULES: Lazy<RwLock<HashMap<String, Arc<String>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+static EMBEDDED_ALIASES: Lazy<RwLock<HashMap<String, String>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Register a JS module source against its build-time canonical path.
+/// Called by `js_register_embedded_module` (the C FFI) at startup from the
+/// generated bundle constructor; also usable directly from Rust for tests.
+pub fn register_embedded_module(path: &str, source: String) {
+    if let Ok(mut map) = EMBEDDED_MODULES.write() {
+        map.insert(path.to_string(), Arc::new(source));
+    }
+}
+
+/// Register a bare specifier → build-time canonical path alias. Lets
+/// `resolve()` redirect `import "hono"` to the embedded source without
+/// walking `node_modules/`.
+pub fn register_embedded_alias(specifier: &str, path: &str) {
+    if let Ok(mut map) = EMBEDDED_ALIASES.write() {
+        map.insert(specifier.to_string(), path.to_string());
+    }
+}
+
+/// Look up an embedded source by build-time canonical path. Returns
+/// `None` when nothing's registered (the normal dev-build case).
+fn lookup_embedded_module(path: &str) -> Option<Arc<String>> {
+    EMBEDDED_MODULES
+        .read()
+        .ok()
+        .and_then(|map| map.get(path).cloned())
+}
+
+/// Look up the build-time canonical path that a bare specifier maps to.
+fn lookup_embedded_alias(specifier: &str) -> Option<String> {
+    EMBEDDED_ALIASES
+        .read()
+        .ok()
+        .and_then(|map| map.get(specifier).cloned())
+}
+
+/// C FFI: register an embedded JS module's source. Called from the
+/// compile-emitted bundle constructor. Pointers are not retained — the
+/// source string is copied into the global map. UTF-8 is assumed.
+///
+/// # Safety
+///
+/// `path_ptr` / `source_ptr` must point to valid `len`-byte regions of
+/// UTF-8 text. The map takes ownership of an internal copy.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_embedded_module(
+    path_ptr: *const c_char,
+    path_len: usize,
+    source_ptr: *const c_char,
+    source_len: usize,
+) {
+    if path_ptr.is_null() || source_ptr.is_null() {
+        return;
+    }
+    let path_bytes = std::slice::from_raw_parts(path_ptr as *const u8, path_len);
+    let source_bytes = std::slice::from_raw_parts(source_ptr as *const u8, source_len);
+    let path = match std::str::from_utf8(path_bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let source = match std::str::from_utf8(source_bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => return,
+    };
+    register_embedded_module(path, source);
+}
+
+/// C FFI: register a bare specifier → embedded-path alias. Pointers are
+/// not retained.
+///
+/// # Safety
+///
+/// Both pointers must reference valid UTF-8 of the given lengths.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_embedded_alias(
+    specifier_ptr: *const c_char,
+    specifier_len: usize,
+    path_ptr: *const c_char,
+    path_len: usize,
+) {
+    if specifier_ptr.is_null() || path_ptr.is_null() {
+        return;
+    }
+    let spec_bytes = std::slice::from_raw_parts(specifier_ptr as *const u8, specifier_len);
+    let path_bytes = std::slice::from_raw_parts(path_ptr as *const u8, path_len);
+    let specifier = match std::str::from_utf8(spec_bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let path = match std::str::from_utf8(path_bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    register_embedded_alias(specifier, path);
+}
+
+// Allow C-style null-terminated registration too — slightly nicer codegen
+// from the bundle constructor (no manual `strlen`) and matches the
+// convention used elsewhere in `perry-jsruntime` FFIs.
+#[allow(dead_code)]
+unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
+    if ptr.is_null() {
+        return None;
+    }
+    CStr::from_ptr(ptr).to_str().ok()
+}
+
+/// Probe the embedded map with the same extension/index candidates used
+/// by `resolve_with_extensions` against the filesystem. Returns the
+/// matching build-time canonical path on hit. Used when the file isn't on
+/// disk because the binary's been shipped without its `node_modules/`.
+fn lookup_embedded_path_with_extensions(base: &Path) -> Option<PathBuf> {
+    let key = base.to_string_lossy().to_string();
+    if lookup_embedded_module(&key).is_some() {
+        return Some(PathBuf::from(&key));
+    }
+    let extensions = [".js", ".mjs", ".cjs", ".json"];
+    for ext in extensions {
+        let candidate = format!("{}{}", key, ext);
+        if lookup_embedded_module(&candidate).is_some() {
+            return Some(PathBuf::from(candidate));
+        }
+    }
+    // Try as a directory containing an index file.
+    for ext in extensions {
+        let candidate = if key.ends_with('/') {
+            format!("{}index{}", key, ext)
+        } else {
+            format!("{}/index{}", key, ext)
+        };
+        if lookup_embedded_module(&candidate).is_some() {
+            return Some(PathBuf::from(candidate));
+        }
+    }
+    None
+}
 
 // CJS heuristics regex set. These are tight, hot path on every loaded JS
 // module (called once per import); compiling them once amortizes the cost.
@@ -79,11 +237,30 @@ impl NodeModuleLoader {
 
     /// Resolve a module specifier to an absolute path
     fn resolve_module_path(&self, specifier: &str, referrer: &Path) -> Result<PathBuf> {
+        // Issue #818 follow-up: prefer embedded-bundle lookups over disk
+        // probes. For bare specifiers ("hono", "@scope/x") an alias map
+        // gives us the canonical build-time path directly; for relative
+        // and absolute paths we still walk the standard candidate chain
+        // and then check whether the resolved path matches an embedded
+        // entry even when the file is absent from the runtime filesystem.
+        if !specifier.starts_with("./")
+            && !specifier.starts_with("../")
+            && !specifier.starts_with('/')
+            && !specifier.starts_with("file://")
+        {
+            if let Some(embedded_path) = lookup_embedded_alias(specifier) {
+                return Ok(PathBuf::from(embedded_path));
+            }
+        }
+
         // Handle file:// URLs
         if specifier.starts_with("file://") {
             let path_str = specifier.strip_prefix("file://").unwrap_or(specifier);
             let path = PathBuf::from(path_str);
             if path.exists() && path.is_file() {
+                return Ok(path);
+            }
+            if lookup_embedded_module(&path.to_string_lossy()).is_some() {
                 return Ok(path);
             }
             return self.resolve_with_extensions(path);
@@ -93,22 +270,49 @@ impl NodeModuleLoader {
         if specifier.starts_with("./") || specifier.starts_with("../") {
             let referrer_dir = referrer.parent().unwrap_or(&self.base_dir);
             let resolved = referrer_dir.join(specifier);
-            let resolved = self.resolve_with_extensions(resolved)?;
-            // Check browser field mapping (e.g., ethers geturl.js -> geturl-browser.js)
-            if let Some(browser_path) = self.check_browser_field(&resolved) {
-                return Ok(browser_path);
+            match self.resolve_with_extensions(resolved.clone()) {
+                Ok(resolved) => {
+                    // Check browser field mapping (e.g., ethers geturl.js -> geturl-browser.js)
+                    if let Some(browser_path) = self.check_browser_field(&resolved) {
+                        return Ok(browser_path);
+                    }
+                    return Ok(resolved);
+                }
+                Err(e) => {
+                    // Self-contained binary path: the file isn't on disk
+                    // because node_modules/ was left behind. Probe the
+                    // embedded map with the same extension/index candidates
+                    // we'd try against the filesystem.
+                    if let Some(p) = lookup_embedded_path_with_extensions(&resolved) {
+                        return Ok(p);
+                    }
+                    return Err(e);
+                }
             }
-            return Ok(resolved);
         }
 
         // Handle absolute paths
         if specifier.starts_with('/') {
             let resolved = PathBuf::from(specifier);
+            if let Ok(p) = self.resolve_with_extensions(resolved.clone()) {
+                return Ok(p);
+            }
+            if let Some(p) = lookup_embedded_path_with_extensions(&resolved) {
+                return Ok(p);
+            }
             return self.resolve_with_extensions(resolved);
         }
 
         // Handle node_modules
-        self.resolve_from_node_modules(specifier, referrer)
+        match self.resolve_from_node_modules(specifier, referrer) {
+            Ok(p) => Ok(p),
+            Err(e) => {
+                if let Some(embedded_path) = lookup_embedded_alias(specifier) {
+                    return Ok(PathBuf::from(embedded_path));
+                }
+                Err(e)
+            }
+        }
     }
 
     /// Try resolving a path with common extensions
@@ -510,13 +714,24 @@ impl ModuleLoader for NodeModuleLoader {
             }
         };
 
-        let code = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                return ModuleLoadResponse::Sync(Err(JsErrorBox::generic(format!(
-                    "Failed to read module {:?}: {}",
-                    path, e
-                ))))
+        // Issue #818 follow-up: embedded-bundle first. Self-contained
+        // binaries register every JS module they import at startup; the
+        // map is keyed on build-time canonical paths, which is what
+        // `resolve()` returns. Falls through to disk only when nothing's
+        // registered for this path — preserves the dev-build behavior
+        // where `node_modules/` sits next to the binary.
+        let path_key = path.to_string_lossy().to_string();
+        let code = if let Some(embedded) = lookup_embedded_module(&path_key) {
+            (*embedded).clone()
+        } else {
+            match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    return ModuleLoadResponse::Sync(Err(JsErrorBox::generic(format!(
+                        "Failed to read module {:?}: {}",
+                        path, e
+                    ))))
+                }
             }
         };
 

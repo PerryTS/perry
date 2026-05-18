@@ -2,6 +2,63 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.994 — feat(jsruntime): V8 ModuleLoader reads from embedded module map (self-contained binaries)
+
+**Symptom.** v0.5.993 closed half of #818: the `__perry_js_bundle.js` artifact now contains every transitive sibling a pure-ESM npm package re-exports, so the bundle's *content* matches reality. The other half (called out in that release's own "Known next blocker") was still open — `NodeModuleLoader::load` in `crates/perry-jsruntime/src/modules.rs` reads source via `std::fs::read_to_string(&path)`, never consults `globalThis.__COMPILETS_MODULES`, and walks the real `node_modules/` tree at runtime. Move a Perry-compiled binary that uses hono / express / any other V8-fallback package into a directory that doesn't have `node_modules/` and V8 throws `Cannot resolve module` (or in the cross-thread `app.fetch(req)` shape, segfaults rc=139) for every missing file.
+
+**Root cause — the bundle had no runtime consumer.** `generate_js_bundle` writes the bundle next to the binary purely as a debugging artifact; nothing on the runtime side knows about it. Resolution and source-reading both go to disk:
+
+```
+NodeModuleLoader::resolve_module_path → resolve_with_extensions → base.exists() / std::fs::read_to_string(package_json)
+NodeModuleLoader::load                 → std::fs::read_to_string(&path)
+```
+
+If `node_modules/hono/` isn't on the filesystem when the binary runs, every probe fails.
+
+**Fix — embed an in-memory module map at link time + teach the loader to prefer it.** Three pieces:
+
+1. **`perry-jsruntime/src/modules.rs`** gains two process-wide `RwLock<HashMap>`s:
+   - `EMBEDDED_MODULES`: build-time canonical path → source code (`Arc<String>`).
+   - `EMBEDDED_ALIASES`: bare specifier ("hono", "@scope/x") → build-time canonical path.
+   Plus matching `#[no_mangle] pub unsafe extern "C"` registration FFIs (`js_register_embedded_module`, `js_register_embedded_alias`) and Rust-facing wrappers (`register_embedded_module`, `register_embedded_alias`).
+
+2. **Loader integration.** `NodeModuleLoader::resolve_module_path` consults the alias map first for bare specifiers and the path map second when on-disk extension/index probes fail — including a `lookup_embedded_path_with_extensions` helper that mirrors `resolve_with_extensions`'s `.js`/`.mjs`/`.cjs`/`.json` and folder-index fallbacks against the in-memory keys. `NodeModuleLoader::load` checks `EMBEDDED_MODULES` before its `std::fs::read_to_string` call. The map keys are build-time canonical paths used as opaque identifiers; `canonicalize()` later in `resolve()` already falls back to `resolved_path.clone()` for paths that don't exist on the runtime filesystem, so the `file://`-URL synthesized for V8 works either way.
+
+3. **Compile-time emission.** New `targets::generate_embedded_js_object` in `crates/perry/src/commands/compile/targets.rs`:
+   - Walks `ctx.js_modules` and emits one C `static const char[]` literal per module's source + length pair.
+   - Walks every TypeScript import edge whose `resolved_path` is in `ctx.js_modules`, collects `(bare_specifier, resolved_path)` pairs, emits matching string literals.
+   - Wraps it in a `__attribute__((constructor(101)))` that calls `js_register_embedded_module` for every source pair and `js_register_embedded_alias` for every alias pair. Priority 101 runs before `main`'s `js_runtime_init()` call, so the map is populated before V8 first asks for a module.
+   - Calls `cc -c` on the generated `.c` and appends the `.o` to `obj_paths` so the existing linker invocation pulls it in.
+
+The generator escapes non-printable bytes octally (`\NNN`) and never emits raw multibyte UTF-8 into the C source, so the resulting `.c` is ASCII-clean regardless of the JS file's encoding. `?` is also escaped to defang any `??=`/`??/` trigraph hazard under `-trigraphs`.
+
+**Validation.**
+
+```
+cd /tmp/perry-selfcontained
+cat > test.ts <<'EOF'
+import { Hono } from 'hono';
+const app = new Hono();
+app.get('/', (c) => c.text('Hi'));
+console.log(typeof app, typeof app.get);
+EOF
+npm install hono@4.6.5 --silent
+perry test.ts -o out
+
+# Move the binary somewhere isolated — no node_modules/, no source
+mkdir -p /tmp/perry-iso && cp out /tmp/perry-iso/ && cd /tmp/perry-iso
+ls    # → just `out`, nothing else
+./out # → object function
+```
+
+Pre-fix the third line printed `Cannot resolve module 'hono'` and exited 1. Post-fix it prints `object function` from a 45 MB binary with zero filesystem dependencies. The on-disk `__perry_js_bundle.js` is still emitted (kept as a build-time debugging artifact) but is no longer needed at runtime. New test fixture: `test-files/test_v8_self_contained.ts`.
+
+**Files touched.**
+- `crates/perry-jsruntime/src/modules.rs` — embedded-module map + FFIs + load/resolve consults.
+- `crates/perry/src/commands/compile/targets.rs` — `generate_embedded_js_object` + `c_string_literal` helper.
+- `crates/perry/src/commands/compile.rs` — append generated `.o` to `obj_paths` whenever `needs_js_runtime` + non-empty `js_modules`.
+- `test-files/test_v8_self_contained.ts` — fixture documenting the self-contained-binary expectation.
+
 ## v0.5.993 — fix(compile): recursively bundle transitive ESM imports for V8 fallback
 
 **Symptom.** A program that imports a pure-ESM npm package whose entry file re-exports siblings (`hono`'s `dist/index.js` → `./hono.js` → `./hono-base.js` → `./compose.js` → `./router/*` → `./utils/*` …) ended up with a `__perry_js_bundle.js` containing only the single entry file. Roughly 20 transitive `dist/**/*.js` files were silently dropped. Compiled binaries still worked when their `node_modules/` tree happened to sit alongside them (V8's `ModuleLoader::load` opens files off disk), but shipping the binary on its own — or running it in any sandbox where the resolved paths don't exist — left V8 throwing `Cannot resolve module` for every missing sibling, and in the realistic hono call path (`app.fetch(req)` running cross-thread) cascaded to an rc=139 segfault because the missing-module callback handed unboxed `undefined` back to compiled native code expecting a NaN-boxed pointer.

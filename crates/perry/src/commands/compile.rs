@@ -51,8 +51,8 @@ use strip_dedup::strip_duplicate_objects_from_lib;
 use targets::{
     apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,
     compile_for_watchos_widget, compile_for_wearos_tile, compile_metallib_for_bundle,
-    find_visionos_swift_runtime, find_watchos_swift_runtime, generate_js_bundle,
-    lookup_bundle_id_from_toml,
+    find_visionos_swift_runtime, find_watchos_swift_runtime, generate_embedded_js_object,
+    generate_js_bundle, lookup_bundle_id_from_toml,
 };
 
 /// Result of a successful compilation
@@ -5515,6 +5515,33 @@ pub fn run_with_parse_cache(
         match format {
             OutputFormat::Text => println!("Generated JS bundle: {}", bundle_path.display()),
             OutputFormat::Json => {}
+        }
+        // Issue #818 follow-up: embed every JS module's source into the
+        // final binary too. The V8 fallback `ModuleLoader` consults this
+        // map before falling back to disk, so the resulting binary needs
+        // no `node_modules/` co-located at runtime. The compiled `.o`
+        // contributes a `__attribute__((constructor))` that calls
+        // `js_register_embedded_module` once per bundled file.
+        let tmp_dir = std::env::temp_dir().join(format!("perry-embed-{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp_dir);
+        match generate_embedded_js_object(&ctx, &tmp_dir) {
+            Ok(obj) => {
+                if matches!(format, OutputFormat::Text) {
+                    println!("Embedded JS bundle: {}", obj.display());
+                }
+                obj_paths.push(obj);
+            }
+            Err(e) => {
+                // Don't hard-fail — the on-disk `__perry_js_bundle.js`
+                // still exists and the runtime falls back to filesystem
+                // reads. Surface a warning so the build is visibly
+                // degraded rather than silently shipping a binary that
+                // requires `node_modules/`.
+                eprintln!(
+                    "warning: failed to embed JS bundle into binary ({}); the resulting binary will still require node_modules/ at runtime",
+                    e
+                );
+            }
         }
         Some(bundle_path)
     } else {
