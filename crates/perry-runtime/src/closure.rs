@@ -248,6 +248,33 @@ fn lookup_closure_arity(func_ptr: *const u8) -> Option<u32> {
     CLOSURE_ARITY_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
 }
 
+/// Public helper: given a `*const ClosureHeader` pointer, return the
+/// closure's declared arity if known. Falls back to the rest-registry
+/// fixed-arity entry for closures declared with `...rest`. Returns
+/// `None` if the pointer isn't a valid closure or no arity was
+/// registered.
+///
+/// Used by the `.length` property accessor on closure values so
+/// `fn.length` returns the spec-compliant declared-param count
+/// (e.g. ramda's `converge` / `juxt` chain that builds a curry arity
+/// from `pluck('length', fns)` — without `.length` returning a real
+/// number, the chain feeds `NaN` to `_arity` and throws
+/// `First argument to _arity must be a non-negative integer no greater
+/// than ten`).
+pub fn closure_arity(closure: *const ClosureHeader) -> Option<u32> {
+    let func_ptr = get_valid_func_ptr(closure);
+    if func_ptr.is_null() {
+        return None;
+    }
+    // Closures declared with `...rest` register through a separate
+    // registry path; prefer the fixed-arity portion of that entry when
+    // present so `length` matches the user-visible declared params.
+    if let Some((arity, _synth)) = lookup_closure_rest_full(func_ptr) {
+        return Some(arity);
+    }
+    lookup_closure_arity(func_ptr)
+}
+
 /// Build a JS array from a slice of NaN-boxed f64 values and return it
 /// NaN-boxed as a pointer. Used by the rest-bundling helper below.
 #[inline(always)]

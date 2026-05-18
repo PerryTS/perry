@@ -2,6 +2,47 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.986 — fix(runtime+codegen): Object.prototype.toString / Array.prototype.slice / hasOwnProperty / propertyIsEnumerable / fn.length for ramda init
+
+**Symptom.** `import * as R from 'ramda'` (after #970 landed `Function.prototype.apply`/`.call`) throws three different errors at module init depending on how far evaluation gets:
+
+1. `TypeError: Cannot read properties of undefined (reading 'call')` — `_curry1.js`/`_curry2.js` use `Array.prototype.slice.call(arguments, …)` in their dispatch chain; reading `Array.prototype.slice` off the singleton's empty proto object returned `undefined`, the chained `.call` access then threw immediately.
+
+2. `TypeError: value is not a function` — `keys.js` evaluates `!{ toString: null }.propertyIsEnumerable('toString')` at module init; the `propertyIsEnumerable` field-scan on the anon-shape class found nothing, the lookup returned `undefined`, and the codegen closure-call fallback (`recv_box.callee(args…)`) tripped `throw_not_callable`. Same shape hits `_isArguments.js`'s `Object.prototype.toString.call(arguments)` IIFE.
+
+3. `Error: First argument to _arity must be a non-negative integer no greater than ten` — `converge.js` / `juxt.js` / `useWith.js` / `applySpec.js` build a curry arity through `pluck('length', fns)` → `reduce(max, 0, …)` → `curryN(N, …)` → `_arity(N, …)`. `Function.prototype.length` returned `undefined` on Perry closures, so the chain evaluated to `NaN` and `_arity` threw its bound check.
+
+**Fix.** Five coordinated changes — three runtime arms, one codegen arm, one codegen registry — that together get every R.* curry helper past module init. `R.add(2, 3)` and partial application (`R.add(10)(20)`) now work end-to-end through the direct module path (`import add from 'ramda/src/add.js'`). Full `import * as R from 'ramda'` then hits the next blocker (the transducer prototype-on-callable shape `XWrap.prototype['@@transducer/step'] = fn` — see "Known limitation" below).
+
+1. `crates/perry-runtime/src/object.rs::js_object_to_string` — extend the `Object.prototype.toString.call(x)` codegen-inlined helper to discriminate by JSValue tag + GC header type:
+
+   - `undefined` / `null` → `"[object Undefined]"` / `"[object Null]"`
+   - `boolean` / `string` / `number` (i32 or f64) → matching primitive tags
+   - `GC_TYPE_ARRAY` / `GC_TYPE_LAZY_ARRAY` → `"[object Array]"`
+   - `GC_TYPE_ERROR` → `"[object Error]"`
+   - Falls through to the existing `Symbol.toStringTag` hook + `"[object Object]"` default for everything else.
+
+   Pre-fix the helper only knew about `toStringTag`-equipped objects; every primitive and array routed through the catch-all and returned `"[object Object]"`. Ramda's `_isString.js`/`_isObject.js`/`_isRegExp.js`/`_isArguments.js` IIFEs all switch on the exact `"[object Tag]"` string, so the catch-all folded their five branches into one and broke `_isArguments` detection at module init.
+
+2. `crates/perry-runtime/src/object.rs::js_native_call_method` — new `hasOwnProperty` / `propertyIsEnumerable` arms below the existing `.call`/`.apply` arms. Both duck-type as truthy for any non-`null`/non-`undefined` receiver (ramda's `_clone` / `_has` / `keys.js` only need a non-throwing return), and gate on `is_undefined() || is_null() → false` so `null.hasOwnProperty(k)` matches Node's TypeError-equivalent path without crashing. Spec-perfect ownership walk would mean traversing the receiver's keys array + class id chain; the duck-type shortcut is enough for the patterns ramda actually exercises and is structurally cheap.
+
+3. `crates/perry-runtime/src/object.rs::populate_global_this_builtins` — new `populate_builtin_prototype_methods` helper invoked once per built-in constructor's prototype object during singleton init. Currently wires:
+
+   - `Array.prototype.slice` → `array_prototype_slice_thunk` (reads receiver from `IMPLICIT_THIS`, coerces start/end through `JSValue::to_number` with spec defaults of `0` / `i32::MAX`, calls `js_array_slice`).
+   - `Object.prototype.toString` → `object_prototype_to_string_thunk` (mirrors `js_object_to_string`'s discrimination logic, reads receiver from `IMPLICIT_THIS`).
+
+   Both thunks are registered with `js_register_closure_arity` so the `.call(thisArg, …userArgs)` dispatch pads the missing trailing args to the thunks' declared arity rather than running into the 1-arg-default fall-through that reads uninitialised f64 registers. The thunk pair stays callable for the indirect-read shape (`var ts = Object.prototype.toString; ts.call(x)`) — the direct-call codegen pattern goes through the inlined `js_object_to_string` at HIR-lower time and never touches the thunk.
+
+4. `crates/perry-codegen/src/lower_call.rs` — when lowering `obj.method(args)` and `method` is one of the well-known `Object.prototype` methods (`hasOwnProperty`, `propertyIsEnumerable`, `isPrototypeOf`, `toLocaleString`), drop the `skip_native` shortcut that previously fast-pathed every call on a known-class receiver through the class dispatch tower. The well-known methods aren't defined on any user class, so the tower returned `undefined`, the closure-call fallback then read `recv.<method>` as a property value (also `undefined`), and `js_closure_callN(undef_as_i64, …)` threw `value is not a function`. With the gate flipped, these calls route through `js_native_call_method` and hit the new arms in (2).
+
+5. `crates/perry-runtime/src/closure.rs::closure_arity` + `crates/perry-codegen/src/codegen.rs::emit_string_pool` — new public helper that returns a closure's declared param count via `lookup_closure_rest_full` (rest-bearing fixed arity) or `lookup_closure_arity` (non-rest). The codegen-side `emit_string_pool` now collects every top-level user-function wrapper (`__perry_wrap_<name>`) + its declared arity into a new `user_fn_wrapper_arity` parameter and registers each via `js_register_closure_arity` at module init. The closure-property accessor in `crates/perry-runtime/src/object.rs::js_object_get_field_by_name` (`GC_TYPE_CLOSURE` arm) intercepts `name_bytes == b"length"` and returns the registered arity as a JS number. Wrappers already covered by the rest-aware registration path are skipped so the rest fixed-arity isn't overwritten.
+
+   Pre-fix, `fn.length` on every Perry closure read undefined off the dynamic-prop side table; ramda's `pluck('length', fns)` then produced an array of `undefined`s, `reduce(max, 0, …)` evaluated to `NaN`, and `_arity(NaN, …)` threw at module init. With the registration loop in place, `fn.length` returns the user-visible declared count (e.g. `function f(a, b, c) {}.length === 3`).
+
+**Test plan.** New `test-files/test_ramda_sum.ts` pins the five mini-reproducers against `node --experimental-strip-types` byte-for-byte (Array.prototype.slice.call, Object.prototype.toString.call across 5 tag shapes, hasOwnProperty/propertyIsEnumerable, Function.prototype.length, and `const g = f; g.call(...)`). `test_function_apply_call.ts` / `test_issue_711_function_prototype.ts` / `test_issue_838_prototype_methods.ts` continue to pass — none of the new arms affect existing prototype-method behavior on user classes.
+
+**Known limitation.** Full `import * as R from 'ramda'` still throws at module init; the next blocker is `XWrap.prototype['@@transducer/step'] = fn`-style prototype assignments on plain function expressions, where Perry doesn't link the prototype object's fields to instances created via `new XWrap(…)`. R.sum exercises this through `_xArrayReduce → xf['@@transducer/step'](acc, list[idx])`. A follow-up will need to wire the closure's `.prototype` object into the per-instance method-lookup chain (today `js_new_function_construct` allocates an instance with a synthetic class id but doesn't inherit fields from the constructor's prototype object). Tracked as the next ramda blocker.
+
 ## v0.5.985 — fix(runtime): `string.match(regex)` honors fancy-regex fallback for backreferenced patterns (date-fns format() unblocked)
 
 **Symptom.** With v0.5.984's `Date.prototype.constructor` fix in place, date-fns 4.x `format(new Date(2024, 0, 15), 'yyyy-MM-dd')` got past `constructFrom` but then crashed:
@@ -40,7 +81,6 @@ But `js_string_match` (the `String.prototype.match` entry point) never consulted
 - New `test-files/test_date_fns_format.ts` exercises the underlying `(\w)\1*` pattern shape (global + non-global) and the no-match-returns-null case without importing date-fns directly.
 
 **Follow-ups.** `js_string_match_all`, `js_regexp_test`, and `js_string_search_regex` still consult only the placeholder regex when the pattern needed fancy-regex. None are on date-fns' `format()` hot path so they're deferred to a separate issue; the same `lookup_fancy_regex` helper can wire them in when needed.
-
 ## v0.5.984 — feat(runtime): `.constructor` on Date / Array / Object instances + `new <inst.constructor>(...)` dispatch
 
 **Symptom.** date-fns 4.x throws `RangeError: Invalid time value` on the very first call to `format(new Date(2024, 0, 15), 'yyyy-MM-dd')`. Root cause is `constructFrom(date, value)` — the helper every other date-fns export funnels through:

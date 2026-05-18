@@ -3458,6 +3458,21 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         })
         .collect();
 
+    // Wrapper arities — declared param count per top-level user-function
+    // wrapper. Used to register `fn.length` for `FuncRef` values that
+    // codegen materialises through `__perry_wrap_<name>`. Refs
+    // ramda's `converge` / `juxt` / `useWith` chain that reads
+    // `.length` off function values to compute curry arities.
+    let user_fn_wrapper_arity: Vec<(String, u32)> = hir
+        .functions
+        .iter()
+        .filter_map(|f| {
+            func_names
+                .get(&f.id)
+                .map(|name| (format!("__perry_wrap_{}", name), f.params.len() as u32))
+        })
+        .collect();
+
     emit_string_pool(
         &mut llmod,
         &strings,
@@ -3470,6 +3485,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &user_fn_wrapper_rest,
         &closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,
+        &user_fn_wrapper_arity,
     );
 
     // Emit the buffer alias-scope metadata once per module, covering every
@@ -5416,6 +5432,14 @@ fn emit_string_pool(
     // wrapper path: each entry is `wrapper_symbol` whose underlying
     // function has its synthesized `arguments` rest param.
     user_fn_wrapper_synthetic_arguments: &std::collections::HashSet<String>,
+    // Declared param count for every top-level user-function wrapper
+    // (`__perry_wrap_<original_name>`) — used to register the wrapper's
+    // arity in the runtime's `CLOSURE_ARITY_REGISTRY` so reads of
+    // `fn.length` on a closure value return the spec-correct
+    // declared-param count. Entries for wrappers also present in
+    // `user_fn_wrapper_rest` are skipped (those go through the rest
+    // registry which already pins arity).
+    user_fn_wrapper_arity: &[(String, u32)],
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -5863,6 +5887,8 @@ fn emit_string_pool(
     // the closure body. See `user_fn_wrapper_rest` doc on this fn's signature.
     let mut sorted_wrappers: Vec<(String, usize)> = user_fn_wrapper_rest.to_vec();
     sorted_wrappers.sort();
+    let rest_wrapper_names: std::collections::HashSet<String> =
+        sorted_wrappers.iter().map(|(s, _)| s.clone()).collect();
     for (wrap_sym, fixed_arity) in sorted_wrappers {
         let func_ref = format!("@{}", wrap_sym);
         // Refs #915 (gap 1 from #899): wrappers whose underlying function
@@ -5876,6 +5902,33 @@ fn emit_string_pool(
         blk.call_void(
             runtime_fn,
             &[(PTR, &func_ref), (I32, &fixed_arity.to_string())],
+        );
+    }
+
+    // Register declared param count for `__perry_wrap_<name>` wrappers of
+    // every non-rest top-level user function. Mirrors the closure-arity
+    // loop above (which registered inline closures) and the rest-wrapper
+    // loop just above. The runtime's `.length` property accessor on a
+    // closure value reads from this registry — ramda's
+    // `converge(<fn>, [filter, reject])` IIFE feeds
+    // `pluck('length', fns)` → `reduce(max, 0, …)` → `curryN(N, …)` →
+    // `_arity(N, …)` at module init; without the wrappers registering
+    // their arity, `pluck('length', [filter, reject])` came back as
+    // `[undefined, undefined]`, `reduce(max, 0, …)` evaluated to `NaN`,
+    // and `_arity(NaN, …)` threw
+    // `First argument to _arity must be a non-negative integer no greater
+    // than ten` before R.add / R.sum was ever called.
+    let mut sorted_wrapper_arities: Vec<(String, u32)> = user_fn_wrapper_arity
+        .iter()
+        .filter(|(name, _)| !rest_wrapper_names.contains(name))
+        .cloned()
+        .collect();
+    sorted_wrapper_arities.sort();
+    for (wrap_sym, arity) in sorted_wrapper_arities {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void(
+            "js_register_closure_arity",
+            &[(PTR, &func_ref), (I32, &arity.to_string())],
         );
     }
 

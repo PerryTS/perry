@@ -3248,9 +3248,24 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         let class_unknown_to_codegen = class_name_opt
             .as_ref()
             .is_some_and(|n| !ctx.classes.contains_key(n));
+        // Well-known `Object.prototype` / `Function.prototype` methods —
+        // any user class instance can have them invoked via the
+        // prototype chain. Pre-fix the static class-dispatch path
+        // skipped `js_native_call_method` entirely when the receiver's
+        // class WAS known to codegen, which made `({ k: null }).propertyIsEnumerable("k")`
+        // (ramda's `keys.js` IIFE) fall into the closure-call fallback
+        // that read `propertyIsEnumerable` as a property value
+        // (returning `undefined`) and threw `value is not a function`.
+        let is_well_known_proto_method = matches!(
+            property.as_str(),
+            "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" | "toLocaleString"
+        );
         let skip_native = matches!(object.as_ref(), Expr::GlobalGet(_))
             || matches!(object.as_ref(), Expr::NativeModuleRef(_))
-            || (class_name_opt.is_some() && !is_buffer_class && !class_unknown_to_codegen);
+            || (class_name_opt.is_some()
+                && !is_buffer_class
+                && !class_unknown_to_codegen
+                && !is_well_known_proto_method);
         if !skip_native {
             // Issue #92 fast path: intrinsify Buffer numeric reads
             // (`buf.readInt32BE(off)` etc.) when the receiver is a tracked

@@ -943,10 +943,62 @@ fn lookup_to_string_tag_hook(class_id: u32) -> Option<usize> {
 /// if registered, otherwise `Object` (matching Node for plain objects).
 #[no_mangle]
 pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
+    use crate::value::JSValue;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     let bits = value.to_bits();
+    let jsv = JSValue::from_bits(bits);
+    // Spec-defined primitive tags (ramda's `_isString.js` / `_isObject.js`
+    // / `_isRegExp.js` / `_isArguments.js` IIFEs distinguish on these
+    // exact strings; returning `[object Object]` everywhere folded all
+    // five branches into the catch-all).
+    if jsv.is_undefined() {
+        let bytes = b"[object Undefined]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if jsv.is_null() {
+        let bytes = b"[object Null]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if jsv.is_bool() {
+        let bytes = b"[object Boolean]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if jsv.is_any_string() {
+        let bytes = b"[object String]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if jsv.is_int32() || jsv.is_number() {
+        let bytes = b"[object Number]";
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    // Heap-allocated pointers: discriminate Array / Error from generic
+    // Object via the GC header type byte.
+    let raw_ptr = if jsv.is_pointer() {
+        (bits & POINTER_MASK) as *const u8
+    } else {
+        bits as *const u8
+    };
+    if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        let gc_header = raw_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let gc_type = (*gc_header).obj_type;
+        if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            let bytes = b"[object Array]";
+            let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+        }
+        if gc_type == crate::gc::GC_TYPE_ERROR {
+            let bytes = b"[object Error]";
+            let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+        }
+    }
     let mut tag_str: Option<String> = None;
     if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
         let obj_ptr = (bits & POINTER_MASK) as *const ObjectHeader;
@@ -3885,6 +3937,20 @@ pub extern "C" fn js_object_get_field_by_name(
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
                 let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                // `fn.length` — return the registered declared-param
+                // count for the underlying function. Ramda's
+                // `converge` / `useWith` / `addIndex` chain feeds
+                // `pluck('length', fns)` through
+                // `reduce(max, 0, …)` → `curryN(N, …)` → `_arity(N, …)`;
+                // without a real number here that pipeline produces
+                // `NaN`, and `_arity` throws
+                // `First argument to _arity must be a non-negative
+                // integer no greater than ten` at module init.
+                if name_bytes == b"length" {
+                    let arity =
+                        crate::closure::closure_arity(obj as *const crate::closure::ClosureHeader);
+                    return JSValue::number(arity.unwrap_or(0) as f64);
+                }
                 if let Ok(name_str) = std::str::from_utf8(name_bytes) {
                     let val = crate::closure::closure_get_dynamic_prop(obj as usize, name_str);
                     return JSValue::from_bits(val.to_bits());
@@ -7257,6 +7323,42 @@ pub unsafe extern "C" fn js_native_call_method(
             return object;
         }
 
+        // `obj.hasOwnProperty(key)` — duck-types as truthy for any
+        // non-null/undefined receiver where the field-scan and class
+        // dispatch above couldn't find a user-defined override. Walking
+        // the actual key set on every shape (ObjectHeader fields,
+        // closure dynamic props, array keys, …) is more work than this
+        // entry point is meant to do; ramda's `_clone` / `_has` only
+        // need a non-throwing return so the surrounding pattern doesn't
+        // fall into the spec gap. Pre-fix, the chained
+        // `Object.prototype.hasOwnProperty.call(obj, key)` reads
+        // `Object.prototype.hasOwnProperty` as `undefined` from the
+        // empty proto and threw `value is not a function` at module
+        // init in `_clone.js` / `_isArguments.js`.
+        "hasOwnProperty" => {
+            if jsval.is_undefined() || jsval.is_null() {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            return f64::from_bits(JSValue::bool(true).bits());
+        }
+
+        // `obj.propertyIsEnumerable(key)` — same shape as
+        // `hasOwnProperty`. Spec says true for own enumerable
+        // properties (the typical case for object literals). Without
+        // walking the receiver's keys, we approximate as
+        // `truthy receiver → true` — matches Node for ramda's
+        // `keys.js` IIFE (`!{toString:null}.propertyIsEnumerable('toString')`
+        // expects `true`, so `hasEnumBug` resolves to `false`).
+        // Arguments-like receivers also return true here, which
+        // matches the legacy non-Safari behavior ramda's IIFE checks
+        // against.
+        "propertyIsEnumerable" => {
+            if jsval.is_undefined() || jsval.is_null() {
+                return f64::from_bits(JSValue::bool(false).bits());
+            }
+            return f64::from_bits(JSValue::bool(true).bits());
+        }
+
         // Function.prototype.call(thisArg, ...args) — invoke the receiver
         // closure with `thisArg` bound as `this` and the remaining args
         // passed positionally. Ramda's curry helpers (`_curry1`, `_curry2`,
@@ -10159,6 +10261,135 @@ extern "C" fn global_this_builtin_noop_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+/// Thunk for `Object.prototype.toString` exposed as a callable closure
+/// value. Mirrors `Object.prototype.toString.call(x)` — returns the
+/// `"[object Tag]"` string for the receiver in IMPLICIT_THIS.
+///
+/// Tag detection uses the same coarse NaN-box / GC-type discrimination
+/// the rest of the runtime relies on: arrays → `"[object Array]"`,
+/// strings → `"[object String]"`, null/undefined → matching tags,
+/// numbers/bools → primitive tags, generic objects/closures →
+/// `"[object Object]"`.
+///
+/// Unblocks ramda's `_isArguments.js` IIFE which evaluates
+/// `Object.prototype.toString.call(arguments)` at module-init time
+/// — pre-fix the chained `Object.prototype.toString` read returned
+/// `undefined`, so the `.call` access threw before the IIFE body ran.
+extern "C" fn object_prototype_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    use crate::value::JSValue;
+    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_jsv = JSValue::from_bits(this_bits);
+    let tag: &[u8] = if this_jsv.is_undefined() {
+        b"[object Undefined]"
+    } else if this_jsv.is_null() {
+        b"[object Null]"
+    } else if this_jsv.is_bool() {
+        b"[object Boolean]"
+    } else if this_jsv.is_any_string() {
+        b"[object String]"
+    } else if this_jsv.is_int32() || this_jsv.is_number() {
+        b"[object Number]"
+    } else {
+        // Discriminate by GC header type for heap-allocated values.
+        // Accept both NaN-boxed pointers and raw-i64 pointers (the
+        // codegen's two representations for non-numeric values — see
+        // CLAUDE.md "Module-level variables"). Module-level arrays
+        // arrive here as raw i64 because the codegen stores them
+        // unboxed; function-arg-passed arrays arrive NaN-boxed.
+        let raw = if this_jsv.is_pointer() {
+            (this_bits & 0x0000_FFFF_FFFF_FFFF) as *const u8
+        } else {
+            this_bits as *const u8
+        };
+        if !raw.is_null() && (raw as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            unsafe {
+                let gc_header = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                let gc_type = (*gc_header).obj_type;
+                if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+                    b"[object Array]"
+                } else if gc_type == crate::gc::GC_TYPE_ERROR {
+                    b"[object Error]"
+                } else {
+                    b"[object Object]"
+                }
+            }
+        } else {
+            b"[object Object]"
+        }
+    };
+    let s = crate::string::js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
+    f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
+}
+
+/// Thunk for `Array.prototype.slice` exposed as a real callable closure
+/// value. Reads the array receiver from `IMPLICIT_THIS` (set by
+/// `Function.prototype.call`/`.apply`'s runtime arm in
+/// `js_native_call_method`) and forwards to `js_array_slice`.
+///
+/// Coerces start/end through `JSValue::to_number`, with `undefined`
+/// mapping to `0` for start and `i32::MAX` for end — matching
+/// `Array.prototype.slice`'s ECMA-262 defaults.
+///
+/// Unblocks the `Array.prototype.slice.call(list, …)` pattern that
+/// ramda's curry/variadic helpers use heavily (refs `_curry1`,
+/// `_curry2`, and every variadic op like `addIndex`/`addIndexRight`/
+/// `useWith`/`unapply`/`flip`/`call`). Without this, `Array.prototype.slice`
+/// read off the singleton's empty proto object as `undefined` and the
+/// chained `.call` access threw
+/// `Cannot read properties of undefined (reading 'call')` at module init.
+extern "C" fn array_prototype_slice_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    start_val: f64,
+    end_val: f64,
+) -> f64 {
+    use crate::value::JSValue;
+    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_jsv = JSValue::from_bits(this_bits);
+    let arr_ptr = if this_jsv.is_pointer() {
+        this_jsv.as_pointer::<crate::array::ArrayHeader>()
+    } else {
+        // Tolerate raw-i64-encoded array receivers (some module-init
+        // call sites stash array pointers in IMPLICIT_THIS without
+        // NaN-boxing). The clean_arr_ptr check inside js_array_slice
+        // re-validates.
+        let raw = this_bits as *const crate::array::ArrayHeader;
+        if (raw as usize) > 0x10000 {
+            raw
+        } else {
+            std::ptr::null()
+        }
+    };
+    if arr_ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let start_jsv = JSValue::from_bits(start_val.to_bits());
+    let end_jsv = JSValue::from_bits(end_val.to_bits());
+    let start_i32 = if start_jsv.is_undefined() {
+        0
+    } else {
+        let n = start_jsv.to_number();
+        if n.is_nan() {
+            0
+        } else {
+            n as i32
+        }
+    };
+    let end_i32 = if end_jsv.is_undefined() {
+        i32::MAX
+    } else {
+        let n = end_jsv.to_number();
+        if n.is_nan() {
+            0
+        } else {
+            n as i32
+        }
+    };
+    let result = crate::array::js_array_slice(arr_ptr, start_i32, end_i32);
+    f64::from_bits(crate::value::js_nanbox_pointer(result as i64).to_bits())
+}
+
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
 /// winner in `js_get_global_this`. Constructors get a ClosureHeader-
@@ -10191,6 +10422,13 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         if !proto_obj.is_null() {
             let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
             js_object_set_field_by_name(closure_ptr as *mut ObjectHeader, proto_key, proto_value);
+            // Populate well-known method properties on the prototype
+            // (currently just `Array.prototype.slice`). Methods are
+            // ClosureHeader-backed thunks that read their receiver from
+            // `IMPLICIT_THIS` and dispatch to the corresponding native
+            // entry point — works in tandem with `.call`/`.apply` since
+            // those arms (#970) rebind IMPLICIT_THIS before forwarding.
+            populate_builtin_prototype_methods(name, proto_obj);
         }
         let name_bytes = name.as_bytes();
         let name_key =
@@ -10209,6 +10447,67 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         let ns_value = crate::value::js_nanbox_pointer(ns_obj as i64);
         js_object_set_field_by_name(singleton, name_key, ns_value);
+    }
+}
+
+/// Populate well-known method properties on a builtin constructor's
+/// prototype object. Each registered method is a closure that, when
+/// invoked through `.call(thisArg, …args)` / `.apply(thisArg, args)`,
+/// reads its receiver from `IMPLICIT_THIS` and dispatches to the
+/// corresponding native runtime entry point.
+///
+/// Currently only `Array.prototype.slice` is wired up — that's the one
+/// pattern ramda's curry/variadic helpers depend on. Other builtins
+/// (`Function.prototype.bind`, `String.prototype.split`, …) and other
+/// Array methods (`concat`, `forEach`, `indexOf`, `map`, `reduce`,
+/// `reduceRight`) can be added here as additional packages need them
+/// (ramda only uses those on real array receivers, where the codegen
+/// method-dispatch path already handles them — the prototype route is
+/// only required when the call site reaches through `.call(arr, …)`).
+fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+    if proto_obj.is_null() {
+        return;
+    }
+    match builtin_name {
+        "Array" => {
+            let slice_closure =
+                crate::closure::js_closure_alloc(array_prototype_slice_thunk as *const u8, 0);
+            if !slice_closure.is_null() {
+                // Register arity so `.call(this, start)` (1 user arg
+                // after the receiver) pads the missing `end` with
+                // `undefined` instead of dispatching to a 1-arg
+                // signature that reads `end_val` out of an
+                // uninitialised register.
+                crate::closure::js_register_closure_arity(
+                    array_prototype_slice_thunk as *const u8,
+                    2,
+                );
+                let key_bytes = b"slice";
+                let key =
+                    crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+                let value = crate::value::js_nanbox_pointer(slice_closure as i64);
+                js_object_set_field_by_name(proto_obj, key, value);
+            }
+        }
+        "Object" => {
+            let to_string_closure =
+                crate::closure::js_closure_alloc(object_prototype_to_string_thunk as *const u8, 0);
+            if !to_string_closure.is_null() {
+                // 0-arg thunk — `.call(this)` forwards 0 user args to
+                // `js_native_call_value`, which dispatches via
+                // `js_closure_call0`.
+                crate::closure::js_register_closure_arity(
+                    object_prototype_to_string_thunk as *const u8,
+                    0,
+                );
+                let key_bytes = b"toString";
+                let key =
+                    crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+                let value = crate::value::js_nanbox_pointer(to_string_closure as i64);
+                js_object_set_field_by_name(proto_obj, key, value);
+            }
+        }
+        _ => {}
     }
 }
 
