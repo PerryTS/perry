@@ -7,40 +7,20 @@ thread_local! {
     static NEXT_SHEET_ID: RefCell<i64> = RefCell::new(1);
 }
 
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
-
-/// Create a sheet (modal window). title_val is a NaN-boxed string (or 0 for no title).
-pub fn create(width: f64, height: f64, title_val: f64) -> i64 {
+/// Create a modal window holding the given body widget. #1033: signature
+/// is `(body_handle, width, height)` to match the perry-dispatch row
+/// `[Widget, F64, F64]` and the TS surface `sheetCreate(body, w, h)`.
+pub fn create(_body_handle: i64, width: f64, height: f64) -> i64 {
     crate::app::ensure_gtk_init();
 
-    // Extract title from NaN-boxed value
-    let title = {
-        extern "C" {
-            fn js_get_string_pointer_unified(value: f64) -> *const u8;
-        }
-        let ptr = unsafe { js_get_string_pointer_unified(title_val) };
-        if ptr.is_null() {
-            "Sheet".to_string()
-        } else {
-            str_from_header(ptr).to_string()
-        }
-    };
-
     let window = gtk4::Window::new();
-    window.set_title(Some(&title));
     window.set_default_size(width as i32, height as i32);
     window.set_modal(true);
     window.set_resizable(true);
+    // GTK widget hand-off across the perry-ui-gtk4 widget registry is
+    // tracked separately — for now we leave the body unattached, which
+    // matches the pre-#1033 behavior here. The signature fix is the
+    // load-bearing change for the macOS sheet bug.
 
     let id = NEXT_SHEET_ID.with(|id| {
         let mut id = id.borrow_mut();

@@ -1328,9 +1328,11 @@ pub extern "C" fn perry_ui_alert(
 // Sheet (new)
 // =============================================================================
 
+// #1033: signature aligned with the perry-dispatch row
+// `[Widget, F64, F64]` and the TS surface `sheetCreate(body, w, h)`.
 #[no_mangle]
-pub extern "C" fn perry_ui_sheet_create(width: f64, height: f64, title_val: f64) -> i64 {
-    sheet::create(width, height, title_val)
+pub extern "C" fn perry_ui_sheet_create(body_handle: i64, width: f64, height: f64) -> i64 {
+    sheet::create(body_handle, width, height)
 }
 
 #[no_mangle]

@@ -1481,10 +1481,11 @@ pub extern "C" fn perry_ui_image_set_tint(handle: i64, r: f64, g: f64, b: f64, a
 // Sheet
 // =============================================================================
 
-/// Create a sheet (modal window).
+/// Create a sheet (modal window). #1033: signature aligned with the
+/// perry-dispatch row `[Widget, F64, F64]`.
 #[no_mangle]
-pub extern "C" fn perry_ui_sheet_create(width: f64, height: f64, title_val: f64) -> i64 {
-    sheet::create(width, height, title_val)
+pub extern "C" fn perry_ui_sheet_create(body_handle: i64, width: f64, height: f64) -> i64 {
+    sheet::create(body_handle, width, height)
 }
 
 /// Present (show) a sheet.

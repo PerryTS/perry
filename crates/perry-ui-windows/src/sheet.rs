@@ -11,22 +11,6 @@ thread_local! {
     static NEXT_SHEET_ID: RefCell<i64> = RefCell::new(1);
 }
 
-extern "C" {
-    fn js_get_string_pointer_unified(value: f64) -> *const u8;
-}
-
-fn str_from_header(ptr: *const u8) -> &'static str {
-    if ptr.is_null() {
-        return "";
-    }
-    unsafe {
-        let header = ptr as *const perry_runtime::string::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
-    }
-}
-
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -42,17 +26,13 @@ unsafe extern "system" fn sheet_default_wnd_proc(
     windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
-/// Create a sheet (modal popup window).
-pub fn create(width: f64, height: f64, title_val: f64) -> i64 {
-    let title = {
-        let ptr = unsafe { js_get_string_pointer_unified(title_val) };
-        if ptr.is_null() {
-            "Sheet".to_string()
-        } else {
-            str_from_header(ptr).to_string()
-        }
-    };
-
+/// Create a sheet (modal popup window) with the body widget installed
+/// as the content view. #1033: signature aligned with the perry-dispatch
+/// row `[Widget, F64, F64]` and the TS surface `sheetCreate(body, w, h)`.
+/// Win32 child-view attach is a separate change; for now the body handle
+/// is accepted so the ABI matches and the call doesn't shuffle the
+/// dimensions through the wrong registers.
+pub fn create(_body_handle: i64, width: f64, height: f64) -> i64 {
     let id = NEXT_SHEET_ID.with(|id| {
         let mut id = id.borrow_mut();
         let current = *id;
@@ -85,7 +65,7 @@ pub fn create(width: f64, height: f64, title_val: f64) -> i64 {
             };
             RegisterClassExW(&wc);
 
-            let title_wide = to_wide(&title);
+            let title_wide = to_wide("");
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 PCWSTR(class_name.as_ptr()),
@@ -108,7 +88,7 @@ pub fn create(width: f64, height: f64, title_val: f64) -> i64 {
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (width, height, title);
+        let _ = (width, height);
         SHEETS.with(|s| s.borrow_mut().insert(id, 0));
     }
 

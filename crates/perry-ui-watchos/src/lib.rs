@@ -1096,7 +1096,9 @@ pub extern "C" fn perry_ui_alert(_title: i64, _msg: i64, _btns: f64, _cb: f64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_alert_simple(_title: i64, _msg: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_sheet_create(_w: f64, _h: f64, _title: i64) -> i64 {
+// #1033: signature aligned with the perry-dispatch row
+// `[Widget, F64, F64]` and the TS surface `sheetCreate(body, w, h)`.
+pub extern "C" fn perry_ui_sheet_create(_body: i64, _w: f64, _h: f64) -> i64 {
     0
 }
 #[no_mangle]

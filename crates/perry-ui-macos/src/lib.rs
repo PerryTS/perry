@@ -2026,15 +2026,15 @@ pub extern "C" fn perry_ui_alert_simple(title_ptr: i64, message_ptr: i64) {
 // Sheet (Modal Panel)
 // =============================================================================
 
-/// Create a sheet (panel). Returns handle.
-/// title_val arrives as NaN-boxed f64 from codegen — extract pointer internally.
+/// Create a sheet (panel) with a body widget, width, and height. Returns
+/// the sheet handle. #1033: aligned with the TS surface
+/// `sheetCreate(body, width, height): Widget` and the perry-dispatch row
+/// `[Widget, F64, F64]`. The previous `(width, height, title)` signature
+/// silently dropped the body handle (it landed in X0; this fn read width
+/// from D0), producing a blank sheet at the requested size.
 #[no_mangle]
-pub extern "C" fn perry_ui_sheet_create(width: f64, height: f64, title_val: f64) -> i64 {
-    extern "C" {
-        fn js_nanbox_get_pointer(value: f64) -> i64;
-    }
-    let title_ptr = unsafe { js_nanbox_get_pointer(title_val) } as *const u8;
-    widgets::sheet::create(width, height, title_ptr)
+pub extern "C" fn perry_ui_sheet_create(body_handle: i64, width: f64, height: f64) -> i64 {
+    widgets::sheet::create(body_handle, width, height)
 }
 
 /// Present a sheet on the key window.
