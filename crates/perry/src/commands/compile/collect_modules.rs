@@ -615,6 +615,7 @@ pub(super) fn collect_modules(
                             | "geolocationStopWatch"
                             | "geolocationRequestPermission"
                             | "imagePickerPick"
+                            | "takeScreenshot"
                             | "networkGetStatus"
                             | "networkOnChange"
                             | "networkStopOnChange"

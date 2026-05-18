@@ -301,6 +301,37 @@ export function imagePickerPick(
 ): void;
 
 // -----------------------------------------------------------------------------
+// In-app screen capture (issue #918)
+//
+// Capture the contents of the key window as a PNG and return a base64-encoded
+// string. The returned value is the raw base64 payload (no `data:image/png;base64,`
+// prefix) so callers can prepend their own scheme or write the decoded bytes
+// to disk via `Buffer.from(s, "base64")` + `fs.writeFileSync`.
+//
+// Platform support:
+//   - macOS:   CGWindowListCreateImage on the key NSWindow.
+//   - iOS:     UIGraphics + drawViewHierarchyInRect on the key UIWindow.
+//   - tvOS:    UIGraphics on the key UIWindow (same as iOS).
+//   - visionOS: UIGraphics on the key UIWindow (same as iOS).
+//   - GTK4:    GtkWidget snapshot of the active GtkWindow.
+//   - Windows: GDI BitBlt of the active HWND, encoded with the `png` crate.
+//   - Android: Canvas-backed Bitmap of the root View, JNI-driven (geisterhand
+//              feature only — returns "" in plain builds).
+//   - watchOS: not supported — returns "".
+//   - CLI / headless builds with no UI host: returns "".
+//
+// The call is synchronous and runs on the calling thread. On macOS / iOS /
+// tvOS / visionOS it must run on the main thread (the AppKit/UIKit thread
+// the app was started on); calling from a background thread is undefined.
+// -----------------------------------------------------------------------------
+
+/**
+ * Capture the key window as a PNG and return a base64-encoded string.
+ * Returns `""` if no UI host is attached or capture fails on the platform.
+ */
+export function takeScreenshot(): string;
+
+// -----------------------------------------------------------------------------
 // Network reachability (issue #582)
 //
 // `networkGetStatus` invokes `cb` synchronously with the current connection

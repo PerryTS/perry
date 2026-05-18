@@ -10,6 +10,7 @@ crate-type = ["rlib", "staticlib"]
 perry-ui = { path = "../perry-ui" }
 perry-ui-testkit = { workspace = true }
 perry-runtime = { path = "../perry-runtime" }
+base64 = "0.22"
 libc = "0.2"
 gtk4 = { version = "0.9", features = ["v4_6"] }
 cairo-rs = "0.20"

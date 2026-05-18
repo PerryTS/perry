@@ -5576,6 +5576,7 @@ version = "0.5.1004"
 name = "perry-ui-android"
 version = "0.5.1004"
 dependencies = [
+ "base64",
  "itoa",
  "jni",
  "libc",
@@ -5601,6 +5602,7 @@ dependencies = [
 name = "perry-ui-gtk4"
 version = "0.5.1004"
 dependencies = [
+ "base64",
  "cairo-rs",
  "dirs 5.0.1",
  "gstreamer",
@@ -5620,6 +5622,7 @@ dependencies = [
 name = "perry-ui-ios"
 version = "0.5.1004"
 dependencies = [
+ "base64",
  "block2",
  "libc",
  "objc2",
@@ -5635,6 +5638,7 @@ dependencies = [
 name = "perry-ui-macos"
 version = "0.5.1004"
 dependencies = [
+ "base64",
  "block2",
  "libc",
  "objc2",
@@ -5657,6 +5661,7 @@ version = "0.5.1004"
 name = "perry-ui-tvos"
 version = "0.5.1004"
 dependencies = [
+ "base64",
  "block2",
  "libc",
  "objc2",
@@ -5672,6 +5677,7 @@ dependencies = [
 name = "perry-ui-visionos"
 version = "0.5.1004"
 dependencies = [
+ "base64",
  "block2",
  "libc",
  "objc2",
@@ -5700,6 +5706,7 @@ dependencies = [
 name = "perry-ui-windows"
 version = "0.5.1004"
 dependencies = [
+ "base64",
  "libc",
  "perry-runtime",
  "perry-ui",

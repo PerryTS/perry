@@ -1430,6 +1430,29 @@ pub extern "C" fn perry_system_image_picker_pick(
     image_picker::pick(max_count, allow_multiple, callback);
 }
 
+// ---- In-app screen capture (issue #918) ----
+/// Capture the key window as a PNG and return a base64-encoded string.
+/// Returns an empty string if no key window is available (e.g. before the
+/// scene is attached, in tests, or in CLI builds) or capture fails.
+#[no_mangle]
+pub extern "C" fn perry_system_take_screenshot() -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut u8;
+    }
+    use base64::Engine as _;
+    unsafe {
+        let mut len: usize = 0;
+        let ptr = crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
+        if ptr.is_null() || len == 0 {
+            return js_string_from_bytes(std::ptr::null(), 0) as i64;
+        }
+        let bytes = std::slice::from_raw_parts(ptr, len);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        libc::free(ptr as *mut libc::c_void);
+        js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32) as i64
+    }
+}
+
 // ---- Network reachability (issue #582) ----
 #[no_mangle]
 pub extern "C" fn perry_system_network_get_status(callback: f64) {

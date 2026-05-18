@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 898 entries across 71 modules
+// Coverage: 900 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -125,6 +125,8 @@ declare module "crypto" {
   export function createHash(...args: any[]): any;
   /** stdlib */
   export function createHmac(...args: any[]): any;
+  /** stdlib */
+  export function createSecretKey(...args: any[]): any;
   /** stdlib */
   export function getRandomValues(...args: any[]): any;
   /** stdlib */
@@ -767,6 +769,8 @@ declare module "perry/system" {
   export function preferencesGet(...args: any[]): any;
   /** stdlib */
   export function preferencesSet(...args: any[]): any;
+  /** stdlib */
+  export function takeScreenshot(...args: any[]): any;
 }
 
 declare module "perry/thread" {

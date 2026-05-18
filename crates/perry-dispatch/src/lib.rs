@@ -2284,6 +2284,13 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         args: &[ArgKind::F64, ArgKind::F64, ArgKind::Closure],
         ret: ReturnKind::Void,
     },
+    // ---- In-app screen capture (issue #918) ----
+    MethodRow {
+        method: "takeScreenshot",
+        runtime: "perry_system_take_screenshot",
+        args: &[],
+        ret: ReturnKind::Str,
+    },
     // ---- Network reachability (issue #582) ----
     MethodRow {
         method: "networkGetStatus",

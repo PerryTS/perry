@@ -2123,6 +2123,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perry/system", "geolocationStopWatch", false, None),
     method("perry/system", "geolocationRequestPermission", false, None),
     method("perry/system", "imagePickerPick", false, None),
+    // --- perry/system in-app screen capture (issue #918). ---
+    method("perry/system", "takeScreenshot", false, None),
     // --- perry/system network reachability (issue #582). ---
     method("perry/system", "networkGetStatus", false, None),
     method("perry/system", "networkOnChange", false, None),

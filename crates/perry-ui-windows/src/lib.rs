@@ -2516,3 +2516,25 @@ pub extern "C" fn perry_ui_attributed_text_append(
 pub extern "C" fn perry_ui_attributed_text_clear(h: i64) {
     widgets::attributed_text::clear(h);
 }
+
+// ---- In-app screen capture (issue #918) ----
+/// Capture the active window as a PNG and return a base64-encoded string.
+/// Returns an empty string if no window is available or capture fails.
+#[no_mangle]
+pub extern "C" fn perry_system_take_screenshot() -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
+    }
+    use base64::Engine as _;
+    unsafe {
+        let mut len: usize = 0;
+        let ptr = crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
+        if ptr.is_null() || len == 0 {
+            return js_string_from_bytes(std::ptr::null(), 0) as i64;
+        }
+        let bytes = std::slice::from_raw_parts(ptr, len);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        libc::free(ptr as *mut libc::c_void);
+        js_string_from_bytes(encoded.as_ptr(), encoded.len() as i64) as i64
+    }
+}

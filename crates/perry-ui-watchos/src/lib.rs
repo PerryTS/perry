@@ -1639,3 +1639,14 @@ pub extern "C" fn perry_ui_attributed_text_clear(h: i64) {
         node.attributed_runs.clear();
     });
 }
+
+// ---- In-app screen capture (issue #918) ----
+/// watchOS has no screenshot-capable runtime today (no `screenshot.rs` in
+/// this crate). Returns an empty string so callers can branch on length.
+#[no_mangle]
+pub extern "C" fn perry_system_take_screenshot() -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+}
