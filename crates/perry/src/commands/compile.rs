@@ -6326,9 +6326,12 @@ pub fn run_with_parse_cache(
                         }
                         OutputFormat::Json => {}
                     }
-                    // Clean up intermediate .ll files
-                    for ll in &ll_files {
-                        let _ = fs::remove_file(ll);
+                    // Clean up intermediate .ll files unless the caller
+                    // explicitly requested debuggable compiler artifacts.
+                    if !args.keep_intermediates {
+                        for ll in &ll_files {
+                            let _ = fs::remove_file(ll);
+                        }
                     }
                     // Replace obj_paths with the merged .o + any stubs
                     obj_paths = vec![linked_obj];
@@ -6356,7 +6359,9 @@ pub fn run_with_parse_cache(
                     perry_codegen::linker::compile_ll_to_object(&ll_text, target.as_deref())?;
                 let obj_path = p.with_extension("o");
                 fs::write(&obj_path, &obj_bytes)?;
-                let _ = fs::remove_file(p);
+                if !args.keep_intermediates {
+                    let _ = fs::remove_file(p);
+                }
                 new_obj_paths.push(obj_path);
             } else {
                 new_obj_paths.push(p.clone());
