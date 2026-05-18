@@ -492,7 +492,10 @@ fn try_rewrite_perry_tui_jsx_intrinsic(
         _ => return Ok(None),
     };
 
-    let Expr::ExternFuncRef { name: type_name, .. } = type_arg else {
+    let Expr::ExternFuncRef {
+        name: type_name, ..
+    } = type_arg
+    else {
         return Ok(None);
     };
     let Some((module, method)) = decode_jsx_intrinsic_sentinel(type_name) else {
@@ -1183,8 +1186,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
             // `js_jsx` (returns TAG_UNDEFINED until the rewriter is
             // extended).
             "jsx" | "jsxs" => {
-                if let Some(call) =
-                    try_rewrite_perry_tui_jsx_intrinsic(ctx, name == "jsxs", args)?
+                if let Some(call) = try_rewrite_perry_tui_jsx_intrinsic(ctx, name == "jsxs", args)?
                 {
                     return Ok(call);
                 }
