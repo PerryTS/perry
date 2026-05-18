@@ -419,10 +419,10 @@ pub fn invoke_audio_callback(samples_ptr: *const f32, num_samples: usize) {
     }
     let callback = callback_opt.unwrap();
     let callback_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
-    
+
     let samples_val = unsafe { js_nanbox_pointer(samples_ptr as i64) };
     let num_samples_val = num_samples as f64;
-    
+
     unsafe {
         js_closure_call2(callback_ptr, samples_val, num_samples_val);
     }

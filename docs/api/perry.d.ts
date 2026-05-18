@@ -1,6 +1,28 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 906 entries across 71 modules
+// Coverage: 916 entries across 73 modules
+
+declare module "@perryts/google-auth" {
+  /** stdlib */
+  export function js_google_auth_sign_in(...args: any[]): any;
+  /** stdlib */
+  export function js_google_auth_sign_out(...args: any[]): any;
+  /** stdlib */
+  export function js_google_auth_silent_sign_in(...args: any[]): any;
+}
+
+declare module "@perryts/pdf" {
+  /** stdlib */
+  export function createPdf(opts: any): number;
+  /** stdlib */
+  export function pdfAddLine(...args: any[]): any;
+  /** stdlib */
+  export function pdfAddText(...args: any[]): any;
+  /** stdlib */
+  export function pdfNewPage(...args: any[]): any;
+  /** stdlib */
+  export function pdfSave(...args: any[]): any;
+}
 
 declare module "argon2" {
   /** stdlib */
@@ -710,6 +732,8 @@ declare module "perry/system" {
   /** stdlib */
   export function audioGetWaveform(...args: any[]): any;
   /** stdlib */
+  export function audioRegisterCallback(...args: any[]): any;
+  /** stdlib */
   export function audioSetOutputFilename(...args: any[]): any;
   /** stdlib */
   export function audioStart(...args: any[]): any;
@@ -719,6 +743,8 @@ declare module "perry/system" {
   export function audioStop(...args: any[]): any;
   /** stdlib */
   export function audioStopRecording(...args: any[]): any;
+  /** stdlib */
+  export function audioUnregisterCallback(...args: any[]): any;
   /** stdlib */
   export function geolocationGetCurrent(...args: any[]): any;
   /** stdlib */

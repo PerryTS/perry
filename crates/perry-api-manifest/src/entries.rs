@@ -2343,9 +2343,24 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // JSON-stringified `GoogleSignInResult`. Listed here so the
     // manifest's unimplemented-API check (#463) accepts them when a
     // user writes `import { js_google_auth_sign_in } from "@perryts/google-auth"`.
-    method("@perryts/google-auth", "js_google_auth_sign_in", false, None),
-    method("@perryts/google-auth", "js_google_auth_silent_sign_in", false, None),
-    method("@perryts/google-auth", "js_google_auth_sign_out", false, None),
+    method(
+        "@perryts/google-auth",
+        "js_google_auth_sign_in",
+        false,
+        None,
+    ),
+    method(
+        "@perryts/google-auth",
+        "js_google_auth_silent_sign_in",
+        false,
+        None,
+    ),
+    method(
+        "@perryts/google-auth",
+        "js_google_auth_sign_out",
+        false,
+        None,
+    ),
     // --- @perryts/pdf (issue #516) ---
     // Minimal PDF creation API. The five FFI entry points exported
     // by crates/perry-ext-pdf. Param shapes intentionally loose

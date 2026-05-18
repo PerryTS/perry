@@ -61,7 +61,11 @@ impl LockArgs {
         if self.frozen {
             LockMode::Frozen
         } else if self.update_all || !self.update.is_empty() {
-            let pkgs = if self.update_all { Vec::new() } else { self.update.clone() };
+            let pkgs = if self.update_all {
+                Vec::new()
+            } else {
+                self.update.clone()
+            };
             LockMode::Update(pkgs)
         } else {
             LockMode::Default
@@ -88,11 +92,8 @@ pub fn run(args: LockArgs, format: crate::OutputFormat, _use_color: bool) -> Res
         .project_root
         .canonicalize()
         .unwrap_or(args.project_root.clone());
-    let lock = crate::commands::perry_lock::verify_or_write(
-        &project_root_canonical,
-        &archives,
-        &mode,
-    )?;
+    let lock =
+        crate::commands::perry_lock::verify_or_write(&project_root_canonical, &archives, &mode)?;
 
     match format {
         crate::OutputFormat::Text => match &mode {

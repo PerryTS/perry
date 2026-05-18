@@ -1886,10 +1886,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                                 // #1030. Keep the richer comment from HEAD but
                                 // call the same helper everything else does.
                                 if inner_property == "resolve"
-                                    && is_global_constructor_expr(
-                                        inner_object.as_ref(),
-                                        "Promise",
-                                    )
+                                    && is_global_constructor_expr(inner_object.as_ref(), "Promise")
                                 {
                                     let inner_value = if inner_args.is_empty() {
                                         double_literal(0.0)

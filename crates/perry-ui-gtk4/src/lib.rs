@@ -2036,7 +2036,12 @@ pub extern "C" fn perry_system_audio_stop_recording() {
 #[no_mangle]
 pub extern "C" fn perry_system_audio_register_callback(callback: f64) {
     use std::io::{self, Write};
-    writeln!(io::stderr(), "[LIB] perry_system_audio_register_callback called! callback={}", callback).unwrap();
+    writeln!(
+        io::stderr(),
+        "[LIB] perry_system_audio_register_callback called! callback={}",
+        callback
+    )
+    .unwrap();
     audio::register_audio_callback(callback);
 }
 #[no_mangle]

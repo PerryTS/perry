@@ -2222,11 +2222,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // codegen via NR_PTR). The mutator ops are Rust `-> ()` and
     // therefore VOID at the LLVM ABI level.
     module.declare_function("js_pdf_create_pdf", I64, &[DOUBLE]);
-    module.declare_function(
-        "js_pdf_add_text",
-        VOID,
-        &[I64, I64, DOUBLE, DOUBLE, DOUBLE],
-    );
+    module.declare_function("js_pdf_add_text", VOID, &[I64, I64, DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function(
         "js_pdf_add_line",
         VOID,

@@ -18,7 +18,9 @@ pub struct PerryLock {
     pub native_library: BTreeMap<String, NativeLibraryLock>,
 }
 
-fn default_version() -> u32 { LOCK_VERSION }
+fn default_version() -> u32 {
+    LOCK_VERSION
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct NativeLibraryLock {
@@ -34,7 +36,9 @@ pub enum LockMode {
 }
 
 impl LockMode {
-    pub fn allows_writes(&self) -> bool { !matches!(self, LockMode::Frozen) }
+    pub fn allows_writes(&self) -> bool {
+        !matches!(self, LockMode::Frozen)
+    }
     pub fn allows_refresh(&self, package: &str) -> bool {
         match self {
             LockMode::Update(pkgs) => pkgs.is_empty() || pkgs.iter().any(|p| p == package),
@@ -44,7 +48,9 @@ impl LockMode {
 }
 
 impl Default for LockMode {
-    fn default() -> Self { LockMode::Default }
+    fn default() -> Self {
+        LockMode::Default
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -67,12 +73,17 @@ pub fn verify_or_write(
 
     for archive in archives {
         let actual = sha256_of_file(&archive.path)?;
-        let entry = lock.native_library.entry(archive.package.clone()).or_default();
+        let entry = lock
+            .native_library
+            .entry(archive.package.clone())
+            .or_default();
         match entry.sha256_per_target.get(&archive.target_key) {
             Some(expected) if expected == &actual => {}
             Some(expected) => {
                 if mode.allows_refresh(&archive.package) {
-                    entry.sha256_per_target.insert(archive.target_key.clone(), actual);
+                    entry
+                        .sha256_per_target
+                        .insert(archive.target_key.clone(), actual);
                     dirty = true;
                 } else {
                     mismatches.push(MismatchReport {
@@ -93,7 +104,9 @@ pub fn verify_or_write(
                         actual,
                     });
                 } else if mode.allows_writes() {
-                    entry.sha256_per_target.insert(archive.target_key.clone(), actual);
+                    entry
+                        .sha256_per_target
+                        .insert(archive.target_key.clone(), actual);
                     dirty = true;
                 }
             }
@@ -101,7 +114,11 @@ pub fn verify_or_write(
     }
 
     if !mismatches.is_empty() || !missing_frozen.is_empty() {
-        return Err(anyhow!(format_violation(&mismatches, &missing_frozen, mode)));
+        return Err(anyhow!(format_violation(
+            &mismatches,
+            &missing_frozen,
+            mode
+        )));
     }
     if dirty && mode.allows_writes() {
         save_lock(&lock_path, &lock)?;
@@ -120,7 +137,10 @@ pub fn sha256_of_file(path: &Path) -> Result<String> {
 
 pub fn load_or_default(lock_path: &Path) -> Result<PerryLock> {
     if !lock_path.exists() {
-        return Ok(PerryLock { version: LOCK_VERSION, native_library: BTreeMap::new() });
+        return Ok(PerryLock {
+            version: LOCK_VERSION,
+            native_library: BTreeMap::new(),
+        });
     }
     let body = fs::read_to_string(lock_path)
         .map_err(|e| anyhow!("read {}: {}", lock_path.display(), e))?;
@@ -164,7 +184,9 @@ fn format_violation(
 ) -> String {
     let mut out = String::new();
     if !mismatches.is_empty() {
-        out.push_str("Lockfile mismatch: one or more archives changed since they were locked (#498).\n\n");
+        out.push_str(
+            "Lockfile mismatch: one or more archives changed since they were locked (#498).\n\n",
+        );
         for m in mismatches {
             out.push_str(&format!(
                 "  archive for `{}` (target `{}`) changed since last accepted:\n    expected: sha256:{}\n    found:    sha256:{}\n    path:     {}\n\n",
@@ -184,8 +206,12 @@ fn format_violation(
     }
     if !missing_frozen.is_empty() {
         if matches!(mode, LockMode::Frozen) {
-            out.push_str("Frozen-mode lockfile is missing entries that the current build needs (#498).\n");
-            out.push_str("`perry lock --frozen` refuses to write to perry.lock; commit the updated\n");
+            out.push_str(
+                "Frozen-mode lockfile is missing entries that the current build needs (#498).\n",
+            );
+            out.push_str(
+                "`perry lock --frozen` refuses to write to perry.lock; commit the updated\n",
+            );
             out.push_str("lockfile from a non-frozen build instead.\n\n");
         }
         for m in missing_frozen {
@@ -218,7 +244,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let p = write_archive(dir.path(), "hello.bin", b"hello\n");
         let hash = sha256_of_file(&p).expect("hash hello.bin");
-        assert_eq!(hash, "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03");
+        assert_eq!(
+            hash,
+            "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+        );
     }
 
     #[test]
@@ -246,12 +275,26 @@ mod tests {
         let a = write_archive(project, "a.a", b"alpha");
         let b = write_archive(project, "b.a", b"beta");
         let archives = vec![
-            ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a.clone() },
-            ArchiveEntry { package: "pkg-b".into(), target_key: "linux-x86_64".into(), path: b.clone() },
+            ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a.clone(),
+            },
+            ArchiveEntry {
+                package: "pkg-b".into(),
+                target_key: "linux-x86_64".into(),
+                path: b.clone(),
+            },
         ];
         let lock = verify_or_write(project, &archives, &LockMode::Default).expect("write");
-        assert_eq!(lock.native_library["pkg-a"].sha256_per_target["macos-arm64"], sha256_of_file(&a).unwrap());
-        assert_eq!(lock.native_library["pkg-b"].sha256_per_target["linux-x86_64"], sha256_of_file(&b).unwrap());
+        assert_eq!(
+            lock.native_library["pkg-a"].sha256_per_target["macos-arm64"],
+            sha256_of_file(&a).unwrap()
+        );
+        assert_eq!(
+            lock.native_library["pkg-b"].sha256_per_target["linux-x86_64"],
+            sha256_of_file(&b).unwrap()
+        );
         assert!(project.join("perry.lock").exists());
     }
 
@@ -260,7 +303,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let project = dir.path();
         let a = write_archive(project, "a.a", b"alpha");
-        let archives = vec![ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a }];
+        let archives = vec![ArchiveEntry {
+            package: "pkg-a".into(),
+            target_key: "macos-arm64".into(),
+            path: a,
+        }];
         verify_or_write(project, &archives, &LockMode::Default).expect("first write");
         verify_or_write(project, &archives, &LockMode::Default).expect("verify pass");
     }
@@ -270,12 +317,33 @@ mod tests {
         let dir = tempdir().unwrap();
         let project = dir.path();
         let a = write_archive(project, "a.a", b"alpha");
-        verify_or_write(project, &[ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a.clone() }], &LockMode::Default).expect("initial");
+        verify_or_write(
+            project,
+            &[ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a.clone(),
+            }],
+            &LockMode::Default,
+        )
+        .expect("initial");
         write_archive(project, "a.a", b"ALPHA-MUTATED");
-        let err = verify_or_write(project, &[ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a }], &LockMode::Default).expect_err("mismatch fails");
+        let err = verify_or_write(
+            project,
+            &[ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a,
+            }],
+            &LockMode::Default,
+        )
+        .expect_err("mismatch fails");
         let msg = err.to_string();
         assert!(msg.contains("pkg-a"), "names package: {msg}");
-        assert!(msg.contains("perry lock --update pkg-a"), "suggests update: {msg}");
+        assert!(
+            msg.contains("perry lock --update pkg-a"),
+            "suggests update: {msg}"
+        );
         assert!(msg.contains("macos-arm64"), "names target: {msg}");
         assert!(msg.contains("#498"), "cites issue: {msg}");
     }
@@ -285,10 +353,31 @@ mod tests {
         let dir = tempdir().unwrap();
         let project = dir.path();
         let a = write_archive(project, "a.a", b"alpha");
-        verify_or_write(project, &[ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a.clone() }], &LockMode::Default).expect("seed");
+        verify_or_write(
+            project,
+            &[ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a.clone(),
+            }],
+            &LockMode::Default,
+        )
+        .expect("seed");
         write_archive(project, "a.a", b"ALPHA-V2");
-        let lock = verify_or_write(project, &[ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a.clone() }], &LockMode::Update(vec!["pkg-a".into()])).expect("refresh");
-        assert_eq!(lock.native_library["pkg-a"].sha256_per_target["macos-arm64"], sha256_of_file(&a).unwrap());
+        let lock = verify_or_write(
+            project,
+            &[ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a.clone(),
+            }],
+            &LockMode::Update(vec!["pkg-a".into()]),
+        )
+        .expect("refresh");
+        assert_eq!(
+            lock.native_library["pkg-a"].sha256_per_target["macos-arm64"],
+            sha256_of_file(&a).unwrap()
+        );
     }
 
     #[test]
@@ -298,15 +387,30 @@ mod tests {
         let a = write_archive(project, "a.a", b"alpha");
         let b = write_archive(project, "b.a", b"beta");
         let archives_v1 = vec![
-            ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a.clone() },
-            ArchiveEntry { package: "pkg-b".into(), target_key: "linux-x86_64".into(), path: b.clone() },
+            ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a.clone(),
+            },
+            ArchiveEntry {
+                package: "pkg-b".into(),
+                target_key: "linux-x86_64".into(),
+                path: b.clone(),
+            },
         ];
         verify_or_write(project, &archives_v1, &LockMode::Default).expect("seed");
         write_archive(project, "a.a", b"alpha-v2");
         write_archive(project, "b.a", b"beta-v2");
-        let lock = verify_or_write(project, &archives_v1, &LockMode::Update(vec![])).expect("refresh-all");
-        assert_eq!(lock.native_library["pkg-a"].sha256_per_target["macos-arm64"], sha256_of_file(&a).unwrap());
-        assert_eq!(lock.native_library["pkg-b"].sha256_per_target["linux-x86_64"], sha256_of_file(&b).unwrap());
+        let lock =
+            verify_or_write(project, &archives_v1, &LockMode::Update(vec![])).expect("refresh-all");
+        assert_eq!(
+            lock.native_library["pkg-a"].sha256_per_target["macos-arm64"],
+            sha256_of_file(&a).unwrap()
+        );
+        assert_eq!(
+            lock.native_library["pkg-b"].sha256_per_target["linux-x86_64"],
+            sha256_of_file(&b).unwrap()
+        );
     }
 
     #[test]
@@ -316,13 +420,26 @@ mod tests {
         let a = write_archive(project, "a.a", b"alpha");
         let b = write_archive(project, "b.a", b"beta");
         let archives_v1 = vec![
-            ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a.clone() },
-            ArchiveEntry { package: "pkg-b".into(), target_key: "linux-x86_64".into(), path: b.clone() },
+            ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a.clone(),
+            },
+            ArchiveEntry {
+                package: "pkg-b".into(),
+                target_key: "linux-x86_64".into(),
+                path: b.clone(),
+            },
         ];
         verify_or_write(project, &archives_v1, &LockMode::Default).expect("seed");
         write_archive(project, "a.a", b"alpha-v2");
         write_archive(project, "b.a", b"beta-v2");
-        let err = verify_or_write(project, &archives_v1, &LockMode::Update(vec!["pkg-a".into()])).expect_err("pkg-b not refreshed");
+        let err = verify_or_write(
+            project,
+            &archives_v1,
+            &LockMode::Update(vec!["pkg-a".into()]),
+        )
+        .expect_err("pkg-b not refreshed");
         assert!(err.to_string().contains("pkg-b"));
     }
 
@@ -331,12 +448,23 @@ mod tests {
         let dir = tempdir().unwrap();
         let project = dir.path();
         let a = write_archive(project, "a.a", b"alpha");
-        let archives = vec![ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a }];
-        let err = verify_or_write(project, &archives, &LockMode::Frozen).expect_err("frozen+missing fails");
+        let archives = vec![ArchiveEntry {
+            package: "pkg-a".into(),
+            target_key: "macos-arm64".into(),
+            path: a,
+        }];
+        let err = verify_or_write(project, &archives, &LockMode::Frozen)
+            .expect_err("frozen+missing fails");
         let msg = err.to_string();
-        assert!(msg.contains("Frozen") || msg.contains("frozen"), "mentions frozen: {msg}");
+        assert!(
+            msg.contains("Frozen") || msg.contains("frozen"),
+            "mentions frozen: {msg}"
+        );
         assert!(msg.contains("pkg-a"));
-        assert!(!project.join("perry.lock").exists(), "frozen must not write");
+        assert!(
+            !project.join("perry.lock").exists(),
+            "frozen must not write"
+        );
     }
 
     #[test]
@@ -344,7 +472,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let project = dir.path();
         let a = write_archive(project, "a.a", b"alpha");
-        let archives = vec![ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a }];
+        let archives = vec![ArchiveEntry {
+            package: "pkg-a".into(),
+            target_key: "macos-arm64".into(),
+            path: a,
+        }];
         verify_or_write(project, &archives, &LockMode::Default).expect("seed");
         verify_or_write(project, &archives, &LockMode::Frozen).expect("frozen verify");
     }
@@ -354,9 +486,27 @@ mod tests {
         let dir = tempdir().unwrap();
         let project = dir.path();
         let a = write_archive(project, "a.a", b"alpha");
-        verify_or_write(project, &[ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a.clone() }], &LockMode::Default).expect("seed");
+        verify_or_write(
+            project,
+            &[ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a.clone(),
+            }],
+            &LockMode::Default,
+        )
+        .expect("seed");
         write_archive(project, "a.a", b"alpha-v2");
-        let err = verify_or_write(project, &[ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a }], &LockMode::Frozen).expect_err("frozen+mismatch fails");
+        let err = verify_or_write(
+            project,
+            &[ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a,
+            }],
+            &LockMode::Frozen,
+        )
+        .expect_err("frozen+mismatch fails");
         assert!(err.to_string().contains("pkg-a"));
     }
 
@@ -367,14 +517,28 @@ mod tests {
         let a_mac = write_archive(project, "a-macos.a", b"alpha-mac");
         let a_linux = write_archive(project, "a-linux.a", b"alpha-linux");
         let archives = vec![
-            ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a_mac.clone() },
-            ArchiveEntry { package: "pkg-a".into(), target_key: "linux-x86_64".into(), path: a_linux.clone() },
+            ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a_mac.clone(),
+            },
+            ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "linux-x86_64".into(),
+                path: a_linux.clone(),
+            },
         ];
         let lock = verify_or_write(project, &archives, &LockMode::Default).expect("write");
         let pkg = &lock.native_library["pkg-a"];
         assert_eq!(pkg.sha256_per_target.len(), 2);
-        assert_eq!(pkg.sha256_per_target["macos-arm64"], sha256_of_file(&a_mac).unwrap());
-        assert_eq!(pkg.sha256_per_target["linux-x86_64"], sha256_of_file(&a_linux).unwrap());
+        assert_eq!(
+            pkg.sha256_per_target["macos-arm64"],
+            sha256_of_file(&a_mac).unwrap()
+        );
+        assert_eq!(
+            pkg.sha256_per_target["linux-x86_64"],
+            sha256_of_file(&a_linux).unwrap()
+        );
     }
 
     #[test]
@@ -384,8 +548,16 @@ mod tests {
         let a = write_archive(project, "a.a", b"alpha");
         let b = write_archive(project, "b.a", b"beta");
         let archives = vec![
-            ArchiveEntry { package: "pkg-z".into(), target_key: "linux-x86_64".into(), path: b },
-            ArchiveEntry { package: "pkg-a".into(), target_key: "macos-arm64".into(), path: a },
+            ArchiveEntry {
+                package: "pkg-z".into(),
+                target_key: "linux-x86_64".into(),
+                path: b,
+            },
+            ArchiveEntry {
+                package: "pkg-a".into(),
+                target_key: "macos-arm64".into(),
+                path: a,
+            },
         ];
         verify_or_write(project, &archives, &LockMode::Default).expect("first");
         let bytes_one = fs::read(project.join("perry.lock")).expect("read");

@@ -44,8 +44,8 @@ use std::sync::{Mutex, OnceLock};
 
 use perry_ffi::{read_string, JsString, StringHeader};
 use printpdf::{
-    BuiltinFont, Color, Line, LinePoint, Op, PdfDocument, PdfFontHandle, PdfPage,
-    PdfSaveOptions, PdfWarnMsg, Point, Pt, Rgb, TextItem,
+    BuiltinFont, Color, Line, LinePoint, Op, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions,
+    PdfWarnMsg, Point, Pt, Rgb, TextItem,
 };
 
 // ============================================================================
@@ -315,7 +315,8 @@ pub unsafe extern "C" fn js_pdf_add_line(handle: i64, x1: f64, y1: f64, x2: f64,
             icc_profile: None,
         }),
     });
-    doc.current_ops.push(Op::SetOutlineThickness { pt: Pt(1.0) });
+    doc.current_ops
+        .push(Op::SetOutlineThickness { pt: Pt(1.0) });
     doc.current_ops.push(Op::DrawLine { line });
 }
 
@@ -378,10 +379,7 @@ pub unsafe extern "C" fn js_pdf_save(handle: i64) {
     }
 
     if let Err(e) = fs::write(&doc.path, &bytes) {
-        eprintln!(
-            "[perry-ext-pdf] failed to write PDF to {}: {}",
-            doc.path, e
-        );
+        eprintln!("[perry-ext-pdf] failed to write PDF to {}: {}", doc.path, e);
     }
 }
 
@@ -645,8 +643,9 @@ mod tests {
 
     #[test]
     fn skips_unknown_value_kinds() {
-        let v = parse(r#"{ "path": "/tmp/c.pdf", "meta": null, "tags": [1,2], "nested": {"x":1} }"#)
-            .expect("parse");
+        let v =
+            parse(r#"{ "path": "/tmp/c.pdf", "meta": null, "tags": [1,2], "nested": {"x":1} }"#)
+                .expect("parse");
         assert_eq!(v.get_str("path"), Some("/tmp/c.pdf"));
     }
 }

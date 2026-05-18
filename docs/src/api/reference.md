@@ -2,10 +2,12 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 906 entries across 71 modules.
+Total: 916 entries across 73 modules.
 
 ## Modules
 
+- [`@perryts/google-auth`](#-perryts-google-auth)
+- [`@perryts/pdf`](#-perryts-pdf)
 - [`argon2`](#argon2)
 - [`async_hooks`](#async-hooks)
 - [`axios`](#axios)
@@ -79,6 +81,24 @@ Total: 906 entries across 71 modules.
 - [`zlib`](#zlib)
 
 ---
+
+## `@perryts/google-auth`
+
+### Methods
+
+- `js_google_auth_sign_in` — module
+- `js_google_auth_sign_out` — module
+- `js_google_auth_silent_sign_in` — module
+
+## `@perryts/pdf`
+
+### Methods
+
+- `createPdf` — module
+- `pdfAddLine` — module
+- `pdfAddText` — module
+- `pdfNewPage` — module
+- `pdfSave` — module
 
 ## `argon2`
 
@@ -909,11 +929,13 @@ Total: 906 entries across 71 modules.
 - `audioGetLevel` — module
 - `audioGetPeak` — module
 - `audioGetWaveform` — module
+- `audioRegisterCallback` — module
 - `audioSetOutputFilename` — module
 - `audioStart` — module
 - `audioStartRecording` — module
 - `audioStop` — module
 - `audioStopRecording` — module
+- `audioUnregisterCallback` — module
 - `geolocationGetCurrent` — module
 - `geolocationRequestPermission` — module
 - `geolocationStopWatch` — module

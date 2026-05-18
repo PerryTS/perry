@@ -8867,19 +8867,18 @@ mod lock_integration_tests {
     fn derive_target_key_native_falls_back_to_host_os_and_arch() {
         let host = derive_target_key(None);
         assert!(host.contains('-'), "host key has arch suffix: {host}");
-        assert!(host.starts_with(std::env::consts::OS), "host key starts with host OS: {host}");
+        assert!(
+            host.starts_with(std::env::consts::OS),
+            "host key starts with host OS: {host}"
+        );
     }
 
     #[test]
     fn collect_archives_no_node_modules() {
         let dir = tempfile::tempdir().unwrap();
-        let archives = collect_native_archives_for_lock(
-            dir.path(),
-            None,
-            Some("macos"),
-            OutputFormat::Json,
-        )
-        .expect("succeeds with no deps");
+        let archives =
+            collect_native_archives_for_lock(dir.path(), None, Some("macos"), OutputFormat::Json)
+                .expect("succeeds with no deps");
         assert!(archives.is_empty());
     }
 
@@ -8910,16 +8909,14 @@ mod lock_integration_tests {
         )
         .unwrap();
 
-        let archives = collect_native_archives_for_lock(
-            project,
-            None,
-            Some("macos"),
-            OutputFormat::Json,
-        )
-        .expect("scan");
+        let archives =
+            collect_native_archives_for_lock(project, None, Some("macos"), OutputFormat::Json)
+                .expect("scan");
         assert_eq!(archives.len(), 1);
         assert_eq!(archives[0].package, "@bloom/engine");
-        assert_eq!(archives[0].target_key, "macos-arm64");
+        // Derived from host arch so the test passes on both arm64 Mac dev
+        // boxes and x86_64 Linux CI runners.
+        assert_eq!(archives[0].target_key, derive_target_key(Some("macos")));
         assert_eq!(archives[0].path, archive_path);
     }
 }
