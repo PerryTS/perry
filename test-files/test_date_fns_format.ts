@@ -37,3 +37,18 @@ console.log(format(d, "yyyy"));
 console.log(format(d, "MM"));
 console.log(format(d, "dd"));
 console.log(typeof format(d, "yyyy"));
+// Composed patterns + month/weekday names + ordinal suffix.
+// All match `node --experimental-strip-types` byte-for-byte.
+console.log(format(d, "yyyy-MM-dd HH:mm:ss"));
+console.log(format(d, "MMMM do yyyy"));
+console.log(format(d, "EEEE"));
+// Ordinal-only tokens.
+console.log(format(d, "do"));
+console.log(format(d, "Mo"));
+console.log(format(d, "yo"));
+// AM/PM variants (run length controls casing/dotting).
+const pmDate = new Date(2020, 0, 6, 13, 45, 30);
+console.log(format(pmDate, "a"));
+console.log(format(pmDate, "aaa"));
+console.log(format(pmDate, "aaaa"));
+console.log(format(pmDate, "aaaaa"));

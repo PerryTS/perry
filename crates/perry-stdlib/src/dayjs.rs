@@ -597,6 +597,74 @@ where
             i += 1;
         }
         let run = i - start;
+        // date-fns ordinal suffix: a single-letter token immediately
+        // followed by literal `o` formats the corresponding field as an
+        // English ordinal (`do` → "6th", `Mo` → "1st", `yo` → "2020th",
+        // `Do` → day-of-year ordinal, `Qo`/`qo` → quarter ordinal). The
+        // letters that participate are exactly those listed in the
+        // date-fns tokenizer character class:
+        // `[yYQqMLwIdDecihHKkms]o`. We only honour the suffix when the
+        // run length is 1, mirroring date-fns's own behavior.
+        let ordinal = run == 1
+            && i < bytes.len()
+            && bytes[i] == b'o'
+            && matches!(
+                c,
+                b'y' | b'Y'
+                    | b'Q'
+                    | b'q'
+                    | b'M'
+                    | b'L'
+                    | b'w'
+                    | b'I'
+                    | b'd'
+                    | b'D'
+                    | b'e'
+                    | b'c'
+                    | b'i'
+                    | b'h'
+                    | b'H'
+                    | b'K'
+                    | b'k'
+                    | b'm'
+                    | b's'
+            );
+        if ordinal {
+            // Consume the trailing `o`.
+            i += 1;
+            let n: i64 = match c {
+                b'y' | b'Y' => dt.year() as i64,
+                b'Q' | b'q' => (((dt.month() - 1) / 3) + 1) as i64,
+                b'M' | b'L' => dt.month() as i64,
+                b'w' | b'I' => dt.iso_week().week() as i64,
+                b'd' => dt.day() as i64,
+                b'D' => dt.ordinal() as i64,
+                b'e' | b'c' | b'i' => dt.weekday().number_from_monday() as i64,
+                b'h' => {
+                    let h12 = dt.hour() % 12;
+                    if h12 == 0 {
+                        12
+                    } else {
+                        h12 as i64
+                    }
+                }
+                b'H' => dt.hour() as i64,
+                b'K' => (dt.hour() % 12) as i64,
+                b'k' => {
+                    let h = dt.hour();
+                    if h == 0 {
+                        24
+                    } else {
+                        h as i64
+                    }
+                }
+                b'm' => dt.minute() as i64,
+                b's' => dt.second() as i64,
+                _ => 0,
+            };
+            out.push_str(&english_ordinal(n));
+            continue;
+        }
         match c {
             b'y' => match run {
                 1 => out.push_str(&format!("{}", dt.year())),
@@ -644,9 +712,40 @@ where
                 }
             }
             b'a' => {
-                // am/pm marker
-                let ampm = if dt.hour() < 12 { "AM" } else { "PM" };
-                out.push_str(ampm);
+                // am/pm marker. date-fns: a/aa → "AM"/"PM",
+                // aaa → "am"/"pm", aaaa → "a.m."/"p.m.", aaaaa → "a"/"p".
+                let pm = dt.hour() >= 12;
+                let s = match run {
+                    3 => {
+                        if pm {
+                            "pm"
+                        } else {
+                            "am"
+                        }
+                    }
+                    4 => {
+                        if pm {
+                            "p.m."
+                        } else {
+                            "a.m."
+                        }
+                    }
+                    5 => {
+                        if pm {
+                            "p"
+                        } else {
+                            "a"
+                        }
+                    }
+                    _ => {
+                        if pm {
+                            "PM"
+                        } else {
+                            "AM"
+                        }
+                    }
+                };
+                out.push_str(s);
             }
             b'E' => {
                 // Day-of-week abbreviations. EEEE = long, EEE/EE/E = short.
@@ -673,6 +772,20 @@ where
         }
     }
     out
+}
+
+/// English ordinal suffix for a non-negative integer.
+/// 1 → "1st", 2 → "2nd", 3 → "3rd", 11 → "11th", 21 → "21st", etc.
+fn english_ordinal(n: i64) -> String {
+    let abs = n.unsigned_abs();
+    let suffix = match (abs % 100, abs % 10) {
+        (11, _) | (12, _) | (13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    format!("{}{}", n, suffix)
 }
 
 fn short_month_name(m: u32) -> &'static str {

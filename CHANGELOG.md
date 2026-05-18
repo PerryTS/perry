@@ -2,6 +2,35 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1000 — fix(date-fns): ordinal-suffix tokens + lowercase/dotted AM/PM variants
+
+PR #993 wired the date-fns `format()` token loop, but only emitted runs
+of repeated letters: `yyyy`/`MM`/`dd` etc. all worked, but a date-fns
+ordinal token like `do` (day-of-month with ordinal suffix) read as two
+separate runs — first `d` → `"6"`, then the lone `o` fell into the
+unknown-letter catch-all and was emitted verbatim. `format(d, 'MMMM do yyyy')`
+returned `"January 6o 2020"` against Node's `"January 6th 2020"`.
+
+This change adds:
+
+- **Ordinal tokens** (`yo`/`Yo`/`Mo`/`Lo`/`do`/`Do`/`ho`/`Ho`/`Ko`/`ko`/`mo`/`so`/`wo`/`Io`/`Qo`/`qo`/`eo`/`co`/`io`):
+  detected when a run of length 1 over one of the listed letters is
+  immediately followed by `o`. Consumes the `o` and emits the English
+  ordinal (`"1st"`, `"2nd"`, `"3rd"`, `"4th"` … `"11th"`, `"21st"`, …)
+  via a new `english_ordinal()` helper. `11/12/13` get `"th"` regardless
+  of the units digit, matching date-fns.
+- **AM/PM variants** — `a`/`aa` → `"AM"/"PM"`, `aaa` → `"am"/"pm"`,
+  `aaaa` → `"a.m."/"p.m."`, `aaaaa` → `"a"/"p"`. Previously every run
+  length emitted `"AM"/"PM"`.
+
+Both behaviors are verified byte-for-byte against
+`node --experimental-strip-types` on `date-fns@4.1.0` for:
+`yyyy-MM-dd`, `yyyy`, `MM`, `dd`, `HH:mm:ss`, `yyyy-MM-dd HH:mm:ss`,
+`MMMM do yyyy`, `EEEE`, `do`/`Mo`/`yo`, and `a`/`aaa`/`aaaa`/`aaaaa`.
+
+`test-files/test_date_fns_format.ts` is extended to cover the full
+token suite.
+
 ## v0.5.999 — feat(jsruntime/http): V8-fallback `createServer` bridge to a real hyper server
 
 Pre-fix the V8/JS-runtime fallback's `node:http` stub raised
