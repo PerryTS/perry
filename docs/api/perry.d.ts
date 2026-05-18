@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 897 entries across 71 modules
+// Coverage: 898 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -1194,6 +1194,8 @@ declare module "stream" {
   export class Transform { [key: string]: any; }
   /** stdlib */
   export class Writable { [key: string]: any; }
+  /** stdlib */
+  export const prototype: any;
   /** stdlib */
   export function finished(...args: any[]): any;
   /** stdlib */
