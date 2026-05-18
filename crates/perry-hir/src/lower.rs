@@ -6775,6 +6775,10 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                         }
                     }
                 }
+                // #853: `ast::Decl` is `#[non_exhaustive]` upstream — keep
+                // this catch-all so a future SWC variant is dropped silently
+                // (the supported variants above each have explicit handling).
+                #[allow(unreachable_patterns)]
                 _ => {}
             }
         }
@@ -8606,6 +8610,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     Ok(Expr::Delete(operand))
                 }
                 ast::UnaryOp::Void => Ok(Expr::Void(operand)),
+                // #853: `ast::UnaryOp` is `#[non_exhaustive]` upstream — keep
+                // this catch-all as a forward-compat safety net.
+                #[allow(unreachable_patterns)]
                 _ => Err(anyhow!("Unsupported unary operator: {:?}", unary.op)),
             }
         }

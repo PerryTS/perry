@@ -1522,7 +1522,8 @@ fn walk_expr_children_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
             f(index);
             f(value);
         }
-        PropertyUpdate { object, .. } => f(object),
+        // #853: the `PropertyUpdate` arm earlier in this match (around
+        // line 1511) already covers this variant. Duplicate removed.
         ArrayPush { value, .. } => f(value),
         ArrayPushSpread { source, .. } => f(source),
         _ => {}

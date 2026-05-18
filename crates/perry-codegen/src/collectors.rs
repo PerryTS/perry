@@ -5234,7 +5234,9 @@ fn check_escapes_in_expr(
         | Expr::StaticFieldGet { .. }
         | Expr::RegExp { .. }
         | Expr::Uint8ArrayNew(None)
-        | Expr::ErrorNew(None)
+        // #853: `Expr::ErrorNew(opt)` is already matched by the earlier
+        // arm (around line 4949). The `ErrorNew(None)` here was dead —
+        // removed.
         | Expr::BigInt(_) => {}
         // Catch-all: conservatively mark any candidate referenced in an
         // unrecognized expression as escaped. This is safe — just misses

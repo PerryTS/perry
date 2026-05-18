@@ -5461,7 +5461,10 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
         }
         // Final catch-all: any genuinely unexpected variant (e.g. a future
         // swc Stmt variant we haven't enumerated) bails instead of silently
-        // dropping the statement.
+        // dropping the statement. #853: `ast::Stmt` is `#[non_exhaustive]`
+        // upstream — keep the catch-all even though current SWC variants
+        // are covered.
+        #[allow(unreachable_patterns)]
         other => {
             return Err(anyhow!(
                 "lower_body_stmt: unhandled statement variant {:?}",

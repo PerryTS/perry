@@ -4511,45 +4511,11 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                         }
                                         // Fall through if neither Set nor Map
                                     }
-                                    // Map iterator methods: entries(), keys(), values()
-                                    "entries" => {
-                                        let is_map = ctx.lookup_local_type(&arr_name)
-                                                .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Map"))
-                                                .unwrap_or(false);
-                                        if is_map && args.is_empty() {
-                                            return Ok(Expr::MapEntries(Box::new(Expr::LocalGet(
-                                                array_id,
-                                            ))));
-                                        }
-                                    }
-                                    "keys" => {
-                                        let is_map = ctx.lookup_local_type(&arr_name)
-                                                .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Map"))
-                                                .unwrap_or(false);
-                                        if is_map && args.is_empty() {
-                                            return Ok(Expr::MapKeys(Box::new(Expr::LocalGet(
-                                                array_id,
-                                            ))));
-                                        }
-                                    }
-                                    "values" => {
-                                        let is_map = ctx.lookup_local_type(&arr_name)
-                                                .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Map"))
-                                                .unwrap_or(false);
-                                        if is_map && args.is_empty() {
-                                            return Ok(Expr::MapValues(Box::new(Expr::LocalGet(
-                                                array_id,
-                                            ))));
-                                        }
-                                        let is_set = ctx.lookup_local_type(&arr_name)
-                                                .map(|ty| matches!(ty, Type::Generic { base, .. } if base == "Set"))
-                                                .unwrap_or(false);
-                                        if is_set && args.is_empty() {
-                                            return Ok(Expr::SetValues(Box::new(Expr::LocalGet(
-                                                array_id,
-                                            ))));
-                                        }
-                                    }
+                                    // #853: the `"entries" | "keys" | "values"` arm earlier
+                                    // in this match (around line 4323) already dispatches
+                                    // Map/Set/Array iterator methods for every receiver type.
+                                    // The Map-only duplicate arms that used to live here were
+                                    // dead under that arm's coverage — removed.
                                     // Set methods
                                     "add" => {
                                         // Check if this is a Set type before treating as Set.add()

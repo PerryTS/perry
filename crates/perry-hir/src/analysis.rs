@@ -1043,17 +1043,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(arg, assigned);
             }
         }
-        // OS module expressions (no local refs or assignments)
-        Expr::OsPlatform
-        | Expr::OsArch
-        | Expr::OsHostname
-        | Expr::OsType
-        | Expr::OsRelease
-        | Expr::OsHomedir
-        | Expr::OsTmpdir
-        | Expr::OsTotalmem
-        | Expr::OsFreemem
-        | Expr::OsCpus => {}
+        // #853: an earlier arm in this match (lines 682-695) already
+        // covers every Expr::Os* variant. The duplicate arm here was
+        // dead — removed.
         // Delete operator
         Expr::Delete(inner) => {
             collect_assigned_locals_expr(inner, assigned);

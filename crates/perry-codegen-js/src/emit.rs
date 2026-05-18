@@ -2678,23 +2678,9 @@ impl JsEmitter {
                 self.emit_expr(b);
                 let _ = write!(self.output, ")");
             }
-            Expr::StringFromCodePoint(arg) => {
-                self.output.push_str("String.fromCodePoint(");
-                self.emit_expr(arg);
-                self.output.push(')');
-            }
-            Expr::StringAt { string, index } => {
-                self.emit_expr(string);
-                self.output.push_str(".at(");
-                self.emit_expr(index);
-                self.output.push(')');
-            }
-            Expr::StringCodePointAt { string, index } => {
-                self.emit_expr(string);
-                self.output.push_str(".codePointAt(");
-                self.emit_expr(index);
-                self.output.push(')');
-            }
+            // #853: `StringFromCodePoint` / `StringAt` / `StringCodePointAt`
+            // are already handled in the earlier shared block (around lines
+            // 2027–2050). The duplicate arms here were dead — removed.
             // Object property descriptor stubs
             Expr::ObjectDefineProperty(obj, key, desc) => {
                 self.output.push_str("Object.defineProperty("); self.emit_expr(obj);
@@ -3390,8 +3376,12 @@ impl JsEmitter {
             "setLineWidth" | "canvas_set_line_width" => "perry_ui_canvas_set_line_width",
             "fillText" | "canvas_fill_text" => "perry_ui_canvas_fill_text",
             "setFont" | "canvas_set_font" => "perry_ui_canvas_set_font",
-            // Hone IDE camelCase free-function imports
-            "textSetColor" => "perry_ui_set_foreground",
+            // Hone IDE camelCase free-function imports.
+            // #853: `"textSetColor"` previously had two arms — the first
+            // mapped to `perry_ui_set_foreground` (which has never existed
+            // as an FFI symbol), shadowing the correct mapping below. The
+            // dead first arm was deleted; the canonical mapping lives later
+            // in this block alongside the other `text*` entries.
             "textSetFontSize" => "perry_ui_set_font_size",
             "textSetFontWeight" => "perry_ui_set_font_weight",
             "textSetFontFamily" => "perry_ui_set_font_family",

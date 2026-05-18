@@ -905,10 +905,11 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // node:path constants
         | Expr::PathSep
         | Expr::PathDelimiter
-        // JSON.stringify returns a string
+        // JSON.stringify returns a string. #853: `JsonStringifyFull(..)`
+        // is already enumerated in the earlier (line ~878) arm — listing
+        // it again here was dead.
         | Expr::JsonStringify(_)
-        | Expr::JsonStringifyPretty { .. }
-        | Expr::JsonStringifyFull(..) => true,
+        | Expr::JsonStringifyPretty { .. } => true,
         // process.* / os.* string-returning accessors. These lower to runtime
         // calls that return raw StringHeader* pointers, NaN-boxed with STRING_TAG
         // in expr.rs. Without this, `process.version.startsWith('v')` falls

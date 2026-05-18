@@ -1102,6 +1102,10 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             Ok(())
         }
 
+        // #853: every current `perry_hir::Stmt` variant is matched above.
+        // Keep this catch-all so HIR additions land as a clear compile-time
+        // diagnostic instead of a silent codegen drop.
+        #[allow(unreachable_patterns)]
         other => bail!(
             "perry-codegen Phase B.12: Stmt {} not yet supported",
             stmt_variant_name(other)

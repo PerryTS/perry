@@ -793,8 +793,9 @@ pub extern "C" fn js_fs_access_sync_throw(path_value: f64) -> f64 {
     let msg = js_string_from_bytes(b"ENOENT: no such file or directory".as_ptr(), 33);
     let err = crate::error::js_error_new_with_message(msg);
     let err_val = crate::value::js_nanbox_pointer(err as i64);
-    crate::exception::js_throw(err_val);
-    f64::from_bits(TAG_UNDEFINED)
+    // js_throw is `-> !` (diverges via setjmp/longjmp into the nearest
+    // try/catch). No code path reaches here. #853.
+    crate::exception::js_throw(err_val)
 }
 
 // ============================================================

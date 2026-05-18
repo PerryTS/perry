@@ -2466,6 +2466,9 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                         );
                     }
                 }
+                // #853: kept as a forward-compat safety net in case future
+                // OutputFormat variants land. Current variants are exhausted.
+                #[allow(unreachable_patterns)]
                 _ => {}
             }
         }

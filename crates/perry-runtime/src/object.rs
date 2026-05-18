@@ -6997,10 +6997,10 @@ pub unsafe extern "C" fn js_native_call_method(
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
             if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+                // #853: the `is_valid_obj_ptr` guard that used to live after
+                // this return was dead — the early return claims the path
+                // unconditionally. Removed.
                 return dispatch_native_module_method(obj, method_name, args_ptr, args_len);
-                if !is_valid_obj_ptr(obj as *const u8) {
-                    return 0.0;
-                }
             }
 
             // Scan object fields for a callable property (closure stored via IndexSet)
@@ -7300,10 +7300,8 @@ pub unsafe extern "C" fn js_native_call_method(
         if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
             // Check for native module namespace
             if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+                // #853: same dead-after-return as the first arm above.
                 return dispatch_native_module_method(obj, method_name, args_ptr, args_len);
-                if !is_valid_obj_ptr(obj as *const u8) {
-                    return 0.0;
-                }
             }
 
             // Field name scan on this object

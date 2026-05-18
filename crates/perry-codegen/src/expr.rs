@@ -8018,20 +8018,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // NaN-tagged value. Use the runtime which checks
             // is_number() first.
             let v = lower_expr(ctx, operand)?;
+            // #853: the runtime fcmp inline pattern that used to follow
+            // was kept as a reference; it was unreachable code after the
+            // early return above. Removed — the comment block immediately
+            // above this arm documents why the runtime call is required.
             return Ok(ctx
                 .block()
                 .call(DOUBLE, "js_number_is_nan", &[(DOUBLE, &v)]));
-            // Dead code — kept as documentation of the inline pattern:
-            let blk = ctx.block();
-            let bit = blk.fcmp("uno", &v, &v);
-            let tagged = blk.select(
-                I1,
-                &bit,
-                I64,
-                crate::nanbox::TAG_TRUE_I64,
-                crate::nanbox::TAG_FALSE_I64,
-            );
-            Ok(blk.bitcast_i64_to_double(&tagged))
         }
         Expr::FsMkdirSync(p) => {
             // Phase H fs: call js_fs_mkdir_sync. Node's fs.mkdirSync
