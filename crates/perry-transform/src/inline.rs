@@ -4,7 +4,7 @@
 //! call overhead and enable further optimizations.
 
 use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
-use perry_hir::{BinaryOp, Class, Expr, Function, Module, Stmt};
+use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
 use perry_types::{FuncId, LocalId, Type};
 use std::collections::{HashMap, HashSet};
 
@@ -31,6 +31,13 @@ pub struct MethodCandidate {
     /// table can dispatch the cross-module call (`perry_fn_<source_prefix>__<name>`).
     pub required_extern_imports: Vec<(String, String)>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ExactReceiverFact {
+    class_name: String,
+}
+
+type ExactReceiverFacts = HashMap<LocalId, ExactReceiverFact>;
 
 /// Inline small functions and methods in the module.
 ///
@@ -490,12 +497,14 @@ pub fn inline_functions(
             .collect();
         let mut next_local_id = module_max_id + 1;
         let mut local_types: HashMap<LocalId, String> = HashMap::new();
+        let mut exact_receiver_facts = ExactReceiverFacts::new();
         inline_calls_in_stmts(
             &mut module.init,
             &pure_func_candidates,
             &method_candidates,
             &class_names,
             &mut local_types,
+            &mut exact_receiver_facts,
             &mut next_local_id,
             None,
             &class_field_types,
@@ -517,6 +526,7 @@ pub fn inline_functions(
         }
         let mut local_id = next_module_id;
         let mut local_types: HashMap<LocalId, String> = HashMap::new();
+        let mut exact_receiver_facts = ExactReceiverFacts::new();
         // Add function parameters to local_types
         for param in &func.params {
             if let Type::Named(class_name) = &param.ty {
@@ -529,6 +539,7 @@ pub fn inline_functions(
             &method_candidates,
             &class_names,
             &mut local_types,
+            &mut exact_receiver_facts,
             &mut local_id,
             None,
             &class_field_types,
@@ -554,6 +565,7 @@ pub fn inline_functions(
             }
             let mut local_id = next_module_id;
             let mut local_types: HashMap<LocalId, String> = HashMap::new();
+            let mut exact_receiver_facts = ExactReceiverFacts::new();
             for param in &method.params {
                 if let Type::Named(class_name) = &param.ty {
                     local_types.insert(param.id, class_name.clone());
@@ -565,6 +577,7 @@ pub fn inline_functions(
                 &method_candidates,
                 &class_names,
                 &mut local_types,
+                &mut exact_receiver_facts,
                 &mut local_id,
                 Some(&class_name),
                 &class_field_types,
@@ -1614,12 +1627,21 @@ fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
 /// about to substitute directly. If we cannot prove the class chain is free of
 /// those hazards, keep the call intact for the normal dispatch path.
 fn method_lookup_is_unshadowed(classes: &[Class], class_name: &str, method_name: &str) -> bool {
+    let Some((data_fields, getter_names, setter_names)) =
+        class_chain_property_sets(classes, class_name)
+    else {
+        return false;
+    };
+
     let mut cur = Some(class_name);
     let mut depth = 0usize;
     while let Some(name) = cur {
         let Some(class) = classes.iter().find(|c| c.name == name) else {
             return false;
         };
+        if class.extends_expr.is_some() || class.native_extends.is_some() {
+            return false;
+        }
         if class
             .fields
             .iter()
@@ -1632,6 +1654,30 @@ fn method_lookup_is_unshadowed(classes: &[Class], class_name: &str, method_name:
         {
             return false;
         }
+        if class.fields.iter().any(|f| {
+            f.init.as_ref().is_some_and(|init| {
+                construction_expr_can_affect_method_lookup(
+                    init,
+                    method_name,
+                    &data_fields,
+                    &getter_names,
+                    &setter_names,
+                )
+            })
+        }) {
+            return false;
+        }
+        if class.constructor.as_ref().is_some_and(|ctor| {
+            construction_stmts_can_affect_method_lookup(
+                &ctor.body,
+                method_name,
+                &data_fields,
+                &getter_names,
+                &setter_names,
+            )
+        }) {
+            return false;
+        }
         cur = class.extends_name.as_deref();
         depth += 1;
         if depth > 32 {
@@ -1639,6 +1685,225 @@ fn method_lookup_is_unshadowed(classes: &[Class], class_name: &str, method_name:
         }
     }
     true
+}
+
+fn class_chain_property_sets(
+    classes: &[Class],
+    class_name: &str,
+) -> Option<(HashSet<String>, HashSet<String>, HashSet<String>)> {
+    let mut fields = HashSet::new();
+    let mut getters = HashSet::new();
+    let mut setters = HashSet::new();
+    let mut cur = Some(class_name);
+    let mut depth = 0usize;
+    while let Some(name) = cur {
+        let class = classes.iter().find(|c| c.name == name)?;
+        if class.extends_expr.is_some() || class.native_extends.is_some() {
+            return None;
+        }
+        for field in &class.fields {
+            if field.key_expr.is_some() {
+                return None;
+            }
+            fields.insert(field.name.clone());
+        }
+        for (name, _) in &class.getters {
+            getters.insert(name.clone());
+        }
+        for (name, _) in &class.setters {
+            setters.insert(name.clone());
+        }
+        cur = class.extends_name.as_deref();
+        depth += 1;
+        if depth > 32 {
+            return None;
+        }
+    }
+    Some((fields, getters, setters))
+}
+
+fn construction_stmts_can_affect_method_lookup(
+    stmts: &[Stmt],
+    method_name: &str,
+    data_fields: &HashSet<String>,
+    getter_names: &HashSet<String>,
+    setter_names: &HashSet<String>,
+) -> bool {
+    stmts.iter().any(|stmt| {
+        construction_stmt_can_affect_method_lookup(
+            stmt,
+            method_name,
+            data_fields,
+            getter_names,
+            setter_names,
+        )
+    })
+}
+
+fn construction_stmt_can_affect_method_lookup(
+    stmt: &Stmt,
+    method_name: &str,
+    data_fields: &HashSet<String>,
+    getter_names: &HashSet<String>,
+    setter_names: &HashSet<String>,
+) -> bool {
+    match stmt {
+        Stmt::Let { init, .. } => init.as_ref().is_some_and(|expr| {
+            construction_expr_can_affect_method_lookup(
+                expr,
+                method_name,
+                data_fields,
+                getter_names,
+                setter_names,
+            )
+        }),
+        Stmt::Expr(expr) => construction_expr_can_affect_method_lookup(
+            expr,
+            method_name,
+            data_fields,
+            getter_names,
+            setter_names,
+        ),
+        Stmt::Return(Some(_)) | Stmt::Throw(_) => true,
+        Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            construction_expr_can_affect_method_lookup(
+                condition,
+                method_name,
+                data_fields,
+                getter_names,
+                setter_names,
+            ) || construction_stmts_can_affect_method_lookup(
+                then_branch,
+                method_name,
+                data_fields,
+                getter_names,
+                setter_names,
+            ) || else_branch.as_ref().is_some_and(|branch| {
+                construction_stmts_can_affect_method_lookup(
+                    branch,
+                    method_name,
+                    data_fields,
+                    getter_names,
+                    setter_names,
+                )
+            })
+        }
+        Stmt::Labeled { body, .. } => construction_stmt_can_affect_method_lookup(
+            body,
+            method_name,
+            data_fields,
+            getter_names,
+            setter_names,
+        ),
+        Stmt::PreallocateBoxes(_) => false,
+        Stmt::While { .. }
+        | Stmt::DoWhile { .. }
+        | Stmt::For { .. }
+        | Stmt::Try { .. }
+        | Stmt::Switch { .. }
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_) => true,
+    }
+}
+
+fn construction_expr_can_affect_method_lookup(
+    expr: &Expr,
+    method_name: &str,
+    data_fields: &HashSet<String>,
+    getter_names: &HashSet<String>,
+    setter_names: &HashSet<String>,
+) -> bool {
+    match expr {
+        Expr::This => true,
+        Expr::PropertyGet { object, property } if matches!(object.as_ref(), Expr::This) => {
+            property == method_name
+                || !data_fields.contains(property)
+                || getter_names.contains(property)
+        }
+        Expr::PropertySet {
+            object,
+            property,
+            value,
+        } if matches!(object.as_ref(), Expr::This) => {
+            property == method_name
+                || setter_names.contains(property)
+                || construction_expr_can_affect_method_lookup(
+                    value,
+                    method_name,
+                    data_fields,
+                    getter_names,
+                    setter_names,
+                )
+        }
+        Expr::LocalSet(_, value) => construction_expr_can_affect_method_lookup(
+            value,
+            method_name,
+            data_fields,
+            getter_names,
+            setter_names,
+        ),
+        Expr::SuperCall(args) => args.iter().any(|arg| {
+            construction_expr_can_affect_method_lookup(
+                arg,
+                method_name,
+                data_fields,
+                getter_names,
+                setter_names,
+            )
+        }),
+        Expr::Call { .. }
+        | Expr::CallSpread { .. }
+        | Expr::NativeMethodCall { .. }
+        | Expr::StaticMethodCall { .. }
+        | Expr::SuperMethodCall { .. }
+        | Expr::New { .. }
+        | Expr::NewDynamic { .. }
+        | Expr::ObjectAssign { .. }
+        | Expr::PropertySet { .. }
+        | Expr::PropertyUpdate { .. }
+        | Expr::IndexSet { .. }
+        | Expr::IndexUpdate { .. }
+        | Expr::StaticFieldSet { .. }
+        | Expr::ClassStaticSymbolSet { .. }
+        | Expr::RegisterClassParentDynamic { .. }
+        | Expr::RegisterClassStaticSymbol { .. }
+        | Expr::SetFunctionPrototype { .. }
+        | Expr::RegisterPrototypeMethod { .. }
+        | Expr::RegisterFunctionPrototypeMethod { .. }
+        | Expr::ObjectDefineProperty(_, _, _)
+        | Expr::ObjectDefineProperties(_, _)
+        | Expr::ObjectSetPrototypeOf(_, _)
+        | Expr::Delete(_)
+        | Expr::ReflectSet { .. }
+        | Expr::ReflectDelete { .. }
+        | Expr::ReflectDefineProperty { .. }
+        | Expr::GlobalSet(_, _)
+        | Expr::JsSetProperty { .. }
+        | Expr::ProxySet { .. }
+        | Expr::ProxyDelete { .. } => true,
+        Expr::Closure { captures_this, .. } if *captures_this => true,
+        Expr::Closure { .. } => false,
+        _ => {
+            let mut unsafe_lookup = false;
+            walk_expr_children(expr, &mut |child| {
+                if construction_expr_can_affect_method_lookup(
+                    child,
+                    method_name,
+                    data_fields,
+                    getter_names,
+                    setter_names,
+                ) {
+                    unsafe_lookup = true;
+                }
+            });
+            unsafe_lookup
+        }
+    }
 }
 
 /// Returns true iff `body` only references symbols whose resolution stays
@@ -2799,6 +3064,293 @@ fn resolve_receiver_class(
     }
 }
 
+fn intersect_exact_receiver_facts(
+    left: &ExactReceiverFacts,
+    right: &ExactReceiverFacts,
+) -> ExactReceiverFacts {
+    left.iter()
+        .filter_map(|(id, fact)| {
+            right
+                .get(id)
+                .filter(|other| *other == fact)
+                .map(|_| (*id, fact.clone()))
+        })
+        .collect()
+}
+
+fn apply_exact_receiver_stmt_effect(stmt: &Stmt, facts: &mut ExactReceiverFacts) {
+    match stmt {
+        Stmt::Let { id, init, .. } => {
+            facts.remove(id);
+            if let Some(init) = init {
+                invalidate_exact_receivers_for_expr(init, facts);
+                kill_referenced_exact_receivers(init, facts);
+                if let Expr::New { class_name, .. } = init {
+                    facts.insert(
+                        *id,
+                        ExactReceiverFact {
+                            class_name: class_name.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            invalidate_exact_receivers_for_expr(expr, facts);
+        }
+        Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_) => {}
+        Stmt::PreallocateBoxes(ids) => {
+            for id in ids {
+                facts.remove(id);
+            }
+        }
+        Stmt::If { .. }
+        | Stmt::While { .. }
+        | Stmt::DoWhile { .. }
+        | Stmt::For { .. }
+        | Stmt::Labeled { .. }
+        | Stmt::Try { .. }
+        | Stmt::Switch { .. } => facts.clear(),
+    }
+}
+
+fn apply_exact_receiver_stmt_effects(stmts: &[Stmt], facts: &mut ExactReceiverFacts) {
+    for stmt in stmts {
+        apply_exact_receiver_stmt_effect(stmt, facts);
+    }
+}
+
+fn clear_exact_receivers_after_global_effect(expr: &Expr, facts: &mut ExactReceiverFacts) {
+    walk_expr_children(expr, &mut |child| {
+        invalidate_exact_receivers_for_expr(child, facts)
+    });
+    facts.clear();
+}
+
+fn invalidate_exact_receivers_for_expr(expr: &Expr, facts: &mut ExactReceiverFacts) {
+    match expr {
+        Expr::Call { .. }
+        | Expr::CallSpread { .. }
+        | Expr::NativeMethodCall { .. }
+        | Expr::StaticMethodCall { .. }
+        | Expr::SuperCall(_)
+        | Expr::SuperMethodCall { .. }
+        | Expr::New { .. }
+        | Expr::NewDynamic { .. }
+        | Expr::ObjectAssign { .. }
+        | Expr::PropertySet { .. }
+        | Expr::PropertyUpdate { .. }
+        | Expr::IndexSet { .. }
+        | Expr::IndexUpdate { .. }
+        | Expr::StaticFieldSet { .. }
+        | Expr::ClassStaticSymbolSet { .. }
+        | Expr::RegisterClassParentDynamic { .. }
+        | Expr::RegisterClassStaticSymbol { .. }
+        | Expr::SetFunctionPrototype { .. }
+        | Expr::RegisterPrototypeMethod { .. }
+        | Expr::RegisterFunctionPrototypeMethod { .. }
+        | Expr::ObjectDefineProperty(_, _, _)
+        | Expr::ObjectDefineProperties(_, _)
+        | Expr::ObjectSetPrototypeOf(_, _)
+        | Expr::Delete(_)
+        | Expr::ReflectSet { .. }
+        | Expr::ReflectDelete { .. }
+        | Expr::ReflectDefineProperty { .. } => {
+            clear_exact_receivers_after_global_effect(expr, facts);
+        }
+        Expr::Object(_)
+        | Expr::ObjectSpread { .. }
+        | Expr::Array(_)
+        | Expr::ArraySpread(_)
+        | Expr::LocalSet(_, _)
+        | Expr::GlobalSet(_, _) => {
+            kill_referenced_exact_receivers(expr, facts);
+        }
+        Expr::Closure {
+            params,
+            body,
+            captures,
+            mutable_captures,
+            ..
+        } => {
+            for id in captures.iter().chain(mutable_captures.iter()) {
+                facts.remove(id);
+            }
+            let mut body_refs = HashSet::new();
+            for stmt in body {
+                collect_exact_receiver_refs_in_stmt(stmt, facts, &mut body_refs);
+            }
+            for id in body_refs {
+                facts.remove(&id);
+            }
+            for param in params {
+                if let Some(default) = &param.default {
+                    invalidate_exact_receivers_for_expr(default, facts);
+                }
+            }
+        }
+        _ => {
+            walk_expr_children(expr, &mut |child| {
+                invalidate_exact_receivers_for_expr(child, facts)
+            });
+        }
+    }
+}
+
+fn kill_referenced_exact_receivers(expr: &Expr, facts: &mut ExactReceiverFacts) {
+    let mut refs = HashSet::new();
+    collect_exact_receiver_refs_in_expr(expr, facts, &mut refs);
+    for id in refs {
+        facts.remove(&id);
+    }
+}
+
+fn collect_exact_receiver_refs_in_stmt(
+    stmt: &Stmt,
+    facts: &ExactReceiverFacts,
+    out: &mut HashSet<LocalId>,
+) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(init) = init {
+                collect_exact_receiver_refs_in_expr(init, facts, out);
+            }
+        }
+        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            collect_exact_receiver_refs_in_expr(expr, facts, out);
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_exact_receiver_refs_in_expr(condition, facts, out);
+            for stmt in then_branch {
+                collect_exact_receiver_refs_in_stmt(stmt, facts, out);
+            }
+            if let Some(else_branch) = else_branch {
+                for stmt in else_branch {
+                    collect_exact_receiver_refs_in_stmt(stmt, facts, out);
+                }
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            collect_exact_receiver_refs_in_expr(condition, facts, out);
+            for stmt in body {
+                collect_exact_receiver_refs_in_stmt(stmt, facts, out);
+            }
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(init) = init {
+                collect_exact_receiver_refs_in_stmt(init, facts, out);
+            }
+            if let Some(condition) = condition {
+                collect_exact_receiver_refs_in_expr(condition, facts, out);
+            }
+            if let Some(update) = update {
+                collect_exact_receiver_refs_in_expr(update, facts, out);
+            }
+            for stmt in body {
+                collect_exact_receiver_refs_in_stmt(stmt, facts, out);
+            }
+        }
+        Stmt::Labeled { body, .. } => collect_exact_receiver_refs_in_stmt(body, facts, out),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for stmt in body {
+                collect_exact_receiver_refs_in_stmt(stmt, facts, out);
+            }
+            if let Some(catch) = catch {
+                for stmt in &catch.body {
+                    collect_exact_receiver_refs_in_stmt(stmt, facts, out);
+                }
+            }
+            if let Some(finally) = finally {
+                for stmt in finally {
+                    collect_exact_receiver_refs_in_stmt(stmt, facts, out);
+                }
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            collect_exact_receiver_refs_in_expr(discriminant, facts, out);
+            for case in cases {
+                if let Some(test) = &case.test {
+                    collect_exact_receiver_refs_in_expr(test, facts, out);
+                }
+                for stmt in &case.body {
+                    collect_exact_receiver_refs_in_stmt(stmt, facts, out);
+                }
+            }
+        }
+        Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => {}
+    }
+}
+
+fn collect_exact_receiver_refs_in_expr(
+    expr: &Expr,
+    facts: &ExactReceiverFacts,
+    out: &mut HashSet<LocalId>,
+) {
+    match expr {
+        Expr::LocalGet(id) | Expr::LocalSet(id, _) => {
+            if facts.contains_key(id) {
+                out.insert(*id);
+            }
+        }
+        Expr::Update { id, .. } => {
+            if facts.contains_key(id) {
+                out.insert(*id);
+            }
+        }
+        Expr::Closure {
+            params,
+            body,
+            captures,
+            mutable_captures,
+            ..
+        } => {
+            for id in captures.iter().chain(mutable_captures.iter()) {
+                if facts.contains_key(id) {
+                    out.insert(*id);
+                }
+            }
+            for param in params {
+                if let Some(default) = &param.default {
+                    collect_exact_receiver_refs_in_expr(default, facts, out);
+                }
+            }
+            for stmt in body {
+                collect_exact_receiver_refs_in_stmt(stmt, facts, out);
+            }
+            return;
+        }
+        _ => {}
+    }
+    walk_expr_children(expr, &mut |child| {
+        collect_exact_receiver_refs_in_expr(child, facts, out)
+    });
+}
+
 /// True if `s` (or any nested branch) contains a `Stmt::Return`. Used by the
 /// Stmt::Let-init-Call inliner to decide between the "trailing-only" collapse
 /// and the do-while(false) wrapper.
@@ -2923,6 +3475,7 @@ fn inline_calls_in_stmts(
     method_candidates: &HashMap<(String, String), MethodCandidate>,
     class_names: &HashMap<String, String>,
     local_types: &mut HashMap<LocalId, String>,
+    exact_receiver_facts: &mut ExactReceiverFacts,
     next_local_id: &mut LocalId,
     enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
@@ -2941,6 +3494,7 @@ fn inline_calls_in_stmts(
         }
 
         let mut new_stmts: Option<Vec<Stmt>> = None;
+        let mut exact_effect_handled = false;
 
         match &mut stmts[i] {
             Stmt::Expr(expr) => {
@@ -2949,6 +3503,7 @@ fn inline_calls_in_stmts(
                     func_candidates,
                     method_candidates,
                     local_types,
+                    exact_receiver_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
@@ -2987,6 +3542,7 @@ fn inline_calls_in_stmts(
                             func_candidates,
                             method_candidates,
                             local_types,
+                            exact_receiver_facts,
                             next_local_id,
                             enclosing_class,
                             class_field_types,
@@ -3016,6 +3572,7 @@ fn inline_calls_in_stmts(
                         func_candidates,
                         method_candidates,
                         local_types,
+                        exact_receiver_facts,
                         next_local_id,
                         enclosing_class,
                         class_field_types,
@@ -3076,6 +3633,7 @@ fn inline_calls_in_stmts(
                         func_candidates,
                         method_candidates,
                         local_types,
+                        exact_receiver_facts,
                         next_local_id,
                         enclosing_class,
                         class_field_types,
@@ -3139,6 +3697,7 @@ fn inline_calls_in_stmts(
                             func_candidates,
                             method_candidates,
                             local_types,
+                            exact_receiver_facts,
                             next_local_id,
                             enclosing_class,
                             class_field_types,
@@ -3163,6 +3722,7 @@ fn inline_calls_in_stmts(
                     func_candidates,
                     method_candidates,
                     local_types,
+                    exact_receiver_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
@@ -3188,21 +3748,27 @@ fn inline_calls_in_stmts(
                     func_candidates,
                     method_candidates,
                     local_types,
+                    exact_receiver_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 );
+                invalidate_exact_receivers_for_expr(condition, exact_receiver_facts);
+                let after_condition_facts = exact_receiver_facts.clone();
                 // Note: hoisting from conditions is rare and complex; skip for now
+                let mut then_facts = after_condition_facts.clone();
                 inline_calls_in_stmts(
                     then_branch,
                     func_candidates,
                     method_candidates,
                     class_names,
                     local_types,
+                    &mut then_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 );
+                let mut else_facts = after_condition_facts;
                 if let Some(else_b) = else_branch {
                     inline_calls_in_stmts(
                         else_b,
@@ -3210,32 +3776,68 @@ fn inline_calls_in_stmts(
                         method_candidates,
                         class_names,
                         local_types,
+                        &mut else_facts,
                         next_local_id,
                         enclosing_class,
                         class_field_types,
                     );
                 }
+                *exact_receiver_facts = intersect_exact_receiver_facts(&then_facts, &else_facts);
+                exact_effect_handled = true;
             }
             Stmt::While { condition, body } => {
+                let mut empty_facts = ExactReceiverFacts::new();
                 let _hoisted = inline_calls_in_expr(
                     condition,
                     func_candidates,
                     method_candidates,
                     local_types,
+                    &mut empty_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 );
+                let mut body_facts = ExactReceiverFacts::new();
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
                     method_candidates,
                     class_names,
                     local_types,
+                    &mut body_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 );
+                exact_receiver_facts.clear();
+                exact_effect_handled = true;
+            }
+            Stmt::DoWhile { body, condition } => {
+                let mut body_facts = ExactReceiverFacts::new();
+                inline_calls_in_stmts(
+                    body,
+                    func_candidates,
+                    method_candidates,
+                    class_names,
+                    local_types,
+                    &mut body_facts,
+                    next_local_id,
+                    enclosing_class,
+                    class_field_types,
+                );
+                let mut empty_facts = ExactReceiverFacts::new();
+                let _hoisted = inline_calls_in_expr(
+                    condition,
+                    func_candidates,
+                    method_candidates,
+                    local_types,
+                    &mut empty_facts,
+                    next_local_id,
+                    enclosing_class,
+                    class_field_types,
+                );
+                exact_receiver_facts.clear();
+                exact_effect_handled = true;
             }
             Stmt::For {
                 init,
@@ -3245,12 +3847,14 @@ fn inline_calls_in_stmts(
             } => {
                 if let Some(init_stmt) = init {
                     let mut init_stmts = vec![*init_stmt.clone()];
+                    let mut init_facts = ExactReceiverFacts::new();
                     inline_calls_in_stmts(
                         &mut init_stmts,
                         func_candidates,
                         method_candidates,
                         class_names,
                         local_types,
+                        &mut init_facts,
                         next_local_id,
                         enclosing_class,
                         class_field_types,
@@ -3260,37 +3864,45 @@ fn inline_calls_in_stmts(
                     }
                 }
                 if let Some(cond) = condition {
+                    let mut empty_facts = ExactReceiverFacts::new();
                     let _hoisted = inline_calls_in_expr(
                         cond,
                         func_candidates,
                         method_candidates,
                         local_types,
+                        &mut empty_facts,
                         next_local_id,
                         enclosing_class,
                         class_field_types,
                     );
                 }
                 if let Some(upd) = update {
+                    let mut empty_facts = ExactReceiverFacts::new();
                     let _hoisted = inline_calls_in_expr(
                         upd,
                         func_candidates,
                         method_candidates,
                         local_types,
+                        &mut empty_facts,
                         next_local_id,
                         enclosing_class,
                         class_field_types,
                     );
                 }
+                let mut body_facts = ExactReceiverFacts::new();
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
                     method_candidates,
                     class_names,
                     local_types,
+                    &mut body_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 );
+                exact_receiver_facts.clear();
+                exact_effect_handled = true;
             }
             _ => {}
         }
@@ -3318,6 +3930,7 @@ fn inline_calls_in_stmts(
                 method_candidates,
                 class_names,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3329,6 +3942,9 @@ fn inline_calls_in_stmts(
             }
             i += inlined_len.max(1);
         } else {
+            if !exact_effect_handled {
+                apply_exact_receiver_stmt_effect(&stmts[i], exact_receiver_facts);
+            }
             i += 1;
         }
     }
@@ -3341,6 +3957,7 @@ fn inline_calls_in_expr(
     func_candidates: &HashMap<FuncId, Function>,
     method_candidates: &HashMap<(String, String), MethodCandidate>,
     local_types: &HashMap<LocalId, String>,
+    exact_receiver_facts: &mut ExactReceiverFacts,
     next_local_id: &mut LocalId,
     enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
@@ -3351,15 +3968,18 @@ fn inline_calls_in_expr(
         func_candidates,
         method_candidates,
         local_types,
+        exact_receiver_facts,
         next_local_id,
         enclosing_class,
         class_field_types,
     ) {
+        apply_exact_receiver_stmt_effects(&stmts, exact_receiver_facts);
         let inner = inline_calls_in_expr(
             &mut result,
             func_candidates,
             method_candidates,
             local_types,
+            exact_receiver_facts,
             next_local_id,
             enclosing_class,
             class_field_types,
@@ -3373,14 +3993,13 @@ fn inline_calls_in_expr(
     // Otherwise recurse into sub-expressions, collecting hoisted stmts
     let mut hoisted = Vec::new();
     match expr {
-        Expr::Binary { left, right, .. }
-        | Expr::Logical { left, right, .. }
-        | Expr::Compare { left, right, .. } => {
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
             hoisted.extend(inline_calls_in_expr(
                 left,
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3390,10 +4009,45 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
             ));
+        }
+        Expr::Logical { left, right, .. } => {
+            hoisted.extend(inline_calls_in_expr(
+                left,
+                func_candidates,
+                method_candidates,
+                local_types,
+                exact_receiver_facts,
+                next_local_id,
+                enclosing_class,
+                class_field_types,
+            ));
+
+            let after_left_facts = exact_receiver_facts.clone();
+            let mut right_candidate = (**right).clone();
+            let mut right_facts = after_left_facts.clone();
+            let right_hoisted = inline_calls_in_expr(
+                &mut right_candidate,
+                func_candidates,
+                method_candidates,
+                local_types,
+                &mut right_facts,
+                next_local_id,
+                enclosing_class,
+                class_field_types,
+            );
+            if right_hoisted.is_empty() {
+                **right = right_candidate;
+            } else {
+                right_facts = after_left_facts.clone();
+                invalidate_exact_receivers_for_expr(right.as_ref(), &mut right_facts);
+            }
+            *exact_receiver_facts = intersect_exact_receiver_facts(&after_left_facts, &right_facts);
+            return hoisted;
         }
         Expr::Unary { operand, .. } => {
             hoisted.extend(inline_calls_in_expr(
@@ -3401,6 +4055,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3416,28 +4071,54 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
             ));
-            hoisted.extend(inline_calls_in_expr(
-                then_expr,
+
+            let after_condition_facts = exact_receiver_facts.clone();
+
+            let mut then_candidate = (**then_expr).clone();
+            let mut then_facts = after_condition_facts.clone();
+            let then_hoisted = inline_calls_in_expr(
+                &mut then_candidate,
                 func_candidates,
                 method_candidates,
                 local_types,
+                &mut then_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
-            ));
-            hoisted.extend(inline_calls_in_expr(
-                else_expr,
+            );
+            if then_hoisted.is_empty() {
+                **then_expr = then_candidate;
+            } else {
+                then_facts = after_condition_facts.clone();
+                invalidate_exact_receivers_for_expr(then_expr.as_ref(), &mut then_facts);
+            }
+
+            let mut else_candidate = (**else_expr).clone();
+            let mut else_facts = after_condition_facts.clone();
+            let else_hoisted = inline_calls_in_expr(
+                &mut else_candidate,
                 func_candidates,
                 method_candidates,
                 local_types,
+                &mut else_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
-            ));
+            );
+            if else_hoisted.is_empty() {
+                **else_expr = else_candidate;
+            } else {
+                else_facts = after_condition_facts;
+                invalidate_exact_receivers_for_expr(else_expr.as_ref(), &mut else_facts);
+            }
+
+            *exact_receiver_facts = intersect_exact_receiver_facts(&then_facts, &else_facts);
+            return hoisted;
         }
         Expr::Call { callee, args, .. } => {
             hoisted.extend(inline_calls_in_expr(
@@ -3445,21 +4126,24 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
             ));
-            for arg in args {
+            for arg in args.iter_mut() {
                 hoisted.extend(inline_calls_in_expr(
                     arg,
                     func_candidates,
                     method_candidates,
                     local_types,
+                    exact_receiver_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 ));
             }
+            exact_receiver_facts.clear();
         }
         Expr::Array(elements) => {
             for elem in elements {
@@ -3468,10 +4152,12 @@ fn inline_calls_in_expr(
                     func_candidates,
                     method_candidates,
                     local_types,
+                    exact_receiver_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 ));
+                kill_referenced_exact_receivers(elem, exact_receiver_facts);
             }
         }
         Expr::Object(fields) => {
@@ -3481,10 +4167,12 @@ fn inline_calls_in_expr(
                     func_candidates,
                     method_candidates,
                     local_types,
+                    exact_receiver_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 ));
+                kill_referenced_exact_receivers(v, exact_receiver_facts);
             }
         }
         Expr::ObjectSpread { parts } => {
@@ -3494,10 +4182,12 @@ fn inline_calls_in_expr(
                     func_candidates,
                     method_candidates,
                     local_types,
+                    exact_receiver_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 ));
+                kill_referenced_exact_receivers(v, exact_receiver_facts);
             }
         }
         Expr::ArraySpread(elements) => {
@@ -3509,10 +4199,12 @@ fn inline_calls_in_expr(
                             func_candidates,
                             method_candidates,
                             local_types,
+                            exact_receiver_facts,
                             next_local_id,
                             enclosing_class,
                             class_field_types,
                         ));
+                        kill_referenced_exact_receivers(e, exact_receiver_facts);
                     }
                 }
             }
@@ -3523,11 +4215,12 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
             ));
-            for arg in args {
+            for arg in args.iter_mut() {
                 match arg {
                     perry_hir::CallArg::Expr(e) | perry_hir::CallArg::Spread(e) => {
                         hoisted.extend(inline_calls_in_expr(
@@ -3535,6 +4228,7 @@ fn inline_calls_in_expr(
                             func_candidates,
                             method_candidates,
                             local_types,
+                            exact_receiver_facts,
                             next_local_id,
                             enclosing_class,
                             class_field_types,
@@ -3542,6 +4236,7 @@ fn inline_calls_in_expr(
                     }
                 }
             }
+            exact_receiver_facts.clear();
         }
         Expr::IndexGet { object, index } => {
             hoisted.extend(inline_calls_in_expr(
@@ -3549,6 +4244,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3558,6 +4254,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3573,6 +4270,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3582,6 +4280,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3591,10 +4290,12 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
             ));
+            exact_receiver_facts.clear();
         }
         Expr::PropertyGet { object, .. } => {
             hoisted.extend(inline_calls_in_expr(
@@ -3602,6 +4303,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3613,6 +4315,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3622,21 +4325,26 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
             ));
+            exact_receiver_facts.clear();
         }
-        Expr::LocalSet(_, value) => {
+        Expr::LocalSet(id, value) => {
             hoisted.extend(inline_calls_in_expr(
                 value,
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
             ));
+            exact_receiver_facts.remove(id);
+            kill_referenced_exact_receivers(value.as_ref(), exact_receiver_facts);
         }
         Expr::NativeMethodCall { object, args, .. } => {
             if let Some(obj) = object {
@@ -3645,22 +4353,25 @@ fn inline_calls_in_expr(
                     func_candidates,
                     method_candidates,
                     local_types,
+                    exact_receiver_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 ));
             }
-            for arg in args {
+            for arg in args.iter_mut() {
                 hoisted.extend(inline_calls_in_expr(
                     arg,
                     func_candidates,
                     method_candidates,
                     local_types,
+                    exact_receiver_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
                 ));
             }
+            exact_receiver_facts.clear();
         }
         // Issue #169: a Call nested inside a Uint8Array index/set/length
         // (e.g. `buf[clamp(i)]`) wouldn't be inlined without these arms.
@@ -3670,6 +4381,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3679,6 +4391,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3694,6 +4407,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3703,6 +4417,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3712,10 +4427,14 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
             ));
+            kill_referenced_exact_receivers(array.as_ref(), exact_receiver_facts);
+            kill_referenced_exact_receivers(index.as_ref(), exact_receiver_facts);
+            kill_referenced_exact_receivers(value.as_ref(), exact_receiver_facts);
         }
         Expr::Uint8ArrayLength(arr) => {
             hoisted.extend(inline_calls_in_expr(
@@ -3723,6 +4442,7 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
@@ -3734,10 +4454,25 @@ fn inline_calls_in_expr(
                 func_candidates,
                 method_candidates,
                 local_types,
+                exact_receiver_facts,
                 next_local_id,
                 enclosing_class,
                 class_field_types,
             ));
+        }
+        Expr::Sequence(exprs) => {
+            for item in exprs {
+                hoisted.extend(inline_calls_in_expr(
+                    item,
+                    func_candidates,
+                    method_candidates,
+                    local_types,
+                    exact_receiver_facts,
+                    next_local_id,
+                    enclosing_class,
+                    class_field_types,
+                ));
+            }
         }
         // Descend into closure bodies. Without this, the inliner never
         // visits the body of an arrow/`function(){}` literal — which
@@ -3754,13 +4489,17 @@ fn inline_calls_in_expr(
         Expr::Closure {
             body,
             params,
+            captures,
+            mutable_captures,
             enclosing_class: closure_enclosing,
             ..
         } => {
             // Seed local_types entries for each param with a Named class
-            // type, so calls of the form `paramName.method(...)` inside the
-            // closure can still resolve via the LocalGet path.
+            // type. Exact receiver facts intentionally do not flow into
+            // closures: the closure may run later, after aliases or own
+            // property writes have changed dispatch.
             let mut closure_local_types = local_types.clone();
+            let mut closure_exact_receiver_facts = ExactReceiverFacts::new();
             for p in params.iter() {
                 if let Type::Named(class_name) = &p.ty {
                     closure_local_types.insert(p.id, class_name.clone());
@@ -3775,14 +4514,85 @@ fn inline_calls_in_expr(
                 method_candidates,
                 &HashMap::new(),
                 &mut closure_local_types,
+                &mut closure_exact_receiver_facts,
                 next_local_id,
                 closure_enclosing.as_deref(),
                 class_field_types,
             );
+            for id in captures.iter().chain(mutable_captures.iter()) {
+                exact_receiver_facts.remove(id);
+            }
+            let mut body_refs = HashSet::new();
+            for stmt in body {
+                collect_exact_receiver_refs_in_stmt(stmt, exact_receiver_facts, &mut body_refs);
+            }
+            for id in body_refs {
+                exact_receiver_facts.remove(&id);
+            }
+            for param in params {
+                if let Some(default) = &param.default {
+                    invalidate_exact_receivers_for_expr(default, exact_receiver_facts);
+                }
+            }
         }
-        _ => {}
+        _ => {
+            invalidate_exact_receivers_for_expr(expr, exact_receiver_facts);
+        }
     }
     hoisted
+}
+
+fn build_inline_arg_bindings(
+    params: &[Param],
+    args: &[Expr],
+    closure_captures: &HashSet<LocalId>,
+    next_local_id: &mut LocalId,
+) -> Option<(Vec<Stmt>, HashMap<LocalId, Expr>)> {
+    if params.iter().any(|param| param.is_rest) {
+        return None;
+    }
+
+    let mut setup = Vec::new();
+    let mut param_map = HashMap::new();
+
+    for (index, param) in params.iter().enumerate() {
+        if let Some(arg) = args.get(index) {
+            let trivial_in_closure = is_trivial_expr(arg)
+                && !matches!(arg, Expr::LocalGet(_))
+                && closure_captures.contains(&param.id);
+            if is_trivial_expr(arg) && !trivial_in_closure {
+                param_map.insert(param.id, arg.clone());
+            } else {
+                let fresh = *next_local_id;
+                *next_local_id += 1;
+                setup.push(Stmt::Let {
+                    id: fresh,
+                    name: param.name.clone(),
+                    ty: param.ty.clone(),
+                    mutable: false,
+                    init: Some(arg.clone()),
+                });
+                param_map.insert(param.id, Expr::LocalGet(fresh));
+            }
+        } else {
+            let fresh = *next_local_id;
+            *next_local_id += 1;
+            setup.push(Stmt::Let {
+                id: fresh,
+                name: param.name.clone(),
+                ty: param.ty.clone(),
+                mutable: true,
+                init: Some(Expr::Undefined),
+            });
+            param_map.insert(param.id, Expr::LocalGet(fresh));
+        }
+    }
+
+    for arg in args.iter().skip(params.len()) {
+        setup.push(Stmt::Expr(arg.clone()));
+    }
+
+    Some((setup, param_map))
 }
 
 /// Try to inline a simple function or method call.
@@ -3793,23 +4603,16 @@ fn try_inline_simple_call(
     expr: &Expr,
     func_candidates: &HashMap<FuncId, Function>,
     method_candidates: &HashMap<(String, String), MethodCandidate>,
-    local_types: &HashMap<LocalId, String>,
+    _local_types: &HashMap<LocalId, String>,
+    exact_receiver_facts: &ExactReceiverFacts,
     next_local_id: &mut LocalId,
-    enclosing_class: Option<&str>,
+    _enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
 ) -> Option<(Vec<Stmt>, Expr)> {
     if let Expr::Call { callee, args, .. } = expr {
         // Check for regular function call
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             if let Some(func) = func_candidates.get(func_id) {
-                // Extra actual args are evaluated before a JS call even when
-                // the callee declares fewer params. The current inliner maps
-                // params with zip(), so it cannot preserve those trailing
-                // side effects. Keep the call intact instead.
-                if args.len() > func.params.len() {
-                    return None;
-                }
-
                 // Pattern 1: single Return(expr)
                 if func.body.len() == 1 {
                     if let Stmt::Return(Some(return_expr)) = &func.body[0] {
@@ -3827,32 +4630,12 @@ fn try_inline_simple_call(
                             std::collections::HashSet::new();
                         collect_closure_captured_local_ids(&func.body, &mut closure_capt);
 
-                        let mut setup_stmts: Vec<Stmt> = Vec::new();
-                        let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
-                        for (param, arg) in func.params.iter().zip(args.iter()) {
-                            // If the param is closure-captured AND the arg
-                            // isn't already a plain LocalGet (which the
-                            // closure body can capture as-is), materialize
-                            // via a fresh Let so the closure body's
-                            // `LocalGet(fresh)` and `captures: [fresh]`
-                            // stay in agreement with codegen.
-                            let needs_let = closure_capt.contains(&param.id)
-                                && !matches!(arg, Expr::LocalGet(_));
-                            if needs_let {
-                                let fresh = *next_local_id;
-                                *next_local_id += 1;
-                                setup_stmts.push(Stmt::Let {
-                                    id: fresh,
-                                    name: param.name.clone(),
-                                    ty: param.ty.clone(),
-                                    mutable: false,
-                                    init: Some(arg.clone()),
-                                });
-                                param_map.insert(param.id, Expr::LocalGet(fresh));
-                            } else {
-                                param_map.insert(param.id, arg.clone());
-                            }
-                        }
+                        let (setup_stmts, param_map) = build_inline_arg_bindings(
+                            &func.params,
+                            args,
+                            &closure_capt,
+                            next_local_id,
+                        )?;
                         let mut result = return_expr.clone();
                         substitute_locals(&mut result, &param_map, next_local_id);
                         return Some((setup_stmts, result));
@@ -3887,21 +4670,12 @@ fn try_inline_simple_call(
                                 std::collections::HashSet::new();
                             collect_closure_captured_local_ids(&func.body, &mut closure_capt);
 
-                            // Build param substitution map
-                            let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
-                            for (param, arg) in func.params.iter().zip(args.iter()) {
-                                let trivial_in_closure = is_trivial_expr(arg)
-                                    && !matches!(arg, Expr::LocalGet(_))
-                                    && closure_capt.contains(&param.id);
-                                if is_trivial_expr(arg) && !trivial_in_closure {
-                                    param_map.insert(param.id, arg.clone());
-                                } else {
-                                    let fresh = *next_local_id;
-                                    *next_local_id += 1;
-                                    param_map.insert(param.id, Expr::LocalGet(fresh));
-                                    // We'll create the Let for this fresh id below
-                                }
-                            }
+                            let (mut setup, mut param_map) = build_inline_arg_bindings(
+                                &func.params,
+                                args,
+                                &closure_capt,
+                                next_local_id,
+                            )?;
 
                             // Remap body-local IDs
                             let body_ids = collect_body_local_ids(&func.body);
@@ -3910,30 +4684,6 @@ fn try_inline_simple_call(
                                     let fresh = *next_local_id;
                                     *next_local_id += 1;
                                     param_map.insert(*old_id, Expr::LocalGet(fresh));
-                                }
-                            }
-
-                            // Build setup stmts: param Lets (for non-trivial args) + body Lets
-                            let mut setup: Vec<Stmt> = Vec::new();
-
-                            // First, add Lets for non-trivial param args
-                            // (and for trivial-but-closure-captured args —
-                            // those got promoted to a fresh LocalGet above).
-                            for (param, arg) in func.params.iter().zip(args.iter()) {
-                                let trivial_in_closure = is_trivial_expr(arg)
-                                    && !matches!(arg, Expr::LocalGet(_))
-                                    && closure_capt.contains(&param.id);
-                                if !is_trivial_expr(arg) || trivial_in_closure {
-                                    if let Some(Expr::LocalGet(fresh_id)) = param_map.get(&param.id)
-                                    {
-                                        setup.push(Stmt::Let {
-                                            id: *fresh_id,
-                                            name: param.name.clone(),
-                                            ty: param.ty.clone(),
-                                            mutable: false,
-                                            init: Some(arg.clone()),
-                                        });
-                                    }
                                 }
                             }
 
@@ -3982,26 +4732,14 @@ fn try_inline_simple_call(
             property: method_name,
         } = callee.as_ref()
         {
-            // Resolve the receiver class via `resolve_receiver_class`:
-            //   - `Expr::LocalGet(id)` whose static type is a known class:
-            //     LocalGet substitution; `Expr::This` in the body rewrites to
-            //     `Expr::LocalGet(id)`.
-            //   - `Expr::This`, when we're inside a class method of the same
-            //     class: `Expr::This` in the body stays `Expr::This` (it
-            //     refers to the same `this` as the caller's context).
-            //   - `Expr::PropertyGet { ... }` chain (e.g. `world.commandBuffer`):
-            //     resolved by walking the chain via `class_field_types`. The
-            //     simple-call path here can't materialize a setup-Let for the
-            //     receiver (it must produce a single Expr result with an
-            //     empty stmt list for the single-Return case), so we only
-            //     accept LocalGet/This shapes here. The richer
-            //     `try_inline_call` path (multi-stmt) handles PropertyGet
-            //     receivers by emitting a `Let __recv = <chain>` first.
+            // Method inlining requires an exact `let obj = new C(...)`
+            // receiver proof. Declared/parameter types are not enough:
+            // virtual dispatch can pick a subclass override at runtime, and
+            // own-property writes can shadow the prototype method.
             let receiver: Option<(String, Option<LocalId>)> = match object.as_ref() {
-                Expr::LocalGet(obj_id) => local_types
+                Expr::LocalGet(obj_id) => exact_receiver_facts
                     .get(obj_id)
-                    .map(|cn| (cn.clone(), Some(*obj_id))),
-                Expr::This => enclosing_class.map(|cn| (cn.to_string(), None)),
+                    .map(|fact| (fact.class_name.clone(), Some(*obj_id))),
                 _ => None,
             };
             // Silence unused-warning for the resolver helper when this
@@ -4016,9 +4754,7 @@ fn try_inline_simple_call(
                     // evaluation. Direct substitution would bypass
                     // own-property/accessor shadows and zip() would drop
                     // extra actual args plus their side effects.
-                    if !method_candidate.method_lookup_safe
-                        || args.len() > method_candidate.func.params.len()
-                    {
+                    if !method_candidate.method_lookup_safe {
                         return None;
                     }
 
@@ -4035,8 +4771,12 @@ fn try_inline_simple_call(
                                 &mut closure_capt,
                             );
 
-                            let mut setup_stmts: Vec<Stmt> = Vec::new();
-                            let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
+                            let (setup_stmts, mut param_map) = build_inline_arg_bindings(
+                                &method_candidate.func.params,
+                                args,
+                                &closure_capt,
+                                next_local_id,
+                            )?;
 
                             // Map 'this' parameter to the receiver object (only
                             // when the receiver is a LocalGet — for an
@@ -4047,28 +4787,6 @@ fn try_inline_simple_call(
                                 (method_candidate.this_param_id, obj_id_opt)
                             {
                                 param_map.insert(this_id, Expr::LocalGet(obj_id));
-                            }
-
-                            // Map parameters to arguments
-                            // Note: Method params don't include 'this' - they use Expr::This instead
-                            for (param, arg) in method_candidate.func.params.iter().zip(args.iter())
-                            {
-                                let needs_let = closure_capt.contains(&param.id)
-                                    && !matches!(arg, Expr::LocalGet(_));
-                                if needs_let {
-                                    let fresh = *next_local_id;
-                                    *next_local_id += 1;
-                                    setup_stmts.push(Stmt::Let {
-                                        id: fresh,
-                                        name: param.name.clone(),
-                                        ty: param.ty.clone(),
-                                        mutable: false,
-                                        init: Some(arg.clone()),
-                                    });
-                                    param_map.insert(param.id, Expr::LocalGet(fresh));
-                                } else {
-                                    param_map.insert(param.id, arg.clone());
-                                }
                             }
 
                             let mut result = return_expr.clone();
@@ -4105,30 +4823,16 @@ fn try_inline_simple_call(
                             &method_candidate.func.body,
                             &mut closure_capt,
                         );
-                        let mut setup_for_params: Vec<Stmt> = Vec::new();
-                        let mut shared_param_map: HashMap<LocalId, Expr> = HashMap::new();
+                        let (setup_for_params, mut shared_param_map) = build_inline_arg_bindings(
+                            &method_candidate.func.params,
+                            args,
+                            &closure_capt,
+                            next_local_id,
+                        )?;
                         if let (Some(this_id), Some(obj_id)) =
                             (method_candidate.this_param_id, obj_id_opt)
                         {
                             shared_param_map.insert(this_id, Expr::LocalGet(obj_id));
-                        }
-                        for (param, arg) in method_candidate.func.params.iter().zip(args.iter()) {
-                            let needs_let = closure_capt.contains(&param.id)
-                                && !matches!(arg, Expr::LocalGet(_));
-                            if needs_let {
-                                let fresh = *next_local_id;
-                                *next_local_id += 1;
-                                setup_for_params.push(Stmt::Let {
-                                    id: fresh,
-                                    name: param.name.clone(),
-                                    ty: param.ty.clone(),
-                                    mutable: false,
-                                    init: Some(arg.clone()),
-                                });
-                                shared_param_map.insert(param.id, Expr::LocalGet(fresh));
-                            } else {
-                                shared_param_map.insert(param.id, arg.clone());
-                            }
                         }
 
                         for stmt in &method_candidate.func.body {
@@ -4167,9 +4871,10 @@ fn try_inline_call(
     expr: &Expr,
     func_candidates: &HashMap<FuncId, Function>,
     method_candidates: &HashMap<(String, String), MethodCandidate>,
-    local_types: &HashMap<LocalId, String>,
+    _local_types: &HashMap<LocalId, String>,
+    exact_receiver_facts: &ExactReceiverFacts,
     next_local_id: &mut LocalId,
-    enclosing_class: Option<&str>,
+    _enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
 ) -> Option<(Vec<Stmt>, Option<Expr>)> {
     if let Expr::Call { callee, args, .. } = expr {
@@ -4263,22 +4968,12 @@ fn try_inline_call(
             property: method_name,
         } = callee.as_ref()
         {
-            // Resolve receiver class. Three shapes are supported:
-            //   - `Expr::LocalGet(id)` whose static type is in `local_types`
-            //     (existing case, no setup needed).
-            //   - `Expr::This` (existing case, `Expr::This` in the body stays
-            //     unchanged because the caller's `this` already matches when
-            //     `enclosing_class` is set).
-            //   - Any other shape that `resolve_receiver_class` can resolve
-            //     (notably `PropertyGet { object: LocalGet(id), property: f }`
-            //     when `class_field_types` knows `(class_of_id, f) ->
-            //     field_class`). For these we materialize the receiver into
-            //     a fresh local via a setup `Let` and then drive
-            //     `substitute_this_in_stmts` against that local — without
-            //     materialization the body's `Expr::This` would reference the
-            //     CALLER's `this`, which is the wrong receiver class.
+            // Method inlining requires an exact `let obj = new C(...)`
+            // receiver proof. Declared/parameter types are not enough:
+            // virtual dispatch can pick a subclass override at runtime, and
+            // own-property writes can shadow the prototype method.
             let mut setup_stmts: Vec<Stmt> = Vec::new();
-            // Receiver resolution: only LocalGet/This receivers are inlined.
+            // Receiver resolution: only exact LocalGet receivers are inlined.
             // PropertyGet chains (e.g. `world.commandBuffer.set(...)`) are
             // technically resolvable via `class_field_types`, but when we
             // tried inlining them by materializing the chain into a fresh
@@ -4295,10 +4990,9 @@ fn try_inline_call(
             // can swap in here without re-threading the signatures.
             let _ = class_field_types;
             let receiver: Option<(String, Option<LocalId>)> = match object.as_ref() {
-                Expr::LocalGet(obj_id) => local_types
+                Expr::LocalGet(obj_id) => exact_receiver_facts
                     .get(obj_id)
-                    .map(|cn| (cn.clone(), Some(*obj_id))),
-                Expr::This => enclosing_class.map(|cn| (cn.to_string(), None)),
+                    .map(|fact| (fact.class_name.clone(), Some(*obj_id))),
                 _ => None,
             };
             if let Some((class_name, obj_id_opt)) = receiver {
