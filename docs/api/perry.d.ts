@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 870 entries across 71 modules
+// Coverage: 891 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -403,6 +403,10 @@ declare module "lodash" {
   /** stdlib */
   export function last(p0: any): any;
   /** stdlib */
+  export function mean(p0: any): number;
+  /** stdlib */
+  export function meanBy(p0: any, p1: any): number;
+  /** stdlib */
   export function range(p0: any, p1: any, p2: any): any;
   /** stdlib */
   export function reverse(p0: any): any;
@@ -410,6 +414,12 @@ declare module "lodash" {
   export function size(p0: any): any;
   /** stdlib */
   export function snakeCase(p0: string): string;
+  /** stdlib */
+  export function sum(p0: any): number;
+  /** stdlib */
+  export function sumBy(p0: any, p1: any): number;
+  /** stdlib */
+  export function tail(p0: any): any;
   /** stdlib */
   export function take(p0: any, p1: any): any;
   /** stdlib */
@@ -745,6 +755,8 @@ declare module "perry/system" {
   export function preferencesGet(...args: any[]): any;
   /** stdlib */
   export function preferencesSet(...args: any[]): any;
+  /** stdlib */
+  export function takeScreenshot(...args: any[]): any;
 }
 
 declare module "perry/thread" {

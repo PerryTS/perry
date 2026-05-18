@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 870 entries across 71 modules.
+Total: 891 entries across 71 modules.
 
 ## Modules
 
@@ -621,10 +621,15 @@ Total: 870 entries across 71 modules.
 - `head` — module
 - `kebabCase` — module
 - `last` — module
+- `mean` — module
+- `meanBy` — module
 - `range` — module
 - `reverse` — module
 - `size` — module
 - `snakeCase` — module
+- `sum` — module
+- `sumBy` — module
+- `tail` — module
 - `take` — module
 - `times` — module
 - `uniq` — module
@@ -926,6 +931,7 @@ Total: 870 entries across 71 modules.
 - `openURL` — module
 - `preferencesGet` — module
 - `preferencesSet` — module
+- `takeScreenshot` — module
 
 ## `perry/thread`
 
@@ -1228,9 +1234,24 @@ Total: 870 entries across 71 modules.
 
 ### Methods
 
+- `addListener` — instance
+- `emit` — instance
+- `eventNames` — instance
 - `finished` — module
 - `from` — module
+- `getMaxListeners` — instance
+- `listenerCount` — instance
+- `listeners` — instance
+- `off` — instance
+- `on` — instance
+- `once` — instance
 - `pipeline` — module
+- `prependListener` — instance
+- `prependOnceListener` — instance
+- `rawListeners` — instance
+- `removeAllListeners` — instance
+- `removeListener` — instance
+- `setMaxListeners` — instance
 
 ## `streams`
 
