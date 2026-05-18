@@ -1022,7 +1022,7 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
 /// the given statements, INCLUDING inside nested closures. Used to
 /// detect whether a local is ever mutated — the "is this captured +
 /// mutated" gate for boxing.
-fn collect_write_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
+pub(crate) fn collect_write_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     for s in stmts {
         collect_write_ids_in_stmt(s, out);
     }
@@ -1099,6 +1099,7 @@ fn collect_write_ids_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) {
                 collect_write_ids_in_stmts(&case.body, out);
             }
         }
+        Stmt::Labeled { body, .. } => collect_write_ids_in_stmt(body, out),
         _ => {}
     }
 }

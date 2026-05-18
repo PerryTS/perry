@@ -5063,8 +5063,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // ClosureHeader and skips gc_malloc + gc_check_trigger.
             //
             // We skip the captured-singleton path for closures whose
-            // body mutates a capture: those want fresh per-site identity
-            // because each call site might want its own writable slot.
+            // body mutates an unboxed capture: those want fresh
+            // per-call identity because the captured slot itself holds
+            // mutable state for that invocation.
             //
             // Closures that capture `this` are still routable through
             // the captured-singleton path — we include the `this` value
@@ -5096,9 +5097,13 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // work even though the box pointers are stable across
             // call sites. The relaxed gate plus the multi-slot LRU
             // backing reclaims that overhead.
-            let _ = mutable_captures;
             let no_capture_singleton = total_caps == 0;
-            let captured_singleton = !no_capture_singleton;
+            let mut write_ids = std::collections::HashSet::new();
+            crate::boxed_vars::collect_write_ids_in_stmts(body, &mut write_ids);
+            let writes_unboxed_capture = auto_captures
+                .iter()
+                .any(|cap_id| !ctx.boxed_vars.contains(cap_id) && write_ids.contains(cap_id));
+            let captured_singleton = !no_capture_singleton && !writes_unboxed_capture;
 
             // For captures_this, the cache buffer needs an extra slot
             // for the `this` value so the cache key distinguishes
