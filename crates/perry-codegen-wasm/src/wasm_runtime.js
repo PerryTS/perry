@@ -19,6 +19,18 @@ const _u64 = new BigUint64Array(_convBuf);
 function f64ToU64(f) { _f64[0] = f; return _u64[0]; }
 function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 
+// Issue #1035: pad a BigInt arg list to match the WASM function's declared arity.
+// Missing trailing slots correspond to TS optional params the caller omitted; the
+// WASM ABI expects an i64 (BigInt) per declared slot, so we fill with TAG_UNDEFINED.
+// Without this, V8/SpiderMonkey auto-coerce `undefined` via BigInt(undefined) and
+// throw "Cannot convert undefined to a BigInt". `prefix` is the count of leading
+// args already on the call (e.g. 1 for the receiver, or closure capture count).
+function __padBigintArgs(fn, prefix, bigintArgs) {
+  const need = Math.max(0, (fn.length | 0) - (prefix | 0));
+  while (bigintArgs.length < need) bigintArgs.push(TAG_UNDEFINED);
+  return bigintArgs;
+}
+
 // NaN-box helpers
 function nanboxString(id) {
   return u64ToF64((STRING_TAG << 48n) | BigInt(id));
@@ -467,28 +479,33 @@ function buildImports() {
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        return u64ToF64(fn(...c.captures));
+        // Pad for omitted TS optional params (Issue #1035).
+        const padded = __padBigintArgs(fn, c.captures.length, []);
+        return u64ToF64(fn(...c.captures, ...padded));
       },
       closure_call_1: (handle, a0) => {
         const c = getHandle(handle);
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        return u64ToF64(fn(...c.captures, f64ToU64(a0)));
+        const padded = __padBigintArgs(fn, c.captures.length + 1, [f64ToU64(a0)]);
+        return u64ToF64(fn(...c.captures, ...padded));
       },
       closure_call_2: (handle, a0, a1) => {
         const c = getHandle(handle);
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        return u64ToF64(fn(...c.captures, f64ToU64(a0), f64ToU64(a1)));
+        const padded = __padBigintArgs(fn, c.captures.length + 2, [f64ToU64(a0), f64ToU64(a1)]);
+        return u64ToF64(fn(...c.captures, ...padded));
       },
       closure_call_3: (handle, a0, a1, a2) => {
         const c = getHandle(handle);
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        return u64ToF64(fn(...c.captures, f64ToU64(a0), f64ToU64(a1), f64ToU64(a2)));
+        const padded = __padBigintArgs(fn, c.captures.length + 3, [f64ToU64(a0), f64ToU64(a1), f64ToU64(a2)]);
+        return u64ToF64(fn(...c.captures, ...padded));
       },
       // closure_call_spread(handle, args_array_handle) -> result
       closure_call_spread: (handle, argsHandle) => {
@@ -497,8 +514,8 @@ function buildImports() {
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        const bigintArgs = args.map(v => f64ToU64(fromJsValue(v)));
-        return u64ToF64(fn(...c.captures, ...bigintArgs));
+        const padded = __padBigintArgs(fn, c.captures.length, args.map(v => f64ToU64(fromJsValue(v))));
+        return u64ToF64(fn(...c.captures, ...padded));
       },
 
       // ===== Phase 2: Array higher-order methods =====
@@ -639,7 +656,9 @@ function buildImports() {
               const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
               if (fn) {
                 const args = getHandle(argsHandle) || [];
-                return u64ToF64(fn(f64ToU64(handle), ...args.map(v => f64ToU64(fromJsValue(v)))));
+                // Pad for omitted TS optional params (Issue #1035).
+                const padded = __padBigintArgs(fn, 1, args.map(v => f64ToU64(fromJsValue(v))));
+                return u64ToF64(fn(f64ToU64(handle), ...padded));
               }
             }
             cls = classParentTable[cls] || null;
@@ -884,6 +903,7 @@ function buildImports() {
       date_get_full_year: (h) => { const d = getHandle(h); return d instanceof Date ? d.getFullYear() : 0; },
       date_get_month: (h) => { const d = getHandle(h); return d instanceof Date ? d.getMonth() : 0; },
       date_get_date: (h) => { const d = getHandle(h); return d instanceof Date ? d.getDate() : 0; },
+      date_get_day: (h) => { const d = getHandle(h); return d instanceof Date ? d.getDay() : 0; },
       date_get_hours: (h) => { const d = getHandle(h); return d instanceof Date ? d.getHours() : 0; },
       date_get_minutes: (h) => { const d = getHandle(h); return d instanceof Date ? d.getMinutes() : 0; },
       date_get_seconds: (h) => { const d = getHandle(h); return d instanceof Date ? d.getSeconds() : 0; },
@@ -1662,32 +1682,38 @@ const __memDispatch = {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    return __bitsToJsValue(fn(...closure.captures));
+    // Pad for omitted TS optional params (Issue #1035).
+    const padded = __padBigintArgs(fn, closure.captures.length, []);
+    return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_1: (closure, a0) => {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    return __bitsToJsValue(fn(...closure.captures, __jsValueToBits(a0)));
+    const padded = __padBigintArgs(fn, closure.captures.length + 1, [__jsValueToBits(a0)]);
+    return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_2: (closure, a0, a1) => {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    return __bitsToJsValue(fn(...closure.captures, __jsValueToBits(a0), __jsValueToBits(a1)));
+    const padded = __padBigintArgs(fn, closure.captures.length + 2, [__jsValueToBits(a0), __jsValueToBits(a1)]);
+    return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_3: (closure, a0, a1, a2) => {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    return __bitsToJsValue(fn(...closure.captures, __jsValueToBits(a0), __jsValueToBits(a1), __jsValueToBits(a2)));
+    const padded = __padBigintArgs(fn, closure.captures.length + 3, [__jsValueToBits(a0), __jsValueToBits(a1), __jsValueToBits(a2)]);
+    return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    return __bitsToJsValue(fn(...closure.captures, ...argArr.map(v => __jsValueToBits(v))));
+    const padded = __padBigintArgs(fn, closure.captures.length, argArr.map(v => __jsValueToBits(v)));
+    return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
 
   // Array higher-order methods — WASM callbacks use i64 (BigInt) params/returns.
@@ -1783,8 +1809,10 @@ const __memDispatch = {
           const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
           if (fn) {
             const args = Array.isArray(argsArr) ? argsArr : [];
-            // WASM functions use i64 (BigInt) params/returns
-            return __bitsToJsValue(fn(__jsValueToBits(obj), ...args.map(v => __jsValueToBits(v))));
+            // WASM functions use i64 (BigInt) params/returns.
+            // Pad for omitted TS optional params (Issue #1035).
+            const padded = __padBigintArgs(fn, 1, args.map(v => __jsValueToBits(v)));
+            return __bitsToJsValue(fn(__jsValueToBits(obj), ...padded));
           }
         }
         cls = classParentTable[cls] || null;
@@ -1914,16 +1942,44 @@ const __memDispatch = {
   set_values: (s) => (s instanceof Set) ? [...s.values()] : [],
 
   // Date — arg is a plain JS value (the Date object itself once created)
+  date_new: () => new Date(),
   date_new_val: (arg) => (arg === undefined) ? new Date() : new Date(arg),
+  date_now: () => Date.now(),
+  date_parse: (s) => Date.parse(String(s)),
+  date_utc: (...args) => Date.UTC(...args.map(Number)),
   date_get_time: (d) => (d instanceof Date) ? d.getTime() : 0,
+  date_value_of: (d) => (d instanceof Date) ? d.valueOf() : 0,
   date_to_iso_string: (d) => { if (!(d instanceof Date)) return undefined; return d.toISOString(); },
+  date_to_date_string: (d) => (d instanceof Date) ? d.toDateString() : '',
+  date_to_time_string: (d) => (d instanceof Date) ? d.toTimeString() : '',
+  date_to_locale_string: (d) => (d instanceof Date) ? d.toLocaleString() : '',
+  date_to_locale_date_string: (d) => (d instanceof Date) ? d.toLocaleDateString() : '',
+  date_to_locale_time_string: (d) => (d instanceof Date) ? d.toLocaleTimeString() : '',
+  date_to_json: (d) => (d instanceof Date) ? d.toJSON() : null,
   date_get_full_year: (d) => (d instanceof Date) ? d.getFullYear() : 0,
   date_get_month: (d) => (d instanceof Date) ? d.getMonth() : 0,
   date_get_date: (d) => (d instanceof Date) ? d.getDate() : 0,
+  date_get_day: (d) => (d instanceof Date) ? d.getDay() : 0,
   date_get_hours: (d) => (d instanceof Date) ? d.getHours() : 0,
   date_get_minutes: (d) => (d instanceof Date) ? d.getMinutes() : 0,
   date_get_seconds: (d) => (d instanceof Date) ? d.getSeconds() : 0,
   date_get_milliseconds: (d) => (d instanceof Date) ? d.getMilliseconds() : 0,
+  date_get_utc_full_year: (d) => (d instanceof Date) ? d.getUTCFullYear() : 0,
+  date_get_utc_month: (d) => (d instanceof Date) ? d.getUTCMonth() : 0,
+  date_get_utc_date: (d) => (d instanceof Date) ? d.getUTCDate() : 0,
+  date_get_utc_day: (d) => (d instanceof Date) ? d.getUTCDay() : 0,
+  date_get_utc_hours: (d) => (d instanceof Date) ? d.getUTCHours() : 0,
+  date_get_utc_minutes: (d) => (d instanceof Date) ? d.getUTCMinutes() : 0,
+  date_get_utc_seconds: (d) => (d instanceof Date) ? d.getUTCSeconds() : 0,
+  date_get_utc_milliseconds: (d) => (d instanceof Date) ? d.getUTCMilliseconds() : 0,
+  date_get_timezone_offset: (d) => (d instanceof Date) ? d.getTimezoneOffset() : 0,
+  date_set_utc_full_year: (d, v) => (d instanceof Date) ? d.setUTCFullYear(Number(v)) : 0,
+  date_set_utc_month: (d, v) => (d instanceof Date) ? d.setUTCMonth(Number(v)) : 0,
+  date_set_utc_date: (d, v) => (d instanceof Date) ? d.setUTCDate(Number(v)) : 0,
+  date_set_utc_hours: (d, v) => (d instanceof Date) ? d.setUTCHours(Number(v)) : 0,
+  date_set_utc_minutes: (d, v) => (d instanceof Date) ? d.setUTCMinutes(Number(v)) : 0,
+  date_set_utc_seconds: (d, v) => (d instanceof Date) ? d.setUTCSeconds(Number(v)) : 0,
+  date_set_utc_milliseconds: (d, v) => (d instanceof Date) ? d.setUTCMilliseconds(Number(v)) : 0,
 
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
@@ -3729,7 +3785,11 @@ function __classDispatch(objVal, mname, rawArgs) {
       const methods = classMethodTable[cls];
       if (methods && mname in methods) {
         const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
-        if (fn) return __bitsToJsValue(fn(__jsValueToBits(objVal), ...rawArgs.map(v => __jsValueToBits(v))));
+        if (fn) {
+          // Pad for omitted TS optional params (Issue #1035).
+          const padded = __padBigintArgs(fn, 1, rawArgs.map(v => __jsValueToBits(v)));
+          return __bitsToJsValue(fn(__jsValueToBits(objVal), ...padded));
+        }
       }
       cls = classParentTable[cls] || null;
     }

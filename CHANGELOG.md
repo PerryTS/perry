@@ -2,6 +2,42 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1007 — fix(wasm-runtime): #1034 Date.prototype.getDay LinkError + audit, #1035 __classDispatch optional-param arg padding
+
+Two WASM-target (`--target web`) instantiation/runtime fixes from the @honeide/editor compile sweep.
+
+### #1034 — `rt.date_get_day` LinkError + Date surface audit
+
+`wasm_runtime.js` declared `date_get_day` in the WASM import struct (`crates/perry-codegen-wasm/src/emit.rs:841`) but never defined `rt.date_get_day` in the JS import object. Any program reaching `Date.prototype.getDay()` failed at instantiation with `LinkError: function import requires a callable`. Fix is one line in the `imports.rt` block.
+
+Audit found a wider gap: many Date methods (`emit_memcall` calls for `date_get_utc_*`, `date_get_timezone_offset`, `date_to_*`, `date_to_locale_*`, `date_to_json`, `date_value_of`, `date_parse`, `date_utc`, `date_set_utc_*`, `date_new`, `date_now`) are dispatched through `mem_call → __memDispatch[name]` but the `__memDispatch` table only defined the basic-getter subset. These wouldn't LinkError (only `mem_call` is the named import) but would silently return `undefined`. Added all of them so the full Date surface that `perry-codegen-wasm/src/emit.rs:7929..8109` emits has a working bridge.
+
+Same pattern likely exists in `crates/perry-codegen-js/src/web_runtime.js` (the JS target), but that file has no Date entries at all today — that's a pre-existing larger gap, left for a follow-up.
+
+### #1035 — `__classDispatch` and friends throw `BigInt(undefined)` on omitted TS optional params
+
+When a TS class method declares optional params, the compiled WASM function still takes the full declared arity as i64 (BigInt). Calling `t.parse('hello')` on `parse(buffer: string, changedRanges?: number[])` left the `changedRanges` slot empty in the JS-side dispatch. The spread `...args.map(v => __jsValueToBits(v))` produced too-few args; V8/SpiderMonkey coerced the trailing `undefined` slot with `BigInt(undefined)` and threw `TypeError: Cannot convert undefined to a BigInt`. Same pattern in three class-dispatch sites and the closure path:
+
+- `__classDispatch` (the site named in the issue, used as the `mem_call` last-resort dispatch)
+- `class_call_method` in `imports.rt`
+- `class_call_method` in `__memDispatch`
+- `closure_call_{0,1,2,3,spread}` in both `imports.rt` and `__memDispatch` (same ABI mismatch in the freestanding-function path the issue called out)
+
+Added a small `__padBigintArgs(fn, prefix, bigintArgs)` helper that pads `bigintArgs` up to `fn.length - prefix` with `TAG_UNDEFINED`. Used at all eight call sites. `prefix` accounts for the leading receiver or closure-captures already on the wire.
+
+Verified with `test_1035.ts` (`parse('hello')` returns 5, `parse('hello', [1,2,3])` returns 8) — before the fix this threw on instantiation.
+
+### #1037 — investigated, can't repro standalone
+
+Built a minimal `for (let ki = 0; ki < kws.length; ki++)` over the editor's `_KWS_TS` offset array on `--target web`. The loop terminates cleanly (no hang) in headless Node. Without the editor's full TS context the repro doesn't surface — the bug is likely tied to something specific about how `kws` is constructed in the editor (a `.split('|')` over a long string, plus surrounding iterator state). Left a comment on the issue asking for a reduced repro.
+
+The minimal test did surface a separate latent bug — `toJsValue` doesn't decode `INT32_TAG`, so `kws[ki] === word` returns false when one side is an INT32-tagged value and the other a plain f64. Not filed yet; not the same as #1037.
+
+### Files touched
+
+- `crates/perry-codegen-wasm/src/wasm_runtime.js` — `__padBigintArgs` helper, 1× `rt.date_get_day`, ~30 Date entries in `__memDispatch`, 3× `class_call_method` / `__classDispatch` padding, 2× `closure_call_{0..3,spread}` padding.
+- `Cargo.toml`, `CLAUDE.md` — version bump.
+
 ## v0.5.1006 — feat(jsruntime): Response / Request / Headers Web Fetch API globals in V8 fallback
 
 The next hono blocker after the SIGSEGV fix (v0.5.1005) was:
