@@ -2,6 +2,132 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1001 — fix(jsruntime/http): V8 listen keepalive + express handler smoke
+
+Post-#994 the V8-fallback `http.createServer().listen(port, cb)` smoke
+was hanging end-to-end in three different ways. This release ships
+fixes for the first two; the third (express + native `await fetch`
+self-call inside the listen callback) is documented below as a known
+limitation gated on real native async lowering.
+
+**1. `app.listen()` returned before bind completed → "listening" never printed**
+
+`op_perry_http_listen` is an async deno op: its body spawns
+`TcpListener::bind(addr)` on the shared multi-thread runtime and awaits
+the `JoinHandle`. The codegen-emitted outer event loop calls
+`js_run_jsruntime_pump` once before the header check, which polls
+`state.runtime.poll_event_loop(...)` exactly once. That single poll
+suspends on the bind future and returns `Poll::Pending` — but
+`jsruntime_has_active_handles` only inspected resolved-state counters
+(`ACTIVE_SERVERS`, foreign-promise adapters, pending ticks, module
+evaluations). With all four at zero, the header check returned 0 and
+the program exited before bind ever resolved.
+
+Fix: `poll_v8_event_loop_once` now records the most recent
+`Poll::Pending` / `Poll::Ready` result in a new
+`JsRuntimeState::last_poll_was_pending` flag, and the
+active-handles check returns 1 whenever the last poll left
+deno_core with refed ops in flight. `crates/perry-jsruntime/src/lib.rs`
+(state field + ctor), `crates/perry-jsruntime/src/interop.rs` (set
+the flag in `poll_v8_event_loop_once`, read it from
+`jsruntime_has_active_handles`). New regression test:
+`test-files/test_issue_997_v8_listen_keepalive.ts` (synchronous
+listen-cb that closes immediately — pre-fix hangs forever under
+`timeout`, post-fix prints "listening" and exits 0).
+
+**2. Express request handlers threw `ReferenceError: setImmediate is not defined` and `TypeError: Buffer.isBuffer is not a function`**
+
+External curl to a Perry-compiled express server (`app.listen(port,
+() => {...})`) was reaching the JS-side accept loop, dispatching to
+express's router, then throwing two missing-polyfill errors. Both
+turn into our V8 shim's catch-all 500 response, so callers saw
+`Internal Server Error` instead of the route's body.
+
+Fixes in `crates/perry-jsruntime/src/node_polyfills.js`:
+
+- Added `globalThis.setImmediate` / `globalThis.clearImmediate`
+  polyfills (microtask-based, mirroring the existing setTimeout
+  polyfill). Express's router uses `setImmediate` to break recursion
+  in middleware chains.
+- Added `Buffer.allocUnsafeSlow` static method. `safe-buffer`
+  (used by express, body-parser, etc.) detects whether our
+  global Buffer is "complete enough" by checking for all four of
+  `from` / `alloc` / `allocUnsafe` / `allocUnsafeSlow`. With
+  `allocUnsafeSlow` missing, safe-buffer falls through to a
+  `copyProps(Buffer, SafeBuffer)` fallback that uses `for...in` —
+  which silently skips ES class static methods because those are
+  non-enumerable in V8. The resulting SafeBuffer was missing
+  `isBuffer` / `byteLength` / etc., and every `Buffer.isBuffer(chunk)`
+  in `express/lib/response.js` threw TypeError. Providing
+  `allocUnsafeSlow` keeps safe-buffer on the happy path (just
+  re-exports our Buffer).
+
+Validated: `curl http://127.0.0.1:port/ping` against a
+Perry-compiled `app.get('/ping', (_req, res) => res.send('pong'))`
+now returns `pong` with HTTP 200.
+
+**3. Server.listen cb ordering + `op_perry_fetch` made async**
+
+Smaller refactors in the same code path:
+
+- `Server.listen` in the `node:http` shim now schedules the
+  user-supplied listening callback as `Promise.resolve().then(() =>
+  cb())` so the JS-side accept loop registers its first
+  `op_perry_http_accept(sid)` op BEFORE the trampoline-driven
+  callback runs. Pre-fix the synchronous `cb()` call could block
+  the V8 thread (when cb's native body contained an `await`) before
+  any accept op was queued, leaving hyper's `service_fn` stuck on
+  an mpsc with no consumer. Strictly logical-ordering improvement
+  for the express+self-fetch case (#4 below) — covers the no-await
+  callback shape today.
+- `op_perry_fetch` is now `async` (PR #994 deliberately chose sync
+  ureq to dodge a nested-block-on issue in the legacy blocking-await
+  path). The blocking ureq is wrapped in
+  `tokio::task::spawn_blocking` so the V8 thread can yield via
+  `await` while ureq runs on a tokio blocking-pool worker. The
+  polyfill's `const result = core.ops.op_perry_fetch(...)` is now
+  `const result = await core.ops.op_perry_fetch(...)` to preserve
+  the same callsite shape.
+
+**4. Self-fetch from inside an `async` listen callback (deferred)**
+
+The original repro was `app.listen(port, async () => { const r =
+await fetch('http://127.0.0.1:port/...') })`. Even with everything
+above, this still deadlocks. Root cause is structural: Perry's
+TS→native compilation lowers user `async () => …` arrows into a
+busy-wait loop (`crates/perry-codegen/src/expr.rs:10687`) rather
+than a true Future-style state machine, so a native callback
+invoked from the V8 trampoline (`native_callback_trampoline` in
+`crates/perry-jsruntime/src/interop.rs`) blocks the V8 thread for
+the entire duration of the callback body. Inside the busy-wait the
+re-entrant `js_run_jsruntime_pump` call DOES poll V8 — but
+`op_perry_http_accept`'s `rx.recv().await` future, scheduled on
+deno_core's executor, never resolves while the outer V8 stack
+frame holds an active scope from the trampoline. Net effect: the
+native fetch establishes a TCP connection to the hyper accept
+loop, hyper pushes the request through the mpsc, but the accept
+op never fires its V8 continuation — so the handler chain never
+runs and the request hangs.
+
+Workarounds that DO work today:
+
+- Use the `new Promise<void>(resolve => server.listen(port, () =>
+  resolve()))` pattern instead of an async-arrow callback, then
+  do the fetch in top-level code outside the callback. This is
+  what `test-files/test_http_createserver_v8.ts` exercises; it
+  still passes against this build (`200 hello` + exit 0).
+- External clients (curl, another process, etc.) hit the server
+  cleanly — the deadlock only manifests on same-process self-fetch
+  inside the listen-cb itself.
+- Fastify still works end-to-end (it routes through perry-stdlib's
+  bundled fastify path, not the V8-fallback hyper bridge, so the
+  trampoline doesn't sit on the V8 stack while the handler is
+  awaited).
+
+Deferring the self-fetch case to a future issue covering Perry's
+async lowering. The trampoline ↔ busy-wait interaction is too
+broad to safely patch in the V8-fallback http shim alone.
+
 ## v0.5.1000 — fix(date-fns): ordinal-suffix tokens + lowercase/dotted AM/PM variants
 
 PR #993 wired the date-fns `format()` token loop, but only emitted runs
@@ -30,7 +156,6 @@ Both behaviors are verified byte-for-byte against
 
 `test-files/test_date_fns_format.ts` is extended to cover the full
 token suite.
-
 ## v0.5.999 — feat(jsruntime/http): V8-fallback `createServer` bridge to a real hyper server
 
 Pre-fix the V8/JS-runtime fallback's `node:http` stub raised

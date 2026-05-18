@@ -44,16 +44,59 @@ fn op_perry_print(#[string] message: String) {
     let _ = stdout.flush();
 }
 
-/// Synchronous HTTP fetch op for V8's fetch() polyfill.
-/// Uses ureq (blocking) to avoid Tokio runtime conflicts when called
-/// from within js_await_js_promise's block_on context.
+/// Async HTTP fetch op for V8's fetch() polyfill.
+///
+/// History: this op was initially synchronous (#994) because the legacy
+/// blocking-await path (`PERRY_JSRUNTIME_ENABLE_LEGACY_BLOCKING_AWAIT`)
+/// already runs inside `tokio_rt.block_on(...)` and a naive `tokio::spawn`
+/// inside that block was hitting a current-thread runtime nested-block-on
+/// deadlock. The downside was that any `await fetch(...)` from a JS
+/// program ran ureq on the V8 thread synchronously — fine for "fetch
+/// before listening" workloads, but it deadlocks the express smoke
+/// (`app.listen(port, async cb => { await fetch(...) })`) because the
+/// V8 thread is the same one that drives the JS-side accept loop:
+///
+///   1. listen-cb fires. cb body runs to first `await` → ureq blocks
+///      the V8 thread waiting on `127.0.0.1:port`.
+///   2. The hyper accept loop on the shared tokio runtime accepts the
+///      connection and pushes a `PendingHttpRequest` into the mpsc.
+///   3. Nobody is calling `op_perry_http_accept`: the JS-side accept
+///      loop only starts after cb returns, but cb is awaiting fetch,
+///      which is blocked waiting for the server, which is waiting for
+///      the accept loop. Three-way deadlock.
+///
+/// Fix: make the op async and run the blocking ureq call on
+/// `tokio::task::spawn_blocking`. The await in JS then suspends the
+/// awaiting frame, V8 returns to the event loop, the JS-side accept
+/// loop starts polling `op_perry_http_accept`, and the spawn_blocking
+/// worker eventually returns the response to V8.
+///
+/// `spawn_blocking` uses tokio's blocking thread pool, which is distinct
+/// from the main worker pool — so ureq's blocking I/O doesn't tie up a
+/// runtime worker. We use the shared `TOKIO_RUNTIME` so behavior matches
+/// the rest of the V8 ops.
 #[op2]
 #[serde]
-fn op_perry_fetch(
+async fn op_perry_fetch(
     #[string] url: String,
     #[string] method: String,
     #[string] body: String,
     #[serde] headers: HashMap<String, String>,
+) -> Result<serde_json::Value, JsErrorBox> {
+    let tokio_rt = crate::get_tokio_runtime();
+    tokio_rt
+        .spawn_blocking(move || run_ureq_fetch(url, method, body, headers))
+        .await
+        .map_err(|e| JsErrorBox::generic(format!("fetch task join error: {}", e)))?
+}
+
+/// Blocking ureq dispatch. Runs on a tokio blocking-pool worker via
+/// `op_perry_fetch`; keep it pure so the async wrapper stays trivial.
+fn run_ureq_fetch(
+    url: String,
+    method: String,
+    body: String,
+    headers: HashMap<String, String>,
 ) -> Result<serde_json::Value, JsErrorBox> {
     let agent = ureq::agent();
     let method_upper = method.to_uppercase();

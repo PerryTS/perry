@@ -83,6 +83,15 @@ pub struct JsRuntimeState {
     pub pending_module_evaluations: HashMap<deno_core::ModuleId, PendingModuleEvaluation>,
     /// Whether the runtime has been initialized
     pub initialized: bool,
+    /// True if the last call to `poll_event_loop` returned `Poll::Pending`,
+    /// meaning deno_core still has refed ops in flight (async ops,
+    /// dyn imports, microtask backlog, etc.). Used by
+    /// `jsruntime_has_active_handles` to keep the codegen-emitted outer
+    /// event loop ticking while any V8-side async work is outstanding —
+    /// without it, a top-level `await op_perry_http_listen(...)` returns
+    /// to the caller while its bind future is still on the multi-thread
+    /// runtime, and the outer loop exits before the bind completes.
+    pub last_poll_was_pending: bool,
 }
 
 pub struct PendingModuleEvaluation {
@@ -122,6 +131,7 @@ impl JsRuntimeState {
             loaded_modules: HashMap::new(),
             pending_module_evaluations: HashMap::new(),
             initialized: true,
+            last_poll_was_pending: false,
         }
     }
 }

@@ -361,12 +361,25 @@ fn poll_v8_event_loop_once(state: &mut JsRuntimeState) -> i32 {
     let waker = notifying_waker();
     let mut cx = TaskContext::from_waker(&waker);
     match state.runtime.poll_event_loop(&mut cx, Default::default()) {
-        Poll::Ready(Ok(())) => 0,
+        Poll::Ready(Ok(())) => {
+            // V8 event loop drained — clear the pending flag so the outer
+            // loop can exit (assuming no other source — timers, stdlib,
+            // http servers — still keeps it alive).
+            state.last_poll_was_pending = false;
+            0
+        }
         Poll::Ready(Err(e)) => {
+            state.last_poll_was_pending = false;
             eprintln!("[jsruntime_pump] event loop error: {}", e);
             1
         }
-        Poll::Pending => 0,
+        Poll::Pending => {
+            // Refed async op / dyn import / microtask / promise event
+            // outstanding. `jsruntime_has_active_handles` reads this flag
+            // to keep the outer event loop alive until the op resolves.
+            state.last_poll_was_pending = true;
+            0
+        }
     }
 }
 
@@ -464,12 +477,31 @@ extern "C" fn jsruntime_has_active_handles() -> i32 {
             .as_ref()
             .is_some_and(|state| !state.pending_module_evaluations.is_empty())
     });
+    // `last_poll_was_pending` is set by `poll_v8_event_loop_once` whenever
+    // deno_core returns `Poll::Pending` — i.e. a refed async op / dyn
+    // import / microtask / promise event is still in flight. Without this
+    // gate, a top-level `await op_perry_http_listen(port)` (or any other
+    // async op invoked from module init) returns to the codegen-emitted
+    // outer event loop while its body is still suspended on a tokio
+    // worker; the header check then sees no other active source and
+    // exits before the op resolves and the listening callback can fire.
+    // Pairs with the express smoke at #997.
+    let has_pending_v8 = JS_RUNTIME.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|state| state.last_poll_was_pending)
+    });
     // Keep the program alive while any V8-fallback `http.createServer`
     // is still listening — without this the outer event loop exits
     // immediately after `server.listen(...)` resolves and the accept
     // loop's tokio task is dropped before serving any requests.
     let has_http_servers = crate::ops::perry_http_active_count() > 0;
-    if has_foreign_adapters || has_pending_ticks || has_module_evaluations || has_http_servers {
+    if has_foreign_adapters
+        || has_pending_ticks
+        || has_module_evaluations
+        || has_http_servers
+        || has_pending_v8
+    {
         1
     } else {
         0

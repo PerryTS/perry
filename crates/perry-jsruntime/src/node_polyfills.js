@@ -25,6 +25,21 @@
             return new Buffer(size);
         }
 
+        // safe-buffer (used by express, body-parser, etc.) detects whether
+        // our Buffer is "complete enough" by checking for all four of
+        // .from / .alloc / .allocUnsafe / .allocUnsafeSlow. If any are
+        // missing it copies static props onto a SafeBuffer shim using a
+        // for-in loop, which silently skips ES class static methods
+        // because those are non-enumerable. The resulting SafeBuffer is
+        // then missing isBuffer / byteLength / etc. and every
+        // `Buffer.isBuffer(chunk)` in express/response.js throws
+        // TypeError. Providing allocUnsafeSlow keeps safe-buffer on the
+        // happy path (just re-exports our Buffer), avoiding the lossy
+        // for-in copy entirely.
+        static allocUnsafeSlow(size) {
+            return new Buffer(size);
+        }
+
         static from(data, encodingOrOffset, length) {
             if (typeof data === 'string') {
                 const encoding = encodingOrOffset || 'utf8';
@@ -261,6 +276,19 @@
         globalThis.setInterval = function(fn, delay) { return __timerId++; };
         globalThis.clearInterval = function(id) {};
     }
+    // setImmediate / clearImmediate - Node-specific. express's router uses
+    // setImmediate to break recursion in middleware chains. Without this
+    // polyfill, every request handler throws ReferenceError and our http
+    // shim returns 500. Microtask-based fallback matches the behavior of
+    // setTimeout above; same caveat applies (no real event loop ordering).
+    if (typeof globalThis.setImmediate === 'undefined') {
+        globalThis.setImmediate = function(fn, ...args) {
+            const id = __timerId++;
+            Promise.resolve().then(() => { try { fn(...args); } catch (_) {} });
+            return id;
+        };
+        globalThis.clearImmediate = function(id) {};
+    }
 
     // fetch() polyfill using op_perry_fetch Deno op
     if (typeof globalThis.fetch === 'undefined') {
@@ -286,7 +314,13 @@
                     Object.assign(headers, init.headers);
                 }
             }
-            const result = core.ops.op_perry_fetch(url, method, body, headers);
+            // op_perry_fetch is async (returns a Promise). Awaiting here
+            // yields back to the V8 event loop, which is required for
+            // self-fetch patterns like app.listen(port, async () => {
+            // await fetch("http://127.0.0.1:port/...") }) - without
+            // the yield the JS-side accept loop never starts polling
+            // op_perry_http_accept and the request deadlocks.
+            const result = await core.ops.op_perry_fetch(url, method, body, headers);
             return {
                 ok: result.status >= 200 && result.status < 300,
                 status: result.status,

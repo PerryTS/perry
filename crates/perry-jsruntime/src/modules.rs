@@ -1348,6 +1348,26 @@ class Server {
         const self = this;
         // Kick off the bind + accept loop. Once bound, fire 'listening'
         // + the user callback and begin dispatching to the handler.
+        //
+        // Critical ordering for the express + native-fetch self-call
+        // pattern (#997): the listening callback is invoked AFTER the
+        // accept loop has registered its first `op_perry_http_accept`
+        // op. This matters because user callbacks compiled from Perry
+        // TypeScript come in as native trampolines — the V8 thread is
+        // blocked synchronously while the callback's native body runs,
+        // and any `await` inside the body busy-waits on the V8 thread
+        // (pumping `js_run_jsruntime_pump` inside the wait so microtasks
+        // still progress). If we called `cb()` BEFORE the accept loop
+        // queued its op, an `await fetch('http://127.0.0.1:port/...')`
+        // inside cb would block waiting for the server to respond, but
+        // the server can't dispatch because the accept loop hasn't
+        // started — three-way deadlock against the synchronous trampoline.
+        //
+        // Scheduling cb on Promise.resolve().then() defers it past the
+        // first `await op_perry_http_accept(...)`, so by the time the
+        // trampoline starts blocking the V8 thread there's already a
+        // pending accept op the inner pump can drive to resolution
+        // when hyper hands a request through the mpsc.
         (async () => {
             try {
                 const sid = await __perry_ops.op_perry_http_listen(port, host);
@@ -1355,7 +1375,11 @@ class Server {
                 self._listening = true;
                 self._listenAddress = { port, host };
                 self._emit('listening');
-                if (typeof cb === 'function') { try { cb(); } catch (_) {} }
+                if (typeof cb === 'function') {
+                    // Defer to a microtask so the accept loop below
+                    // registers `op_perry_http_accept` first.
+                    Promise.resolve().then(() => { try { cb(); } catch (_) {} });
+                }
                 // Accept loop
                 while (self._listening && self._serverId !== 0) {
                     let r;
