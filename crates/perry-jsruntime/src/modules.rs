@@ -752,6 +752,22 @@ const _cjs = (function() {{
             if (ns.__perry_commonjs === true && ns.default !== undefined) return ns.default;
         }} catch (_) {{
         }}
+        // ESM module-namespace objects (from `import * as ns`) have a null
+        // prototype, so `ns.hasOwnProperty(...)` throws "is not a function".
+        // safer-buffer's `for (key in buffer) if (!buffer.hasOwnProperty(key))`
+        // probe (loaded indirectly by express via body-parser) and similar
+        // legacy CommonJS code expects the value returned from `require()` to
+        // inherit from Object.prototype. Copy enumerable own props into a
+        // plain object so Object.prototype.* (hasOwnProperty,
+        // propertyIsEnumerable, toString, valueOf) is reachable.
+        try {{
+            if (ns && typeof ns === 'object' && Object.getPrototypeOf(ns) === null) {{
+                var __o = {{}};
+                for (var __k in ns) __o[__k] = ns[__k];
+                return __o;
+            }}
+        }} catch (_) {{
+        }}
         return ns;
     }}
     function require(specifier) {{

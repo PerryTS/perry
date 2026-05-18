@@ -7834,6 +7834,18 @@ pub fn is_buffer_method_name(name: &str) -> bool {
             | "swap16"
             | "swap32"
             | "swap64"
+            // Object.prototype methods exposed on Buffer instances so
+            // safer-buffer's `if (buffer.hasOwnProperty(...))` probe (and
+            // similar duck-type tests in express / body-parser dependents)
+            // resolve to a callable, not undefined. Without these,
+            // `typeof buf.hasOwnProperty` is `"undefined"` and the
+            // subsequent invocation throws "buffer.hasOwnProperty is not
+            // a function" at express startup.
+            | "hasOwnProperty"
+            | "propertyIsEnumerable"
+            | "valueOf"
+            | "isPrototypeOf"
+            | "toLocaleString"
             | "readUInt8"
             | "readUint8"
             | "readInt8"
@@ -8197,6 +8209,127 @@ pub unsafe fn dispatch_buffer_method(
             crate::buffer::js_buffer_write_int_le(buf_f64, arg_or_zero(0), arg_i32(1), arg_i32(2));
             (arg_i32(1) + arg_i32(2)) as f64
         }
+        // ── Object.prototype fallbacks on Buffer instances ──
+        // safer-buffer (loaded by express) probes Buffer instances with
+        // `if (buffer.hasOwnProperty(...))`. Pre-fix every non-buffer-specific
+        // method read returned undefined, so the call threw
+        // "buffer.hasOwnProperty is not a function". Mirror the generic
+        // ObjectHeader behaviour wired up in PR #978: hasOwnProperty checks
+        // numeric indices against the buffer length (Node spec — indexed
+        // bytes are own properties, `length` is on the prototype), and
+        // the remaining Object.prototype methods get spec-shaped stubs.
+        "hasOwnProperty" => {
+            let key_is_own = if args.is_empty() {
+                false
+            } else {
+                let key_bits = args[0].to_bits();
+                if (key_bits >> 48) == 0x7FFF {
+                    // string key
+                    let sptr =
+                        (key_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader;
+                    if sptr.is_null() {
+                        false
+                    } else {
+                        let slen = (*sptr).byte_len as usize;
+                        let sdata =
+                            (sptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let bytes = std::slice::from_raw_parts(sdata, slen);
+                        if let Ok(s) = std::str::from_utf8(bytes) {
+                            // Only numeric-string indices that are in bounds
+                            // count as own properties for Buffer/Uint8Array.
+                            if let Ok(idx) = s.parse::<u32>() {
+                                let buf_len = (*buf_ptr).length as u32;
+                                idx < buf_len
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                } else if (key_bits >> 48) == 0x7FFE {
+                    // int32 key
+                    let idx = (key_bits & 0xFFFF_FFFF) as i32;
+                    let buf_len = (*buf_ptr).length as i32;
+                    idx >= 0 && idx < buf_len
+                } else if !(0x7FF8..=0x7FFF).contains(&(key_bits >> 48)) {
+                    // raw f64 numeric key (NaN-boxing tags occupy 0x7FF8..=0x7FFF)
+                    let n = args[0];
+                    if n.is_finite() && n.fract() == 0.0 && n >= 0.0 {
+                        let idx = n as u32;
+                        let buf_len = (*buf_ptr).length as u32;
+                        idx < buf_len
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+            i32_bool(key_is_own as i32)
+        }
+        "propertyIsEnumerable" => {
+            // Same key→own check as hasOwnProperty; indexed bytes on a
+            // Buffer are enumerable own data properties.
+            let key_is_own = if args.is_empty() {
+                false
+            } else {
+                let key_bits = args[0].to_bits();
+                if (key_bits >> 48) == 0x7FFF {
+                    let sptr =
+                        (key_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader;
+                    if sptr.is_null() {
+                        false
+                    } else {
+                        let slen = (*sptr).byte_len as usize;
+                        let sdata =
+                            (sptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let bytes = std::slice::from_raw_parts(sdata, slen);
+                        if let Ok(s) = std::str::from_utf8(bytes) {
+                            if let Ok(idx) = s.parse::<u32>() {
+                                let buf_len = (*buf_ptr).length as u32;
+                                idx < buf_len
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                } else if (key_bits >> 48) == 0x7FFE {
+                    let idx = (key_bits & 0xFFFF_FFFF) as i32;
+                    let buf_len = (*buf_ptr).length as i32;
+                    idx >= 0 && idx < buf_len
+                } else if !args[0].is_nan() {
+                    let n = args[0];
+                    if n.is_finite() && n.fract() == 0.0 && n >= 0.0 {
+                        let idx = n as u32;
+                        let buf_len = (*buf_ptr).length as u32;
+                        idx < buf_len
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+            i32_bool(key_is_own as i32)
+        }
+        // `buf.valueOf()` returns the Buffer itself in Node (Uint8Array
+        // inherits the no-op valueOf from Object.prototype, but for the
+        // duck-test usage in safer-buffer/express-graph the receiver
+        // round-trip is what matters).
+        "valueOf" => f64::from_bits(JSValue::pointer(addr as *mut u8).bits()),
+        // `buf.toLocaleString()` — Node delegates to toString() with no
+        // args, which yields the utf8 decode. Match that.
+        "toLocaleString" => {
+            let str_ptr = crate::buffer::js_buffer_to_string(buf_ptr, 0);
+            f64::from_bits(JSValue::string_ptr(str_ptr).bits())
+        }
+        // `buf.isPrototypeOf(other)` — buffers aren't prototype objects in
+        // user code, so this is always false (matches Node when `buf` is
+        // a Buffer instance rather than `Buffer.prototype`).
+        "isPrototypeOf" => i32_bool(0),
         _ => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
 }

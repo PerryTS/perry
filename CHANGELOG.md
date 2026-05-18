@@ -2,6 +2,24 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.989 — feat(runtime+jsruntime): expose Object.prototype methods on Buffer instances + plain-object require() namespace
+
+**Symptom.** `import express from 'express'` (and any transitive consumer of `safer-buffer`) threw `TypeError: buffer.hasOwnProperty is not a function` at module-init time. safer-buffer's `safer.js` opens with `for (key in buffer) { if (!buffer.hasOwnProperty(key)) continue; ... }` where `buffer` is the value returned by `require('buffer')`. Two distinct gaps converged on the same error message:
+
+1. **Buffer instances** had no `Object.prototype.*` fallbacks. PR #978 wired `hasOwnProperty` / `propertyIsEnumerable` on generic `ObjectHeader` instances inside `js_native_call_method`, but Buffer dispatch routes through the dedicated `dispatch_buffer_method` arm (because BufferHeader is a raw `alloc()` without a GcHeader and is detected via `BUFFER_REGISTRY` before the GcHeader inspection runs). That arm matched on the buffer-specific method names and returned `undefined` for everything else — so `buf.hasOwnProperty` was undefined and `typeof buf.hasOwnProperty` was `'undefined'`.
+
+2. **`require('builtin')` returned a raw ESM-namespace object** with a null prototype (per QuickJS / ES spec for module namespaces). Even though our `'buffer'` stub exported `Buffer`, `constants`, `kMaxLength`, etc. correctly, the namespace itself had no `Object.prototype` in its chain — so `nsObj.hasOwnProperty(...)` threw before any Buffer instance was even involved. This is what actually crashed safer-buffer (the call site `buffer.hasOwnProperty(key)` is on the **module**, not on a Buffer instance).
+
+**Fix — two coordinated changes:**
+
+1. **`crates/perry-runtime/src/object.rs::dispatch_buffer_method`:** add explicit arms for `hasOwnProperty`, `propertyIsEnumerable`, `valueOf`, `toLocaleString`, `isPrototypeOf` before the `_ => undefined` fallback. `hasOwnProperty(idx)` / `propertyIsEnumerable(idx)` check numeric-string and int32 keys against `(*buf_ptr).length` (Node spec: indexed bytes are own enumerable properties on a Buffer, `length` is inherited from the prototype). `valueOf` round-trips the buffer pointer, `toLocaleString` delegates to `toString()` with the utf8 encoding tag, and `isPrototypeOf` returns false. `is_buffer_method_name` is extended with the same names so a method-as-value read (`typeof buf.hasOwnProperty === "function"`) materializes a bound-method closure via `js_class_method_bind` and the subsequent call routes back through the new arms.
+
+2. **`crates/perry-jsruntime/src/modules.rs::__perry_require_namespace`:** when the value returned from `require()` is an ESM module-namespace object (`Object.getPrototypeOf(ns) === null`), copy its enumerable own properties into a plain object so it inherits from `Object.prototype`. References to inner classes/functions are preserved (the copy is shallow and uses `=`, so static members and `.prototype` on copied function/class values survive). This unblocks every legacy CJS module that probes its imports with `hasOwnProperty` (safer-buffer being the highest-profile example).
+
+**Validation.**
+- `test-files/test_buffer_prototype_methods.ts` — byte-for-byte match with `node --experimental-strip-types` (`false`, `false`, `function`, `hello`, `function`, `false`).
+- `/tmp/perry-express` smoke test: pre-fix crashed with `buffer.hasOwnProperty is not a function` at `safer-buffer/safer.js:36:15`. Post-fix the safer-buffer crash is gone; downstream `send` then hits a separate unrelated issue (`util.inherits` on a stub-default-export Stream that lacks `.prototype`), tracked separately.
+
 ## v0.5.988 — feat(lodash): add max/min/maxBy/minBy/clamp/inRange/random to manifest
 
 Direct follow-up to PR #966 (sum/mean/sumBy/meanBy/head/last/tail). After #966 unblocked `lodash.sum`, the next bare-lodash sweep tripped on `_.max` — the runtime helpers for `clamp`/`inRange`/`random` already existed (and `clamp` had a `NativeModSig`), but no manifest entry, and the four extrema (`max`/`min`/`maxBy`/`minBy`) didn't exist at all. This PR fills the gap end-to-end.
@@ -38,7 +56,6 @@ false
 PR #966's `test-files/test_lodash_sum.ts` still passes unchanged (`10 / 2.5 / 3 / 1 / 3`) — no regression on the previously-landed aggregators.
 
 **Known follow-up — `compilePackages: ["lodash"]` path.** With `compilePackages` set to compile lodash from `node_modules` instead of routing through native, the test crashes at runtime with `TypeError: Cannot read properties of undefined (reading 'call')` — same V8-fallback-style issue that's blocking other compile-as-package smokes (#678 territory). The bare-import path (which is what the manifest + native dispatch is actually for) works correctly.
-
 ## v0.5.987 — fix(hir+runtime): Constructor.prototype method dispatch for computed keys + read-side introspection (ramda transducer pattern)
 
 **Symptom.** `XWrap.prototype['@@transducer/step'] = function(acc, x) { … }` — ramda's transducer scaffolding (`_xwrap.js`) plus any pre-ES6 library that attaches instance methods through a computed string-literal key — pre-fix silently fell through to a generic `PropertySet` because the assignment-side recogniser in `lower/expr_assign.rs` only matched the `MemberProp::Ident` shape (`.method = fn`). Subsequent `(new XWrap(fn))['@@transducer/step'](acc, x)` then threw `undefined is not a function` even though the dispatch hot path was perfectly capable of finding the method via `CLASS_PROTOTYPE_METHODS` — the side-table just never got populated.
