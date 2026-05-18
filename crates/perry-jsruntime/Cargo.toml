@@ -41,5 +41,13 @@ regex = "1"
 # HTTP client for fetch() polyfill (blocking, no Tokio dependency)
 ureq = "2"
 
+# HTTP server stack for `http.createServer` shim used by the V8 fallback
+# path (express/fastify smoke tests). Same crate versions as perry-ext-http-server
+# so we don't duplicate the dep graph.
+hyper = { version = "1.4", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["server", "tokio"] }
+http-body-util = "0.1"
+bytes = "1.5"
+
 [features]
 default = []

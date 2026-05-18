@@ -1108,14 +1108,305 @@ export default { TLSSocket, connect, createSecureContext };
 "#.to_string(),
         "http" | "https" | "http2" => r#"
 // Stub implementation for Node.js http/https/http2 module
-export class IncomingMessage {}
-export class ServerResponse {}
+//
+// `createServer(handler)` bridges to the V8-fallback HTTP server via
+// the `op_perry_http_*` ops (see crates/perry-jsruntime/src/ops.rs).
+// This is the minimum viable shape — enough for express.listen() to
+// receive real requests and respond. NOT a full Node `http.Server`
+// (no streams, no trailers, no upgrade events). Apps that need richer
+// HTTP server semantics should compile through the native path
+// (perry-ext-http-server).
+const __perry_core = (typeof Deno !== 'undefined' && Deno.core) ? Deno.core : null;
+const __perry_ops = __perry_core && __perry_core.ops ? __perry_core.ops : null;
+
+export class IncomingMessage {
+    constructor(opaque) {
+        this.method = opaque.method;
+        this.url = opaque.url;
+        this.headers = opaque.headers || {};
+        this.rawHeaders = opaque.rawHeaders || [];
+        this.httpVersion = '1.1';
+        this.httpVersionMajor = 1;
+        this.httpVersionMinor = 1;
+        this.complete = true;
+        this._body = opaque.body || '';
+        this._listeners = Object.create(null);
+        // Minimal stream-ish events: synthesize 'data' + 'end' on next tick
+        // so handlers that wire `.on('data', ...).on('end', ...)` work.
+        Promise.resolve().then(() => {
+            const dataCbs = this._listeners['data'] || [];
+            if (dataCbs.length > 0 && this._body) {
+                for (const cb of dataCbs) cb(this._body);
+            }
+            const endCbs = this._listeners['end'] || [];
+            for (const cb of endCbs) cb();
+        });
+    }
+    on(event, listener) {
+        (this._listeners[event] = this._listeners[event] || []).push(listener);
+        return this;
+    }
+    once(event, listener) {
+        const wrapped = (...args) => { this.off(event, wrapped); listener(...args); };
+        return this.on(event, wrapped);
+    }
+    off(event, listener) {
+        const arr = this._listeners[event];
+        if (arr) { const i = arr.indexOf(listener); if (i >= 0) arr.splice(i, 1); }
+        return this;
+    }
+    removeListener(event, listener) { return this.off(event, listener); }
+    emit(event, ...args) {
+        const arr = this._listeners[event];
+        if (arr) arr.slice().forEach(fn => fn.apply(this, args));
+        return !!arr;
+    }
+    setEncoding() { return this; }
+    pause() { return this; }
+    resume() { return this; }
+}
+
+export class ServerResponse {
+    constructor(reqId) {
+        this._reqId = reqId;
+        this._status = 200;
+        this._headers = []; // array of [name, value] preserving order
+        this._headerMap = Object.create(null); // lowercase -> last value
+        this._body = '';
+        this._ended = false;
+        this.headersSent = false;
+        this.finished = false;
+        this.statusCode = 200;
+        this.statusMessage = '';
+        this._listeners = Object.create(null);
+    }
+    setHeader(name, value) {
+        const lower = String(name).toLowerCase();
+        // Replace any previous entry for the same header.
+        this._headers = this._headers.filter(p => p[0].toLowerCase() !== lower);
+        this._headers.push([String(name), String(value)]);
+        this._headerMap[lower] = String(value);
+        return this;
+    }
+    getHeader(name) { return this._headerMap[String(name).toLowerCase()]; }
+    getHeaders() {
+        const out = {};
+        for (const [k, v] of this._headers) out[k.toLowerCase()] = v;
+        return out;
+    }
+    getHeaderNames() { return Object.keys(this._headerMap); }
+    hasHeader(name) { return String(name).toLowerCase() in this._headerMap; }
+    removeHeader(name) {
+        const lower = String(name).toLowerCase();
+        this._headers = this._headers.filter(p => p[0].toLowerCase() !== lower);
+        delete this._headerMap[lower];
+        return this;
+    }
+    writeHead(status, statusMessageOrHeaders, headers) {
+        this._status = status;
+        this.statusCode = status;
+        let h = headers;
+        if (statusMessageOrHeaders && typeof statusMessageOrHeaders !== 'string') {
+            h = statusMessageOrHeaders;
+        } else if (typeof statusMessageOrHeaders === 'string') {
+            this.statusMessage = statusMessageOrHeaders;
+        }
+        if (h) {
+            if (Array.isArray(h)) {
+                // [name1, val1, name2, val2, ...]
+                for (let i = 0; i + 1 < h.length; i += 2) this.setHeader(h[i], h[i + 1]);
+            } else {
+                for (const k of Object.keys(h)) this.setHeader(k, h[k]);
+            }
+        }
+        return this;
+    }
+    write(chunk) {
+        if (this._ended) return false;
+        if (chunk == null) return true;
+        if (typeof chunk === 'string') {
+            this._body += chunk;
+        } else if (chunk instanceof Uint8Array) {
+            this._body += new TextDecoder().decode(chunk);
+        } else if (chunk && chunk.buffer instanceof ArrayBuffer) {
+            this._body += new TextDecoder().decode(new Uint8Array(chunk.buffer));
+        } else {
+            this._body += String(chunk);
+        }
+        return true;
+    }
+    end(chunk, encoding, cb) {
+        if (this._ended) return this;
+        if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
+        else if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+        if (chunk != null) this.write(chunk);
+        this._ended = true;
+        this.finished = true;
+        this.headersSent = true;
+        // Default Content-Length when caller hasn't set Transfer-Encoding.
+        const lower = this._headerMap;
+        if (!lower['content-length'] && !lower['transfer-encoding']) {
+            const len = (typeof TextEncoder !== 'undefined')
+                ? new TextEncoder().encode(this._body).length
+                : this._body.length;
+            this.setHeader('Content-Length', String(len));
+        }
+        if (__perry_ops && __perry_ops.op_perry_http_respond) {
+            try {
+                __perry_ops.op_perry_http_respond(
+                    this._reqId, this._status, JSON.stringify(this._headers), this._body);
+            } catch (_) {}
+        }
+        const finishCbs = this._listeners['finish'] || [];
+        for (const f of finishCbs) { try { f(); } catch (_) {} }
+        const closeCbs = this._listeners['close'] || [];
+        for (const f of closeCbs) { try { f(); } catch (_) {} }
+        if (typeof cb === 'function') { try { cb(); } catch (_) {} }
+        return this;
+    }
+    on(event, listener) {
+        (this._listeners[event] = this._listeners[event] || []).push(listener);
+        return this;
+    }
+    once(event, listener) {
+        const wrapped = (...args) => { this.off(event, wrapped); listener(...args); };
+        return this.on(event, wrapped);
+    }
+    off(event, listener) {
+        const arr = this._listeners[event];
+        if (arr) { const i = arr.indexOf(listener); if (i >= 0) arr.splice(i, 1); }
+        return this;
+    }
+    removeListener(event, listener) { return this.off(event, listener); }
+    emit(event, ...args) {
+        const arr = this._listeners[event];
+        if (arr) arr.slice().forEach(fn => fn.apply(this, args));
+        return !!arr;
+    }
+    flushHeaders() { this.headersSent = true; }
+}
+
 export class Agent {}
+
+class Server {
+    constructor(handler) {
+        this._handler = handler || (() => {});
+        this._serverId = 0;
+        this._listening = false;
+        this._listeners = Object.create(null);
+        this._listenAddress = null;
+    }
+    _emit(event, ...args) {
+        const arr = this._listeners[event];
+        if (arr) arr.slice().forEach(fn => { try { fn.apply(this, args); } catch (_) {} });
+    }
+    on(event, listener) {
+        if (event === 'request' && typeof listener === 'function') {
+            // Mirror Node: 'request' listeners run in addition to the
+            // constructor handler. Stash them in _listeners and dispatch
+            // alongside the main handler in the accept loop.
+        }
+        (this._listeners[event] = this._listeners[event] || []).push(listener);
+        return this;
+    }
+    once(event, listener) {
+        const wrapped = (...args) => { this.off(event, wrapped); listener(...args); };
+        return this.on(event, wrapped);
+    }
+    off(event, listener) {
+        const arr = this._listeners[event];
+        if (arr) { const i = arr.indexOf(listener); if (i >= 0) arr.splice(i, 1); }
+        return this;
+    }
+    removeListener(event, listener) { return this.off(event, listener); }
+    addListener(event, listener) { return this.on(event, listener); }
+    emit(event, ...args) { this._emit(event, ...args); return true; }
+    setTimeout() { return this; }
+    address() {
+        if (!this._listenAddress) return null;
+        return { port: this._listenAddress.port, address: this._listenAddress.host, family: 'IPv4' };
+    }
+    listen(...args) {
+        // express calls listen(port, cb); also support (port, host, cb) and ({port, host}, cb).
+        let port = 3000;
+        let host = '0.0.0.0';
+        let cb = null;
+        for (const a of args) {
+            if (typeof a === 'number') port = a;
+            else if (typeof a === 'string') {
+                const n = parseInt(a, 10);
+                if (!isNaN(n)) port = n;
+            } else if (typeof a === 'function') cb = a;
+            else if (a && typeof a === 'object') {
+                if (typeof a.port === 'number') port = a.port;
+                if (typeof a.host === 'string') host = a.host;
+            }
+        }
+        if (!__perry_ops || !__perry_ops.op_perry_http_listen) {
+            throw new Error('http.createServer: Perry V8-fallback HTTP ops unavailable');
+        }
+        const self = this;
+        // Kick off the bind + accept loop. Once bound, fire 'listening'
+        // + the user callback and begin dispatching to the handler.
+        (async () => {
+            try {
+                const sid = await __perry_ops.op_perry_http_listen(port, host);
+                self._serverId = sid;
+                self._listening = true;
+                self._listenAddress = { port, host };
+                self._emit('listening');
+                if (typeof cb === 'function') { try { cb(); } catch (_) {} }
+                // Accept loop
+                while (self._listening && self._serverId !== 0) {
+                    let r;
+                    try { r = await __perry_ops.op_perry_http_accept(sid); }
+                    catch (_) { break; }
+                    if (!r || r.id === 0) break;
+                    const req = new IncomingMessage(r);
+                    const res = new ServerResponse(r.id);
+                    // Fire 'request' listeners + the constructor handler.
+                    const reqListeners = self._listeners['request'] || [];
+                    for (const fn of reqListeners) {
+                        try { fn.call(self, req, res); } catch (e) { /* swallow */ }
+                    }
+                    try {
+                        const ret = self._handler(req, res);
+                        if (ret && typeof ret.then === 'function') {
+                            ret.catch(() => {});
+                        }
+                    } catch (e) {
+                        if (!res._ended) {
+                            try {
+                                res.statusCode = 500;
+                                res.end('Internal Server Error');
+                            } catch (_) {}
+                        }
+                    }
+                }
+            } catch (err) {
+                self._emit('error', err);
+                if (typeof cb === 'function') { try { cb(err); } catch (_) {} }
+            }
+        })();
+        return this;
+    }
+    close(cb) {
+        if (this._serverId && __perry_ops && __perry_ops.op_perry_http_close) {
+            try { __perry_ops.op_perry_http_close(this._serverId); } catch (_) {}
+        }
+        this._listening = false;
+        this._serverId = 0;
+        this._emit('close');
+        if (typeof cb === 'function') { try { cb(); } catch (_) {} }
+        return this;
+    }
+    closeAllConnections() {}
+    closeIdleConnections() {}
+    get listening() { return this._listening; }
+}
+
 // Issue #912 (#909 follow-up): express/router read `const { METHODS } =
 // require('node:http')` at module init and immediately call `METHODS.map(...)`.
-// Pre-fix METHODS was undefined and threw `TypeError: Cannot read properties
-// of undefined (reading 'map')`. Mirrors `http_methods_array` in
-// perry-runtime/src/object.rs (Node 22 snapshot).
 export const METHODS = [
     'ACL', 'BIND', 'CHECKOUT', 'CONNECT', 'COPY', 'DELETE', 'GET', 'HEAD',
     'LINK', 'LOCK', 'M-SEARCH', 'MERGE', 'MKACTIVITY', 'MKCALENDAR', 'MKCOL',
@@ -1123,9 +1414,6 @@ export const METHODS = [
     'PURGE', 'PUT', 'QUERY', 'REBIND', 'REPORT', 'SEARCH', 'SOURCE',
     'SUBSCRIBE', 'TRACE', 'UNBIND', 'UNLINK', 'UNLOCK', 'UNSUBSCRIBE'
 ];
-// Node also exposes a `STATUS_CODES` map keyed by integer code. Expose a
-// minimal subset so consumers that read `STATUS_CODES[500]` at module init
-// don't crash with the same "undefined" pattern.
 export const STATUS_CODES = {
     100: 'Continue', 101: 'Switching Protocols', 200: 'OK', 201: 'Created',
     202: 'Accepted', 204: 'No Content', 301: 'Moved Permanently',
@@ -1138,9 +1426,10 @@ export const STATUS_CODES = {
 };
 export function request() { throw new Error('http.request not supported in this environment'); }
 export function get() { throw new Error('http.get not supported in this environment'); }
-export function createServer() { throw new Error('http.createServer not supported in this environment'); }
+export function createServer(handler) { return new Server(handler); }
 export function createSecureServer() { throw new Error('http2.createSecureServer not supported in this environment'); }
-export default { IncomingMessage, ServerResponse, Agent, METHODS, STATUS_CODES, request, get, createServer, createSecureServer };
+export { Server };
+export default { IncomingMessage, ServerResponse, Server, Agent, METHODS, STATUS_CODES, request, get, createServer, createSecureServer };
 "#.to_string(),
         "crypto" => r#"
 // Stub implementation for Node.js 'crypto' module

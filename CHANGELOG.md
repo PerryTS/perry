@@ -2,6 +2,82 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.999 — feat(jsruntime/http): V8-fallback `createServer` bridge to a real hyper server
+
+Pre-fix the V8/JS-runtime fallback's `node:http` stub raised
+`Error: http.createServer not supported in this environment` whenever an
+interpreted module (express, fastify, nestjs, …) called
+`http.createServer((req, res) => …)`. Express's `app.listen(...)` goes
+through `http.createServer(app)` internally, so any V8-resolved express
+app crashed at boot.
+
+This change wires the stub to a real hyper-based HTTP/1.1 server via
+four new deno_core ops:
+
+- `op_perry_http_listen(port, host)` — async; binds a `tokio::net::TcpListener`
+  on Perry's shared multi-thread tokio runtime, spawns a hyper accept
+  loop that pushes `PendingHttpRequest`s through an mpsc channel.
+- `op_perry_http_accept(serverId)` — async; pops the next pending
+  request, stashes the response `oneshot::Sender` keyed by request id,
+  returns `{id, method, url, headers, rawHeaders, body}` to JS.
+- `op_perry_http_respond(reqId, status, headersJson, body)` — sync;
+  resolves the stashed oneshot with a `HttpResponseShape` so hyper's
+  service fn can write the response.
+- `op_perry_http_close(serverId)` — sync; drops the accept-loop shutdown
+  oneshot so the listener exits cleanly.
+
+`crates/perry-jsruntime/src/modules.rs` `node:http` stub now exports a
+real `Server` class with `.listen()`, `.close()`, `.on()`, plus
+`IncomingMessage` and `ServerResponse` that implement the minimum
+surface express needs: `req.method`/`req.url`/`req.headers`,
+`res.writeHead`/`res.setHeader`/`res.write`/`res.end`/`res.statusCode`.
+Response bodies are utf-8 strings (no streaming); request bodies are
+synthesized as a single `'data'` event followed by `'end'` on next tick
+so `req.on('data', cb).on('end', cb)` consumers work.
+
+Two adjacent fixes were required so the async-op pipeline could touch
+tokio at all:
+
+1. `JsRuntime::new()` captures `tokio::runtime::Handle::try_current()`
+   for its async-op executor. `ensure_runtime_initialized` previously
+   called it without any tokio context, so the captured handle pointed
+   at nothing and any subsequent `TcpListener::bind` / `tokio::spawn`
+   from inside an async op panicked with "there is no reactor running".
+   `ensure_runtime_initialized` now enters Perry's shared
+   `TOKIO_RUNTIME` via `tokio::runtime::Runtime::enter` before
+   constructing the runtime.
+2. The same enter() guard now wraps every `with_runtime(...)` call.
+   Without this the JS event loop pump (`poll_event_loop`) would poll
+   async ops in a thread-local context that lacked a reactor. Mirror
+   logic added to `jsruntime_process_pending`.
+
+`jsruntime_has_active_handles` now keeps the program alive while any
+V8-fallback http server is bound; without this, the outer event loop
+would exit before the accept loop saw its first connection.
+
+Validation:
+
+- `test-files/test_http_createserver_v8.ts` (TS file, goes through the
+  *native* `node:http` path on perry-ext-http-server) still prints
+  `200 hello` — unchanged, no regression.
+- Express smoke from the issue prompt (`/tmp/perry-express-http/test.ts`
+  with `import express from 'express'` + `app.listen(19000, cb)`) now
+  prints `listening on 19000` (pre-fix: thrown error at module init).
+- A middleware-only express variant (`app.use((req, res) => res.end(...))`)
+  serves a real HTTP response: external `fetch('http://127.0.0.1:.../')`
+  returns `status=200 body=hi-from-middleware`.
+
+Deferred — explicitly out of scope for this initial bridge:
+
+- Streaming request/response bodies (everything buffers as a string).
+- HTTPS + HTTP/2 (`createSecureServer` still throws — applications that
+  need TLS termination should compile through the native path).
+- `req.socket`/`req.connection` surface.
+- `'upgrade'` events / WebSocket handshakes inside V8 (those live in
+  perry-ext-http-server via `js_node_http_server_on`).
+- A full `Server` `EventEmitter` (the shim implements on/off/emit but
+  isn't an `events.EventEmitter` instance).
+
 ## v0.5.998 — fix(date-fns): format() returns a formatted string instead of undefined
 
 **Symptom.** `import { format } from 'date-fns'; format(new Date(2020, 0, 6), 'yyyy-MM-dd')` compiled cleanly and ran without error, but the console printed `undefined` instead of `2020-01-06`. Same shape for every other free function date-fns exports (`parseISO`, `addDays`, `isAfter`, …).
@@ -30,7 +106,6 @@ console.log(format(d, 'MM'));            // 01
 console.log(format(d, 'dd'));            // 06
 console.log(typeof format(d, 'yyyy'));   // string
 ```
-
 ## v0.5.997 — feat(jsruntime): V8 named-import static-method dispatch for Effect.succeed
 
 **Symptom.** `import { Effect } from 'effect'; Effect.succeed(42)` returned the literal number `0` instead of an Effect class instance. `typeof e === 'number'`, `e.pipe` was `undefined`, `e._tag` was `undefined`. Same shape blocked any `import { X } from 'v8-fallback-pkg'; X.method(args)` pattern where the V8 module's top-level export `X` is itself a sub-namespace object holding the actual functions — the Effect/jose/many-internal-tools pattern.

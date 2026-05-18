@@ -435,6 +435,13 @@ fn poll_pending_module_evaluations(state: &mut JsRuntimeState) -> i32 {
 extern "C" fn jsruntime_process_pending() -> i32 {
     jsruntime_profile_register();
     bump_jsruntime(&JSRUNTIME_PUMP_TICKS);
+    // Enter the shared tokio runtime so async ops (e.g. the V8-fallback
+    // `op_perry_http_*` listener) that touch `tokio::net` / `tokio::spawn`
+    // can run inside a reactor context. Without this guard, polling an
+    // async op that does `TcpListener::bind(...)` panics with "there is
+    // no reactor running".
+    let tokio_rt = crate::get_tokio_runtime();
+    let _enter = tokio_rt.enter();
     with_runtime(|state| {
         let mut ran = poll_v8_event_loop_once(state);
         let resolved_ticks = resolve_pending_jsruntime_ticks(state);
@@ -457,7 +464,12 @@ extern "C" fn jsruntime_has_active_handles() -> i32 {
             .as_ref()
             .is_some_and(|state| !state.pending_module_evaluations.is_empty())
     });
-    if has_foreign_adapters || has_pending_ticks || has_module_evaluations {
+    // Keep the program alive while any V8-fallback `http.createServer`
+    // is still listening — without this the outer event loop exits
+    // immediately after `server.listen(...)` resolves and the accept
+    // loop's tokio task is dropped before serving any requests.
+    let has_http_servers = crate::ops::perry_http_active_count() > 0;
+    if has_foreign_adapters || has_pending_ticks || has_module_evaluations || has_http_servers {
         1
     } else {
         0
