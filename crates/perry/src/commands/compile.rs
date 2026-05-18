@@ -4271,6 +4271,21 @@ pub fn run_with_parse_cache(
                                     .insert(imported.clone(), synthetic_prefix.clone());
                                 import_function_v8_specifiers
                                     .insert(imported.clone(), specifier.clone());
+                                // Issue #818 (Effect.succeed pattern) follow-up:
+                                // when an aliased named-import (`import { Foo
+                                // as Bar }`) of a V8 module is used as a
+                                // static-method receiver (`Bar.method(...)`),
+                                // the codegen's StaticMethodCall arm sees
+                                // class_name = "Bar" — but the V8 namespace
+                                // exposes the property under "Foo". Record the
+                                // local→imported mapping in
+                                // `import_function_origin_names` so the bridge
+                                // call reaches the right namespace property.
+                                // Without this, aliased Effect-shaped imports
+                                // would look up a missing property and fall to
+                                // undefined.
+                                import_function_origin_names
+                                    .insert(local.clone(), imported.clone());
                             }
                         }
                         perry_hir::ImportSpecifier::Default { local } => {

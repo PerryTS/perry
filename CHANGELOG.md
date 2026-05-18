@@ -2,6 +2,57 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.997 — feat(jsruntime): V8 named-import static-method dispatch for Effect.succeed
+
+**Symptom.** `import { Effect } from 'effect'; Effect.succeed(42)` returned the literal number `0` instead of an Effect class instance. `typeof e === 'number'`, `e.pipe` was `undefined`, `e._tag` was `undefined`. Same shape blocked any `import { X } from 'v8-fallback-pkg'; X.method(args)` pattern where the V8 module's top-level export `X` is itself a sub-namespace object holding the actual functions — the Effect/jose/many-internal-tools pattern.
+
+**Root cause — StaticMethodCall on a Named V8 import had no dispatch path.** Perry's HIR-lower lifts `Effect.succeed(42)` to `StaticMethodCall { class_name: "Effect", method_name: "succeed" }` because `Effect` is uppercase + imported (a workaround for missing cross-module class metadata at HIR-lower time). The codegen's StaticMethodCall arm in `crates/perry-codegen/src/expr.rs` then probes, in order:
+
+1. `methods.get(("Effect", "succeed"))` — misses (Effect isn't a perry class)
+2. `namespace_imports.contains("Effect")` — false (it's a Named, not `import * as Effect`)
+3. … fall through to `double_literal(0.0)` stub.
+
+The #985 ramda fix added the same dispatch for the namespace branch (`import * as R from 'ramda'; R.sum(...)`) by routing through `js_call_v8_export(specifier, member, args)`. The Effect shape needed a different bridge call: the V8 module's `Effect` export is itself an object, not a function — `effect.succeed(...)` at the module root doesn't exist; the actual function lives at `effect.Effect.succeed`.
+
+**Fix — new `js_call_v8_member_method` bridge + codegen probe.** Two parts:
+
+1. **Runtime bridge** (`crates/perry-jsruntime/src/interop.rs`). New `js_call_v8_member_method(spec, member, method, args)` FFI entry that:
+   - Loads the module via `js_load_module(spec)`.
+   - Reads `member` off the module namespace (must be an object, not a primitive — Effect/jose/etc all match this shape).
+   - Reads `method` off the member object, asserts it's callable.
+   - Invokes with `this` bound to the member object (matches the JS call semantics — `Effect.succeed(42)` runs with `this === Effect`).
+   - Marshals args + return through the existing `native_to_v8` / `v8_to_native` pair. Object returns come back as JS handles so the receiver-side property/method dispatch reaches V8 again with the prototype intact.
+
+2. **Codegen probe** (`crates/perry-codegen/src/expr.rs`). New `emit_v8_member_method_call(spec, member, method, args)` helper (same shape as #985's `emit_v8_export_call`) materializes three rodata constants + stack-allocates the args buffer + emits the FFI call. The StaticMethodCall arm now probes `ctx.import_function_v8_specifiers.get(class_name)` after the existing namespace branch; on a hit, route through the new helper using the imported (origin) name as the member key.
+
+3. **Aliased-import support** (`crates/perry/src/commands/compile.rs`). When `local != imported` for a Named V8 import, record `local → imported` in `import_function_origin_names` so `import { Effect as Eff } from 'effect'; Eff.succeed(42)` correctly looks up `Effect` on the namespace instead of `Eff`. Without this the alias would silently look up a missing property and fall to undefined.
+
+4. **PropertyGet routing for V8 handles** (`crates/perry-runtime/src/object.rs`). `js_object_get_field_by_name` now detects JS_HANDLE_TAG (top16 == 0x7FFB) at the top of the function and routes through the registered `JS_HANDLE_OBJECT_GET_PROPERTY` callback (perry-jsruntime's `js_handle_object_get_property`). Mirror of the existing `js_call_method` JS_HANDLE_CALL_METHOD dispatch. Without this, `e.value` / `e._tag` on a JS-handle-shaped Effect instance fell through to the small-handle dispatch (which only knows about Fastify/axios/sqlite, not generic V8 handles) and returned undefined. Method calls were already routed correctly — only property reads needed the equivalent fix.
+
+**Validation.**
+
+- `import { Effect } from 'effect'; const e = Effect.succeed(42); console.log(typeof e, typeof e.pipe, e._tag)` now prints `object function Success` — matches `node --experimental-strip-types` byte-for-byte. Pre-fix: `number undefined undefined`.
+- `Effect.runSync(Effect.succeed(42))` returns `42`.
+- `e.pipe(Effect.map(x => x + 1))` chains correctly (the pipe result is also a JS-handle-shaped Effect instance).
+- New in-repo regression test `test-files/test_v8_class_instance_return.ts` + `test-files/fixtures/v8_class_instance_pkg/v8_helper.mjs` pin the synthetic `import { Thing } from "<v8-module>"; Thing.make(42).{value,_tag,doubled(),pipe}` shape that isolates the bug from Effect's full code path. Six lines of output; matches Node.
+- Existing `test-files/test_v8_namespace_call.ts` (#985 wildcard-namespace test) and the #678 V8 fallback tests still pass — the new probe in `StaticMethodCall` runs after the existing namespace branch, so wildcard-namespace dispatch is unchanged.
+- Ramda's `import * as R from 'ramda'; R.sum([1,2,3])` still returns `6` (no regression in the namespace path).
+
+**Out of scope / deferred.**
+
+- Aliased named imports (`import { Effect as Eff }`) are wired but not exercised by Effect's own code — there's no regression test for them yet.
+- Effect's deeper code paths (Schema.ts ~310th-init, HashRing) still hit #684/#809 (object-literal computed-keys, cross-module spread) — those are separate trackers under the umbrella #321.
+- The Effect/jose/etc pattern is the most common shape but not the only one; if a V8 module exports a function (rather than an object) at the named-import slot, `js_call_v8_member_method`'s `is_object` check returns undefined and we'd need a fallback to call the export directly. Not seen in the current package matrix.
+
+**Files changed.**
+
+- `crates/perry-jsruntime/src/interop.rs` — `js_call_v8_member_method` FFI + `c_str_to_utf8` helper.
+- `crates/perry-codegen/src/expr.rs` — `emit_v8_member_method_call` helper + StaticMethodCall probe.
+- `crates/perry/src/commands/compile.rs` — alias→imported registration for V8 named imports.
+- `crates/perry-runtime/src/object.rs` — JS_HANDLE_TAG fast path at the top of `js_object_get_field_by_name`.
+- `crates/perry-runtime/src/value.rs` — expose `JS_HANDLE_OBJECT_GET_PROPERTY` as `pub(crate)` so object.rs can read it.
+- `test-files/test_v8_class_instance_return.ts` + `test-files/fixtures/v8_class_instance_pkg/v8_helper.mjs` — synthetic regression test.
+
 ## v0.5.996 — test(express): lock in the post-#986 `app.on('mount', ...)` smoke
 
 **Context.** The #986 (v0.5.992) fix made the V8-fallback `events` shim lazy-init `_events` on every method touch, which closed the express `app.init()` → `this.on('mount', ...)` crash. The follow-up task expected a *deeper* `Cannot read properties of undefined (reading 'mount')` crash to surface after that fix (`events.js:5` in the V8 stack), but reproducing the express smoke at v0.5.994 — `npm install express@4.21.0` + `import express from 'express'; const app = express(); console.log(typeof app, typeof app.get)` — already prints

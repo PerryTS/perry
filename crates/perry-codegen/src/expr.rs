@@ -196,6 +196,110 @@ pub(crate) fn emit_v8_export_call(
     )
 }
 
+/// Issue #818 (Effect.succeed pattern): emit a
+/// `js_call_v8_member_method(spec, member, method, args)` bridge call for a
+/// named V8 import used as a static-method receiver — `Effect.succeed(42)`
+/// where `Effect` is `import { Effect } from 'effect'`. The V8 module's
+/// top-level export `Effect` is itself a namespace-shaped object whose
+/// `.succeed` is the actual function; the existing `emit_v8_export_call`
+/// would mistakenly try to invoke `effect.succeed(...)` at the module root.
+pub(crate) fn emit_v8_member_method_call(
+    ctx: &mut FnCtx<'_>,
+    specifier: &str,
+    member: &str,
+    method: &str,
+    lowered_args: &[String],
+) -> String {
+    let idx = ctx.typed_parse_counter;
+    ctx.typed_parse_counter += 1;
+    let spec_global = format!("perry_v8_mspec_{}", idx);
+    let member_global = format!("perry_v8_mmember_{}", idx);
+    let method_global = format!("perry_v8_mmethod_{}", idx);
+    let escape = |s: &str| -> String {
+        let bytes = s.as_bytes();
+        let mut lit = String::with_capacity(bytes.len() + 4);
+        lit.push('c');
+        lit.push('"');
+        for &b in bytes {
+            if (32..127).contains(&b) && b != b'"' && b != b'\\' {
+                lit.push(b as char);
+            } else {
+                lit.push('\\');
+                lit.push_str(&format!("{:02X}", b));
+            }
+        }
+        lit.push_str("\\00\"");
+        lit
+    };
+    let spec_bytes = specifier.as_bytes().len();
+    let member_bytes = member.as_bytes().len();
+    let method_bytes = method.as_bytes().len();
+    ctx.typed_parse_rodata.push(format!(
+        "@{} = private unnamed_addr constant [{} x i8] {}",
+        spec_global,
+        spec_bytes + 1,
+        escape(specifier)
+    ));
+    ctx.typed_parse_rodata.push(format!(
+        "@{} = private unnamed_addr constant [{} x i8] {}",
+        member_global,
+        member_bytes + 1,
+        escape(member)
+    ));
+    ctx.typed_parse_rodata.push(format!(
+        "@{} = private unnamed_addr constant [{} x i8] {}",
+        method_global,
+        method_bytes + 1,
+        escape(method)
+    ));
+
+    let argc = lowered_args.len();
+    let alloca_count = if argc == 0 { 1 } else { argc };
+    let blk = ctx.block();
+    let argc_lit = format!("{}", argc);
+    let spec_ptr = format!("@{}", spec_global);
+    let member_ptr = format!("@{}", member_global);
+    let method_ptr = format!("@{}", method_global);
+    let spec_len_lit = format!("{}", spec_bytes);
+    let member_len_lit = format!("{}", member_bytes);
+    let method_len_lit = format!("{}", method_bytes);
+
+    let args_slot = blk.fresh_reg();
+    blk.emit_raw(format!(
+        "{} = alloca [{} x double], align 8",
+        args_slot, alloca_count
+    ));
+    for (i, v) in lowered_args.iter().enumerate() {
+        let slot = blk.fresh_reg();
+        blk.emit_raw(format!(
+            "{} = getelementptr inbounds [{} x double], ptr {}, i64 0, i64 {}",
+            slot, alloca_count, args_slot, i
+        ));
+        blk.emit_raw(format!("store double {}, ptr {}, align 8", v, slot));
+    }
+
+    ctx.pending_declares.push((
+        "js_call_v8_member_method".to_string(),
+        DOUBLE,
+        vec![PTR, I64, PTR, I64, PTR, I64, PTR, I64],
+    ));
+    let blk = ctx.block();
+    blk.call(
+        DOUBLE,
+        "js_call_v8_member_method",
+        &[
+            (PTR, &spec_ptr),
+            (I64, &spec_len_lit),
+            (PTR, &member_ptr),
+            (I64, &member_len_lit),
+            (PTR, &method_ptr),
+            (I64, &method_len_lit),
+            (PTR, &args_slot),
+            (I64, &argc_lit),
+        ],
+    )
+}
+
 /// If `callee` is a `new`-target whose class name is statically
 /// known, return that name. Used by the `Expr::NewDynamic` lowering
 /// to reroute statically-resolvable shapes to the regular `lower_new`
@@ -6654,6 +6758,42 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
                     return Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices));
                 }
+            }
+            // Issue #818 (Effect.succeed pattern): the receiver is a NAMED
+            // import (`import { Effect } from 'effect'`), not a namespace
+            // alias. The HIR's "uppercase Ident looks like a class" rule
+            // lifts `Effect.succeed(args)` to StaticMethodCall, but `Effect`
+            // isn't a perry class and isn't in `namespace_imports`. When the
+            // class_name resolves to a V8-fallback specifier, route through
+            // the bridge: load the module, get the named member as an
+            // object, then call .method on it. Without this the call fell
+            // to the `double_literal(0.0)` stub below — Effect's
+            // `Effect.succeed(42)` returned the literal `0` instead of the
+            // tagged Effect instance.
+            if let Some(specifier) = ctx.import_function_v8_specifiers.get(class_name).cloned() {
+                let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered.push(lower_expr(ctx, a)?);
+                }
+                // The V8 module's top-level export uses the *imported* name
+                // (the name in the source module). If the local alias differs
+                // from the imported name, fall back to the local name — the
+                // specifier-registration code in compile.rs registers both
+                // when local != imported, so for a Named import the lookup
+                // key here is the consumer-visible alias which equals the
+                // remote name when no `as` rename is present.
+                let member = ctx
+                    .import_function_origin_names
+                    .get(class_name)
+                    .cloned()
+                    .unwrap_or_else(|| class_name.clone());
+                return Ok(emit_v8_member_method_call(
+                    ctx,
+                    &specifier,
+                    &member,
+                    method_name,
+                    &lowered,
+                ));
             }
             for a in args {
                 let _ = lower_expr(ctx, a)?;

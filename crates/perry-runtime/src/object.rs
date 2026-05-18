@@ -3710,6 +3710,37 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    // Issue #818 (Effect class-instance pattern): a V8 handle (JS_HANDLE_TAG
+    // = 0x7FFB) reaches here when codegen routes a generic `PropertyGet`
+    // through this slow path — e.g. `Effect.succeed(42).value` where the
+    // call return was a JS handle but the HIR `js_transform` pass didn't
+    // rewrite the consumer-side `.value` into `JsGetProperty` (because the
+    // call lowered as a `StaticMethodCall`, not as a `JsCallMethod`). The
+    // method-call counterpart in `js_call_method` already routes
+    // JS_HANDLE_TAG values to V8 via JS_HANDLE_CALL_METHOD; do the same
+    // here via JS_HANDLE_OBJECT_GET_PROPERTY so subsequent property reads
+    // on a returned class instance reach the live V8 object instead of
+    // falling to the small-handle dispatch (which only knows about
+    // Fastify/axios/sqlite, not generic V8 handles).
+    {
+        let bits = obj as u64;
+        if (bits >> 48) == 0x7FFB && !key.is_null() {
+            let func_ptr = crate::value::JS_HANDLE_OBJECT_GET_PROPERTY
+                .load(std::sync::atomic::Ordering::SeqCst);
+            if !func_ptr.is_null() {
+                let func: unsafe extern "C" fn(f64, *const i8, usize) -> f64 =
+                    unsafe { std::mem::transmute(func_ptr) };
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let result = func(f64::from_bits(bits), key_ptr as *const i8, key_len);
+                    return JSValue::from_bits(result.to_bits());
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
     // Issue #618-followup: read INT32-tagged class ref's dynamic property
     // from the side-table (mirror of the set-side intercept). For drizzle's
     // `SQL.Aliased` lookup pattern.

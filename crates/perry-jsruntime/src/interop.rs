@@ -1195,6 +1195,168 @@ pub unsafe extern "C" fn js_call_v8_export(
     )
 }
 
+/// Issue #818 (Effect.succeed pattern): invoke a method on a NAMED member of a
+/// V8-fallback module — `Effect.succeed(42)` where `Effect` is imported by name
+/// (`import { Effect } from 'effect'`) and the export is itself a sub-namespace
+/// object that holds the actual `succeed` function.
+///
+/// Without this entry, `StaticMethodCall { class_name: "Effect", method_name:
+/// "succeed" }` fell through to `double_literal(0.0)` because:
+///   - `methods.get(("Effect","succeed"))` misses (Effect isn't a perry class)
+///   - `namespace_imports.contains("Effect")` is false (it's a Named, not a
+///     `import * as Effect`)
+///   - The existing `js_call_v8_export` would call `effect.succeed(...)` at
+///     the top level of the module, but the actual function lives at
+///     `effect.Effect.succeed`.
+///
+/// Bundles `js_load_module` + namespace-property-get + method-call so the
+/// codegen can drop in a single FFI call wherever a named V8 import is invoked
+/// as a static method. Argument and return marshalling follows the same
+/// conventions as `js_call_v8_export` — args already NaN-boxed, result
+/// NaN-boxed (objects come back as JS handles so subsequent `.value` /
+/// `.pipe()` accesses route through the existing HANDLE_PROPERTY / METHOD
+/// dispatch and reach V8 again with the prototype intact).
+#[no_mangle]
+pub unsafe extern "C" fn js_call_v8_member_method(
+    specifier_ptr: *const i8,
+    specifier_len: usize,
+    member_name_ptr: *const i8,
+    member_name_len: usize,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    bump_v8_entry(V8EntryKind::V8ExportCall);
+    let module_handle = js_load_module(specifier_ptr, specifier_len);
+    if module_handle == 0 {
+        return f64::from_bits(0x7FFC_0000_0000_0001);
+    }
+    let member_name = match c_str_to_utf8(member_name_ptr, member_name_len) {
+        Some(s) => s,
+        None => return f64::from_bits(0x7FFC_0000_0000_0001),
+    };
+    let method_name = match c_str_to_utf8(method_name_ptr, method_name_len) {
+        Some(s) => s,
+        None => return f64::from_bits(0x7FFC_0000_0000_0001),
+    };
+    let args = if args_ptr.is_null() || args_len == 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len).to_vec()
+    };
+
+    with_runtime(|state| {
+        let module_id = module_handle as deno_core::ModuleId;
+        let namespace = match state.runtime.get_module_namespace(module_id) {
+            Ok(ns) => ns,
+            Err(e) => {
+                log::error!("Failed to get module namespace: {}", e);
+                return f64::from_bits(0x7FFC_0000_0000_0001);
+            }
+        };
+
+        deno_core::scope!(scope, &mut state.runtime);
+        let namespace = v8::Local::new(scope, namespace);
+        v8::tc_scope!(tc_scope, scope);
+
+        // Walk the member chain (single hop here — caller passes `Effect`
+        // for `Effect.succeed(args)`). Result must be a callable host.
+        let member_key = match v8::String::new(tc_scope, &member_name) {
+            Some(k) => k,
+            None => return f64::from_bits(0x7FFC_0000_0000_0001),
+        };
+        let member_val = match namespace.get(tc_scope, member_key.into()) {
+            Some(v) => v,
+            None => {
+                eprintln!(
+                    "[JS-INTEROP] V8 member '{}' not found on module namespace",
+                    member_name
+                );
+                return f64::from_bits(0x7FFC_0000_0000_0001);
+            }
+        };
+        if !member_val.is_object() {
+            eprintln!(
+                "[JS-INTEROP] V8 member '{}' is not an object (got typeof {})",
+                member_name,
+                if member_val.is_function() {
+                    "function"
+                } else {
+                    "primitive"
+                }
+            );
+            return f64::from_bits(0x7FFC_0000_0000_0001);
+        }
+        let member_obj = match member_val.to_object(tc_scope) {
+            Some(o) => o,
+            None => return f64::from_bits(0x7FFC_0000_0000_0001),
+        };
+
+        let method_key = match v8::String::new(tc_scope, &method_name) {
+            Some(k) => k,
+            None => return f64::from_bits(0x7FFC_0000_0000_0001),
+        };
+        let method_val = match member_obj.get(tc_scope, method_key.into()) {
+            Some(v) => v,
+            None => {
+                eprintln!(
+                    "[JS-INTEROP] V8 method '{}.{}' not found",
+                    member_name, method_name
+                );
+                return f64::from_bits(0x7FFC_0000_0000_0001);
+            }
+        };
+        if !method_val.is_function() {
+            eprintln!(
+                "[JS-INTEROP] V8 '{}.{}' is not a function",
+                member_name, method_name
+            );
+            return f64::from_bits(0x7FFC_0000_0000_0001);
+        }
+        let method = v8::Local::<v8::Function>::try_from(method_val).unwrap();
+
+        let v8_args: Vec<v8::Local<v8::Value>> = args
+            .iter()
+            .map(|&a| native_to_v8(tc_scope, fixup_native_for_v8(a)))
+            .collect();
+
+        // Bind `this` to the member object so methods that use `this`
+        // (most class-style static methods) see the right receiver.
+        let result = match method.call(tc_scope, member_obj.into(), &v8_args) {
+            Some(r) => r,
+            None => {
+                if tc_scope.has_caught() {
+                    if let Some(exception) = tc_scope.exception() {
+                        let msg = exception.to_rust_string_lossy(tc_scope);
+                        eprintln!(
+                            "[JS-INTEROP] '{}.{}' threw: {}",
+                            member_name, method_name, msg
+                        );
+                    }
+                }
+                return f64::from_bits(0x7FFC_0000_0000_0001);
+            }
+        };
+
+        v8_to_native(tc_scope, result)
+    })
+}
+
+fn c_str_to_utf8(ptr: *const i8, len: usize) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = unsafe {
+        if len > 0 {
+            std::slice::from_raw_parts(ptr as *const u8, len)
+        } else {
+            CStr::from_ptr(ptr as *const c_char).to_bytes()
+        }
+    };
+    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+}
+
 fn call_function_impl(
     state: &mut JsRuntimeState,
     namespace: v8::Global<v8::Object>,
