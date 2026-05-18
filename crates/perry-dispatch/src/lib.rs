@@ -2204,6 +2204,16 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         args: &[],
         ret: ReturnKind::F64,
     },
+    // Bug-report-flow utility: stable OS-version string per
+    // platform. Returns a NaN-boxed JS string the user can splice
+    // into crash reports / telemetry. Same dispatch shape as
+    // getDeviceModel.
+    MethodRow {
+        method: "getOSVersion",
+        runtime: "perry_system_get_os_version",
+        args: &[],
+        ret: ReturnKind::F64,
+    },
     MethodRow {
         method: "audioSetOutputFilename",
         runtime: "perry_system_audio_set_output_filename",

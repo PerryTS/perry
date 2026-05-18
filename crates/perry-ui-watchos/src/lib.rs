@@ -1200,6 +1200,19 @@ pub extern "C" fn perry_system_audio_get_waveform(_count: f64) -> f64 {
 pub extern "C" fn perry_system_get_device_model() -> i64 {
     0
 }
+/// Bug-report-flow utility: stable OS-version string. watchOS stub.
+#[no_mangle]
+pub extern "C" fn perry_system_get_os_version() -> i64 {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_get_os_version",
+        "watchOS getOSVersion not yet implemented",
+        None,
+    );
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+}
 #[no_mangle]
 pub extern "C" fn perry_system_audio_set_output_filename(filename_ptr: i64) {
     let filename = str_from_header(filename_ptr as *const u8);

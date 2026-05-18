@@ -1463,6 +1463,20 @@ pub const FEATURES: &[Feature] = &[
         web: S,
         web_name: None,
     },
+    // Bug-report-flow utility: stable OS-version string. macOS has
+    // the real impl via NSProcessInfo; every other platform is a
+    // first-call-warning stub awaiting its native implementation.
+    Feature {
+        name: "perry_system_get_os_version",
+        category: SystemApi,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: S,
+        web_name: None,
+    },
     Feature {
         name: "perry_system_preferences_set",
         category: SystemApi,

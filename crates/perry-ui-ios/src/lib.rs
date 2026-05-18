@@ -1541,6 +1541,20 @@ pub extern "C" fn perry_system_audio_get_waveform(count: f64) -> f64 {
 pub extern "C" fn perry_system_get_device_model() -> i64 {
     audio::get_device_model()
 }
+/// Bug-report-flow utility: stable OS-version string. MVP stub on
+/// iOS; native impl will use `[[UIDevice currentDevice] systemVersion]`.
+#[no_mangle]
+pub extern "C" fn perry_system_get_os_version() -> i64 {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_get_os_version",
+        "iOS getOSVersion not yet implemented (UIDevice.systemVersion follow-up)",
+        Some("#918"),
+    );
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+}
 #[no_mangle]
 pub extern "C" fn perry_system_audio_set_output_filename(filename_ptr: i64) {
     fn str_from_header(ptr: *const u8) -> &'static str {

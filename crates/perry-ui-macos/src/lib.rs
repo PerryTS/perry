@@ -2157,6 +2157,39 @@ pub extern "C" fn perry_system_get_device_model() -> i64 {
     audio::get_device_model()
 }
 
+/// Bug-report-flow utility: stable OS-version string. Uses
+/// `[[NSProcessInfo processInfo] operatingSystemVersionString]`
+/// which returns a human-readable form like `"Version 14.5
+/// (Build 23F79)"` — preserved as-is so triage can grep the build
+/// number too. Returned as a Perry-managed string.
+#[no_mangle]
+pub extern "C" fn perry_system_get_os_version() -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe {
+        let cls = objc2::runtime::AnyClass::get(c"NSProcessInfo").unwrap();
+        let info: *mut objc2::runtime::AnyObject = objc2::msg_send![cls, processInfo];
+        if info.is_null() {
+            return js_string_from_bytes(std::ptr::null(), 0);
+        }
+        let s: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![info, operatingSystemVersionString];
+        if s.is_null() {
+            return js_string_from_bytes(std::ptr::null(), 0);
+        }
+        let utf8_ptr: *const u8 = objc2::msg_send![s, UTF8String];
+        if utf8_ptr.is_null() {
+            return js_string_from_bytes(std::ptr::null(), 0);
+        }
+        let utf8_len: usize = objc2::msg_send![s, lengthOfBytesUsingEncoding: 4u64];
+        if utf8_len == 0 {
+            return js_string_from_bytes(std::ptr::null(), 0);
+        }
+        js_string_from_bytes(utf8_ptr, utf8_len as i32)
+    }
+}
+
 /// Set output filename for audio recording.
 #[no_mangle]
 pub extern "C" fn perry_system_audio_set_output_filename(filename_ptr: i64) {

@@ -2087,6 +2087,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perry/system", "isDarkMode", false, None),
     method("perry/system", "getDeviceIdiom", false, None),
     method("perry/system", "getDeviceModel", false, None),
+    // Bug-report-flow utility: stable OS-version string per
+    // platform (e.g. `"15.2"`, `"macOS 14.5"`, `"Android 14"`).
+    // Common need for crash reports and telemetry; pairs with
+    // getDeviceModel / getAppVersion.
+    method("perry/system", "getOSVersion", false, None),
     method("perry/system", "getLocale", false, None),
     method("perry/system", "getAppVersion", false, None),
     method("perry/system", "getAppBuildNumber", false, None),

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 900 entries across 71 modules
+// Coverage: 901 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -735,6 +735,8 @@ declare module "perry/system" {
   export function getDeviceModel(...args: any[]): any;
   /** stdlib */
   export function getLocale(...args: any[]): any;
+  /** stdlib */
+  export function getOSVersion(...args: any[]): any;
   /** stdlib */
   export function imagePickerPick(...args: any[]): any;
   /** stdlib */
