@@ -57,12 +57,18 @@
 //!   GlobalGet(0)). The async-step driver is built inline in the
 //!   generator transform. This sidesteps the LLVM constant-folding
 //!   mystery the prior prototype hit (issue #256 background section 1).
-//! - **State-machine idempotency (issue #1029)**: the underlying state
-//!   machine is currently not idempotent across re-invocation — call 2+
-//!   to the same state-machined fn or closure returns undefined. The
-//!   bug predates #1021; #1021 phase 2 just expands its surface to async
-//!   closures with awaits. Fixing #1029 will also fix re-invoked async
-//!   closures for free.
+//! - **State-machine idempotency (issue #1029, fixed in this branch)**:
+//!   the underlying state machine was not idempotent across re-invocation
+//!   (call 2+ returned undefined) because the generator transform's
+//!   internally-built next/return/throw/step closures listed state/done/
+//!   sent in `mutable_captures` but the boxing analysis missed them, so
+//!   `js_closure_alloc_with_captures_singleton` cached on capture-VALUE
+//!   bits — identical every call → stale closure reused. Fixed by
+//!   prepending `Stmt::PreallocateBoxes` for the state-machine internals
+//!   in `transform_generator_function_with_extra_captures` so captures
+//!   lower to box pointers (distinct per call). This applies uniformly
+//!   to top-level async fns and to the async closures rewritten by
+//!   #1021 phase 2.
 
 use perry_hir::ir::*;
 use perry_types::{LocalId, Type};
