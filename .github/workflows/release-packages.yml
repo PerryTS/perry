@@ -311,6 +311,49 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo build --release --target ${{ matrix.target }} -p perry-ui-windows
 
+      # Closes #872: cross-compile the Android runtime libs on the Windows
+      # leg so the WinGet zip includes `libperry_runtime.a` /
+      # `libperry_stdlib.a` for `aarch64-linux-android`. Without these,
+      # `perry compile --target android` from a WinGet-installed perry
+      # bails at link time with "Could not find libperry_runtime.a".
+      # GitHub-hosted Windows runners pre-install the Android NDK at
+      # `%ANDROID_NDK_HOME%`; we point cargo at its `aarch64-linux-android-*`
+      # clang as the cross-linker.
+      - name: Install aarch64-linux-android Rust target (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: rustup target add aarch64-linux-android
+      - name: Build Android cross-compile libraries (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          # API level 24 matches every other Android leg we cross-build for
+          # elsewhere (perry-ui-android's build.rs assumes the same NDK
+          # surface).
+          ANDROID_API_LEVEL: "24"
+        run: |
+          if (-not $env:ANDROID_NDK_HOME) {
+            $env:ANDROID_NDK_HOME = $env:ANDROID_NDK_LATEST_HOME
+          }
+          if (-not $env:ANDROID_NDK_HOME) {
+            Write-Error "ANDROID_NDK_HOME not set on this Windows runner — needed for #872 android cross-build."
+            exit 1
+          }
+          $toolchain = Join-Path $env:ANDROID_NDK_HOME "toolchains/llvm/prebuilt/windows-x86_64/bin"
+          $linker = Join-Path $toolchain "aarch64-linux-android$($env:ANDROID_API_LEVEL)-clang.cmd"
+          if (-not (Test-Path $linker)) {
+            $linker = Join-Path $toolchain "aarch64-linux-android$($env:ANDROID_API_LEVEL)-clang.exe"
+          }
+          if (-not (Test-Path $linker)) {
+            Write-Error "Android NDK linker not found at $linker — NDK layout drifted; update the version-suffixed path."
+            exit 1
+          }
+          $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = $linker
+          $env:CC_aarch64_linux_android = $linker
+          $env:AR_aarch64_linux_android = Join-Path $toolchain "llvm-ar.exe"
+          cargo build --release --target aarch64-linux-android -p perry-runtime
+          cargo build --release --target aarch64-linux-android -p perry-stdlib
+
       - name: Package release archive (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -407,6 +450,20 @@ jobs:
             $path = "target/${{ matrix.target }}/release/$lib"
             if (Test-Path $path) {
               Copy-Item $path staging/
+            }
+          }
+          # #872: stage the Android cross-compiled archives next to the
+          # Windows libs. perry's library_search.rs walks
+          # `<install-dir>/<triple>/release/<libname>.a` so we mirror that
+          # layout inside the zip — the `aarch64-linux-android/release/`
+          # subdir lives alongside `perry.exe`.
+          $androidLibDir = "staging/aarch64-linux-android/release"
+          New-Item -ItemType Directory -Force -Path $androidLibDir | Out-Null
+          $androidLibs = @("libperry_runtime.a", "libperry_stdlib.a")
+          foreach ($lib in $androidLibs) {
+            $src = "target/aarch64-linux-android/release/$lib"
+            if (Test-Path $src) {
+              Copy-Item $src $androidLibDir
             }
           }
           Compress-Archive -Path staging/* -DestinationPath "${{ matrix.artifact }}.zip"

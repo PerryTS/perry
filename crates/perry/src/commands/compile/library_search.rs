@@ -728,6 +728,17 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
         // Also check directories relative to the perry executable.
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
+                // #872: WinGet extracts the package zip into a single
+                // `PerryTS.Perry_<hash>` directory under
+                // `%LOCALAPPDATA%\Microsoft\WinGet\Packages\`. The
+                // package staging (release-packages.yml) writes Android
+                // cross-compile libs at `<root>/aarch64-linux-android/
+                // release/<name>` inside that same dir, so this lookup
+                // — `dir/<triple>/release/<name>` — must come BEFORE the
+                // sibling `dir.parent()` path below or the existing
+                // search would walk up and miss the staged libs.
+                candidates.push(dir.join(triple).join("release").join(name));
+                candidates.push(dir.join(triple).join("debug").join(name));
                 // Cross-compile targets are in ../../target/<triple>/release/ relative
                 // to the perry binary (which is in target/release/). Check this
                 // BEFORE the exe-dir bundled-install lookups below — in an
