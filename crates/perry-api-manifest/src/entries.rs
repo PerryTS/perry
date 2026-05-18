@@ -109,6 +109,12 @@ pub const NATIVE_MODULES: &[&str] = &[
     // side companion to the existing PdfView widget. d.ts at
     // `types/perry/pdf/index.d.ts`.
     "@perryts/pdf",
+    // `perry/ads` — official in-app advertising package (#867).
+    // MVP scaffold: bundled wrapper at `crates/perry-ext-ads`
+    // returns structured `{ error: "no-sdk-linked" }` placeholders
+    // until real Google Mobile Ads SDK integration lands. d.ts at
+    // `types/perry/ads/index.d.ts`.
+    "perry/ads",
 ];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
@@ -2380,4 +2386,20 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("@perryts/pdf", "pdfAddLine", false, None),
     method("@perryts/pdf", "pdfNewPage", false, None),
     method("@perryts/pdf", "pdfSave", false, None),
+    // --- perry/ads (issue #867) ---
+    // Six FFI entry points exported by crates/perry-ext-ads.
+    // Promise-returning load / show pairs for interstitial and
+    // rewarded ads; sync handle-returning create + destroy pair
+    // for the banner widget. Listed here so the manifest's
+    // unimplemented-API check (#463) accepts them when a user
+    // writes `import { js_ads_interstitial_show } from "perry/ads"`.
+    // The MVP returns structured `{ error: "no-sdk-linked" }`
+    // placeholders; real Google Mobile Ads SDK integration is
+    // tracked under the same issue.
+    method("perry/ads", "js_ads_interstitial_load", false, None),
+    method("perry/ads", "js_ads_interstitial_show", false, None),
+    method("perry/ads", "js_ads_rewarded_load", false, None),
+    method("perry/ads", "js_ads_rewarded_show", false, None),
+    method("perry/ads", "js_ads_banner_create", false, None),
+    method("perry/ads", "js_ads_banner_destroy", false, None),
 ];

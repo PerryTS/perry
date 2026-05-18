@@ -1938,6 +1938,20 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_google_auth_silent_sign_in", I64, &[]);
     module.declare_function("js_google_auth_sign_out", I64, &[]);
 
+    // ========== perry/ads (issue #867) ==========
+    // Four promise-returning entry points (NR_PTR — i64 return,
+    // NaN-boxed as POINTER) plus two synchronous banner FFI
+    // functions (NR_F64 / NR_VOID). String args lower to
+    // `*const StringHeader` (i64) per the codegen NA_STR
+    // convention; the f64 handle is the NaN-boxable numeric
+    // return for banner_create.
+    module.declare_function("js_ads_interstitial_load", I64, &[I64]);
+    module.declare_function("js_ads_interstitial_show", I64, &[]);
+    module.declare_function("js_ads_rewarded_load", I64, &[I64]);
+    module.declare_function("js_ads_rewarded_show", I64, &[]);
+    module.declare_function("js_ads_banner_create", DOUBLE, &[I64, I64]);
+    module.declare_function("js_ads_banner_destroy", VOID, &[DOUBLE]);
+
     // ========== perry/thread (parallelMap, parallelFilter, spawn) ==========
     module.declare_function("js_thread_parallel_map", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_thread_parallel_filter", DOUBLE, &[DOUBLE, DOUBLE]);

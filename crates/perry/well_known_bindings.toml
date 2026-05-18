@@ -278,3 +278,15 @@ tracking = "#674"
 crate = "perry-ext-pdf"
 lib = "perry_ext_pdf"
 tracking = "#516"
+
+# `perry/ads` — official in-app advertising package (issue #867).
+# Interstitial + rewarded + banner FFI over Google Mobile Ads
+# (iOS via SwiftPM, Android via play-services-ads). MVP scaffold:
+# every FFI entry point resolves a structured
+# `{ error: "no-sdk-linked" }` placeholder. Real SDK integration,
+# GDPR/ATT consent flow, and Info.plist / AndroidManifest auto-
+# injection are tracked as follow-ups under the same issue.
+[bindings."perry/ads"]
+crate = "perry-ext-ads"
+lib = "perry_ext_ads"
+tracking = "#867"

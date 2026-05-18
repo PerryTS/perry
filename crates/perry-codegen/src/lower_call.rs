@@ -11088,6 +11088,71 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[],
         ret: NR_PTR,
     },
+    // ========== perry/ads (issue #867) ==========
+    // Six FFI entry points exported by `crates/perry-ext-ads`:
+    //   - 4 promise-returning load/show pairs for interstitial +
+    //     rewarded (NR_PTR — runtime sees a `*mut perry_ffi::Promise`
+    //     and NaN-boxes via POINTER_TAG, same as bcrypt / argon2 /
+    //     google-auth).
+    //   - 2 synchronous banner create/destroy (NR_F64 / NR_VOID —
+    //     banner_create returns a handle as a `number`, destroy is
+    //     fire-and-forget).
+    // MVP returns structured `{ error: "no-sdk-linked" }`
+    // placeholders; real Google Mobile Ads SDK integration follows.
+    NativeModSig {
+        module: "perry/ads",
+        has_receiver: false,
+        method: "js_ads_interstitial_load",
+        class_filter: None,
+        runtime: "js_ads_interstitial_load",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "perry/ads",
+        has_receiver: false,
+        method: "js_ads_interstitial_show",
+        class_filter: None,
+        runtime: "js_ads_interstitial_show",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "perry/ads",
+        has_receiver: false,
+        method: "js_ads_rewarded_load",
+        class_filter: None,
+        runtime: "js_ads_rewarded_load",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "perry/ads",
+        has_receiver: false,
+        method: "js_ads_rewarded_show",
+        class_filter: None,
+        runtime: "js_ads_rewarded_show",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "perry/ads",
+        has_receiver: false,
+        method: "js_ads_banner_create",
+        class_filter: None,
+        runtime: "js_ads_banner_create",
+        args: &[NA_STR, NA_STR],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "perry/ads",
+        has_receiver: false,
+        method: "js_ads_banner_destroy",
+        class_filter: None,
+        runtime: "js_ads_banner_destroy",
+        args: &[NA_F64],
+        ret: NR_VOID,
+    },
 ];
 
 /// Walk a statement to collect LocalIds declared inside a closure body —

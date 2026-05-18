@@ -5243,6 +5243,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-ext-ads"
+version = "0.5.1006"
+dependencies = [
+ "perry-ffi",
+]
+
+[[package]]
 name = "perry-ext-argon2"
 version = "0.5.1007"
 dependencies = [
