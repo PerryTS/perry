@@ -92,10 +92,7 @@ fn init_widget(args: InitArgs, format: OutputFormat) -> Result<()> {
         ));
     }
 
-    let display_name = args
-        .display_name
-        .clone()
-        .unwrap_or_else(|| humanize(name));
+    let display_name = args.display_name.clone().unwrap_or_else(|| humanize(name));
     let description = args
         .description
         .clone()
@@ -137,7 +134,10 @@ fn init_widget(args: InitArgs, format: OutputFormat) -> Result<()> {
 
     match format {
         OutputFormat::Text => {
-            println!("Scaffolded WidgetKit source tree at {}/", target_dir.display());
+            println!(
+                "Scaffolded WidgetKit source tree at {}/",
+                target_dir.display()
+            );
             println!("  {}", widget_path.display());
             println!("  {}", intent_path.display());
             if appended {
@@ -150,7 +150,10 @@ fn init_widget(args: InitArgs, format: OutputFormat) -> Result<()> {
             }
             println!();
             println!("Next steps:");
-            println!("  1. Edit {} to point at your data / render shape.", widget_path.display());
+            println!(
+                "  1. Edit {} to point at your data / render shape.",
+                widget_path.display()
+            );
             println!("  2. Run `perry compile --target ios` from your project root.");
             println!("     The widget builds via swiftc and lands at ");
             println!("     <output>.app/Frameworks/{}.appex/.", name);

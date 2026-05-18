@@ -214,7 +214,9 @@ mod tests {
             json!({"name":"b","version":"1","main":"index.js"}),
             &[("index.js", body.as_str())],
         );
-        assert!(check(&p).iter().any(|f| f.rule == "obfuscation-base64-blob"));
+        assert!(check(&p)
+            .iter()
+            .any(|f| f.rule == "obfuscation-base64-blob"));
     }
 
     #[test]
@@ -231,7 +233,9 @@ mod tests {
             json!({"name":"b","version":"1","main":"index.js"}),
             &[("index.js", body.as_str())],
         );
-        assert!(check(&p).iter().any(|f| f.rule == "obfuscation-base64-blob"));
+        assert!(check(&p)
+            .iter()
+            .any(|f| f.rule == "obfuscation-base64-blob"));
     }
 
     #[test]
@@ -338,6 +342,8 @@ mod tests {
             json!({"name":"sneaky","version":"1","main":"index.js"}),
             &[("index.js", body.as_str())],
         );
-        assert!(check(&p).iter().any(|f| f.rule == "obfuscation-base64-blob"));
+        assert!(check(&p)
+            .iter()
+            .any(|f| f.rule == "obfuscation-base64-blob"));
     }
 }

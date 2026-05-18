@@ -122,9 +122,8 @@ pub(super) fn build_declared_widgets_ios(
 
     let project_root = project_root_for(input);
     let frameworks_dir = app_dir.join("Frameworks");
-    fs::create_dir_all(&frameworks_dir).with_context(|| {
-        format!("Failed to create `{}`", frameworks_dir.display())
-    })?;
+    fs::create_dir_all(&frameworks_dir)
+        .with_context(|| format!("Failed to create `{}`", frameworks_dir.display()))?;
 
     let sdk = if is_simulator {
         "iphonesimulator"
@@ -231,9 +230,8 @@ pub(super) fn build_declared_widgets_ios(
         }
 
         let appex_dir = frameworks_dir.join(format!("{}.appex", entry.name));
-        fs::create_dir_all(&appex_dir).with_context(|| {
-            format!("Failed to create `{}`", appex_dir.display())
-        })?;
+        fs::create_dir_all(&appex_dir)
+            .with_context(|| format!("Failed to create `{}`", appex_dir.display()))?;
 
         let plist = render_info_plist(&entry.name, &display_name, &widget_bundle_id);
         fs::write(appex_dir.join("Info.plist"), plist).with_context(|| {
@@ -300,11 +298,9 @@ pub(super) fn build_declared_widgets_ios(
         }
 
         match format {
-            OutputFormat::Text => println!(
-                "  Embedded {}.appex at {}",
-                entry.name,
-                appex_dir.display()
-            ),
+            OutputFormat::Text => {
+                println!("  Embedded {}.appex at {}", entry.name, appex_dir.display())
+            }
             OutputFormat::Json => {}
         }
 
@@ -325,10 +321,7 @@ pub(super) fn build_declared_widgets_ios(
 
 fn warn_skip(format: OutputFormat, widget: &str, platform: &str, message: &str) {
     if let OutputFormat::Text = format {
-        eprintln!(
-            "Warning: widget `{}` ({}): {}",
-            widget, platform, message
-        );
+        eprintln!("Warning: widget `{}` ({}): {}", widget, platform, message);
     }
 }
 
@@ -358,8 +351,7 @@ fn resolve_sdk_path(sdk: &str) -> Result<String> {
 /// for v1 — the scaffolder lays everything flat). Returns the files
 /// sorted so the swiftc command line is stable across invocations.
 fn collect_swift_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    let md = fs::metadata(dir)
-        .with_context(|| format!("Failed to stat `{}`", dir.display()))?;
+    let md = fs::metadata(dir).with_context(|| format!("Failed to stat `{}`", dir.display()))?;
     if !md.is_dir() {
         // Allow a single .swift file as well — useful for tests.
         if dir.extension().and_then(|s| s.to_str()) == Some("swift") {
@@ -371,9 +363,7 @@ fn collect_swift_files(dir: &Path) -> Result<Vec<PathBuf>> {
         ));
     }
     let mut files = Vec::new();
-    for entry in fs::read_dir(dir)
-        .with_context(|| format!("Failed to read `{}`", dir.display()))?
-    {
+    for entry in fs::read_dir(dir).with_context(|| format!("Failed to read `{}`", dir.display()))? {
         let entry = entry?;
         let p = entry.path();
         if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("swift") {

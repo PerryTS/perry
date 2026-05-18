@@ -673,7 +673,11 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
     // dispatch. Detect and undo the reroute only in member-object
     // position; local shadowing is unaffected because a shadowing local
     // would have lowered to `LocalGet`, never this reroute.
-    if let Expr::PropertyGet { object: inner, property } = &object_expr {
+    if let Expr::PropertyGet {
+        object: inner,
+        property,
+    } = &object_expr
+    {
         if matches!(inner.as_ref(), Expr::GlobalGet(0))
             && crate::analysis::is_builtin_global_value_name(property)
         {

@@ -251,7 +251,8 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let mut manifest = json!({"name": name, "version": "1.0.0"});
         if with_repo {
-            manifest["repository"] = json!({"type": "git", "url": "git+https://github.com/x/y.git"});
+            manifest["repository"] =
+                json!({"type": "git", "url": "git+https://github.com/x/y.git"});
         }
         if with_license_field {
             manifest["license"] = json!("MIT");
