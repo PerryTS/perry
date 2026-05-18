@@ -2,6 +2,74 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.995 — test(ramda): user-import fixture pinning the #985 V8-namespace fix
+
+**Symptom (apparent regression in v0.5.993/.994 compat sweep).** `/tmp/perry-compat-sweep` reported ramda failing at v0.5.993 and v0.5.994:
+
+```
+sum=0
+head=0
+```
+
+instead of the expected `sum=15 / head=1`. The fixture in question is the canonical user-import form:
+
+```ts
+import * as R from "ramda";
+const arr = [1, 2, 3, 4, 5];
+console.log("sum=" + R.sum(arr));
+console.log("head=" + R.head(arr));
+```
+
+PR #985 (committed at `a7cd054a`, 2026-05-18 05:48) had specifically claimed this case was fixed by adding `CompileOptions::namespace_v8_specifiers` and routing `R.<member>(args)` through `js_call_v8_export` from both `expr.rs:6588` (StaticMethodCall arm) and `lower_call.rs:549` (namespace-member-call arm).
+
+**Root cause — stale sweep binary, not a regression.** The sweep at `/tmp/perry-compat-sweep/run.sh` defaults `PERRY_BIN` to `/Users/amlug/projects/perry/perry/target/release/perry`, and that binary on disk was built at 05:25 — 23 minutes *before* #985's commit landed. Rebuilding the compiler (`cargo build --release -p perry-runtime -p perry-stdlib -p perry-jsruntime -p perry`) and rerunning the sweep against the freshly-built binary turns the ramda fixture green immediately:
+
+```
+package       status  phase    error_excerpt
+ramda         PASS    -        -
+```
+
+No code change is required — #985's namespace_v8_specifiers route covers the user-import / bare-V8-fallback path as designed.
+
+**What this release adds — a pinning fixture that would have caught the false alarm.** `test-files/test_ramda_user_import.ts` exercises the exact `import * as R from 'ramda'` user-import shape against five direct calls (number return path):
+
+| call | expected |
+|---|---|
+| `R.sum([1,2,3,4,5])` | 15 |
+| `R.head([1,2,3])` | 1 |
+| `R.add(2, 3)` | 5 |
+| `R.identity(42)` | 42 |
+| `R.multiply(3, 4)` | 12 |
+
+`node --experimental-strip-types test_ramda_user_import.ts` produces `15 / 1 / 5 / 42 / 12`, and the v0.5.995 perry binary matches byte-for-byte. Curried higher-order returns (`const inc = R.add(1); inc(5)`) are intentionally **not** in this fixture — #985 deferred them because the V8 bridge still returns closures as opaque handles the native callsite can't dispatch.
+
+**Validation.**
+
+```
+mkdir -p /tmp/perry-ramda-99 && cd /tmp/perry-ramda-99
+cp <worktree>/test-files/test_ramda_user_import.ts test_user.ts
+cat > package.json <<'EOF'
+{ "name": "test", "type": "module", "dependencies": { "ramda": "0.30.1" } }
+EOF
+npm install --silent --no-audit --no-fund
+<worktree>/target/release/perry test_user.ts -o out_user && ./out_user
+# → 15 / 1 / 5 / 42 / 12 (matches `node --experimental-strip-types`)
+```
+
+Compat sweep with the v0.5.995 worktree binary:
+```
+PERRY_BIN=<worktree>/target/release/perry bash /tmp/perry-compat-sweep/run.sh
+# → ramda PASS
+```
+
+**Files touched.**
+
+- `test-files/test_ramda_user_import.ts` — new fixture.
+- `Cargo.toml`, `CLAUDE.md` — version bump to 0.5.995.
+- `CHANGELOG.md` — this entry.
+
+No source code changes — this release is documentation + a regression-pinning test for the #985 fix.
+
 ## v0.5.994 — feat(jsruntime): V8 ModuleLoader reads from embedded module map (self-contained binaries)
 
 **Symptom.** v0.5.993 closed half of #818: the `__perry_js_bundle.js` artifact now contains every transitive sibling a pure-ESM npm package re-exports, so the bundle's *content* matches reality. The other half (called out in that release's own "Known next blocker") was still open — `NodeModuleLoader::load` in `crates/perry-jsruntime/src/modules.rs` reads source via `std::fs::read_to_string(&path)`, never consults `globalThis.__COMPILETS_MODULES`, and walks the real `node_modules/` tree at runtime. Move a Perry-compiled binary that uses hono / express / any other V8-fallback package into a directory that doesn't have `node_modules/` and V8 throws `Cannot resolve module` (or in the cross-thread `app.fetch(req)` shape, segfaults rc=139) for every missing file.
