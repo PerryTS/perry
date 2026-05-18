@@ -42,16 +42,27 @@
 //! body in a microtask. The microtask runs after all currently-executing
 //! synchronous code finishes — exactly the spec ordering.
 //!
-//! ## Scope and limitations (v1)
+//! ## Scope and limitations
 //!
-//! - **Top-level functions only**: nested async closures (arrow/function
-//!   expressions assigned to locals) are NOT yet rewritten. They keep
-//!   the pre-fix direct-call/busy-wait behavior. Follow-up.
+//! - **Top-level functions and async closures (since #1021 phase 2)**:
+//!   `Expr::Closure { is_async: true }` whose body contains awaits is now
+//!   also rewritten — the closure body goes through
+//!   `transform_plain_async_closure_body` (in `generator.rs`) which reuses
+//!   the same state-machine + async-step-driver path. Detected closures'
+//!   func_ids land in `Module.async_step_closures`. Without this, the
+//!   busy-wait at `expr.rs:10588` deadlocks self-fetch from inside V8
+//!   trampoline frames (issue #1021).
 //! - **No new HIR variants or runtime helpers**: the rewrite produces
 //!   only existing variants (Yield, Closure, Promise.then chains via
 //!   GlobalGet(0)). The async-step driver is built inline in the
 //!   generator transform. This sidesteps the LLVM constant-folding
 //!   mystery the prior prototype hit (issue #256 background section 1).
+//! - **State-machine idempotency (issue #1029)**: the underlying state
+//!   machine is currently not idempotent across re-invocation — call 2+
+//!   to the same state-machined fn or closure returns undefined. The
+//!   bug predates #1021; #1021 phase 2 just expands its surface to async
+//!   closures with awaits. Fixing #1029 will also fix re-invoked async
+//!   closures for free.
 
 use perry_hir::ir::*;
 use perry_types::{LocalId, Type};
