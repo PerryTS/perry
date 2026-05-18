@@ -1621,8 +1621,18 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                                 property: inner_property,
                             } = inner_callee.as_ref()
                             {
-                                if matches!(inner_object.as_ref(), Expr::GlobalGet(_))
-                                    && inner_property == "resolve"
+                                // #1008: accept both the legacy `Promise` =
+                                // GlobalGet shape and the post-#973
+                                // PropertyGet { GlobalGet(0), "Promise" }
+                                // shape. Without the second arm the
+                                // fast path silently disengaged for
+                                // every `Promise.resolve(...).then(...)`
+                                // call (microtask-02..07 regression).
+                                if inner_property == "resolve"
+                                    && crate::type_analysis::is_global_builtin_named(
+                                        inner_object.as_ref(),
+                                        "Promise",
+                                    )
                                 {
                                     let inner_value = if inner_args.is_empty() {
                                         double_literal(0.0)
