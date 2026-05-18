@@ -728,8 +728,17 @@ pub(super) fn lookup_bundle_id_from_toml(input: &std::path::Path, section: &str)
                 .or_else(|| doc.get("bundle_id"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            if bid.is_some() {
-                return bid;
+            if let Some(raw) = bid {
+                // #999: validate before letting an explicit toml-supplied
+                // bundle ID reach codesign argv.
+                let label = format!(
+                    "perry.toml [{}].bundle_id at {}",
+                    section,
+                    toml_path.display()
+                );
+                return Some(crate::commands::sanitize::validate_bundle_id_or_exit(
+                    &raw, &label,
+                ));
             }
         }
     }

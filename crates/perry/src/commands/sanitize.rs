@@ -148,6 +148,77 @@ pub fn default_perry_bundle_id(exe_stem: &str) -> String {
     format!("com.perry.{stem}")
 }
 
+/// Validate a user-supplied full bundle ID (`com.example.app` shape)
+/// before letting it reach `codesign --sign` or `productbuild` argv.
+///
+/// Reverse-DNS bundle IDs in practice are `[A-Za-z0-9._-]+`. We reject
+/// anything outside that class, plus the empty string and lone `.` /
+/// `..`, with a diagnostic that names the source and the offending
+/// character(s). The caller is expected to surface the error to the
+/// user — we do **not** silently rewrite explicit bundle IDs because
+/// the bundle ID is the round-trip identifier the user types into
+/// provisioning portals; mismatches between configured and built ID
+/// produce the worst kind of "why is my app installing under a
+/// different identifier" bug. #999.
+///
+/// On success returns the input string unchanged so the call-site can
+/// keep using it directly.
+pub fn validate_bundle_id(raw: &str, source_label: &str) -> Result<String, String> {
+    if raw.is_empty() {
+        return Err(format!(
+            "empty bundle ID from {source_label} — expected a reverse-DNS \
+             identifier like `com.example.app`"
+        ));
+    }
+    if raw == "." || raw == ".." {
+        return Err(format!(
+            "invalid bundle ID `{raw}` from {source_label} — `.` and `..` \
+             are reserved path components, not identifiers"
+        ));
+    }
+    // Collect every offending character (deduped, in input order) so the
+    // diagnostic surfaces the full problem set on the first build attempt
+    // instead of forcing the user to fix one char at a time.
+    let mut bad: Vec<char> = Vec::new();
+    for c in raw.chars() {
+        let ok = c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-';
+        if !ok && !bad.contains(&c) {
+            bad.push(c);
+        }
+    }
+    if !bad.is_empty() {
+        let listed = bad
+            .iter()
+            .map(|c| format!("`{}` (U+{:04X})", c, *c as u32))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "invalid character(s) in bundle ID `{raw}` from {source_label}: {listed}. \
+             Allowed character set is `[A-Za-z0-9._-]`. Bundle IDs flow into \
+             `codesign --sign` and `productbuild` argv where shell metacharacters, \
+             whitespace, and path separators can flip the argument into a directive. \
+             #500/#944/#999."
+        ));
+    }
+    Ok(raw.to_string())
+}
+
+/// Convenience wrapper around [`validate_bundle_id`] for call sites
+/// that don't propagate `Result`: print the diagnostic on stderr and
+/// exit with status 1. Use this only where the surrounding signature
+/// can't carry a `Result` (e.g. `read_app_metadata` returning a
+/// tuple) — anywhere else, prefer the plain [`validate_bundle_id`]
+/// and propagate via `?`.
+pub fn validate_bundle_id_or_exit(raw: &str, source_label: &str) -> String {
+    match validate_bundle_id(raw, source_label) {
+        Ok(s) => s,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +388,77 @@ mod tests {
                 line
             );
         }
+    }
+
+    #[test]
+    fn validate_bundle_id_accepts_reverse_dns() {
+        // Standard reverse-DNS forms must pass — these are what real
+        // provisioning profiles look like.
+        for ok in [
+            "com.example.app",
+            "com.scope-with-dash.app_with_underscore",
+            "co.uk.example",
+            "123starts-with-digit",
+            "all-lowercase-no-dot",
+            "A.Mixed.Case.Id",
+        ] {
+            assert!(
+                validate_bundle_id(ok, "test").is_ok(),
+                "expected {ok:?} to pass validation"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_bundle_id_rejects_hostile_inputs() {
+        // #999: each of these is the kind of value a malicious
+        // `package.json`/`perry.toml` would inject to flip the argument
+        // when it lands in `codesign --sign` / `productbuild` argv.
+        for evil in [
+            "@evil/scope",
+            "a;rm -rf /",
+            "a|b",
+            "$PATH",
+            "a\nb",
+            "a\0b",
+            "..",
+            ".",
+            "",
+            "foo/bar",
+            "foo bar",
+            "ｐerry",         // full-width 'p' lookalike
+            "good\u{202E}evil", // RTL bidi override
+        ] {
+            let err = validate_bundle_id(evil, "test source")
+                .unwrap_err_or_else_panic_with_label(evil);
+            assert!(
+                err.contains("test source"),
+                "diagnostic should name the source for {evil:?}: {err}"
+            );
+        }
+    }
+
+    // Local helper — clearer panic message than plain expect_err.
+    trait UnwrapErrLabelled {
+        fn unwrap_err_or_else_panic_with_label(self, label: &str) -> String;
+    }
+    impl UnwrapErrLabelled for Result<String, String> {
+        fn unwrap_err_or_else_panic_with_label(self, label: &str) -> String {
+            match self {
+                Ok(_) => panic!("expected {label:?} to be rejected by validate_bundle_id"),
+                Err(e) => e,
+            }
+        }
+    }
+
+    #[test]
+    fn validate_bundle_id_diagnostic_lists_offending_chars() {
+        // #999 acceptance: clear diagnostic naming offending chars.
+        let err = validate_bundle_id("a;b|c", "package.json").expect_err("should fail");
+        assert!(err.contains("`;`"), "should call out `;`: {err}");
+        assert!(err.contains("`|`"), "should call out `|`: {err}");
+        assert!(err.contains("package.json"), "should name source: {err}");
+        assert!(err.contains("[A-Za-z0-9._-]"), "should state allowed class: {err}");
     }
 
     #[test]

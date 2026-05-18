@@ -1481,7 +1481,12 @@ fn read_app_metadata(project_root: &Path, input: &Path) -> (String, String) {
                 .or_else(|| t.get("bundle_id"))
         })
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(|s| {
+            // #999: this string flows into codesign argv when `perry run`
+            // re-signs the iOS bundle. Validate before letting it through.
+            let label = format!("perry.toml bundle_id at {}", toml_path.display());
+            super::sanitize::validate_bundle_id_or_exit(s, &label)
+        });
 
     // Then check package.json
     let pkg_path = project_root.join("package.json");
@@ -1502,7 +1507,12 @@ fn read_app_metadata(project_root: &Path, input: &Path) -> (String, String) {
                 .or_else(|| p.get("perry").and_then(|pp| pp.get("bundleId")))
         })
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(|s| {
+            // #999: validate before letting an explicit package.json
+            // bundle ID reach codesign argv.
+            let label = format!("package.json `bundleId` at {}", pkg_path.display());
+            super::sanitize::validate_bundle_id_or_exit(s, &label)
+        });
 
     let raw_name = toml_name.or(pkg_name).unwrap_or_else(|| {
         input

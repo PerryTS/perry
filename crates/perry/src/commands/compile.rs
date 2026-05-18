@@ -195,10 +195,17 @@ fn package_bundle_id_from_input(input: &Path) -> Option<String> {
     loop {
         let pkg = dir.join("package.json");
         if pkg.exists() {
-            let data = fs::read_to_string(pkg).ok()?;
+            let data = fs::read_to_string(&pkg).ok()?;
             let json: serde_json::Value = serde_json::from_str(&data).ok()?;
             if let Some(bundle_id) = json.get("bundleId").and_then(|v| v.as_str()) {
-                return Some(bundle_id.to_string());
+                // #999: explicit `bundleId` was previously passed straight to
+                // codesign argv; reject obviously-hostile values at read time
+                // with a clear file-path diagnostic instead of silently letting
+                // them through.
+                let label = format!("package.json `bundleId` at {}", pkg.display());
+                return Some(crate::commands::sanitize::validate_bundle_id_or_exit(
+                    bundle_id, &label,
+                ));
             }
         }
         if !dir.pop() {
@@ -225,10 +232,14 @@ fn read_app_metadata(
     }
 
     metadata.bundle_id = cli_bundle_id
-        .map(str::to_string)
+        .map(|raw| {
+            // #999: CLI `--app-bundle-id` flag goes straight to codesign argv;
+            // validate before accepting it.
+            crate::commands::sanitize::validate_bundle_id_or_exit(raw, "CLI --app-bundle-id")
+        })
         .or_else(|| {
             let doc = perry_toml?;
-            target_bundle_section(target)
+            let raw = target_bundle_section(target)
                 .and_then(|section| toml_string(doc, section, "bundle_id"))
                 .or_else(|| toml_string(doc, "app", "bundle_id"))
                 .or_else(|| toml_string(doc, "project", "bundle_id"))
@@ -236,7 +247,15 @@ fn read_app_metadata(
                     doc.get("bundle_id")
                         .and_then(|v| v.as_str())
                         .map(str::to_string)
-                })
+                })?;
+            // #999: perry.toml is host-trusted in normal use, but the threat
+            // model in sanitize.rs explicitly lists it as attacker-influenceable
+            // (a hostile dep dropping perry.toml in a project root). Validate
+            // before letting it reach codesign.
+            Some(crate::commands::sanitize::validate_bundle_id_or_exit(
+                &raw,
+                "perry.toml `bundle_id`",
+            ))
         })
         .or_else(|| package_bundle_id_from_input(input))
         .unwrap_or_else(|| {
@@ -7017,6 +7036,13 @@ pub fn run_with_parse_cache(
         let bundle_id = args
             .app_bundle_id
             .clone()
+            .map(|raw| {
+                // #999: CLI override goes straight to codesign argv.
+                crate::commands::sanitize::validate_bundle_id_or_exit(
+                    &raw,
+                    "CLI --app-bundle-id",
+                )
+            })
             .or_else(|| {
                 (|| -> Option<String> {
                     let mut dir = args.input.canonicalize().ok()?;
@@ -7037,8 +7063,17 @@ pub fn run_with_parse_cache(
                                         .or_else(|| doc.get("bundle_id"))
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string());
-                                    if toml_bid.is_some() {
-                                        return toml_bid;
+                                    if let Some(raw) = toml_bid {
+                                        // #999: validate before letting toml-supplied IDs reach codesign.
+                                        let label = format!(
+                                            "perry.toml bundle_id at {}",
+                                            toml_path.display()
+                                        );
+                                        return Some(
+                                            crate::commands::sanitize::validate_bundle_id_or_exit(
+                                                &raw, &label,
+                                            ),
+                                        );
                                     }
                                 }
                             }
@@ -7046,12 +7081,22 @@ pub fn run_with_parse_cache(
                         // Then check package.json
                         let pkg = dir.join("package.json");
                         if pkg.exists() {
-                            let data = fs::read_to_string(pkg).ok()?;
+                            let data = fs::read_to_string(&pkg).ok()?;
                             let idx = data.find("\"bundleId\"")?;
                             let colon = data[idx..].find(':')?;
                             let q1 = data[idx + colon..].find('"')? + idx + colon + 1;
                             let q2 = data[q1..].find('"')? + q1;
-                            return Some(data[q1..q2].to_string());
+                            // #999: same as the toml path above — validate
+                            // before this raw byte-sliced string reaches
+                            // codesign argv.
+                            let raw = &data[q1..q2];
+                            let label = format!(
+                                "package.json `bundleId` at {}",
+                                pkg.display()
+                            );
+                            return Some(crate::commands::sanitize::validate_bundle_id_or_exit(
+                                raw, &label,
+                            ));
                         }
                     }
                     None
