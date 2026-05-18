@@ -10,7 +10,8 @@
 use flate2::read::{DeflateDecoder, DeflateEncoder, GzDecoder, GzEncoder};
 use flate2::Compression;
 use perry_ffi::{
-    alloc_bytes, read_bytes, spawn_blocking, JsPromise, JsString, JsValue, Promise, StringHeader,
+    alloc_buffer, alloc_bytes, read_bytes, spawn_blocking, BufferHeader, JsPromise, JsString,
+    JsValue, Promise, StringHeader,
 };
 use std::io::Read;
 
@@ -99,6 +100,16 @@ pub unsafe extern "C" fn js_zlib_inflate_sync(data_ptr: *const StringHeader) -> 
         Some(Ok(out)) => alloc_bytes(&out).as_raw(),
         _ => std::ptr::null_mut(),
     }
+}
+
+/// `zlib.createBrotliDecompress(options?)`.
+///
+/// Minimal feature-check shim: return a truthy Buffer-shaped object so package
+/// init paths that probe Brotli support can proceed. Real Brotli stream
+/// decoding remains outside this wrapper's current surface.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_create_brotli_decompress(_opts: f64) -> *mut BufferHeader {
+    alloc_buffer(&[])
 }
 
 // ── async variants ────────────────────────────────────────────
