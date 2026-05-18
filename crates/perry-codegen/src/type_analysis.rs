@@ -9,6 +9,15 @@ use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
 
+pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
+    matches!(e, Expr::GlobalGet(_))
+        || matches!(
+            e,
+            Expr::PropertyGet { object, property }
+                if property == name && matches!(object.as_ref(), Expr::GlobalGet(_))
+        )
+}
+
 /// Refine an `Any`-typed local's static type based on its initializer
 /// expression. Returns Some(Type) when we can statically prove the
 /// initializer produces a more specific type, so the `Stmt::Let`
@@ -998,7 +1007,7 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             Expr::PropertyGet { object, property } => {
                 // `Promise.resolve(...)` etc. — GlobalGet receiver with
                 // a promise-shaped static method name.
-                if matches!(object.as_ref(), Expr::GlobalGet(_))
+                if is_global_constructor_expr(object, "Promise")
                     && matches!(
                         property.as_str(),
                         "resolve" | "reject" | "all" | "race" | "allSettled" | "any"
@@ -1007,7 +1016,7 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     return true;
                 }
                 // `Array.fromAsync(...)` returns a Promise<Array>.
-                if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == "fromAsync" {
+                if is_global_constructor_expr(object, "Array") && property == "fromAsync" {
                     return true;
                 }
                 // `.then(cb)` / `.catch(cb)` / `.finally(cb)` on a promise

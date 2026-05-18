@@ -48,7 +48,8 @@ pub(crate) use native::lower_native_method_call;
 use crate::lower_string_method::lower_string_method;
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{
-    is_array_expr, is_map_expr, is_promise_expr, is_set_expr, is_string_expr, receiver_class_name,
+    is_array_expr, is_global_constructor_expr, is_map_expr, is_promise_expr, is_set_expr,
+    is_string_expr, receiver_class_name,
 };
 use crate::types::{DOUBLE, I32, I64, I8, PTR, VOID};
 
@@ -1652,7 +1653,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                                 property: inner_property,
                             } = inner_callee.as_ref()
                             {
-                                if matches!(inner_object.as_ref(), Expr::GlobalGet(_))
+                                if is_global_constructor_expr(inner_object, "Promise")
                                     && inner_property == "resolve"
                                 {
                                     let inner_value = if inner_args.is_empty() {
@@ -3166,14 +3167,11 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
 
     // -------- Promise.resolve / reject / all / race / allSettled --------
     //
-    // The HIR doesn't have dedicated PromiseResolve/Reject variants —
-    // they appear as Call { callee: PropertyGet { GlobalGet(0), "resolve" } }.
-    // We assume any
-    // GlobalGet receiver with a Promise-shaped property name is the
-    // Promise constructor. (This conflicts with `console.resolve` etc.
-    // — but those don't exist in JS.)
+    // The HIR doesn't have dedicated PromiseResolve/Reject variants. Depending
+    // on the lowering path they appear either as a bare GlobalGet receiver or
+    // as `globalThis.Promise.<method>`.
     if let Expr::PropertyGet { object, property } = callee {
-        if matches!(object.as_ref(), Expr::GlobalGet(_)) {
+        if is_global_constructor_expr(object, "Promise") {
             match property.as_str() {
                 "resolve" => {
                     let value = if args.is_empty() {
@@ -3219,21 +3217,17 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                     let handle = blk.call(I64, "js_promise_with_resolvers", &[]);
                     return Ok(nanbox_pointer_inline(blk, &handle));
                 }
-                // `Array.fromAsync(input)` — Node 22+ static method.
-                // Dispatched here because the receiver is a GlobalGet
-                // (matches the same pattern as Promise.all). The property
-                // name `fromAsync` is unique to Array so there's no
-                // conflict with Promise.
-                "fromAsync" => {
-                    if args.is_empty() {
-                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                    }
-                    let input = lower_expr(ctx, &args[0])?;
-                    let blk = ctx.block();
-                    return Ok(blk.call(DOUBLE, "js_array_from_async", &[(DOUBLE, &input)]));
-                }
                 _ => {}
             }
+        }
+        // `Array.fromAsync(input)` — Node 22+ static method.
+        if is_global_constructor_expr(object, "Array") && property == "fromAsync" {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let input = lower_expr(ctx, &args[0])?;
+            let blk = ctx.block();
+            return Ok(blk.call(DOUBLE, "js_array_from_async", &[(DOUBLE, &input)]));
         }
     }
 
