@@ -222,10 +222,9 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 left,
                 right: Box::new(rhs),
             })
-        }
-        // #853: the match above exhausts every `ast::AssignOp` variant
-        // SWC ships today. If SWC adds a new operator, the build breaks
-        // here — preferable to a silent runtime error path. No catch-all.
+        } // #853: the match above exhausts every `ast::AssignOp` variant
+          // SWC ships today. If SWC adds a new operator, the build breaks
+          // here — preferable to a silent runtime error path. No catch-all.
     };
 
     match &assign.left {
