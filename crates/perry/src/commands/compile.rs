@@ -25,6 +25,7 @@ mod resolve;
 mod sandbox_buildrs;
 mod strip_dedup;
 mod targets;
+mod widget_build;
 pub mod well_known;
 use collect_modules::collect_modules;
 pub use library_search::find_library;
@@ -7094,9 +7095,31 @@ pub fn run_with_parse_cache(
 
         compile_metallib_for_bundle(&ctx, target.as_deref(), &app_dir, format)?;
 
+        // Issue #676: build any [[widget]] entries declared in perry.toml,
+        // embedding each produced .appex into <app>.app/Frameworks/<Name>.appex/.
+        // iOS-only for v1 — watchOS / Android Glance variants warn-and-skip
+        // inside the helper.
+        let widgets_built = {
+            let is_ios_sim = matches!(target.as_deref(), Some("ios-simulator"));
+            widget_build::build_declared_widgets_ios(
+                &args.input,
+                &app_dir,
+                is_ios_sim,
+                &bundle_id,
+                format,
+            )?
+        };
+
         match format {
             OutputFormat::Text => {
                 println!("Wrote iOS app bundle: {}", app_dir.display());
+                if widgets_built > 0 {
+                    println!(
+                        "  Embedded {} widget extension{} under Frameworks/",
+                        widgets_built,
+                        if widgets_built == 1 { "" } else { "s" }
+                    );
+                }
                 println!();
                 println!("To run on iOS Simulator:");
                 println!("  xcrun simctl install booted {}", app_dir.display());
@@ -7109,6 +7132,7 @@ pub fn run_with_parse_cache(
                     "bundle_id": bundle_id,
                     "native_modules": ctx.native_modules.len(),
                     "js_modules": ctx.js_modules.len(),
+                    "widgets_built": widgets_built,
                 });
                 println!("{}", serde_json::to_string(&result)?);
             }

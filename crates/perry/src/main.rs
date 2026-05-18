@@ -158,6 +158,15 @@ enum Commands {
     ///                                 staticlib's exported symbols.
     /// `perry native list`         — list bundled well-known bindings.
     Native(commands::native::NativeArgs),
+
+    /// WidgetKit / Glance build glue (issue #676).
+    ///
+    /// `perry widget init <name>` — scaffold a SwiftUI WidgetKit source
+    /// tree under `ios-widgets/<name>/` and append a `[[widget]]` entry
+    /// to `perry.toml` so the next `perry compile --target ios` builds
+    /// the widget and embeds the produced `.appex` under
+    /// `<output>.app/Frameworks/`.
+    Widget(commands::widget::WidgetArgs),
 }
 
 /// Check if the first non-flag argument looks like a TypeScript file
@@ -192,6 +201,7 @@ fn is_legacy_invocation(args: &[String]) -> bool {
                 | "cache"
                 | "updater"
                 | "native"
+                | "widget"
                 | "help"
         ) {
             return false;
@@ -396,6 +406,7 @@ fn main_inner() -> Result<()> {
         Commands::Cache(args) => commands::cache::run(args, cli.format),
         Commands::Updater(args) => commands::updater::run(args),
         Commands::Native(args) => commands::native::run(args, cli.format, use_color),
+        Commands::Widget(args) => commands::widget::run(args, cli.format, use_color),
     };
 
     // Send telemetry for non-compile commands (compile is handled above for target/status)
