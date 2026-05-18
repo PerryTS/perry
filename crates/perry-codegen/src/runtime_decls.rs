@@ -477,6 +477,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_console_log_spread", VOID, &[I64]);
     module.declare_function("js_console_error_spread", VOID, &[I64]);
     module.declare_function("js_console_warn_spread", VOID, &[I64]);
+    // #1002: native `util.format` / `util.formatWithOptions`. Codegen
+    // bundles the call args into a heap array (same shape as
+    // js_console_log_spread) and gets a NaN-boxed string back.
+    module.declare_function("js_util_format", DOUBLE, &[I64]);
     module.declare_function("js_getenv", I64, &[I64]);
     module.declare_function("js_console_table", VOID, &[DOUBLE]);
     module.declare_function("js_console_trace", VOID, &[DOUBLE]);
