@@ -549,6 +549,25 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     if let Expr::PropertyGet { object, property } = callee {
         if let Expr::ExternFuncRef { name: ns_name, .. } = object.as_ref() {
             if ctx.namespace_imports.contains(ns_name) {
+                // Issue #678 followup (namespace branch): wildcard-namespace
+                // import to a V8 module — `import * as R from "ramda";
+                // R.sum([1,2,3])`. The V8 module has no static export list
+                // and (when no companion Named import is present) nothing
+                // seeded `import_function_prefixes` for `property`. Route
+                // the member call through the bridge using the
+                // namespace's specifier before falling through to the
+                // native-prefix lookup. Without this, ramda / date-fns /
+                // jose / effect wildcard members fell to the
+                // `double_literal(0.0)` stub.
+                if let Some(specifier) = ctx.namespace_v8_specifiers.get(ns_name).cloned() {
+                    let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                    for a in args {
+                        lowered.push(lower_expr(ctx, a)?);
+                    }
+                    return Ok(crate::expr::emit_v8_export_call(
+                        ctx, &specifier, property, &lowered,
+                    ));
+                }
                 // Issue #680: prefer the per-namespace map so
                 // `random.make` and `tracer.make` resolve to their own
                 // sources even when both modules export `make`. Falls

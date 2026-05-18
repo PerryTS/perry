@@ -3436,6 +3436,17 @@ pub fn run_with_parse_cache(
             let mut namespace_node_submodules:
                 std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            // Issue #678 followup (namespace branch): local-namespace →
+            // V8 module specifier for `import * as ns from "<v8-module>"`.
+            // Populated in the V8-imports pass below at the same site that
+            // would otherwise no-op on `ImportSpecifier::Namespace`. Used
+            // by codegen's StaticMethodCall / namespace-member-call
+            // lowering to route `ns.member(args)` through
+            // `js_call_v8_export` when nothing else seeded
+            // `import_function_prefixes` for the member.
+            let mut namespace_v8_specifiers:
+                std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             // Issue #680: per-namespace member resolution. Disambiguates
             // `random.make` vs `tracer.make` when multiple namespaces
             // export the same member name. Keyed by `(namespace_local,
@@ -4268,18 +4279,24 @@ pub fn run_with_parse_cache(
                             import_function_v8_specifiers
                                 .insert(local.clone(), specifier.clone());
                         }
-                        perry_hir::ImportSpecifier::Namespace { .. } => {
+                        perry_hir::ImportSpecifier::Namespace { local } => {
                             // Namespace bindings (`import * as X from "ink"`)
                             // are already registered into `namespace_imports`
-                            // by the pre-loop above; per-member access for a
-                            // V8 module has no static export list, so the
-                            // codegen relies on the Named-import path above
-                            // (on a sibling line) to register
-                            // per-member specifiers. Pure namespace usage
-                            // with no Named import alongside falls through
-                            // to the unresolved-namespace runtime stub —
-                            // acceptable because V8 module consumers
-                            // overwhelmingly use Named/Default imports.
+                            // by the pre-loop above. For pure-namespace usage
+                            // with no companion `Named` import, the V8 module
+                            // has no static export list to register members
+                            // against — so we record `local → specifier` here.
+                            // The codegen's StaticMethodCall arm and the
+                            // namespace-member-call arm in `lower_call.rs`
+                            // probe `namespace_v8_specifiers` and, on a hit,
+                            // emit `js_call_v8_export(specifier, member,
+                            // args, argc)` so `R.sum([1,2,3])` (`import * as
+                            // R from "ramda"`) reaches V8 instead of falling
+                            // to the `double_literal(0.0)` stub. Unblocks
+                            // ramda / date-fns / jose / effect wildcard
+                            // namespace usage.
+                            namespace_v8_specifiers
+                                .insert(local.clone(), specifier.clone());
                         }
                     }
                 }
@@ -4838,6 +4855,7 @@ pub fn run_with_parse_cache(
                 import_function_v8_specifiers,
                 import_function_node_submodule,
                 namespace_node_submodules,
+                namespace_v8_specifiers,
                 namespace_member_prefixes,
                 emit_ir_only: bitcode_link,
                 namespace_imports,

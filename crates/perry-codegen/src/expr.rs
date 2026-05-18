@@ -405,6 +405,16 @@ pub(crate) struct FnCtx<'a> {
     /// accesses (`ns.X`) read the same function singletons named
     /// imports produce.
     pub namespace_node_submodules: &'a std::collections::HashMap<String, String>,
+    /// Issue #678 followup (namespace branch): see
+    /// `CompileOptions::namespace_v8_specifiers`. Local namespace alias →
+    /// V8 module specifier for `import * as ns from "<v8-module>"`. When
+    /// `ns.member(args)` is lowered and the namespace local appears here,
+    /// codegen emits a `js_call_v8_export(specifier, member, args, argc)`
+    /// bridge call instead of falling to the `double_literal(0.0)` stub.
+    /// Unblocks ramda (`import * as R`), date-fns, jose, effect — packages
+    /// where consumers use a wildcard namespace for ergonomics but the
+    /// source module fell back to V8.
+    pub namespace_v8_specifiers: &'a std::collections::HashMap<String, String>,
     /// Closure capture map: when lowering inside a closure body, this
     /// holds `LocalId → capture_index`. `LocalGet`/`LocalSet`/`Update`
     /// of an id in this map routes through the runtime
@@ -6597,6 +6607,22 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // to the same `perry_fn_<src>__<method>` symbol a
             // `import * as Foo from "pkg/Foo"` would have used.
             if ctx.namespace_imports.contains(class_name) {
+                // Issue #678 followup (namespace branch): `import * as ns
+                // from "<v8-module>"; ns.member(args)` with no companion
+                // Named import — the V8 module has no static export list
+                // so `import_function_prefixes` has no entry for
+                // `method_name`. Probe the namespace-level V8 specifier
+                // map first; on a hit, route the member call through the
+                // bridge using the namespace's specifier. Without this,
+                // ramda / date-fns / jose / effect wildcard-namespace
+                // members fell to the `double_literal(0.0)` stub below.
+                if let Some(specifier) = ctx.namespace_v8_specifiers.get(class_name).cloned() {
+                    let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                    for a in args {
+                        lowered.push(lower_expr(ctx, a)?);
+                    }
+                    return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
+                }
                 if let Some(source_prefix) = ctx.import_function_prefixes.get(method_name).cloned()
                 {
                     // Issue #678 followup: V8-fallback namespace member route —

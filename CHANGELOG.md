@@ -2,6 +2,39 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.991 — fix(codegen): V8 wildcard-namespace member calls — `R.sum([1,2,3])` returns 15 not 0
+
+**Symptom.** `import * as R from 'ramda'; console.log(R.sum([1,2,3,4,5]))` printed `0` instead of `15`. Same shape for any `R.add(2,3)`, `R.identity(5)`, `R.head([1,2,3])` — every member call on a wildcard-namespace import of a V8-fallback module returned the literal `0.0`. The bug is reproducible without ramda using a tiny `.mjs` helper module (`export function sum(arr) { return arr.reduce(...) }`) imported as `import * as helper from './helper.mjs'`, then `helper.sum([1,2,3])`. Named imports from the same module (`import { sum }`) worked fine.
+
+**Root cause — two-step misrouting.**
+
+1. **HIR lowering at `crates/perry-hir/src/lower/expr_call.rs:1987-2017`.** When the receiver of a call is an uppercase identifier that's been registered as an imported binding, HIR lifts `R.sum(args)` to `Expr::StaticMethodCall { class_name: "R", method_name: "sum", args }` — assuming `R` is a class. This is correct for `import { MongoClient } from 'pkg'; MongoClient.connect()` (the comment at 1991-1998 calls this out as a deliberate workaround for the lack of cross-module class metadata at HIR-lower time) but fires equally for `import * as R from 'ramda'`. Lowercase namespace identifiers (`import * as helper`) take a different path that lowers to `PropertyGet { object: ExternFuncRef(ns), property: "sum" }` and reaches the namespace-member-call arm in `crates/perry-codegen/src/lower_call.rs:549`.
+
+2. **Codegen at `crates/perry-codegen/src/expr.rs:6588-6635` (StaticMethodCall arm) and `lower_call.rs:549-660` (namespace-member-call arm).** Both arms route through `import_function_prefixes` to find the source module that exports the method, and on a hit further probe `import_function_v8_specifiers` to switch from native-symbol-call to `js_call_v8_export`. For a wildcard namespace import of a V8 module with no companion `Named` import alongside, `compile.rs:4271-4283` deliberately no-ops on the `ImportSpecifier::Namespace` branch — the comment there observes "V8 module consumers overwhelmingly use Named/Default imports", which holds for `ink` (the canonical #678 case) but breaks ramda, effect, jose, date-fns, and any other library where `import * as Pkg from 'pkg'` is idiomatic. With nothing seeded into `import_function_prefixes` for `sum`, both arms fall through to the `double_literal(0.0)` stub. That's the `0` the user sees.
+
+**Fix — add a per-namespace V8 specifier map and probe it before the existing `import_function_prefixes` lookups.**
+
+1. **`crates/perry-codegen/src/codegen.rs`:** add `CompileOptions::namespace_v8_specifiers: HashMap<String, String>` (namespace-local-name → V8 module specifier) and a matching `CrossModuleCtx::namespace_v8_specifiers`. Plumb through all six `FnCtx` construction sites (the search-and-replace was four indented variations of the same field-init shape).
+
+2. **`crates/perry-codegen/src/expr.rs` (`FnCtx`):** add `pub namespace_v8_specifiers: &'a HashMap<String, String>`.
+
+3. **`crates/perry/src/commands/compile.rs`:** initialise the new map alongside `import_function_v8_specifiers` and populate it from the V8-imports pass's `ImportSpecifier::Namespace` branch (the previous no-op). One `insert(local.clone(), specifier.clone())` per namespace import to a `ModuleKind::Interpreted` source. Thread the map into the `CompileOptions` literal at the bottom.
+
+4. **`crates/perry-codegen/src/expr.rs:6599` (StaticMethodCall arm) and `crates/perry-codegen/src/lower_call.rs:549` (PropertyGet-call arm):** before the existing `if let Some(source_prefix) = ...` lookup, probe the new map: `if let Some(specifier) = ctx.namespace_v8_specifiers.get(ns).cloned()` and on a hit, `emit_v8_export_call(ctx, &specifier, method_or_property, &lowered)`. Lowered args are passed through with no transformation — the existing bridge code (`crates/perry-codegen/src/expr.rs::emit_v8_export_call` → `crates/perry-jsruntime/src/interop.rs::js_call_v8_export` → `call_function_impl`) handles NaN-box → V8 arg marshalling and V8 → NaN-box result marshalling. The arrays in `R.sum([1,2,3])` round-trip cleanly because `native_to_v8` already recognises GC-tracked arrays at the source side and `v8_to_native` returns the V8 number result as a plain f64.
+
+5. **`crates/perry/src/commands/compile/object_cache.rs`:** add a `namespace_v8_specifiers` field to the `empty_opts` test helper and hash it alongside `namespace_node_submodules` in `compute_object_cache_key` so a flip between V8-fallback and native-compile for the namespace-target module invalidates the cached `.o`.
+
+**Validation.**
+
+- New worktree fixture `test-files/test_v8_namespace_call.ts` + `test-files/fixtures/v8_namespace_call_pkg/v8_helper.mjs` covers number-from-array (`sum`), string (`greet`), and class-instance with method (`make` returning a `Thing` with `.value` + `.doubled()`). All three lines match `node --experimental-strip-types` byte-for-byte.
+- `R.sum([1, 2, 3, 4, 5]) === 15`, `R.add(2, 3) === 5`, `R.identity(5) === 5`, `R.head([1, 2, 3]) === 1` against `npm install ramda@0.30.1`.
+- Existing `test_issue_678_v8_fallback*` and `test_issue_678_reexport_default` tests still pass — the `import_function_prefixes` lookup path is untouched, the new probe is purely an additional first-chance hit.
+
+**Out of scope (deferred follow-ups).**
+
+- **Higher-order results.** `const inc = R.add(1); inc(5)` still throws `TypeError: value is not a function`. The V8 bridge returns curried/closure values as JS handles, and the native call path doesn't dispatch handles as callables yet. Same shape blocks `R.pipe(...)(5)` and `R.map(R.multiply(2), [1,2,3])`. Tracked as a deeper Promise/closure marshalling bug — orthogonal to the namespace-routing fix here.
+- **date-fns + Effect class instances.** date-fns has a `NativeRust` Perry binding (`crates/perry-stdlib/...`), so `import { format } from 'date-fns'` doesn't reach the V8 path at all — `format` lowers to `NativeMethodCall { module: "date-fns" }` and reads `undefined` because the binding is incomplete. That's a perry-stdlib gap, not a V8 marshalling bug. Similarly `Effect.succeed(42)` returning the bare `42` instead of an Effect wrapper requires class-instance marshalling work that's bigger than this PR's scope.
+
 ## v0.5.990 — feat(util/stream): util.inherits + stream prototype scaffold (express compile unblocked)
 
 **Symptom.** After PR #983 unblocked `safer-buffer`, `import express from 'express'` advanced one frame further and then crashed at `node_modules/send/index.js:173` with:
