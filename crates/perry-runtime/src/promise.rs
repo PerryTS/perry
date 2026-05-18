@@ -1656,6 +1656,21 @@ pub extern "C" fn js_promise_resolved_then(
 ///     directly by the runner).
 #[no_mangle]
 pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *mut Promise {
+    // PR #1004 followup: if `value` is a JS_HANDLE_TAG handle to a V8
+    // Promise (the common case for `await <V8-fallback-call>(...)` —
+    // e.g. `await new SignJWT(...).sign(key)` in jose), convert it to
+    // a native pending Promise before any of the dispatch logic looks
+    // at it. Without this, `is_definitely_primitive(value)` returns
+    // true for the handle (only POINTER_TAG values are non-primitive),
+    // so the V8 Promise gets enqueued as the resolution value directly
+    // — the next async step then sees the unresolved Promise object
+    // as the `await` result, and code that expects the inner value
+    // (e.g. jose's `jwtVerify(jwt, key)` where `jwt` should be a
+    // string) observes `[object Promise]` instead. The other arms of
+    // this function already handle native pending Promises correctly
+    // via the `js_value_is_promise` + thunk path.
+    let value = adapt_foreign_promise_value(value);
+
     // Reuse predicate. `next` reuse is sound only when AsyncStepChain
     // is being called from the body of the SAME step closure that the
     // runner is currently dispatching. Two readers of INLINE_TRAP pose
@@ -1778,6 +1793,15 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
 /// Fall back to `js_promise_resolved(value)`.
 #[no_mangle]
 pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *mut Promise {
+    // PR #1004 followup (sibling to js_async_step_chain): adapt a
+    // JS_HANDLE_TAG V8 Promise into a native Promise before storing it
+    // as the resolution value, so `async function f() { return
+    // v8Promise; }` produces a Promise that resolves to the inner
+    // value (per ES spec for an async fn returning a thenable) instead
+    // of a Promise whose resolution value is the unresolved V8 Promise
+    // handle.
+    let value = adapt_foreign_promise_value(value);
+
     let trap = INLINE_TRAP.with(|c| c.get());
     if !trap.trap_next.is_null() && trap.current_step == step_closure as usize {
         bump(&MT_STEP_DONE_REUSE_HIT);

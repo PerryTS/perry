@@ -2,6 +2,112 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1004 — fix(runtime): `js_async_step_chain` awaits V8 Promise handles instead of treating them as primitives
+
+PR #1004 landed the marshalling layer for jose JWT (HS256) sign/verify
+end-to-end through the V8 fallback, but the compat sweep fixture at
+`/tmp/perry-compat-sweep/jose/entry.ts` — the end-to-end shape, not
+just the sign half — still failed with
+
+```
+[jsruntime_pump] event loop error: JWSInvalid: Compact JWS must be a
+string or Uint8Array
+    at compactVerify (.../jose/dist/node/esm/jws/compact/verify.js:9:15)
+    at jwtVerify (.../jose/dist/node/esm/jwt/verify.js:5:28)
+```
+
+The fixture is the canonical jose roundtrip — sign then immediately
+verify with the same secret:
+
+```ts
+const secret = new TextEncoder().encode("test-secret-key-32-bytes-aaaaaaaa");
+const jwt = await new SignJWT({ sub: "alice" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setExpirationTime("1h")
+    .sign(secret);
+const { payload } = await jwtVerify(jwt, secret);
+console.log("sub=" + payload.sub);
+```
+
+A diagnostic probe revealed that `typeof jwt = "object"` and
+`String(jwt) = "[object Promise]"` — the await of `.sign(secret)` was
+returning the unresolved V8 Promise handle, not the JWT string. So
+when the next statement called `jwtVerify(jwt, secret)`, jose's
+`compactVerify` was being handed the Promise object as the token —
+hence the rejection.
+
+**Root cause:** `crates/perry-runtime/src/promise.rs:js_async_step_chain`
+(the hot path that perry's async-to-generator transform emits in place
+of `Promise.resolve(<await-value>).then(step, step)` per `await`)
+short-circuits via `is_definitely_primitive(value)`:
+
+```rust
+fn is_definitely_primitive(value: f64) -> bool {
+    let tag = value.to_bits() & TAG_MASK;
+    tag != POINTER_TAG  // POINTER_TAG = 0x7FFD
+}
+```
+
+That predicate is fine for STRING_TAG (0x7FFF), INT32_TAG (0x7FFE),
+BIGINT_TAG (0x7FFA), TAG_UNDEFINED, TAG_NULL, TAG_FALSE, TAG_TRUE,
+and raw f64 numbers — none of which can be promises or thenables. But
+**JS_HANDLE_TAG (0x7FFB)** — perry-jsruntime's NaN-box tag for a V8
+handle (function, object, **including a V8 Promise**) — also fails
+`tag == POINTER_TAG`, so `is_definitely_primitive` returns `true`,
+and the step dispatch enqueues the V8 Promise handle as the
+resolution value for the next async step instead of waiting on it.
+The next step then writes the handle directly into the user
+variable — and `typeof handle` is `"object"` (per `js_handle_typeof`
+returning `false` for non-function handles), `String(handle)` is
+`"[object Promise]"`, and `jwtVerify(jwt, ...)` sees the Promise
+itself as the token argument.
+
+`js_promise_resolved` (the unfused equivalent) already had this
+covered:
+
+```rust
+pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
+    let value = adapt_foreign_promise_value(value);  // ← this line
+    if is_definitely_primitive(value) { ... }
+    ...
+}
+```
+
+`adapt_foreign_promise_value` calls back into the registered
+foreign-promise adapter (perry-jsruntime's `js_await_any_promise`),
+which converts a JS_HANDLE_TAG V8 Promise into a native pending
+Promise. That native Promise carries POINTER_TAG, so the post-adapt
+value naturally fails `is_definitely_primitive` and falls into the
+existing `js_value_is_promise` arm that drives the thunk path.
+
+**Fix:** call `adapt_foreign_promise_value(value)` at the entry of
+both `js_async_step_chain` and `js_async_step_done`, mirroring the
+existing pattern in `js_promise_resolved`. Both helpers are on the
+async-fn hot path:
+
+- `js_async_step_chain` handles every per-`await` lowering in an
+  async fn: `return AsyncStepChain(stepValue, __step)`.
+- `js_async_step_done` handles `return <expr>` from inside an async
+  fn body, where `<expr>` could be a V8 Promise (an `async` function
+  returning a thenable is supposed to adopt its state per spec).
+
+Once both adapt, every code path that hands a V8 Promise into perry's
+async step machinery wraps it in a native pending Promise before the
+primitive check fires; the rest of the dispatch then handles it like
+any other native promise (waits for resolution, unwraps the value,
+hands it to the next step).
+
+`test-files/test_jose_signverify_roundtrip.ts` (new) pins the
+fixture-equivalent shape. Output now prints `sub=alice` end-to-end
+through Perry's V8 fallback. The existing `test_jose_sign.ts` (just
+the sign half) still passes — it never exercised the second `await`
+because the original task only printed `typeof token`.
+
+Other npm libs that combine `async` with a Promise-returning V8
+method — anything that does `await <V8-imported-function>(...)` —
+were silently affected by the same bug; this fix lifts them all
+without per-library work. Files: `crates/perry-runtime/src/promise.rs`.
+
 ## v0.5.1003 — fix(jsruntime): jose JWT (HS256) end-to-end through the V8 fallback
 
 `await new SignJWT({ sub: 'alice' }).setProtectedHeader({ alg: 'HS256' }).sign(key)`
