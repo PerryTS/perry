@@ -2,6 +2,41 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.992 — fix(jsruntime/events): lazy `_events` init so mixin paths (express) work
+
+**Symptom.** After v0.5.991's `util.inherits` fix landed (PR #984), the next express blocker surfaced:
+
+```
+TypeError: Cannot read properties of undefined (reading 'mount')
+   at node:events:5 (inside EventEmitter.on)
+```
+
+Reproducer is `mkdir /tmp/x && cd /tmp/x; npm i express@4.21.0; perry test.ts -o out && ./out` where `test.ts` is just `import express from 'express'; const app = express(); console.log(typeof app.get);`. The crash happened inside `app.init()` → `this.on('mount', ...)`.
+
+**Root cause.** express's `createApplication()` does `mixin(app, EventEmitter.prototype, false)` — it copies methods from `EventEmitter.prototype` onto `app` but does **not** invoke the `EventEmitter` constructor. So `app._events` is never initialized. Then `app.init()` calls `this.on('mount', ...)`, the shim's `on` did `(this._events[event] = this._events[event] || []).push(listener)`, and reading `_events[event]` on `undefined` threw.
+
+This mirrors a real Node.js detail: lib/events.js does **not** rely on the constructor for `_events`. Every method that touches `_events` does `this._events ??= ObjectCreate(null)` first. The shim was assuming constructor-only init.
+
+**Fix.** Rewrote `crates/perry-jsruntime/src/modules.rs` events shim so every method lazy-initializes `_events`:
+
+```js
+function __perry_ee_init(self) { if (!self._events) self._events = Object.create(null); return self._events; }
+export class EventEmitter {
+    constructor() { this._events = Object.create(null); }
+    on(event, listener) { const e = __perry_ee_init(this); (e[event] = e[event] || []).push(listener); return this; }
+    // ... and so on for emit, off, once, removeAllListeners, listeners, listenerCount
+}
+```
+
+While there, also added the previously-missing prototype methods Node's EventEmitter exposes: `addListener` (alias for `on`), `prependListener`, `prependOnceListener`, `eventNames`. `emit` now also copies the listener array before iterating (Node semantics — listeners that remove themselves during emit must still fire) and uses `fn.apply(this, args)` so `this` inside listeners points at the emitter.
+
+**Verified.** `mkdir /tmp/perry-express-3 && cd /tmp/perry-express-3 && npm i express@4.21.0 && perry test.ts -o out && ./out` now prints `function\nfunction` (typeof app, typeof app.get) instead of crashing in `node:events:5`. The events shim regression test (`test-files/test_events_mixin_lazy.ts`) matches Node byte-for-byte.
+
+**Files changed.**
+
+- `crates/perry-jsruntime/src/modules.rs` (events shim rewrite, ~20 lines)
+- `test-files/test_events_mixin_lazy.ts` (new regression test)
+
 ## v0.5.991 — fix(codegen): V8 wildcard-namespace member calls — `R.sum([1,2,3])` returns 15 not 0
 
 **Symptom.** `import * as R from 'ramda'; console.log(R.sum([1,2,3,4,5]))` printed `0` instead of `15`. Same shape for any `R.add(2,3)`, `R.identity(5)`, `R.head([1,2,3])` — every member call on a wildcard-namespace import of a V8-fallback module returned the literal `0.0`. The bug is reproducible without ramda using a tiny `.mjs` helper module (`export function sum(arr) { return arr.reduce(...) }`) imported as `import * as helper from './helper.mjs'`, then `helper.sum([1,2,3])`. Named imports from the same module (`import { sum }`) worked fine.

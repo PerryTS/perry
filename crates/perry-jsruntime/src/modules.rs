@@ -1253,17 +1253,27 @@ export const types = {
 export default { promisify, callbackify, inspect, format, formatWithOptions, debuglog, deprecate, inherits, TextEncoder, TextDecoder, types };
 "#.to_string(),
         "events" => r#"
-// Stub implementation for Node.js 'events' module
+// Stub implementation for Node.js 'events' module.
+// Every method lazy-initializes `_events` so mixin/inherit patterns that
+// copy EventEmitter.prototype without invoking the constructor (e.g.
+// express's createApplication -> mixin(app, EventEmitter.prototype, false))
+// still work. This mirrors Node's real lib/events.js, which does
+// `this._events ??= ObjectCreate(null)` inside every method.
+function __perry_ee_init(self) { if (!self._events) self._events = Object.create(null); return self._events; }
 export class EventEmitter {
-    constructor() { this._events = {}; }
-    on(event, listener) { (this._events[event] = this._events[event] || []).push(listener); return this; }
-    once(event, listener) { const wrapped = (...args) => { this.off(event, wrapped); listener(...args); }; return this.on(event, wrapped); }
-    off(event, listener) { const arr = this._events[event]; if (arr) { const i = arr.indexOf(listener); if (i >= 0) arr.splice(i, 1); } return this; }
+    constructor() { this._events = Object.create(null); }
+    on(event, listener) { const e = __perry_ee_init(this); (e[event] = e[event] || []).push(listener); return this; }
+    addListener(event, listener) { return this.on(event, listener); }
+    once(event, listener) { __perry_ee_init(this); const wrapped = (...args) => { this.off(event, wrapped); listener(...args); }; return this.on(event, wrapped); }
+    off(event, listener) { const e = __perry_ee_init(this); const arr = e[event]; if (arr) { const i = arr.indexOf(listener); if (i >= 0) arr.splice(i, 1); } return this; }
     removeListener(event, listener) { return this.off(event, listener); }
-    emit(event, ...args) { const arr = this._events[event]; if (arr) arr.forEach(fn => fn(...args)); return !!arr; }
-    removeAllListeners(event) { if (event) delete this._events[event]; else this._events = {}; return this; }
-    listeners(event) { return this._events[event] || []; }
-    listenerCount(event) { return (this._events[event] || []).length; }
+    emit(event, ...args) { const e = __perry_ee_init(this); const arr = e[event]; if (arr) arr.slice().forEach(fn => fn.apply(this, args)); return !!arr; }
+    removeAllListeners(event) { const e = __perry_ee_init(this); if (event) delete e[event]; else this._events = Object.create(null); return this; }
+    prependListener(event, listener) { const e = __perry_ee_init(this); (e[event] = e[event] || []).unshift(listener); return this; }
+    prependOnceListener(event, listener) { __perry_ee_init(this); const wrapped = (...args) => { this.off(event, wrapped); listener(...args); }; return this.prependListener(event, wrapped); }
+    listeners(event) { const e = __perry_ee_init(this); return (e[event] || []).slice(); }
+    listenerCount(event) { const e = __perry_ee_init(this); return (e[event] || []).length; }
+    eventNames() { const e = __perry_ee_init(this); return Object.keys(e); }
     setMaxListeners() { return this; }
     getMaxListeners() { return 10; }
 }
