@@ -1009,8 +1009,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
             return String::new();
         }
         let len = (*s_ptr).byte_len as usize;
-        let data =
-            (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
         let bs = std::slice::from_raw_parts(data, len);
         std::str::from_utf8(bs).unwrap_or("").to_string()
     }
@@ -1019,8 +1018,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
     }
     unsafe {
         let length = (*arr_ptr).length as usize;
-        let data_ptr = (arr_ptr as *const u8)
-            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+        let data_ptr = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
             as *const f64;
 
         // No format string → empty result. Node returns "" for

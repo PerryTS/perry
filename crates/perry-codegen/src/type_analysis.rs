@@ -1041,9 +1041,7 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     return true;
                 }
                 // `Array.fromAsync(...)` returns a Promise<Array>.
-                if property == "fromAsync"
-                    && is_global_builtin_named(object.as_ref(), "Array")
-                {
+                if property == "fromAsync" && is_global_builtin_named(object.as_ref(), "Array") {
                     return true;
                 }
                 // `.then(cb)` / `.catch(cb)` / `.finally(cb)` on a promise
