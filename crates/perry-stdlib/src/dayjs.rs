@@ -520,16 +520,219 @@ pub unsafe extern "C" fn js_dayjs_is_valid(handle: Handle) -> f64 {
 // ============ date-fns compatible functions ============
 
 /// format(date, formatStr) -> string (date-fns compatible)
+///
+/// date-fns uses Unicode-LDML-ish tokens (lowercase `yyyy` for year,
+/// `dd` for day-of-month, `MM` for month, etc.) and formats in the
+/// **local** timezone — distinct from dayjs which uses uppercase
+/// `YYYY`/`DD` and is happy to format in UTC. We can't reuse
+/// `js_dayjs_format` for this because (a) the token replacements miss,
+/// and (b) local-vs-UTC swings the day across a midnight boundary.
+/// Refs date-fns blocker.
 #[no_mangle]
 pub unsafe extern "C" fn js_datefns_format(
     timestamp: f64,
     pattern_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    let handle_f64 = js_dayjs_from_timestamp(timestamp);
-    if handle_f64 == 0.0 {
+    use chrono::Local;
+    if timestamp.is_nan() {
         return std::ptr::null_mut();
     }
-    js_dayjs_format(f64_to_handle(handle_f64), pattern_ptr)
+    let pattern = string_from_header(pattern_ptr).unwrap_or_else(|| "yyyy-MM-dd".to_string());
+    // `new Date(year, monthIndex, ...)` stores a UTC ms timestamp whose
+    // wall-clock representation in local time is the literal components
+    // the user passed. So formatting it in `Local` reproduces those
+    // components — which is exactly what Node's date-fns does.
+    let secs = (timestamp / 1000.0) as i64;
+    let nanos = ((timestamp.rem_euclid(1000.0)) * 1_000_000.0) as u32;
+    let dt = match chrono::DateTime::from_timestamp(secs, nanos) {
+        Some(d) => d.with_timezone(&Local),
+        None => return std::ptr::null_mut(),
+    };
+    let formatted = format_date_fns_pattern(&pattern, &dt);
+    js_string_from_bytes(formatted.as_ptr(), formatted.len() as u32)
+}
+
+/// Translate a date-fns format pattern against a chrono datetime.
+///
+/// Handles the most common Unicode-LDML tokens that date-fns supports.
+/// Single-quoted literals (`'literal'`) pass through untouched. Tokens
+/// not recognized below pass through unchanged — matching date-fns'
+/// permissive behavior on unknown letters.
+fn format_date_fns_pattern<Tz: chrono::TimeZone>(pattern: &str, dt: &chrono::DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    use chrono::{Datelike, Timelike};
+    let bytes = pattern.as_bytes();
+    let mut out = String::with_capacity(pattern.len() + 8);
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        // Single-quoted literal — anything between `'...'` is emitted
+        // verbatim. `''` is a single quote.
+        if c == b'\'' {
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'\'' {
+                out.push('\'');
+                i += 1;
+                continue;
+            }
+            while i < bytes.len() && bytes[i] != b'\'' {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+        if !c.is_ascii_alphabetic() {
+            out.push(c as char);
+            i += 1;
+            continue;
+        }
+        // Read a run of the same letter.
+        let start = i;
+        while i < bytes.len() && bytes[i] == c {
+            i += 1;
+        }
+        let run = i - start;
+        match c {
+            b'y' => match run {
+                1 => out.push_str(&format!("{}", dt.year())),
+                2 => out.push_str(&format!("{:02}", dt.year() % 100)),
+                _ => out.push_str(&format!("{:0width$}", dt.year(), width = run)),
+            },
+            b'M' => match run {
+                1 => out.push_str(&format!("{}", dt.month())),
+                2 => out.push_str(&format!("{:02}", dt.month())),
+                3 => out.push_str(short_month_name(dt.month())),
+                _ => out.push_str(long_month_name(dt.month())),
+            },
+            b'd' => match run {
+                1 => out.push_str(&format!("{}", dt.day())),
+                _ => out.push_str(&format!("{:02}", dt.day())),
+            },
+            b'H' => match run {
+                1 => out.push_str(&format!("{}", dt.hour())),
+                _ => out.push_str(&format!("{:02}", dt.hour())),
+            },
+            b'h' => {
+                let h12 = dt.hour() % 12;
+                let h12 = if h12 == 0 { 12 } else { h12 };
+                match run {
+                    1 => out.push_str(&format!("{}", h12)),
+                    _ => out.push_str(&format!("{:02}", h12)),
+                }
+            }
+            b'm' => match run {
+                1 => out.push_str(&format!("{}", dt.minute())),
+                _ => out.push_str(&format!("{:02}", dt.minute())),
+            },
+            b's' => match run {
+                1 => out.push_str(&format!("{}", dt.second())),
+                _ => out.push_str(&format!("{:02}", dt.second())),
+            },
+            b'S' => {
+                // Fractional seconds. date-fns uses S/SS/SSS for 1/2/3
+                // digits of millisecond precision.
+                let ms = dt.nanosecond() / 1_000_000;
+                match run {
+                    1 => out.push_str(&format!("{}", ms / 100)),
+                    2 => out.push_str(&format!("{:02}", ms / 10)),
+                    _ => out.push_str(&format!("{:03}", ms)),
+                }
+            }
+            b'a' => {
+                // am/pm marker
+                let ampm = if dt.hour() < 12 { "AM" } else { "PM" };
+                out.push_str(ampm);
+            }
+            b'E' => {
+                // Day-of-week abbreviations. EEEE = long, EEE/EE/E = short.
+                let wd = dt.weekday();
+                if run >= 4 {
+                    out.push_str(long_weekday_name(wd));
+                } else {
+                    out.push_str(short_weekday_name(wd));
+                }
+            }
+            b'X' | b'x' => {
+                // Time-zone offset. Approximate as ±HH:MM (date-fns has
+                // many variants; this covers the common case).
+                out.push_str(&format!("{}", dt.offset()));
+            }
+            _ => {
+                // Unknown letter run — emit verbatim (date-fns throws
+                // on truly unknown tokens, but conservatively passing
+                // through is closer to dayjs's behavior).
+                for _ in 0..run {
+                    out.push(c as char);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn short_month_name(m: u32) -> &'static str {
+    match m {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => "",
+    }
+}
+
+fn long_month_name(m: u32) -> &'static str {
+    match m {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        _ => "",
+    }
+}
+
+fn short_weekday_name(w: chrono::Weekday) -> &'static str {
+    match w {
+        chrono::Weekday::Mon => "Mon",
+        chrono::Weekday::Tue => "Tue",
+        chrono::Weekday::Wed => "Wed",
+        chrono::Weekday::Thu => "Thu",
+        chrono::Weekday::Fri => "Fri",
+        chrono::Weekday::Sat => "Sat",
+        chrono::Weekday::Sun => "Sun",
+    }
+}
+
+fn long_weekday_name(w: chrono::Weekday) -> &'static str {
+    match w {
+        chrono::Weekday::Mon => "Monday",
+        chrono::Weekday::Tue => "Tuesday",
+        chrono::Weekday::Wed => "Wednesday",
+        chrono::Weekday::Thu => "Thursday",
+        chrono::Weekday::Fri => "Friday",
+        chrono::Weekday::Sat => "Saturday",
+        chrono::Weekday::Sun => "Sunday",
+    }
 }
 
 /// parseISO(dateString) -> timestamp (date-fns compatible)

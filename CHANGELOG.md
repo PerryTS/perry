@@ -2,6 +2,35 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.998 — fix(date-fns): format() returns a formatted string instead of undefined
+
+**Symptom.** `import { format } from 'date-fns'; format(new Date(2020, 0, 6), 'yyyy-MM-dd')` compiled cleanly and ran without error, but the console printed `undefined` instead of `2020-01-06`. Same shape for every other free function date-fns exports (`parseISO`, `addDays`, `isAfter`, …).
+
+**Root cause — manifest entries existed, dispatch table did not.** Three layers were wired but the middle one was missing:
+
+1. `crates/perry-api-manifest/src/entries.rs` surfaces `method("date-fns", "format", false, None)` and friends, so the HIR-lowerer recognises the import and emits `NativeMethodCall { module: "date-fns", method: "format", … }`.
+2. `crates/perry-stdlib/src/dayjs.rs` defines `js_datefns_format` / `js_datefns_add_days` / etc and `runtime_decls.rs` declares them at the LLVM level.
+3. **Missing.** `NATIVE_MODULE_TABLE` in `crates/perry-codegen/src/lower_call.rs` had no `module: "date-fns"` rows, so `native_module_lookup("date-fns", false, "format", _)` returned `None` and the call fell through to the receiver-less-unknown-native branch, which materialises as undefined.
+
+Beyond the dispatch hole, `js_datefns_format` itself was a thin wrapper around `js_dayjs_format`, which only knows dayjs's *uppercase* tokens (`YYYY/DD`). date-fns uses *lowercase* Unicode-LDML tokens (`yyyy/dd`) — so even after the dispatch was hooked up, `format(d, 'yyyy-MM-dd')` would have printed the raw template back. And dayjs's formatter normalises to UTC, which shifts the displayed day across the midnight boundary for any non-UTC machine.
+
+**Fix.** Two halves:
+
+1. **Wire dispatch** (`crates/perry-codegen/src/lower_call.rs`). Added twelve `NativeModSig` rows for module `"date-fns"` covering the manifest surface (`format`, `parseISO`, `addDays/Months/Years`, `differenceInDays/Hours/Minutes`, `isAfter/Before`, `startOfDay/endOfDay`). All `has_receiver: false` — date-fns is a functional API, every call passes the date as the first argument.
+2. **Rewrite `js_datefns_format`** (`crates/perry-stdlib/src/dayjs.rs`). New `format_date_fns_pattern` helper walks the pattern character-by-character, recognises the LDML tokens date-fns actually emits (`y/M/d/H/h/m/s/S/a/E/X`), handles `'single-quoted literals'`, and formats in `chrono::Local` so the day-of-month matches Node's date-fns output on a non-UTC machine. Token-run length controls padding (e.g. `M` → `1`, `MM` → `01`, `MMM` → `Jan`, `MMMM` → `January`).
+
+**Validation.** New test fixture `test-files/test_date_fns_format.ts` exercises the regex-token path (existing) plus end-to-end `format(...)`. Byte-for-byte parity against Node's `--experimental-strip-types` on the original repro:
+
+```
+import { format } from 'date-fns';
+const d = new Date(2020, 0, 6);
+console.log(format(d, 'yyyy-MM-dd'));  // 2020-01-06
+console.log(format(d, 'yyyy'));         // 2020
+console.log(format(d, 'MM'));            // 01
+console.log(format(d, 'dd'));            // 06
+console.log(typeof format(d, 'yyyy'));   // string
+```
+
 ## v0.5.997 — feat(jsruntime): V8 named-import static-method dispatch for Effect.succeed
 
 **Symptom.** `import { Effect } from 'effect'; Effect.succeed(42)` returned the literal number `0` instead of an Effect class instance. `typeof e === 'number'`, `e.pipe` was `undefined`, `e._tag` was `undefined`. Same shape blocked any `import { X } from 'v8-fallback-pkg'; X.method(args)` pattern where the V8 module's top-level export `X` is itself a sub-namespace object holding the actual functions — the Effect/jose/many-internal-tools pattern.

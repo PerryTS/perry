@@ -27,3 +27,13 @@ console.log("aabbbccdd".match(g));
 
 // No-match returns null
 console.log("xyz".match(/(\w)\1+/));
+
+// End-to-end: format(date, pattern). Uses the native runtime path
+// (date-fns is well-known-aliased to perry-ext-dayjs).
+import { format } from "date-fns";
+const d = new Date(2020, 0, 6);
+console.log(format(d, "yyyy-MM-dd"));
+console.log(format(d, "yyyy"));
+console.log(format(d, "MM"));
+console.log(format(d, "dd"));
+console.log(typeof format(d, "yyyy"));
