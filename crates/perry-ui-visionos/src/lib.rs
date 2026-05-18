@@ -1399,6 +1399,9 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "perry_system_share_url",
         "visionOS share sheet not yet implemented (#917 follow-up)",
         Some("#917"),
+    );
+}
+
 // #675 — App Group stubs on visionOS. Same UserDefaults(suiteName:)
 // path as iOS will work; tracked as #675 follow-up.
 #[no_mangle]

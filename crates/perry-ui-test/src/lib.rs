@@ -1457,6 +1457,26 @@ pub const FEATURES: &[Feature] = &[
     // (per-platform native impls land as #917 follow-ups).
     Feature {
         name: "perry_system_share_text",
+        category: SystemApi,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: S,
+        web_name: None,
+    },
+    Feature {
+        name: "perry_system_share_url",
+        category: SystemApi,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: S,
+        web_name: None,
+    },
     // #675: App Group / cross-process shared storage. macOS has the
     // real NSUserDefaults(suiteName:) impl; iOS has the in-process
     // HashMap MVP; every other platform is a first-call-warning stub.
@@ -1472,7 +1492,6 @@ pub const FEATURES: &[Feature] = &[
         web_name: None,
     },
     Feature {
-        name: "perry_system_share_url",
         name: "perry_system_app_group_get",
         category: SystemApi,
         macos: S,

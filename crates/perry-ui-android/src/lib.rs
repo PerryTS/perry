@@ -1432,6 +1432,9 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "perry_system_share_url",
         "Android Intent.ACTION_SEND not yet implemented (#917 follow-up)",
         Some("#917"),
+    );
+}
+
 // #675 — App Group stubs on Android. Native impl will use scoped
 // `SharedPreferences` keyed by `shared_prefs_name` from perry.toml,
 // dispatched through JNI; tracked as #675 follow-up.

@@ -1730,6 +1730,9 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "perry_system_share_url",
         "GTK4/Linux XDG share portal not yet wired (#917 follow-up)",
         Some("#917"),
+    );
+}
+
 // #675 — App Group stubs on GTK4 / Linux. Native impl will use a
 // per-user XDG path (`$XDG_DATA_HOME/<bundle_id>/shared/`) for the
 // blob shape and a small JSON-backed kv store; tracked as #675

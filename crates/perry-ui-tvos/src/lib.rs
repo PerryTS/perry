@@ -1280,6 +1280,9 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "perry_system_share_url",
         "tvOS does not expose a programmatic share sheet (#917)",
         Some("#917"),
+    );
+}
+
 // #675 — App Group / cross-process shared storage. MVP stubs on
 // tvOS; tvOS user apps don't typically share data cross-process,
 // and the matching real impl (UserDefaults(suiteName:)) isn't

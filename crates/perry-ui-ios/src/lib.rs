@@ -1393,6 +1393,8 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "iOS UIActivityViewController not yet implemented (#917 follow-up)",
         Some("#917"),
     );
+}
+
 // #675 — App Group / cross-process shared storage on iOS. MVP uses
 // an in-process HashMap so the API is exercisable from user code;
 // the native impl (UserDefaults(suiteName:) read from
