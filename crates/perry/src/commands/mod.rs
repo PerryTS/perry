@@ -1,6 +1,7 @@
 //! CLI command implementations
 
 pub mod appstore;
+pub mod attest;
 pub mod audit;
 pub mod cache;
 pub mod check;

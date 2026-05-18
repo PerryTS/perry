@@ -191,6 +191,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         debug_symbols: false,
         no_cache: false,
         fast_math: false,
+        emit_attest: false,
         min_windows_version: "10".to_string(),
         // Phase 2 v7: harmonyos signing flags. `perry run` is for local
         // iteration where unsigned HAPs are fine, so fall through to env

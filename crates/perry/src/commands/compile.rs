@@ -337,6 +337,17 @@ pub struct CompileArgs {
     #[arg(long)]
     pub fast_math: bool,
 
+    /// #504 — emit `<binary>.attest.json` next to the compiled
+    /// executable. The sidecar carries SHA-256 of the binary +
+    /// provenance (perry version, git commit, build timestamp) so
+    /// downstream users can verify a downloaded binary matches the
+    /// source. Verify with `perry verify --attest <binary>`.
+    /// Also settable via `PERRY_EMIT_ATTEST=1` env or
+    /// `"perry": { "emitAttest": true }` in package.json.
+    /// See `docs/src/cli/emit-attest.md`.
+    #[arg(long)]
+    pub emit_attest: bool,
+
     /// Minimum Windows version the compiled executable must run on.
     /// Accepted values: `7`, `8`, `10` (default `10`). Ignored on every
     /// non-Windows target.
@@ -582,6 +593,13 @@ pub struct CompilationContext {
     /// default; populated from `perry.allowUnsandboxedBuild` in the
     /// host `package.json`.
     pub allow_unsandboxed_build: Vec<String>,
+    /// #504 — when true, emit `<binary>.attest.json` next to the
+    /// compiled binary. The sidecar holds SHA-256 + size +
+    /// provenance metadata so downstream users can verify the
+    /// binary matches its declared source via `perry verify --attest`.
+    /// Sources, last wins: `perry.emitAttest` in package.json →
+    /// `PERRY_EMIT_ATTEST=1` env → `--emit-attest` CLI.
+    pub emit_attest: bool,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -633,6 +651,7 @@ impl CompilationContext {
             permissions: std::collections::BTreeMap::new(),
             host_package_name: None,
             allow_unsandboxed_build: Vec::new(),
+            emit_attest: false,
         }
     }
 }
@@ -1204,6 +1223,15 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
+                // #504: perry.emitAttest — emit binary attestation
+                // sidecar at compile time. See docs/src/cli/emit-attest.md.
+                if let Some(ea) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("emitAttest"))
+                    .and_then(|v| v.as_bool())
+                {
+                    ctx.emit_attest = ea;
+                }
             }
         }
     }
@@ -1252,6 +1280,18 @@ pub fn run_with_parse_cache(
             ctx.allow_js_runtime = false;
         }
         _ => {}
+    }
+
+    // #504 — precedence ladder (last wins): package.json
+    // `perry.emitAttest` → env `PERRY_EMIT_ATTEST=1` → CLI
+    // `--emit-attest`.
+    match std::env::var("PERRY_EMIT_ATTEST") {
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => ctx.emit_attest = true,
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => ctx.emit_attest = false,
+        _ => {}
+    }
+    if args.emit_attest {
+        ctx.emit_attest = true;
     }
 
     // --- i18n: parse [i18n] config from perry.toml and load locale files ---
@@ -7697,6 +7737,33 @@ pub fn run_with_parse_cache(
                 .status();
         } else {
             let _ = std::process::Command::new("strip").arg(&exe_path).status();
+        }
+    }
+
+    // #504 — emit `<binary>.attest.json` AFTER strip/codesign/etc. so
+    // the captured SHA-256 matches the file users will actually
+    // download. (Hooked here, not next to `Wrote executable:`, because
+    // strip rewrites the file between the linker and the final
+    // shipped form.) Best-effort: errors log and continue.
+    if ctx.emit_attest {
+        match super::attest::build_attestation(&exe_path, &ctx.project_root) {
+            Ok(manifest) => match super::attest::write_attestation(&exe_path, &manifest) {
+                Ok(sidecar) => {
+                    if let OutputFormat::Text = format {
+                        println!("Wrote attestation: {}", sidecar.display())
+                    }
+                }
+                Err(e) => {
+                    if let OutputFormat::Text = format {
+                        eprintln!("warning: failed to write attestation: {}", e)
+                    }
+                }
+            },
+            Err(e) => {
+                if let OutputFormat::Text = format {
+                    eprintln!("warning: failed to build attestation: {}", e)
+                }
+            }
         }
     }
 
