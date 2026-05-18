@@ -7038,10 +7038,7 @@ pub fn run_with_parse_cache(
             .clone()
             .map(|raw| {
                 // #999: CLI override goes straight to codesign argv.
-                crate::commands::sanitize::validate_bundle_id_or_exit(
-                    &raw,
-                    "CLI --app-bundle-id",
-                )
+                crate::commands::sanitize::validate_bundle_id_or_exit(&raw, "CLI --app-bundle-id")
             })
             .or_else(|| {
                 (|| -> Option<String> {
@@ -7090,10 +7087,7 @@ pub fn run_with_parse_cache(
                             // before this raw byte-sliced string reaches
                             // codesign argv.
                             let raw = &data[q1..q2];
-                            let label = format!(
-                                "package.json `bundleId` at {}",
-                                pkg.display()
-                            );
+                            let label = format!("package.json `bundleId` at {}", pkg.display());
                             return Some(crate::commands::sanitize::validate_bundle_id_or_exit(
                                 raw, &label,
                             ));

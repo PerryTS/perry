@@ -426,11 +426,11 @@ mod tests {
             "",
             "foo/bar",
             "foo bar",
-            "ｐerry",         // full-width 'p' lookalike
+            "ｐerry",           // full-width 'p' lookalike
             "good\u{202E}evil", // RTL bidi override
         ] {
-            let err = validate_bundle_id(evil, "test source")
-                .unwrap_err_or_else_panic_with_label(evil);
+            let err =
+                validate_bundle_id(evil, "test source").unwrap_err_or_else_panic_with_label(evil);
             assert!(
                 err.contains("test source"),
                 "diagnostic should name the source for {evil:?}: {err}"
@@ -458,7 +458,10 @@ mod tests {
         assert!(err.contains("`;`"), "should call out `;`: {err}");
         assert!(err.contains("`|`"), "should call out `|`: {err}");
         assert!(err.contains("package.json"), "should name source: {err}");
-        assert!(err.contains("[A-Za-z0-9._-]"), "should state allowed class: {err}");
+        assert!(
+            err.contains("[A-Za-z0-9._-]"),
+            "should state allowed class: {err}"
+        );
     }
 
     #[test]
