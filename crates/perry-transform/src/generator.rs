@@ -24,6 +24,62 @@ pub fn transform_generators(module: &mut Module) {
     }
 }
 
+/// Issue #1021: apply the same generator + async-step-driver transform that
+/// `transform_generators` runs on top-level functions to a single
+/// `Expr::Closure` body. Used by `transform_async_to_generator` for async
+/// arrow callbacks (`app.listen(port, async () => { await fetch(self) })`)
+/// that would otherwise lower to the busy-wait at `expr.rs:10588` and
+/// deadlock self-fetch inside a V8 trampoline frame.
+///
+/// Preconditions: the body has already had `hoist_awaits_in_stmts` and
+/// `rewrite_stmts` applied (i.e. all `Expr::Await` have been turned into
+/// `Expr::Yield` and the body is in linearizable form). The caller (in
+/// `async_to_generator.rs`) is responsible for that.
+///
+/// Returns the rewritten body. The closure's `params` are unchanged. The
+/// caller should set `is_async = false` on the closure and register the
+/// closure's `func_id` in `module.async_step_closures`.
+pub fn transform_plain_async_closure_body(
+    body: Vec<Stmt>,
+    params: &[perry_hir::Param],
+    outer_captures: &[LocalId],
+    outer_mutable_captures: &[LocalId],
+    next_local_id: &mut LocalId,
+    next_func_id: &mut FuncId,
+) -> Vec<Stmt> {
+    // Construct a temporary Function so we can reuse the existing
+    // `transform_generator_function_with_extra_captures` plumbing
+    // verbatim. Fields not consulted by the transform are stubbed.
+    let synth_func_id = {
+        let id = *next_func_id;
+        *next_func_id += 1;
+        id
+    };
+    let mut synth = Function {
+        id: synth_func_id,
+        name: "__async_closure_body".to_string(),
+        type_params: Vec::new(),
+        params: params.to_vec(),
+        return_type: Type::Any,
+        body,
+        is_async: false,
+        is_generator: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: true,
+        was_unrolled: false,
+    };
+    transform_generator_function_with_extra_captures(
+        &mut synth,
+        next_local_id,
+        next_func_id,
+        outer_captures,
+        outer_mutable_captures,
+    );
+    synth.body
+}
+
 /// Find the maximum local ID used in the module.
 fn compute_max_local_id(module: &Module) -> LocalId {
     let mut max_id: LocalId = 0;
@@ -812,6 +868,33 @@ fn transform_generator_function(
     next_local_id: &mut u32,
     next_func_id: &mut u32,
 ) {
+    transform_generator_function_with_extra_captures(
+        func,
+        next_local_id,
+        next_func_id,
+        &[],
+        &[],
+    );
+}
+
+/// Issue #1021: variant that augments the internally-generated
+/// next/return/throw/step closures with extra captures from an enclosing
+/// scope. Used when this transform is applied to a synthetic Function
+/// built from an `Expr::Closure` body — the body's `LocalGet`s to
+/// outer-scope variables (e.g. `server` in `app.listen(port, async () =>
+/// { ... server.close() })`) need those LocalIds in the step closure's
+/// captures so Perry's transitive closure-capture mechanism (see
+/// `expr.rs:4984-4997`) resolves them via the enclosing closure pointer.
+///
+/// For top-level fns (`extra_captures` empty) the behavior is identical
+/// to the pre-refactor implementation.
+fn transform_generator_function_with_extra_captures(
+    func: &mut Function,
+    next_local_id: &mut u32,
+    next_func_id: &mut u32,
+    extra_captures: &[LocalId],
+    extra_mutable_captures: &[LocalId],
+) {
     // Remember whether this was an async generator (`async function*`).
     // Async generators are still lowered via the same state-machine
     // transform, but:
@@ -1061,6 +1144,16 @@ fn transform_generator_function(
     for extra_id in &extra_local_ids {
         captures.push(*extra_id);
         mutable_captures.push(*extra_id);
+    }
+    // Issue #1021: when transforming a closure body, the body may reference
+    // LocalIds captured from outer scope. Add them so the internally-built
+    // next/return/throw/step closures can resolve them transitively through
+    // the enclosing closure pointer.
+    for cap_id in extra_captures {
+        captures.push(*cap_id);
+    }
+    for mcap_id in extra_mutable_captures {
+        mutable_captures.push(*mcap_id);
     }
     captures.sort();
     captures.dedup();

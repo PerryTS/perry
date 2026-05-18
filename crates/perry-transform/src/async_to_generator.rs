@@ -121,6 +121,347 @@ pub fn transform_async_to_generator(module: &mut Module) {
             }
         }
     }
+
+    // Issue #1021 phase 2: rewrite async closures (`Expr::Closure {
+    // is_async: true }` with awaits) into state machines. Without this,
+    // `app.listen(port, async () => { await fetch(self) })` callbacks
+    // busy-wait at `expr.rs:10588` while holding a V8 trampoline scope,
+    // blocking deno's executor from settling the accept-loop continuation
+    // and deadlocking self-fetch.
+    //
+    // The set populated by `collect_async_step_closures` above is the
+    // worklist. The actual rewrite runs after the top-level fn pass so
+    // the helpers (`hoist_awaits_in_stmts`, `rewrite_stmts`) share the
+    // single `next_local_id` counter without races.
+    if !module.async_step_closures.is_empty() {
+        let mut next_func_id: perry_types::FuncId =
+            compute_max_func_id_module(module) + 1;
+        // Walk the HIR, rewriting matched async closures in-place. The
+        // walker descends into nested closures so chains like
+        // `async () => { items.map(async x => await f(x)) }` are
+        // handled.
+        let work = module.async_step_closures.clone();
+        for func in &mut module.functions {
+            rewrite_async_closures_in_stmts(
+                &mut func.body,
+                &work,
+                &mut next_local_id,
+                &mut next_func_id,
+            );
+        }
+        rewrite_async_closures_in_stmts(
+            &mut module.init,
+            &work,
+            &mut next_local_id,
+            &mut next_func_id,
+        );
+        for class in &mut module.classes {
+            for m in &mut class.methods {
+                rewrite_async_closures_in_stmts(
+                    &mut m.body,
+                    &work,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                );
+            }
+            for m in &mut class.static_methods {
+                rewrite_async_closures_in_stmts(
+                    &mut m.body,
+                    &work,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                );
+            }
+            if let Some(ctor) = &mut class.constructor {
+                rewrite_async_closures_in_stmts(
+                    &mut ctor.body,
+                    &work,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                );
+            }
+            for getter in &mut class.getters {
+                rewrite_async_closures_in_stmts(
+                    &mut getter.1.body,
+                    &work,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                );
+            }
+            for setter in &mut class.setters {
+                rewrite_async_closures_in_stmts(
+                    &mut setter.1.body,
+                    &work,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                );
+            }
+        }
+    }
+}
+
+fn compute_max_func_id_module(module: &Module) -> perry_types::FuncId {
+    let mut m: perry_types::FuncId = 0;
+    for func in &module.functions {
+        m = m.max(func.id);
+    }
+    // Scan all closures' func_ids in the HIR so we don't collide with an
+    // existing closure id when synthesizing transform-internal func_ids.
+    let mut max_closure_id: perry_types::FuncId = 0;
+    for func in &module.functions {
+        scan_stmts_for_max_closure_id(&func.body, &mut max_closure_id);
+    }
+    for stmt in &module.init {
+        scan_stmt_for_max_closure_id(stmt, &mut max_closure_id);
+    }
+    for class in &module.classes {
+        for mb in &class.methods {
+            scan_stmts_for_max_closure_id(&mb.body, &mut max_closure_id);
+        }
+        for mb in &class.static_methods {
+            scan_stmts_for_max_closure_id(&mb.body, &mut max_closure_id);
+        }
+        if let Some(ctor) = &class.constructor {
+            scan_stmts_for_max_closure_id(&ctor.body, &mut max_closure_id);
+        }
+        for g in &class.getters {
+            scan_stmts_for_max_closure_id(&g.1.body, &mut max_closure_id);
+        }
+        for s in &class.setters {
+            scan_stmts_for_max_closure_id(&s.1.body, &mut max_closure_id);
+        }
+    }
+    m.max(max_closure_id)
+}
+
+fn scan_stmts_for_max_closure_id(stmts: &[Stmt], m: &mut perry_types::FuncId) {
+    for s in stmts {
+        scan_stmt_for_max_closure_id(s, m);
+    }
+}
+
+fn scan_stmt_for_max_closure_id(stmt: &Stmt, m: &mut perry_types::FuncId) {
+    match stmt {
+        Stmt::Let { init: Some(e), .. } => scan_expr_for_max_closure_id(e, m),
+        Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_for_max_closure_id(e, m),
+        Stmt::Return(Some(e)) => scan_expr_for_max_closure_id(e, m),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            scan_expr_for_max_closure_id(condition, m);
+            scan_stmts_for_max_closure_id(then_branch, m);
+            if let Some(eb) = else_branch {
+                scan_stmts_for_max_closure_id(eb, m);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            scan_expr_for_max_closure_id(condition, m);
+            scan_stmts_for_max_closure_id(body, m);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                scan_stmt_for_max_closure_id(i, m);
+            }
+            if let Some(c) = condition {
+                scan_expr_for_max_closure_id(c, m);
+            }
+            if let Some(u) = update {
+                scan_expr_for_max_closure_id(u, m);
+            }
+            scan_stmts_for_max_closure_id(body, m);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            scan_stmts_for_max_closure_id(body, m);
+            if let Some(c) = catch {
+                scan_stmts_for_max_closure_id(&c.body, m);
+            }
+            if let Some(f) = finally {
+                scan_stmts_for_max_closure_id(f, m);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            scan_expr_for_max_closure_id(discriminant, m);
+            for case in cases {
+                scan_stmts_for_max_closure_id(&case.body, m);
+            }
+        }
+        Stmt::Labeled { body, .. } => scan_stmt_for_max_closure_id(body, m),
+        _ => {}
+    }
+}
+
+fn scan_expr_for_max_closure_id(expr: &Expr, m: &mut perry_types::FuncId) {
+    if let Expr::Closure { func_id, body, .. } = expr {
+        *m = (*m).max(*func_id);
+        scan_stmts_for_max_closure_id(body, m);
+        return;
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |e| scan_expr_for_max_closure_id(e, m));
+}
+
+fn rewrite_async_closures_in_stmts(
+    stmts: &mut Vec<Stmt>,
+    work: &std::collections::HashSet<perry_types::FuncId>,
+    next_local_id: &mut LocalId,
+    next_func_id: &mut perry_types::FuncId,
+) {
+    for s in stmts {
+        rewrite_async_closures_in_stmt(s, work, next_local_id, next_func_id);
+    }
+}
+
+fn rewrite_async_closures_in_stmt(
+    stmt: &mut Stmt,
+    work: &std::collections::HashSet<perry_types::FuncId>,
+    next_local_id: &mut LocalId,
+    next_func_id: &mut perry_types::FuncId,
+) {
+    match stmt {
+        Stmt::Let { init: Some(e), .. } => {
+            rewrite_async_closures_in_expr(e, work, next_local_id, next_func_id)
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => {
+            rewrite_async_closures_in_expr(e, work, next_local_id, next_func_id)
+        }
+        Stmt::Return(Some(e)) => {
+            rewrite_async_closures_in_expr(e, work, next_local_id, next_func_id)
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            rewrite_async_closures_in_expr(condition, work, next_local_id, next_func_id);
+            rewrite_async_closures_in_stmts(then_branch, work, next_local_id, next_func_id);
+            if let Some(eb) = else_branch {
+                rewrite_async_closures_in_stmts(eb, work, next_local_id, next_func_id);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            rewrite_async_closures_in_expr(condition, work, next_local_id, next_func_id);
+            rewrite_async_closures_in_stmts(body, work, next_local_id, next_func_id);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                rewrite_async_closures_in_stmt(i, work, next_local_id, next_func_id);
+            }
+            if let Some(c) = condition {
+                rewrite_async_closures_in_expr(c, work, next_local_id, next_func_id);
+            }
+            if let Some(u) = update {
+                rewrite_async_closures_in_expr(u, work, next_local_id, next_func_id);
+            }
+            rewrite_async_closures_in_stmts(body, work, next_local_id, next_func_id);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            rewrite_async_closures_in_stmts(body, work, next_local_id, next_func_id);
+            if let Some(c) = catch {
+                rewrite_async_closures_in_stmts(&mut c.body, work, next_local_id, next_func_id);
+            }
+            if let Some(f) = finally {
+                rewrite_async_closures_in_stmts(f, work, next_local_id, next_func_id);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            rewrite_async_closures_in_expr(discriminant, work, next_local_id, next_func_id);
+            for case in cases.iter_mut() {
+                if let Some(t) = &mut case.test {
+                    rewrite_async_closures_in_expr(t, work, next_local_id, next_func_id);
+                }
+                rewrite_async_closures_in_stmts(&mut case.body, work, next_local_id, next_func_id);
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            rewrite_async_closures_in_stmt(body, work, next_local_id, next_func_id)
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_async_closures_in_expr(
+    expr: &mut Expr,
+    work: &std::collections::HashSet<perry_types::FuncId>,
+    next_local_id: &mut LocalId,
+    next_func_id: &mut perry_types::FuncId,
+) {
+    // Match-and-rewrite at the current level.
+    let should_rewrite = if let Expr::Closure {
+        func_id, is_async, ..
+    } = expr
+    {
+        *is_async && work.contains(func_id)
+    } else {
+        false
+    };
+    if should_rewrite {
+        if let Expr::Closure {
+            params,
+            body,
+            captures,
+            mutable_captures,
+            is_async,
+            ..
+        } = expr
+        {
+            // Step A: descend into the body first to handle nested async
+            // closures bottom-up. After that, the body has no nested async
+            // closures-with-awaits remaining (they've been turned into
+            // state-machine bodies returning Promises).
+            rewrite_async_closures_in_stmts(body, work, next_local_id, next_func_id);
+
+            // Step B: hoist + await→yield over THIS closure's body.
+            hoist_awaits_in_stmts(body, next_local_id);
+            let mut had_await = false;
+            rewrite_stmts(body, &mut had_await);
+            if had_await {
+                let owned_body = std::mem::take(body);
+                let owned_params = params.clone();
+                let owned_captures = captures.clone();
+                let owned_mutable_captures = mutable_captures.clone();
+                let new_body = crate::generator::transform_plain_async_closure_body(
+                    owned_body,
+                    &owned_params,
+                    &owned_captures,
+                    &owned_mutable_captures,
+                    next_local_id,
+                    next_func_id,
+                );
+                *body = new_body;
+                *is_async = false;
+            }
+            return;
+        }
+    }
+    // Otherwise descend into children.
+    perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
+        rewrite_async_closures_in_expr(child, work, next_local_id, next_func_id);
+    });
 }
 
 /// Detect if the module has any classes with `__perry_cap_*` instance
