@@ -656,7 +656,35 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
         }
     }
 
-    let object = Box::new(lower_expr(ctx, &member.obj)?);
+    let mut object_expr = lower_expr(ctx, &member.obj)?;
+
+    // #973 (5ddccbbc) rerouted bare built-in identifiers used as VALUES
+    // (`Number`, `Object`, `Array`, ...) to `PropertyGet { GlobalGet(0),
+    // name }` so identity comparisons like `inst.constructor === Date`
+    // resolve both sides to the same `populate_global_this_builtins`
+    // closure. But when the built-in ident is the OBJECT of a member
+    // access (`Number.parseFloat`, `Object.keys`, `Array.isArray`, ...),
+    // that reroute turns the intrinsic static-method/property lookup into
+    // `globalThis.Number.parseFloat`, which is no longer the same value
+    // as the intrinsic global `parseFloat` — silently breaking
+    // `Number.parseFloat === parseFloat`, `Number.parseInt === parseInt`,
+    // and similar identity checks (regressed test_gap_number_math).
+    // Static surfaces must keep the pre-#973 intrinsic `GlobalGet(0)`
+    // dispatch. Detect and undo the reroute only in member-object
+    // position; local shadowing is unaffected because a shadowing local
+    // would have lowered to `LocalGet`, never this reroute.
+    if let Expr::PropertyGet { object: inner, property } = &object_expr {
+        if matches!(inner.as_ref(), Expr::GlobalGet(0))
+            && crate::analysis::is_builtin_global_value_name(property)
+        {
+            if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                if obj_ident.sym.as_ref() == property.as_str() {
+                    object_expr = Expr::GlobalGet(0);
+                }
+            }
+        }
+    }
+    let object = Box::new(object_expr);
 
     // Unimplemented-API gate (#463). When the receiver is a
     // `NativeModuleRef("crypto")`-style import binding and the user is
