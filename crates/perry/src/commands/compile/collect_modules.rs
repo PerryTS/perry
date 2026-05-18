@@ -29,6 +29,96 @@ use super::{
     JsModule, ParseCache,
 };
 
+/// Issue #818: scan a JS module's source for static ESM imports /
+/// re-exports / string-literal dynamic imports, resolve each one
+/// against the module's directory (with `resolve_with_extensions` so
+/// extensionless and folder-index lookups work the same way they do at
+/// import-time), and return the deduped list of file paths to add to
+/// the bundle.
+///
+/// Bare specifiers (`react`, `@foo/bar`) and unresolvable relative
+/// paths are skipped: bare specifiers are the V8 fallback's job to
+/// resolve via the node_modules tree (we don't have a `require.resolve`
+/// equivalent here without a full parse), and unresolvable relatives
+/// just leak the same runtime error the V8 loader would have produced
+/// anyway. This keeps the scan cheap and side-effect free.
+pub(super) fn collect_js_module_imports(file_path: &std::path::Path, source: &str) -> Vec<PathBuf> {
+    use std::sync::OnceLock;
+    static IMPORT_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static EXPORT_FROM_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static DYNAMIC_IMPORT_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static BARE_IMPORT_RE: OnceLock<regex::Regex> = OnceLock::new();
+
+    // `import ... from "spec"` — matches default/named/namespace forms.
+    let import_re = IMPORT_RE.get_or_init(|| {
+        regex::Regex::new(r#"(?m)^\s*import\s+(?:[^'"]+?\s+from\s+)?['"]([^'"]+)['"]"#)
+            .expect("import regex")
+    });
+    // Bare side-effect import: `import "./foo.js";`
+    let bare_re = BARE_IMPORT_RE.get_or_init(|| {
+        regex::Regex::new(r#"(?m)^\s*import\s+['"]([^'"]+)['"]"#).expect("bare import regex")
+    });
+    // `export ... from "spec"` — covers `export *`, `export * as ns`,
+    // `export { a, b }`. Captures the specifier.
+    let export_re = EXPORT_FROM_RE.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?m)^\s*export\s+(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]"#,
+        )
+        .expect("export from regex")
+    });
+    // Dynamic `import("spec")` — string-literal only.
+    let dyn_re = DYNAMIC_IMPORT_RE.get_or_init(|| {
+        regex::Regex::new(r#"\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)"#).expect("dynamic import regex")
+    });
+
+    let mut specs: Vec<String> = Vec::new();
+    for cap in import_re.captures_iter(source) {
+        specs.push(cap[1].to_string());
+    }
+    for cap in bare_re.captures_iter(source) {
+        specs.push(cap[1].to_string());
+    }
+    for cap in export_re.captures_iter(source) {
+        specs.push(cap[1].to_string());
+    }
+    for cap in dyn_re.captures_iter(source) {
+        specs.push(cap[1].to_string());
+    }
+
+    let parent = match file_path.parent() {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    for spec in specs {
+        // Only follow relative or absolute paths — bare specifiers like
+        // `react` need the node_modules resolver which is more invasive
+        // to call here. The original entry walker (TS path) already
+        // pulled bare-specifier dependencies in via `cached_resolve_import`,
+        // so the most common case (top-level package brings in submodules)
+        // is covered. Inside a package's `node_modules` tree, all
+        // sibling imports are relative-path anyway.
+        if !(spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/')) {
+            continue;
+        }
+        let candidate = if spec.starts_with('/') {
+            PathBuf::from(&spec)
+        } else {
+            parent.join(&spec)
+        };
+        if let Some(resolved) = super::resolve::resolve_with_extensions(&candidate) {
+            if let Ok(canon) = resolved.canonicalize() {
+                if seen.insert(canon.clone()) {
+                    out.push(canon);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Issue #841: Node.js submodules that Perry knows about at the
 /// resolver level (no perry-stdlib backing, no compiled-source backing)
 /// but for which we still want to provide a minimal import surface so
@@ -133,6 +223,37 @@ pub(super) fn collect_modules(
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
 
         let specifier = canonical.to_string_lossy().to_string();
+        // Issue #818: walk transitive ESM imports for JS modules so the
+        // bundle contains every file the V8 fallback will be asked to load
+        // at runtime. Without this, pure-ESM packages with relative
+        // sub-module imports (e.g. hono's `dist/index.js` re-exporting
+        // `./hono.js`, which re-exports `./hono-base.js`, …) would land
+        // in `ctx.js_modules` with only the entry file, leaving every
+        // transitive `./foo.js` to be resolved against disk at runtime —
+        // fine when node_modules/ is co-located with the binary, but
+        // produces a `Cannot resolve module` failure (and in some cases
+        // a downstream segfault when the missing-module callback returns
+        // an unboxed undefined to compiled native code) when the binary
+        // is shipped on its own.
+        //
+        // We deliberately collect imports via a lightweight regex scan
+        // rather than parsing every JS file through SWC. The bundler
+        // only needs to know what file paths to embed; runtime
+        // semantics (default vs named, conditional execution, dynamic
+        // import) are still V8's job. The regex catches all the static
+        // shapes we need to follow:
+        //   import x from "./foo.js"
+        //   import { a, b } from "./foo.js"
+        //   import * as ns from "./foo.js"
+        //   import "./side-effect.js"
+        //   export { x } from "./foo.js"
+        //   export * from "./foo.js"
+        //   export * as ns from "./foo.js"
+        // Dynamic `import("./foo.js")` with a string-literal argument is
+        // also walked. Template-literal / variable specifiers can't be
+        // resolved statically and are skipped (V8 will surface the
+        // resolution failure at runtime, same as today).
+        let transitive_paths = collect_js_module_imports(&canonical, &source);
         ctx.js_modules.insert(
             specifier.clone(),
             JsModule {
@@ -143,7 +264,23 @@ pub(super) fn collect_modules(
         );
         ctx.needs_js_runtime = true;
 
-        // We don't parse JS/node_modules files for their imports (V8 will handle that at runtime)
+        // Recurse into each resolved sibling. We re-enter
+        // `collect_modules`, which re-runs the JS/native classification
+        // — covering the case where a JS file re-imports something that
+        // resolves to a TypeScript file under a `compilePackages` dir.
+        for next in transitive_paths {
+            collect_modules(
+                &next,
+                ctx,
+                visited,
+                enable_js_runtime,
+                format,
+                target,
+                next_class_id,
+                skip_transforms,
+                parse_cache.as_deref_mut(),
+            )?;
+        }
         return Ok(());
     }
 

@@ -2,6 +2,26 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.993 — fix(compile): recursively bundle transitive ESM imports for V8 fallback
+
+**Symptom.** A program that imports a pure-ESM npm package whose entry file re-exports siblings (`hono`'s `dist/index.js` → `./hono.js` → `./hono-base.js` → `./compose.js` → `./router/*` → `./utils/*` …) ended up with a `__perry_js_bundle.js` containing only the single entry file. Roughly 20 transitive `dist/**/*.js` files were silently dropped. Compiled binaries still worked when their `node_modules/` tree happened to sit alongside them (V8's `ModuleLoader::load` opens files off disk), but shipping the binary on its own — or running it in any sandbox where the resolved paths don't exist — left V8 throwing `Cannot resolve module` for every missing sibling, and in the realistic hono call path (`app.fetch(req)` running cross-thread) cascaded to an rc=139 segfault because the missing-module callback handed unboxed `undefined` back to compiled native code expecting a NaN-boxed pointer.
+
+**Root cause — JS branch of `collect_modules` was a leaf.** `crates/perry/src/commands/compile/collect_modules.rs` classifies every reachable file as either "native compile" (TypeScript / `compilePackages`-overridden source) or "JS runtime" (everything else under `node_modules/` when `--enable-js-runtime` is implicitly on). The native branch already recursed via `cached_resolve_import` for every `import.source` on the lowered HIR, and re-exports were chased separately a few lines later. The JS branch took the shortcut comment `// We don't parse JS/node_modules files for their imports (V8 will handle that at runtime)` and bailed after inserting one entry into `ctx.js_modules`. The same bailout fed `targets::generate_js_bundle`, which loops over `ctx.js_modules` to materialize `__COMPILETS_MODULES` — so the bundle is exactly as deep as the JS walk, i.e., one level.
+
+The codegen path was correct: SWC parses TypeScript fine, so the user-written `import { Hono } from 'hono'` got registered as an import edge and `hono`'s `package.json` `module: "dist/index.js"` resolved through `resolve_package_entry`. That gave us one JS module. From there the walk stopped. Everything `dist/index.js` re-exported existed on disk but was invisible to the bundler.
+
+**Fix — add a lightweight ESM-import scanner and recurse.** New helper `collect_js_module_imports` in `collect_modules.rs` regex-scans a JS source for the static import / re-export / string-literal-dynamic-import shapes and returns the resolved sibling paths. Only relative / absolute specifiers are followed — bare specifiers like `react` need full `node_modules` resolution that the entry walker already handled via `cached_resolve_import`, so the realistic hono / express / koa / fastify / ink shape (top-level package brings in its own relative submodules) is fully covered. The JS branch then loops over the returned paths and re-enters `collect_modules`, which re-runs the JS/native classification — covering the case where a JS file re-imports something that resolves to a TypeScript file under a `compilePackages` directory.
+
+The scanner is regex-based on purpose. Running SWC on every transitive JS file just to harvest specifiers would cost real time on `node_modules` walks (hono alone is 24 files; effect+drizzle compose into hundreds), and the bundle's only job here is "make sure the path is embedded". Runtime semantics — conditional execution, dynamic shape, namespace materialization — remain V8's job; the bundler just needs to know which file paths the V8 fallback will be asked for.
+
+**Validation.** Built a local `hono@latest` (4.12.19) repro under `/tmp/perry-hono/`:
+- Pre-fix: bundle contained 1 `globalThis.__COMPILETS_MODULES[...]` entry (hono's `dist/index.js`).
+- Post-fix: bundle contains 24 entries — every `dist/**/*.js` reachable from `index.js` through the entire re-export graph (`compose.js`, `context.js`, `hono.js`, `hono-base.js`, `http-exception.js`, `request.js`, `request/constants.js`, `router.js`, plus the full `router/{reg-exp,smart,trie}-router/*.js` and `utils/*.js` subtrees).
+- `./out` still prints the expected `object` / `function` / `function`.
+- New test fixture at `test-files/test_hono_bundle.ts` is a static type-check / compile-doesn't-choke probe; the bundle-walks-recursively assertion lives in the PR description because the parity suite doesn't install npm packages.
+
+**Known next blocker (not in scope).** The bundle is now correct content-wise, but V8's `ModuleLoader::load` in `crates/perry-jsruntime/src/modules.rs:464-538` still resolves via `std::fs::read_to_string` against the on-disk path — `__COMPILETS_MODULES` is generated but never consulted by the loader. Removing `node_modules/` from beside the binary still produces `Cannot resolve module`. Wiring the loader to prefer the in-binary embedded source is a separate fix (likely a small `if let Some(src) = unsafe { COMPILED_MODULES.get(&path_str) }` short-circuit before the disk read), tracked alongside #818's wider "compile to a single self-contained binary for V8-fallback packages" goal.
+
 ## v0.5.992 — fix(jsruntime/events): lazy `_events` init so mixin paths (express) work
 
 **Symptom.** After v0.5.991's `util.inherits` fix landed (PR #984), the next express blocker surfaced:
@@ -36,7 +56,6 @@ While there, also added the previously-missing prototype methods Node's EventEmi
 
 - `crates/perry-jsruntime/src/modules.rs` (events shim rewrite, ~20 lines)
 - `test-files/test_events_mixin_lazy.ts` (new regression test)
-
 ## v0.5.991 — fix(codegen): V8 wildcard-namespace member calls — `R.sum([1,2,3])` returns 15 not 0
 
 **Symptom.** `import * as R from 'ramda'; console.log(R.sum([1,2,3,4,5]))` printed `0` instead of `15`. Same shape for any `R.add(2,3)`, `R.identity(5)`, `R.head([1,2,3])` — every member call on a wildcard-namespace import of a V8-fallback module returned the literal `0.0`. The bug is reproducible without ramda using a tiny `.mjs` helper module (`export function sum(arr) { return arr.reduce(...) }`) imported as `import * as helper from './helper.mjs'`, then `helper.sum([1,2,3])`. Named imports from the same module (`import { sum }`) worked fine.
