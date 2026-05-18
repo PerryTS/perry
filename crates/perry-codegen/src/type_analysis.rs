@@ -9,6 +9,15 @@ use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
 
+pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
+    matches!(e, Expr::GlobalGet(_))
+        || matches!(
+            e,
+            Expr::PropertyGet { object, property }
+                if property == name && matches!(object.as_ref(), Expr::GlobalGet(_))
+        )
+}
+
 /// Refine an `Any`-typed local's static type based on its initializer
 /// expression. Returns Some(Type) when we can statically prove the
 /// initializer produces a more specific type, so the `Stmt::Let`
@@ -1022,6 +1031,7 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Promise.resolve / reject / all / race / allSettled / any
         Expr::Call { callee, .. } => match callee.as_ref() {
             Expr::PropertyGet { object, property } => {
+<<<<<<< HEAD
                 // `Promise.resolve(...)` etc. The receiver `Promise` can
                 // appear in two shapes:
                 //   - Legacy: bare ident → `Expr::GlobalGet(_)` directly.
@@ -1037,11 +1047,24 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     property.as_str(),
                     "resolve" | "reject" | "all" | "race" | "allSettled" | "any"
                 ) && is_global_builtin_named(object.as_ref(), "Promise")
+=======
+                // `Promise.resolve(...)` etc. — GlobalGet receiver with
+                // a promise-shaped static method name.
+                if is_global_constructor_expr(object, "Promise")
+                    && matches!(
+                        property.as_str(),
+                        "resolve" | "reject" | "all" | "race" | "allSettled" | "any"
+                    )
+>>>>>>> 92d5eab9 (fix: recognize global Promise static calls)
                 {
                     return true;
                 }
                 // `Array.fromAsync(...)` returns a Promise<Array>.
+<<<<<<< HEAD
                 if property == "fromAsync" && is_global_builtin_named(object.as_ref(), "Array") {
+=======
+                if is_global_constructor_expr(object, "Array") && property == "fromAsync" {
+>>>>>>> 92d5eab9 (fix: recognize global Promise static calls)
                     return true;
                 }
                 // `.then(cb)` / `.catch(cb)` / `.finally(cb)` on a promise
