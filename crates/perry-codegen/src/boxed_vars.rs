@@ -262,6 +262,18 @@ fn collect_nested_closure_boxed_vars_in_stmt(stmt: &perry_hir::Stmt, out: &mut H
                 collect_nested_closure_boxed_vars_in_stmts(&case.body, out);
             }
         }
+        // Issue #1021/#1029 follow-up: the async-step driver wraps its
+        // state-machine body in `Stmt::Labeled { __step_done, body: DoWhile{...} }`.
+        // Without this arm, the recursion stops at the Labeled wrapper and any
+        // nested closure bodies (e.g. an async closure constructed inside one
+        // of the state branches) never get their PreallocateBoxes IDs added to
+        // the module-wide boxed set — `ctx.boxed_vars.contains(id)` returns
+        // false for captures that ARE boxed, so the captured-from-outer box
+        // pointer gets stored as a plain value, and reads from inside the
+        // inner step body load garbage instead of the box.
+        Stmt::Labeled { body, .. } => {
+            collect_nested_closure_boxed_vars_in_stmt(body, out);
+        }
         _ => {}
     }
 }
