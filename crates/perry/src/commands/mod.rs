@@ -21,6 +21,7 @@ pub mod native;
 pub mod publish;
 pub mod run;
 pub mod sanitize;
+pub mod sandbox_profile;
 pub mod setup;
 pub mod stdlib_features;
 pub mod typecheck;

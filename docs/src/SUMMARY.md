@@ -141,6 +141,7 @@
 - [JS Runtime Opt-In](cli/allow-js-runtime.md)
 - [`PERRY_SANDBOX_BUILDRS`](cli/sandbox-buildrs.md)
 - [`--emit-attest` (binary attestation sidecar)](cli/emit-attest.md)
+- [`--emit-sandbox`](cli/emit-sandbox.md)
 - [perry.toml Reference](cli/perry-toml.md)
 
 ---

@@ -347,6 +347,18 @@ pub struct CompileArgs {
     /// See `docs/src/cli/emit-attest.md`.
     #[arg(long)]
     pub emit_attest: bool,
+    /// #506 — emit a kernel-enforced sandbox profile next to the
+    /// compiled binary. macOS: `<binary>.sandbox` sandbox-exec
+    /// profile derived from the build's reachable stdlib surface
+    /// (deny `proc:exec` if `child_process` isn't imported, deny
+    /// outbound network if `fetch`/`net` isn't, etc.). Linux + other
+    /// platforms: documented as a follow-up.
+    ///
+    /// Also settable via `PERRY_EMIT_SANDBOX=1` env var or
+    /// `"perry": { "emitSandbox": true }` in package.json.
+    /// See `docs/src/cli/emit-sandbox.md`.
+    #[arg(long)]
+    pub emit_sandbox: bool,
 
     /// Minimum Windows version the compiled executable must run on.
     /// Accepted values: `7`, `8`, `10` (default `10`). Ignored on every
@@ -600,6 +612,14 @@ pub struct CompilationContext {
     /// Sources, last wins: `perry.emitAttest` in package.json →
     /// `PERRY_EMIT_ATTEST=1` env → `--emit-attest` CLI.
     pub emit_attest: bool,
+    /// #506 — when true, emit `<binary>.sandbox` next to the
+    /// compiled binary on macOS containing a sandbox-exec profile
+    /// derived from the build's reachable stdlib surface. Sources,
+    /// last wins: `perry.emitSandbox: true` in package.json → env
+    /// `PERRY_EMIT_SANDBOX=1` → CLI `--emit-sandbox`. The host
+    /// invokes the binary via `sandbox-exec -f <binary>.sandbox
+    /// <binary>` (documented in docs/src/cli/emit-sandbox.md).
+    pub emit_sandbox: bool,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -652,6 +672,7 @@ impl CompilationContext {
             host_package_name: None,
             allow_unsandboxed_build: Vec::new(),
             emit_attest: false,
+            emit_sandbox: false,
         }
     }
 }
@@ -1232,6 +1253,15 @@ pub fn run_with_parse_cache(
                 {
                     ctx.emit_attest = ea;
                 }
+                // #506 — emit kernel sandbox profile alongside the
+                // binary. See docs/src/cli/emit-sandbox.md.
+                if let Some(es) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("emitSandbox"))
+                    .and_then(|v| v.as_bool())
+                {
+                    ctx.emit_sandbox = es;
+                }
             }
         }
     }
@@ -1292,6 +1322,18 @@ pub fn run_with_parse_cache(
     }
     if args.emit_attest {
         ctx.emit_attest = true;
+    }
+
+    // #506 — precedence: package.json `perry.emitSandbox` → env
+    // `PERRY_EMIT_SANDBOX=1` → CLI `--emit-sandbox` (last wins,
+    // mirrors the fast-math ladder).
+    match std::env::var("PERRY_EMIT_SANDBOX") {
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => ctx.emit_sandbox = true,
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => ctx.emit_sandbox = false,
+        _ => {}
+    }
+    if args.emit_sandbox {
+        ctx.emit_sandbox = true;
     }
 
     // --- i18n: parse [i18n] config from perry.toml and load locale files ---
@@ -7650,6 +7692,40 @@ pub fn run_with_parse_cache(
                     "js_modules": ctx.js_modules.len(),
                 });
                 println!("{}", serde_json::to_string(&result)?);
+            }
+        }
+
+        // #506 — emit `<binary>.sandbox` next to the binary when
+        // `--emit-sandbox` (or the equivalent env / package.json
+        // knob) is set. macOS only for the MVP; other platforms
+        // log a once-per-build note that the kernel-sandbox MVP
+        // is macOS-only and the matching seccomp / AppContainer /
+        // ... support lands as #506 follow-up.
+        if ctx.emit_sandbox {
+            #[cfg(target_os = "macos")]
+            {
+                match super::sandbox_profile::emit_macos_sandbox_profile(&ctx, &exe_path) {
+                    Ok(path) => match format {
+                        OutputFormat::Text => {
+                            println!("Wrote sandbox profile: {}", path.display())
+                        }
+                        OutputFormat::Json => {}
+                    },
+                    Err(e) => match format {
+                        OutputFormat::Text => {
+                            eprintln!("warning: failed to emit sandbox profile: {}", e);
+                        }
+                        OutputFormat::Json => {}
+                    },
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let OutputFormat::Text = format {
+                    eprintln!(
+                        "note: `--emit-sandbox` is macOS-only in this MVP; Linux seccomp + Windows AppContainer support tracked under #506."
+                    );
+                }
             }
         }
     }

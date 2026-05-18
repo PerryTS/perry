@@ -299,6 +299,7 @@ fn build_once(
         no_cache: false,
         fast_math: false,
         emit_attest: false,
+        emit_sandbox: false,
         min_windows_version: "10".to_string(),
         // Phase 2 v7: harmonyos signing flags. `perry dev` is the watch
         // mode for local iteration; unsigned HAPs are fine, fall through
