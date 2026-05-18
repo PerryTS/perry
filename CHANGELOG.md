@@ -2,6 +2,49 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1008 — fix(wasm): #1037 — `String.fromCharCode` returns `undefined` on `--target web`
+
+The reduction Ralph posted on #1037 showed `s += String.fromCharCode(0)` over-appending 9 chars per iteration — but the underlying cause was not handle-ID stringification; it was simpler. The compiled `String.fromCharCode` was returning `undefined`, and `'' + undefined === 'undefined'` (which is exactly 9 chars). 16 iters × 9 = the observed 144-byte length.
+
+### Root cause
+
+`crates/perry-codegen-wasm/src/emit.rs:7702..7711` (the `Expr::StringFromCharCode` and `Expr::StringFromCodePoint` codegen arms) emitted a `mem_call` to the bridge name `string_from_char_code` (snake_case). The runtime's `__memDispatch` table in `crates/perry-codegen-wasm/src/wasm_runtime.js` only registers `string_fromCharCode` (camelCase, line 1660). With no matching dispatch entry, `mem_call` (line 1377) falls through to `__classDispatch(args[0], "string_from_char_code", [])`. `args[0]` is the decoded code argument (a plain number) — `Number.prototype["string_from_char_code"]` is undefined — `__classDispatch` returns undefined. The compiled call then NaN-boxes `undefined` and ships it back as the FFI result. JS string concat coerces that to `"undefined"`, and the editor's `buildBlockDepthString` cache grew 9× per parse, which surfaced as the apparent "hang" reported in the original issue (`object_get_dynamic` re-fetching the same end-of-buffer offset against a forever-too-small cache).
+
+### Fix
+
+Two-character edit per arm: `string_from_char_code` → `string_fromCharCode`. Both `String.fromCharCode` and `String.fromCodePoint` route through the same HIR variant in WASM today (the StringFromCodePoint arm has a `// WASM stub: same as fromCharCode for now (BMP-only)` comment from before this fix).
+
+### Verified
+
+Ralph's four-row variant matrix from the issue thread, all on `--target web` (now `--target wasm` per the harness):
+
+| Variant | Pre-fix | Post-fix |
+|---|---|---|
+| `result += 'x'` (literal) | 16 ✓ | 16 ✓ |
+| `result += String.fromCharCode(0)` | 144 | **16 ✓** |
+| `result = result + String.fromCharCode(0)` | 144 | **16 ✓** |
+| 4-iter `result += String.fromCharCode(0)` | 36 | **4 ✓** |
+| `String.fromCodePoint(65)` | undefined | **"A" ✓** |
+
+Regression test `tests/wasm/20_string_from_char_code.ts` covers all four shapes.
+
+### Harness fix bundled
+
+The wasm test runner at `tests/wasm/run_wasm_tests.sh` was failing every test with `document is not defined` because `wasm_runtime.js` injects a `<style>` element at module load (`document.head.appendChild(...)` at line 2528). Added a minimal DOM polyfill at the top of the Node eval block. Local runner only — CI uses a separate cross-compile gate that doesn't execute the wasm.
+
+Same-suite result on baseline (pre-fix, my new test removed): 12 pass, 7 fail (`05_objects_arrays`, `10_higher_order`, `11_map_set_json`, `14_regex_date`, `17_class_field_splice`, `18_module_splice`, `19_ffi_imports`). With the fix applied: identical 7 pre-existing failures + 1 new passing test (`20_string_from_char_code`). No regressions.
+
+### Related typos worth noting (not fixed in this PR — out of scope)
+
+Audit found seven other emit-side bridge names with the same snake_case/camelCase mismatch, all in the `_ => Handle instance method calls on objects` catch-all in `Expr::NativeMethodCall` (`emit.rs:5588..5840`): `string_char_at`, `string_index_of`, `string_to_lower_case`, `string_to_upper_case`, `string_starts_with`, `string_ends_with`, `string_pad_start`, `string_pad_end`. The catch-all path is unreachable for normal `str.charAt(i)` etc. — those hit `emit_method_call` at `emit.rs:4081` (camelCase, correct) — so the bugs are latent. Listing here so a future cleanup can sweep them with a separate test per name.
+
+### Files touched
+
+- `crates/perry-codegen-wasm/src/emit.rs` — two bridge-name edits in `Expr::StringFromCharCode` and `Expr::StringFromCodePoint`.
+- `tests/wasm/run_wasm_tests.sh` — DOM polyfill for the Node eval harness.
+- `tests/wasm/20_string_from_char_code.{ts,expected}` — regression test.
+- `Cargo.toml`, `CLAUDE.md` — version bump.
+
 ## v0.5.1007 — fix(wasm-runtime): #1034 Date.prototype.getDay LinkError + audit, #1035 __classDispatch optional-param arg padding
 
 Two WASM-target (`--target web`) instantiation/runtime fixes from the @honeide/editor compile sweep.

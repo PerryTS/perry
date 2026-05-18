@@ -7700,15 +7700,18 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "string_split", 2);
             }
             Expr::StringFromCharCode(code) => {
+                // Bridge name is the key in __memDispatch (wasm_runtime.js) — keep
+                // camelCase even though Rust prefers snake_case; no dispatch entry
+                // means mem_call silently falls through to __classDispatch.
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, code);
-                self.emit_memcall(func, "string_from_char_code", 1);
+                self.emit_memcall(func, "string_fromCharCode", 1);
             }
             Expr::StringFromCodePoint(code) => {
-                // WASM stub: same as fromCharCode for now (BMP-only)
+                // WASM stub: same as fromCharCode for now (BMP-only).
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, code);
-                self.emit_memcall(func, "string_from_char_code", 1);
+                self.emit_memcall(func, "string_fromCharCode", 1);
             }
             Expr::StringAt { string, index } => {
                 // WASM stub: alias to char_at

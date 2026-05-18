@@ -39,6 +39,13 @@ run_test() {
   # Run in Node.js
   local actual
   actual=$(node -e "
+// Minimal DOM polyfill: wasm_runtime.js injects a <style> tag at module load,
+// so 'document' must exist or the require fails before any test code runs.
+globalThis.window = globalThis;
+const _stub = { id: '', appendChild: () => {}, getElementById: () => null, style: {}, textContent: '' };
+const _doc = { createElement: () => Object.assign({}, _stub), getElementById: () => null, title: '' };
+_doc.head = _stub; _doc.body = _stub;
+globalThis.document = _doc;
 const fs = require('fs');
 const html = fs.readFileSync('$html_file', 'utf8');
 const scripts = [];
