@@ -2201,8 +2201,8 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                         // untagged NaN that the next chain step read as a number
                         // ("(number).send is not a function"). Static NATIVE_MODULE_TABLE
                         // dispatch covers it correctly.
-                        let is_fastify_reply = module.as_str() == "fastify"
-                            && class_name.as_deref() == Some("Reply");
+                        let is_fastify_reply =
+                            module.as_str() == "fastify" && class_name.as_deref() == Some("Reply");
                         let is_fastify_reply_chain_method = matches!(
                             method_name.as_str(),
                             "code" | "status" | "header" | "type" | "send"
