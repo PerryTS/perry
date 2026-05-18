@@ -167,6 +167,17 @@ enum Commands {
     /// the widget and embeds the produced `.appex` under
     /// `<output>.app/Frameworks/`.
     Widget(commands::widget::WidgetArgs),
+
+    /// Supply-chain lockfile for `perry.nativeLibrary` archives (#498).
+    ///
+    /// `perry lock`                 - verify-and-write the lockfile
+    ///                                 (default mode); equivalent to
+    ///                                 the gate `perry compile` runs.
+    /// `perry lock --update <pkg>`  - refresh `<pkg>`'s hashes after
+    ///                                 a deliberate upgrade.
+    /// `perry lock --frozen`        - CI verification only; refuses to
+    ///                                 extend the lockfile.
+    Lock(commands::lock::LockArgs),
 }
 
 /// Check if the first non-flag argument looks like a TypeScript file
@@ -202,6 +213,7 @@ fn is_legacy_invocation(args: &[String]) -> bool {
                 | "updater"
                 | "native"
                 | "widget"
+                | "lock"
                 | "help"
         ) {
             return false;
@@ -407,6 +419,7 @@ fn main_inner() -> Result<()> {
         Commands::Updater(args) => commands::updater::run(args),
         Commands::Native(args) => commands::native::run(args, cli.format, use_color),
         Commands::Widget(args) => commands::widget::run(args, cli.format, use_color),
+        Commands::Lock(args) => commands::lock::run(args, cli.format, use_color),
     };
 
     // Send telemetry for non-compile commands (compile is handled above for target/status)

@@ -64,6 +64,17 @@ pub(super) fn build_and_run_link(
     // panics in the compiled app symbolize. Windows-active today.
     debug_symbols: bool,
 ) -> Result<()> {
+    // #498 - supply-chain gate. Before any prebuilt archive hits the
+    // linker, hash it and compare against `perry.lock`. First build
+    // writes the lockfile; subsequent builds verify. Mismatch fails
+    // with an actionable diagnostic (`perry lock --update <pkg>`).
+    // `PERRY_LOCK_FROZEN=1` upgrades the verify to CI mode (refuses
+    // to extend the lock); `PERRY_LOCK_UPDATE=<pkg>` deliberately
+    // bumps the named package's hashes. Wired here so every backend
+    // (LLVM / WASM / ArkTS / HarmonyOS / Glance / SwiftUI / JS)
+    // inherits the gate from one chokepoint.
+    super::run_lock_verify_for_compile(ctx, target)?;
+
     let is_ios = matches!(target, Some("ios-simulator") | Some("ios"));
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
     let is_android = matches!(target, Some("android"));
