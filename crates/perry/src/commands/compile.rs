@@ -1707,6 +1707,77 @@ pub fn run_with_parse_cache(
                     });
                 }
             }
+
+            // --- [google_auth] config parsing (issue #674) ---
+            //
+            // Shape mirrors the issue:
+            //
+            //     [google_auth]
+            //     ios_client_id = "..."
+            //     android_client_id = "..."
+            //     server_client_id = "..."
+            //     default_scopes = ["openid", "email", "profile"]
+            //
+            // MVP scope: validate types + surface a build-time note that
+            // the block was seen. The runtime entry points in
+            // `perry-ext-google-auth` don't yet consume these — they'll
+            // be threaded through Info.plist (iOS/macOS) and
+            // AndroidManifest meta-data (Android) when real SDK
+            // integration lands. Wiring the parse here means user
+            // perry.toml files can carry the config now without
+            // tripping unknown-key warnings later, and lets us catch
+            // type mistakes (`ios_client_id = 42` etc.) at compile
+            // time instead of waiting until the native SDK rejects
+            // them at sign-in time.
+            if let Some(ga) = doc.get("google_auth").and_then(|v| v.as_table()) {
+                fn warn_non_string(key: &str, ga: &toml::Table) {
+                    if let Some(v) = ga.get(key) {
+                        if v.as_str().is_none() {
+                            eprintln!(
+                                "  Warning: perry.toml [google_auth].{} must be a string (got {:?}); ignoring.",
+                                key,
+                                v.type_str()
+                            );
+                        }
+                    }
+                }
+                warn_non_string("ios_client_id", ga);
+                warn_non_string("android_client_id", ga);
+                warn_non_string("server_client_id", ga);
+
+                if let Some(scopes) = ga.get("default_scopes") {
+                    match scopes.as_array() {
+                        Some(arr) => {
+                            for (i, item) in arr.iter().enumerate() {
+                                if item.as_str().is_none() {
+                                    eprintln!(
+                                        "  Warning: perry.toml [google_auth].default_scopes[{}] must be a string (got {:?}); ignoring.",
+                                        i,
+                                        item.type_str()
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            eprintln!(
+                                "  Warning: perry.toml [google_auth].default_scopes must be an array of strings (got {:?}); ignoring.",
+                                scopes.type_str()
+                            );
+                        }
+                    }
+                }
+
+                if let OutputFormat::Text = format {
+                    let configured = ["ios_client_id", "android_client_id", "server_client_id"]
+                        .iter()
+                        .filter(|k| ga.get(**k).and_then(|v| v.as_str()).is_some())
+                        .count();
+                    println!(
+                        "  google_auth: {} client id(s) configured (issue #674)",
+                        configured
+                    );
+                }
+            }
         }
     }
 

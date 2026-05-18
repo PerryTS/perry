@@ -45,6 +45,7 @@ members = [
     "crates/perry-ext-http",
     "crates/perry-ext-streams",
     "crates/perry-ext-fastify",
+    "crates/perry-ext-google-auth",
     "crates/perry-jsruntime",
     "crates/perry-wasm-host",
     "crates/perry-stdlib",
@@ -119,6 +120,7 @@ default-members = [
     "crates/perry-ext-http",
     "crates/perry-ext-streams",
     "crates/perry-ext-fastify",
+    "crates/perry-ext-google-auth",
     "crates/perry-jsruntime",
     "crates/perry-wasm-host",
     "crates/perry-stdlib",
@@ -290,6 +292,7 @@ perry-ext-net = { path = "crates/perry-ext-net" }
 perry-ext-http = { path = "crates/perry-ext-http" }
 perry-ext-streams = { path = "crates/perry-ext-streams" }
 perry-ext-fastify = { path = "crates/perry-ext-fastify" }
+perry-ext-google-auth = { path = "crates/perry-ext-google-auth" }
 perry-stdlib = { path = "crates/perry-stdlib" }
 perry-diagnostics = { path = "crates/perry-diagnostics" }
 perry-jsruntime = { path = "crates/perry-jsruntime" }

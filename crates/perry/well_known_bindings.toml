@@ -256,3 +256,14 @@ tracking = "#466"
 crate = "perry-ext-fastify"
 lib = "perry_ext_fastify"
 tracking = "#466"
+
+# `@perryts/google-auth` — official Google Sign In package
+# (issue #674). iOS/macOS go through the GoogleSignIn SwiftPM
+# SDK; Android uses `androidx.credentials.CredentialManager` +
+# `GetGoogleIdOption`. MVP scope: compiles + links across all 7
+# platform crates with structured-failure placeholders on every
+# target. Real SDK integration follows as a separate change set.
+[bindings."@perryts/google-auth"]
+crate = "perry-ext-google-auth"
+lib = "perry_ext_google_auth"
+tracking = "#674"

@@ -11051,6 +11051,40 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[NA_STR, NA_PTR],
         ret: NR_F64,
     },
+    // ========== @perryts/google-auth (issue #674) ==========
+    // Three zero-arg FFI entry points exported by
+    // `crates/perry-ext-google-auth`. Each returns a
+    // `*mut perry_ffi::Promise` which the runtime sees as a
+    // POINTER_TAG'd value — same return shape as bcrypt/argon2
+    // (NR_PTR). MVP returns a JSON-stringified `GoogleSignInResult`;
+    // see issue #674 for the schema and follow-up work.
+    NativeModSig {
+        module: "@perryts/google-auth",
+        has_receiver: false,
+        method: "js_google_auth_sign_in",
+        class_filter: None,
+        runtime: "js_google_auth_sign_in",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "@perryts/google-auth",
+        has_receiver: false,
+        method: "js_google_auth_silent_sign_in",
+        class_filter: None,
+        runtime: "js_google_auth_silent_sign_in",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "@perryts/google-auth",
+        has_receiver: false,
+        method: "js_google_auth_sign_out",
+        class_filter: None,
+        runtime: "js_google_auth_sign_out",
+        args: &[],
+        ret: NR_PTR,
+    },
 ];
 
 /// Walk a statement to collect LocalIds declared inside a closure body —

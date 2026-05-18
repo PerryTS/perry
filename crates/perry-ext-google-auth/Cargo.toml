@@ -1,0 +1,13 @@
+[package]
+name = "perry-ext-google-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for `@perryts/google-auth` (#674) — Google Sign In via GoogleSignIn SDK (iOS/macOS) and androidx.credentials Credential Manager (Android). MVP: compiles and links across all 7 platform crates; iOS/macOS/Android carry the SDK-integration scaffolding behind a structured `{ success: false }` placeholder, other targets resolve `{ success: false, error: \"unsupported-platform\" }`."
+repository.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
