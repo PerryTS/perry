@@ -193,22 +193,13 @@ pub(super) fn parse_native_library_manifest(
         .and_then(|k| targets_block.and_then(|t| t.get(k)))
         .or_else(|| targets_block.and_then(|t| t.get(target_key)));
 
-    let target_config = target_value.map(|tc| {
-        let crate_path =
-            package_dir.join(tc.get("crate").and_then(|c| c.as_str()).unwrap_or(""));
-        // Fall back to `[package].name` / `[lib].name` from Cargo.toml when
-        // `targets.<target>.lib` is omitted. Older `perry native init`
-        // templates shipped without the `lib` key, which silently disabled
-        // staticlib linking and produced `undefined reference to js_*`
-        // errors at link time (issue #792).
-        let lib_name = tc
+    let target_config = target_value.map(|tc| TargetNativeConfig {
+        crate_path: package_dir.join(tc.get("crate").and_then(|c| c.as_str()).unwrap_or("")),
+        lib_name: tc
             .get("lib")
             .and_then(|l| l.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| derive_lib_name_from_cargo_toml(&crate_path).unwrap_or_default());
-        TargetNativeConfig {
-            crate_path,
-            lib_name,
+            .unwrap_or("")
+            .to_string(),
         prebuilt: tc
             .get("prebuilt")
             .and_then(|p| p.as_str())
@@ -267,7 +258,6 @@ pub(super) fn parse_native_library_manifest(
                     .collect()
             })
             .unwrap_or_default(),
-        }
     });
 
     Some(NativeLibraryManifest {
@@ -277,42 +267,6 @@ pub(super) fn parse_native_library_manifest(
         functions,
         target_config,
     })
-}
-
-/// Read `[lib].name` (preferred) or `[package].name` from `Cargo.toml`
-/// at `crate_path` and return it with `-` normalized to `_`, the form
-/// cargo uses for the staticlib filename (e.g. `perry-ext-native` →
-/// `perry_ext_native`). Used as a fallback when a wrapper's manifest
-/// omits `targets.<target>.lib` — refs issue #792.
-fn derive_lib_name_from_cargo_toml(crate_path: &Path) -> Option<String> {
-    let content = fs::read_to_string(crate_path.join("Cargo.toml")).ok()?;
-    let mut in_lib = false;
-    let mut in_package = false;
-    let mut lib_name: Option<String> = None;
-    let mut package_name: Option<String> = None;
-    for raw in content.lines() {
-        let line = raw.split('#').next().unwrap_or("").trim();
-        if line.starts_with('[') {
-            in_lib = line == "[lib]";
-            in_package = line == "[package]";
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() != "name" {
-            continue;
-        }
-        let value = value.trim().trim_matches('"').to_string();
-        if in_lib {
-            lib_name = Some(value);
-        } else if in_package {
-            package_name = Some(value);
-        }
-    }
-    lib_name
-        .or(package_name)
-        .map(|n| n.replace('-', "_"))
 }
 
 /// Map a Perry target string to the architecture token used in
@@ -701,40 +655,6 @@ mod manifest_parse_tests {
         let tc = parsed.target_config.expect("target_config");
         assert_eq!(tc.lib_name, "demo");
         assert!(tc.prebuilt.is_none());
-    }
-
-    /// Issue #792 — older `perry native init` templates shipped
-    /// without `targets.<target>.lib`, so `lib_name` came back empty
-    /// and `link.rs` silently skipped adding the staticlib to the
-    /// link line. When `lib` is absent, fall back to the cargo crate
-    /// name (with `-` → `_`) so the linker actually sees the `.a`.
-    #[test]
-    fn lib_name_falls_back_to_cargo_package_name_when_missing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pkg_dir = dir.path();
-        std::fs::write(
-            pkg_dir.join("Cargo.toml"),
-            "[package]\nname = \"perry-ext-demo\"\nversion = \"0.1.0\"\n",
-        )
-        .expect("write Cargo.toml");
-        let manifest = serde_json::json!({
-            "perry": {
-                "nativeLibrary": {
-                    "functions": [],
-                    "targets": { "macos": { "cargo_features": [] } }
-                }
-            }
-        });
-        std::fs::write(
-            pkg_dir.join("package.json"),
-            serde_json::to_string(&manifest).unwrap(),
-        )
-        .expect("write package.json");
-
-        let parsed = parse_native_library_manifest(pkg_dir, "demo", Some("macos"))
-            .expect("parsed manifest");
-        let tc = parsed.target_config.expect("target_config");
-        assert_eq!(tc.lib_name, "perry_ext_demo");
     }
 
     /// Issue #860 — `prebuilt:` pointing at a node-style module
