@@ -205,6 +205,7 @@ impl SH for Module {
             init_was_unrolled,
             has_top_level_await,
             init_kind,
+            async_step_closures,
         } = self;
         name.hash(h);
         imports.hash(h);
@@ -227,6 +228,10 @@ impl SH for Module {
         init_was_unrolled.hash(h);
         has_top_level_await.hash(h);
         init_kind.hash(h);
+        // HashSet has nondeterministic iteration order; sort for stable hashing.
+        let mut ids: Vec<u32> = async_step_closures.iter().copied().collect();
+        ids.sort_unstable();
+        ids.hash(h);
     }
 }
 

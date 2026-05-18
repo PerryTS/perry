@@ -411,6 +411,13 @@ pub struct Module {
     /// the first dispatch (Deferred). Populated during `collect_modules`
     /// after the import graph is fully built.
     pub init_kind: ModuleInitKind,
+    /// Issue #1021: closure func_ids whose body has been rewritten by
+    /// `transform_async_to_generator` from a plain async closure into a
+    /// generator + async-step driver. `compile_closure` consults this set
+    /// to decide whether the closure body is already a state machine
+    /// returning a Promise (no busy-wait pump needed). Populated by the
+    /// transform pass; consumed by codegen.
+    pub async_step_closures: std::collections::HashSet<perry_types::FuncId>,
 }
 
 /// A widget extension declaration (WidgetKit on iOS/watchOS, Glance on Android, Tiles on Wear OS)
@@ -2925,6 +2932,7 @@ impl Module {
             init_was_unrolled: false,
             has_top_level_await: false,
             init_kind: ModuleInitKind::Eager,
+            async_step_closures: std::collections::HashSet::new(),
         }
     }
 }

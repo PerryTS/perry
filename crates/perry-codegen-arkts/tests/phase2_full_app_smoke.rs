@@ -51,6 +51,7 @@ fn empty_module() -> Module {
         extern_funcs: vec![],
         has_top_level_await: false,
         init_kind: perry_hir::ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
     }
 }
 

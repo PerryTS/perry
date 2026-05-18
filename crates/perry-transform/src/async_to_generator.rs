@@ -59,6 +59,16 @@ use std::collections::HashSet;
 
 /// Run the pre-pass on every async function in the module.
 pub fn transform_async_to_generator(module: &mut Module) {
+    // Issue #1021: identify async closures (`Expr::Closure { is_async: true }`
+    // with awaits in their body) so codegen can later wrap them in a
+    // state-machine driver instead of busy-waiting inside a V8 trampoline
+    // frame. The detection walker runs even when the conservative-scope
+    // bailout below short-circuits the top-level fn rewrite — the closure
+    // path is independent of class-capture collisions. The actual body
+    // transform is staged as a follow-up (see CHANGELOG entry for the
+    // multi-phase plan).
+    collect_async_step_closures(module);
+
     // Conservative module-level scope: skip the rewrite ENTIRELY if the
     // module has classes with __perry_cap_* fields (the v0.5.323 issue
     // #212 capture rewrite). The async-step driver's fresh LocalId
@@ -1046,4 +1056,247 @@ fn rewrite_expr(expr: &mut Expr, had_await: &mut bool) {
         return;
     }
     perry_hir::walker::walk_expr_children_mut(expr, &mut |e| rewrite_expr(e, had_await));
+}
+
+// ─── #1021: async-closure detection ────────────────────────────────────────
+//
+// Walks the entire HIR (top-level fn bodies, class members, module init, and
+// recursively through nested closures) collecting func_ids of every
+// `Expr::Closure { is_async: true }` whose body contains at least one
+// `Expr::Await`. These are the closures that today lower to a busy-wait at
+// `expr.rs:10588` and deadlock self-fetch from inside a V8 trampoline
+// (issue #1021).
+//
+// Phase 1 (this commit): populate `module.async_step_closures` so the rest
+// of the compiler can see the set. No HIR rewriting yet — `compile_closure`
+// reads the set but does not act on it.
+//
+// Phase 2 (follow-up): rewrite each detected closure's body via
+// `hoist_awaits_in_stmts` + await→yield, then run the generator
+// state-machine transform on the body so the closure returns a Promise
+// immediately and resumes via `js_async_step_chain` / `Task::AsyncStep`.
+//
+// Phase 3 (follow-up): `compile_closure` emits the wrapped form when the
+// closure's func_id is in `module.async_step_closures`.
+fn collect_async_step_closures(module: &mut Module) {
+    let mut found: std::collections::HashSet<perry_types::FuncId> =
+        std::collections::HashSet::new();
+    for func in &module.functions {
+        scan_stmts_for_async_closures(&func.body, &mut found);
+    }
+    for stmt in &module.init {
+        scan_stmt_for_async_closures(stmt, &mut found);
+    }
+    for class in &module.classes {
+        for m in &class.methods {
+            scan_stmts_for_async_closures(&m.body, &mut found);
+        }
+        for m in &class.static_methods {
+            scan_stmts_for_async_closures(&m.body, &mut found);
+        }
+        if let Some(ctor) = &class.constructor {
+            scan_stmts_for_async_closures(&ctor.body, &mut found);
+        }
+        for getter in &class.getters {
+            scan_stmts_for_async_closures(&getter.1.body, &mut found);
+        }
+        for setter in &class.setters {
+            scan_stmts_for_async_closures(&setter.1.body, &mut found);
+        }
+    }
+    module.async_step_closures = found;
+}
+
+fn scan_stmts_for_async_closures(
+    stmts: &[Stmt],
+    found: &mut std::collections::HashSet<perry_types::FuncId>,
+) {
+    for s in stmts {
+        scan_stmt_for_async_closures(s, found);
+    }
+}
+
+fn scan_stmt_for_async_closures(
+    stmt: &Stmt,
+    found: &mut std::collections::HashSet<perry_types::FuncId>,
+) {
+    match stmt {
+        Stmt::Let { init: Some(e), .. } => scan_expr_for_async_closures(e, found),
+        Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_for_async_closures(e, found),
+        Stmt::Return(Some(e)) => scan_expr_for_async_closures(e, found),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            scan_expr_for_async_closures(condition, found);
+            scan_stmts_for_async_closures(then_branch, found);
+            if let Some(eb) = else_branch {
+                scan_stmts_for_async_closures(eb, found);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            scan_expr_for_async_closures(condition, found);
+            scan_stmts_for_async_closures(body, found);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                scan_stmt_for_async_closures(i, found);
+            }
+            if let Some(c) = condition {
+                scan_expr_for_async_closures(c, found);
+            }
+            if let Some(u) = update {
+                scan_expr_for_async_closures(u, found);
+            }
+            scan_stmts_for_async_closures(body, found);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            scan_stmts_for_async_closures(body, found);
+            if let Some(c) = catch {
+                scan_stmts_for_async_closures(&c.body, found);
+            }
+            if let Some(f) = finally {
+                scan_stmts_for_async_closures(f, found);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            scan_expr_for_async_closures(discriminant, found);
+            for case in cases {
+                if let Some(t) = &case.test {
+                    scan_expr_for_async_closures(t, found);
+                }
+                scan_stmts_for_async_closures(&case.body, found);
+            }
+        }
+        Stmt::Labeled { body, .. } => scan_stmt_for_async_closures(body, found),
+        _ => {}
+    }
+}
+
+fn scan_expr_for_async_closures(
+    expr: &Expr,
+    found: &mut std::collections::HashSet<perry_types::FuncId>,
+) {
+    if let Expr::Closure {
+        func_id,
+        body,
+        is_async,
+        ..
+    } = expr
+    {
+        if *is_async && body_contains_await(body) {
+            found.insert(*func_id);
+        }
+        // Descend into the closure body too — nested async closures inside
+        // an outer closure body are independent candidates.
+        scan_stmts_for_async_closures(body, found);
+        return;
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |e| scan_expr_for_async_closures(e, found));
+}
+
+fn body_contains_await(stmts: &[Stmt]) -> bool {
+    let mut found = false;
+    for s in stmts {
+        if stmt_contains_await(s, &mut found) {
+            return true;
+        }
+        if found {
+            return true;
+        }
+    }
+    false
+}
+
+fn stmt_contains_await(stmt: &Stmt, found: &mut bool) -> bool {
+    if *found {
+        return true;
+    }
+    match stmt {
+        Stmt::Let { init: Some(e), .. } => expr_contains_await_shallow(e, found),
+        Stmt::Expr(e) | Stmt::Throw(e) => expr_contains_await_shallow(e, found),
+        Stmt::Return(Some(e)) => expr_contains_await_shallow(e, found),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_contains_await_shallow(condition, found)
+                || body_contains_await(then_branch)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|eb| body_contains_await(eb))
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            expr_contains_await_shallow(condition, found) || body_contains_await(body)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref().is_some_and(|i| stmt_contains_await(i, found))
+                || condition
+                    .as_ref()
+                    .is_some_and(|c| expr_contains_await_shallow(c, found))
+                || update
+                    .as_ref()
+                    .is_some_and(|u| expr_contains_await_shallow(u, found))
+                || body_contains_await(body)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body_contains_await(body)
+                || catch.as_ref().is_some_and(|c| body_contains_await(&c.body))
+                || finally.as_ref().is_some_and(|f| body_contains_await(f))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            expr_contains_await_shallow(discriminant, found)
+                || cases.iter().any(|c| body_contains_await(&c.body))
+        }
+        Stmt::Labeled { body, .. } => stmt_contains_await(body, found),
+        _ => false,
+    }
+}
+
+/// Shallow: matches `Expr::Await` at any depth in this expression, but
+/// STOPS at nested closures — an `await` inside a different closure
+/// belongs to that closure's body, not the current one.
+fn expr_contains_await_shallow(expr: &Expr, found: &mut bool) -> bool {
+    if *found {
+        return true;
+    }
+    if matches!(expr, Expr::Await(_)) {
+        *found = true;
+        return true;
+    }
+    if matches!(expr, Expr::Closure { .. }) {
+        return false;
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |e| {
+        if !*found {
+            expr_contains_await_shallow(e, found);
+        }
+    });
+    *found
 }
