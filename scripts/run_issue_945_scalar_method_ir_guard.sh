@@ -68,7 +68,27 @@ set -e
 
 IR_FILE="$TMPDIR/main_ts.ll"
 if [ ! -f "$IR_FILE" ]; then
+  # Some CI runners invoke Perry from a workspace where the displayed
+  # "Wrote LLVM IR: <path>" location is relative to the original shell
+  # cwd, not the temporary compile cwd. Trust the compiler's reported
+  # path before failing the guard.
+  while IFS= read -r logged_ir; do
+    [ -z "$logged_ir" ] && continue
+    if [ -f "$logged_ir" ]; then
+      cp "$logged_ir" "$IR_FILE"
+      break
+    fi
+    if [ -f "$TMPDIR/$logged_ir" ]; then
+      cp "$TMPDIR/$logged_ir" "$IR_FILE"
+      break
+    fi
+  done < <(sed -n 's/^Wrote LLVM IR: //p' "$COMPILE_LOG")
+fi
+
+if [ ! -f "$IR_FILE" ]; then
   echo "FAIL: expected LLVM IR file was not emitted"
+  echo "Files under temp dir:"
+  find "$TMPDIR" -maxdepth 2 -type f -print || true
   cat "$COMPILE_LOG"
   exit 1
 fi
