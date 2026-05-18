@@ -4941,11 +4941,19 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // crash on `this` references — they just produce garbage
             // until full this-capture support lands. The wrong-but-
             // doesn't-crash trade unblocks dozens of test files.
-            // Async closures lower the same way as sync closures for
-            // now — we just don't actually wrap the body in a Promise
-            // state machine. The body still emits, calls work, and
-            // `await` inside it is also a pass-through (Phase E proper
-            // landing handles real async semantics).
+            //
+            // Async-closure handling (post #1021 phase 2): async closures
+            // whose body contains an `await` are pre-rewritten upstream
+            // by `transform_async_to_generator` (via
+            // `transform_plain_async_closure_body` in
+            // `perry-transform/src/generator.rs`). By the time codegen sees
+            // them, the rewrite has flipped `is_async` to false and the
+            // body is a state machine returning a Promise. What still
+            // arrives here with `is_async: true` is async closures
+            // *without* awaits — for those the body just runs once and
+            // returns its value, and the caller's `await` (if any) wraps
+            // it in `Promise.resolve(value)` semantics via the surrounding
+            // codegen. No state-machine wrapping needed here.
             let _ = is_async;
             // mutable_captures uses the same get/set runtime path —
             // they work as long as the outer scope doesn't also access
