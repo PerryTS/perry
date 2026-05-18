@@ -5638,6 +5638,7 @@ fn emit_string_pool(
     // and similar method-less marker classes hit this.
     {
         let mut all_class_ids: Vec<u32> = Vec::new();
+        let mut anon_shape_ids: Vec<u32> = Vec::new();
         for (class_name, class) in classes.iter() {
             if *class_name != class.name {
                 continue;
@@ -5647,12 +5648,30 @@ fn emit_string_pool(
                 _ => continue,
             };
             all_class_ids.push(cid);
+            // date-fns / drizzle / lodash plain-object duck-checks need
+            // `({ x: 1 }).constructor === Object` to hold. The HIR
+            // synthesizes an `__AnonShape_<hash>` class per literal
+            // shape; mark each such class id so the runtime
+            // `js_object_get_field_by_name` resolves `.constructor` to
+            // the global `Object` constructor instead of the synthetic
+            // class ref.
+            if class_name.starts_with("__AnonShape_") {
+                anon_shape_ids.push(cid);
+            }
         }
         all_class_ids.sort_unstable();
         all_class_ids.dedup();
         for cid in all_class_ids {
             blk.call_void(
                 "js_register_class_id",
+                &[(crate::types::I32, &cid.to_string())],
+            );
+        }
+        anon_shape_ids.sort_unstable();
+        anon_shape_ids.dedup();
+        for cid in anon_shape_ids {
+            blk.call_void(
+                "js_register_anon_shape_class_id",
                 &[(crate::types::I32, &cid.to_string())],
             );
         }

@@ -2,6 +2,39 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.984 — feat(runtime): `.constructor` on Date / Array / Object instances + `new <inst.constructor>(...)` dispatch
+
+**Symptom.** date-fns 4.x throws `RangeError: Invalid time value` on the very first call to `format(new Date(2024, 0, 15), 'yyyy-MM-dd')`. Root cause is `constructFrom(date, value)` — the helper every other date-fns export funnels through:
+
+```js
+if (date instanceof Date) return new date.constructor(value);
+```
+
+Perry returned `undefined` from `date.constructor` (Date stores as a raw f64 timestamp, not an ObjectHeader, so the codegen receiver-tag guard at `pget.recv_bad` rejected it as non-pointer and short-circuited to `TAG_UNDEFINED` without ever calling the runtime). The downstream `new undefined(value)` then constructed an empty `ObjectHeader` placeholder; `cloned.getTime()` read garbage; the formatter threw.
+
+Same defect affected every duck-type test of the shape `inst.constructor === Date` / `arr.constructor === Array` / `obj.constructor === Object` (drizzle's `is(value, ctor)`, lodash-style `value.constructor === Array` checks, ramda’s `R.type` fast paths).
+
+**Fix.** Three coordinated changes so both `inst.constructor` reads and bare `Date` / `Array` / `Object` identifiers resolve to the same closure-pointer value, and so `new <inst.constructor>(...)` dispatches into the real factory.
+
+1. `crates/perry-hir/src/lower.rs` — bare built-in identifiers (`Date`, `Array`, `Object`, `Map`, `Set`, `Error`, …) now lower to `Expr::PropertyGet { GlobalGet(0), <name> }` instead of the bare `GlobalGet(0)` sentinel. Routes through the existing codegen `is_global_this_builtin_name` arm which materializes the singleton closure via `js_get_global_this` + `js_object_get_field_by_name_f64`. Added a parallel `is_builtin_global_value_name` helper in `crates/perry-hir/src/analysis.rs` that mirrors the codegen / runtime built-in lists. `lower_types.rs::lower_decorator_arg` extended to also recognise the new `PropertyGet { GlobalGet, name }` shape as a class ref for `@Decorator(Date)`-style use. Callable surfaces (`Date()`, `new Date(...)`, `Date.now()`, `Math.PI`) are intercepted by their dedicated HIR variants before this arm fires, so the change doesn’t disturb those.
+
+2. `crates/perry-runtime/src/object.rs::js_object_get_field_by_name` — new `"constructor"` short-circuit arms:
+   - `GC_TYPE_ARRAY` and `GC_TYPE_LAZY_ARRAY` → return `globalThis.Array` closure (was: returned `undefined`).
+   - Generic object path: `class_id == 0` → return `globalThis.Object`; `is_anon_shape_class_id(class_id)` → also `globalThis.Object` so `({ x: 1 }).constructor === Object` holds.
+   - Plus a new entry-level arm in `js_object_get_field_by_name_f64` that recognises raw-f64 Date receivers via `is_registered_date_bits` and returns `globalThis.Date` — needed because the codegen receiver-tag check filters Date out of the dispatch path otherwise.
+   - The codegen invalid-receiver fall-through (`pget.recv_bad`’s non-nullish branch) now routes through `js_object_get_field_by_name_f64` instead of emitting `TAG_UNDEFINED` directly, so the Date arm above actually fires for raw-f64 receivers.
+
+3. `crates/perry-runtime/src/object.rs::js_new_function_construct` — new `identify_global_builtin_constructor` short-circuit. Walks the singleton’s built-in entries, matches the receiver’s `ClosureHeader.func_ptr` against `global_this_builtin_noop_thunk` (GC-stable identifier — the singleton closure header itself gets evacuated and pointer-rewritten, but the embedded func ptr is read-only), and dispatches to the real factory:
+   - `Date` → `js_date_new` / `js_date_new_from_value` / `js_date_new_local_components`
+   - `Array` → `js_array_alloc` (single-finite-arg → empty array of that length; otherwise positional fill)
+   - `Object` → `js_object_alloc(0, 0)`
+
+   Plus a parallel codegen change in `crates/perry-codegen/src/expr.rs::NewDynamic`: callees of shape `PropertyGet { … }` (the date-fns `new date.constructor(value)` shape) now also route through `js_new_function_construct`. A statically-typed Date receiver short-circuits earlier to `Expr::DateNew(args)` so the hot path stays inline.
+
+4. `crates/perry-codegen/src/codegen.rs` — emit `js_register_anon_shape_class_id` at module init for every `__AnonShape_<hash>` class so the new constructor arm above can distinguish object-literal instances from user classes. The runtime exposes a matching `js_register_anon_shape_class_id` FFI declared in `crates/perry-codegen/src/runtime_decls.rs`, alongside the new `js_get_global_this_builtin_value` helper.
+
+**Validation.** `test-files/test_constructor_property.ts` covers Date / Array / Object `.constructor` reads, identity-equality with the bare global, and `new <date.constructor>(ts)` cloning — all 7 assertions match Node byte-for-byte. date-fns `format(new Date(...), 'yyyy-MM-dd')` (under `compilePackages: ["date-fns"]`) no longer trips `RangeError: Invalid time value`; the next blocker is a `Cannot read properties of undefined (reading 'map')` inside date-fns’s `normalizeDates` chain (downstream of `constructFrom` — separate gap).
+
 ## v0.5.983 — feat(runtime): `Function.prototype.apply` + `Function.prototype.call` dispatch
 
 **Symptom.** `add.apply(null, [2, 3])` and `add.call(null, 2, 3)` both returned an opaque `[object Object]` stub instead of `5`. The dynamic method-dispatch path (`js_native_call_method` in `crates/perry-runtime/src/object.rs`) had a `bind` arm and the closure dynamic-prop lookup, but no `apply` / `call` arms — so any `fn.apply(thisArg, argsArr)` / `fn.call(thisArg, …)` on a closure receiver fell through the `is_closure` branch and returned the `NULL_OBJECT_BYTES` stub. This is what blocked ramda end-to-end: `_curry1`, `_curry2`, `_curry3` all wrap their bodies in `fn.apply(this, arguments)`, so the very first call to any curried export (`R.sum`, `R.add`, etc.) returned a stub instead of the dispatch result.

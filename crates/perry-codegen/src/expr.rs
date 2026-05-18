@@ -3670,6 +3670,34 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // (which IS the NaN-boxed value for non-number fields — same bit
         // pattern, runtime callers re-interpret based on context).
         Expr::PropertyGet { object, property } => {
+            // date-fns `constructFrom(date, value)` reads `date.constructor`
+            // to clone Dates without naming Date directly. Perry stores
+            // Date as a raw f64 timestamp (no ObjectHeader), so the
+            // generic `js_object_get_field_by_name_f64` path would treat
+            // the bit pattern as an invalid pointer and return undefined.
+            // For statically-Date-typed receivers, short-circuit
+            // `.constructor` to the global Date constructor closure —
+            // same value as the bare `Date` identifier resolves to via
+            // `js_get_global_this_builtin_value`.
+            if property == "constructor" {
+                if let Expr::LocalGet(id) = object.as_ref() {
+                    let is_date = matches!(
+                        ctx.local_types.get(id),
+                        Some(HirType::Named(name)) if name == "Date"
+                    );
+                    if is_date {
+                        let name = "Date";
+                        let idx = ctx.strings.intern(name);
+                        let bytes_global = format!("@{}", ctx.strings.entry(idx).bytes_global);
+                        let len_str = name.len().to_string();
+                        return Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_get_global_this_builtin_value",
+                            &[(PTR, &bytes_global), (I64, &len_str)],
+                        ));
+                    }
+                }
+            }
             // Issue #649: PropertyGet on a native-module reference (`fs`,
             // `os`, `crypto`, `path`, ...). `NativeModuleRef` lowers to a
             // literal `0.0`, so the generic PropertyGet path can't see the
@@ -4456,10 +4484,21 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ctx.block().unreachable();
 
             // Undef-return path: existing fall-through for non-nullish
-            // invalid receivers.
+            // invalid receivers. Route through the runtime helper first
+            // so non-pointer typed shapes can still report a sensible
+            // value when the runtime knows what they are. Today this
+            // unblocks Date `.constructor` (Date stores as a raw f64
+            // timestamp, so the codegen receiver-tag check at line ~4212
+            // rejects it as non-pointer — yet the runtime's
+            // `js_object_get_field_by_name_f64` recognizes the bit
+            // pattern via `DATE_REGISTRY` and returns the global Date
+            // constructor closure). Date-fns `constructFrom` blocker.
             ctx.current_block = undef_idx;
-            let undef_bits = crate::nanbox::i64_literal(crate::nanbox::TAG_UNDEFINED);
-            let undef_val = ctx.block().bitcast_i64_to_double(&undef_bits);
+            let undef_val = ctx.block().call(
+                DOUBLE,
+                "js_object_get_field_by_name_f64",
+                &[(I64, &obj_bits), (I64, &key_handle)],
+            );
             let invalid_end_label = ctx.block().label.clone();
             ctx.block().br(&final_merge_label);
 
@@ -5104,6 +5143,31 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return lower_new(ctx, name, args);
             }
 
+            // date-fns `constructFrom(date, value)`:
+            //   return new date.constructor(value);
+            // The callee is `PropertyGet { LocalGet(date), "constructor" }`
+            // where `date` is statically Date-typed. Lower through the
+            // dedicated `Expr::DateNew` path so the call routes to
+            // `js_date_new_from_value` / `js_date_new_local_components`
+            // and the result is a real Date timestamp, not an empty
+            // ObjectHeader. Pre-fix the NewDynamic fallback returned a
+            // placeholder object — `cloned.getTime()` then read garbage
+            // and the equality failed. Refs date-fns blocker.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "constructor" {
+                    if let Expr::LocalGet(id) = object.as_ref() {
+                        let is_date = matches!(
+                            ctx.local_types.get(id),
+                            Some(HirType::Named(name)) if name == "Date"
+                        );
+                        if is_date {
+                            let synth = Expr::DateNew(args.to_vec());
+                            return lower_expr(ctx, &synth);
+                        }
+                    }
+                }
+            }
+
             // Refs #740: `new O.Inner(args)` where `O` is an object
             // literal whose `Inner` field was initialized from a class
             // expression. The Stmt::Let lowering populates
@@ -5175,8 +5239,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // also supported because the helper falls back to a
             // class_id=0 empty-object allocation when no synthetic id
             // exists (preserves the pre-fix baseline).
-            let routes_through_function_construct =
-                matches!(callee.as_ref(), Expr::FuncRef(_) | Expr::LocalGet(_));
+            // Also route PropertyGet callees through `js_new_function_construct`:
+            // covers `new date.constructor(value)` (date-fns
+            // `constructFrom`) and generic `new obj.factory(...)` shapes
+            // where `obj.factory` resolves to a closure pointer at
+            // runtime. The runtime helper detects the global Date /
+            // Array / Object thunks and dispatches into the matching
+            // real factory; non-matching closures still get the
+            // class_id=0 empty-object baseline.
+            let routes_through_function_construct = matches!(
+                callee.as_ref(),
+                Expr::FuncRef(_) | Expr::LocalGet(_) | Expr::PropertyGet { .. }
+            );
             if routes_through_function_construct {
                 let func_double = lower_expr(ctx, callee)?;
                 let lowered_args: Vec<String> = args

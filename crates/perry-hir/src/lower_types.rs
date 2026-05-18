@@ -1232,6 +1232,16 @@ fn lower_decorator_arg(ctx: &mut LoweringContext, expr: &ast::Expr) -> Option<Ex
         ast::Expr::Lit(lit) => lower_lit(lit).ok(),
         ast::Expr::Ident(ident) => match lower_expr(ctx, expr).ok() {
             Some(Expr::GlobalGet(0)) => Some(Expr::ClassRef(ident.sym.to_string())),
+            // Bare built-in name `Date`/`Array`/`Object`/... now lowers
+            // to `PropertyGet { GlobalGet(0), name }` (so the value-side
+            // identity comparison `inst.constructor === Date` matches).
+            // For decorator-arg use it's still a class ref.
+            Some(Expr::PropertyGet {
+                object: ref obj,
+                property: _,
+            }) if matches!(obj.as_ref(), Expr::GlobalGet(0)) => {
+                Some(Expr::ClassRef(ident.sym.to_string()))
+            }
             other => other,
         },
         ast::Expr::Array(arr) => {

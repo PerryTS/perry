@@ -1236,6 +1236,99 @@ pub unsafe extern "C" fn js_register_class_id(class_id: u32) {
     guard.as_mut().unwrap().insert(class_id);
 }
 
+/// Resolve a closure-typed JSValue back to a built-in constructor name
+/// (`"Date"`/`"Array"`/`"Object"`/...) when it matches one of the
+/// singleton-installed thunks. Returns `None` for closures that aren't
+/// the globalThis built-in constructors. Used by
+/// `js_new_function_construct` to dispatch `new <inst.constructor>(...)`
+/// shapes (date-fns `constructFrom`, lodash-style `Array` cloning, ...)
+/// to the right runtime factory.
+fn identify_global_builtin_constructor(func_value: f64) -> Option<&'static str> {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(func_value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer() as *const crate::closure::ClosureHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    if !is_valid_obj_ptr(ptr as *const u8) {
+        return None;
+    }
+    // Identify by the closure's read-only `func_ptr` rather than the
+    // GC-movable ClosureHeader address. Both the date-fns ctor closure
+    // and the (later-evacuated) ctor closure carry the same
+    // `global_this_builtin_noop_thunk` function pointer, so this match
+    // survives GC moves. The per-name lookup must then walk the
+    // globalThis singleton's keys to recover the constructor name —
+    // accept the extra hop only when the func_ptr matches.
+    unsafe {
+        if (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
+            return None;
+        }
+        let func_ptr = (*ptr).func_ptr as usize;
+        let noop_thunk = global_this_builtin_noop_thunk as *const u8 as usize;
+        if func_ptr != noop_thunk {
+            return None;
+        }
+    }
+    // Find which builtin name maps to this exact closure header on the
+    // singleton. Walk via the existing
+    // `js_get_global_this_builtin_value` helper — short loop (≤ ~50
+    // entries), only fires on the constructFrom hot path.
+    let global_this_f64 = js_get_global_this();
+    let global_obj = crate::value::js_nanbox_get_pointer(global_this_f64) as *const ObjectHeader;
+    if global_obj.is_null() {
+        return None;
+    }
+    for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let v = unsafe { js_object_get_field_by_name(global_obj, key) };
+        if v.bits() == jv.bits() {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// Synthetic-anonymous-shape class IDs: classes the HIR generates for
+/// bare object literals (`{ x: 1 }` → `__AnonShape_<hash>`). Instances
+/// of these shapes should report `Object` from `.constructor`, not the
+/// synthetic class itself, so date-fns's `new value.constructor(...)`,
+/// drizzle's `value.constructor === Object` duck checks, and the standard
+/// `({}).constructor === Object` semantics all match Node. The HIR
+/// lowering registers each anon shape's id here at module init.
+pub static ANON_SHAPE_CLASS_IDS: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
+
+/// Mark `class_id` as a synthetic anon-shape class so `.constructor`
+/// reads on instances of that class return the global `Object`
+/// constructor rather than the synthetic class ref.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_anon_shape_class_id(class_id: u32) {
+    if class_id == 0 {
+        return;
+    }
+    let mut guard = ANON_SHAPE_CLASS_IDS.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(std::collections::HashSet::new());
+    }
+    guard.as_mut().unwrap().insert(class_id);
+}
+
+/// True if `class_id` was registered via `js_register_anon_shape_class_id`.
+pub fn is_anon_shape_class_id(class_id: u32) -> bool {
+    if class_id == 0 {
+        return false;
+    }
+    if let Ok(guard) = ANON_SHAPE_CLASS_IDS.read() {
+        if let Some(set) = guard.as_ref() {
+            return set.contains(&class_id);
+        }
+    }
+    false
+}
+
 /// Register a static field value on a class so `Cls.field` (when `Cls` is
 /// accessed via dynamic dispatch — e.g. through an Any-typed local) finds
 /// the value via the runtime path. Codegen calls this at module init for
@@ -1429,6 +1522,62 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // date-fns `constructFrom` clones a Date via
+    // `new date.constructor(value)`. `date.constructor` resolves to
+    // the global `Date` closure pointer (the noop thunk installed by
+    // `populate_global_this_builtins`). Without this intercept the
+    // call falls through to the generic empty-object path and
+    // `cloned.getTime()` reads garbage. Detect the global Date /
+    // Array / Object constructor pointers and dispatch into the
+    // matching real factory. Refs date-fns blocker.
+    if let Some(name) = identify_global_builtin_constructor(func_value) {
+        let args = if args_ptr.is_null() {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(args_ptr, args_len)
+        };
+        match name {
+            "Date" => {
+                if args.is_empty() {
+                    return crate::date::js_date_new();
+                }
+                if args.len() == 1 {
+                    return crate::date::js_date_new_from_value(args[0]);
+                }
+                let mut vals = [f64::from_bits(crate::value::TAG_UNDEFINED); 7];
+                for (i, slot) in vals.iter_mut().enumerate() {
+                    if i < args.len() {
+                        *slot = args[i];
+                    }
+                }
+                return crate::date::js_date_new_local_components(
+                    vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6],
+                );
+            }
+            "Array" => {
+                // `new Array(n)`: empty array of length n.
+                // `new Array(a, b, c)`: array filled with the args.
+                let single_len = args.len() == 1 && args[0].is_finite() && args[0] >= 0.0;
+                let len = if single_len {
+                    args[0] as u32
+                } else {
+                    args.len() as u32
+                };
+                let arr = crate::array::js_array_alloc(len);
+                if !single_len {
+                    for (i, &v) in args.iter().enumerate() {
+                        crate::array::js_array_set_f64(arr, i as u32, v);
+                    }
+                }
+                return crate::value::js_nanbox_pointer(arr as i64);
+            }
+            "Object" => {
+                let obj = js_object_alloc(0, 0);
+                return crate::value::js_nanbox_pointer(obj as i64);
+            }
+            _ => {}
+        }
+    }
     let cid = synthetic_class_id_for_function(func_value);
     // Allocate the instance with the synthetic class id (or 0 if the
     // value isn't callable). The object starts with no own props; the
@@ -3803,6 +3952,16 @@ pub extern "C" fn js_object_get_field_by_name(
                     let arr = obj as *const crate::array::ArrayHeader;
                     return JSValue::number(crate::array::js_array_length(arr) as f64);
                 }
+                // date-fns / drizzle / lodash duck-typing path:
+                // `arr.constructor === Array`, `new arr.constructor(...)`,
+                // etc. expect a non-undefined function-typed value that
+                // refers back to the global `Array` constructor. Resolve
+                // through the singleton so this returns the same closure
+                // pointer as the bare `Array` identifier.
+                if key_bytes == b"constructor" {
+                    let v = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
+                    return JSValue::from_bits(v.to_bits());
+                }
             }
             return JSValue::undefined();
         }
@@ -3819,6 +3978,10 @@ pub extern "C" fn js_object_get_field_by_name(
                 if key_bytes == b"length" {
                     let arr = obj as *const crate::array::ArrayHeader;
                     return JSValue::number(crate::array::js_array_length(arr) as f64);
+                }
+                if key_bytes == b"constructor" {
+                    let v = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
+                    return JSValue::from_bits(v.to_bits());
                 }
             }
             // Any other property access force-materializes, then
@@ -3982,9 +4145,28 @@ pub extern "C" fn js_object_get_field_by_name(
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
             if key_bytes == b"constructor" {
                 let class_id = (*obj).class_id;
+                // Object-literal instances (`{ x: 1 }`) carry a synthetic
+                // `__AnonShape_*` class id. Spec says their `.constructor`
+                // is the global `Object`, not the synthetic class — so
+                // resolve through the globalThis singleton so the value
+                // matches the bare `Object` identifier (`x.constructor
+                // === Object`, date-fns `constructFrom`, drizzle's
+                // `isPlainObject` duck check).
+                if class_id != 0 && is_anon_shape_class_id(class_id) {
+                    let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+                    return JSValue::from_bits(v.to_bits());
+                }
                 if class_id != 0 && is_class_id_registered(class_id) {
                     let bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64);
                     return JSValue::from_bits(bits);
+                }
+                // class_id == 0 fallback: plain ObjectHeader allocated
+                // without an HIR shape (Object.create(null) hybrids, raw
+                // empty `{}` produced by JSON.parse, etc.). Report
+                // `Object` so duck-type tests don't trip undefined.
+                if class_id == 0 {
+                    let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+                    return JSValue::from_bits(v.to_bits());
                 }
             }
         }
@@ -4275,6 +4457,26 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> f64 {
+    // date-fns `constructFrom`: the parameter is statically Any so the
+    // codegen Date intercept doesn't fire here. Detect Date instances
+    // by their registered f64 bit pattern and route `.constructor` to
+    // the global Date constructor closure — same value the bare `Date`
+    // identifier produces, so `date instanceof Date` followed by `new
+    // date.constructor(value)` lands on the right factory inside
+    // `js_new_function_construct`.
+    if !key.is_null() {
+        let obj_bits = obj as u64;
+        if crate::date::is_registered_date_bits(obj_bits) {
+            unsafe {
+                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let key_len = (*key).byte_len as usize;
+                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                if key_bytes == b"constructor" {
+                    return js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
+                }
+            }
+        }
+    }
     let value = js_object_get_field_by_name(obj, key);
     f64::from_bits(value.bits())
 }
@@ -10008,6 +10210,39 @@ fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let ns_value = crate::value::js_nanbox_pointer(ns_obj as i64);
         js_object_set_field_by_name(singleton, name_key, ns_value);
     }
+}
+
+/// Look up the canonical NaN-boxed value of a built-in constructor /
+/// namespace stored on `globalThis` (the singleton populated by
+/// `populate_global_this_builtins`). Used by `instance.constructor`
+/// reads and by bare `Date`/`Array`/`Object` identifier resolution so
+/// both forms produce the same closure-pointer value — that's what
+/// `instance.constructor === Date` (date-fns's `constructFrom`,
+/// drizzle's `is(value, ctor)` duck checks, ...) hinges on.
+///
+/// Returns NaN-boxed undefined if the name isn't one of the populated
+/// built-ins or the singleton hasn't been initialized yet.
+#[no_mangle]
+pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len: usize) -> f64 {
+    if name_ptr.is_null() || name_len == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let name_bytes = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match std::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
+    // Force the singleton init the first time so the lookup below has
+    // a populated field bag.
+    let global_this_f64 = js_get_global_this();
+    let global_obj = crate::value::js_nanbox_get_pointer(global_this_f64) as *const ObjectHeader;
+    if global_obj.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name(global_obj, key);
+    let bits = value.bits();
+    f64::from_bits(bits)
 }
 
 /// Object.getOwnPropertyNames(obj) — returns all own property names (including non-enumerable).

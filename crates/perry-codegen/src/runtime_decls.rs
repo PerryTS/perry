@@ -696,6 +696,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_instanceof_dynamic", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_register_class_extends_error", VOID, &[I32]);
     module.declare_function("js_register_class_id", VOID, &[I32]);
+    // Anon-shape class registration so `.constructor` reads on object
+    // literals (`{ x: 1 }`) return the global `Object` constructor
+    // instead of the synthetic class ref. Refs #968 / date-fns
+    // `constructFrom` blocker.
+    module.declare_function("js_register_anon_shape_class_id", VOID, &[I32]);
+    // Built-in constructor / namespace value-lookup on the globalThis
+    // singleton. Used to wire `instance.constructor` and bare
+    // `Date`/`Array`/`Object` identifiers to the same closure pointer
+    // so `inst.constructor === Date` (date-fns / drizzle / lodash duck
+    // checks) holds.
+    module.declare_function("js_get_global_this_builtin_value", DOUBLE, &[PTR, I64]);
     // Inline-allocator class registration: emitted once per class
     // with a parent in the entry-block init prelude. The runtime
     // allocators register on every alloc; the inline allocator skips
