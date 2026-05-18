@@ -137,6 +137,17 @@ pub fn sanitize_for_bundle_id_component(raw: &str) -> String {
     out
 }
 
+/// Build the default `com.perry.<stem>` bundle ID for an executable
+/// stem when no explicit bundle ID has been configured. Shared by every
+/// Apple platform (macOS, iOS, visionOS, watchOS, tvOS) so the generated
+/// fallback agrees byte-for-byte across targets — provisioning profiles
+/// that round-trip a binary between platforms can rely on a single
+/// canonical form. #998.
+pub fn default_perry_bundle_id(exe_stem: &str) -> String {
+    let stem = sanitize_for_bundle_id_component(exe_stem);
+    format!("com.perry.{stem}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +279,44 @@ mod tests {
     fn bundle_id_component_lowercases() {
         assert_eq!(sanitize_for_bundle_id_component("@Foo/Bar"), "foo-bar");
         assert_eq!(sanitize_for_bundle_id_component("MyApp"), "myapp");
+    }
+
+    #[test]
+    fn default_perry_bundle_id_is_sanitized_lowercase() {
+        // #998: every Apple-platform fallback (macOS/iOS/visionOS/
+        // watchOS/tvOS) must produce the same byte-for-byte form so a
+        // binary round-tripped between targets keeps a single canonical
+        // bundle ID. The shared helper enforces it.
+        assert_eq!(default_perry_bundle_id("MyApp"), "com.perry.myapp");
+        assert_eq!(default_perry_bundle_id("@scope/pkg"), "com.perry.scope-pkg");
+        assert_eq!(default_perry_bundle_id("foo bar"), "com.perry.foo_bar");
+    }
+
+    #[test]
+    fn compile_rs_uses_shared_helper_for_all_fallbacks() {
+        // #998 grep-audit: ensure no Apple-platform site builds the
+        // bundle-ID inline (which would skip the sanitizer). Every
+        // `com.perry.<stem>` derivation must go through
+        // `default_perry_bundle_id`.
+        let src = include_str!("compile.rs");
+        // The only places `com.perry.` may appear are doc/comment text;
+        // there must be no `format!("com.perry.{...", ...)` invocations
+        // (those are the unsanitized inline forms).
+        for line in src.lines() {
+            // Be conservative — skip comments outright.
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                continue;
+            }
+            assert!(
+                !line.contains("format!(\"com.perry."),
+                "compile.rs has an inline `format!(\"com.perry.…\")` call. \
+                 Use `crate::commands::sanitize::default_perry_bundle_id` \
+                 instead so the bundle-ID fallback stays consistent across \
+                 Apple platforms (#998). Offending line:\n  {}",
+                line
+            );
+        }
     }
 
     #[test]

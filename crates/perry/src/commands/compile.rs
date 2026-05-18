@@ -244,9 +244,10 @@ fn read_app_metadata(
             // argv. The input file stem is attacker-influenceable
             // (tooling-chosen paths), so route it through the shared
             // sanitizer before splicing into the reverse-DNS string.
+            // The helper is also used by every other Apple-platform
+            // fallback site (#998) so generated bundle IDs agree.
             let raw = input.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
-            let stem = crate::commands::sanitize::sanitize_for_bundle_id_component(raw);
-            format!("com.perry.{stem}")
+            crate::commands::sanitize::default_perry_bundle_id(raw)
         });
 
     metadata
@@ -7056,7 +7057,14 @@ pub fn run_with_parse_cache(
                     None
                 })()
             })
-            .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
+            .unwrap_or_else(|| {
+                // #998: shared helper so iOS bundle IDs match the macOS
+                // path (sanitized + lowercase-canonical). `exe_stem` is
+                // already transitively safe (sourced from the upstream
+                // sanitized `stem`); the helper still calls the
+                // sanitizer for the lowercase mapping.
+                crate::commands::sanitize::default_perry_bundle_id(exe_stem)
+            });
         result_bundle_id = Some(bundle_id.clone());
         result_app_dir = Some(app_dir.clone());
 
@@ -7691,7 +7699,7 @@ pub fn run_with_parse_cache(
         let bundle_id = lookup_bundle_id_from_toml(&args.input, "visionos")
             .or_else(|| lookup_bundle_id_from_toml(&args.input, "app"))
             .or_else(|| lookup_bundle_id_from_toml(&args.input, "ios"))
-            .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
+            .unwrap_or_else(|| crate::commands::sanitize::default_perry_bundle_id(exe_stem));
         result_bundle_id = Some(bundle_id.clone());
         result_app_dir = Some(app_dir.clone());
 
@@ -7966,7 +7974,7 @@ pub fn run_with_parse_cache(
             .unwrap_or(stem);
         let bundle_id = lookup_bundle_id_from_toml(&args.input, "watchos")
             .or_else(|| lookup_bundle_id_from_toml(&args.input, "app"))
-            .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
+            .unwrap_or_else(|| crate::commands::sanitize::default_perry_bundle_id(exe_stem));
         result_bundle_id = Some(bundle_id.clone());
         result_app_dir = Some(app_dir.clone());
 
@@ -8083,7 +8091,7 @@ pub fn run_with_parse_cache(
             .unwrap_or(stem);
         let bundle_id = lookup_bundle_id_from_toml(&args.input, "tvos")
             .or_else(|| lookup_bundle_id_from_toml(&args.input, "app"))
-            .unwrap_or_else(|| format!("com.perry.{}", exe_stem));
+            .unwrap_or_else(|| crate::commands::sanitize::default_perry_bundle_id(exe_stem));
         result_bundle_id = Some(bundle_id.clone());
         result_app_dir = Some(app_dir.clone());
 
