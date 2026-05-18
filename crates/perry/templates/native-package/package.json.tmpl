@@ -23,9 +23,9 @@
         { "name": "js_{{crate_name}}_hello", "params": ["string"], "returns": "string" }
       ],
       "targets": {
-        "macos":   { "cargo_features": [], "frameworks": [] },
-        "linux":   { "cargo_features": [] },
-        "windows": { "cargo_features": [] }
+        "macos":   { "crate": ".", "lib": "libperry_ext_{{crate_name}}.a", "cargo_features": [], "frameworks": [] },
+        "linux":   { "crate": ".", "lib": "libperry_ext_{{crate_name}}.a", "cargo_features": [] },
+        "windows": { "crate": ".", "lib": "perry_ext_{{crate_name}}.lib",  "cargo_features": [] }
       }
     }
   }

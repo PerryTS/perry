@@ -83,17 +83,59 @@ pub(crate) fn locate_native_lib_artifact(
     target: Option<&str>,
     lib_name: &str,
 ) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut release_dirs: Vec<PathBuf> = Vec::new();
     if let Some(triple) = rust_target_triple(target) {
-        candidates.push(crate_target_dir.join(triple).join("release").join(lib_name));
-        candidates.push(crate_target_dir.join("release").join(lib_name));
+        release_dirs.push(crate_target_dir.join(triple).join("release"));
+        release_dirs.push(crate_target_dir.join("release"));
     } else {
-        candidates.push(crate_target_dir.join("release").join(lib_name));
+        release_dirs.push(crate_target_dir.join("release"));
         if let Some(host) = host_target_triple() {
-            candidates.push(crate_target_dir.join(host).join("release").join(lib_name));
+            release_dirs.push(crate_target_dir.join(host).join("release"));
         }
     }
-    candidates.into_iter().find(|p| p.exists())
+    for dir in &release_dirs {
+        for name in lib_name_variants(lib_name, target) {
+            let path = dir.join(&name);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Expand a bare crate name into platform-appropriate staticlib /
+/// dylib filenames. The literal name is tried first so manifests that
+/// already include the full filename (e.g. `libfoo.a`) keep working
+/// unchanged; the variants cover wrappers that supply only the bare
+/// cargo lib name (refs issue #792).
+fn lib_name_variants(lib_name: &str, target: Option<&str>) -> Vec<String> {
+    let mut out = vec![lib_name.to_string()];
+    let has_ext = std::path::Path::new(lib_name).extension().is_some();
+    let has_lib_prefix = lib_name.starts_with("lib");
+    if !has_ext {
+        let is_windows = matches!(target, Some("windows"))
+            || (target.is_none() && cfg!(target_os = "windows"));
+        let is_macos = matches!(target, Some("ios") | Some("ios-simulator")
+            | Some("tvos") | Some("tvos-simulator")
+            | Some("watchos") | Some("watchos-simulator")
+            | Some("visionos") | Some("visionos-simulator")
+            | Some("macos"))
+            || (target.is_none() && cfg!(target_os = "macos"));
+        if is_windows {
+            // MSVC staticlib: `{name}.lib`, no `lib` prefix.
+            out.push(format!("{}.lib", lib_name.trim_start_matches("lib")));
+        } else if is_macos {
+            let stem = if has_lib_prefix { lib_name.to_string() } else { format!("lib{}", lib_name) };
+            out.push(format!("{}.a", stem));
+            out.push(format!("{}.dylib", stem));
+        } else {
+            let stem = if has_lib_prefix { lib_name.to_string() } else { format!("lib{}", lib_name) };
+            out.push(format!("{}.a", stem));
+            out.push(format!("{}.so", stem));
+        }
+    }
+    out
 }
 
 pub(super) fn find_llvm_tool(tool_name: &str) -> Option<PathBuf> {
@@ -1236,6 +1278,27 @@ mod native_lib_artifact_tests {
         fs::write(&lib_path, b"fake archive").expect("write lib");
 
         let found = locate_native_lib_artifact(&target_dir, None, "libfoo.a");
+        assert_eq!(found.as_deref(), Some(lib_path.as_path()));
+    }
+
+    /// Refs #792 — wrappers that supply only the cargo crate name
+    /// (e.g. `perry_ext_foo`) instead of the full filename should
+    /// still resolve to `libperry_ext_foo.a` on the host platform.
+    #[test]
+    fn locates_artifact_from_bare_crate_name() {
+        let tmp = tempfile::tempdir().expect("create tmpdir");
+        let target_dir = tmp.path().join("target");
+        let release_dir = target_dir.join("release");
+        fs::create_dir_all(&release_dir).expect("mkdir release");
+        let lib_name = if cfg!(target_os = "windows") {
+            "perry_ext_foo.lib"
+        } else {
+            "libperry_ext_foo.a"
+        };
+        let lib_path = release_dir.join(lib_name);
+        fs::write(&lib_path, b"fake archive").expect("write lib");
+
+        let found = locate_native_lib_artifact(&target_dir, None, "perry_ext_foo");
         assert_eq!(found.as_deref(), Some(lib_path.as_path()));
     }
 
