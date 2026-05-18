@@ -31,12 +31,19 @@
 //! emitter.emit(&diag, &cache).unwrap();
 //! ```
 
+pub mod compat_report;
 pub mod diagnostic;
 pub mod emitter;
 pub mod source_cache;
 pub mod span;
 
 // Re-export commonly used types
+pub use compat_report::{
+    category_for_code, enqueue_report, has_report_sink, is_reportable_code,
+    maybe_enqueue_for_diagnostic, redact_snippet, set_report_sink, sha256_hash,
+    CompatibilityReport, PendingReport, RedactionError, ReportCategory, ReportSink, ReportStage,
+    MAX_SNIPPET_LEN,
+};
 pub use diagnostic::{
     Applicability, Diagnostic, DiagnosticBuilder, DiagnosticCode, Diagnostics, RelatedInfo,
     Severity, Suggestion,

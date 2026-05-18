@@ -22,15 +22,55 @@ const CHIRP_KEY: &str = "testkey123";
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Tri-state setting for the #849 opt-in compatibility-report channel.
+/// Decoupled from `enabled` (generic usage analytics) so users can opt in
+/// to one without the other.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CompatibilityReports {
+    /// Never send. Sink stays uninstalled; queue stays empty.
+    Off,
+    /// Prompt the user the first time a qualifying report would fire.
+    /// Default for new installs.
+    #[default]
+    Ask,
+    /// Always send (after dedup + redaction). User has opted in.
+    On,
+}
+
+impl CompatibilityReports {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            CompatibilityReports::Off => "off",
+            CompatibilityReports::Ask => "ask",
+            CompatibilityReports::On => "on",
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TelemetryConfig {
     pub(crate) enabled: bool,
     #[serde(default)]
     pub(crate) client_id: String,
+    /// #849: opt-in compatibility reports. Off by default in code (`Ask`
+    /// is the variant default but `#[serde(default)]` means existing
+    /// installs without the field get `Off` until they upgrade — see
+    /// `compatibility_reports_default`).
+    #[serde(default = "compatibility_reports_default")]
+    pub(crate) compatibility_reports: CompatibilityReports,
+}
+
+/// Existing users (config.toml predates #849) get `Ask` so they see the
+/// prompt next time a gap is hit. New installs running through
+/// `init_and_check_consent()` also land on `Ask`. Set explicitly to `Off`
+/// to opt out at the file level.
+fn compatibility_reports_default() -> CompatibilityReports {
+    CompatibilityReports::Ask
 }
 
 /// Returns true if telemetry should be skipped entirely (explicit opt-out).
-fn should_skip_telemetry() -> bool {
+pub(crate) fn should_skip_telemetry() -> bool {
     if std::env::var("PERRY_NO_TELEMETRY").is_ok_and(|v| v == "1" || v == "true") {
         return true;
     }
@@ -48,20 +88,20 @@ fn should_skip_consent_prompt() -> bool {
 
 /// Load telemetry config from ~/.perry/config.toml.
 /// Returns None if no [telemetry] section exists (= never asked).
-fn load_telemetry_config() -> Option<TelemetryConfig> {
+pub(crate) fn load_telemetry_config() -> Option<TelemetryConfig> {
     let config = load_config();
     config.telemetry
 }
 
 /// Save telemetry config, preserving all other config sections.
-fn save_telemetry_config(telemetry: &TelemetryConfig) {
+pub(crate) fn save_telemetry_config(telemetry: &TelemetryConfig) {
     let mut config = load_config();
     config.telemetry = Some(telemetry.clone());
     let _ = save_config(&config);
 }
 
 /// Generate a random client ID (UUID-like hex string).
-fn generate_client_id() -> String {
+pub(crate) fn generate_client_id() -> String {
     let mut bytes = [0u8; 16];
 
     // Try /dev/urandom first (Unix) — must use Read trait, not fs::read (infinite device)
@@ -109,6 +149,11 @@ fn prompt_consent() -> bool {
     let config = TelemetryConfig {
         enabled: consent,
         client_id: generate_client_id(),
+        // Generic analytics consent prompt doesn't speak for the
+        // separate #849 compat-report channel — leave it on `Ask` so
+        // the user gets a focused, in-context prompt the first time
+        // a gap actually fires.
+        compatibility_reports: CompatibilityReports::Ask,
     };
     save_telemetry_config(&config);
 

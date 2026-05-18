@@ -3,6 +3,7 @@
 //! CLI driver for compiling TypeScript to native executables.
 
 mod commands;
+mod compat_reports;
 mod telemetry;
 mod update_checker;
 
@@ -357,6 +358,12 @@ fn main_inner() -> Result<()> {
         false
     };
 
+    // #849: install the compat-report sink so diagnostic emission sites
+    // can enqueue reports. Honors `compatibility_reports = "off"` (skips
+    // installation entirely) and `PERRY_NO_TELEMETRY=1`/`CI=true` (same
+    // env overrides as the generic telemetry channel).
+    compat_reports::install_sink();
+
     // Spawn background update check (non-blocking, cached for 24h)
     let is_update_cmd = matches!(cli.command, Some(Commands::Update(_)));
     let bg_check = if !cli.quiet && !is_update_cmd && !update_checker::should_skip_check() {
@@ -457,6 +464,11 @@ fn main_inner() -> Result<()> {
             update_checker::print_update_notice(&current, &latest, &release_url, use_stderr_color);
         }
     }
+
+    // #849: drain queued compat reports (prompts the user once in `ask`
+    // mode) before flushing generic telemetry. Runs even when the
+    // command succeeded — reports fire on *warnings* too (e.g. NoOpStub).
+    compat_reports::flush();
 
     // Wait for any pending telemetry events to be delivered before exiting
     telemetry::flush();
