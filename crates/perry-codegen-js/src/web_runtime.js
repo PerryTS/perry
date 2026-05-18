@@ -1673,6 +1673,45 @@ function perry_system_keychain_delete(key) {
     localStorage.removeItem("perry_keychain_" + key);
 }
 
+// --- System: Share Sheet (#917) ---
+// Stub: navigator.share() is the obvious mapping but it's user-gesture-gated,
+// available only over HTTPS, and partially supported. For matrix parity we
+// no-op + log; native impls land per-platform separately.
+function perry_system_share_text(text, _title) {
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+        try { navigator.share({ text: String(text || "") }); return; } catch (_) {}
+    }
+    console.warn("perry/system: share_text not implemented on web (no navigator.share)");
+}
+
+function perry_system_share_url(url, _title) {
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+        try { navigator.share({ url: String(url || "") }); return; } catch (_) {}
+    }
+    console.warn("perry/system: share_url not implemented on web (no navigator.share)");
+}
+
+// --- System: App Group / cross-process shared storage (#675) ---
+// Stub: web has no cross-origin shared storage primitive. Back the API with
+// localStorage under a stable prefix so within-origin reads/writes round-trip.
+function perry_system_app_group_set(key, value) {
+    localStorage.setItem("perry_appgroup_" + key, value);
+}
+
+function perry_system_app_group_get(key) {
+    return localStorage.getItem("perry_appgroup_" + key) || "";
+}
+
+function perry_system_app_group_delete(key) {
+    localStorage.removeItem("perry_appgroup_" + key);
+}
+
+// --- System: OS version (bug-report flow) ---
+function perry_system_get_os_version() {
+    if (typeof navigator !== "undefined" && navigator.userAgent) return navigator.userAgent;
+    return "web";
+}
+
 // --- System: Notifications ---
 function perry_system_notification_send(title, body) {
     if ("Notification" in window && Notification.permission === "granted") {

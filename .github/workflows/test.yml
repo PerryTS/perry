@@ -371,6 +371,22 @@ jobs:
           # (`ramda`) through the V8 fallback path. The compile-smoke
           # runner does not npm-install optional package fixtures, so the
           # strict unresolved-namespace diagnostic is expected here.
+          # test_take_screenshot imports perry/ui (same `--target gtk4`
+          # / pre-built libperry_ui_gtk4.a coupling as the test_ui_*
+          # family above — bare-target compile path doesn't link the
+          # platform widgets on Linux).
+          # test_issue_842_side_effect_dynamic_import compiles a barrel
+          # file that dynamic-imports a sibling helper; the smoke
+          # harness compiles each .ts standalone with `perry foo.ts -o
+          # out`, so the helper .o never gets produced and ld fails on
+          # the unresolved symbol. The test belongs in a multi-file
+          # integration runner, not the per-file smoke pass.
+          # test_jose_signverify_roundtrip references `jwtVerify` from
+          # the jose ext (#1025 sibling work). The bare smoke compile
+          # path doesn't link the jose-specific runtime symbol — same
+          # ld-unresolved-reference failure observed on #1038 pre-merge.
+          # Move to a jose-aware test runner once that crate's CI hook
+          # is wired up.
           export SKIP_TESTS=" \
             test_ui_comprehensive \
             test_ui_controls \
@@ -389,6 +405,9 @@ jobs:
             test_issue_763_reactive_textfield \
             test_issue_764_state_at_module_init \
             test_ramda_user_import \
+            test_take_screenshot \
+            test_issue_842_side_effect_dynamic_import \
+            test_jose_signverify_roundtrip \
             test_parity_assert \
             test_parity_async_hooks \
             test_parity_buffer \
