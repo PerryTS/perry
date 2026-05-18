@@ -19,6 +19,7 @@ pub mod login;
 pub mod native;
 pub mod publish;
 pub mod run;
+pub mod sanitize;
 pub mod setup;
 pub mod stdlib_features;
 pub mod typecheck;

@@ -58,11 +58,13 @@ fn crypto_subtle_digest_compiles() {
     );
 }
 
-/// Out-of-scope subtle methods (encrypt/decrypt/generateKey/etc., #561's
-/// "Out of scope" section) must reject with a clear message naming the
-/// supported surface.
+/// crypto.subtle.encrypt now compiles after PR #952 added AES-GCM
+/// support (and AES-CBC lowering through the same WebCryptoEncrypt
+/// HIR variant). The pre-#952 "out of scope, must reject" assertion
+/// has flipped — exercise the modern compile-success path so a
+/// regression in the lowering would surface here.
 #[test]
-fn crypto_subtle_encrypt_is_rejected() {
+fn crypto_subtle_encrypt_compiles() {
     let result = lower_result(
         r#"
         import * as crypto from "crypto";
@@ -71,10 +73,9 @@ fn crypto_subtle_encrypt_is_rejected() {
         }
     "#,
     );
-    let err = result.expect_err("crypto.subtle.encrypt should reject");
     assert!(
-        err.contains("crypto.subtle.encrypt") && err.contains("not implemented"),
-        "expected #561 rejection message, got: {err}"
+        result.is_ok(),
+        "crypto.subtle.encrypt must compile after #952: {result:?}"
     );
 }
 

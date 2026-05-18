@@ -323,6 +323,19 @@ pub fn compute_object_cache_key(
             .join(",");
         h.field("namespace_node_submodules", &s);
     }
+    // Issue #678 followup (namespace branch): per-local-namespace V8
+    // specifier mapping. A flip between V8-fallback and native-compile
+    // for the namespace-target module must invalidate the cached `.o`.
+    {
+        let mut v: Vec<(&String, &String)> = opts.namespace_v8_specifiers.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(k, vv)| format!("{}={}", k, vv))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("namespace_v8_specifiers", &s);
+    }
 
     // Imported classes — sort by name. Serialize every field that codegen
     // reads so a changed constructor arity or new method on a re-exported
@@ -627,6 +640,7 @@ mod object_cache_tests {
             // Issue #841: new submodule registry fields.
             import_function_node_submodule: std::collections::HashMap::new(),
             namespace_node_submodules: std::collections::HashMap::new(),
+            namespace_v8_specifiers: std::collections::HashMap::new(),
             namespace_member_prefixes: std::collections::HashMap::new(),
             emit_ir_only: false,
             namespace_imports: Vec::new(),

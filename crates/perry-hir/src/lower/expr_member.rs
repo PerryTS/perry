@@ -397,6 +397,86 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
         }
     }
 
+    // Issue #838 followup (b) — read side: `<funcDecl>.prototype.<name>`
+    // (and the computed-string-literal form
+    // `<funcDecl>.prototype['<name>']`). The assignment side routes
+    // through `Expr::RegisterFunctionPrototypeMethod` which stores the
+    // method in `CLASS_PROTOTYPE_METHODS[synthetic_cid]`; pre-fix the
+    // matching read fell through to `PropertyGet(PropertyGet(funcDecl,
+    // "prototype"), name)` whose receiver evaluated to `undefined`, so
+    // `typeof Foo.prototype.method` came back `'undefined'` even with a
+    // working dispatch. Look up the side-table directly here. Same
+    // unwrap helper as the assignment-side recogniser so TS casts
+    // (`(Foo.prototype as any).method`) don't defeat the match.
+    {
+        fn unwrap_ts_local(e: &ast::Expr) -> &ast::Expr {
+            let mut cur = e;
+            loop {
+                match cur {
+                    ast::Expr::TsAs(x) => cur = &x.expr,
+                    ast::Expr::TsNonNull(x) => cur = &x.expr,
+                    ast::Expr::TsSatisfies(x) => cur = &x.expr,
+                    ast::Expr::TsTypeAssertion(x) => cur = &x.expr,
+                    ast::Expr::TsConstAssertion(x) => cur = &x.expr,
+                    ast::Expr::Paren(x) => cur = &x.expr,
+                    _ => return cur,
+                }
+            }
+        }
+        let method_name_opt: Option<String> = match &member.prop {
+            ast::MemberProp::Ident(p) => Some(p.sym.to_string()),
+            ast::MemberProp::Computed(c) => match c.expr.as_ref() {
+                ast::Expr::Lit(ast::Lit::Str(s)) => {
+                    Some(s.value.as_str().unwrap_or("").to_string())
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(method_name) = method_name_opt {
+            let obj_unwrapped = unwrap_ts_local(member.obj.as_ref());
+            if let ast::Expr::Member(inner) = obj_unwrapped {
+                let prop_is_prototype = matches!(
+                    &inner.prop,
+                    ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
+                );
+                if prop_is_prototype {
+                    let inner_obj = unwrap_ts_local(inner.obj.as_ref());
+                    if let ast::Expr::Ident(fn_ident) = inner_obj {
+                        let fn_name = fn_ident.sym.to_string();
+                        // Mirror the assignment-side resolution order:
+                        // function-typed local > top-level FuncRef. Skip
+                        // classes — `class C` already has a real proto
+                        // object exposed elsewhere and the side-table
+                        // walk wouldn't help here. Skip native imports
+                        // since their `.prototype` is module-managed.
+                        if ctx.lookup_class(&fn_name).is_none()
+                            && !matches!(ctx.lookup_native_module(&fn_name), Some((_, Some(_))))
+                        {
+                            let func_expr = if let Some(local_id) = ctx.lookup_local(&fn_name) {
+                                if ctx.function_valued_locals.contains(&local_id) {
+                                    Some(Expr::LocalGet(local_id))
+                                } else {
+                                    None
+                                }
+                            } else if let Some(func_id) = ctx.lookup_func(&fn_name) {
+                                Some(Expr::FuncRef(func_id))
+                            } else {
+                                None
+                            };
+                            if let Some(func_expr) = func_expr {
+                                return Ok(Expr::GetFunctionPrototypeMethod {
+                                    func: Box::new(func_expr),
+                                    method_name,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Check for native instance property access (e.g., response.status, response.ok)
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.to_string();
@@ -695,6 +775,63 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
             Ok(Expr::PropertyGet { object, property })
         }
         ast::MemberProp::Computed(computed) => {
+            // #503: refuse compile-time dynamic dispatch on stdlib namespace
+            // receivers — `process[runtimeVar]`, `fs[atob(...)]()`, etc. —
+            // the dispatch-by-string class of supply-chain evasion. The check
+            // runs on the AST so it sees the un-folded shape, and bails before
+            // we lower the index (lowering can have side effects we want to
+            // avoid for refused code).
+            //
+            // Only fires when:
+            //   - the receiver AST is a bare ident naming a stdlib namespace
+            //     (or an alias bound to one via `import x from 'fs'`),
+            //   - the index is NOT a string literal at the source level
+            //     (literal keys are caught by the fold below, and never
+            //     constitute string-obfuscation),
+            //   - the refusal pass is enabled (`PERRY_ALLOW_DYNAMIC_STDLIB=0` /
+            //     `perry.allowDynamicStdlibDispatch: false`; on by default),
+            //   - the currently-lowering source file does NOT belong to a
+            //     package on the per-package allow-list, and
+            //   - there is no `// @perry-allow-dynamic` line annotation on
+            //     or immediately above the offending site.
+            if crate::ir::refuse_dynamic_stdlib_dispatch_enabled() {
+                if let Some(ns) = stdlib_namespace_receiver(ctx, member.obj.as_ref()) {
+                    if !matches!(*computed.expr, ast::Expr::Lit(ast::Lit::Str(_))) {
+                        let pkg = crate::ir::package_name_for_source_path(&ctx.source_file_path);
+                        let pkg_allowed = pkg
+                            .map(crate::ir::dynamic_stdlib_allowed_for_package)
+                            .unwrap_or(false);
+                        let site_allowed =
+                            crate::ir::current_module_has_allow_dynamic_at(member.span.lo.0);
+                        if !pkg_allowed && !site_allowed {
+                            let pkg_label = pkg
+                                .map(|p| format!(" (in package `{}`)", p))
+                                .unwrap_or_default();
+                            crate::lower_bail!(
+                                member.span,
+                                "dynamic dispatch on stdlib namespace `{}` is refused at \
+                                 compile time{} — this catches the obfuscation pattern \
+                                 `{}[runtimeVar]()` used by malicious npm packages. (#503)\n\
+                                 \n\
+                                 Options:\n\
+                                 - Replace with a static call: `{}.<methodName>(...)`.\n\
+                                 - If the indirection is intentional, add `// @perry-allow-dynamic` \
+                                   on the line above the call.\n\
+                                 - To opt an entire dependency out, add its name to \
+                                   `perry.allowDynamicStdlibDispatch` in the host package.json, \
+                                   or set `perry.allowDynamicStdlibDispatch: true` to disable \
+                                   the check globally.\n\
+                                 - Or set `PERRY_ALLOW_DYNAMIC_STDLIB=1` for a one-off build.",
+                                ns,
+                                pkg_label,
+                                ns,
+                                ns,
+                            );
+                        }
+                    }
+                }
+            }
+
             let index = Box::new(lower_expr(ctx, &computed.expr)?);
             // Specialize for Uint8Array/Buffer variables → byte-level access.
             // Params declared `Buffer` (e.g. `function f(src: Buffer)`)
@@ -746,6 +883,115 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
             Ok(Expr::PropertyGet { object, property })
         }
     }
+}
+
+/// #503 — Node-core stdlib namespace receivers whose dynamic (`obj[x]`)
+/// member access is refused at compile time. These are the namespaces
+/// the issue calls out: the well-known shapes used by string-based
+/// obfuscation in malicious npm packages. Globals (`process`, `Buffer`)
+/// and `require`-imported core modules are both covered — Buffer is
+/// intentionally omitted because it is a class constructor (`new Buffer`)
+/// rather than a namespace; the meaningful attack surface there is the
+/// constructor itself, not dynamic property access. Keep this list in
+/// sync with the docs in `docs/src/security/dynamic-dispatch.md`.
+const STDLIB_NAMESPACE_NAMES: &[&str] = &[
+    "process",
+    "fs",
+    "crypto",
+    "child_process",
+    "net",
+    "os",
+    "path",
+    "http",
+    "https",
+    "http2",
+    "stream",
+    "url",
+    "util",
+    "events",
+    "dns",
+    "tls",
+    "querystring",
+    "zlib",
+    "async_hooks",
+    "readline",
+    "string_decoder",
+    "tty",
+    "worker_threads",
+];
+
+/// #503 — does the given AST receiver expression resolve to a known
+/// stdlib namespace? Recognised shapes:
+///   - bare ident matching one of `STDLIB_NAMESPACE_NAMES` (global
+///     `process` or top-level imported `fs` etc.),
+///   - bare ident bound to a stdlib alias via `import x from 'fs'`
+///     (`ctx.builtin_module_aliases` populated by `require()` and ESM
+///     default imports), or
+///   - bare ident bound to a namespace import (`import * as fs from
+///     'fs'`) via `ctx.native_modules` with a `None` method-name.
+///
+/// Returns the canonical stdlib namespace name (e.g. `"fs"`) when a
+/// match is found, so the diagnostic can name the namespace concretely.
+pub(super) fn stdlib_namespace_receiver(
+    ctx: &super::LoweringContext,
+    obj: &ast::Expr,
+) -> Option<&'static str> {
+    // TS type-position wrappers like `(process as any)` and
+    // `<any>process` parse as `TsAsExpr` / `TsTypeAssertion`, and the
+    // `(...)` itself shows up as a `Paren`. Strip them so an idiomatic
+    // `(process as any)[k]()` still surfaces `process` as the receiver.
+    let mut current = obj;
+    loop {
+        match current {
+            ast::Expr::Paren(p) => current = p.expr.as_ref(),
+            ast::Expr::TsAs(a) => current = a.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(a) => current = a.expr.as_ref(),
+            ast::Expr::TsNonNull(a) => current = a.expr.as_ref(),
+            ast::Expr::TsConstAssertion(a) => current = a.expr.as_ref(),
+            ast::Expr::TsSatisfies(a) => current = a.expr.as_ref(),
+            _ => break,
+        }
+    }
+    let ident = match current {
+        ast::Expr::Ident(ident) => ident,
+        _ => return None,
+    };
+    let name = ident.sym.as_ref();
+
+    // Direct global / module specifier match.
+    if let Some(canon) = STDLIB_NAMESPACE_NAMES.iter().find(|n| **n == name) {
+        return Some(*canon);
+    }
+
+    // `require()` / default-import alias: `import fs from 'fs'` →
+    // builtin_module_aliases["fs"] = "fs", but the user may rename:
+    // `import myFs from 'fs'` → ["myFs"] = "fs". Resolve to the
+    // canonical specifier.
+    for (local, module) in ctx.builtin_module_aliases.iter() {
+        if local == name {
+            if let Some(canon) = STDLIB_NAMESPACE_NAMES
+                .iter()
+                .find(|n| **n == module.as_str())
+            {
+                return Some(*canon);
+            }
+        }
+    }
+
+    // Namespace import: `import * as fs from 'fs'` — tracked as a
+    // native_modules entry with method_name = None.
+    for (local, module, method) in ctx.native_modules.iter() {
+        if local == name && method.is_none() {
+            if let Some(canon) = STDLIB_NAMESPACE_NAMES
+                .iter()
+                .find(|n| **n == module.as_str())
+            {
+                return Some(*canon);
+            }
+        }
+    }
+
+    None
 }
 
 /// Issue #562 — does `prop` name a stream-API method or property on the

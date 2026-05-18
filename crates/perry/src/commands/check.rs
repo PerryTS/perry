@@ -248,7 +248,13 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
 
         // Try to lower to HIR to catch more errors
         let file_id = parse_result.file_id;
-        match perry_hir::lower_module(&parse_result.module, &filename, &filename) {
+        // #503: stash the source text so the dynamic-dispatch check can
+        // resolve `// @perry-allow-dynamic` annotations during `perry check`
+        // the same way it does during a real build.
+        perry_hir::set_current_module_source(source.clone());
+        let lower_outcome = perry_hir::lower_module(&parse_result.module, &filename, &filename);
+        perry_hir::clear_current_module_source();
+        match lower_outcome {
             Ok(_hir_module) => {
                 // Successfully lowered
             }

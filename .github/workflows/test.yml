@@ -455,8 +455,41 @@ jobs:
             # single retry after a brief delay is the cheapest fix
             # without serializing the workers entirely. `||` short-
             # circuits on first success — the success path is unchanged.
-            if "$PERRY" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log" \
-               || (sleep 2 && "$PERRY" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log"); then
+            # #499: the compile-smoke pass mass-compiles every
+            # test-files/*.ts; a handful (test_jsruntime_*,
+            # test_decorators_nest_*, test_issue_248_*,
+            # test_issue_678_v8, test_issue_express_js_load_module,
+            # …) import `.js` fixtures, which the new gate refuses
+            # without an explicit opt-in. Smoke is CI infrastructure
+            # — try the bare path first; if perry bails citing the
+            # #499 gate, retry with `--enable-js-runtime`. This
+            # avoids hand-curating a list of "tests that legitimately
+            # need V8" *and* keeps binaries that don't need V8
+            # cheap (no 40 MB QuickJS-link tax).
+            try_compile() {
+              "$PERRY" "$f" -o "/tmp/perry_smoke_${name}" 2>"$err_log"
+            }
+            retry_with_js_runtime() {
+              "$PERRY" --enable-js-runtime "$f" -o "/tmp/perry_smoke_${name}" \
+                2>"$err_log"
+            }
+            try_compile && status=0 || status=$?
+            if [[ $status -ne 0 ]] && grep -q "perry-jsruntime" "$err_log"; then
+              # #499 gate fired — re-run with the opt-in flag.
+              retry_with_js_runtime && status=0 || status=$?
+            fi
+            if [[ $status -ne 0 ]]; then
+              # Original retry-on-race semantics, still gated by
+              # the same "needs jsruntime?" check on the second
+              # try so a transient auto-optimize race doesn't get
+              # misclassified.
+              sleep 2
+              try_compile && status=0 || status=$?
+              if [[ $status -ne 0 ]] && grep -q "perry-jsruntime" "$err_log"; then
+                retry_with_js_runtime && status=0 || status=$?
+              fi
+            fi
+            if [[ $status -eq 0 ]]; then
               : > "$LOGS_DIR/${name}.pass"
               rm -f "/tmp/perry_smoke_${name}" "$err_log"
             else

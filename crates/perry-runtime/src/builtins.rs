@@ -976,6 +976,165 @@ pub extern "C" fn js_console_warn_spread(arr_ptr: *const crate::array::ArrayHead
     js_console_error_spread(arr_ptr);
 }
 
+/// #1002: `util.format(fmt, ...args)` / `util.formatWithOptions(opts,
+/// fmt, ...args)` native implementation. Codegen bundles the call args
+/// into a heap-allocated array (same shape as `js_console_log_spread`)
+/// and calls in here; the first element is the format string and the
+/// rest are substitution values. Returns a NaN-boxed string.
+///
+/// Placeholder support mirrors Node's `util.format` for the substrings
+/// most callers care about: `%s` (string-coerce), `%d`/`%i` (integer),
+/// `%f` (float), `%j` (JSON), `%o`/`%O` (object inspect), `%%` (literal
+/// percent). Anything else is left as-is. Trailing args without a
+/// matching placeholder are appended space-separated, again matching
+/// Node.
+///
+/// When the first array element isn't a string, Node falls back to
+/// space-joining every arg through `util.inspect` — same here, going
+/// through `format_jsvalue` for parity with `console.log`.
+#[no_mangle]
+pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f64 {
+    use crate::value::JSValue;
+    // Helper: produce a NaN-boxed string from a Rust `&str`.
+    fn boxed_string(s: &str) -> f64 {
+        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    }
+    // Helper: turn any JS value into its `String(value)` coercion using
+    // Perry's existing helper (covers strings, numbers, null/undefined,
+    // objects via their .toString protocol).
+    unsafe fn jsvalue_as_owned_string(val: f64) -> String {
+        let s_ptr = crate::value::js_jsvalue_to_string(val);
+        if s_ptr.is_null() {
+            return String::new();
+        }
+        let len = (*s_ptr).byte_len as usize;
+        let data =
+            (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let bs = std::slice::from_raw_parts(data, len);
+        std::str::from_utf8(bs).unwrap_or("").to_string()
+    }
+    if arr_ptr.is_null() {
+        return boxed_string("");
+    }
+    unsafe {
+        let length = (*arr_ptr).length as usize;
+        let data_ptr = (arr_ptr as *const u8)
+            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+            as *const f64;
+
+        // No format string → empty result. Node returns "" for
+        // `util.format()`.
+        if length == 0 {
+            return boxed_string("");
+        }
+
+        // If arg[0] isn't a string, fall back to space-joining every
+        // arg with `format_jsvalue` (matches Node's non-string-first
+        // util.format codepath).
+        let first = *data_ptr;
+        let first_jv = JSValue::from_bits(first.to_bits());
+        if !first_jv.is_any_string() {
+            let mut parts: Vec<String> = Vec::with_capacity(length);
+            for i in 0..length {
+                parts.push(format_jsvalue(*data_ptr.add(i), 0));
+            }
+            return boxed_string(&parts.join(" "));
+        }
+
+        // Materialize the format string. Short strings live inline in
+        // the NaN-box (top bits set), long strings live in a
+        // StringHeader. The unified helper handles both.
+        let fmt = jsvalue_as_owned_string(first);
+
+        let mut out = String::with_capacity(fmt.len());
+        let mut arg_idx: usize = 1;
+        let bytes = fmt.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b != b'%' || i + 1 >= bytes.len() {
+                out.push(b as char);
+                i += 1;
+                continue;
+            }
+            let spec = bytes[i + 1];
+            // `%%` → literal `%` (no arg consumed).
+            if spec == b'%' {
+                out.push('%');
+                i += 2;
+                continue;
+            }
+            // Out of args: leave the placeholder untouched (Node does
+            // the same — `util.format("%s %s", "x")` prints `"x %s"`).
+            if arg_idx >= length {
+                out.push('%');
+                out.push(spec as char);
+                i += 2;
+                continue;
+            }
+            let val = *data_ptr.add(arg_idx);
+            arg_idx += 1;
+            let jv = JSValue::from_bits(val.to_bits());
+            match spec {
+                b's' => {
+                    out.push_str(&jsvalue_as_owned_string(val));
+                }
+                b'd' | b'i' => {
+                    if jv.is_int32() {
+                        out.push_str(&jv.as_int32().to_string());
+                    } else if jv.is_number() {
+                        let f = jv.as_number();
+                        if f.is_nan() {
+                            out.push_str("NaN");
+                        } else {
+                            // Integer-truncated, matching Node.
+                            out.push_str(&(f.trunc() as i64).to_string());
+                        }
+                    } else {
+                        out.push_str("NaN");
+                    }
+                }
+                b'f' => {
+                    if jv.is_number() {
+                        out.push_str(&format_finite_number_js(jv.as_number()));
+                    } else if jv.is_int32() {
+                        out.push_str(&jv.as_int32().to_string());
+                    } else {
+                        out.push_str("NaN");
+                    }
+                }
+                b'j' => {
+                    out.push_str(&format_jsvalue_for_json(val, 0));
+                }
+                b'o' | b'O' => {
+                    out.push_str(&format_jsvalue(val, 0));
+                }
+                _ => {
+                    // Unknown specifier: leave verbatim, don't consume
+                    // the arg (Node 22+ behavior — older Node consumed
+                    // it; modern behavior is what libraries write
+                    // against).
+                    out.push('%');
+                    out.push(spec as char);
+                    arg_idx -= 1;
+                }
+            }
+            i += 2;
+        }
+
+        // Append any remaining args separated by spaces, again matching
+        // Node: `util.format("hi", "x", "y")` → `"hi x y"`.
+        while arg_idx < length {
+            out.push(' ');
+            out.push_str(&format_jsvalue(*data_ptr.add(arg_idx), 0));
+            arg_idx += 1;
+        }
+
+        boxed_string(&out)
+    }
+}
+
 /// Print an array in the format [element1, element2, ...]
 #[no_mangle]
 pub extern "C" fn js_array_print(arr_ptr: *const crate::array::ArrayHeader) {

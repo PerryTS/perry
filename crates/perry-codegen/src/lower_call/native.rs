@@ -1779,6 +1779,44 @@ pub(crate) fn lower_native_method_call(
         }
     }
 
+    // #1002: native `util.format` / `util.formatWithOptions`. The HIR
+    // surfaces these as receiver-less `NativeMethodCall { module:
+    // "util", method: "format" | "formatWithOptions", args }`. Before
+    // this arm, both fell into the receiver-less fall-through below
+    // and returned `TAG_UNDEFINED` — `console.log(util.format("hi %s",
+    // "x"))` printed `undefined` and `test_util_format_with_options`
+    // failed the parity gate on every PR.
+    //
+    // Bundle the substitution args into a heap array (same shape
+    // `js_console_log_spread` uses) and call `js_util_format`. For
+    // `formatWithOptions(opts, fmt, ...args)`, drop arg[0] (the
+    // `util.inspect` options bag) — the runtime stub ignores it; full
+    // options-passthrough (real `%o` / `%O` styling) is a follow-up.
+    if module == "util" && object.is_none() && (method == "format" || method == "formatWithOptions")
+    {
+        let skip = if method == "formatWithOptions" { 1 } else { 0 };
+        // Lower any dropped args (just the options bag for now) for
+        // side effects so closures inside them still register.
+        for a in args.iter().take(skip) {
+            let _ = lower_expr(ctx, a)?;
+        }
+        let payload: Vec<&Expr> = args.iter().skip(skip).collect();
+        let cap = (payload.len() as u32).to_string();
+        let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+        for arg in &payload {
+            let v = lower_expr(ctx, arg)?;
+            let blk = ctx.block();
+            current_arr = blk.call(
+                I64,
+                "js_array_push_f64",
+                &[(I64, &current_arr), (DOUBLE, &v)],
+            );
+        }
+        let blk = ctx.block();
+        let result = blk.call(DOUBLE, "js_util_format", &[(I64, &current_arr)]);
+        return Ok(result);
+    }
+
     // Receiver-less native method calls (e.g. plugin::setConfig(...)
     // as a static module function): lower args for side effects and
     // return TAG_UNDEFINED. Using TAG_UNDEFINED (not 0.0) so that

@@ -1508,25 +1508,19 @@ fn read_app_metadata(project_root: &Path, input: &Path) -> (String, String) {
             .unwrap_or("app")
             .to_string()
     });
-    let name = sanitize_app_name(&raw_name);
+    // Issue #500 (generalises #467): the package-derived name flows
+    // into argv as `-o <name>` to the linker and as a bundle-ID stem
+    // into codesign. Route through the shared sanitizer so every
+    // hostile-character class (response-file `@`, flag-like `-`,
+    // shell metacharacters, control bytes, path traversal, bidi
+    // marks, …) is scrubbed at a single, fuzz-tested choke point.
+    let name = super::sanitize::sanitize_for_linker_argv(&raw_name);
 
     let bundle_id = toml_bundle_id
         .or(pkg_bundle_id)
         .unwrap_or_else(|| format!("com.perry.{}", name));
 
     (name, bundle_id)
-}
-
-/// Make a package.json/perry.toml `name` safe to use as an output filename
-/// and as a default bundle-ID component.
-///
-/// npm scoped names look like `@scope/pkg`. Passed unchanged as `-o @scope/pkg`,
-/// ld64 sees the leading `@` and tries to expand the path as a response file
-/// (issue #467). Strip the `@` and flatten `/` to `-` so the result is a plain
-/// path segment that's also a valid Apple bundle-ID component.
-fn sanitize_app_name(name: &str) -> String {
-    let trimmed = name.strip_prefix('@').unwrap_or(name);
-    trimmed.replace('/', "-")
 }
 
 /// Read iOS-specific config from perry.toml

@@ -995,6 +995,81 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         TypeSpec::Any,
     ),
     method_sig("lodash", "size", false, None, &[p_any("p0")], TypeSpec::Any),
+    method_sig(
+        "lodash",
+        "sum",
+        false,
+        None,
+        &[p_any("p0")],
+        TypeSpec::Number,
+    ),
+    method_sig(
+        "lodash",
+        "mean",
+        false,
+        None,
+        &[p_any("p0")],
+        TypeSpec::Number,
+    ),
+    method_sig(
+        "lodash",
+        "sumBy",
+        false,
+        None,
+        &[p_any("p0"), p_any("p1")],
+        TypeSpec::Number,
+    ),
+    method_sig(
+        "lodash",
+        "meanBy",
+        false,
+        None,
+        &[p_any("p0"), p_any("p1")],
+        TypeSpec::Number,
+    ),
+    method_sig("lodash", "tail", false, None, &[p_any("p0")], TypeSpec::Any),
+    method_sig("lodash", "max", false, None, &[p_any("p0")], TypeSpec::Any),
+    method_sig("lodash", "min", false, None, &[p_any("p0")], TypeSpec::Any),
+    method_sig(
+        "lodash",
+        "maxBy",
+        false,
+        None,
+        &[p_any("p0"), p_any("p1")],
+        TypeSpec::Any,
+    ),
+    method_sig(
+        "lodash",
+        "minBy",
+        false,
+        None,
+        &[p_any("p0"), p_any("p1")],
+        TypeSpec::Any,
+    ),
+    method_sig(
+        "lodash",
+        "clamp",
+        false,
+        None,
+        &[p_any("p0"), p_any("p1"), p_any("p2")],
+        TypeSpec::Number,
+    ),
+    method_sig(
+        "lodash",
+        "inRange",
+        false,
+        None,
+        &[p_any("p0"), p_any("p1"), p_any("p2")],
+        TypeSpec::Bool,
+    ),
+    method_sig(
+        "lodash",
+        "random",
+        false,
+        None,
+        &[p_any("p0"), p_any("p1")],
+        TypeSpec::Number,
+    ),
     method_sig("dayjs", "default", false, None, &[], TypeSpec::Any),
     method_sig("dayjs", "dayjs", false, None, &[], TypeSpec::Any),
     method("dayjs", "format", true, None),
@@ -1098,6 +1173,28 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     method_sig("zlib", "gzip", false, None, &[p_str("p0")], TypeSpec::Any),
     method_sig("zlib", "gunzip", false, None, &[p_str("p0")], TypeSpec::Any),
+    // `zlib.constants` — the ~50 Z_*/DEFLATE/INFLATE/GZIP/BROTLI_*/ZSTD_*
+    // constants Node exposes on `require('node:zlib').constants`. Required
+    // by axios for stream wiring. Values are resolved at runtime by
+    // `get_native_module_constant` in `perry-runtime/src/object.rs`.
+    property("zlib", "constants"),
+    // `zlib.createBrotliDecompress(options?)` — axios feature-checks this
+    // at module init (the typeof === 'function' shape). The native shim
+    // returns a registered Buffer-shaped handle; the real decode path is
+    // only reached when a server actually replies with
+    // `content-encoding: br`, which we leave for a follow-up.
+    method_sig(
+        "zlib",
+        "createBrotliDecompress",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "options",
+            ty: TypeSpec::Any,
+            optional: true,
+        }],
+        TypeSpec::Any,
+    ),
     method_sig(
         "cron",
         "validate",
@@ -1597,8 +1694,19 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "sha256", false, None),
     method("crypto", "md5", false, None),
     method("crypto", "getRandomValues", false, None),
+    // crypto.randomFillSync(buffer, offset?, size?) — fills the
+    // typed-array / Buffer with cryptographically strong random
+    // bytes in-place and returns the same object. Required by
+    // axios (Uint32Array) for ID generation.
+    method("crypto", "randomFillSync", false, None),
     method("crypto", "createHash", false, None),
     method("crypto", "createHmac", false, None),
+    // `crypto.createSecretKey(key, encoding?)` — required by jose for the
+    // JWT signing path; returns a Uint8Array-marked Buffer of the key
+    // bytes that `instanceof Uint8Array` accepts on both sides of the
+    // V8 boundary. Wired through codegen in `expr.rs` (no NATIVE_MODULE_TABLE
+    // entry — direct dispatch matches the createHash/createHmac pattern).
+    method("crypto", "createSecretKey", false, None),
     method("crypto", "pbkdf2Sync", false, None),
     method("crypto", "pbkdf2", false, None),
     // Web Crypto API (issue #561) — `crypto.subtle.*`. The HIR
@@ -1728,6 +1836,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     //     the rest are documented stubs) ---
     method("util", "inspect", false, None),
     method("util", "format", false, None),
+    // `util.formatWithOptions(options, format[, ...args])` — identical to
+    // `util.format` except the first arg is an `util.inspect` options bag
+    // applied to any `%o`/`%O` placeholders. Required by the `debug` npm
+    // package (top-1k downloads, transitive dep of express/socket.io). Our
+    // stub ignores the options bag and delegates to `util.format`; full
+    // options-passthrough is a follow-up.
+    method("util", "formatWithOptions", false, None),
     method("util", "promisify", false, None),
     method("util", "callbackify", false, None),
     method("util", "deprecate", false, None),
@@ -1751,10 +1866,46 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("stream", "PassThrough"),
     method("stream", "pipeline", false, None),
     method("stream", "finished", false, None),
+    // `require('stream')` returns the legacy `Stream` constructor itself,
+    // which has its own `.prototype` (it extends EventEmitter). The
+    // `node_modules/send` package (express's static-file backend) does
+    // `util.inherits(SendStream, require('stream'))`, which reads
+    // `Stream.prototype` — the gate rejects the access without this entry.
+    property("stream", "prototype"),
     // `Readable.from(iterable)` — Node's static factory. Resolves
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.
     method("stream", "from", false, None),
+    // EventEmitter methods on stream instances. node:stream extends
+    // EventEmitter — every Readable/Writable/Duplex/Transform/PassThrough
+    // exposes the full `.on('data'|'end'|'error'|'close'|...)` /
+    // `.once` / `.off` / `.removeListener` / `.emit` /
+    // `.removeAllListeners` / `.addListener` / `.prependListener` /
+    // `.prependOnceListener` / `.listenerCount` / `.listeners` /
+    // `.eventNames` / `.setMaxListeners` / `.getMaxListeners` surface.
+    // The runtime closures are built by `js_node_stream_*_new` (see
+    // `crates/perry-runtime/src/node_stream.rs`); these entries exist so
+    // the #463 unimplemented-API gate accepts `stream.on(...)` /
+    // `stream.once(...)` / etc. in user code (e.g. axios's
+    // `AxiosTransformStream extends stream.Transform` + downstream
+    // event wiring). Has_receiver=true because every call site reads
+    // `<instance>.on(...)`, not `stream.on(...)` as a module-level
+    // helper.
+    method("stream", "on", true, None),
+    method("stream", "once", true, None),
+    method("stream", "off", true, None),
+    method("stream", "addListener", true, None),
+    method("stream", "removeListener", true, None),
+    method("stream", "removeAllListeners", true, None),
+    method("stream", "emit", true, None),
+    method("stream", "prependListener", true, None),
+    method("stream", "prependOnceListener", true, None),
+    method("stream", "listenerCount", true, None),
+    method("stream", "listeners", true, None),
+    method("stream", "rawListeners", true, None),
+    method("stream", "eventNames", true, None),
+    method("stream", "setMaxListeners", true, None),
+    method("stream", "getMaxListeners", true, None),
     // --- child_process (synchronous + async exec surface;
     //     spawn/fork are documented but not yet codegen'd) ---
     method("child_process", "exec", false, None),

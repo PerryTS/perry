@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 866 entries across 71 modules
+// Coverage: 898 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -135,6 +135,8 @@ declare module "crypto" {
   export function pbkdf2Sync(...args: any[]): any;
   /** stdlib */
   export function randomBytes(...args: any[]): any;
+  /** stdlib */
+  export function randomFillSync(...args: any[]): any;
   /** stdlib */
   export function randomUUID(...args: any[]): any;
   /** stdlib */
@@ -397,9 +399,25 @@ declare module "lodash" {
   /** stdlib */
   export function head(p0: any): any;
   /** stdlib */
+  export function inRange(p0: any, p1: any, p2: any): boolean;
+  /** stdlib */
   export function kebabCase(p0: string): string;
   /** stdlib */
   export function last(p0: any): any;
+  /** stdlib */
+  export function max(p0: any): any;
+  /** stdlib */
+  export function maxBy(p0: any, p1: any): any;
+  /** stdlib */
+  export function mean(p0: any): number;
+  /** stdlib */
+  export function meanBy(p0: any, p1: any): number;
+  /** stdlib */
+  export function min(p0: any): any;
+  /** stdlib */
+  export function minBy(p0: any, p1: any): any;
+  /** stdlib */
+  export function random(p0: any, p1: any): number;
   /** stdlib */
   export function range(p0: any, p1: any, p2: any): any;
   /** stdlib */
@@ -408,6 +426,12 @@ declare module "lodash" {
   export function size(p0: any): any;
   /** stdlib */
   export function snakeCase(p0: string): string;
+  /** stdlib */
+  export function sum(p0: any): number;
+  /** stdlib */
+  export function sumBy(p0: any, p1: any): number;
+  /** stdlib */
+  export function tail(p0: any): any;
   /** stdlib */
   export function take(p0: any, p1: any): any;
   /** stdlib */
@@ -1171,6 +1195,8 @@ declare module "stream" {
   /** stdlib */
   export class Writable { [key: string]: any; }
   /** stdlib */
+  export const prototype: any;
+  /** stdlib */
   export function finished(...args: any[]): any;
   /** stdlib */
   export function from(...args: any[]): any;
@@ -1252,6 +1278,8 @@ declare module "util" {
   /** stdlib */
   export function format(...args: any[]): any;
   /** stdlib */
+  export function formatWithOptions(...args: any[]): any;
+  /** stdlib */
   export function inherits(...args: any[]): any;
   /** stdlib */
   export function inspect(...args: any[]): any;
@@ -1312,6 +1340,10 @@ declare module "ws" {
 }
 
 declare module "zlib" {
+  /** stdlib */
+  export const constants: any;
+  /** stdlib */
+  export function createBrotliDecompress(options?: any): any;
   /** stdlib */
   export function deflateSync(p0: string): string;
   /** stdlib */

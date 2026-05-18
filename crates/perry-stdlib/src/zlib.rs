@@ -5,7 +5,10 @@
 
 use flate2::read::{DeflateDecoder, DeflateEncoder, GzDecoder, GzEncoder};
 use flate2::Compression;
-use perry_runtime::{js_string_from_bytes, JSValue, StringHeader};
+use perry_runtime::{
+    buffer::{buffer_alloc, mark_as_uint8array, BufferHeader},
+    js_string_from_bytes, JSValue, StringHeader,
+};
 use std::io::Read;
 
 use crate::common::async_bridge::{queue_promise_resolution, spawn};
@@ -143,6 +146,39 @@ pub unsafe extern "C" fn js_zlib_gzip(
     });
 
     promise
+}
+
+/// `zlib.createBrotliDecompress(options?)` — minimal feature-check
+/// shim.
+///
+/// Axios's compile-time module init calls
+/// `typeof zlib.createBrotliDecompress === 'function'` and only
+/// invokes this when a server actually replies with
+/// `content-encoding: br`. To get axios past the gate we return a
+/// registered Buffer-shaped handle (32 bytes, marked as Uint8Array
+/// so `instanceof Uint8Array` is true). The real Brotli pipe
+/// (`write` / `end` / `on('data')` / `on('end')`) is a TODO follow-
+/// up — when a Brotli response actually comes back the stream
+/// handlers will hit the unimplemented dispatch path and surface a
+/// clear error to the caller rather than silently corrupting the
+/// payload.
+///
+/// `_opts` is the (optional) BrotliDecompressOptions object; we
+/// ignore it for the stub since none of the configurable knobs
+/// affect feature-check semantics. Returns a `*mut BufferHeader`
+/// which the calling site NaN-boxes with POINTER_TAG via
+/// `nanbox_pointer_inline`.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_create_brotli_decompress(_opts: f64) -> *mut BufferHeader {
+    // 32 bytes is arbitrary — large enough to look like a real
+    // stream handle, small enough to be cheap.
+    let buf = buffer_alloc(32);
+    if buf.is_null() {
+        return std::ptr::null_mut();
+    }
+    (*buf).length = 0;
+    mark_as_uint8array(buf as usize);
+    buf
 }
 
 /// Gunzip decompress data asynchronously

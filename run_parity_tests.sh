@@ -405,8 +405,21 @@ for test_file in "$TEST_DIR"/*.ts; do
     if [[ "$test_name" == test_parity_* ]]; then
         compile_env="PERRY_ALLOW_UNIMPLEMENTED=1"
     fi
+    # #499: some parity tests transitively pull in `.js` fixtures
+    # (jsruntime/* tests by design, plus a long-tail of others: V8
+    # fallback fixtures, js_interop callbacks, nest_js_common decorators,
+    # etc.). The host-opt-in gate refuses linkage by default. Mirror the
+    # compile-smoke retry pattern: try once without the flag (keeps
+    # native-only binaries cheap and surfaces tests that *shouldn't*
+    # be pulling QuickJS in), and if the error names `perry-jsruntime`,
+    # retry once with `--enable-js-runtime`. Avoids hand-curating a list
+    # of test names that need V8.
     compile_output=$(env $compile_env "$PERRY_BIN" $BACKEND_FLAG "$test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
+    if [[ $compile_exit -ne 0 ]] && grep -q "perry-jsruntime" <<<"$compile_output"; then
+        compile_output=$(env $compile_env "$PERRY_BIN" $BACKEND_FLAG --enable-js-runtime "$test_file" -o "$perry_binary" 2>&1)
+        compile_exit=$?
+    fi
 
     if [[ $compile_exit -ne 0 ]]; then
         echo -e "${RED}FAIL${NC}  $test_name (compile error)"

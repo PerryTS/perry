@@ -433,6 +433,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // based on the receiver's NaN-box tag at runtime. Used by IndexGet's
     // fallback path when codegen can't statically prove the receiver type.
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    // Issue #957: tag-aware dynamic index write. Used by `Expr::IndexUpdate`
+    // codegen to write back the incremented value without rebuilding the
+    // IndexSet dispatch tree. Routes to `js_array_set_index_or_string` for
+    // arrays and `js_object_set_field_by_name` for plain objects.
+    module.declare_function("js_dyn_index_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_string_to_char_array", I64, &[I64]);
     module.declare_function("js_string_repeat", I64, &[I64, I32]);
     module.declare_function("js_string_replace_string", I64, &[I64, I64, I64]);
@@ -472,6 +477,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_console_log_spread", VOID, &[I64]);
     module.declare_function("js_console_error_spread", VOID, &[I64]);
     module.declare_function("js_console_warn_spread", VOID, &[I64]);
+    // #1002: native `util.format` / `util.formatWithOptions`. Codegen
+    // bundles the call args into a heap array (same shape as
+    // js_console_log_spread) and gets a NaN-boxed string back.
+    module.declare_function("js_util_format", DOUBLE, &[I64]);
     module.declare_function("js_getenv", I64, &[I64]);
     module.declare_function("js_console_table", VOID, &[DOUBLE]);
     module.declare_function("js_console_trace", VOID, &[DOUBLE]);
@@ -691,6 +700,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_instanceof_dynamic", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_register_class_extends_error", VOID, &[I32]);
     module.declare_function("js_register_class_id", VOID, &[I32]);
+    // Anon-shape class registration so `.constructor` reads on object
+    // literals (`{ x: 1 }`) return the global `Object` constructor
+    // instead of the synthetic class ref. Refs #968 / date-fns
+    // `constructFrom` blocker.
+    module.declare_function("js_register_anon_shape_class_id", VOID, &[I32]);
+    // Built-in constructor / namespace value-lookup on the globalThis
+    // singleton. Used to wire `instance.constructor` and bare
+    // `Date`/`Array`/`Object` identifiers to the same closure pointer
+    // so `inst.constructor === Date` (date-fns / drizzle / lodash duck
+    // checks) holds.
+    module.declare_function("js_get_global_this_builtin_value", DOUBLE, &[PTR, I64]);
     // Inline-allocator class registration: emitted once per class
     // with a parent in the entry-block init prelude. The runtime
     // allocators register on every alloc; the inline allocator skips
@@ -740,6 +760,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // invokes the constructor with IMPLICIT_THIS bound to the new
     // instance. Returns the NaN-boxed new instance pointer.
     module.declare_function("js_new_function_construct", DOUBLE, &[DOUBLE, PTR, I64]);
+    // Read side of #838 followup (b): look up a previously-registered
+    // prototype method on a function value by name. Pairs with
+    // `js_register_function_prototype_method`. Returns the NaN-boxed
+    // closure value if the synthetic-class-id derived from the function
+    // has an entry under `name`, otherwise the NaN-boxed `undefined`
+    // tag. ramda's transducer pattern + `typeof Foo.prototype.method`
+    // introspection both reach this entry point.
+    module.declare_function(
+        "js_get_function_prototype_method",
+        DOUBLE,
+        &[DOUBLE, PTR, I64],
+    );
     module.declare_function("js_typeerror_new", I64, &[I64]);
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);
@@ -1042,6 +1074,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_pbkdf2_bytes", I64, &[I64, I64, DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_uuid", I64, &[]);
+    // `crypto.createSecretKey(key, encoding?)` — returns Uint8Array-marked
+    // BufferHeader of the key bytes (jose accepts Uint8Array for HS*).
+    module.declare_function("js_crypto_create_secret_key", I64, &[I64]);
     // Web Crypto (issue #561): crypto.subtle.{digest,importKey,sign,verify}.
     // Each takes NaN-boxed JS values as f64 and returns a *mut Promise.
     module.declare_function("js_webcrypto_digest", I64, &[DOUBLE, DOUBLE]);
@@ -1055,6 +1090,41 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         "js_webcrypto_verify",
         I64,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    // AES-GCM encrypt / decrypt (issue #561 follow-up). Same Promise
+    // shape as sign/verify; runtime resolves synchronously.
+    module.declare_function("js_webcrypto_encrypt", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_webcrypto_decrypt", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    // subtle.generateKey(algorithm, extractable, usages) → Promise<CryptoKey>.
+    // Initial implementation covers AES-GCM (128/256-bit) — the shape
+    // jose's `generateSecret('A256GCM')` reaches for.
+    module.declare_function("js_webcrypto_generate_key", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    // subtle.wrapKey(format, key, wrappingKey, wrapAlgorithm) →
+    // Promise<Uint8Array>. Initial implementation covers AES-KW
+    // (`{ name: 'AES-KW' }`) plus AES-GCM (`{ name: 'AES-GCM', iv }`).
+    // Required by jose's `wrapKey`.
+    module.declare_function(
+        "js_webcrypto_wrap_key",
+        I64,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    // subtle.unwrapKey(format, wrappedKey, unwrappingKey, unwrapAlgorithm,
+    //   unwrappedKeyAlgorithm, extractable, usages) → Promise<CryptoKey>.
+    module.declare_function(
+        "js_webcrypto_unwrap_key",
+        I64,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    // `zlib.createBrotliDecompress(options?)` — axios feature-check
+    // shim. Returns a registered Buffer-shaped handle (NaN-boxed at
+    // the call site).
+    module.declare_function("js_zlib_create_brotli_decompress", I64, &[DOUBLE]);
+    // crypto.randomFillSync(buf, offset?, size?) → returns the same
+    // NaN-boxed buffer with random bytes written in-place.
+    module.declare_function(
+        "js_crypto_random_fill_sync",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
     );
     // Hash-handle form (issue #86): `const h = crypto.createHash(alg);
     // h.update(x); h.digest()`. Returns a NaN-boxed POINTER_TAG handle id;
@@ -2292,6 +2362,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_lodash_last", DOUBLE, &[I64]);
     module.declare_function("js_lodash_lower_case", I64, &[I64]);
     module.declare_function("js_lodash_lower_first", I64, &[I64]);
+    module.declare_function("js_lodash_max", DOUBLE, &[I64]);
+    module.declare_function("js_lodash_max_by", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_lodash_mean", DOUBLE, &[I64]);
+    module.declare_function("js_lodash_mean_by", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_lodash_min", DOUBLE, &[I64]);
+    module.declare_function("js_lodash_min_by", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_lodash_pad", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_pad_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_pad_start", I64, &[I64, DOUBLE]);
@@ -2304,6 +2380,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_lodash_split", I64, &[I64, I64]);
     module.declare_function("js_lodash_start_case", I64, &[I64]);
     module.declare_function("js_lodash_starts_with", DOUBLE, &[I64, I64]);
+    module.declare_function("js_lodash_sum", DOUBLE, &[I64]);
+    module.declare_function("js_lodash_sum_by", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_lodash_tail", I64, &[I64]);
     module.declare_function("js_lodash_take", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_take_right", I64, &[I64, DOUBLE]);

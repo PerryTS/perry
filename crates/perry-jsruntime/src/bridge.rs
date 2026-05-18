@@ -105,6 +105,73 @@ fn native_class_constructor(
     retval.set(v8::Object::new(scope).into());
 }
 
+// Issue: Effect.pipe(map) chain — when a Perry closure (raw `*const
+// ClosureHeader` pointer that's been NaN-boxed with POINTER_TAG) crosses
+// into V8 as an argument, it must surface as a real v8::Function so JS
+// code can invoke it. Without this wrapper, V8 saw a string/object proxy
+// (from `native_object_to_v8`'s fallback paths) and threw "f is not a
+// function" when Effect's internal pipeline tried to call the mapping
+// function.
+//
+// Mirrors `native_callback_trampoline` (interop.rs) but stores the
+// closure pointer directly in the v8::Function's `data` slot instead of
+// going through the NATIVE_CALLBACKS registry — we already have the
+// closure pointer in hand and don't need a stable callback_id for it.
+fn perry_closure_v8_trampoline(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let data = args.data();
+    if !data.is_external() {
+        retval.set(v8::undefined(scope).into());
+        return;
+    }
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let closure_ptr = external.value() as i64;
+    if closure_ptr == 0 {
+        retval.set(v8::undefined(scope).into());
+        return;
+    }
+
+    let arg_count = args.length();
+    let mut native_args: Vec<f64> = Vec::with_capacity(arg_count as usize);
+    for i in 0..arg_count {
+        let arg = args.get(i);
+        native_args.push(v8_to_native(scope, arg));
+    }
+
+    let _scope_guard = crate::stash_trampoline_scope(scope);
+
+    type ClosureCallFn = unsafe extern "C" fn(i64, *const f64, i64) -> f64;
+    let func: ClosureCallFn = perry_runtime::closure::js_closure_call_array;
+    let result = unsafe { func(closure_ptr, native_args.as_ptr(), native_args.len() as i64) };
+
+    let v8_result = native_to_v8(scope, result);
+    retval.set(v8_result);
+}
+
+/// Wrap a Perry closure (raw pointer to a `ClosureHeader` with
+/// `CLOSURE_MAGIC` at offset 12) as a `v8::Function`. Used by
+/// `native_object_to_v8` when an argument passed to V8 turns out to be a
+/// native closure — typically when a `LocalGet` holding an arrow function
+/// is passed to a V8-imported call site like `Effect.map(fn)`.
+fn native_closure_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    ptr: *const u8,
+) -> Option<v8::Local<'s, v8::Value>> {
+    if ptr.is_null() {
+        return None;
+    }
+    // Closure pointer is *const ClosureHeader. Stash the raw address in a
+    // v8::External so the trampoline can recover it on invocation.
+    let external = v8::External::new(scope, ptr as *mut std::ffi::c_void);
+    let function = v8::Function::builder(perry_closure_v8_trampoline)
+        .data(external.into())
+        .build(scope)?;
+    Some(function.into())
+}
+
 fn native_class_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     class_id: u32,
@@ -840,6 +907,106 @@ fn native_object_to_v8<'s>(
         return v8::null(scope).into();
     }
 
+    // Issue (jose JWT blocker): Uint8Array / TypedArray pointers crossing
+    // into V8 used to fall through to the generic `v8::Array` branch,
+    // which turned a perry Uint8Array into a v8 Array. Libraries running
+    // in the V8 fallback (jose, jsonwebtoken) check `instanceof Uint8Array`
+    // on signing inputs/outputs and fail with "Received an instance of
+    // Array". Detect typed-array pointers via the runtime's registry and
+    // materialize a real v8 `Uint8Array` (or matching TypedArray) with a
+    // copy of the underlying bytes so V8 owns the backing store.
+    //
+    // Two perry representations cross the boundary here:
+    //   - `TypedArrayHeader` — `new Uint8Array([..])` and TypedArray ops.
+    //   - `BufferHeader` marked via `mark_as_uint8array` — what
+    //     `TextEncoder().encode(...)` and `Buffer.from(...)` return.
+    //     Layout is identical (`length: u32, capacity: u32`) but the
+    //     "kind" is implicit (always uint8) and tracked in a separate
+    //     registry. Handle both before the generic-object branch.
+    {
+        let buf_addr = ptr as usize;
+        // BufferHeader path: registered Uint8Array buffer with the
+        // packed-u8 layout. Must materialize as v8 Uint8Array so jose's
+        // `instanceof Uint8Array` checks pass.
+        let is_buf = perry_runtime::buffer::is_registered_buffer(buf_addr);
+        let is_marked_u8 = perry_runtime::buffer::is_uint8array_buffer(buf_addr);
+        if is_buf || is_marked_u8 {
+            let buf = ptr as *const perry_runtime::buffer::BufferHeader;
+            let length = unsafe { (*buf).length } as usize;
+            let data_ptr = unsafe {
+                (ptr as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>())
+            };
+            let ab = v8::ArrayBuffer::new(scope, length);
+            if length > 0 {
+                let bs = ab.get_backing_store();
+                let dst = bs.data().map(|nn| nn.as_ptr() as *mut u8);
+                if let Some(dst) = dst {
+                    unsafe { std::ptr::copy_nonoverlapping(data_ptr, dst, length) };
+                }
+            }
+            if let Some(ta) = v8::Uint8Array::new(scope, ab, 0, length) {
+                return ta.into();
+            }
+        }
+        if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(buf_addr) {
+            let ta = ptr as *const perry_runtime::typedarray::TypedArrayHeader;
+            let length = unsafe { (*ta).length } as usize;
+            let elem_size = perry_runtime::typedarray::elem_size_for_kind(kind);
+            let byte_len = length.saturating_mul(elem_size);
+            let data_ptr = unsafe {
+                (ptr as *const u8).add(std::mem::size_of::<
+                    perry_runtime::typedarray::TypedArrayHeader,
+                >())
+            };
+            // Build an ArrayBuffer owned by V8 and copy the perry bytes into it.
+            // Using a copy (not a backing-store wrapper) keeps lifetimes simple:
+            // perry's GC can reclaim the source without confusing V8.
+            let ab = v8::ArrayBuffer::new(scope, byte_len);
+            if byte_len > 0 {
+                let bs = ab.get_backing_store();
+                let dst = bs.data().map(|nn| nn.as_ptr() as *mut u8);
+                if let Some(dst) = dst {
+                    unsafe { std::ptr::copy_nonoverlapping(data_ptr, dst, byte_len) };
+                }
+            }
+            // Element kind → V8 TypedArray constructor.
+            use perry_runtime::typedarray as ta_mod;
+            let ta_value: v8::Local<v8::Value> = match kind {
+                ta_mod::KIND_INT8 => v8::Int8Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_UINT8 | ta_mod::KIND_UINT8_CLAMPED => {
+                    // V8 has Uint8ClampedArray as a separate type, but jose
+                    // / jsonwebtoken only branch on `Uint8Array`. Use the
+                    // plain Uint8Array unless we explicitly need clamped.
+                    v8::Uint8Array::new(scope, ab, 0, length)
+                        .map(|v| v.into())
+                        .unwrap_or_else(|| v8::Array::new(scope, 0).into())
+                }
+                ta_mod::KIND_INT16 => v8::Int16Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_UINT16 => v8::Uint16Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_INT32 => v8::Int32Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_UINT32 => v8::Uint32Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_FLOAT32 => v8::Float32Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_FLOAT64 => v8::Float64Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                _ => v8::Array::new(scope, 0).into(),
+            };
+            return ta_value;
+        }
+    }
+
     // Use GcHeader (8 bytes before user pointer) to reliably determine type.
     // All Perry arrays and objects are arena-allocated with GcHeader via arena_alloc_gc.
     let gc_header_ptr = (ptr as usize).wrapping_sub(perry_runtime::gc::GC_HEADER_SIZE);
@@ -849,6 +1016,23 @@ fn native_object_to_v8<'s>(
 
         if gc_header.obj_type == perry_runtime::gc::GC_TYPE_PROMISE {
             return native_promise_to_v8(scope, ptr as *mut perry_runtime::promise::Promise);
+        }
+
+        // Issue: Effect.pipe(map) chain — a Perry closure passed to V8 as
+        // an arg (e.g. `Effect.map(fn)` where `fn` is a local arrow) lands
+        // here with POINTER_TAG. Confirm the `CLOSURE_MAGIC` tag before
+        // wrapping so we don't misidentify a generic native object as a
+        // closure. The HIR-level `JsCreateCallback` rewrite handles inline
+        // `Closure` literals; this is the LocalGet / FuncRef fallback
+        // path.
+        if gc_header.obj_type == perry_runtime::gc::GC_TYPE_CLOSURE {
+            const CLOSURE_TYPE_TAG_OFFSET: usize = 12;
+            let type_tag = unsafe { *(ptr.add(CLOSURE_TYPE_TAG_OFFSET) as *const u32) };
+            if type_tag == perry_runtime::closure::CLOSURE_MAGIC {
+                if let Some(func_value) = native_closure_to_v8(scope, ptr) {
+                    return func_value;
+                }
+            }
         }
 
         if is_arena && gc_header.obj_type == perry_runtime::gc::GC_TYPE_ARRAY {

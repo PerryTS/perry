@@ -137,6 +137,8 @@
 - [Commands](cli/commands.md)
 - [Compiler Flags](cli/flags.md)
 - [Fast-math (`--fast-math`)](cli/fast-math.md)
+- [Dynamic Stdlib Dispatch](cli/dynamic-dispatch.md)
+- [JS Runtime Opt-In](cli/allow-js-runtime.md)
 - [perry.toml Reference](cli/perry-toml.md)
 
 ---

@@ -198,7 +198,10 @@ for fixture in "${FIXTURES[@]}"; do
         continue
     fi
 
-    if ! "${PERRY_CMD[@]}" "$fixture" --no-cache -o "$bin" >"$compile_log" 2>&1; then
+    # #499: this script intentionally pulls in V8 to rank what falls
+    # through to jsruntime; passes `--enable-js-runtime` so the gate
+    # honors that choice.
+    if ! "${PERRY_CMD[@]}" "$fixture" --enable-js-runtime --no-cache -o "$bin" >"$compile_log" 2>&1; then
         echo "FAIL $name: compile failed"
         dump_file "$compile_log"
         FAIL=$((FAIL + 1))

@@ -378,10 +378,20 @@ pub(crate) fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) ->
             .unwrap_or(false);
 
     // Lower parameters with type extraction (using context for type param resolution)
+    //
+    // Mirrors the `expr_function.rs` site: TypeScript's `this: T` is a
+    // TYPE-only marker (SWC emits it as a regular `Param { pat: Ident("this") }`),
+    // so skip it up front. Without this skip, `function greet(this: ..., prefix)`
+    // is lowered as a 2-arg function and `.call(obj, 'Hi')` binds `this=obj,
+    // prefix=undefined` — which breaks `Function.prototype.{call,apply}` on
+    // FnDecls that use TS `this:` annotations.
     let mut params = Vec::new();
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in fn_decl.function.params.iter() {
         let param_name = get_pat_name(&param.pat)?;
+        if param_name == "this" {
+            continue;
+        }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_default = get_param_default(ctx, &param.pat)?;
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
@@ -4131,11 +4141,16 @@ pub(crate) fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Re
                     .map(|(name, id, _)| (name.clone(), *id))
                     .collect();
 
-                // Lower parameters
+                // Lower parameters. Skip the TypeScript `this:` annotation —
+                // it has no runtime existence (see the sibling site above for
+                // the full rationale).
                 let mut params = Vec::new();
                 let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
                 for param in &fn_decl.function.params {
                     let param_name = get_pat_name(&param.pat)?;
+                    if param_name == "this" {
+                        continue;
+                    }
                     let param_default = get_param_default(ctx, &param.pat)?;
                     let is_rest = is_rest_param(&param.pat);
                     let param_id = ctx.define_local(param_name.clone(), Type::Any);

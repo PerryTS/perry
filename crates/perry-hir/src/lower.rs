@@ -8216,6 +8216,25 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         name
                     );
                 }
+                // Bare built-in constructor identifiers (`Date`, `Array`,
+                // `Object`, ...) used as VALUES (not method receivers /
+                // `new` callees) need a real closure pointer so identity
+                // comparisons like `inst.constructor === Date` hold —
+                // both sides must resolve to the same `populate_global_this_builtins`-
+                // installed closure. Reuse the existing
+                // `PropertyGet { GlobalGet, <name> }` codegen path that
+                // dispatches through `js_get_global_this` for builtin
+                // names. Bare-callee shapes (e.g. `Date.now()`, `new
+                // Date()`) are picked off earlier by their dedicated HIR
+                // variants — `Expr::DateNow`, `Expr::DateNew(...)`,
+                // `Expr::Date*Get(...)` — so they don't reach this arm.
+                // date-fns / drizzle / lodash duck-typing path.
+                if is_builtin_global_value_name(&name) {
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(Expr::GlobalGet(0)),
+                        property: name,
+                    });
+                }
                 Ok(Expr::GlobalGet(0))
             }
         }

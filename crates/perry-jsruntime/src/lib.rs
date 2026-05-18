@@ -83,6 +83,15 @@ pub struct JsRuntimeState {
     pub pending_module_evaluations: HashMap<deno_core::ModuleId, PendingModuleEvaluation>,
     /// Whether the runtime has been initialized
     pub initialized: bool,
+    /// True if the last call to `poll_event_loop` returned `Poll::Pending`,
+    /// meaning deno_core still has refed ops in flight (async ops,
+    /// dyn imports, microtask backlog, etc.). Used by
+    /// `jsruntime_has_active_handles` to keep the codegen-emitted outer
+    /// event loop ticking while any V8-side async work is outstanding —
+    /// without it, a top-level `await op_perry_http_listen(...)` returns
+    /// to the caller while its bind future is still on the multi-thread
+    /// runtime, and the outer loop exits before the bind completes.
+    pub last_poll_was_pending: bool,
 }
 
 pub struct PendingModuleEvaluation {
@@ -122,6 +131,7 @@ impl JsRuntimeState {
             loaded_modules: HashMap::new(),
             pending_module_evaluations: HashMap::new(),
             initialized: true,
+            last_poll_was_pending: false,
         }
     }
 }
@@ -199,6 +209,15 @@ pub fn ensure_runtime_initialized() {
     if REENTRY_PTR.with(|p| !p.get().is_null()) {
         return;
     }
+    // `JsRuntime::new()` captures `tokio::runtime::Handle::try_current()`
+    // for its async-op executor. Without entering Perry's shared tokio
+    // runtime here, async ops that touch `tokio::net` / `tokio::spawn`
+    // would later panic with "no reactor running" because the captured
+    // handle would be empty / point at a defunct runtime. Mirror this
+    // enter() in `with_runtime` below so every poll of the JS event loop
+    // sees the same reactor context.
+    let tokio_rt = get_tokio_runtime();
+    let _enter = tokio_rt.enter();
     JS_RUNTIME.with(|cell| {
         let mut opt = cell.borrow_mut();
         if opt.is_none() {
@@ -236,6 +255,11 @@ where
     }
 
     ensure_runtime_initialized();
+    // Enter the shared tokio runtime context so V8 async ops touching
+    // `tokio::net` / `tokio::spawn` (e.g. the V8-fallback http server
+    // ops) can run inside a reactor. See `ensure_runtime_initialized`.
+    let tokio_rt = get_tokio_runtime();
+    let _enter = tokio_rt.enter();
     JS_RUNTIME.with(|cell| {
         let mut opt = cell.borrow_mut();
         let state = opt.as_mut().expect("Runtime should be initialized");

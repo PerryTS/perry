@@ -549,6 +549,25 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     if let Expr::PropertyGet { object, property } = callee {
         if let Expr::ExternFuncRef { name: ns_name, .. } = object.as_ref() {
             if ctx.namespace_imports.contains(ns_name) {
+                // Issue #678 followup (namespace branch): wildcard-namespace
+                // import to a V8 module — `import * as R from "ramda";
+                // R.sum([1,2,3])`. The V8 module has no static export list
+                // and (when no companion Named import is present) nothing
+                // seeded `import_function_prefixes` for `property`. Route
+                // the member call through the bridge using the
+                // namespace's specifier before falling through to the
+                // native-prefix lookup. Without this, ramda / date-fns /
+                // jose / effect wildcard members fell to the
+                // `double_literal(0.0)` stub.
+                if let Some(specifier) = ctx.namespace_v8_specifiers.get(ns_name).cloned() {
+                    let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                    for a in args {
+                        lowered.push(lower_expr(ctx, a)?);
+                    }
+                    return Ok(crate::expr::emit_v8_export_call(
+                        ctx, &specifier, property, &lowered,
+                    ));
+                }
                 // Issue #680: prefer the per-namespace map so
                 // `random.make` and `tracer.make` resolve to their own
                 // sources even when both modules export `make`. Falls
@@ -1602,8 +1621,18 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                                 property: inner_property,
                             } = inner_callee.as_ref()
                             {
-                                if matches!(inner_object.as_ref(), Expr::GlobalGet(_))
-                                    && inner_property == "resolve"
+                                // #1008: accept both the legacy `Promise` =
+                                // GlobalGet shape and the post-#973
+                                // PropertyGet { GlobalGet(0), "Promise" }
+                                // shape. Without the second arm the
+                                // fast path silently disengaged for
+                                // every `Promise.resolve(...).then(...)`
+                                // call (microtask-02..07 regression).
+                                if inner_property == "resolve"
+                                    && crate::type_analysis::is_global_builtin_named(
+                                        inner_object.as_ref(),
+                                        "Promise",
+                                    )
                                 {
                                     let inner_value = if inner_args.is_empty() {
                                         double_literal(0.0)
@@ -3248,9 +3277,24 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         let class_unknown_to_codegen = class_name_opt
             .as_ref()
             .is_some_and(|n| !ctx.classes.contains_key(n));
+        // Well-known `Object.prototype` / `Function.prototype` methods —
+        // any user class instance can have them invoked via the
+        // prototype chain. Pre-fix the static class-dispatch path
+        // skipped `js_native_call_method` entirely when the receiver's
+        // class WAS known to codegen, which made `({ k: null }).propertyIsEnumerable("k")`
+        // (ramda's `keys.js` IIFE) fall into the closure-call fallback
+        // that read `propertyIsEnumerable` as a property value
+        // (returning `undefined`) and threw `value is not a function`.
+        let is_well_known_proto_method = matches!(
+            property.as_str(),
+            "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" | "toLocaleString"
+        );
         let skip_native = matches!(object.as_ref(), Expr::GlobalGet(_))
             || matches!(object.as_ref(), Expr::NativeModuleRef(_))
-            || (class_name_opt.is_some() && !is_buffer_class && !class_unknown_to_codegen);
+            || (class_name_opt.is_some()
+                && !is_buffer_class
+                && !class_unknown_to_codegen
+                && !is_well_known_proto_method);
         if !skip_native {
             // Issue #92 fast path: intrinsify Buffer numeric reads
             // (`buf.readInt32BE(off)` etc.) when the receiver is a tracked
@@ -8628,6 +8672,96 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "lodash",
+        has_receiver: false,
+        method: "tail",
+        class_filter: None,
+        runtime: "js_lodash_tail",
+        args: &[NA_PTR],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "lodash",
+        has_receiver: false,
+        method: "sum",
+        class_filter: None,
+        runtime: "js_lodash_sum",
+        args: &[NA_PTR],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "lodash",
+        has_receiver: false,
+        method: "mean",
+        class_filter: None,
+        runtime: "js_lodash_mean",
+        args: &[NA_PTR],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "lodash",
+        has_receiver: false,
+        method: "sumBy",
+        class_filter: None,
+        runtime: "js_lodash_sum_by",
+        args: &[NA_PTR, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "lodash",
+        has_receiver: false,
+        method: "meanBy",
+        class_filter: None,
+        runtime: "js_lodash_mean_by",
+        args: &[NA_PTR, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "lodash",
+        has_receiver: false,
+        method: "max",
+        class_filter: None,
+        runtime: "js_lodash_max",
+        args: &[NA_PTR],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "lodash",
+        has_receiver: false,
+        method: "min",
+        class_filter: None,
+        runtime: "js_lodash_min",
+        args: &[NA_PTR],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "lodash",
+        has_receiver: false,
+        method: "maxBy",
+        class_filter: None,
+        runtime: "js_lodash_max_by",
+        args: &[NA_PTR, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "lodash",
+        has_receiver: false,
+        method: "minBy",
+        class_filter: None,
+        runtime: "js_lodash_min_by",
+        args: &[NA_PTR, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "lodash",
+        has_receiver: false,
+        method: "inRange",
+        class_filter: None,
+        runtime: "js_lodash_in_range",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     // ========== dayjs ==========
     // Factory: `import dayjs from 'dayjs'; dayjs()` → method:"default".
     // Named import: `import { dayjs } from 'dayjs'; dayjs()` → method:"dayjs".
@@ -8849,6 +8983,121 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_dayjs_value_of",
         args: &[],
+        ret: NR_F64,
+    },
+    // ========== date-fns ==========
+    // date-fns exports free functions: `format(date, pattern)`,
+    // `addDays(date, n)`, etc. The first argument is a Date (NaN-boxed
+    // f64 timestamp from `new Date(...)`). The manifest entries surface
+    // these as receiver-less NativeMethodCalls on module "date-fns".
+    // Without these rows the dispatch returns None and the call falls
+    // through to undefined. Refs date-fns format() blocker.
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "format",
+        class_filter: None,
+        runtime: "js_datefns_format",
+        args: &[NA_F64, NA_STR],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "parseISO",
+        class_filter: None,
+        runtime: "js_datefns_parse_iso",
+        args: &[NA_STR],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "addDays",
+        class_filter: None,
+        runtime: "js_datefns_add_days",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "addMonths",
+        class_filter: None,
+        runtime: "js_datefns_add_months",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "addYears",
+        class_filter: None,
+        runtime: "js_datefns_add_years",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "differenceInDays",
+        class_filter: None,
+        runtime: "js_datefns_difference_in_days",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "differenceInHours",
+        class_filter: None,
+        runtime: "js_datefns_difference_in_hours",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "differenceInMinutes",
+        class_filter: None,
+        runtime: "js_datefns_difference_in_minutes",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "isAfter",
+        class_filter: None,
+        runtime: "js_datefns_is_after",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "isBefore",
+        class_filter: None,
+        runtime: "js_datefns_is_before",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "startOfDay",
+        class_filter: None,
+        runtime: "js_datefns_start_of_day",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "date-fns",
+        has_receiver: false,
+        method: "endOfDay",
+        class_filter: None,
+        runtime: "js_datefns_end_of_day",
+        args: &[NA_F64],
         ret: NR_F64,
     },
     // ========== moment ==========
@@ -9191,6 +9440,20 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_zlib_gunzip",
         args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    // `zlib.createBrotliDecompress(options?)` — axios feature-checks
+    // this at module init. The runtime stub returns a registered
+    // Buffer-shaped handle (NaN-boxed as a pointer) so callers see
+    // a truthy non-null object; the real Brotli decode path is a
+    // follow-up. `options` is NaN-boxed as f64.
+    NativeModSig {
+        module: "zlib",
+        has_receiver: false,
+        method: "createBrotliDecompress",
+        class_filter: None,
+        runtime: "js_zlib_create_brotli_decompress",
+        args: &[NA_F64],
         ret: NR_PTR,
     },
     // ========== cron ==========

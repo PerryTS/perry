@@ -39,6 +39,10 @@ tests/release/packages/
      - Honor `PERRY_BIN` (default `target/release/perry` from repo root).
      - On success: print one `PASS <fixture-name>` line and exit 0.
      - On failure: print `FAIL <fixture-name>`, the diff, exit 1.
+
+   Linker-only regressions may omit `expected.txt` and stop after
+   compile/link plus targeted symbol inspection; document in the fixture
+   why the binary is not executed.
 2. Run `./tests/release/packages/_harness.sh --filter <name>` to verify
    the fixture works in isolation before checking it in.
 3. Run `./scripts/release_sweep.sh --tier=3` to verify it runs through the

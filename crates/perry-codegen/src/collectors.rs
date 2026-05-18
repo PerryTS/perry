@@ -841,6 +841,9 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
             walk(func, out);
             walk(value, out);
         }
+        Expr::GetFunctionPrototypeMethod { func, .. } => {
+            walk(func, out);
+        }
         Expr::MapNew | Expr::SetNew => {}
         Expr::SetNewFromArray(arr) => walk(arr, out),
         Expr::MapSet { map, key, value } => {
@@ -6234,6 +6237,7 @@ fn check_object_literal_escapes_in_expr(
         | Expr::ProcessVersion | Expr::ProcessVersions | Expr::ProcessHrtimeBigint
         | Expr::ProcessStdin | Expr::ProcessStdout | Expr::ProcessStderr
         | Expr::ProcessEnv
+        | Expr::GlobalThisExpr
         // Path / encoding / OS leaf intrinsics
         | Expr::PathSep | Expr::PathDelimiter
         | Expr::TextEncoderNew | Expr::TextDecoderNew

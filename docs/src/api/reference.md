@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 866 entries across 71 modules.
+Total: 898 entries across 71 modules.
 
 ## Modules
 
@@ -235,6 +235,7 @@ Total: 866 entries across 71 modules.
 - `pbkdf2` — module
 - `pbkdf2Sync` — module
 - `randomBytes` — module
+- `randomFillSync` — module
 - `randomUUID` — module
 - `sha256` — module
 
@@ -613,17 +614,29 @@ Total: 866 entries across 71 modules.
 - `camelCase` — module
 - `chunk` — module
 - `clamp` — module
+- `clamp` — module
 - `compact` — module
 - `drop` — module
 - `first` — module
 - `flatten` — module
 - `head` — module
+- `inRange` — module
 - `kebabCase` — module
 - `last` — module
+- `max` — module
+- `maxBy` — module
+- `mean` — module
+- `meanBy` — module
+- `min` — module
+- `minBy` — module
+- `random` — module
 - `range` — module
 - `reverse` — module
 - `size` — module
 - `snakeCase` — module
+- `sum` — module
+- `sumBy` — module
+- `tail` — module
 - `take` — module
 - `times` — module
 - `uniq` — module
@@ -1227,9 +1240,28 @@ Total: 866 entries across 71 modules.
 
 ### Methods
 
+- `addListener` — instance
+- `emit` — instance
+- `eventNames` — instance
 - `finished` — module
 - `from` — module
+- `getMaxListeners` — instance
+- `listenerCount` — instance
+- `listeners` — instance
+- `off` — instance
+- `on` — instance
+- `once` — instance
 - `pipeline` — module
+- `prependListener` — instance
+- `prependOnceListener` — instance
+- `rawListeners` — instance
+- `removeAllListeners` — instance
+- `removeListener` — instance
+- `setMaxListeners` — instance
+
+### Properties
+
+- `prototype`
 
 ## `streams`
 
@@ -1315,6 +1347,7 @@ Total: 866 entries across 71 modules.
 - `callbackify` — module
 - `deprecate` — module
 - `format` — module
+- `formatWithOptions` — module
 - `inherits` — module
 - `inspect` — module
 - `isDeepStrictEqual` — module
@@ -1378,10 +1411,15 @@ Total: 866 entries across 71 modules.
 
 ### Methods
 
+- `createBrotliDecompress` — module
 - `deflateSync` — module
 - `gunzip` — module
 - `gunzipSync` — module
 - `gzip` — module
 - `gzipSync` — module
 - `inflateSync` — module
+
+### Properties
+
+- `constants`
 

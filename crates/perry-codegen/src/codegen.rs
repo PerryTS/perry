@@ -130,6 +130,20 @@ pub struct CompileOptions {
     ///     `import { X }` produces (so `typeof ns.X === "function"` /
     ///     `ns.X === <named>` both hold)
     pub namespace_node_submodules: std::collections::HashMap<String, String>,
+    /// Issue #678 followup (namespace branch): when a `import * as ns from
+    /// "<v8-module>"` lands in a `ModuleKind::Interpreted` source with no
+    /// accompanying named imports, no member appears in
+    /// `import_function_prefixes` / `import_function_v8_specifiers` (the
+    /// V8 module has no statically known export list). Keyed by
+    /// `namespace_local_name` → `module_specifier`; consulted by the
+    /// StaticMethodCall and namespace-member-call lowering paths so
+    /// `ns.member(args)` routes through `js_call_v8_export(specifier,
+    /// member, args, argc)` instead of falling through to the
+    /// `double_literal(0.0)` stub. Affects ramda (`import * as R`),
+    /// date-fns, jose, effect — packages where consumers use a wildcard
+    /// namespace import for ergonomics. Sparse map; absent entries mean
+    /// the namespace resolves natively (NativeCompiled or NativeRust).
+    pub namespace_v8_specifiers: std::collections::HashMap<String, String>,
     /// Issue #680: per-namespace member resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `source_prefix`. Used by
     /// the namespace-member access lowering paths in `expr.rs` and
@@ -463,6 +477,11 @@ pub(crate) struct CrossModuleCtx {
     /// submodules to a runtime stub object whose properties point at the
     /// same function singletons named imports produce.
     pub namespace_node_submodules: std::collections::HashMap<String, String>,
+    /// See `CompileOptions::namespace_v8_specifiers`. Routes
+    /// `import * as ns from "<v8-module>"; ns.member(args)` through the
+    /// V8 bridge when the source has no statically known export list and
+    /// no companion named import seeded `import_function_prefixes`.
+    pub namespace_v8_specifiers: std::collections::HashMap<String, String>,
     /// Issue #608 — imported function names whose source-side signature
     /// has a trailing `...rest` parameter. Used by the cross-module call
     /// site in `lower_call.rs` to pack trailing args into a rest array.
@@ -1332,6 +1351,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // Issue #841: see CrossModuleCtx field docs.
         import_function_node_submodule: opts.import_function_node_submodule.clone(),
         namespace_node_submodules: opts.namespace_node_submodules.clone(),
+        namespace_v8_specifiers: opts.namespace_v8_specifiers.clone(),
         imported_func_has_rest: opts.imported_func_has_rest,
         imported_func_return_types: opts.imported_func_return_types,
         func_returns_class: func_returns_class_map,
@@ -2985,6 +3005,24 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // is yet defined. Catches `import * as z; export { z };`
             // and any `export { ClassName }` or `export { someConst }`
             // where the consumer reads the value as a closure.
+            //
+            // Issue #967: when the `local==exported` name IS registered
+            // in `hir.exported_functions` as an alias for a real function
+            // body (the canonical shape: `function add(a,b){…}; export
+            // default add;` lowers to `Export::Named { local: "default",
+            // exported: "default" }` *and* pushes `("default", add_id)`
+            // into `exported_functions`), the no-op wrapper short-circuits
+            // any consumer-side closure dispatch through this default
+            // import. The consumer's
+            // `__perry_wrap_perry_fn_<src>__default` then transmutes a
+            // function pointer that returns `undefined` no matter the args
+            // — `const fn = add; fn(2,3)` evaluates to `undefined` instead
+            // of `5`. Ramda/date-fns trip this on every `var sum =
+            // reduce(add, 0)` style barrel where `add`/`reduce` are
+            // default-exports of locally-named functions. Fix: when
+            // `exported_functions` points the name at a real HIR function,
+            // emit a forwarding wrapper to that function's body (mirrors
+            // the `local != exported` branch at L2792 above).
             if local == exported && !func_by_local_name.contains_key(local.as_str()) {
                 let exported_wrap = format!(
                     "__perry_wrap_perry_fn_{}__{}",
@@ -2994,21 +3032,48 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 if !llmod.has_function(&exported_wrap)
                     && emitted_aliases.insert(exported_wrap.clone())
                 {
-                    let wf = llmod.define_function(
-                        &exported_wrap,
-                        DOUBLE,
-                        vec![
-                            (I64, "%this_closure".to_string()),
-                            (DOUBLE, "%a0".to_string()),
-                            (DOUBLE, "%a1".to_string()),
-                            (DOUBLE, "%a2".to_string()),
-                            (DOUBLE, "%a3".to_string()),
-                            (DOUBLE, "%a4".to_string()),
-                        ],
-                    );
-                    let _ = wf.create_block("entry");
-                    let blk = wf.block_mut(0).unwrap();
-                    blk.ret(DOUBLE, "0x7FFC000000000001");
+                    // Check if this name is registered as an alias
+                    // pointing at a real HIR function (`export default
+                    // <namedFn>` shape).
+                    let aliased_func: Option<&perry_hir::Function> = hir
+                        .exported_functions
+                        .iter()
+                        .find(|(n, _)| n == exported)
+                        .and_then(|(_, fid)| hir.functions.iter().find(|f| f.id == *fid));
+                    if let Some(f) = aliased_func {
+                        let arity = f.params.len().min(5);
+                        let mut wrap_params: Vec<(LlvmType, String)> =
+                            vec![(I64, "%this_closure".to_string())];
+                        for i in 0..arity {
+                            wrap_params.push((DOUBLE, format!("%a{}", i)));
+                        }
+                        let wf = llmod.define_function(&exported_wrap, DOUBLE, wrap_params);
+                        let _ = wf.create_block("entry");
+                        let blk = wf.block_mut(0).unwrap();
+                        let target = scoped_fn_name(&module_prefix, &f.name);
+                        let call_args: Vec<(LlvmType, String)> =
+                            (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
+                        let call_args_ref: Vec<(LlvmType, &str)> =
+                            call_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
+                        let result = blk.call(DOUBLE, &target, &call_args_ref);
+                        blk.ret(DOUBLE, &result);
+                    } else {
+                        let wf = llmod.define_function(
+                            &exported_wrap,
+                            DOUBLE,
+                            vec![
+                                (I64, "%this_closure".to_string()),
+                                (DOUBLE, "%a0".to_string()),
+                                (DOUBLE, "%a1".to_string()),
+                                (DOUBLE, "%a2".to_string()),
+                                (DOUBLE, "%a3".to_string()),
+                                (DOUBLE, "%a4".to_string()),
+                            ],
+                        );
+                        let _ = wf.create_block("entry");
+                        let blk = wf.block_mut(0).unwrap();
+                        blk.ret(DOUBLE, "0x7FFC000000000001");
+                    }
                 }
             }
         }
@@ -3413,6 +3478,21 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         })
         .collect();
 
+    // Wrapper arities — declared param count per top-level user-function
+    // wrapper. Used to register `fn.length` for `FuncRef` values that
+    // codegen materialises through `__perry_wrap_<name>`. Refs
+    // ramda's `converge` / `juxt` / `useWith` chain that reads
+    // `.length` off function values to compute curry arities.
+    let user_fn_wrapper_arity: Vec<(String, u32)> = hir
+        .functions
+        .iter()
+        .filter_map(|f| {
+            func_names
+                .get(&f.id)
+                .map(|name| (format!("__perry_wrap_{}", name), f.params.len() as u32))
+        })
+        .collect();
+
     emit_string_pool(
         &mut llmod,
         &strings,
@@ -3425,6 +3505,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &user_fn_wrapper_rest,
         &closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,
+        &user_fn_wrapper_arity,
     );
 
     // Emit the buffer alias-scope metadata once per module, covering every
@@ -3666,6 +3747,7 @@ fn compile_function(
         // Issue #841: node:submodule named-import + namespace registries.
         import_function_node_submodule: &cross_module.import_function_node_submodule,
         namespace_node_submodules: &cross_module.namespace_node_submodules,
+        namespace_v8_specifiers: &cross_module.namespace_v8_specifiers,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,
@@ -4049,6 +4131,7 @@ fn compile_closure(
         // Issue #841: node:submodule named-import + namespace registries.
         import_function_node_submodule: &cross_module.import_function_node_submodule,
         namespace_node_submodules: &cross_module.namespace_node_submodules,
+        namespace_v8_specifiers: &cross_module.namespace_v8_specifiers,
         closure_captures,
         current_closure_ptr: Some("%this_closure".to_string()),
         enums,
@@ -4290,6 +4373,7 @@ fn compile_method(
         // Issue #841: node:submodule named-import + namespace registries.
         import_function_node_submodule: &cross_module.import_function_node_submodule,
         namespace_node_submodules: &cross_module.namespace_node_submodules,
+        namespace_v8_specifiers: &cross_module.namespace_v8_specifiers,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,
@@ -4769,6 +4853,7 @@ fn compile_module_entry(
             // Issue #841: node:submodule named-import + namespace registries.
             import_function_node_submodule: &cross_module.import_function_node_submodule,
             namespace_node_submodules: &cross_module.namespace_node_submodules,
+            namespace_v8_specifiers: &cross_module.namespace_v8_specifiers,
             closure_captures: HashMap::new(),
             current_closure_ptr: None,
             enums,
@@ -5149,6 +5234,7 @@ fn compile_module_entry(
             // Issue #841: node:submodule named-import + namespace registries.
             import_function_node_submodule: &cross_module.import_function_node_submodule,
             namespace_node_submodules: &cross_module.namespace_node_submodules,
+            namespace_v8_specifiers: &cross_module.namespace_v8_specifiers,
             closure_captures: HashMap::new(),
             current_closure_ptr: None,
             enums,
@@ -5371,6 +5457,14 @@ fn emit_string_pool(
     // wrapper path: each entry is `wrapper_symbol` whose underlying
     // function has its synthesized `arguments` rest param.
     user_fn_wrapper_synthetic_arguments: &std::collections::HashSet<String>,
+    // Declared param count for every top-level user-function wrapper
+    // (`__perry_wrap_<original_name>`) — used to register the wrapper's
+    // arity in the runtime's `CLOSURE_ARITY_REGISTRY` so reads of
+    // `fn.length` on a closure value return the spec-correct
+    // declared-param count. Entries for wrappers also present in
+    // `user_fn_wrapper_rest` are skipped (those go through the rest
+    // registry which already pins arity).
+    user_fn_wrapper_arity: &[(String, u32)],
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -5593,6 +5687,7 @@ fn emit_string_pool(
     // and similar method-less marker classes hit this.
     {
         let mut all_class_ids: Vec<u32> = Vec::new();
+        let mut anon_shape_ids: Vec<u32> = Vec::new();
         for (class_name, class) in classes.iter() {
             if *class_name != class.name {
                 continue;
@@ -5602,12 +5697,30 @@ fn emit_string_pool(
                 _ => continue,
             };
             all_class_ids.push(cid);
+            // date-fns / drizzle / lodash plain-object duck-checks need
+            // `({ x: 1 }).constructor === Object` to hold. The HIR
+            // synthesizes an `__AnonShape_<hash>` class per literal
+            // shape; mark each such class id so the runtime
+            // `js_object_get_field_by_name` resolves `.constructor` to
+            // the global `Object` constructor instead of the synthetic
+            // class ref.
+            if class_name.starts_with("__AnonShape_") {
+                anon_shape_ids.push(cid);
+            }
         }
         all_class_ids.sort_unstable();
         all_class_ids.dedup();
         for cid in all_class_ids {
             blk.call_void(
                 "js_register_class_id",
+                &[(crate::types::I32, &cid.to_string())],
+            );
+        }
+        anon_shape_ids.sort_unstable();
+        anon_shape_ids.dedup();
+        for cid in anon_shape_ids {
+            blk.call_void(
+                "js_register_anon_shape_class_id",
                 &[(crate::types::I32, &cid.to_string())],
             );
         }
@@ -5799,6 +5912,8 @@ fn emit_string_pool(
     // the closure body. See `user_fn_wrapper_rest` doc on this fn's signature.
     let mut sorted_wrappers: Vec<(String, usize)> = user_fn_wrapper_rest.to_vec();
     sorted_wrappers.sort();
+    let rest_wrapper_names: std::collections::HashSet<String> =
+        sorted_wrappers.iter().map(|(s, _)| s.clone()).collect();
     for (wrap_sym, fixed_arity) in sorted_wrappers {
         let func_ref = format!("@{}", wrap_sym);
         // Refs #915 (gap 1 from #899): wrappers whose underlying function
@@ -5812,6 +5927,33 @@ fn emit_string_pool(
         blk.call_void(
             runtime_fn,
             &[(PTR, &func_ref), (I32, &fixed_arity.to_string())],
+        );
+    }
+
+    // Register declared param count for `__perry_wrap_<name>` wrappers of
+    // every non-rest top-level user function. Mirrors the closure-arity
+    // loop above (which registered inline closures) and the rest-wrapper
+    // loop just above. The runtime's `.length` property accessor on a
+    // closure value reads from this registry — ramda's
+    // `converge(<fn>, [filter, reject])` IIFE feeds
+    // `pluck('length', fns)` → `reduce(max, 0, …)` → `curryN(N, …)` →
+    // `_arity(N, …)` at module init; without the wrappers registering
+    // their arity, `pluck('length', [filter, reject])` came back as
+    // `[undefined, undefined]`, `reduce(max, 0, …)` evaluated to `NaN`,
+    // and `_arity(NaN, …)` threw
+    // `First argument to _arity must be a non-negative integer no greater
+    // than ten` before R.add / R.sum was ever called.
+    let mut sorted_wrapper_arities: Vec<(String, u32)> = user_fn_wrapper_arity
+        .iter()
+        .filter(|(name, _)| !rest_wrapper_names.contains(name))
+        .cloned()
+        .collect();
+    sorted_wrapper_arities.sort();
+    for (wrap_sym, arity) in sorted_wrapper_arities {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void(
+            "js_register_closure_arity",
+            &[(PTR, &func_ref), (I32, &arity.to_string())],
         );
     }
 
@@ -5934,6 +6076,7 @@ fn compile_static_method(
         // Issue #841: node:submodule named-import + namespace registries.
         import_function_node_submodule: &cross_module.import_function_node_submodule,
         namespace_node_submodules: &cross_module.namespace_node_submodules,
+        namespace_v8_specifiers: &cross_module.namespace_v8_specifiers,
         closure_captures: HashMap::new(),
         current_closure_ptr: None,
         enums,

@@ -11,7 +11,165 @@ use deno_core::{
 use deno_error::JsErrorBox;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::collections::HashMap;
+use std::ffi::{c_char, CStr};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+
+// Issue #818 follow-up: embedded module map for self-contained V8-fallback
+// binaries. The compile pipeline emits a generated `.c` file (one entry per
+// JS module pulled into the bundle by `collect_js_module_imports`) whose
+// `__attribute__((constructor))` calls `js_register_embedded_module` for
+// each `(canonical_path, source)` pair plus `js_register_embedded_alias`
+// for each `(bare_specifier, canonical_path)` import edge. At runtime the
+// `NodeModuleLoader` consults these maps BEFORE touching `node_modules/`,
+// so the resulting binary boots correctly even when shipped without the
+// source tree's `node_modules/` directory.
+//
+// Keys are kept as build-time canonical path strings — they don't need to
+// exist on the runtime filesystem. The loader uses them as opaque
+// identifiers; only the source string and the import-edge alias map are
+// consulted on the load hot path.
+static EMBEDDED_MODULES: Lazy<RwLock<HashMap<String, Arc<String>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+static EMBEDDED_ALIASES: Lazy<RwLock<HashMap<String, String>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Register a JS module source against its build-time canonical path.
+/// Called by `js_register_embedded_module` (the C FFI) at startup from the
+/// generated bundle constructor; also usable directly from Rust for tests.
+pub fn register_embedded_module(path: &str, source: String) {
+    if let Ok(mut map) = EMBEDDED_MODULES.write() {
+        map.insert(path.to_string(), Arc::new(source));
+    }
+}
+
+/// Register a bare specifier → build-time canonical path alias. Lets
+/// `resolve()` redirect `import "hono"` to the embedded source without
+/// walking `node_modules/`.
+pub fn register_embedded_alias(specifier: &str, path: &str) {
+    if let Ok(mut map) = EMBEDDED_ALIASES.write() {
+        map.insert(specifier.to_string(), path.to_string());
+    }
+}
+
+/// Look up an embedded source by build-time canonical path. Returns
+/// `None` when nothing's registered (the normal dev-build case).
+fn lookup_embedded_module(path: &str) -> Option<Arc<String>> {
+    EMBEDDED_MODULES
+        .read()
+        .ok()
+        .and_then(|map| map.get(path).cloned())
+}
+
+/// Look up the build-time canonical path that a bare specifier maps to.
+fn lookup_embedded_alias(specifier: &str) -> Option<String> {
+    EMBEDDED_ALIASES
+        .read()
+        .ok()
+        .and_then(|map| map.get(specifier).cloned())
+}
+
+/// C FFI: register an embedded JS module's source. Called from the
+/// compile-emitted bundle constructor. Pointers are not retained — the
+/// source string is copied into the global map. UTF-8 is assumed.
+///
+/// # Safety
+///
+/// `path_ptr` / `source_ptr` must point to valid `len`-byte regions of
+/// UTF-8 text. The map takes ownership of an internal copy.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_embedded_module(
+    path_ptr: *const c_char,
+    path_len: usize,
+    source_ptr: *const c_char,
+    source_len: usize,
+) {
+    if path_ptr.is_null() || source_ptr.is_null() {
+        return;
+    }
+    let path_bytes = std::slice::from_raw_parts(path_ptr as *const u8, path_len);
+    let source_bytes = std::slice::from_raw_parts(source_ptr as *const u8, source_len);
+    let path = match std::str::from_utf8(path_bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let source = match std::str::from_utf8(source_bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => return,
+    };
+    register_embedded_module(path, source);
+}
+
+/// C FFI: register a bare specifier → embedded-path alias. Pointers are
+/// not retained.
+///
+/// # Safety
+///
+/// Both pointers must reference valid UTF-8 of the given lengths.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_embedded_alias(
+    specifier_ptr: *const c_char,
+    specifier_len: usize,
+    path_ptr: *const c_char,
+    path_len: usize,
+) {
+    if specifier_ptr.is_null() || path_ptr.is_null() {
+        return;
+    }
+    let spec_bytes = std::slice::from_raw_parts(specifier_ptr as *const u8, specifier_len);
+    let path_bytes = std::slice::from_raw_parts(path_ptr as *const u8, path_len);
+    let specifier = match std::str::from_utf8(spec_bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let path = match std::str::from_utf8(path_bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    register_embedded_alias(specifier, path);
+}
+
+// Allow C-style null-terminated registration too — slightly nicer codegen
+// from the bundle constructor (no manual `strlen`) and matches the
+// convention used elsewhere in `perry-jsruntime` FFIs.
+#[allow(dead_code)]
+unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
+    if ptr.is_null() {
+        return None;
+    }
+    CStr::from_ptr(ptr).to_str().ok()
+}
+
+/// Probe the embedded map with the same extension/index candidates used
+/// by `resolve_with_extensions` against the filesystem. Returns the
+/// matching build-time canonical path on hit. Used when the file isn't on
+/// disk because the binary's been shipped without its `node_modules/`.
+fn lookup_embedded_path_with_extensions(base: &Path) -> Option<PathBuf> {
+    let key = base.to_string_lossy().to_string();
+    if lookup_embedded_module(&key).is_some() {
+        return Some(PathBuf::from(&key));
+    }
+    let extensions = [".js", ".mjs", ".cjs", ".json"];
+    for ext in extensions {
+        let candidate = format!("{}{}", key, ext);
+        if lookup_embedded_module(&candidate).is_some() {
+            return Some(PathBuf::from(candidate));
+        }
+    }
+    // Try as a directory containing an index file.
+    for ext in extensions {
+        let candidate = if key.ends_with('/') {
+            format!("{}index{}", key, ext)
+        } else {
+            format!("{}/index{}", key, ext)
+        };
+        if lookup_embedded_module(&candidate).is_some() {
+            return Some(PathBuf::from(candidate));
+        }
+    }
+    None
+}
 
 // CJS heuristics regex set. These are tight, hot path on every loaded JS
 // module (called once per import); compiling them once amortizes the cost.
@@ -79,11 +237,30 @@ impl NodeModuleLoader {
 
     /// Resolve a module specifier to an absolute path
     fn resolve_module_path(&self, specifier: &str, referrer: &Path) -> Result<PathBuf> {
+        // Issue #818 follow-up: prefer embedded-bundle lookups over disk
+        // probes. For bare specifiers ("hono", "@scope/x") an alias map
+        // gives us the canonical build-time path directly; for relative
+        // and absolute paths we still walk the standard candidate chain
+        // and then check whether the resolved path matches an embedded
+        // entry even when the file is absent from the runtime filesystem.
+        if !specifier.starts_with("./")
+            && !specifier.starts_with("../")
+            && !specifier.starts_with('/')
+            && !specifier.starts_with("file://")
+        {
+            if let Some(embedded_path) = lookup_embedded_alias(specifier) {
+                return Ok(PathBuf::from(embedded_path));
+            }
+        }
+
         // Handle file:// URLs
         if specifier.starts_with("file://") {
             let path_str = specifier.strip_prefix("file://").unwrap_or(specifier);
             let path = PathBuf::from(path_str);
             if path.exists() && path.is_file() {
+                return Ok(path);
+            }
+            if lookup_embedded_module(&path.to_string_lossy()).is_some() {
                 return Ok(path);
             }
             return self.resolve_with_extensions(path);
@@ -93,22 +270,49 @@ impl NodeModuleLoader {
         if specifier.starts_with("./") || specifier.starts_with("../") {
             let referrer_dir = referrer.parent().unwrap_or(&self.base_dir);
             let resolved = referrer_dir.join(specifier);
-            let resolved = self.resolve_with_extensions(resolved)?;
-            // Check browser field mapping (e.g., ethers geturl.js -> geturl-browser.js)
-            if let Some(browser_path) = self.check_browser_field(&resolved) {
-                return Ok(browser_path);
+            match self.resolve_with_extensions(resolved.clone()) {
+                Ok(resolved) => {
+                    // Check browser field mapping (e.g., ethers geturl.js -> geturl-browser.js)
+                    if let Some(browser_path) = self.check_browser_field(&resolved) {
+                        return Ok(browser_path);
+                    }
+                    return Ok(resolved);
+                }
+                Err(e) => {
+                    // Self-contained binary path: the file isn't on disk
+                    // because node_modules/ was left behind. Probe the
+                    // embedded map with the same extension/index candidates
+                    // we'd try against the filesystem.
+                    if let Some(p) = lookup_embedded_path_with_extensions(&resolved) {
+                        return Ok(p);
+                    }
+                    return Err(e);
+                }
             }
-            return Ok(resolved);
         }
 
         // Handle absolute paths
         if specifier.starts_with('/') {
             let resolved = PathBuf::from(specifier);
+            if let Ok(p) = self.resolve_with_extensions(resolved.clone()) {
+                return Ok(p);
+            }
+            if let Some(p) = lookup_embedded_path_with_extensions(&resolved) {
+                return Ok(p);
+            }
             return self.resolve_with_extensions(resolved);
         }
 
         // Handle node_modules
-        self.resolve_from_node_modules(specifier, referrer)
+        match self.resolve_from_node_modules(specifier, referrer) {
+            Ok(p) => Ok(p),
+            Err(e) => {
+                if let Some(embedded_path) = lookup_embedded_alias(specifier) {
+                    return Ok(PathBuf::from(embedded_path));
+                }
+                Err(e)
+            }
+        }
     }
 
     /// Try resolving a path with common extensions
@@ -510,13 +714,24 @@ impl ModuleLoader for NodeModuleLoader {
             }
         };
 
-        let code = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                return ModuleLoadResponse::Sync(Err(JsErrorBox::generic(format!(
-                    "Failed to read module {:?}: {}",
-                    path, e
-                ))))
+        // Issue #818 follow-up: embedded-bundle first. Self-contained
+        // binaries register every JS module they import at startup; the
+        // map is keyed on build-time canonical paths, which is what
+        // `resolve()` returns. Falls through to disk only when nothing's
+        // registered for this path — preserves the dev-build behavior
+        // where `node_modules/` sits next to the binary.
+        let path_key = path.to_string_lossy().to_string();
+        let code = if let Some(embedded) = lookup_embedded_module(&path_key) {
+            (*embedded).clone()
+        } else {
+            match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    return ModuleLoadResponse::Sync(Err(JsErrorBox::generic(format!(
+                        "Failed to read module {:?}: {}",
+                        path, e
+                    ))))
+                }
             }
         };
 
@@ -752,6 +967,22 @@ const _cjs = (function() {{
             if (ns.__perry_commonjs === true && ns.default !== undefined) return ns.default;
         }} catch (_) {{
         }}
+        // ESM module-namespace objects (from `import * as ns`) have a null
+        // prototype, so `ns.hasOwnProperty(...)` throws "is not a function".
+        // safer-buffer's `for (key in buffer) if (!buffer.hasOwnProperty(key))`
+        // probe (loaded indirectly by express via body-parser) and similar
+        // legacy CommonJS code expects the value returned from `require()` to
+        // inherit from Object.prototype. Copy enumerable own props into a
+        // plain object so Object.prototype.* (hasOwnProperty,
+        // propertyIsEnumerable, toString, valueOf) is reachable.
+        try {{
+            if (ns && typeof ns === 'object' && Object.getPrototypeOf(ns) === null) {{
+                var __o = {{}};
+                for (var __k in ns) __o[__k] = ns[__k];
+                return __o;
+            }}
+        }} catch (_) {{
+        }}
         return ns;
     }}
     function require(specifier) {{
@@ -877,14 +1108,329 @@ export default { TLSSocket, connect, createSecureContext };
 "#.to_string(),
         "http" | "https" | "http2" => r#"
 // Stub implementation for Node.js http/https/http2 module
-export class IncomingMessage {}
-export class ServerResponse {}
+//
+// `createServer(handler)` bridges to the V8-fallback HTTP server via
+// the `op_perry_http_*` ops (see crates/perry-jsruntime/src/ops.rs).
+// This is the minimum viable shape — enough for express.listen() to
+// receive real requests and respond. NOT a full Node `http.Server`
+// (no streams, no trailers, no upgrade events). Apps that need richer
+// HTTP server semantics should compile through the native path
+// (perry-ext-http-server).
+const __perry_core = (typeof Deno !== 'undefined' && Deno.core) ? Deno.core : null;
+const __perry_ops = __perry_core && __perry_core.ops ? __perry_core.ops : null;
+
+export class IncomingMessage {
+    constructor(opaque) {
+        this.method = opaque.method;
+        this.url = opaque.url;
+        this.headers = opaque.headers || {};
+        this.rawHeaders = opaque.rawHeaders || [];
+        this.httpVersion = '1.1';
+        this.httpVersionMajor = 1;
+        this.httpVersionMinor = 1;
+        this.complete = true;
+        this._body = opaque.body || '';
+        this._listeners = Object.create(null);
+        // Minimal stream-ish events: synthesize 'data' + 'end' on next tick
+        // so handlers that wire `.on('data', ...).on('end', ...)` work.
+        Promise.resolve().then(() => {
+            const dataCbs = this._listeners['data'] || [];
+            if (dataCbs.length > 0 && this._body) {
+                for (const cb of dataCbs) cb(this._body);
+            }
+            const endCbs = this._listeners['end'] || [];
+            for (const cb of endCbs) cb();
+        });
+    }
+    on(event, listener) {
+        (this._listeners[event] = this._listeners[event] || []).push(listener);
+        return this;
+    }
+    once(event, listener) {
+        const wrapped = (...args) => { this.off(event, wrapped); listener(...args); };
+        return this.on(event, wrapped);
+    }
+    off(event, listener) {
+        const arr = this._listeners[event];
+        if (arr) { const i = arr.indexOf(listener); if (i >= 0) arr.splice(i, 1); }
+        return this;
+    }
+    removeListener(event, listener) { return this.off(event, listener); }
+    emit(event, ...args) {
+        const arr = this._listeners[event];
+        if (arr) arr.slice().forEach(fn => fn.apply(this, args));
+        return !!arr;
+    }
+    setEncoding() { return this; }
+    pause() { return this; }
+    resume() { return this; }
+}
+
+export class ServerResponse {
+    constructor(reqId) {
+        this._reqId = reqId;
+        this._status = 200;
+        this._headers = []; // array of [name, value] preserving order
+        this._headerMap = Object.create(null); // lowercase -> last value
+        this._body = '';
+        this._ended = false;
+        this.headersSent = false;
+        this.finished = false;
+        this.statusCode = 200;
+        this.statusMessage = '';
+        this._listeners = Object.create(null);
+    }
+    setHeader(name, value) {
+        const lower = String(name).toLowerCase();
+        // Replace any previous entry for the same header.
+        this._headers = this._headers.filter(p => p[0].toLowerCase() !== lower);
+        this._headers.push([String(name), String(value)]);
+        this._headerMap[lower] = String(value);
+        return this;
+    }
+    getHeader(name) { return this._headerMap[String(name).toLowerCase()]; }
+    getHeaders() {
+        const out = {};
+        for (const [k, v] of this._headers) out[k.toLowerCase()] = v;
+        return out;
+    }
+    getHeaderNames() { return Object.keys(this._headerMap); }
+    hasHeader(name) { return String(name).toLowerCase() in this._headerMap; }
+    removeHeader(name) {
+        const lower = String(name).toLowerCase();
+        this._headers = this._headers.filter(p => p[0].toLowerCase() !== lower);
+        delete this._headerMap[lower];
+        return this;
+    }
+    writeHead(status, statusMessageOrHeaders, headers) {
+        this._status = status;
+        this.statusCode = status;
+        let h = headers;
+        if (statusMessageOrHeaders && typeof statusMessageOrHeaders !== 'string') {
+            h = statusMessageOrHeaders;
+        } else if (typeof statusMessageOrHeaders === 'string') {
+            this.statusMessage = statusMessageOrHeaders;
+        }
+        if (h) {
+            if (Array.isArray(h)) {
+                // [name1, val1, name2, val2, ...]
+                for (let i = 0; i + 1 < h.length; i += 2) this.setHeader(h[i], h[i + 1]);
+            } else {
+                for (const k of Object.keys(h)) this.setHeader(k, h[k]);
+            }
+        }
+        return this;
+    }
+    write(chunk) {
+        if (this._ended) return false;
+        if (chunk == null) return true;
+        if (typeof chunk === 'string') {
+            this._body += chunk;
+        } else if (chunk instanceof Uint8Array) {
+            this._body += new TextDecoder().decode(chunk);
+        } else if (chunk && chunk.buffer instanceof ArrayBuffer) {
+            this._body += new TextDecoder().decode(new Uint8Array(chunk.buffer));
+        } else {
+            this._body += String(chunk);
+        }
+        return true;
+    }
+    end(chunk, encoding, cb) {
+        if (this._ended) return this;
+        if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
+        else if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+        if (chunk != null) this.write(chunk);
+        this._ended = true;
+        this.finished = true;
+        this.headersSent = true;
+        // Default Content-Length when caller hasn't set Transfer-Encoding.
+        const lower = this._headerMap;
+        if (!lower['content-length'] && !lower['transfer-encoding']) {
+            const len = (typeof TextEncoder !== 'undefined')
+                ? new TextEncoder().encode(this._body).length
+                : this._body.length;
+            this.setHeader('Content-Length', String(len));
+        }
+        if (__perry_ops && __perry_ops.op_perry_http_respond) {
+            try {
+                __perry_ops.op_perry_http_respond(
+                    this._reqId, this._status, JSON.stringify(this._headers), this._body);
+            } catch (_) {}
+        }
+        const finishCbs = this._listeners['finish'] || [];
+        for (const f of finishCbs) { try { f(); } catch (_) {} }
+        const closeCbs = this._listeners['close'] || [];
+        for (const f of closeCbs) { try { f(); } catch (_) {} }
+        if (typeof cb === 'function') { try { cb(); } catch (_) {} }
+        return this;
+    }
+    on(event, listener) {
+        (this._listeners[event] = this._listeners[event] || []).push(listener);
+        return this;
+    }
+    once(event, listener) {
+        const wrapped = (...args) => { this.off(event, wrapped); listener(...args); };
+        return this.on(event, wrapped);
+    }
+    off(event, listener) {
+        const arr = this._listeners[event];
+        if (arr) { const i = arr.indexOf(listener); if (i >= 0) arr.splice(i, 1); }
+        return this;
+    }
+    removeListener(event, listener) { return this.off(event, listener); }
+    emit(event, ...args) {
+        const arr = this._listeners[event];
+        if (arr) arr.slice().forEach(fn => fn.apply(this, args));
+        return !!arr;
+    }
+    flushHeaders() { this.headersSent = true; }
+}
+
 export class Agent {}
+
+class Server {
+    constructor(handler) {
+        this._handler = handler || (() => {});
+        this._serverId = 0;
+        this._listening = false;
+        this._listeners = Object.create(null);
+        this._listenAddress = null;
+    }
+    _emit(event, ...args) {
+        const arr = this._listeners[event];
+        if (arr) arr.slice().forEach(fn => { try { fn.apply(this, args); } catch (_) {} });
+    }
+    on(event, listener) {
+        if (event === 'request' && typeof listener === 'function') {
+            // Mirror Node: 'request' listeners run in addition to the
+            // constructor handler. Stash them in _listeners and dispatch
+            // alongside the main handler in the accept loop.
+        }
+        (this._listeners[event] = this._listeners[event] || []).push(listener);
+        return this;
+    }
+    once(event, listener) {
+        const wrapped = (...args) => { this.off(event, wrapped); listener(...args); };
+        return this.on(event, wrapped);
+    }
+    off(event, listener) {
+        const arr = this._listeners[event];
+        if (arr) { const i = arr.indexOf(listener); if (i >= 0) arr.splice(i, 1); }
+        return this;
+    }
+    removeListener(event, listener) { return this.off(event, listener); }
+    addListener(event, listener) { return this.on(event, listener); }
+    emit(event, ...args) { this._emit(event, ...args); return true; }
+    setTimeout() { return this; }
+    address() {
+        if (!this._listenAddress) return null;
+        return { port: this._listenAddress.port, address: this._listenAddress.host, family: 'IPv4' };
+    }
+    listen(...args) {
+        // express calls listen(port, cb); also support (port, host, cb) and ({port, host}, cb).
+        let port = 3000;
+        let host = '0.0.0.0';
+        let cb = null;
+        for (const a of args) {
+            if (typeof a === 'number') port = a;
+            else if (typeof a === 'string') {
+                const n = parseInt(a, 10);
+                if (!isNaN(n)) port = n;
+            } else if (typeof a === 'function') cb = a;
+            else if (a && typeof a === 'object') {
+                if (typeof a.port === 'number') port = a.port;
+                if (typeof a.host === 'string') host = a.host;
+            }
+        }
+        if (!__perry_ops || !__perry_ops.op_perry_http_listen) {
+            throw new Error('http.createServer: Perry V8-fallback HTTP ops unavailable');
+        }
+        const self = this;
+        // Kick off the bind + accept loop. Once bound, fire 'listening'
+        // + the user callback and begin dispatching to the handler.
+        //
+        // Critical ordering for the express + native-fetch self-call
+        // pattern (#997): the listening callback is invoked AFTER the
+        // accept loop has registered its first `op_perry_http_accept`
+        // op. This matters because user callbacks compiled from Perry
+        // TypeScript come in as native trampolines — the V8 thread is
+        // blocked synchronously while the callback's native body runs,
+        // and any `await` inside the body busy-waits on the V8 thread
+        // (pumping `js_run_jsruntime_pump` inside the wait so microtasks
+        // still progress). If we called `cb()` BEFORE the accept loop
+        // queued its op, an `await fetch('http://127.0.0.1:port/...')`
+        // inside cb would block waiting for the server to respond, but
+        // the server can't dispatch because the accept loop hasn't
+        // started — three-way deadlock against the synchronous trampoline.
+        //
+        // Scheduling cb on Promise.resolve().then() defers it past the
+        // first `await op_perry_http_accept(...)`, so by the time the
+        // trampoline starts blocking the V8 thread there's already a
+        // pending accept op the inner pump can drive to resolution
+        // when hyper hands a request through the mpsc.
+        (async () => {
+            try {
+                const sid = await __perry_ops.op_perry_http_listen(port, host);
+                self._serverId = sid;
+                self._listening = true;
+                self._listenAddress = { port, host };
+                self._emit('listening');
+                if (typeof cb === 'function') {
+                    // Defer to a microtask so the accept loop below
+                    // registers `op_perry_http_accept` first.
+                    Promise.resolve().then(() => { try { cb(); } catch (_) {} });
+                }
+                // Accept loop
+                while (self._listening && self._serverId !== 0) {
+                    let r;
+                    try { r = await __perry_ops.op_perry_http_accept(sid); }
+                    catch (_) { break; }
+                    if (!r || r.id === 0) break;
+                    const req = new IncomingMessage(r);
+                    const res = new ServerResponse(r.id);
+                    // Fire 'request' listeners + the constructor handler.
+                    const reqListeners = self._listeners['request'] || [];
+                    for (const fn of reqListeners) {
+                        try { fn.call(self, req, res); } catch (e) { /* swallow */ }
+                    }
+                    try {
+                        const ret = self._handler(req, res);
+                        if (ret && typeof ret.then === 'function') {
+                            ret.catch(() => {});
+                        }
+                    } catch (e) {
+                        if (!res._ended) {
+                            try {
+                                res.statusCode = 500;
+                                res.end('Internal Server Error');
+                            } catch (_) {}
+                        }
+                    }
+                }
+            } catch (err) {
+                self._emit('error', err);
+                if (typeof cb === 'function') { try { cb(err); } catch (_) {} }
+            }
+        })();
+        return this;
+    }
+    close(cb) {
+        if (this._serverId && __perry_ops && __perry_ops.op_perry_http_close) {
+            try { __perry_ops.op_perry_http_close(this._serverId); } catch (_) {}
+        }
+        this._listening = false;
+        this._serverId = 0;
+        this._emit('close');
+        if (typeof cb === 'function') { try { cb(); } catch (_) {} }
+        return this;
+    }
+    closeAllConnections() {}
+    closeIdleConnections() {}
+    get listening() { return this._listening; }
+}
+
 // Issue #912 (#909 follow-up): express/router read `const { METHODS } =
 // require('node:http')` at module init and immediately call `METHODS.map(...)`.
-// Pre-fix METHODS was undefined and threw `TypeError: Cannot read properties
-// of undefined (reading 'map')`. Mirrors `http_methods_array` in
-// perry-runtime/src/object.rs (Node 22 snapshot).
 export const METHODS = [
     'ACL', 'BIND', 'CHECKOUT', 'CONNECT', 'COPY', 'DELETE', 'GET', 'HEAD',
     'LINK', 'LOCK', 'M-SEARCH', 'MERGE', 'MKACTIVITY', 'MKCALENDAR', 'MKCOL',
@@ -892,9 +1438,6 @@ export const METHODS = [
     'PURGE', 'PUT', 'QUERY', 'REBIND', 'REPORT', 'SEARCH', 'SOURCE',
     'SUBSCRIBE', 'TRACE', 'UNBIND', 'UNLINK', 'UNLOCK', 'UNSUBSCRIBE'
 ];
-// Node also exposes a `STATUS_CODES` map keyed by integer code. Expose a
-// minimal subset so consumers that read `STATUS_CODES[500]` at module init
-// don't crash with the same "undefined" pattern.
 export const STATUS_CODES = {
     100: 'Continue', 101: 'Switching Protocols', 200: 'OK', 201: 'Created',
     202: 'Accepted', 204: 'No Content', 301: 'Moved Permanently',
@@ -907,9 +1450,10 @@ export const STATUS_CODES = {
 };
 export function request() { throw new Error('http.request not supported in this environment'); }
 export function get() { throw new Error('http.get not supported in this environment'); }
-export function createServer() { throw new Error('http.createServer not supported in this environment'); }
+export function createServer(handler) { return new Server(handler); }
 export function createSecureServer() { throw new Error('http2.createSecureServer not supported in this environment'); }
-export default { IncomingMessage, ServerResponse, Agent, METHODS, STATUS_CODES, request, get, createServer, createSecureServer };
+export { Server };
+export default { IncomingMessage, ServerResponse, Server, Agent, METHODS, STATUS_CODES, request, get, createServer, createSecureServer };
 "#.to_string(),
         "crypto" => r#"
 // Stub implementation for Node.js 'crypto' module
@@ -918,21 +1462,235 @@ export function randomBytes(size) {
     crypto.getRandomValues(arr);
     return arr;
 }
+// Issue: jose imports `randomFillSync` from `node:crypto` via the V8/JS
+// fallback path. Node's `randomFillSync(buffer, offset?, size?)` fills the
+// given TypedArray/Buffer with cryptographically secure random bytes in
+// place and returns the buffer.
+export function randomFillSync(buf, offset, size) {
+    const o = offset || 0;
+    const len = (buf && typeof buf.length === 'number') ? buf.length : 0;
+    const n = (size != null) ? size : (len - o);
+    let view;
+    if (typeof buf.subarray === 'function') {
+        view = buf.subarray(o, o + n);
+    } else if (buf && buf.buffer) {
+        view = new Uint8Array(buf.buffer, (buf.byteOffset || 0) + o, n);
+    } else {
+        view = buf;
+    }
+    crypto.getRandomValues(view);
+    return buf;
+}
+export function randomUUID() {
+    // RFC 4122 v4 UUID using getRandomValues
+    const b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = [];
+    for (let i = 0; i < 16; i++) h.push((b[i] + 0x100).toString(16).slice(1));
+    return h[0]+h[1]+h[2]+h[3]+'-'+h[4]+h[5]+'-'+h[6]+h[7]+'-'+h[8]+h[9]+'-'+h[10]+h[11]+h[12]+h[13]+h[14]+h[15];
+}
 export function createHash(algorithm) {
     return {
         update(data) { this._data = (this._data || '') + data; return this; },
         digest(encoding) { return ''; }
     };
 }
+// `crypto.createHmac(algorithm, key)` — real HMAC for HS256/384/512 via
+// `op_perry_hmac`. The op takes a normalized algorithm name plus
+// zero-copy Uint8Array buffers for the key/data. We accumulate update()
+// inputs into a single Uint8Array on .digest() to match Node's API
+// shape (Node's createHmac returns a Hmac that supports chained
+// update().update().digest()). Without this, libraries like `jose`
+// fall through to an empty signature and produce malformed JWS tokens.
+const __perry_hmac_normalize_alg = (algorithm) => {
+    if (typeof algorithm !== 'string') return null;
+    const a = algorithm.toLowerCase();
+    if (a === 'sha256' || a === 'sha-256') return 'sha256';
+    if (a === 'sha384' || a === 'sha-384') return 'sha384';
+    if (a === 'sha512' || a === 'sha-512') return 'sha512';
+    return null;
+};
+const __perry_hmac_to_bytes = (input) => {
+    if (input == null) return new Uint8Array(0);
+    if (input instanceof Uint8Array) return input;
+    if (input instanceof ArrayBuffer) return new Uint8Array(input);
+    if (ArrayBuffer.isView(input)) {
+        return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    }
+    if (typeof input === 'string') {
+        return new TextEncoder().encode(input);
+    }
+    // KeyObject / shim with .export(), ._material, or ._key — best-effort
+    // unwrap. Check _material first so we don't recurse through the Buffer
+    // returned from export() (which would already be a Uint8Array hit).
+    if (input._material instanceof Uint8Array) return input._material;
+    if (typeof input.export === 'function') {
+        try { return __perry_hmac_to_bytes(input.export()); } catch (_) {}
+    }
+    if (input._key != null) return __perry_hmac_to_bytes(input._key);
+    return new Uint8Array(0);
+};
+const __perry_hmac_concat = (chunks) => {
+    let total = 0;
+    for (const c of chunks) total += c.length;
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    return out;
+};
+const __perry_hmac_to_hex = (bytes) => {
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) {
+        s += (bytes[i] + 0x100).toString(16).slice(1);
+    }
+    return s;
+};
+const __perry_hmac_to_base64 = (bytes) => {
+    if (typeof Buffer !== 'undefined' && Buffer.from) {
+        return Buffer.from(bytes).toString('base64');
+    }
+    // Fallback (no Buffer): manual base64.
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    if (typeof btoa === 'function') return btoa(bin);
+    return bin;
+};
 export function createHmac(algorithm, key) {
+    const alg = __perry_hmac_normalize_alg(algorithm);
+    const keyBytes = __perry_hmac_to_bytes(key);
+    const chunks = [];
+    const ops = (typeof Deno !== 'undefined' && Deno.core && Deno.core.ops) ? Deno.core.ops : null;
     return {
-        update(data) { return this; },
-        digest(encoding) { return ''; }
+        update(data, _inputEncoding) {
+            chunks.push(__perry_hmac_to_bytes(data));
+            return this;
+        },
+        digest(encoding) {
+            const dataBytes = __perry_hmac_concat(chunks);
+            let out;
+            if (alg && ops && typeof ops.op_perry_hmac === 'function') {
+                out = ops.op_perry_hmac(alg, keyBytes, dataBytes);
+                if (!(out instanceof Uint8Array)) out = new Uint8Array(out || []);
+            } else {
+                out = new Uint8Array(0);
+            }
+            if (encoding === 'hex') return __perry_hmac_to_hex(out);
+            if (encoding === 'base64') return __perry_hmac_to_base64(out);
+            if (encoding === 'base64url') {
+                return __perry_hmac_to_base64(out).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+            }
+            // No encoding → Buffer/Uint8Array. Prefer Node-style Buffer
+            // (jose calls `.toString('base64url')` on the result). Buffer
+            // extends Uint8Array, so `instanceof Uint8Array` checks still
+            // pass on the returned value.
+            if (typeof Buffer !== 'undefined' && Buffer.from) {
+                return Buffer.from(out);
+            }
+            return out;
+        }
     };
 }
 export function pbkdf2Sync() { return new Uint8Array(32); }
 export function pbkdf2() { return Promise.resolve(new Uint8Array(32)); }
-export default { randomBytes, createHash, createHmac, pbkdf2Sync, pbkdf2 };
+// Best-effort stubs for additional `node:crypto` named exports that
+// libraries like `jose` import at module-init time. Returning sane
+// no-ops lets the import resolve (so ESM linking succeeds and the
+// library can load), even when the underlying primitive isn't wired
+// through Perry's native crypto path. Calling them at runtime in the
+// V8 fallback path will throw or no-op deterministically, NOT crash
+// the JS module loader. Real implementations live behind the native
+// FFI path (`Expr::Crypto*` in HIR / `js_crypto_*` in perry-stdlib).
+export function timingSafeEqual(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    let r = 0;
+    for (let i = 0; i < a.length; i++) r |= a[i] ^ b[i];
+    return r === 0;
+}
+export function createCipheriv() { throw new Error('crypto.createCipheriv not supported in V8 fallback'); }
+export function createDecipheriv() { throw new Error('crypto.createDecipheriv not supported in V8 fallback'); }
+// `KeyObject` (V8 fallback shim) — must be a real class so that
+// `key instanceof KeyObject` checks in libraries like `jose` succeed.
+// `createSecretKey(key, encoding)` returns a KeyObject; for utf8 input
+// we encode via TextEncoder so the underlying bytes match what HMAC
+// expects (Node's `createSecretKey('secret', 'utf8')` byte-aligns
+// with Buffer.from('secret', 'utf8')).
+export class KeyObject {
+    constructor(opts) {
+        opts = opts || {};
+        this.type = opts.type || 'secret';
+        this.asymmetricKeyType = opts.asymmetricKeyType;
+        this.asymmetricKeyDetails = opts.asymmetricKeyDetails;
+        this._material = opts._material || new Uint8Array(0);
+        this.symmetricKeySize = this._material.length;
+    }
+    export(options) {
+        // Node returns a Buffer for secret keys when no format is given.
+        if (typeof Buffer !== 'undefined' && Buffer.from) {
+            return Buffer.from(this._material);
+        }
+        return this._material;
+    }
+    static from(cryptoKey) {
+        return new KeyObject({ type: 'secret', _material: new Uint8Array(0) });
+    }
+}
+export function createSecretKey(key, encoding) {
+    let bytes;
+    if (key instanceof Uint8Array) {
+        bytes = key;
+    } else if (typeof key === 'string') {
+        // Node accepts a string + encoding; only utf8 is common.
+        if (encoding && encoding !== 'utf8' && encoding !== 'utf-8') {
+            // Best-effort: hex / base64 decoders are not free here. Fall
+            // back to utf8 bytes so the caller still gets a valid key.
+        }
+        bytes = new TextEncoder().encode(key);
+    } else if (key && key.buffer instanceof ArrayBuffer) {
+        bytes = new Uint8Array(key.buffer, key.byteOffset || 0, key.byteLength);
+    } else {
+        bytes = new Uint8Array(0);
+    }
+    return new KeyObject({ type: 'secret', _material: bytes });
+}
+export function createPrivateKey() { throw new Error('crypto.createPrivateKey not supported in V8 fallback'); }
+export function createPublicKey() { throw new Error('crypto.createPublicKey not supported in V8 fallback'); }
+export function generateKeyPair() { throw new Error('crypto.generateKeyPair not supported in V8 fallback'); }
+export function diffieHellman() { throw new Error('crypto.diffieHellman not supported in V8 fallback'); }
+export function publicEncrypt() { throw new Error('crypto.publicEncrypt not supported in V8 fallback'); }
+export function privateDecrypt() { throw new Error('crypto.privateDecrypt not supported in V8 fallback'); }
+export function getCiphers() { return []; }
+export const constants = {
+    RSA_PKCS1_PADDING: 1,
+    RSA_PKCS1_OAEP_PADDING: 4,
+    RSA_PSS_SALTLEN_DIGEST: -1,
+    RSA_PSS_SALTLEN_MAX_SIGN: -2,
+    RSA_PSS_SALTLEN_AUTO: -2,
+};
+// `crypto.webcrypto` — Node exposes the Web Crypto API namespace here.
+// jose's `webcrypto.js` reads `crypto.webcrypto.CryptoKey`; returning a
+// minimal object with the same surface lets ESM linking succeed and
+// makes `crypto.webcrypto?.CryptoKey` resolve to `undefined` rather
+// than crash with a TypeError.
+export const webcrypto = (typeof globalThis !== 'undefined' && globalThis.crypto)
+    ? globalThis.crypto
+    : { subtle: {}, getRandomValues(arr) { return arr; } };
+// `crypto.sign(algorithm, data, key, callback)` — Node's one-shot
+// signer. jose's `runtime/sign.js` does `promisify(crypto.sign)` and
+// only calls the resulting Promise variant for non-HS algorithms.
+// Throwing here keeps the V8 stub deterministic: HS* never touches
+// `crypto.sign`, and asymmetric signing is unsupported on this path.
+export function sign(algorithm, data, key, callback) {
+    const err = new Error('crypto.sign (asymmetric) not supported in V8 fallback');
+    if (typeof callback === 'function') {
+        callback(err);
+        return;
+    }
+    throw err;
+}
+export function verify() { throw new Error('crypto.verify (asymmetric) not supported in V8 fallback'); }
+export default { randomBytes, randomFillSync, randomUUID, createHash, createHmac, pbkdf2Sync, pbkdf2, timingSafeEqual, createCipheriv, createDecipheriv, createSecretKey, createPrivateKey, createPublicKey, generateKeyPair, diffieHellman, publicEncrypt, privateDecrypt, getCiphers, KeyObject, constants, webcrypto, sign, verify };
 "#.to_string(),
         "fs" => r#"
 // Stub implementation for Node.js 'fs' module
@@ -987,19 +1745,45 @@ export function networkInterfaces() { return {}; }
 export const EOL = '\n';
 export default { platform, arch, cpus, homedir, tmpdir, hostname, type, release, totalmem, freemem, uptime, loadavg, networkInterfaces, EOL };
 "#.to_string(),
-        "stream" | "stream/web" => r#"
-// Stub implementation for Node.js 'stream' module
-export class Readable {
+        "stream" => r#"
+// Stub implementation for Node.js 'stream' module.
+//
+// IMPORTANT: Node's `require('stream')` returns the legacy `Stream`
+// *constructor* (a class) with `Readable`/`Writable`/etc. attached as
+// static properties — NOT a plain namespace object. Packages like
+// `send` / `express` rely on this shape:
+//
+//     var Stream = require('stream')
+//     function SendStream() { Stream.call(this) }
+//     util.inherits(SendStream, Stream)   // reads Stream.prototype
+//
+// If the default export is `{ Readable, Writable, ... }` then
+// `Stream.prototype` is `undefined` and `util.inherits` blows up with
+// "Object prototype may only be an Object or null: undefined".
+// (See: node_modules/send/index.js:30,173.)
+//
+// So we make `Stream` a real class, attach the sub-classes as static
+// properties, and export the *class itself* as default.
+class Stream {
     constructor() {}
-    read() { return null; }
+    pipe(dest) { return dest; }
     on() { return this; }
-    pipe() { return this; }
+    once() { return this; }
+    emit() { return false; }
+    off() { return this; }
+    addListener() { return this; }
+    removeListener() { return this; }
+    removeAllListeners() { return this; }
 }
-export class Writable {
-    constructor() {}
+export class Readable extends Stream {
+    constructor() { super(); }
+    read() { return null; }
+    pipe(dest) { return dest; }
+}
+export class Writable extends Stream {
+    constructor() { super(); }
     write() { return true; }
     end() {}
-    on() { return this; }
 }
 export class Duplex extends Readable {
     write() { return true; }
@@ -1012,7 +1796,25 @@ export class WritableStream {}
 export class TransformStream {}
 export function pipeline() {}
 export function finished() {}
-export default { Readable, Writable, Duplex, Transform, PassThrough, ReadableStream, WritableStream, TransformStream, pipeline, finished };
+// Attach sub-classes as static properties so `Stream.Readable`,
+// `Stream.Writable`, etc. resolve the way Node ships them.
+Stream.Readable = Readable;
+Stream.Writable = Writable;
+Stream.Duplex = Duplex;
+Stream.Transform = Transform;
+Stream.PassThrough = PassThrough;
+Stream.pipeline = pipeline;
+Stream.finished = finished;
+export { Stream };
+// `__perry_commonjs = true` tells the wrap_commonjs() require() shim in
+// modules.rs to return `module.default` instead of the ESM namespace
+// when this module is `require()`'d. Node's `require('stream')` returns
+// the Stream class itself (with `.Readable` / `.prototype` / etc),
+// NOT a namespace object. Without this flag, `var Stream =
+// require('stream')` ends up as a copied null-proto object and
+// `Stream.prototype` becomes undefined → `util.inherits` crashes.
+export const __perry_commonjs = true;
+export default Stream;
 "#.to_string(),
         "repl" => r#"
 // Stub implementation for Node.js 'repl' module
@@ -1070,9 +1872,33 @@ export function promisify(fn) { return (...args) => new Promise((resolve, reject
 export function callbackify(fn) { return (...args) => { const cb = args.pop(); fn(...args).then(r => cb(null, r)).catch(cb); }; }
 export function inspect(obj) { return JSON.stringify(obj); }
 export function format(fmt, ...args) { return fmt; }
+// util.formatWithOptions(inspectOptions, format[, ...args]) — identical to
+// util.format with the first arg routed into util.inspect for %o/%O. Our
+// stub ignores the options object and delegates to format(); full
+// options-passthrough is a follow-up. Required by the `debug` npm package.
+export function formatWithOptions(_inspectOptions, fmt, ...args) { return format(fmt, ...args); }
 export function debuglog() { return () => {}; }
 export function deprecate(fn) { return fn; }
-export function inherits(ctor, superCtor) { Object.setPrototypeOf(ctor.prototype, superCtor.prototype); }
+// `util.inherits(ctor, superCtor)` — Node's pre-class inheritance helper.
+// Real Node semantics:
+//   Object.defineProperty(ctor, 'super_', { value: superCtor });
+//   Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
+// Throws TypeError if either arg is missing a `.prototype`. We mirror that
+// contract so packages like `send` (which derives `SendStream` from
+// `require('stream')`) work transparently.
+export function inherits(ctor, superCtor) {
+    if (ctor === undefined || ctor === null) {
+        throw new TypeError('The constructor to "inherits" must not be null or undefined');
+    }
+    if (superCtor === undefined || superCtor === null) {
+        throw new TypeError('The super constructor to "inherits" must not be null or undefined');
+    }
+    if (superCtor.prototype === undefined) {
+        throw new TypeError('The super constructor to "inherits" must have a prototype');
+    }
+    Object.defineProperty(ctor, 'super_', { value: superCtor, writable: true, configurable: true });
+    Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
+}
 export const TextEncoder = globalThis.TextEncoder;
 export const TextDecoder = globalThis.TextDecoder;
 // util.types — Node's runtime introspection namespace. NestJS / rxjs
@@ -1081,6 +1907,25 @@ export const TextDecoder = globalThis.TextDecoder;
 // `false` for an unknown shape is the conservative answer (the caller
 // then falls through to its own duck-typing path).
 const _isPromiseLike = (v) => v != null && (typeof v === "object" || typeof v === "function") && typeof v.then === "function";
+// `_isKeyObjectShape` — duck-types the `node:crypto` `KeyObject` shim
+// without importing it (avoids a circular module dependency between
+// node:util and node:crypto). Real Node uses an internal class brand;
+// for our V8 fallback path the shape check is sufficient because
+// libraries (jose) only ever produce KeyObjects via `createSecretKey`
+// or `KeyObject.from`, both of which set `type: 'secret' | ...`
+// alongside a typed-array `_material` field.
+const _isKeyObjectShape = (v) => (
+    v != null && typeof v === 'object'
+    && typeof v.type === 'string'
+    && (v._material instanceof Uint8Array || v._key != null
+        || typeof v.export === 'function')
+);
+const _isCryptoKeyShape = (v) => (
+    v != null && typeof v === 'object'
+    && typeof v.algorithm === 'object'
+    && typeof v.type === 'string'
+    && typeof v.extractable === 'boolean'
+);
 export const types = {
     isPromise: (v) => _isPromiseLike(v),
     isAsyncFunction: (v) => typeof v === "function" && v.constructor && v.constructor.name === "AsyncFunction",
@@ -1101,21 +1946,38 @@ export const types = {
     isBoxedPrimitive: () => false,
     isAnyArrayBuffer: (v) => v instanceof ArrayBuffer,
     isModuleNamespaceObject: () => false,
+    // `util.types.isKeyObject` / `isCryptoKey` are required by `jose`
+    // (and other JWT/JOSE libs) to discriminate between Uint8Array,
+    // CryptoKey, and Node's KeyObject before signing/verifying. The
+    // V8 fallback path doesn't expose a real `internalBinding('util')`
+    // so we duck-type against the shape produced by our crypto shim.
+    isKeyObject: (v) => _isKeyObjectShape(v),
+    isCryptoKey: (v) => _isCryptoKeyShape(v),
 };
-export default { promisify, callbackify, inspect, format, debuglog, deprecate, inherits, TextEncoder, TextDecoder, types };
+export default { promisify, callbackify, inspect, format, formatWithOptions, debuglog, deprecate, inherits, TextEncoder, TextDecoder, types };
 "#.to_string(),
         "events" => r#"
-// Stub implementation for Node.js 'events' module
+// Stub implementation for Node.js 'events' module.
+// Every method lazy-initializes `_events` so mixin/inherit patterns that
+// copy EventEmitter.prototype without invoking the constructor (e.g.
+// express's createApplication -> mixin(app, EventEmitter.prototype, false))
+// still work. This mirrors Node's real lib/events.js, which does
+// `this._events ??= ObjectCreate(null)` inside every method.
+function __perry_ee_init(self) { if (!self._events) self._events = Object.create(null); return self._events; }
 export class EventEmitter {
-    constructor() { this._events = {}; }
-    on(event, listener) { (this._events[event] = this._events[event] || []).push(listener); return this; }
-    once(event, listener) { const wrapped = (...args) => { this.off(event, wrapped); listener(...args); }; return this.on(event, wrapped); }
-    off(event, listener) { const arr = this._events[event]; if (arr) { const i = arr.indexOf(listener); if (i >= 0) arr.splice(i, 1); } return this; }
+    constructor() { this._events = Object.create(null); }
+    on(event, listener) { const e = __perry_ee_init(this); (e[event] = e[event] || []).push(listener); return this; }
+    addListener(event, listener) { return this.on(event, listener); }
+    once(event, listener) { __perry_ee_init(this); const wrapped = (...args) => { this.off(event, wrapped); listener(...args); }; return this.on(event, wrapped); }
+    off(event, listener) { const e = __perry_ee_init(this); const arr = e[event]; if (arr) { const i = arr.indexOf(listener); if (i >= 0) arr.splice(i, 1); } return this; }
     removeListener(event, listener) { return this.off(event, listener); }
-    emit(event, ...args) { const arr = this._events[event]; if (arr) arr.forEach(fn => fn(...args)); return !!arr; }
-    removeAllListeners(event) { if (event) delete this._events[event]; else this._events = {}; return this; }
-    listeners(event) { return this._events[event] || []; }
-    listenerCount(event) { return (this._events[event] || []).length; }
+    emit(event, ...args) { const e = __perry_ee_init(this); const arr = e[event]; if (arr) arr.slice().forEach(fn => fn.apply(this, args)); return !!arr; }
+    removeAllListeners(event) { const e = __perry_ee_init(this); if (event) delete e[event]; else this._events = Object.create(null); return this; }
+    prependListener(event, listener) { const e = __perry_ee_init(this); (e[event] = e[event] || []).unshift(listener); return this; }
+    prependOnceListener(event, listener) { __perry_ee_init(this); const wrapped = (...args) => { this.off(event, wrapped); listener(...args); }; return this.prependListener(event, wrapped); }
+    listeners(event) { const e = __perry_ee_init(this); return (e[event] || []).slice(); }
+    listenerCount(event) { const e = __perry_ee_init(this); return (e[event] || []).length; }
+    eventNames() { const e = __perry_ee_init(this); return Object.keys(e); }
     setMaxListeners() { return this; }
     getMaxListeners() { return 10; }
 }

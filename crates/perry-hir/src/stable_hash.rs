@@ -1637,6 +1637,7 @@ impl SH for Expr {
                 e.as_ref().hash(h);
             }
             Expr::ProcessEnv => tag(h, 55),
+            Expr::GlobalThisExpr => tag(h, 474),
             Expr::ProcessUptime => tag(h, 56),
             Expr::ProcessCwd => tag(h, 57),
             Expr::ProcessArgv => tag(h, 58),
@@ -2239,6 +2240,76 @@ impl SH for Expr {
                 key.as_ref().hash(h);
                 signature.as_ref().hash(h);
                 data.as_ref().hash(h);
+            }
+            Expr::WebCryptoEncrypt {
+                algorithm,
+                key,
+                data,
+            } => {
+                tag(h, 466);
+                algorithm.as_ref().hash(h);
+                key.as_ref().hash(h);
+                data.as_ref().hash(h);
+            }
+            Expr::WebCryptoDecrypt {
+                algorithm,
+                key,
+                data,
+            } => {
+                tag(h, 467);
+                algorithm.as_ref().hash(h);
+                key.as_ref().hash(h);
+                data.as_ref().hash(h);
+            }
+            Expr::WebCryptoGenerateKey {
+                algorithm,
+                extractable,
+                usages,
+            } => {
+                tag(h, 469);
+                algorithm.as_ref().hash(h);
+                extractable.as_ref().hash(h);
+                usages.as_ref().hash(h);
+            }
+            Expr::WebCryptoWrapKey {
+                format,
+                key,
+                wrapping_key,
+                wrap_algorithm,
+            } => {
+                tag(h, 470);
+                format.as_ref().hash(h);
+                key.as_ref().hash(h);
+                wrapping_key.as_ref().hash(h);
+                wrap_algorithm.as_ref().hash(h);
+            }
+            Expr::WebCryptoUnwrapKey {
+                format,
+                wrapped_key,
+                unwrapping_key,
+                unwrap_algorithm,
+                unwrapped_key_algorithm,
+                extractable,
+                usages,
+            } => {
+                tag(h, 471);
+                format.as_ref().hash(h);
+                wrapped_key.as_ref().hash(h);
+                unwrapping_key.as_ref().hash(h);
+                unwrap_algorithm.as_ref().hash(h);
+                unwrapped_key_algorithm.as_ref().hash(h);
+                extractable.as_ref().hash(h);
+                usages.as_ref().hash(h);
+            }
+            Expr::CryptoRandomFillSync {
+                buffer,
+                offset,
+                size,
+            } => {
+                tag(h, 468);
+                buffer.as_ref().hash(h);
+                offset.as_ref().hash(h);
+                size.as_ref().hash(h);
             }
             Expr::OsPlatform => tag(h, 201),
             Expr::OsArch => tag(h, 202),
@@ -3148,6 +3219,16 @@ impl SH for Expr {
                 pattern.hash(h);
                 flags.hash(h);
             }
+            Expr::RegExpDynamic { pattern, flags } => {
+                tag(h, 475);
+                pattern.as_ref().hash(h);
+                if let Some(f_box) = flags {
+                    tag(h, 476);
+                    f_box.as_ref().hash(h);
+                } else {
+                    tag(h, 477);
+                }
+            }
             Expr::RegExpTest { regex, string } => {
                 tag(h, 384);
                 regex.as_ref().hash(h);
@@ -3609,6 +3690,11 @@ impl SH for Expr {
                 func.as_ref().hash(h);
                 method_name.hash(h);
                 value.as_ref().hash(h);
+            }
+            Expr::GetFunctionPrototypeMethod { func, method_name } => {
+                tag(h, 1465);
+                func.as_ref().hash(h);
+                method_name.hash(h);
             }
             Expr::WebAssemblyValidate(bytes) => {
                 tag(h, 449);

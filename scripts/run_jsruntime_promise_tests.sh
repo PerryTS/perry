@@ -112,7 +112,12 @@ run_fixture() {
     local stderr_path="$TMP_DIR/$name.stderr"
     local profile_path="$TMP_DIR/$name.profile"
 
-    if ! "${PERRY_CMD[@]}" "$src_path" --no-cache -o "$bin" >"$compile_log" 2>&1; then
+    # #499: the gate refuses linking `perry-jsruntime` without an
+    # explicit opt-in. These tests *are* the explicit opt-in — every
+    # fixture imports a `.js` file specifically to exercise the V8
+    # promise interop surface — so pass `--enable-js-runtime`
+    # alongside the existing flags.
+    if ! "${PERRY_CMD[@]}" "$src_path" --enable-js-runtime --no-cache -o "$bin" >"$compile_log" 2>&1; then
         echo "FAIL $name: compile failed"
         dump_file "$compile_log"
         FAIL=$((FAIL + 1))

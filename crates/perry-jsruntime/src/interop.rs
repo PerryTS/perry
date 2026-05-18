@@ -361,12 +361,25 @@ fn poll_v8_event_loop_once(state: &mut JsRuntimeState) -> i32 {
     let waker = notifying_waker();
     let mut cx = TaskContext::from_waker(&waker);
     match state.runtime.poll_event_loop(&mut cx, Default::default()) {
-        Poll::Ready(Ok(())) => 0,
+        Poll::Ready(Ok(())) => {
+            // V8 event loop drained — clear the pending flag so the outer
+            // loop can exit (assuming no other source — timers, stdlib,
+            // http servers — still keeps it alive).
+            state.last_poll_was_pending = false;
+            0
+        }
         Poll::Ready(Err(e)) => {
+            state.last_poll_was_pending = false;
             eprintln!("[jsruntime_pump] event loop error: {}", e);
             1
         }
-        Poll::Pending => 0,
+        Poll::Pending => {
+            // Refed async op / dyn import / microtask / promise event
+            // outstanding. `jsruntime_has_active_handles` reads this flag
+            // to keep the outer event loop alive until the op resolves.
+            state.last_poll_was_pending = true;
+            0
+        }
     }
 }
 
@@ -435,6 +448,13 @@ fn poll_pending_module_evaluations(state: &mut JsRuntimeState) -> i32 {
 extern "C" fn jsruntime_process_pending() -> i32 {
     jsruntime_profile_register();
     bump_jsruntime(&JSRUNTIME_PUMP_TICKS);
+    // Enter the shared tokio runtime so async ops (e.g. the V8-fallback
+    // `op_perry_http_*` listener) that touch `tokio::net` / `tokio::spawn`
+    // can run inside a reactor context. Without this guard, polling an
+    // async op that does `TcpListener::bind(...)` panics with "there is
+    // no reactor running".
+    let tokio_rt = crate::get_tokio_runtime();
+    let _enter = tokio_rt.enter();
     with_runtime(|state| {
         let mut ran = poll_v8_event_loop_once(state);
         let resolved_ticks = resolve_pending_jsruntime_ticks(state);
@@ -457,7 +477,31 @@ extern "C" fn jsruntime_has_active_handles() -> i32 {
             .as_ref()
             .is_some_and(|state| !state.pending_module_evaluations.is_empty())
     });
-    if has_foreign_adapters || has_pending_ticks || has_module_evaluations {
+    // `last_poll_was_pending` is set by `poll_v8_event_loop_once` whenever
+    // deno_core returns `Poll::Pending` — i.e. a refed async op / dyn
+    // import / microtask / promise event is still in flight. Without this
+    // gate, a top-level `await op_perry_http_listen(port)` (or any other
+    // async op invoked from module init) returns to the codegen-emitted
+    // outer event loop while its body is still suspended on a tokio
+    // worker; the header check then sees no other active source and
+    // exits before the op resolves and the listening callback can fire.
+    // Pairs with the express smoke at #997.
+    let has_pending_v8 = JS_RUNTIME.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|state| state.last_poll_was_pending)
+    });
+    // Keep the program alive while any V8-fallback `http.createServer`
+    // is still listening — without this the outer event loop exits
+    // immediately after `server.listen(...)` resolves and the accept
+    // loop's tokio task is dropped before serving any requests.
+    let has_http_servers = crate::ops::perry_http_active_count() > 0;
+    if has_foreign_adapters
+        || has_pending_ticks
+        || has_module_evaluations
+        || has_http_servers
+        || has_pending_v8
+    {
         1
     } else {
         0
@@ -1193,6 +1237,168 @@ pub unsafe extern "C" fn js_call_v8_export(
         args_ptr,
         args_len,
     )
+}
+
+/// Issue #818 (Effect.succeed pattern): invoke a method on a NAMED member of a
+/// V8-fallback module — `Effect.succeed(42)` where `Effect` is imported by name
+/// (`import { Effect } from 'effect'`) and the export is itself a sub-namespace
+/// object that holds the actual `succeed` function.
+///
+/// Without this entry, `StaticMethodCall { class_name: "Effect", method_name:
+/// "succeed" }` fell through to `double_literal(0.0)` because:
+///   - `methods.get(("Effect","succeed"))` misses (Effect isn't a perry class)
+///   - `namespace_imports.contains("Effect")` is false (it's a Named, not a
+///     `import * as Effect`)
+///   - The existing `js_call_v8_export` would call `effect.succeed(...)` at
+///     the top level of the module, but the actual function lives at
+///     `effect.Effect.succeed`.
+///
+/// Bundles `js_load_module` + namespace-property-get + method-call so the
+/// codegen can drop in a single FFI call wherever a named V8 import is invoked
+/// as a static method. Argument and return marshalling follows the same
+/// conventions as `js_call_v8_export` — args already NaN-boxed, result
+/// NaN-boxed (objects come back as JS handles so subsequent `.value` /
+/// `.pipe()` accesses route through the existing HANDLE_PROPERTY / METHOD
+/// dispatch and reach V8 again with the prototype intact).
+#[no_mangle]
+pub unsafe extern "C" fn js_call_v8_member_method(
+    specifier_ptr: *const i8,
+    specifier_len: usize,
+    member_name_ptr: *const i8,
+    member_name_len: usize,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    bump_v8_entry(V8EntryKind::V8ExportCall);
+    let module_handle = js_load_module(specifier_ptr, specifier_len);
+    if module_handle == 0 {
+        return f64::from_bits(0x7FFC_0000_0000_0001);
+    }
+    let member_name = match c_str_to_utf8(member_name_ptr, member_name_len) {
+        Some(s) => s,
+        None => return f64::from_bits(0x7FFC_0000_0000_0001),
+    };
+    let method_name = match c_str_to_utf8(method_name_ptr, method_name_len) {
+        Some(s) => s,
+        None => return f64::from_bits(0x7FFC_0000_0000_0001),
+    };
+    let args = if args_ptr.is_null() || args_len == 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len).to_vec()
+    };
+
+    with_runtime(|state| {
+        let module_id = module_handle as deno_core::ModuleId;
+        let namespace = match state.runtime.get_module_namespace(module_id) {
+            Ok(ns) => ns,
+            Err(e) => {
+                log::error!("Failed to get module namespace: {}", e);
+                return f64::from_bits(0x7FFC_0000_0000_0001);
+            }
+        };
+
+        deno_core::scope!(scope, &mut state.runtime);
+        let namespace = v8::Local::new(scope, namespace);
+        v8::tc_scope!(tc_scope, scope);
+
+        // Walk the member chain (single hop here — caller passes `Effect`
+        // for `Effect.succeed(args)`). Result must be a callable host.
+        let member_key = match v8::String::new(tc_scope, &member_name) {
+            Some(k) => k,
+            None => return f64::from_bits(0x7FFC_0000_0000_0001),
+        };
+        let member_val = match namespace.get(tc_scope, member_key.into()) {
+            Some(v) => v,
+            None => {
+                eprintln!(
+                    "[JS-INTEROP] V8 member '{}' not found on module namespace",
+                    member_name
+                );
+                return f64::from_bits(0x7FFC_0000_0000_0001);
+            }
+        };
+        if !member_val.is_object() {
+            eprintln!(
+                "[JS-INTEROP] V8 member '{}' is not an object (got typeof {})",
+                member_name,
+                if member_val.is_function() {
+                    "function"
+                } else {
+                    "primitive"
+                }
+            );
+            return f64::from_bits(0x7FFC_0000_0000_0001);
+        }
+        let member_obj = match member_val.to_object(tc_scope) {
+            Some(o) => o,
+            None => return f64::from_bits(0x7FFC_0000_0000_0001),
+        };
+
+        let method_key = match v8::String::new(tc_scope, &method_name) {
+            Some(k) => k,
+            None => return f64::from_bits(0x7FFC_0000_0000_0001),
+        };
+        let method_val = match member_obj.get(tc_scope, method_key.into()) {
+            Some(v) => v,
+            None => {
+                eprintln!(
+                    "[JS-INTEROP] V8 method '{}.{}' not found",
+                    member_name, method_name
+                );
+                return f64::from_bits(0x7FFC_0000_0000_0001);
+            }
+        };
+        if !method_val.is_function() {
+            eprintln!(
+                "[JS-INTEROP] V8 '{}.{}' is not a function",
+                member_name, method_name
+            );
+            return f64::from_bits(0x7FFC_0000_0000_0001);
+        }
+        let method = v8::Local::<v8::Function>::try_from(method_val).unwrap();
+
+        let v8_args: Vec<v8::Local<v8::Value>> = args
+            .iter()
+            .map(|&a| native_to_v8(tc_scope, fixup_native_for_v8(a)))
+            .collect();
+
+        // Bind `this` to the member object so methods that use `this`
+        // (most class-style static methods) see the right receiver.
+        let result = match method.call(tc_scope, member_obj.into(), &v8_args) {
+            Some(r) => r,
+            None => {
+                if tc_scope.has_caught() {
+                    if let Some(exception) = tc_scope.exception() {
+                        let msg = exception.to_rust_string_lossy(tc_scope);
+                        eprintln!(
+                            "[JS-INTEROP] '{}.{}' threw: {}",
+                            member_name, method_name, msg
+                        );
+                    }
+                }
+                return f64::from_bits(0x7FFC_0000_0000_0001);
+            }
+        };
+
+        v8_to_native(tc_scope, result)
+    })
+}
+
+fn c_str_to_utf8(ptr: *const i8, len: usize) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = unsafe {
+        if len > 0 {
+            std::slice::from_raw_parts(ptr as *const u8, len)
+        } else {
+            CStr::from_ptr(ptr as *const c_char).to_bytes()
+        }
+    };
+    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
 fn call_function_impl(

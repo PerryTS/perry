@@ -20,11 +20,17 @@ mod crash_handler {
         exception_information: [usize; 15],
     }
 
+    // Accurate x64 Windows CONTEXT layout for the two fields we need.
+    // (The previous `_padding:[u8;0x78]; Rip` mislabeled offset 0x78 — that
+    // is Rax on x64; Rip is at 0xF8 — but nothing read it, so the bug was
+    // dormant. We need Rsp@0x98 to recover the call chain.)
     #[repr(C)]
     #[allow(non_snake_case)]
     struct Context {
-        _padding: [u8; 0x78], // offset to Rip on x64
-        Rip: u64,
+        _pad0: [u8; 0x98],              // → Rsp at 0x98
+        Rsp: u64,                       // 0x98
+        _pad1: [u8; 0xF8 - (0x98 + 8)], // 0xA0..0xF8
+        Rip: u64,                       // 0xF8
     }
 
     #[repr(C)]
@@ -38,7 +44,13 @@ mod crash_handler {
             first: u32,
             handler: unsafe extern "system" fn(*mut ExceptionPointers) -> i32,
         ) -> *mut core::ffi::c_void;
+        fn GetModuleHandleW(name: *const u16) -> *mut core::ffi::c_void;
     }
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // The rich dump itself reads raw stack memory; if that ever faults we
+    // must not re-enter and loop. One dump is all a diagnostic needs.
+    static DUMPED: AtomicBool = AtomicBool::new(false);
 
     unsafe extern "system" fn handler(info: *mut ExceptionPointers) -> i32 {
         let info = &*info;
@@ -58,6 +70,53 @@ mod crash_handler {
                 rip,
                 addr
             );
+            // Recover the faulting call chain. A RIP of 0 / wild address is
+            // a call through a null/garbage function pointer — the pushed
+            // return address at [Rsp] points straight at the culprit. We
+            // can't symbolize in-process safely from a VEH (no DbgHelp), so
+            // emit the module base + raw addresses and their module-relative
+            // RVAs; with `--debug-symbols` (#896) producing a PDB these
+            // resolve offline via `llvm-symbolizer --obj=<exe> <rva>`.
+            if !DUMPED.swap(true, Ordering::SeqCst) && !info.context_record.is_null() {
+                let ctx = &*info.context_record;
+                let base = GetModuleHandleW(core::ptr::null()) as usize;
+                // 256 MiB code window — generous; perry binaries are tens of MiB.
+                let win = 0x1000_0000usize;
+                let in_mod = |a: usize| base != 0 && a >= base && a < base + win;
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "[CRASH] rip=0x{:X} rsp=0x{:X} module_base=0x{:X}{}",
+                    ctx.Rip as usize,
+                    ctx.Rsp as usize,
+                    base,
+                    if in_mod(ctx.Rip as usize) {
+                        format!(" rip_rva=+0x{:X}", ctx.Rip as usize - base)
+                    } else {
+                        String::new()
+                    }
+                );
+                // Scan the top of the faulting stack for return-address-shaped
+                // values (anything inside the main module's code window). The
+                // first is the immediate caller of the bad call; the rest
+                // approximate the chain above it.
+                let sp = ctx.Rsp as *const usize;
+                let mut printed = 0;
+                let mut i = 0usize;
+                while i < 512 && printed < 24 {
+                    let v = *sp.add(i);
+                    if in_mod(v) {
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "[CRASH] stack[+0x{:X}] = 0x{:X}  rva=+0x{:X}",
+                            i * 8,
+                            v,
+                            v - base
+                        );
+                        printed += 1;
+                    }
+                    i += 1;
+                }
+            }
             let _ = std::io::stderr().flush();
         }
         0 // EXCEPTION_CONTINUE_SEARCH

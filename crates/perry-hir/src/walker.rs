@@ -76,6 +76,7 @@ where
         | Expr::Update { .. }
         | Expr::EnvGet(_)
         | Expr::ProcessEnv
+        | Expr::GlobalThisExpr
         | Expr::ProcessUptime
         | Expr::ProcessCwd
         | Expr::ProcessArgv
@@ -387,6 +388,66 @@ where
             f(signature);
             f(data);
         }
+        Expr::WebCryptoEncrypt {
+            algorithm,
+            key,
+            data,
+        }
+        | Expr::WebCryptoDecrypt {
+            algorithm,
+            key,
+            data,
+        } => {
+            f(algorithm);
+            f(key);
+            f(data);
+        }
+        Expr::WebCryptoGenerateKey {
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            f(algorithm);
+            f(extractable);
+            f(usages);
+        }
+        Expr::WebCryptoWrapKey {
+            format,
+            key,
+            wrapping_key,
+            wrap_algorithm,
+        } => {
+            f(format);
+            f(key);
+            f(wrapping_key);
+            f(wrap_algorithm);
+        }
+        Expr::WebCryptoUnwrapKey {
+            format,
+            wrapped_key,
+            unwrapping_key,
+            unwrap_algorithm,
+            unwrapped_key_algorithm,
+            extractable,
+            usages,
+        } => {
+            f(format);
+            f(wrapped_key);
+            f(unwrapping_key);
+            f(unwrap_algorithm);
+            f(unwrapped_key_algorithm);
+            f(extractable);
+            f(usages);
+        }
+        Expr::CryptoRandomFillSync {
+            buffer,
+            offset,
+            size,
+        } => {
+            f(buffer);
+            f(offset);
+            f(size);
+        }
 
         // ─── Two-child variants ───────────────────────────────────────────
         Expr::Binary { left, right, .. }
@@ -424,6 +485,9 @@ where
         Expr::RegisterFunctionPrototypeMethod { func, value, .. } => {
             f(func);
             f(value);
+        }
+        Expr::GetFunctionPrototypeMethod { func, .. } => {
+            f(func);
         }
         Expr::IndexGet { object, index } => {
             f(object);
@@ -751,6 +815,12 @@ where
         | Expr::StringMatchAll { string, regex } => {
             f(regex);
             f(string);
+        }
+        Expr::RegExpDynamic { pattern, flags } => {
+            f(pattern);
+            if let Some(flags_box) = flags {
+                f(flags_box);
+            }
         }
         Expr::RegExpSetLastIndex { regex, value } => {
             f(regex);
@@ -1360,6 +1430,7 @@ where
         | Expr::Update { .. }
         | Expr::EnvGet(_)
         | Expr::ProcessEnv
+        | Expr::GlobalThisExpr
         | Expr::ProcessUptime
         | Expr::ProcessCwd
         | Expr::ProcessArgv
@@ -1671,6 +1742,66 @@ where
             f(signature);
             f(data);
         }
+        Expr::WebCryptoEncrypt {
+            algorithm,
+            key,
+            data,
+        }
+        | Expr::WebCryptoDecrypt {
+            algorithm,
+            key,
+            data,
+        } => {
+            f(algorithm);
+            f(key);
+            f(data);
+        }
+        Expr::WebCryptoGenerateKey {
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            f(algorithm);
+            f(extractable);
+            f(usages);
+        }
+        Expr::WebCryptoWrapKey {
+            format,
+            key,
+            wrapping_key,
+            wrap_algorithm,
+        } => {
+            f(format);
+            f(key);
+            f(wrapping_key);
+            f(wrap_algorithm);
+        }
+        Expr::WebCryptoUnwrapKey {
+            format,
+            wrapped_key,
+            unwrapping_key,
+            unwrap_algorithm,
+            unwrapped_key_algorithm,
+            extractable,
+            usages,
+        } => {
+            f(format);
+            f(wrapped_key);
+            f(unwrapping_key);
+            f(unwrap_algorithm);
+            f(unwrapped_key_algorithm);
+            f(extractable);
+            f(usages);
+        }
+        Expr::CryptoRandomFillSync {
+            buffer,
+            offset,
+            size,
+        } => {
+            f(buffer);
+            f(offset);
+            f(size);
+        }
 
         // ─── Multi-child variants — same shape as the mut variant ─────────
         Expr::Binary { left, right, .. }
@@ -1708,6 +1839,9 @@ where
         Expr::RegisterFunctionPrototypeMethod { func, value, .. } => {
             f(func);
             f(value);
+        }
+        Expr::GetFunctionPrototypeMethod { func, .. } => {
+            f(func);
         }
         Expr::IndexGet { object, index } => {
             f(object);
@@ -2021,6 +2155,12 @@ where
         | Expr::StringMatchAll { string, regex } => {
             f(regex);
             f(string);
+        }
+        Expr::RegExpDynamic { pattern, flags } => {
+            f(pattern);
+            if let Some(flags_box) = flags {
+                f(flags_box);
+            }
         }
         Expr::RegExpSetLastIndex { regex, value } => {
             f(regex);

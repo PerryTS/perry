@@ -51,8 +51,8 @@ use strip_dedup::strip_duplicate_objects_from_lib;
 use targets::{
     apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,
     compile_for_watchos_widget, compile_for_wearos_tile, compile_metallib_for_bundle,
-    find_visionos_swift_runtime, find_watchos_swift_runtime, generate_js_bundle,
-    lookup_bundle_id_from_toml,
+    find_visionos_swift_runtime, find_watchos_swift_runtime, generate_embedded_js_object,
+    generate_js_bundle, lookup_bundle_id_from_toml,
 };
 
 /// Result of a successful compilation
@@ -101,6 +101,32 @@ fn toml_build_number(table: &toml::Table) -> Option<i64> {
     value
         .as_integer()
         .or_else(|| value.as_str().and_then(|s| s.parse::<i64>().ok()))
+}
+
+/// #499: extract the owning npm package name from a source-file path
+/// by locating the rightmost `node_modules/` segment. Scope-aware:
+/// `node_modules/@scope/pkg/...` returns `@scope/pkg`. Returns `None`
+/// for user-source files outside `node_modules/`.
+fn package_name_for_path(source_path: &str) -> Option<String> {
+    let idx = source_path.rfind("node_modules/")?;
+    let after = &source_path[idx + "node_modules/".len()..];
+    if let Some(stripped) = after.strip_prefix('@') {
+        let mut parts = stripped.splitn(3, '/');
+        let scope = parts.next().unwrap_or("");
+        let pkg = parts.next().unwrap_or("");
+        if scope.is_empty() || pkg.is_empty() {
+            None
+        } else {
+            Some(format!("@{}/{}", scope, pkg))
+        }
+    } else {
+        let pkg = after.split('/').next()?;
+        if pkg.is_empty() {
+            None
+        } else {
+            Some(pkg.to_string())
+        }
+    }
 }
 
 fn package_bundle_id_from_input(input: &Path) -> Option<String> {
@@ -156,7 +182,12 @@ fn read_app_metadata(
         })
         .or_else(|| package_bundle_id_from_input(input))
         .unwrap_or_else(|| {
-            let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
+            // Issue #500: bundle_id flows into codesign / productbuild
+            // argv. The input file stem is attacker-influenceable
+            // (tooling-chosen paths), so route it through the shared
+            // sanitizer before splicing into the reverse-DNS string.
+            let raw = input.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
+            let stem = crate::commands::sanitize::sanitize_for_bundle_id_component(raw);
             format!("com.perry.{stem}")
         });
 
@@ -499,6 +530,33 @@ pub struct CompilationContext {
     /// rebuild without the `bundled-streams` feature. This set lets
     /// the registry drain inject the missing feature directly.
     pub extra_stdlib_features: BTreeSet<&'static str>,
+    /// #503: when true, HIR lowering refuses dynamic-dispatch on known
+    /// stdlib namespaces (`process[runtimeVar]()` and similar). Default
+    /// true. Sources, last wins: `perry.allowDynamicStdlibDispatch: true`
+    /// in package.json → env `PERRY_ALLOW_DYNAMIC_STDLIB=1` flips this
+    /// off. An array value (`["@scope/pkg", ...]`) keeps refusal on but
+    /// allows the listed packages — captured in
+    /// `allow_dynamic_stdlib_packages`.
+    pub refuse_dynamic_stdlib_dispatch: bool,
+    /// #503: package names whose modules may legitimately use dynamic
+    /// stdlib dispatch (`perry.allowDynamicStdlibDispatch: [...]`).
+    /// Consulted per-module during HIR lowering; ignored when
+    /// `refuse_dynamic_stdlib_dispatch` is false.
+    pub allow_dynamic_stdlib_packages: HashSet<String>,
+    /// #499: explicit host opt-in to link `perry-jsruntime` (QuickJS-based
+    /// eval-equivalent runtime). Default false. Sources, last wins:
+    /// `perry.allowJsRuntime: true` in host package.json → CLI flag
+    /// `--enable-js-runtime` implicitly opts in. Without the opt-in,
+    /// any transitive dep that introduces a `.js` file under
+    /// `node_modules/` fails the build with a diagnostic that names
+    /// the offending file(s).
+    pub allow_js_runtime: bool,
+    /// #499: source files that flipped `needs_js_runtime` to true.
+    /// Used to name the offending importer(s) in the refusal
+    /// diagnostic. Records canonical path; the package name (if the
+    /// file lives under `node_modules/<pkg>/...`) is derived at
+    /// diagnostic-emission time. Empty until `collect_modules` runs.
+    pub js_runtime_importers: Vec<PathBuf>,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -543,6 +601,10 @@ impl CompilationContext {
             min_windows_version: "10".to_string(),
             entry_canonical: None,
             extra_stdlib_features: BTreeSet::new(),
+            refuse_dynamic_stdlib_dispatch: true,
+            allow_dynamic_stdlib_packages: HashSet::new(),
+            allow_js_runtime: false,
+            js_runtime_importers: Vec::new(),
         }
     }
 }
@@ -1006,6 +1068,63 @@ pub fn run_with_parse_cache(
                 {
                     ctx.fast_math = fm;
                 }
+                // #503: perry.allowDynamicStdlibDispatch — either a boolean
+                // (`true` disables the refusal globally) or an array of
+                // npm package names allowed to use dynamic dispatch on
+                // stdlib namespaces. Absent / `false` keeps the default
+                // (refusal active for all packages including the host).
+                if let Some(v) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("allowDynamicStdlibDispatch"))
+                {
+                    if let Some(b) = v.as_bool() {
+                        ctx.refuse_dynamic_stdlib_dispatch = !b;
+                        if b {
+                            match format {
+                                OutputFormat::Text => println!(
+                                    "  Dynamic stdlib dispatch: ALLOWED globally (perry.allowDynamicStdlibDispatch: true)"
+                                ),
+                                OutputFormat::Json => {}
+                            }
+                        }
+                    } else if let Some(arr) = v.as_array() {
+                        for entry in arr {
+                            if let Some(name) = entry.as_str() {
+                                match format {
+                                    OutputFormat::Text => println!(
+                                        "  Dynamic stdlib dispatch: ALLOWED for `{}`",
+                                        name
+                                    ),
+                                    OutputFormat::Json => {}
+                                }
+                                ctx.allow_dynamic_stdlib_packages.insert(name.to_string());
+                            }
+                        }
+                    }
+                }
+                // #499: perry.allowJsRuntime — explicit host opt-in to link
+                // perry-jsruntime (QuickJS-based eval-equivalent). Off by
+                // default: a transitive dep pulling in a `.js` file under
+                // `node_modules/` would otherwise silently link the
+                // JS-eval runtime into the binary, defeating Perry's
+                // structural advantage over Node. With `false` (or absent),
+                // the build fails and names the offending file(s) so the
+                // user can decide whether to opt in.
+                if let Some(allow) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("allowJsRuntime"))
+                    .and_then(|v| v.as_bool())
+                {
+                    ctx.allow_js_runtime = allow;
+                    if allow {
+                        match format {
+                            OutputFormat::Text => {
+                                println!("  JS runtime: ALLOWED (perry.allowJsRuntime: true)")
+                            }
+                            OutputFormat::Json => {}
+                        }
+                    }
+                }
             }
         }
     }
@@ -1020,6 +1139,40 @@ pub fn run_with_parse_cache(
     // CLI flag overrides everything (last wins).
     if args.fast_math {
         ctx.fast_math = true;
+    }
+
+    // #503: `PERRY_ALLOW_DYNAMIC_STDLIB=1` disables the dynamic-dispatch
+    // refusal pass globally (env var beats package.json). `=0` keeps the
+    // refusal on even if the host has opted out, so CI can enforce.
+    match std::env::var("PERRY_ALLOW_DYNAMIC_STDLIB") {
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => {
+            ctx.refuse_dynamic_stdlib_dispatch = false;
+        }
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => {
+            ctx.refuse_dynamic_stdlib_dispatch = true;
+        }
+        _ => {}
+    }
+    // #503: install the resolved configuration into the HIR thread-locals
+    // before any module lowering begins. Re-installed per-thread by
+    // `collect_modules.rs` (rayon workers don't inherit thread-locals),
+    // but this set covers the driver thread's own lowering work and
+    // serves as documentation of the source of truth.
+    perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
+    perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
+
+    // #499: `PERRY_ALLOW_JS_RUNTIME=1` opts in to perry-jsruntime
+    // linkage from the environment (CI-friendly knob without touching
+    // package.json). `=0` keeps the refusal on even if package.json
+    // opted in — useful for an enforcement gate on a CI matrix entry.
+    match std::env::var("PERRY_ALLOW_JS_RUNTIME") {
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => {
+            ctx.allow_js_runtime = true;
+        }
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => {
+            ctx.allow_js_runtime = false;
+        }
+        _ => {}
     }
 
     // --- i18n: parse [i18n] config from perry.toml and load locale files ---
@@ -1288,6 +1441,50 @@ pub fn run_with_parse_cache(
                 }
             }
         }
+    }
+
+    // #499: gate `perry-jsruntime` linkage on explicit host opt-in.
+    // The runtime is the one remaining vector in a Perry-compiled
+    // binary for executing arbitrary JS — defeating Perry's primary
+    // structural advantage over Node. Without the gate, any transitive
+    // dep that ships a `.js` file under `node_modules/` would silently
+    // pull QuickJS into the binary and the host author would never
+    // know. The check fires after dep collection so the diagnostic
+    // can name every file that introduced the dependency.
+    //
+    // Treats `--enable-js-runtime` CLI as an explicit opt-in
+    // (semantically equivalent to setting `perry.allowJsRuntime: true`
+    // for this one build) so we don't regress that workflow.
+    if ctx.needs_js_runtime && !ctx.allow_js_runtime && !args.enable_js_runtime {
+        let importers = &ctx.js_runtime_importers;
+        let mut detail = String::new();
+        // Cap the printed list at the first eight importers — pathological
+        // builds can pull in dozens of node_modules JS files and we'd
+        // rather show the head of the list than a 60-line error.
+        let limit = 8usize;
+        for path in importers.iter().take(limit) {
+            let pkg = package_name_for_path(&path.to_string_lossy())
+                .map(|s| format!(" [{}]", s))
+                .unwrap_or_default();
+            detail.push_str(&format!("\n  - {}{}", path.display(), pkg));
+        }
+        if importers.len() > limit {
+            detail.push_str(&format!("\n  ... and {} more", importers.len() - limit));
+        }
+        anyhow::bail!(
+            "build pulled in `perry-jsruntime` (QuickJS-based eval-equivalent \
+             runtime) via the following file(s):{detail}\n\
+             \n\
+             `perry-jsruntime` is treated as a privileged dependency on par \
+             with adding a JIT to the binary — it re-introduces arbitrary \
+             runtime code execution and defeats Perry's structural advantage \
+             over Node. Refusing to link by default. (#499)\n\
+             \n\
+             To enable, set `perry.allowJsRuntime: true` in the host \
+             package.json, or pass `--enable-js-runtime` on the CLI for a \
+             one-off build. (Falls under `--lockdown` deny set when that \
+             flag ships — see #496.)"
+        );
     }
 
     // Recompute project_root as the common ancestor of all module paths.
@@ -3436,6 +3633,17 @@ pub fn run_with_parse_cache(
             let mut namespace_node_submodules:
                 std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            // Issue #678 followup (namespace branch): local-namespace →
+            // V8 module specifier for `import * as ns from "<v8-module>"`.
+            // Populated in the V8-imports pass below at the same site that
+            // would otherwise no-op on `ImportSpecifier::Namespace`. Used
+            // by codegen's StaticMethodCall / namespace-member-call
+            // lowering to route `ns.member(args)` through
+            // `js_call_v8_export` when nothing else seeded
+            // `import_function_prefixes` for the member.
+            let mut namespace_v8_specifiers:
+                std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             // Issue #680: per-namespace member resolution. Disambiguates
             // `random.make` vs `tracer.make` when multiple namespaces
             // export the same member name. Keyed by `(namespace_local,
@@ -4260,6 +4468,21 @@ pub fn run_with_parse_cache(
                                     .insert(imported.clone(), synthetic_prefix.clone());
                                 import_function_v8_specifiers
                                     .insert(imported.clone(), specifier.clone());
+                                // Issue #818 (Effect.succeed pattern) follow-up:
+                                // when an aliased named-import (`import { Foo
+                                // as Bar }`) of a V8 module is used as a
+                                // static-method receiver (`Bar.method(...)`),
+                                // the codegen's StaticMethodCall arm sees
+                                // class_name = "Bar" — but the V8 namespace
+                                // exposes the property under "Foo". Record the
+                                // local→imported mapping in
+                                // `import_function_origin_names` so the bridge
+                                // call reaches the right namespace property.
+                                // Without this, aliased Effect-shaped imports
+                                // would look up a missing property and fall to
+                                // undefined.
+                                import_function_origin_names
+                                    .insert(local.clone(), imported.clone());
                             }
                         }
                         perry_hir::ImportSpecifier::Default { local } => {
@@ -4268,18 +4491,24 @@ pub fn run_with_parse_cache(
                             import_function_v8_specifiers
                                 .insert(local.clone(), specifier.clone());
                         }
-                        perry_hir::ImportSpecifier::Namespace { .. } => {
+                        perry_hir::ImportSpecifier::Namespace { local } => {
                             // Namespace bindings (`import * as X from "ink"`)
                             // are already registered into `namespace_imports`
-                            // by the pre-loop above; per-member access for a
-                            // V8 module has no static export list, so the
-                            // codegen relies on the Named-import path above
-                            // (on a sibling line) to register
-                            // per-member specifiers. Pure namespace usage
-                            // with no Named import alongside falls through
-                            // to the unresolved-namespace runtime stub —
-                            // acceptable because V8 module consumers
-                            // overwhelmingly use Named/Default imports.
+                            // by the pre-loop above. For pure-namespace usage
+                            // with no companion `Named` import, the V8 module
+                            // has no static export list to register members
+                            // against — so we record `local → specifier` here.
+                            // The codegen's StaticMethodCall arm and the
+                            // namespace-member-call arm in `lower_call.rs`
+                            // probe `namespace_v8_specifiers` and, on a hit,
+                            // emit `js_call_v8_export(specifier, member,
+                            // args, argc)` so `R.sum([1,2,3])` (`import * as
+                            // R from "ramda"`) reaches V8 instead of falling
+                            // to the `double_literal(0.0)` stub. Unblocks
+                            // ramda / date-fns / jose / effect wildcard
+                            // namespace usage.
+                            namespace_v8_specifiers
+                                .insert(local.clone(), specifier.clone());
                         }
                     }
                 }
@@ -4838,6 +5067,7 @@ pub fn run_with_parse_cache(
                 import_function_v8_specifiers,
                 import_function_node_submodule,
                 namespace_node_submodules,
+                namespace_v8_specifiers,
                 namespace_member_prefixes,
                 emit_ir_only: bitcode_link,
                 namespace_imports,
@@ -5498,16 +5728,51 @@ pub fn run_with_parse_cache(
             OutputFormat::Text => println!("Generated JS bundle: {}", bundle_path.display()),
             OutputFormat::Json => {}
         }
+        // Issue #818 follow-up: embed every JS module's source into the
+        // final binary too. The V8 fallback `ModuleLoader` consults this
+        // map before falling back to disk, so the resulting binary needs
+        // no `node_modules/` co-located at runtime. The compiled `.o`
+        // contributes a `__attribute__((constructor))` that calls
+        // `js_register_embedded_module` once per bundled file.
+        let tmp_dir = std::env::temp_dir().join(format!("perry-embed-{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp_dir);
+        match generate_embedded_js_object(&ctx, &tmp_dir) {
+            Ok(obj) => {
+                if matches!(format, OutputFormat::Text) {
+                    println!("Embedded JS bundle: {}", obj.display());
+                }
+                obj_paths.push(obj);
+            }
+            Err(e) => {
+                // Don't hard-fail — the on-disk `__perry_js_bundle.js`
+                // still exists and the runtime falls back to filesystem
+                // reads. Surface a warning so the build is visibly
+                // degraded rather than silently shipping a binary that
+                // requires `node_modules/`.
+                eprintln!(
+                    "warning: failed to embed JS bundle into binary ({}); the resulting binary will still require node_modules/ at runtime",
+                    e
+                );
+            }
+        }
         Some(bundle_path)
     } else {
         None
     };
 
-    let stem = args
+    let raw_stem = args
         .input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("output");
+    // Issue #500: the input file stem flows into argv as `-o <stem>.dylib`
+    // (and friends) to the linker. A pathological input filename like
+    // `@evil.ts` re-triggers the ld64 response-file class of bug
+    // (originally fixed in #467 for `package.json` names only). Route
+    // through the shared sanitizer so the entire char-class is scrubbed
+    // at one fuzz-tested choke point.
+    let stem_owned = super::sanitize::sanitize_for_linker_argv(raw_stem);
+    let stem = stem_owned.as_str();
     let is_dylib = args.output_type == "dylib";
     let exe_path = args.output.unwrap_or_else(|| {
         if is_dylib {
@@ -7458,5 +7723,66 @@ bundle_id = "com.example.project"
         assert_eq!(metadata.version, "1.0.0");
         assert_eq!(metadata.build_number, 1);
         assert_eq!(metadata.bundle_id, "com.example.pkg");
+    }
+}
+
+#[cfg(test)]
+mod js_runtime_gate_tests {
+    //! #499 — coverage for the helper that names the offending
+    //! package in the perry-jsruntime refusal diagnostic.
+    //!
+    //! The end-to-end gate fires deep inside `compile_command` after
+    //! `collect_modules` runs and exits via `anyhow::bail!`; building
+    //! a unit test that drives it requires a full project on disk
+    //! (tested via the smoke test in the PR description). Here we
+    //! pin the importer-attribution helper that the diagnostic uses
+    //! — the part that historically rotted in #467's
+    //! `sanitize_app_name` because no test covered it.
+
+    use super::package_name_for_path;
+
+    #[test]
+    fn unscoped_package_under_node_modules() {
+        assert_eq!(
+            package_name_for_path("/repo/node_modules/lodash/lib/index.js"),
+            Some("lodash".to_string())
+        );
+    }
+
+    #[test]
+    fn scoped_package_under_node_modules() {
+        assert_eq!(
+            package_name_for_path("/repo/node_modules/@scope/pkg/src/index.js"),
+            Some("@scope/pkg".to_string())
+        );
+    }
+
+    #[test]
+    fn nested_node_modules_returns_innermost() {
+        // Bun/pnpm-style nested node_modules: the rightmost segment
+        // is the one that actually resolved.
+        assert_eq!(
+            package_name_for_path("/repo/node_modules/outer/node_modules/inner/lib/index.js"),
+            Some("inner".to_string())
+        );
+    }
+
+    #[test]
+    fn user_source_returns_none() {
+        assert_eq!(package_name_for_path("/repo/src/main.ts"), None);
+    }
+
+    #[test]
+    fn malformed_scope_returns_none() {
+        // `@/foo` is malformed (empty scope) — don't claim a package
+        // name we can't actually quote back to the user.
+        assert_eq!(
+            package_name_for_path("/repo/node_modules/@/foo/index.js"),
+            None
+        );
+        // Empty segment immediately after `node_modules/` — defensive
+        // coverage; the diagnostic falls through to printing only the
+        // raw path.
+        assert_eq!(package_name_for_path("/repo/node_modules/"), None);
     }
 }

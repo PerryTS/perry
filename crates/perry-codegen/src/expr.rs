@@ -196,6 +196,110 @@ pub(crate) fn emit_v8_export_call(
     )
 }
 
+/// Issue #818 (Effect.succeed pattern): emit a
+/// `js_call_v8_member_method(spec, member, method, args)` bridge call for a
+/// named V8 import used as a static-method receiver — `Effect.succeed(42)`
+/// where `Effect` is `import { Effect } from 'effect'`. The V8 module's
+/// top-level export `Effect` is itself a namespace-shaped object whose
+/// `.succeed` is the actual function; the existing `emit_v8_export_call`
+/// would mistakenly try to invoke `effect.succeed(...)` at the module root.
+pub(crate) fn emit_v8_member_method_call(
+    ctx: &mut FnCtx<'_>,
+    specifier: &str,
+    member: &str,
+    method: &str,
+    lowered_args: &[String],
+) -> String {
+    let idx = ctx.typed_parse_counter;
+    ctx.typed_parse_counter += 1;
+    let spec_global = format!("perry_v8_mspec_{}", idx);
+    let member_global = format!("perry_v8_mmember_{}", idx);
+    let method_global = format!("perry_v8_mmethod_{}", idx);
+    let escape = |s: &str| -> String {
+        let bytes = s.as_bytes();
+        let mut lit = String::with_capacity(bytes.len() + 4);
+        lit.push('c');
+        lit.push('"');
+        for &b in bytes {
+            if (32..127).contains(&b) && b != b'"' && b != b'\\' {
+                lit.push(b as char);
+            } else {
+                lit.push('\\');
+                lit.push_str(&format!("{:02X}", b));
+            }
+        }
+        lit.push_str("\\00\"");
+        lit
+    };
+    let spec_bytes = specifier.as_bytes().len();
+    let member_bytes = member.as_bytes().len();
+    let method_bytes = method.as_bytes().len();
+    ctx.typed_parse_rodata.push(format!(
+        "@{} = private unnamed_addr constant [{} x i8] {}",
+        spec_global,
+        spec_bytes + 1,
+        escape(specifier)
+    ));
+    ctx.typed_parse_rodata.push(format!(
+        "@{} = private unnamed_addr constant [{} x i8] {}",
+        member_global,
+        member_bytes + 1,
+        escape(member)
+    ));
+    ctx.typed_parse_rodata.push(format!(
+        "@{} = private unnamed_addr constant [{} x i8] {}",
+        method_global,
+        method_bytes + 1,
+        escape(method)
+    ));
+
+    let argc = lowered_args.len();
+    let alloca_count = if argc == 0 { 1 } else { argc };
+    let blk = ctx.block();
+    let argc_lit = format!("{}", argc);
+    let spec_ptr = format!("@{}", spec_global);
+    let member_ptr = format!("@{}", member_global);
+    let method_ptr = format!("@{}", method_global);
+    let spec_len_lit = format!("{}", spec_bytes);
+    let member_len_lit = format!("{}", member_bytes);
+    let method_len_lit = format!("{}", method_bytes);
+
+    let args_slot = blk.fresh_reg();
+    blk.emit_raw(format!(
+        "{} = alloca [{} x double], align 8",
+        args_slot, alloca_count
+    ));
+    for (i, v) in lowered_args.iter().enumerate() {
+        let slot = blk.fresh_reg();
+        blk.emit_raw(format!(
+            "{} = getelementptr inbounds [{} x double], ptr {}, i64 0, i64 {}",
+            slot, alloca_count, args_slot, i
+        ));
+        blk.emit_raw(format!("store double {}, ptr {}, align 8", v, slot));
+    }
+
+    ctx.pending_declares.push((
+        "js_call_v8_member_method".to_string(),
+        DOUBLE,
+        vec![PTR, I64, PTR, I64, PTR, I64, PTR, I64],
+    ));
+    let blk = ctx.block();
+    blk.call(
+        DOUBLE,
+        "js_call_v8_member_method",
+        &[
+            (PTR, &spec_ptr),
+            (I64, &spec_len_lit),
+            (PTR, &member_ptr),
+            (I64, &member_len_lit),
+            (PTR, &method_ptr),
+            (I64, &method_len_lit),
+            (PTR, &args_slot),
+            (I64, &argc_lit),
+        ],
+    )
+}
+
 /// If `callee` is a `new`-target whose class name is statically
 /// known, return that name. Used by the `Expr::NewDynamic` lowering
 /// to reroute statically-resolvable shapes to the regular `lower_new`
@@ -405,6 +509,16 @@ pub(crate) struct FnCtx<'a> {
     /// accesses (`ns.X`) read the same function singletons named
     /// imports produce.
     pub namespace_node_submodules: &'a std::collections::HashMap<String, String>,
+    /// Issue #678 followup (namespace branch): see
+    /// `CompileOptions::namespace_v8_specifiers`. Local namespace alias →
+    /// V8 module specifier for `import * as ns from "<v8-module>"`. When
+    /// `ns.member(args)` is lowered and the namespace local appears here,
+    /// codegen emits a `js_call_v8_export(specifier, member, args, argc)`
+    /// bridge call instead of falling to the `double_literal(0.0)` stub.
+    /// Unblocks ramda (`import * as R`), date-fns, jose, effect — packages
+    /// where consumers use a wildcard namespace for ergonomics but the
+    /// source module fell back to V8.
+    pub namespace_v8_specifiers: &'a std::collections::HashMap<String, String>,
     /// Closure capture map: when lowering inside a closure body, this
     /// holds `LocalId → capture_index`. `LocalGet`/`LocalSet`/`Update`
     /// of an id in this map routes through the runtime
@@ -1168,8 +1282,21 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // (Buffer, Promise, URL, etc.) intentionally fall
                         // through so `typeof Buffer === "function"` keeps
                         // working through the existing class-ref path.
+                        //
+                        // lodash followup: built-in constructors exposed on
+                        // globalThis (`Array`, `Object`, `Function`, …) now
+                        // also lower the bare PropertyGet to a real value
+                        // (a backing-object pointer materialized by
+                        // `js_get_global_this`'s singleton populator).
+                        // Without the typeof short-circuit, `typeof
+                        // globalThis.Array` would read "object" (the value
+                        // is a real pointer); spec says "function". Math /
+                        // JSON / Reflect stay "object" — they're namespaces,
+                        // not constructors.
                         match property.as_str() {
                             "process" | "console" | "globalThis" | "performance" => Some("object"),
+                            "Math" | "JSON" | "Reflect" => Some("object"),
+                            n if is_global_this_builtin_function_name(n) => Some("function"),
                             _ => None,
                         }
                     } else {
@@ -3657,6 +3784,34 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // (which IS the NaN-boxed value for non-number fields — same bit
         // pattern, runtime callers re-interpret based on context).
         Expr::PropertyGet { object, property } => {
+            // date-fns `constructFrom(date, value)` reads `date.constructor`
+            // to clone Dates without naming Date directly. Perry stores
+            // Date as a raw f64 timestamp (no ObjectHeader), so the
+            // generic `js_object_get_field_by_name_f64` path would treat
+            // the bit pattern as an invalid pointer and return undefined.
+            // For statically-Date-typed receivers, short-circuit
+            // `.constructor` to the global Date constructor closure —
+            // same value as the bare `Date` identifier resolves to via
+            // `js_get_global_this_builtin_value`.
+            if property == "constructor" {
+                if let Expr::LocalGet(id) = object.as_ref() {
+                    let is_date = matches!(
+                        ctx.local_types.get(id),
+                        Some(HirType::Named(name)) if name == "Date"
+                    );
+                    if is_date {
+                        let name = "Date";
+                        let idx = ctx.strings.intern(name);
+                        let bytes_global = format!("@{}", ctx.strings.entry(idx).bytes_global);
+                        let len_str = name.len().to_string();
+                        return Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_get_global_this_builtin_value",
+                            &[(PTR, &bytes_global), (I64, &len_str)],
+                        ));
+                    }
+                }
+            }
             // Issue #649: PropertyGet on a native-module reference (`fs`,
             // `os`, `crypto`, `path`, ...). `NativeModuleRef` lowers to a
             // literal `0.0`, so the generic PropertyGet path can't see the
@@ -3808,6 +3963,37 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         vec![],
                     ));
                     return Ok(ctx.block().call(DOUBLE, "js_console_log_as_closure", &[]));
+                }
+                // Built-in constructors / namespaces exposed on globalThis
+                // (`Array`, `Object`, `Math`, `JSON`, ...): route the read
+                // through the singleton so `globalThis.Array` (and the
+                // identical `(globalThis as any).X` shape) returns the
+                // pre-populated constructor backing-object instead of the
+                // `0.0` no-value placeholder. Mirrors the IndexGet arm above
+                // (Expr::IndexGet at ~2381) which already routes
+                // `globalThis[<string>]` through `js_get_global_this`. The
+                // runtime populates these on first init — see
+                // `populate_global_this_builtins` in
+                // crates/perry-runtime/src/object.rs. Unblocks lodash's
+                // `runInContext` (`var Array = context.Array; var arrayProto
+                // = Array.prototype`) — the prior `0.0` placeholder caused
+                // the `.prototype` chained read on the locally-bound
+                // alias to throw `Cannot read properties of undefined`.
+                if is_global_this_builtin_name(property) {
+                    let global_box = ctx.block().call(DOUBLE, "js_get_global_this", &[]);
+                    let key_idx = ctx.strings.intern(property);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let obj_handle = unbox_to_i64(blk, &global_box);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_object_get_field_by_name_f64",
+                        &[(I64, &obj_handle), (I64, &key_raw)],
+                    ));
                 }
                 return Ok(double_literal(0.0));
             }
@@ -4412,10 +4598,21 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ctx.block().unreachable();
 
             // Undef-return path: existing fall-through for non-nullish
-            // invalid receivers.
+            // invalid receivers. Route through the runtime helper first
+            // so non-pointer typed shapes can still report a sensible
+            // value when the runtime knows what they are. Today this
+            // unblocks Date `.constructor` (Date stores as a raw f64
+            // timestamp, so the codegen receiver-tag check at line ~4212
+            // rejects it as non-pointer — yet the runtime's
+            // `js_object_get_field_by_name_f64` recognizes the bit
+            // pattern via `DATE_REGISTRY` and returns the global Date
+            // constructor closure). Date-fns `constructFrom` blocker.
             ctx.current_block = undef_idx;
-            let undef_bits = crate::nanbox::i64_literal(crate::nanbox::TAG_UNDEFINED);
-            let undef_val = ctx.block().bitcast_i64_to_double(&undef_bits);
+            let undef_val = ctx.block().call(
+                DOUBLE,
+                "js_object_get_field_by_name_f64",
+                &[(I64, &obj_bits), (I64, &key_handle)],
+            );
             let invalid_end_label = ctx.block().label.clone();
             ctx.block().br(&final_merge_label);
 
@@ -5060,6 +5257,31 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return lower_new(ctx, name, args);
             }
 
+            // date-fns `constructFrom(date, value)`:
+            //   return new date.constructor(value);
+            // The callee is `PropertyGet { LocalGet(date), "constructor" }`
+            // where `date` is statically Date-typed. Lower through the
+            // dedicated `Expr::DateNew` path so the call routes to
+            // `js_date_new_from_value` / `js_date_new_local_components`
+            // and the result is a real Date timestamp, not an empty
+            // ObjectHeader. Pre-fix the NewDynamic fallback returned a
+            // placeholder object — `cloned.getTime()` then read garbage
+            // and the equality failed. Refs date-fns blocker.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "constructor" {
+                    if let Expr::LocalGet(id) = object.as_ref() {
+                        let is_date = matches!(
+                            ctx.local_types.get(id),
+                            Some(HirType::Named(name)) if name == "Date"
+                        );
+                        if is_date {
+                            let synth = Expr::DateNew(args.to_vec());
+                            return lower_expr(ctx, &synth);
+                        }
+                    }
+                }
+            }
+
             // Refs #740: `new O.Inner(args)` where `O` is an object
             // literal whose `Inner` field was initialized from a class
             // expression. The Stmt::Let lowering populates
@@ -5131,8 +5353,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // also supported because the helper falls back to a
             // class_id=0 empty-object allocation when no synthetic id
             // exists (preserves the pre-fix baseline).
-            let routes_through_function_construct =
-                matches!(callee.as_ref(), Expr::FuncRef(_) | Expr::LocalGet(_));
+            // Also route PropertyGet callees through `js_new_function_construct`:
+            // covers `new date.constructor(value)` (date-fns
+            // `constructFrom`) and generic `new obj.factory(...)` shapes
+            // where `obj.factory` resolves to a closure pointer at
+            // runtime. The runtime helper detects the global Date /
+            // Array / Object thunks and dispatches into the matching
+            // real factory; non-matching closures still get the
+            // class_id=0 empty-object baseline.
+            let routes_through_function_construct = matches!(
+                callee.as_ref(),
+                Expr::FuncRef(_) | Expr::LocalGet(_) | Expr::PropertyGet { .. }
+            );
             if routes_through_function_construct {
                 let func_double = lower_expr(ctx, callee)?;
                 let lowered_args: Vec<String> = args
@@ -6262,6 +6494,42 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
+        // `RegExp(<dynExpr>)` / `RegExp(<dynExpr>, <dynFlagsExpr>)` /
+        // `new RegExp(<non-literal>)`. Folded at HIR (lower/expr_call.rs +
+        // lower/expr_new.rs) from any callsite where the pattern (or
+        // flags) come in as runtime values rather than string literals.
+        // Both `pattern` and `flags` are NaN-boxed strings; missing
+        // flags fall back to interning an empty string at codegen so
+        // `js_regexp_new` always sees a real `StringHeader*`. Followup
+        // to #957 / PR #959.
+        Expr::RegExpDynamic { pattern, flags } => {
+            let pattern_box = lower_expr(ctx, pattern)?;
+            let flags_handle = if let Some(flags_expr) = flags {
+                let flags_box = lower_expr(ctx, flags_expr)?;
+                let blk = ctx.block();
+                unbox_str_handle(blk, &flags_box)
+            } else {
+                // Intern an empty string and use its handle so the
+                // runtime sees a valid `StringHeader*` (the
+                // `is_valid_ptr` check inside `js_regexp_new` already
+                // accepts null, but the LLVM type system needs a real
+                // i64 here, not a `null` typed `ptr`).
+                let empty_idx = ctx.strings.intern("");
+                let empty_global = format!("@{}", ctx.strings.entry(empty_idx).handle_global);
+                let blk = ctx.block();
+                let empty_box = blk.load(DOUBLE, &empty_global);
+                unbox_to_i64(blk, &empty_box)
+            };
+            let blk = ctx.block();
+            let pattern_handle = unbox_str_handle(blk, &pattern_box);
+            let result = blk.call(
+                I64,
+                "js_regexp_new",
+                &[(I64, &pattern_handle), (I64, &flags_handle)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
         // -------- ObjectSpread literal --------
         // `{ ...a, key: val, ...b }`. The HIR carries an ordered
         // Vec<(Option<String>, Expr)>. Static props use the same
@@ -6443,6 +6711,22 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // to the same `perry_fn_<src>__<method>` symbol a
             // `import * as Foo from "pkg/Foo"` would have used.
             if ctx.namespace_imports.contains(class_name) {
+                // Issue #678 followup (namespace branch): `import * as ns
+                // from "<v8-module>"; ns.member(args)` with no companion
+                // Named import — the V8 module has no static export list
+                // so `import_function_prefixes` has no entry for
+                // `method_name`. Probe the namespace-level V8 specifier
+                // map first; on a hit, route the member call through the
+                // bridge using the namespace's specifier. Without this,
+                // ramda / date-fns / jose / effect wildcard-namespace
+                // members fell to the `double_literal(0.0)` stub below.
+                if let Some(specifier) = ctx.namespace_v8_specifiers.get(class_name).cloned() {
+                    let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                    for a in args {
+                        lowered.push(lower_expr(ctx, a)?);
+                    }
+                    return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
+                }
                 if let Some(source_prefix) = ctx.import_function_prefixes.get(method_name).cloned()
                 {
                     // Issue #678 followup: V8-fallback namespace member route —
@@ -6474,6 +6758,42 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
                     return Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices));
                 }
+            }
+            // Issue #818 (Effect.succeed pattern): the receiver is a NAMED
+            // import (`import { Effect } from 'effect'`), not a namespace
+            // alias. The HIR's "uppercase Ident looks like a class" rule
+            // lifts `Effect.succeed(args)` to StaticMethodCall, but `Effect`
+            // isn't a perry class and isn't in `namespace_imports`. When the
+            // class_name resolves to a V8-fallback specifier, route through
+            // the bridge: load the module, get the named member as an
+            // object, then call .method on it. Without this the call fell
+            // to the `double_literal(0.0)` stub below — Effect's
+            // `Effect.succeed(42)` returned the literal `0` instead of the
+            // tagged Effect instance.
+            if let Some(specifier) = ctx.import_function_v8_specifiers.get(class_name).cloned() {
+                let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered.push(lower_expr(ctx, a)?);
+                }
+                // The V8 module's top-level export uses the *imported* name
+                // (the name in the source module). If the local alias differs
+                // from the imported name, fall back to the local name — the
+                // specifier-registration code in compile.rs registers both
+                // when local != imported, so for a Named import the lookup
+                // key here is the consumer-visible alias which equals the
+                // remote name when no `as` rename is present.
+                let member = ctx
+                    .import_function_origin_names
+                    .get(class_name)
+                    .cloned()
+                    .unwrap_or_else(|| class_name.clone());
+                return Ok(emit_v8_member_method_call(
+                    ctx,
+                    &specifier,
+                    &member,
+                    method_name,
+                    &lowered,
+                ));
             }
             for a in args {
                 let _ = lower_expr(ctx, a)?;
@@ -7213,6 +7533,43 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             blk.call_void(
                 "js_object_set_field_by_name",
                 &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
+            );
+            Ok(if *prefix { new } else { old })
+        }
+
+        // -------- arr[idx]++ / arr[idx]-- / ++arr[idx] / --arr[idx] --------
+        //
+        // Issue #957: lodash's `countBy` uses `++result[key]` which previously
+        // bailed `expression IndexUpdate not yet supported` and stubbed the
+        // entire module, leaving `import _ from "lodash"` resolving to
+        // undefined. Lower as a tag-aware read+modify+write through the
+        // `js_dyn_index_get` / `js_dyn_index_set` runtime helpers — they
+        // dispatch by gc_type at runtime, so the same emission works for
+        // arrays, plain objects, and TypedArrays without static type
+        // knowledge. `object` and `index` lower once into SSA registers so
+        // side effects are not re-evaluated.
+        Expr::IndexUpdate {
+            object,
+            index,
+            op,
+            prefix,
+        } => {
+            let obj_box = lower_expr(ctx, object)?;
+            let idx_box = lower_expr(ctx, index)?;
+            let blk = ctx.block();
+            let old = blk.call(
+                DOUBLE,
+                "js_dyn_index_get",
+                &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
+            );
+            let new = match op {
+                BinaryOp::Sub => blk.fsub(&old, "1.0"),
+                _ => blk.fadd(&old, "1.0"),
+            };
+            blk.call(
+                DOUBLE,
+                "js_dyn_index_set",
+                &[(DOUBLE, &obj_box), (DOUBLE, &idx_box), (DOUBLE, &new)],
             );
             Ok(if *prefix { new } else { old })
         }
@@ -8490,6 +8847,133 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ],
             );
             Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoEncrypt {
+            algorithm,
+            key,
+            data,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, key)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_encrypt",
+                &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoDecrypt {
+            algorithm,
+            key,
+            data,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let key_box = lower_expr(ctx, key)?;
+            let data_box = lower_expr(ctx, data)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_decrypt",
+                &[(DOUBLE, &algo_box), (DOUBLE, &key_box), (DOUBLE, &data_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoGenerateKey {
+            algorithm,
+            extractable,
+            usages,
+        } => {
+            let algo_box = lower_expr(ctx, algorithm)?;
+            let extractable_box = lower_expr(ctx, extractable)?;
+            let usages_box = lower_expr(ctx, usages)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_generate_key",
+                &[
+                    (DOUBLE, &algo_box),
+                    (DOUBLE, &extractable_box),
+                    (DOUBLE, &usages_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoWrapKey {
+            format,
+            key,
+            wrapping_key,
+            wrap_algorithm,
+        } => {
+            let format_box = lower_expr(ctx, format)?;
+            let key_box = lower_expr(ctx, key)?;
+            let wrapping_key_box = lower_expr(ctx, wrapping_key)?;
+            let wrap_algo_box = lower_expr(ctx, wrap_algorithm)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_wrap_key",
+                &[
+                    (DOUBLE, &format_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &wrapping_key_box),
+                    (DOUBLE, &wrap_algo_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::WebCryptoUnwrapKey {
+            format,
+            wrapped_key,
+            unwrapping_key,
+            unwrap_algorithm,
+            unwrapped_key_algorithm,
+            extractable,
+            usages,
+        } => {
+            let format_box = lower_expr(ctx, format)?;
+            let wrapped_key_box = lower_expr(ctx, wrapped_key)?;
+            let unwrapping_key_box = lower_expr(ctx, unwrapping_key)?;
+            let unwrap_algo_box = lower_expr(ctx, unwrap_algorithm)?;
+            let unwrapped_algo_box = lower_expr(ctx, unwrapped_key_algorithm)?;
+            let extractable_box = lower_expr(ctx, extractable)?;
+            let usages_box = lower_expr(ctx, usages)?;
+            let blk = ctx.block();
+            let promise = blk.call(
+                I64,
+                "js_webcrypto_unwrap_key",
+                &[
+                    (DOUBLE, &format_box),
+                    (DOUBLE, &wrapped_key_box),
+                    (DOUBLE, &unwrapping_key_box),
+                    (DOUBLE, &unwrap_algo_box),
+                    (DOUBLE, &unwrapped_algo_box),
+                    (DOUBLE, &extractable_box),
+                    (DOUBLE, &usages_box),
+                ],
+            );
+            Ok(nanbox_pointer_inline(blk, &promise))
+        }
+        Expr::CryptoRandomFillSync {
+            buffer,
+            offset,
+            size,
+        } => {
+            // Fill `buffer` (Buffer or TypedArray) with random bytes
+            // in-place; return the same NaN-boxed buffer value. `offset`
+            // and `size` are NaN-boxed JS values (Undefined → use
+            // defaults). The runtime accepts both layouts.
+            let buf_box = lower_expr(ctx, buffer)?;
+            let off_box = lower_expr(ctx, offset)?;
+            let sz_box = lower_expr(ctx, size)?;
+            let blk = ctx.block();
+            let result = blk.call(
+                DOUBLE,
+                "js_crypto_random_fill_sync",
+                &[(DOUBLE, &buf_box), (DOUBLE, &off_box), (DOUBLE, &sz_box)],
+            );
+            Ok(result)
         }
 
         // -------- arr.indexOf(value) -> number --------
@@ -9836,6 +10320,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // via the normal object field path.
             Ok(ctx.block().call(DOUBLE, "js_process_env", &[]))
         }
+        Expr::GlobalThisExpr => {
+            // `Function('return this')()` (and any other AST shape we
+            // recognise as "get the global this") materialises here as
+            // the runtime's lazily-allocated `globalThis` singleton —
+            // same object that `globalThis[...]= v` writes target via
+            // the IndexSet arm above. Returns an already-NaN-boxed
+            // f64 POINTER_TAG; the property-get arms route through
+            // this same singleton for `globalThis.process.env` etc.
+            Ok(ctx.block().call(DOUBLE, "js_get_global_this", &[]))
+        }
         Expr::DateToISOString(d) => {
             let v = lower_expr(ctx, d)?;
             let blk = ctx.block();
@@ -10453,6 +10947,31 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(val_double)
         }
+        // Read side of #838 followup (b): `<funcDecl>.prototype.<name>`
+        // (Ident or computed-string-literal form) lowered into a direct
+        // lookup of the prototype-method side-table. Returns the closure
+        // value stored at registration time, or `undefined` if no method
+        // by that name was registered. Pre-fix this would fall through
+        // to a generic PropertyGet on a `Function.prototype` object that
+        // never materialised (so the read was always `undefined`,
+        // making `typeof Foo.prototype.method` come back `'undefined'`
+        // even though `(new Foo()).method` correctly reached the
+        // registered closure via the dispatch path).
+        Expr::GetFunctionPrototypeMethod { func, method_name } => {
+            let func_double = lower_expr(ctx, func)?;
+            let key_idx = ctx.strings.intern(method_name);
+            let key_bytes_global = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
+            let key_len = ctx.strings.entry(key_idx).byte_len.to_string();
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_get_function_prototype_method",
+                &[
+                    (DOUBLE, &func_double),
+                    (PTR, &key_bytes_global),
+                    (I64, &key_len),
+                ],
+            ))
+        }
         // `static [Symbol.for("k")] = "v"` — register in the runtime's
         // class-static-symbol side table. Refs #420 (drizzle).
         Expr::ClassStaticSymbolSet {
@@ -11043,6 +11562,34 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let handle = blk.call(I64, "js_crypto_random_uuid", &[]);
             Ok(nanbox_string_inline(blk, &handle))
+        }
+
+        // `crypto.createSecretKey(key, encoding?)` — JWT signing key for
+        // HS* algorithms. Native-side this returns a Uint8Array-marked
+        // BufferHeader; the bridge then materializes a real v8::Uint8Array
+        // when the value crosses into a V8-fallback module (jose). See
+        // `js_crypto_create_secret_key` for the encoding handling.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "createSecretKey" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let key_box = lower_expr(ctx, &args[0])?;
+            // Ignore the encoding arg if present — we only honor utf8.
+            if args.len() >= 2 {
+                let _ = lower_expr(ctx, &args[1])?;
+            }
+            let blk = ctx.block();
+            let key_handle = unbox_to_i64(blk, &key_box);
+            let buf_handle = blk.call(I64, "js_crypto_create_secret_key", &[(I64, &key_handle)]);
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
         }
 
         // crypto.pbkdf2Sync(password, salt, iterations, keylen, algorithm) -> Buffer.
@@ -13326,6 +13873,84 @@ fn lower_js_args_array(ctx: &mut FnCtx<'_>, lowered_args: &[String]) -> (String,
 pub(crate) fn unbox_to_i64(blk: &mut LlBlock, boxed: &str) -> String {
     let bits = blk.bitcast_double_to_i64(boxed);
     blk.and(I64, &bits, POINTER_MASK_I64)
+}
+
+/// Built-in constructor / namespace names that the runtime pre-populates
+/// on the globalThis singleton (`populate_global_this_builtins` in
+/// crates/perry-runtime/src/object.rs). Used by codegen to decide whether
+/// `globalThis.<Name>` should route through `js_get_global_this`
+/// (returning the populated backing-object) or fall through to the `0.0`
+/// no-value placeholder. Keep this list in sync with
+/// `GLOBAL_THIS_BUILTIN_CONSTRUCTORS` + `GLOBAL_THIS_BUILTIN_NAMESPACES`
+/// in object.rs — the codegen check and the runtime population together
+/// implement the lodash `runInContext` blocker fix.
+pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
+    matches!(
+        name,
+        // Constructors (typeof === "function" in spec).
+        "Array"
+            | "Object"
+            | "String"
+            | "Number"
+            | "Boolean"
+            | "Function"
+            | "RegExp"
+            | "Date"
+            | "Error"
+            | "TypeError"
+            | "RangeError"
+            | "SyntaxError"
+            | "ReferenceError"
+            | "EvalError"
+            | "URIError"
+            | "Symbol"
+            | "Promise"
+            | "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "WeakRef"
+            | "Proxy"
+            | "BigInt"
+            | "Uint8Array"
+            | "Int8Array"
+            | "Uint16Array"
+            | "Int16Array"
+            | "Uint32Array"
+            | "Int32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "Uint8ClampedArray"
+            | "BigInt64Array"
+            | "BigUint64Array"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "DataView"
+            | "TextEncoder"
+            | "TextDecoder"
+            | "URL"
+            | "URLSearchParams"
+            | "AbortController"
+            | "AbortSignal"
+            | "FormData"
+            | "Headers"
+            | "Request"
+            | "Response"
+            | "FinalizationRegistry"
+            // Namespaces (typeof === "object" in spec).
+            | "Math"
+            | "JSON"
+            | "Reflect"
+    )
+}
+
+/// Subset of `is_global_this_builtin_name` whose `typeof` is `"function"`
+/// in spec (constructors). Used by the `Expr::TypeOf` short-circuit so
+/// `typeof globalThis.Array === "function"`. Math/JSON/Reflect are
+/// namespaces — they keep `typeof === "object"` via the existing match
+/// arms.
+pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
+    is_global_this_builtin_name(name) && !matches!(name, "Math" | "JSON" | "Reflect")
 }
 
 /// SSO-safe variant of `unbox_to_i64` for NaN-boxed string operands.

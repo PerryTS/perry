@@ -2,6 +2,1641 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1004 — fix(runtime): `js_async_step_chain` awaits V8 Promise handles instead of treating them as primitives
+
+PR #1004 landed the marshalling layer for jose JWT (HS256) sign/verify
+end-to-end through the V8 fallback, but the compat sweep fixture at
+`/tmp/perry-compat-sweep/jose/entry.ts` — the end-to-end shape, not
+just the sign half — still failed with
+
+```
+[jsruntime_pump] event loop error: JWSInvalid: Compact JWS must be a
+string or Uint8Array
+    at compactVerify (.../jose/dist/node/esm/jws/compact/verify.js:9:15)
+    at jwtVerify (.../jose/dist/node/esm/jwt/verify.js:5:28)
+```
+
+The fixture is the canonical jose roundtrip — sign then immediately
+verify with the same secret:
+
+```ts
+const secret = new TextEncoder().encode("test-secret-key-32-bytes-aaaaaaaa");
+const jwt = await new SignJWT({ sub: "alice" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setExpirationTime("1h")
+    .sign(secret);
+const { payload } = await jwtVerify(jwt, secret);
+console.log("sub=" + payload.sub);
+```
+
+A diagnostic probe revealed that `typeof jwt = "object"` and
+`String(jwt) = "[object Promise]"` — the await of `.sign(secret)` was
+returning the unresolved V8 Promise handle, not the JWT string. So
+when the next statement called `jwtVerify(jwt, secret)`, jose's
+`compactVerify` was being handed the Promise object as the token —
+hence the rejection.
+
+**Root cause:** `crates/perry-runtime/src/promise.rs:js_async_step_chain`
+(the hot path that perry's async-to-generator transform emits in place
+of `Promise.resolve(<await-value>).then(step, step)` per `await`)
+short-circuits via `is_definitely_primitive(value)`:
+
+```rust
+fn is_definitely_primitive(value: f64) -> bool {
+    let tag = value.to_bits() & TAG_MASK;
+    tag != POINTER_TAG  // POINTER_TAG = 0x7FFD
+}
+```
+
+That predicate is fine for STRING_TAG (0x7FFF), INT32_TAG (0x7FFE),
+BIGINT_TAG (0x7FFA), TAG_UNDEFINED, TAG_NULL, TAG_FALSE, TAG_TRUE,
+and raw f64 numbers — none of which can be promises or thenables. But
+**JS_HANDLE_TAG (0x7FFB)** — perry-jsruntime's NaN-box tag for a V8
+handle (function, object, **including a V8 Promise**) — also fails
+`tag == POINTER_TAG`, so `is_definitely_primitive` returns `true`,
+and the step dispatch enqueues the V8 Promise handle as the
+resolution value for the next async step instead of waiting on it.
+The next step then writes the handle directly into the user
+variable — and `typeof handle` is `"object"` (per `js_handle_typeof`
+returning `false` for non-function handles), `String(handle)` is
+`"[object Promise]"`, and `jwtVerify(jwt, ...)` sees the Promise
+itself as the token argument.
+
+`js_promise_resolved` (the unfused equivalent) already had this
+covered:
+
+```rust
+pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
+    let value = adapt_foreign_promise_value(value);  // ← this line
+    if is_definitely_primitive(value) { ... }
+    ...
+}
+```
+
+`adapt_foreign_promise_value` calls back into the registered
+foreign-promise adapter (perry-jsruntime's `js_await_any_promise`),
+which converts a JS_HANDLE_TAG V8 Promise into a native pending
+Promise. That native Promise carries POINTER_TAG, so the post-adapt
+value naturally fails `is_definitely_primitive` and falls into the
+existing `js_value_is_promise` arm that drives the thunk path.
+
+**Fix:** call `adapt_foreign_promise_value(value)` at the entry of
+both `js_async_step_chain` and `js_async_step_done`, mirroring the
+existing pattern in `js_promise_resolved`. Both helpers are on the
+async-fn hot path:
+
+- `js_async_step_chain` handles every per-`await` lowering in an
+  async fn: `return AsyncStepChain(stepValue, __step)`.
+- `js_async_step_done` handles `return <expr>` from inside an async
+  fn body, where `<expr>` could be a V8 Promise (an `async` function
+  returning a thenable is supposed to adopt its state per spec).
+
+Once both adapt, every code path that hands a V8 Promise into perry's
+async step machinery wraps it in a native pending Promise before the
+primitive check fires; the rest of the dispatch then handles it like
+any other native promise (waits for resolution, unwraps the value,
+hands it to the next step).
+
+`test-files/test_jose_signverify_roundtrip.ts` (new) pins the
+fixture-equivalent shape. Output now prints `sub=alice` end-to-end
+through Perry's V8 fallback. The existing `test_jose_sign.ts` (just
+the sign half) still passes — it never exercised the second `await`
+because the original task only printed `typeof token`.
+
+Other npm libs that combine `async` with a Promise-returning V8
+method — anything that does `await <V8-imported-function>(...)` —
+were silently affected by the same bug; this fix lifts them all
+without per-library work. Files: `crates/perry-runtime/src/promise.rs`.
+
+## v0.5.1003 — fix(jsruntime): jose JWT (HS256) end-to-end through the V8 fallback
+
+`await new SignJWT({ sub: 'alice' }).setProtectedHeader({ alg: 'HS256' }).sign(key)`
+through `jose` was returning a malformed token and `jwtVerify` was
+rejecting it. The original failure surfaced as
+`JWSInvalid: Compact JWS must be a string or Uint8Array` and later as
+`TypeError: util.types.isKeyObject is not a function` / `Key for the
+HS256 algorithm must be one of type KeyObject, Uint8Array, or JSON
+Web Key. Received an instance of Array`. Root cause was six-layered:
+
+**1. Native to V8 Uint8Array marshalling lost the typed-array kind.**
+`crates/perry-jsruntime/src/bridge.rs:native_object_to_v8` dispatched
+`TypedArrayHeader`s and `BufferHeader`s through the generic
+`v8::Array::new` branch, so a perry-side `Uint8Array` (or
+`TextEncoder().encode(...)` Buffer) crossed the boundary as a plain
+`v8::Array`. Libraries that branch on `value instanceof Uint8Array`
+(jose, jsonwebtoken, every JWS impl) failed the type check and either
+threw or fell through to JWK handling on a non-JWK input.
+
+Fix: detect the typed-array / buffer registries (`lookup_typed_array_kind`
+and `is_registered_buffer` / `is_uint8array_buffer` in `perry-runtime`)
+before the generic-object arm. For each hit, allocate a V8 `ArrayBuffer`,
+copy the bytes (the source pointer is GC-owned by perry — a copy keeps
+V8's backing store independent), and wrap with the matching
+TypedArray constructor (`Uint8Array`, `Int16Array`, ...). Round-trips
+into V8 fallback modules now preserve the JS-level type.
+
+**2. `node:crypto.createHmac().update().digest()` returned an empty digest.**
+The V8 stub in `crates/perry-jsruntime/src/modules.rs` had a no-op
+`createHmac` that returned `''` from `.digest()`. jose's
+`runtime/sign.js` calls `crypto.createHmac(hmacDigest(alg), k)` then
+`.digest()` for HS*; the empty result produced a token whose signature
+section was the empty string.
+
+Fix: new `op_perry_hmac(alg, key, data)` deno op
+(`crates/perry-jsruntime/src/ops.rs`) using `hmac` + `sha2` (same
+crate versions as `perry-stdlib`'s `crypto` feature). The V8 stub's
+`createHmac` now buffers `.update(...)` chunks, concats them on
+`.digest(encoding?)`, calls the op, and returns either a `Buffer`
+(default), hex, base64, or base64url string per Node's
+`Hmac.prototype.digest` API. The HMAC output is a real Buffer so
+downstream `instanceof Uint8Array` checks succeed and
+`.toString('base64url')` works without going through the
+broken Array path.
+
+**3. `Buffer.toString('base64url')` / `Buffer.from(_, 'base64url')` were unimplemented.**
+`crates/perry-jsruntime/src/node_polyfills.js`'s `Buffer.toString`
+fell through to the utf8 branch on `base64url`, so jose's
+`base64url(signature)` (which is `Buffer.from(sig).toString('base64url')`)
+returned a binary blob smashed into a JS string. JWS tokens looked like
+`{header}.{payload}.{garbage}` and were unparseable.
+
+Fix: `Buffer.toString('base64url')` now base64-encodes, strips trailing
+`=`, and substitutes `+` to `-` / `/` to `_`. `Buffer.from(str, 'base64url')`
+normalizes back (`-` to `+`, `_` to `/`, re-add padding to a multiple of 4)
+before calling `atob`. Also added pure-JS `globalThis.btoa` / `atob`
+globals (V8 standalone does not expose them; Node has them since
+v16, and jose / jwt-decode / jsonwebtoken assume they exist).
+
+**4. `atob` decoded `'='` as `__b64chars.indexOf('=') === -1` and emitted `0xff` bytes.**
+After the base64url normalize re-added the `=` padding for a
+44-char input, the polyfill's atob treated the trailing `=` as `-1`
+and OR'd it into the last byte. Result: every base64url-decoded
+`Uint8Array` had a spurious `0xff` byte at the tail, so jose's
+`crypto.timingSafeEqual(actual, expected)` saw length 33 vs 32 and
+returned false — `jwtVerify` failed with
+`JWSSignatureVerificationFailed` even though sign produced the
+correct digest.
+
+Fix: `atob` now treats `''` and `'='` as the padding index (64) so
+the byte-emit branches skip the trailing partial group cleanly.
+
+**5. `node:crypto.createSecretKey` was a V8-only no-op.**
+Calling `createSecretKey('secret', 'utf8')` from compiled TypeScript
+returned `undefined` because the symbol existed only in the V8
+fallback stub (`crates/perry-jsruntime/src/modules.rs`) — there was
+no native dispatcher. jose's `getSignVerifyKey` then saw `undefined`
+and threw before even reaching the HMAC path.
+
+Fix: new `js_crypto_create_secret_key` in
+`crates/perry-stdlib/src/crypto.rs` returns a `BufferHeader` of the
+key bytes (utf8 string or Buffer input), marked via
+`mark_as_uint8array` so it passes `instanceof Uint8Array` everywhere.
+HS* in jose accepts Uint8Array directly per
+`getSignVerifyKey`; full KeyObject identity is not required. Wired
+through `crates/perry-codegen/src/expr.rs` (PropertyGet shape:
+`crypto.createSecretKey(...)`) and `crates/perry-hir/src/lower/expr_call.rs`
+(named-import shape: `createSecretKey(...)` after
+`import { createSecretKey } from 'node:crypto'`).
+
+**6. `util.types.isKeyObject` / `isCryptoKey` were absent and `node:crypto.KeyObject` was an empty class.**
+jose's `is_key_object.js` calls `util.types.isKeyObject(obj)` to
+distinguish KeyObject from Uint8Array on the key-input path; without
+the helper it threw `is not a function` before ever reaching the
+signing flow. Separately, the V8 stub's `KeyObject` had no body to
+match against `key instanceof KeyObject`, so `getSignVerifyKey` fell
+into the "Received undefined" branch.
+
+Fix: `crates/perry-jsruntime/src/modules.rs` now ships
+`util.types.isKeyObject` and `isCryptoKey` duck-typed against the
+KeyObject / CryptoKey shape (the V8 stub doesn't expose Node's
+internal `internalBinding('util')`, so brand checks aren't available).
+The V8 stub `KeyObject` became a real class with `type`,
+`_material` (Uint8Array of key bytes), `symmetricKeySize`, and
+`export(format?)` returning a `Buffer.from(this._material)` so
+HMAC-side `instanceof KeyObject` + `key.export()` both succeed.
+
+**Test:** `test-files/test_jose_sign.ts` runs the full
+`import { SignJWT } from 'jose'; import { createSecretKey } from 'node:crypto';`
+HS256 sign smoke. Expected output is `string` + `3` (typeof token,
+parts after split). The original task repro (with
+`await jwtVerify(token, key)` then `console.log('sub=' + payload.sub)`)
+now prints `sub=alice`.
+
+**Files touched:**
+- `crates/perry-jsruntime/Cargo.toml` — added `hmac = "0.12"`, `sha2 = "0.10"` (same versions as `perry-stdlib`).
+- `crates/perry-jsruntime/src/ops.rs` — new `op_perry_hmac` deno op, registered in `extension!(perry_ops, ops = [..., op_perry_hmac])`.
+- `crates/perry-jsruntime/src/bridge.rs` — typed-array / buffer detection in `native_object_to_v8` before the generic-object arm.
+- `crates/perry-jsruntime/src/modules.rs` — real `createHmac`, `createSecretKey`, `KeyObject`, `webcrypto`, `sign`/`verify` stubs in the `node:crypto` V8 stub. `util.types.isKeyObject` / `isCryptoKey` in the `node:util` stub.
+- `crates/perry-jsruntime/src/node_polyfills.js` — `btoa`/`atob` globals (atob `=` padding fix), `Buffer.toString('base64url')`, `Buffer.from(_, 'base64url')`.
+- `crates/perry-stdlib/src/crypto.rs` — new `js_crypto_create_secret_key` Uint8Array-marked Buffer allocator.
+- `crates/perry-codegen/src/expr.rs` — codegen dispatch for `crypto.createSecretKey(...)`.
+- `crates/perry-codegen/src/runtime_decls.rs` — extern decl for `js_crypto_create_secret_key`.
+- `crates/perry-hir/src/lower/expr_call.rs` — named-import lowering for `createSecretKey(...)` from `node:crypto`.
+- `crates/perry-api-manifest/src/entries.rs` — manifest entry for `crypto.createSecretKey` (strict-API gate).
+- `test-files/test_jose_sign.ts` — new HS256 sign smoke.
+
+## v0.5.1002 — fix(jsruntime): Effect.pipe(map) chain composition
+
+`Effect.runSync(Effect.succeed(42).pipe(Effect.map(x => x + 1)))` returned
+`undefined` (with `[JS-INTEROP] 'Effect.runSync' threw: (FiberFailure)
+TypeError: f is not a function`) instead of `43`. PR #992 fixed
+`Effect.succeed(42)` by routing `StaticMethodCall` for V8-named imports
+through `js_call_v8_member_method`, but the follow-on `Effect.map(fn)`
+still failed because the Perry closure argument never reached V8 as a
+real `v8::Function`.
+
+**Root cause — two layers**
+
+1. **HIR**: `js_transform`'s `Closure` → `JsCreateCallback` wrap ran in
+   the `JsCallMethod` / `JsCallFunction` / callable-JS-value arms only.
+   The `StaticMethodCall { class_name, args, .. }` arm just recursed on
+   args without rewriting them, so `Effect.map((x) => x + 1)` shipped
+   the raw `Closure` literal as a positional arg.
+
+2. **Codegen → bridge**: `emit_v8_member_method_call` lowers args
+   through `lower_expr` and packs them into a `[N x double]` alloca that
+   `js_call_v8_member_method` then forwards to V8 via
+   `native_to_v8(scope, fixup_native_for_v8(a))`. A raw closure pointer
+   has bits in the heap-pointer range `0x0000_0001_xxxx_xxxx`, so
+   `fixup_native_for_v8` tagged it as `POINTER_TAG`. `native_to_v8` then
+   dispatched to `native_object_to_v8`, which read the `GcHeader` —
+   recognized `GC_TYPE_PROMISE`/`ARRAY`/`OBJECT`, but had NO arm for
+   `GC_TYPE_CLOSURE`. The fallback paths (string-header sniff, array
+   heuristic) misidentified the closure and surfaced as a string-ish or
+   array-ish proxy object to V8. Effect's pipeline read `f =
+   transformer._op_action_fn`, found a non-function, and threw inside
+   `runSync`.
+
+**Fix**
+
+- `crates/perry-hir/src/js_transform.rs` (StaticMethodCall arm):
+  when the class name is a JS-imported value (`extern_func_to_js`
+  contains it), iterate the args and wrap any `Closure` literal in
+  `JsCreateCallback { closure, param_count }`. Inline closure params are
+  marked as JS values in a forked tracker so the body's `LocalGet`s of
+  those params route back through V8 (mirrors the existing
+  `JsCallMethod` arm).
+
+- `crates/perry-jsruntime/src/bridge.rs`:
+  - Add `perry_closure_v8_trampoline` + `native_closure_to_v8` — a
+    `v8::Function` whose `data` slot holds the closure's
+    `*const ClosureHeader` (in a `v8::External`); on invocation the
+    trampoline marshals args via `v8_to_native`, stashes the scope for
+    nested FFI, calls `js_closure_call_array(closure_env, args_ptr,
+    args_len)`, and routes the result back through `native_to_v8`.
+  - In `native_object_to_v8`, before the GC_TYPE_PROMISE/ARRAY/OBJECT
+    arms, add a `GC_TYPE_CLOSURE` arm gated on `CLOSURE_MAGIC` at
+    offset 12 (the same tag `js_value_typeof` uses). This is the
+    LocalGet / FuncRef fallback path — covers
+    `const fn = (x) => x + 1; Effect.map(fn)` patterns where the HIR
+    transform sees only a `LocalGet`, not a `Closure` literal.
+
+**Validation**
+
+```
+mkdir -p /tmp/perry-effect-2 && cd /tmp/perry-effect-2
+cat > test.ts <<'EOF'
+import { Effect } from 'effect';
+const result = Effect.runSync(
+  Effect.succeed(42).pipe(Effect.map((x: number) => x + 1)),
+);
+console.log('out=' + result);
+EOF
+echo '{ "name": "test", "type": "module", "dependencies": { "effect": "3.10.0" } }' > package.json
+npm install --silent
+perry test.ts -o out && ./out
+# pre-fix: out=undefined  (TypeError: f is not a function)
+# post-fix: out=43
+```
+
+Also validated the named-local case (`const fn = (x) => x + 1;
+Effect.map(fn)`) through the bridge's GC_TYPE_CLOSURE path: closure body
+runs, `fn called with: 42` prints, result is `43`. Gap suite unchanged
+(30 pass / 6 pre-existing fails). All four `test_issue_effect_*`
+fixtures pass.
+
+Fixture: `test-files/test_effect_pipe_map.ts` (chain repro).
+## v0.5.1001 — fix(jsruntime/http): V8 listen keepalive + express handler smoke
+
+Post-#994 the V8-fallback `http.createServer().listen(port, cb)` smoke
+was hanging end-to-end in three different ways. This release ships
+fixes for the first two; the third (express + native `await fetch`
+self-call inside the listen callback) is documented below as a known
+limitation gated on real native async lowering.
+
+**1. `app.listen()` returned before bind completed → "listening" never printed**
+
+`op_perry_http_listen` is an async deno op: its body spawns
+`TcpListener::bind(addr)` on the shared multi-thread runtime and awaits
+the `JoinHandle`. The codegen-emitted outer event loop calls
+`js_run_jsruntime_pump` once before the header check, which polls
+`state.runtime.poll_event_loop(...)` exactly once. That single poll
+suspends on the bind future and returns `Poll::Pending` — but
+`jsruntime_has_active_handles` only inspected resolved-state counters
+(`ACTIVE_SERVERS`, foreign-promise adapters, pending ticks, module
+evaluations). With all four at zero, the header check returned 0 and
+the program exited before bind ever resolved.
+
+Fix: `poll_v8_event_loop_once` now records the most recent
+`Poll::Pending` / `Poll::Ready` result in a new
+`JsRuntimeState::last_poll_was_pending` flag, and the
+active-handles check returns 1 whenever the last poll left
+deno_core with refed ops in flight. `crates/perry-jsruntime/src/lib.rs`
+(state field + ctor), `crates/perry-jsruntime/src/interop.rs` (set
+the flag in `poll_v8_event_loop_once`, read it from
+`jsruntime_has_active_handles`). New regression test:
+`test-files/test_issue_997_v8_listen_keepalive.ts` (synchronous
+listen-cb that closes immediately — pre-fix hangs forever under
+`timeout`, post-fix prints "listening" and exits 0).
+
+**2. Express request handlers threw `ReferenceError: setImmediate is not defined` and `TypeError: Buffer.isBuffer is not a function`**
+
+External curl to a Perry-compiled express server (`app.listen(port,
+() => {...})`) was reaching the JS-side accept loop, dispatching to
+express's router, then throwing two missing-polyfill errors. Both
+turn into our V8 shim's catch-all 500 response, so callers saw
+`Internal Server Error` instead of the route's body.
+
+Fixes in `crates/perry-jsruntime/src/node_polyfills.js`:
+
+- Added `globalThis.setImmediate` / `globalThis.clearImmediate`
+  polyfills (microtask-based, mirroring the existing setTimeout
+  polyfill). Express's router uses `setImmediate` to break recursion
+  in middleware chains.
+- Added `Buffer.allocUnsafeSlow` static method. `safe-buffer`
+  (used by express, body-parser, etc.) detects whether our
+  global Buffer is "complete enough" by checking for all four of
+  `from` / `alloc` / `allocUnsafe` / `allocUnsafeSlow`. With
+  `allocUnsafeSlow` missing, safe-buffer falls through to a
+  `copyProps(Buffer, SafeBuffer)` fallback that uses `for...in` —
+  which silently skips ES class static methods because those are
+  non-enumerable in V8. The resulting SafeBuffer was missing
+  `isBuffer` / `byteLength` / etc., and every `Buffer.isBuffer(chunk)`
+  in `express/lib/response.js` threw TypeError. Providing
+  `allocUnsafeSlow` keeps safe-buffer on the happy path (just
+  re-exports our Buffer).
+
+Validated: `curl http://127.0.0.1:port/ping` against a
+Perry-compiled `app.get('/ping', (_req, res) => res.send('pong'))`
+now returns `pong` with HTTP 200.
+
+**3. Server.listen cb ordering + `op_perry_fetch` made async**
+
+Smaller refactors in the same code path:
+
+- `Server.listen` in the `node:http` shim now schedules the
+  user-supplied listening callback as `Promise.resolve().then(() =>
+  cb())` so the JS-side accept loop registers its first
+  `op_perry_http_accept(sid)` op BEFORE the trampoline-driven
+  callback runs. Pre-fix the synchronous `cb()` call could block
+  the V8 thread (when cb's native body contained an `await`) before
+  any accept op was queued, leaving hyper's `service_fn` stuck on
+  an mpsc with no consumer. Strictly logical-ordering improvement
+  for the express+self-fetch case (#4 below) — covers the no-await
+  callback shape today.
+- `op_perry_fetch` is now `async` (PR #994 deliberately chose sync
+  ureq to dodge a nested-block-on issue in the legacy blocking-await
+  path). The blocking ureq is wrapped in
+  `tokio::task::spawn_blocking` so the V8 thread can yield via
+  `await` while ureq runs on a tokio blocking-pool worker. The
+  polyfill's `const result = core.ops.op_perry_fetch(...)` is now
+  `const result = await core.ops.op_perry_fetch(...)` to preserve
+  the same callsite shape.
+
+**4. Self-fetch from inside an `async` listen callback (deferred)**
+
+The original repro was `app.listen(port, async () => { const r =
+await fetch('http://127.0.0.1:port/...') })`. Even with everything
+above, this still deadlocks. Root cause is structural: Perry's
+TS→native compilation lowers user `async () => …` arrows into a
+busy-wait loop (`crates/perry-codegen/src/expr.rs:10687`) rather
+than a true Future-style state machine, so a native callback
+invoked from the V8 trampoline (`native_callback_trampoline` in
+`crates/perry-jsruntime/src/interop.rs`) blocks the V8 thread for
+the entire duration of the callback body. Inside the busy-wait the
+re-entrant `js_run_jsruntime_pump` call DOES poll V8 — but
+`op_perry_http_accept`'s `rx.recv().await` future, scheduled on
+deno_core's executor, never resolves while the outer V8 stack
+frame holds an active scope from the trampoline. Net effect: the
+native fetch establishes a TCP connection to the hyper accept
+loop, hyper pushes the request through the mpsc, but the accept
+op never fires its V8 continuation — so the handler chain never
+runs and the request hangs.
+
+Workarounds that DO work today:
+
+- Use the `new Promise<void>(resolve => server.listen(port, () =>
+  resolve()))` pattern instead of an async-arrow callback, then
+  do the fetch in top-level code outside the callback. This is
+  what `test-files/test_http_createserver_v8.ts` exercises; it
+  still passes against this build (`200 hello` + exit 0).
+- External clients (curl, another process, etc.) hit the server
+  cleanly — the deadlock only manifests on same-process self-fetch
+  inside the listen-cb itself.
+- Fastify still works end-to-end (it routes through perry-stdlib's
+  bundled fastify path, not the V8-fallback hyper bridge, so the
+  trampoline doesn't sit on the V8 stack while the handler is
+  awaited).
+
+Deferring the self-fetch case to a future issue covering Perry's
+async lowering. The trampoline ↔ busy-wait interaction is too
+broad to safely patch in the V8-fallback http shim alone.
+
+## v0.5.1000 — fix(date-fns): ordinal-suffix tokens + lowercase/dotted AM/PM variants
+
+PR #993 wired the date-fns `format()` token loop, but only emitted runs
+of repeated letters: `yyyy`/`MM`/`dd` etc. all worked, but a date-fns
+ordinal token like `do` (day-of-month with ordinal suffix) read as two
+separate runs — first `d` → `"6"`, then the lone `o` fell into the
+unknown-letter catch-all and was emitted verbatim. `format(d, 'MMMM do yyyy')`
+returned `"January 6o 2020"` against Node's `"January 6th 2020"`.
+
+This change adds:
+
+- **Ordinal tokens** (`yo`/`Yo`/`Mo`/`Lo`/`do`/`Do`/`ho`/`Ho`/`Ko`/`ko`/`mo`/`so`/`wo`/`Io`/`Qo`/`qo`/`eo`/`co`/`io`):
+  detected when a run of length 1 over one of the listed letters is
+  immediately followed by `o`. Consumes the `o` and emits the English
+  ordinal (`"1st"`, `"2nd"`, `"3rd"`, `"4th"` … `"11th"`, `"21st"`, …)
+  via a new `english_ordinal()` helper. `11/12/13` get `"th"` regardless
+  of the units digit, matching date-fns.
+- **AM/PM variants** — `a`/`aa` → `"AM"/"PM"`, `aaa` → `"am"/"pm"`,
+  `aaaa` → `"a.m."/"p.m."`, `aaaaa` → `"a"/"p"`. Previously every run
+  length emitted `"AM"/"PM"`.
+
+Both behaviors are verified byte-for-byte against
+`node --experimental-strip-types` on `date-fns@4.1.0` for:
+`yyyy-MM-dd`, `yyyy`, `MM`, `dd`, `HH:mm:ss`, `yyyy-MM-dd HH:mm:ss`,
+`MMMM do yyyy`, `EEEE`, `do`/`Mo`/`yo`, and `a`/`aaa`/`aaaa`/`aaaaa`.
+
+`test-files/test_date_fns_format.ts` is extended to cover the full
+token suite.
+## v0.5.999 — feat(jsruntime/http): V8-fallback `createServer` bridge to a real hyper server
+
+Pre-fix the V8/JS-runtime fallback's `node:http` stub raised
+`Error: http.createServer not supported in this environment` whenever an
+interpreted module (express, fastify, nestjs, …) called
+`http.createServer((req, res) => …)`. Express's `app.listen(...)` goes
+through `http.createServer(app)` internally, so any V8-resolved express
+app crashed at boot.
+
+This change wires the stub to a real hyper-based HTTP/1.1 server via
+four new deno_core ops:
+
+- `op_perry_http_listen(port, host)` — async; binds a `tokio::net::TcpListener`
+  on Perry's shared multi-thread tokio runtime, spawns a hyper accept
+  loop that pushes `PendingHttpRequest`s through an mpsc channel.
+- `op_perry_http_accept(serverId)` — async; pops the next pending
+  request, stashes the response `oneshot::Sender` keyed by request id,
+  returns `{id, method, url, headers, rawHeaders, body}` to JS.
+- `op_perry_http_respond(reqId, status, headersJson, body)` — sync;
+  resolves the stashed oneshot with a `HttpResponseShape` so hyper's
+  service fn can write the response.
+- `op_perry_http_close(serverId)` — sync; drops the accept-loop shutdown
+  oneshot so the listener exits cleanly.
+
+`crates/perry-jsruntime/src/modules.rs` `node:http` stub now exports a
+real `Server` class with `.listen()`, `.close()`, `.on()`, plus
+`IncomingMessage` and `ServerResponse` that implement the minimum
+surface express needs: `req.method`/`req.url`/`req.headers`,
+`res.writeHead`/`res.setHeader`/`res.write`/`res.end`/`res.statusCode`.
+Response bodies are utf-8 strings (no streaming); request bodies are
+synthesized as a single `'data'` event followed by `'end'` on next tick
+so `req.on('data', cb).on('end', cb)` consumers work.
+
+Two adjacent fixes were required so the async-op pipeline could touch
+tokio at all:
+
+1. `JsRuntime::new()` captures `tokio::runtime::Handle::try_current()`
+   for its async-op executor. `ensure_runtime_initialized` previously
+   called it without any tokio context, so the captured handle pointed
+   at nothing and any subsequent `TcpListener::bind` / `tokio::spawn`
+   from inside an async op panicked with "there is no reactor running".
+   `ensure_runtime_initialized` now enters Perry's shared
+   `TOKIO_RUNTIME` via `tokio::runtime::Runtime::enter` before
+   constructing the runtime.
+2. The same enter() guard now wraps every `with_runtime(...)` call.
+   Without this the JS event loop pump (`poll_event_loop`) would poll
+   async ops in a thread-local context that lacked a reactor. Mirror
+   logic added to `jsruntime_process_pending`.
+
+`jsruntime_has_active_handles` now keeps the program alive while any
+V8-fallback http server is bound; without this, the outer event loop
+would exit before the accept loop saw its first connection.
+
+Validation:
+
+- `test-files/test_http_createserver_v8.ts` (TS file, goes through the
+  *native* `node:http` path on perry-ext-http-server) still prints
+  `200 hello` — unchanged, no regression.
+- Express smoke from the issue prompt (`/tmp/perry-express-http/test.ts`
+  with `import express from 'express'` + `app.listen(19000, cb)`) now
+  prints `listening on 19000` (pre-fix: thrown error at module init).
+- A middleware-only express variant (`app.use((req, res) => res.end(...))`)
+  serves a real HTTP response: external `fetch('http://127.0.0.1:.../')`
+  returns `status=200 body=hi-from-middleware`.
+
+Deferred — explicitly out of scope for this initial bridge:
+
+- Streaming request/response bodies (everything buffers as a string).
+- HTTPS + HTTP/2 (`createSecureServer` still throws — applications that
+  need TLS termination should compile through the native path).
+- `req.socket`/`req.connection` surface.
+- `'upgrade'` events / WebSocket handshakes inside V8 (those live in
+  perry-ext-http-server via `js_node_http_server_on`).
+- A full `Server` `EventEmitter` (the shim implements on/off/emit but
+  isn't an `events.EventEmitter` instance).
+
+## v0.5.998 — fix(date-fns): format() returns a formatted string instead of undefined
+
+**Symptom.** `import { format } from 'date-fns'; format(new Date(2020, 0, 6), 'yyyy-MM-dd')` compiled cleanly and ran without error, but the console printed `undefined` instead of `2020-01-06`. Same shape for every other free function date-fns exports (`parseISO`, `addDays`, `isAfter`, …).
+
+**Root cause — manifest entries existed, dispatch table did not.** Three layers were wired but the middle one was missing:
+
+1. `crates/perry-api-manifest/src/entries.rs` surfaces `method("date-fns", "format", false, None)` and friends, so the HIR-lowerer recognises the import and emits `NativeMethodCall { module: "date-fns", method: "format", … }`.
+2. `crates/perry-stdlib/src/dayjs.rs` defines `js_datefns_format` / `js_datefns_add_days` / etc and `runtime_decls.rs` declares them at the LLVM level.
+3. **Missing.** `NATIVE_MODULE_TABLE` in `crates/perry-codegen/src/lower_call.rs` had no `module: "date-fns"` rows, so `native_module_lookup("date-fns", false, "format", _)` returned `None` and the call fell through to the receiver-less-unknown-native branch, which materialises as undefined.
+
+Beyond the dispatch hole, `js_datefns_format` itself was a thin wrapper around `js_dayjs_format`, which only knows dayjs's *uppercase* tokens (`YYYY/DD`). date-fns uses *lowercase* Unicode-LDML tokens (`yyyy/dd`) — so even after the dispatch was hooked up, `format(d, 'yyyy-MM-dd')` would have printed the raw template back. And dayjs's formatter normalises to UTC, which shifts the displayed day across the midnight boundary for any non-UTC machine.
+
+**Fix.** Two halves:
+
+1. **Wire dispatch** (`crates/perry-codegen/src/lower_call.rs`). Added twelve `NativeModSig` rows for module `"date-fns"` covering the manifest surface (`format`, `parseISO`, `addDays/Months/Years`, `differenceInDays/Hours/Minutes`, `isAfter/Before`, `startOfDay/endOfDay`). All `has_receiver: false` — date-fns is a functional API, every call passes the date as the first argument.
+2. **Rewrite `js_datefns_format`** (`crates/perry-stdlib/src/dayjs.rs`). New `format_date_fns_pattern` helper walks the pattern character-by-character, recognises the LDML tokens date-fns actually emits (`y/M/d/H/h/m/s/S/a/E/X`), handles `'single-quoted literals'`, and formats in `chrono::Local` so the day-of-month matches Node's date-fns output on a non-UTC machine. Token-run length controls padding (e.g. `M` → `1`, `MM` → `01`, `MMM` → `Jan`, `MMMM` → `January`).
+
+**Validation.** New test fixture `test-files/test_date_fns_format.ts` exercises the regex-token path (existing) plus end-to-end `format(...)`. Byte-for-byte parity against Node's `--experimental-strip-types` on the original repro:
+
+```
+import { format } from 'date-fns';
+const d = new Date(2020, 0, 6);
+console.log(format(d, 'yyyy-MM-dd'));  // 2020-01-06
+console.log(format(d, 'yyyy'));         // 2020
+console.log(format(d, 'MM'));            // 01
+console.log(format(d, 'dd'));            // 06
+console.log(typeof format(d, 'yyyy'));   // string
+```
+## v0.5.997 — feat(jsruntime): V8 named-import static-method dispatch for Effect.succeed
+
+**Symptom.** `import { Effect } from 'effect'; Effect.succeed(42)` returned the literal number `0` instead of an Effect class instance. `typeof e === 'number'`, `e.pipe` was `undefined`, `e._tag` was `undefined`. Same shape blocked any `import { X } from 'v8-fallback-pkg'; X.method(args)` pattern where the V8 module's top-level export `X` is itself a sub-namespace object holding the actual functions — the Effect/jose/many-internal-tools pattern.
+
+**Root cause — StaticMethodCall on a Named V8 import had no dispatch path.** Perry's HIR-lower lifts `Effect.succeed(42)` to `StaticMethodCall { class_name: "Effect", method_name: "succeed" }` because `Effect` is uppercase + imported (a workaround for missing cross-module class metadata at HIR-lower time). The codegen's StaticMethodCall arm in `crates/perry-codegen/src/expr.rs` then probes, in order:
+
+1. `methods.get(("Effect", "succeed"))` — misses (Effect isn't a perry class)
+2. `namespace_imports.contains("Effect")` — false (it's a Named, not `import * as Effect`)
+3. … fall through to `double_literal(0.0)` stub.
+
+The #985 ramda fix added the same dispatch for the namespace branch (`import * as R from 'ramda'; R.sum(...)`) by routing through `js_call_v8_export(specifier, member, args)`. The Effect shape needed a different bridge call: the V8 module's `Effect` export is itself an object, not a function — `effect.succeed(...)` at the module root doesn't exist; the actual function lives at `effect.Effect.succeed`.
+
+**Fix — new `js_call_v8_member_method` bridge + codegen probe.** Two parts:
+
+1. **Runtime bridge** (`crates/perry-jsruntime/src/interop.rs`). New `js_call_v8_member_method(spec, member, method, args)` FFI entry that:
+   - Loads the module via `js_load_module(spec)`.
+   - Reads `member` off the module namespace (must be an object, not a primitive — Effect/jose/etc all match this shape).
+   - Reads `method` off the member object, asserts it's callable.
+   - Invokes with `this` bound to the member object (matches the JS call semantics — `Effect.succeed(42)` runs with `this === Effect`).
+   - Marshals args + return through the existing `native_to_v8` / `v8_to_native` pair. Object returns come back as JS handles so the receiver-side property/method dispatch reaches V8 again with the prototype intact.
+
+2. **Codegen probe** (`crates/perry-codegen/src/expr.rs`). New `emit_v8_member_method_call(spec, member, method, args)` helper (same shape as #985's `emit_v8_export_call`) materializes three rodata constants + stack-allocates the args buffer + emits the FFI call. The StaticMethodCall arm now probes `ctx.import_function_v8_specifiers.get(class_name)` after the existing namespace branch; on a hit, route through the new helper using the imported (origin) name as the member key.
+
+3. **Aliased-import support** (`crates/perry/src/commands/compile.rs`). When `local != imported` for a Named V8 import, record `local → imported` in `import_function_origin_names` so `import { Effect as Eff } from 'effect'; Eff.succeed(42)` correctly looks up `Effect` on the namespace instead of `Eff`. Without this the alias would silently look up a missing property and fall to undefined.
+
+4. **PropertyGet routing for V8 handles** (`crates/perry-runtime/src/object.rs`). `js_object_get_field_by_name` now detects JS_HANDLE_TAG (top16 == 0x7FFB) at the top of the function and routes through the registered `JS_HANDLE_OBJECT_GET_PROPERTY` callback (perry-jsruntime's `js_handle_object_get_property`). Mirror of the existing `js_call_method` JS_HANDLE_CALL_METHOD dispatch. Without this, `e.value` / `e._tag` on a JS-handle-shaped Effect instance fell through to the small-handle dispatch (which only knows about Fastify/axios/sqlite, not generic V8 handles) and returned undefined. Method calls were already routed correctly — only property reads needed the equivalent fix.
+
+**Validation.**
+
+- `import { Effect } from 'effect'; const e = Effect.succeed(42); console.log(typeof e, typeof e.pipe, e._tag)` now prints `object function Success` — matches `node --experimental-strip-types` byte-for-byte. Pre-fix: `number undefined undefined`.
+- `Effect.runSync(Effect.succeed(42))` returns `42`.
+- `e.pipe(Effect.map(x => x + 1))` chains correctly (the pipe result is also a JS-handle-shaped Effect instance).
+- New in-repo regression test `test-files/test_v8_class_instance_return.ts` + `test-files/fixtures/v8_class_instance_pkg/v8_helper.mjs` pin the synthetic `import { Thing } from "<v8-module>"; Thing.make(42).{value,_tag,doubled(),pipe}` shape that isolates the bug from Effect's full code path. Six lines of output; matches Node.
+- Existing `test-files/test_v8_namespace_call.ts` (#985 wildcard-namespace test) and the #678 V8 fallback tests still pass — the new probe in `StaticMethodCall` runs after the existing namespace branch, so wildcard-namespace dispatch is unchanged.
+- Ramda's `import * as R from 'ramda'; R.sum([1,2,3])` still returns `6` (no regression in the namespace path).
+
+**Out of scope / deferred.**
+
+- Aliased named imports (`import { Effect as Eff }`) are wired but not exercised by Effect's own code — there's no regression test for them yet.
+- Effect's deeper code paths (Schema.ts ~310th-init, HashRing) still hit #684/#809 (object-literal computed-keys, cross-module spread) — those are separate trackers under the umbrella #321.
+- The Effect/jose/etc pattern is the most common shape but not the only one; if a V8 module exports a function (rather than an object) at the named-import slot, `js_call_v8_member_method`'s `is_object` check returns undefined and we'd need a fallback to call the export directly. Not seen in the current package matrix.
+
+**Files changed.**
+
+- `crates/perry-jsruntime/src/interop.rs` — `js_call_v8_member_method` FFI + `c_str_to_utf8` helper.
+- `crates/perry-codegen/src/expr.rs` — `emit_v8_member_method_call` helper + StaticMethodCall probe.
+- `crates/perry/src/commands/compile.rs` — alias→imported registration for V8 named imports.
+- `crates/perry-runtime/src/object.rs` — JS_HANDLE_TAG fast path at the top of `js_object_get_field_by_name`.
+- `crates/perry-runtime/src/value.rs` — expose `JS_HANDLE_OBJECT_GET_PROPERTY` as `pub(crate)` so object.rs can read it.
+- `test-files/test_v8_class_instance_return.ts` + `test-files/fixtures/v8_class_instance_pkg/v8_helper.mjs` — synthetic regression test.
+
+## v0.5.996 — test(express): lock in the post-#986 `app.on('mount', ...)` smoke
+
+**Context.** The #986 (v0.5.992) fix made the V8-fallback `events` shim lazy-init `_events` on every method touch, which closed the express `app.init()` → `this.on('mount', ...)` crash. The follow-up task expected a *deeper* `Cannot read properties of undefined (reading 'mount')` crash to surface after that fix (`events.js:5` in the V8 stack), but reproducing the express smoke at v0.5.994 — `npm install express@4.21.0` + `import express from 'express'; const app = express(); console.log(typeof app, typeof app.get)` — already prints
+
+```
+function
+function
+```
+
+with exit code 0. The `mount` listener registers cleanly inside `defaultConfiguration()` and never fires until a parent app emits `'mount'` (child-app pattern); the basic smoke never reaches that path.
+
+**What this ships.** A new in-repo regression test `test-files/test_express_mount.ts` that exercises the EventEmitter surface express actually depends on — `new EventEmitter()` + `on('mount', listener)` + `emit('mount', parent)` — using a payload shaped like express's mount listener (`function (this, parent: { name }) { ... }`). The test prints byte-for-byte the same lines under Perry and under `node --experimental-strip-types`, which means any future regression in the lazy-init shim or the in-listener `this` binding will surface in-repo without needing the actual express package on disk.
+
+The end-to-end express smoke (`npm install express@4.21.0` → compile → run) is still maintained in the maintainer's checklist; it can't be a parity test because the harness doesn't install npm packages.
+
+**Files changed.**
+
+- `test-files/test_express_mount.ts` (new regression test, no source code changes)
+
+
+
+**Symptom.** v0.5.993 closed half of #818: the `__perry_js_bundle.js` artifact now contains every transitive sibling a pure-ESM npm package re-exports, so the bundle's *content* matches reality. The other half (called out in that release's own "Known next blocker") was still open — `NodeModuleLoader::load` in `crates/perry-jsruntime/src/modules.rs` reads source via `std::fs::read_to_string(&path)`, never consults `globalThis.__COMPILETS_MODULES`, and walks the real `node_modules/` tree at runtime. Move a Perry-compiled binary that uses hono / express / any other V8-fallback package into a directory that doesn't have `node_modules/` and V8 throws `Cannot resolve module` (or in the cross-thread `app.fetch(req)` shape, segfaults rc=139) for every missing file.
+
+**Root cause — the bundle had no runtime consumer.** `generate_js_bundle` writes the bundle next to the binary purely as a debugging artifact; nothing on the runtime side knows about it. Resolution and source-reading both go to disk:
+
+```
+NodeModuleLoader::resolve_module_path → resolve_with_extensions → base.exists() / std::fs::read_to_string(package_json)
+NodeModuleLoader::load                 → std::fs::read_to_string(&path)
+```
+
+If `node_modules/hono/` isn't on the filesystem when the binary runs, every probe fails.
+
+**Fix — embed an in-memory module map at link time + teach the loader to prefer it.** Three pieces:
+
+1. **`perry-jsruntime/src/modules.rs`** gains two process-wide `RwLock<HashMap>`s:
+   - `EMBEDDED_MODULES`: build-time canonical path → source code (`Arc<String>`).
+   - `EMBEDDED_ALIASES`: bare specifier ("hono", "@scope/x") → build-time canonical path.
+   Plus matching `#[no_mangle] pub unsafe extern "C"` registration FFIs (`js_register_embedded_module`, `js_register_embedded_alias`) and Rust-facing wrappers (`register_embedded_module`, `register_embedded_alias`).
+
+2. **Loader integration.** `NodeModuleLoader::resolve_module_path` consults the alias map first for bare specifiers and the path map second when on-disk extension/index probes fail — including a `lookup_embedded_path_with_extensions` helper that mirrors `resolve_with_extensions`'s `.js`/`.mjs`/`.cjs`/`.json` and folder-index fallbacks against the in-memory keys. `NodeModuleLoader::load` checks `EMBEDDED_MODULES` before its `std::fs::read_to_string` call. The map keys are build-time canonical paths used as opaque identifiers; `canonicalize()` later in `resolve()` already falls back to `resolved_path.clone()` for paths that don't exist on the runtime filesystem, so the `file://`-URL synthesized for V8 works either way.
+
+3. **Compile-time emission.** New `targets::generate_embedded_js_object` in `crates/perry/src/commands/compile/targets.rs`:
+   - Walks `ctx.js_modules` and emits one C `static const char[]` literal per module's source + length pair.
+   - Walks every TypeScript import edge whose `resolved_path` is in `ctx.js_modules`, collects `(bare_specifier, resolved_path)` pairs, emits matching string literals.
+   - Wraps it in a `__attribute__((constructor(101)))` that calls `js_register_embedded_module` for every source pair and `js_register_embedded_alias` for every alias pair. Priority 101 runs before `main`'s `js_runtime_init()` call, so the map is populated before V8 first asks for a module.
+   - Calls `cc -c` on the generated `.c` and appends the `.o` to `obj_paths` so the existing linker invocation pulls it in.
+
+The generator escapes non-printable bytes octally (`\NNN`) and never emits raw multibyte UTF-8 into the C source, so the resulting `.c` is ASCII-clean regardless of the JS file's encoding. `?` is also escaped to defang any `??=`/`??/` trigraph hazard under `-trigraphs`.
+
+**Validation.**
+
+```
+cd /tmp/perry-selfcontained
+cat > test.ts <<'EOF'
+import { Hono } from 'hono';
+const app = new Hono();
+app.get('/', (c) => c.text('Hi'));
+console.log(typeof app, typeof app.get);
+EOF
+npm install hono@4.6.5 --silent
+perry test.ts -o out
+
+# Move the binary somewhere isolated — no node_modules/, no source
+mkdir -p /tmp/perry-iso && cp out /tmp/perry-iso/ && cd /tmp/perry-iso
+ls    # → just `out`, nothing else
+./out # → object function
+```
+
+Pre-fix the third line printed `Cannot resolve module 'hono'` and exited 1. Post-fix it prints `object function` from a 45 MB binary with zero filesystem dependencies. The on-disk `__perry_js_bundle.js` is still emitted (kept as a build-time debugging artifact) but is no longer needed at runtime. New test fixture: `test-files/test_v8_self_contained.ts`.
+
+**Files touched.**
+- `crates/perry-jsruntime/src/modules.rs` — embedded-module map + FFIs + load/resolve consults.
+- `crates/perry/src/commands/compile/targets.rs` — `generate_embedded_js_object` + `c_string_literal` helper.
+- `crates/perry/src/commands/compile.rs` — append generated `.o` to `obj_paths` whenever `needs_js_runtime` + non-empty `js_modules`.
+- `test-files/test_v8_self_contained.ts` — fixture documenting the self-contained-binary expectation.
+
+## v0.5.995 — test(ramda): user-import fixture pinning the #985 V8-namespace fix
+
+**Symptom (apparent regression in v0.5.993/.994 compat sweep).** `/tmp/perry-compat-sweep` reported ramda failing at v0.5.993 and v0.5.994:
+
+```
+sum=0
+head=0
+```
+
+instead of the expected `sum=15 / head=1`. The fixture in question is the canonical user-import form:
+
+```ts
+import * as R from "ramda";
+const arr = [1, 2, 3, 4, 5];
+console.log("sum=" + R.sum(arr));
+console.log("head=" + R.head(arr));
+```
+
+PR #985 (committed at `a7cd054a`, 2026-05-18 05:48) had specifically claimed this case was fixed by adding `CompileOptions::namespace_v8_specifiers` and routing `R.<member>(args)` through `js_call_v8_export` from both `expr.rs:6588` (StaticMethodCall arm) and `lower_call.rs:549` (namespace-member-call arm).
+
+**Root cause — stale sweep binary, not a regression.** The sweep at `/tmp/perry-compat-sweep/run.sh` defaults `PERRY_BIN` to `/Users/amlug/projects/perry/perry/target/release/perry`, and that binary on disk was built at 05:25 — 23 minutes *before* #985's commit landed. Rebuilding the compiler (`cargo build --release -p perry-runtime -p perry-stdlib -p perry-jsruntime -p perry`) and rerunning the sweep against the freshly-built binary turns the ramda fixture green immediately:
+
+```
+package       status  phase    error_excerpt
+ramda         PASS    -        -
+```
+
+No code change is required — #985's namespace_v8_specifiers route covers the user-import / bare-V8-fallback path as designed.
+
+**What this release adds — a pinning fixture that would have caught the false alarm.** `test-files/test_ramda_user_import.ts` exercises the exact `import * as R from 'ramda'` user-import shape against five direct calls (number return path):
+
+| call | expected |
+|---|---|
+| `R.sum([1,2,3,4,5])` | 15 |
+| `R.head([1,2,3])` | 1 |
+| `R.add(2, 3)` | 5 |
+| `R.identity(42)` | 42 |
+| `R.multiply(3, 4)` | 12 |
+
+`node --experimental-strip-types test_ramda_user_import.ts` produces `15 / 1 / 5 / 42 / 12`, and the v0.5.995 perry binary matches byte-for-byte. Curried higher-order returns (`const inc = R.add(1); inc(5)`) are intentionally **not** in this fixture — #985 deferred them because the V8 bridge still returns closures as opaque handles the native callsite can't dispatch.
+
+**Validation.**
+
+```
+mkdir -p /tmp/perry-ramda-99 && cd /tmp/perry-ramda-99
+cp <worktree>/test-files/test_ramda_user_import.ts test_user.ts
+cat > package.json <<'EOF'
+{ "name": "test", "type": "module", "dependencies": { "ramda": "0.30.1" } }
+EOF
+npm install --silent --no-audit --no-fund
+<worktree>/target/release/perry test_user.ts -o out_user && ./out_user
+# → 15 / 1 / 5 / 42 / 12 (matches `node --experimental-strip-types`)
+```
+
+Compat sweep with the v0.5.995 worktree binary:
+```
+PERRY_BIN=<worktree>/target/release/perry bash /tmp/perry-compat-sweep/run.sh
+# → ramda PASS
+```
+
+**Files touched.**
+
+- `test-files/test_ramda_user_import.ts` — new fixture.
+- `Cargo.toml`, `CLAUDE.md` — version bump to 0.5.995.
+- `CHANGELOG.md` — this entry.
+
+No source code changes — this release is documentation + a regression-pinning test for the #985 fix.
+
+## v0.5.994 — feat(jsruntime): V8 ModuleLoader reads from embedded module map (self-contained binaries)
+## v0.5.993 — fix(compile): recursively bundle transitive ESM imports for V8 fallback
+
+**Symptom.** A program that imports a pure-ESM npm package whose entry file re-exports siblings (`hono`'s `dist/index.js` → `./hono.js` → `./hono-base.js` → `./compose.js` → `./router/*` → `./utils/*` …) ended up with a `__perry_js_bundle.js` containing only the single entry file. Roughly 20 transitive `dist/**/*.js` files were silently dropped. Compiled binaries still worked when their `node_modules/` tree happened to sit alongside them (V8's `ModuleLoader::load` opens files off disk), but shipping the binary on its own — or running it in any sandbox where the resolved paths don't exist — left V8 throwing `Cannot resolve module` for every missing sibling, and in the realistic hono call path (`app.fetch(req)` running cross-thread) cascaded to an rc=139 segfault because the missing-module callback handed unboxed `undefined` back to compiled native code expecting a NaN-boxed pointer.
+
+**Root cause — JS branch of `collect_modules` was a leaf.** `crates/perry/src/commands/compile/collect_modules.rs` classifies every reachable file as either "native compile" (TypeScript / `compilePackages`-overridden source) or "JS runtime" (everything else under `node_modules/` when `--enable-js-runtime` is implicitly on). The native branch already recursed via `cached_resolve_import` for every `import.source` on the lowered HIR, and re-exports were chased separately a few lines later. The JS branch took the shortcut comment `// We don't parse JS/node_modules files for their imports (V8 will handle that at runtime)` and bailed after inserting one entry into `ctx.js_modules`. The same bailout fed `targets::generate_js_bundle`, which loops over `ctx.js_modules` to materialize `__COMPILETS_MODULES` — so the bundle is exactly as deep as the JS walk, i.e., one level.
+
+The codegen path was correct: SWC parses TypeScript fine, so the user-written `import { Hono } from 'hono'` got registered as an import edge and `hono`'s `package.json` `module: "dist/index.js"` resolved through `resolve_package_entry`. That gave us one JS module. From there the walk stopped. Everything `dist/index.js` re-exported existed on disk but was invisible to the bundler.
+
+**Fix — add a lightweight ESM-import scanner and recurse.** New helper `collect_js_module_imports` in `collect_modules.rs` regex-scans a JS source for the static import / re-export / string-literal-dynamic-import shapes and returns the resolved sibling paths. Only relative / absolute specifiers are followed — bare specifiers like `react` need full `node_modules` resolution that the entry walker already handled via `cached_resolve_import`, so the realistic hono / express / koa / fastify / ink shape (top-level package brings in its own relative submodules) is fully covered. The JS branch then loops over the returned paths and re-enters `collect_modules`, which re-runs the JS/native classification — covering the case where a JS file re-imports something that resolves to a TypeScript file under a `compilePackages` directory.
+
+The scanner is regex-based on purpose. Running SWC on every transitive JS file just to harvest specifiers would cost real time on `node_modules` walks (hono alone is 24 files; effect+drizzle compose into hundreds), and the bundle's only job here is "make sure the path is embedded". Runtime semantics — conditional execution, dynamic shape, namespace materialization — remain V8's job; the bundler just needs to know which file paths the V8 fallback will be asked for.
+
+**Validation.** Built a local `hono@latest` (4.12.19) repro under `/tmp/perry-hono/`:
+- Pre-fix: bundle contained 1 `globalThis.__COMPILETS_MODULES[...]` entry (hono's `dist/index.js`).
+- Post-fix: bundle contains 24 entries — every `dist/**/*.js` reachable from `index.js` through the entire re-export graph (`compose.js`, `context.js`, `hono.js`, `hono-base.js`, `http-exception.js`, `request.js`, `request/constants.js`, `router.js`, plus the full `router/{reg-exp,smart,trie}-router/*.js` and `utils/*.js` subtrees).
+- `./out` still prints the expected `object` / `function` / `function`.
+- New test fixture at `test-files/test_hono_bundle.ts` is a static type-check / compile-doesn't-choke probe; the bundle-walks-recursively assertion lives in the PR description because the parity suite doesn't install npm packages.
+
+**Known next blocker (not in scope).** The bundle is now correct content-wise, but V8's `ModuleLoader::load` in `crates/perry-jsruntime/src/modules.rs:464-538` still resolves via `std::fs::read_to_string` against the on-disk path — `__COMPILETS_MODULES` is generated but never consulted by the loader. Removing `node_modules/` from beside the binary still produces `Cannot resolve module`. Wiring the loader to prefer the in-binary embedded source is a separate fix (likely a small `if let Some(src) = unsafe { COMPILED_MODULES.get(&path_str) }` short-circuit before the disk read), tracked alongside #818's wider "compile to a single self-contained binary for V8-fallback packages" goal.
+
+## v0.5.992 — fix(jsruntime/events): lazy `_events` init so mixin paths (express) work
+
+**Symptom.** After v0.5.991's `util.inherits` fix landed (PR #984), the next express blocker surfaced:
+
+```
+TypeError: Cannot read properties of undefined (reading 'mount')
+   at node:events:5 (inside EventEmitter.on)
+```
+
+Reproducer is `mkdir /tmp/x && cd /tmp/x; npm i express@4.21.0; perry test.ts -o out && ./out` where `test.ts` is just `import express from 'express'; const app = express(); console.log(typeof app.get);`. The crash happened inside `app.init()` → `this.on('mount', ...)`.
+
+**Root cause.** express's `createApplication()` does `mixin(app, EventEmitter.prototype, false)` — it copies methods from `EventEmitter.prototype` onto `app` but does **not** invoke the `EventEmitter` constructor. So `app._events` is never initialized. Then `app.init()` calls `this.on('mount', ...)`, the shim's `on` did `(this._events[event] = this._events[event] || []).push(listener)`, and reading `_events[event]` on `undefined` threw.
+
+This mirrors a real Node.js detail: lib/events.js does **not** rely on the constructor for `_events`. Every method that touches `_events` does `this._events ??= ObjectCreate(null)` first. The shim was assuming constructor-only init.
+
+**Fix.** Rewrote `crates/perry-jsruntime/src/modules.rs` events shim so every method lazy-initializes `_events`:
+
+```js
+function __perry_ee_init(self) { if (!self._events) self._events = Object.create(null); return self._events; }
+export class EventEmitter {
+    constructor() { this._events = Object.create(null); }
+    on(event, listener) { const e = __perry_ee_init(this); (e[event] = e[event] || []).push(listener); return this; }
+    // ... and so on for emit, off, once, removeAllListeners, listeners, listenerCount
+}
+```
+
+While there, also added the previously-missing prototype methods Node's EventEmitter exposes: `addListener` (alias for `on`), `prependListener`, `prependOnceListener`, `eventNames`. `emit` now also copies the listener array before iterating (Node semantics — listeners that remove themselves during emit must still fire) and uses `fn.apply(this, args)` so `this` inside listeners points at the emitter.
+
+**Verified.** `mkdir /tmp/perry-express-3 && cd /tmp/perry-express-3 && npm i express@4.21.0 && perry test.ts -o out && ./out` now prints `function\nfunction` (typeof app, typeof app.get) instead of crashing in `node:events:5`. The events shim regression test (`test-files/test_events_mixin_lazy.ts`) matches Node byte-for-byte.
+
+**Files changed.**
+
+- `crates/perry-jsruntime/src/modules.rs` (events shim rewrite, ~20 lines)
+- `test-files/test_events_mixin_lazy.ts` (new regression test)
+## v0.5.991 — fix(codegen): V8 wildcard-namespace member calls — `R.sum([1,2,3])` returns 15 not 0
+
+**Symptom.** `import * as R from 'ramda'; console.log(R.sum([1,2,3,4,5]))` printed `0` instead of `15`. Same shape for any `R.add(2,3)`, `R.identity(5)`, `R.head([1,2,3])` — every member call on a wildcard-namespace import of a V8-fallback module returned the literal `0.0`. The bug is reproducible without ramda using a tiny `.mjs` helper module (`export function sum(arr) { return arr.reduce(...) }`) imported as `import * as helper from './helper.mjs'`, then `helper.sum([1,2,3])`. Named imports from the same module (`import { sum }`) worked fine.
+
+**Root cause — two-step misrouting.**
+
+1. **HIR lowering at `crates/perry-hir/src/lower/expr_call.rs:1987-2017`.** When the receiver of a call is an uppercase identifier that's been registered as an imported binding, HIR lifts `R.sum(args)` to `Expr::StaticMethodCall { class_name: "R", method_name: "sum", args }` — assuming `R` is a class. This is correct for `import { MongoClient } from 'pkg'; MongoClient.connect()` (the comment at 1991-1998 calls this out as a deliberate workaround for the lack of cross-module class metadata at HIR-lower time) but fires equally for `import * as R from 'ramda'`. Lowercase namespace identifiers (`import * as helper`) take a different path that lowers to `PropertyGet { object: ExternFuncRef(ns), property: "sum" }` and reaches the namespace-member-call arm in `crates/perry-codegen/src/lower_call.rs:549`.
+
+2. **Codegen at `crates/perry-codegen/src/expr.rs:6588-6635` (StaticMethodCall arm) and `lower_call.rs:549-660` (namespace-member-call arm).** Both arms route through `import_function_prefixes` to find the source module that exports the method, and on a hit further probe `import_function_v8_specifiers` to switch from native-symbol-call to `js_call_v8_export`. For a wildcard namespace import of a V8 module with no companion `Named` import alongside, `compile.rs:4271-4283` deliberately no-ops on the `ImportSpecifier::Namespace` branch — the comment there observes "V8 module consumers overwhelmingly use Named/Default imports", which holds for `ink` (the canonical #678 case) but breaks ramda, effect, jose, date-fns, and any other library where `import * as Pkg from 'pkg'` is idiomatic. With nothing seeded into `import_function_prefixes` for `sum`, both arms fall through to the `double_literal(0.0)` stub. That's the `0` the user sees.
+
+**Fix — add a per-namespace V8 specifier map and probe it before the existing `import_function_prefixes` lookups.**
+
+1. **`crates/perry-codegen/src/codegen.rs`:** add `CompileOptions::namespace_v8_specifiers: HashMap<String, String>` (namespace-local-name → V8 module specifier) and a matching `CrossModuleCtx::namespace_v8_specifiers`. Plumb through all six `FnCtx` construction sites (the search-and-replace was four indented variations of the same field-init shape).
+
+2. **`crates/perry-codegen/src/expr.rs` (`FnCtx`):** add `pub namespace_v8_specifiers: &'a HashMap<String, String>`.
+
+3. **`crates/perry/src/commands/compile.rs`:** initialise the new map alongside `import_function_v8_specifiers` and populate it from the V8-imports pass's `ImportSpecifier::Namespace` branch (the previous no-op). One `insert(local.clone(), specifier.clone())` per namespace import to a `ModuleKind::Interpreted` source. Thread the map into the `CompileOptions` literal at the bottom.
+
+4. **`crates/perry-codegen/src/expr.rs:6599` (StaticMethodCall arm) and `crates/perry-codegen/src/lower_call.rs:549` (PropertyGet-call arm):** before the existing `if let Some(source_prefix) = ...` lookup, probe the new map: `if let Some(specifier) = ctx.namespace_v8_specifiers.get(ns).cloned()` and on a hit, `emit_v8_export_call(ctx, &specifier, method_or_property, &lowered)`. Lowered args are passed through with no transformation — the existing bridge code (`crates/perry-codegen/src/expr.rs::emit_v8_export_call` → `crates/perry-jsruntime/src/interop.rs::js_call_v8_export` → `call_function_impl`) handles NaN-box → V8 arg marshalling and V8 → NaN-box result marshalling. The arrays in `R.sum([1,2,3])` round-trip cleanly because `native_to_v8` already recognises GC-tracked arrays at the source side and `v8_to_native` returns the V8 number result as a plain f64.
+
+5. **`crates/perry/src/commands/compile/object_cache.rs`:** add a `namespace_v8_specifiers` field to the `empty_opts` test helper and hash it alongside `namespace_node_submodules` in `compute_object_cache_key` so a flip between V8-fallback and native-compile for the namespace-target module invalidates the cached `.o`.
+
+**Validation.**
+
+- New worktree fixture `test-files/test_v8_namespace_call.ts` + `test-files/fixtures/v8_namespace_call_pkg/v8_helper.mjs` covers number-from-array (`sum`), string (`greet`), and class-instance with method (`make` returning a `Thing` with `.value` + `.doubled()`). All three lines match `node --experimental-strip-types` byte-for-byte.
+- `R.sum([1, 2, 3, 4, 5]) === 15`, `R.add(2, 3) === 5`, `R.identity(5) === 5`, `R.head([1, 2, 3]) === 1` against `npm install ramda@0.30.1`.
+- Existing `test_issue_678_v8_fallback*` and `test_issue_678_reexport_default` tests still pass — the `import_function_prefixes` lookup path is untouched, the new probe is purely an additional first-chance hit.
+
+**Out of scope (deferred follow-ups).**
+
+- **Higher-order results.** `const inc = R.add(1); inc(5)` still throws `TypeError: value is not a function`. The V8 bridge returns curried/closure values as JS handles, and the native call path doesn't dispatch handles as callables yet. Same shape blocks `R.pipe(...)(5)` and `R.map(R.multiply(2), [1,2,3])`. Tracked as a deeper Promise/closure marshalling bug — orthogonal to the namespace-routing fix here.
+- **date-fns + Effect class instances.** date-fns has a `NativeRust` Perry binding (`crates/perry-stdlib/...`), so `import { format } from 'date-fns'` doesn't reach the V8 path at all — `format` lowers to `NativeMethodCall { module: "date-fns" }` and reads `undefined` because the binding is incomplete. That's a perry-stdlib gap, not a V8 marshalling bug. Similarly `Effect.succeed(42)` returning the bare `42` instead of an Effect wrapper requires class-instance marshalling work that's bigger than this PR's scope.
+
+## v0.5.990 — feat(util/stream): util.inherits + stream prototype scaffold (express compile unblocked)
+
+**Symptom.** After PR #983 unblocked `safer-buffer`, `import express from 'express'` advanced one frame further and then crashed at `node_modules/send/index.js:173` with:
+
+```
+TypeError: Object prototype may only be an Object or null: undefined
+    at Object.setPrototypeOf (<anonymous>)
+    at Object.inherits (node:util:14:52)
+    at file:.../send/index.js:356:6
+```
+
+`send/index.js` does the classic pre-ES6 inheritance pattern:
+
+```js
+var Stream = require('stream')             // line 30
+function SendStream(req, path, options) { Stream.call(this); ... }
+util.inherits(SendStream, Stream)          // line 173
+```
+
+`util.inherits(ctor, superCtor)` reads `superCtor.prototype` and calls `Object.setPrototypeOf(ctor.prototype, superCtor.prototype)`. Two coupled gaps converged on the crash:
+
+1. **`node:stream` default export was a plain namespace object.** The V8-fallback `node:stream` shim in `crates/perry-jsruntime/src/modules.rs` ended with `export default { Readable, Writable, Duplex, Transform, ... }` — a literal `{}` object, not the legacy `Stream` constructor Node ships. So `require('stream').prototype` was `undefined`. Even worse, the module had no `__perry_commonjs = true` marker, so the `wrap_commonjs` require() shim took the null-prototype-namespace branch and returned a flat copied object — `Stream.Readable` was preserved but `Stream.prototype` and `Stream` callability were not.
+
+2. **`util.inherits` was minimal.** The V8-fallback `node:util` `inherits` did only `Object.setPrototypeOf(ctor.prototype, superCtor.prototype)` — no `super_` static, no input validation, no useful error message when `superCtor` had no prototype.
+
+**Fix — three coordinated changes:**
+
+1. **`crates/perry-jsruntime/src/modules.rs` (`node:stream` shim):** rewrite the legacy `Stream` value as an actual class with its own `.prototype`, give it the EventEmitter-shaped instance methods (`on`/`once`/`emit`/`off`/`addListener`/`removeListener`/`removeAllListeners`/`pipe`), and re-root `Readable`/`Writable` to extend it. Attach `Readable`/`Writable`/`Duplex`/`Transform`/`PassThrough`/`pipeline`/`finished` as static properties on `Stream` itself, then `export default Stream`. Add `export const __perry_commonjs = true;` so `wrap_commonjs`'s `__perry_require_namespace` returns the class as-is from `require('stream')`. Also splits the old `"stream" | "stream/web"` match arm — they're now distinct, which silences the `unreachable_patterns` warning and lets each module evolve independently.
+
+2. **`crates/perry-jsruntime/src/modules.rs` (`node:util` shim):** harden `inherits(ctor, superCtor)` to mirror Node's contract:
+   - throw `TypeError` on null/undefined `ctor` or `superCtor`,
+   - throw `TypeError` if `superCtor.prototype` is undefined (matches Node's error message format),
+   - `Object.defineProperty(ctor, 'super_', { value: superCtor, writable: true, configurable: true })` so derived classes can chain through `Bar.super_` (the legacy Node pattern several stdlib packages use),
+   - then the original `Object.setPrototypeOf(ctor.prototype, superCtor.prototype)`.
+
+3. **`crates/perry-api-manifest/src/entries.rs`:** add `property("stream", "prototype")` to the manifest so the #463 unimplemented-API gate doesn't reject `Stream.prototype` reads in user TS. (`util.inherits` was already in the manifest.)
+
+**Validation.**
+- `test-files/test_util_inherits.ts` + `test-files/fixtures/util_inherits_v8/inherits_mod.js` — V8-routed fixture mirroring the express/send pattern: `require('util')` + `require('stream')`, two `util.inherits()` calls, and assertions for `Stream.prototype`, `Stream.Readable.prototype`, `super_`, real-prototype-chain `instanceof`, and method resolution through the chain. All eight assertions pass under Perry.
+- Express compile reproducer (`/tmp/perry-express-2/test.ts` = `import express from 'express'; console.log(typeof express)`) now succeeds: prints `function`. Previously this hit the `util.inherits` crash at module-init time and the namespace load failed.
+
+**Caveat.** The native-compile path for `util.inherits` (TS code that imports `node:util` directly without going through the V8 fallback) is still essentially a no-op — Perry's class-id `instanceof` and prototype model don't have a runtime hook for `util.inherits`. That's separate from this fix; users of the express/send chain are in the V8 fallback by definition (those packages are not in `compilePackages` and use CJS internally), so the V8-side change is what matters.
+
+## v0.5.989 — feat(runtime+jsruntime): expose Object.prototype methods on Buffer instances + plain-object require() namespace
+
+**Symptom.** `import express from 'express'` (and any transitive consumer of `safer-buffer`) threw `TypeError: buffer.hasOwnProperty is not a function` at module-init time. safer-buffer's `safer.js` opens with `for (key in buffer) { if (!buffer.hasOwnProperty(key)) continue; ... }` where `buffer` is the value returned by `require('buffer')`. Two distinct gaps converged on the same error message:
+
+1. **Buffer instances** had no `Object.prototype.*` fallbacks. PR #978 wired `hasOwnProperty` / `propertyIsEnumerable` on generic `ObjectHeader` instances inside `js_native_call_method`, but Buffer dispatch routes through the dedicated `dispatch_buffer_method` arm (because BufferHeader is a raw `alloc()` without a GcHeader and is detected via `BUFFER_REGISTRY` before the GcHeader inspection runs). That arm matched on the buffer-specific method names and returned `undefined` for everything else — so `buf.hasOwnProperty` was undefined and `typeof buf.hasOwnProperty` was `'undefined'`.
+
+2. **`require('builtin')` returned a raw ESM-namespace object** with a null prototype (per QuickJS / ES spec for module namespaces). Even though our `'buffer'` stub exported `Buffer`, `constants`, `kMaxLength`, etc. correctly, the namespace itself had no `Object.prototype` in its chain — so `nsObj.hasOwnProperty(...)` threw before any Buffer instance was even involved. This is what actually crashed safer-buffer (the call site `buffer.hasOwnProperty(key)` is on the **module**, not on a Buffer instance).
+
+**Fix — two coordinated changes:**
+
+1. **`crates/perry-runtime/src/object.rs::dispatch_buffer_method`:** add explicit arms for `hasOwnProperty`, `propertyIsEnumerable`, `valueOf`, `toLocaleString`, `isPrototypeOf` before the `_ => undefined` fallback. `hasOwnProperty(idx)` / `propertyIsEnumerable(idx)` check numeric-string and int32 keys against `(*buf_ptr).length` (Node spec: indexed bytes are own enumerable properties on a Buffer, `length` is inherited from the prototype). `valueOf` round-trips the buffer pointer, `toLocaleString` delegates to `toString()` with the utf8 encoding tag, and `isPrototypeOf` returns false. `is_buffer_method_name` is extended with the same names so a method-as-value read (`typeof buf.hasOwnProperty === "function"`) materializes a bound-method closure via `js_class_method_bind` and the subsequent call routes back through the new arms.
+
+2. **`crates/perry-jsruntime/src/modules.rs::__perry_require_namespace`:** when the value returned from `require()` is an ESM module-namespace object (`Object.getPrototypeOf(ns) === null`), copy its enumerable own properties into a plain object so it inherits from `Object.prototype`. References to inner classes/functions are preserved (the copy is shallow and uses `=`, so static members and `.prototype` on copied function/class values survive). This unblocks every legacy CJS module that probes its imports with `hasOwnProperty` (safer-buffer being the highest-profile example).
+
+**Validation.**
+- `test-files/test_buffer_prototype_methods.ts` — byte-for-byte match with `node --experimental-strip-types` (`false`, `false`, `function`, `hello`, `function`, `false`).
+- `/tmp/perry-express` smoke test: pre-fix crashed with `buffer.hasOwnProperty is not a function` at `safer-buffer/safer.js:36:15`. Post-fix the safer-buffer crash is gone; downstream `send` then hits a separate unrelated issue (`util.inherits` on a stub-default-export Stream that lacks `.prototype`), tracked separately.
+
+## v0.5.988 — feat(lodash): add max/min/maxBy/minBy/clamp/inRange/random to manifest
+
+Direct follow-up to PR #966 (sum/mean/sumBy/meanBy/head/last/tail). After #966 unblocked `lodash.sum`, the next bare-lodash sweep tripped on `_.max` — the runtime helpers for `clamp`/`inRange`/`random` already existed (and `clamp` had a `NativeModSig`), but no manifest entry, and the four extrema (`max`/`min`/`maxBy`/`minBy`) didn't exist at all. This PR fills the gap end-to-end.
+
+**Runtime additions (`crates/perry-stdlib/src/lodash.rs`):**
+
+- `js_lodash_max(arr) -> f64` and `js_lodash_min(arr) -> f64` — return the original `JSValue` element (NaN-boxed in f64 bits, same ABI workaround as `js_lodash_first`). `undefined`/`NaN` elements are skipped per lodash's `baseExtremum`. Empty/null arrays return `undefined`.
+- `js_lodash_max_by(arr, iteratee) -> f64` and `js_lodash_min_by(arr, iteratee) -> f64` — same restriction as `sumBy`/`meanBy`: property-shorthand iteratee only (a string key). Returns the original element with the largest/smallest iteratee value, or `undefined` for empty input. Function iteratees return `undefined` until closure-call plumbing across the FFI boundary lands as a follow-up.
+
+The existing `js_lodash_clamp`, `js_lodash_in_range`, and `js_lodash_random` helpers were already present in `perry-stdlib/src/lodash.rs` since well before #966; they just weren't fully wired through the manifest + dispatch table.
+
+**Wiring (the rest of the recipe from #966):**
+
+- `crates/perry-api-manifest/src/entries.rs` — seven new `method_sig` rows: `max`, `min`, `maxBy`, `minBy`, `clamp`, `inRange`, `random`.
+- `crates/perry-codegen/src/lower_call.rs` — six new `NativeModSig` rows (clamp was already present). `max`/`min` take `[NA_PTR]`, `maxBy`/`minBy` take `[NA_PTR, NA_F64]`, `inRange` takes `[NA_F64, NA_F64, NA_F64]` returning `NR_F64` (NaN-boxed true/false).
+- `crates/perry-codegen/src/runtime_decls.rs` — four new `declare_function` rows: `js_lodash_max`, `js_lodash_max_by`, `js_lodash_min`, `js_lodash_min_by` (clamp/in_range/random were already declared).
+
+**Validation.**
+
+`test-files/test_lodash_max_min.ts` (new, nine `console.log` lines) matches `node --experimental-strip-types` byte-for-byte:
+
+```
+5
+1
+{ n: 5 }
+{ n: 1 }
+5
+0
+3
+true
+false
+```
+
+PR #966's `test-files/test_lodash_sum.ts` still passes unchanged (`10 / 2.5 / 3 / 1 / 3`) — no regression on the previously-landed aggregators.
+
+**Known follow-up — `compilePackages: ["lodash"]` path.** With `compilePackages` set to compile lodash from `node_modules` instead of routing through native, the test crashes at runtime with `TypeError: Cannot read properties of undefined (reading 'call')` — same V8-fallback-style issue that's blocking other compile-as-package smokes (#678 territory). The bare-import path (which is what the manifest + native dispatch is actually for) works correctly.
+## v0.5.987 — fix(hir+runtime): Constructor.prototype method dispatch for computed keys + read-side introspection (ramda transducer pattern)
+
+**Symptom.** `XWrap.prototype['@@transducer/step'] = function(acc, x) { … }` — ramda's transducer scaffolding (`_xwrap.js`) plus any pre-ES6 library that attaches instance methods through a computed string-literal key — pre-fix silently fell through to a generic `PropertySet` because the assignment-side recogniser in `lower/expr_assign.rs` only matched the `MemberProp::Ident` shape (`.method = fn`). Subsequent `(new XWrap(fn))['@@transducer/step'](acc, x)` then threw `undefined is not a function` even though the dispatch hot path was perfectly capable of finding the method via `CLASS_PROTOTYPE_METHODS` — the side-table just never got populated.
+
+A second, narrower gap: even when the assignment route worked (Ident-prop form), `(Foo.prototype as any).method` reads on the function-classic shape evaluated to `undefined` because no synthetic prototype object was ever materialised. `typeof Foo.prototype.method` returned `'undefined'` despite `(new Foo()).method` reaching the registered closure correctly.
+
+**Fix — two coordinated arms:**
+
+1. **HIR assignment-side recogniser (`crates/perry-hir/src/lower/expr_assign.rs`):** extend the `<funcDecl>.prototype.<key>` matcher to handle `MemberProp::Computed(Expr::Lit::Str)` in addition to the existing `MemberProp::Ident`. The recogniser still requires a static string-literal key (computed expressions whose value isn't compile-time-resolvable still fall through to the generic dynamic PropertySet — which is fine for the rare runtime-key case). Mirrors the same key-resolution shape `lower/expr_object.rs` uses for object-literal computed keys.
+
+2. **HIR read-side recogniser (`crates/perry-hir/src/lower/expr_member.rs`) + new HIR variant `Expr::GetFunctionPrototypeMethod`:** when the AST shape `<funcDecl>.prototype.<name>` (or `<funcDecl>.prototype['<name>']`) reaches member lowering and the receiver resolves to a function-typed local or top-level `FuncRef` (skipping `class C {}` blocks, which have a real proto object, and named native imports, which are module-managed), emit a direct lookup into the side-table via the new runtime helper `js_get_function_prototype_method(func_value, name_ptr, name_len) -> f64`. Returns the registered closure (NaN-boxed) or `undefined` if no method by that name was registered against the function's synthetic class id. Mirrors `function_class_id` (read-only — does NOT allocate a new synthetic id, so reads on a function that never had any `.prototype.x = fn` write correctly return `undefined`).
+
+Together these close the round-trip: ramda's `XWrap.prototype['@@transducer/init/result/step']` triplet now both registers and reads back, and the `typeof Foo.prototype.method === 'function'` spec idiom returns `'function'` byte-for-byte against Node's output.
+
+**Validation.**
+
+`test-files/test_constructor_prototype_method.ts` (new, four assertions covering Ident-prop assign, second Ident-prop assign, prototype-method read+typeof, computed-key assign+call) now matches `node --experimental-strip-types` line-for-line:
+
+```
+5
+10
+function
+15
+```
+
+A standalone IIFE-style transducer (mirrors ramda's `_xwrap.js`) also passes:
+
+```ts
+var XWrap = (function () { function XWrap(fn) { this.f = fn; }
+  XWrap.prototype['@@transducer/step'] = function (acc, x) { return this.f(acc, x); };
+  return XWrap; })();
+// new XWrap(add)['@@transducer/step'](10, 5) === 15
+```
+
+**Known next blocker — `import * as R from 'ramda'`:** every individual ramda module imports cleanly through the direct-path shape (`import sum from 'ramda/src/sum.js'`) — verified by bisecting all 269 entries. The combined `import * as R from 'ramda'` (or a single named import like `import { sum } from 'ramda'`) still throws `TypeError: value is not a function` at module init, before any user code runs. The failure isn't surfaced by individual-module imports, so it's a cross-module init-time interaction (likely topological-sort or shared-singleton). This is unrelated to the prototype-method shape addressed here.
+
+Files: `crates/perry-hir/src/ir.rs`, `crates/perry-hir/src/lower/expr_assign.rs`, `crates/perry-hir/src/lower/expr_member.rs`, `crates/perry-hir/src/walker.rs`, `crates/perry-hir/src/stable_hash.rs`, `crates/perry-codegen/src/expr.rs`, `crates/perry-codegen/src/collectors.rs`, `crates/perry-codegen/src/runtime_decls.rs`, `crates/perry-runtime/src/object.rs`, `test-files/test_constructor_prototype_method.ts`.
+
+## v0.5.986 — fix(runtime+codegen): Object.prototype.toString / Array.prototype.slice / hasOwnProperty / propertyIsEnumerable / fn.length for ramda init
+
+**Symptom.** `import * as R from 'ramda'` (after #970 landed `Function.prototype.apply`/`.call`) throws three different errors at module init depending on how far evaluation gets:
+
+1. `TypeError: Cannot read properties of undefined (reading 'call')` — `_curry1.js`/`_curry2.js` use `Array.prototype.slice.call(arguments, …)` in their dispatch chain; reading `Array.prototype.slice` off the singleton's empty proto object returned `undefined`, the chained `.call` access then threw immediately.
+
+2. `TypeError: value is not a function` — `keys.js` evaluates `!{ toString: null }.propertyIsEnumerable('toString')` at module init; the `propertyIsEnumerable` field-scan on the anon-shape class found nothing, the lookup returned `undefined`, and the codegen closure-call fallback (`recv_box.callee(args…)`) tripped `throw_not_callable`. Same shape hits `_isArguments.js`'s `Object.prototype.toString.call(arguments)` IIFE.
+
+3. `Error: First argument to _arity must be a non-negative integer no greater than ten` — `converge.js` / `juxt.js` / `useWith.js` / `applySpec.js` build a curry arity through `pluck('length', fns)` → `reduce(max, 0, …)` → `curryN(N, …)` → `_arity(N, …)`. `Function.prototype.length` returned `undefined` on Perry closures, so the chain evaluated to `NaN` and `_arity` threw its bound check.
+
+**Fix.** Five coordinated changes — three runtime arms, one codegen arm, one codegen registry — that together get every R.* curry helper past module init. `R.add(2, 3)` and partial application (`R.add(10)(20)`) now work end-to-end through the direct module path (`import add from 'ramda/src/add.js'`). Full `import * as R from 'ramda'` then hits the next blocker (the transducer prototype-on-callable shape `XWrap.prototype['@@transducer/step'] = fn` — see "Known limitation" below).
+
+1. `crates/perry-runtime/src/object.rs::js_object_to_string` — extend the `Object.prototype.toString.call(x)` codegen-inlined helper to discriminate by JSValue tag + GC header type:
+
+   - `undefined` / `null` → `"[object Undefined]"` / `"[object Null]"`
+   - `boolean` / `string` / `number` (i32 or f64) → matching primitive tags
+   - `GC_TYPE_ARRAY` / `GC_TYPE_LAZY_ARRAY` → `"[object Array]"`
+   - `GC_TYPE_ERROR` → `"[object Error]"`
+   - Falls through to the existing `Symbol.toStringTag` hook + `"[object Object]"` default for everything else.
+
+   Pre-fix the helper only knew about `toStringTag`-equipped objects; every primitive and array routed through the catch-all and returned `"[object Object]"`. Ramda's `_isString.js`/`_isObject.js`/`_isRegExp.js`/`_isArguments.js` IIFEs all switch on the exact `"[object Tag]"` string, so the catch-all folded their five branches into one and broke `_isArguments` detection at module init.
+
+2. `crates/perry-runtime/src/object.rs::js_native_call_method` — new `hasOwnProperty` / `propertyIsEnumerable` arms below the existing `.call`/`.apply` arms. Both duck-type as truthy for any non-`null`/non-`undefined` receiver (ramda's `_clone` / `_has` / `keys.js` only need a non-throwing return), and gate on `is_undefined() || is_null() → false` so `null.hasOwnProperty(k)` matches Node's TypeError-equivalent path without crashing. Spec-perfect ownership walk would mean traversing the receiver's keys array + class id chain; the duck-type shortcut is enough for the patterns ramda actually exercises and is structurally cheap.
+
+3. `crates/perry-runtime/src/object.rs::populate_global_this_builtins` — new `populate_builtin_prototype_methods` helper invoked once per built-in constructor's prototype object during singleton init. Currently wires:
+
+   - `Array.prototype.slice` → `array_prototype_slice_thunk` (reads receiver from `IMPLICIT_THIS`, coerces start/end through `JSValue::to_number` with spec defaults of `0` / `i32::MAX`, calls `js_array_slice`).
+   - `Object.prototype.toString` → `object_prototype_to_string_thunk` (mirrors `js_object_to_string`'s discrimination logic, reads receiver from `IMPLICIT_THIS`).
+
+   Both thunks are registered with `js_register_closure_arity` so the `.call(thisArg, …userArgs)` dispatch pads the missing trailing args to the thunks' declared arity rather than running into the 1-arg-default fall-through that reads uninitialised f64 registers. The thunk pair stays callable for the indirect-read shape (`var ts = Object.prototype.toString; ts.call(x)`) — the direct-call codegen pattern goes through the inlined `js_object_to_string` at HIR-lower time and never touches the thunk.
+
+4. `crates/perry-codegen/src/lower_call.rs` — when lowering `obj.method(args)` and `method` is one of the well-known `Object.prototype` methods (`hasOwnProperty`, `propertyIsEnumerable`, `isPrototypeOf`, `toLocaleString`), drop the `skip_native` shortcut that previously fast-pathed every call on a known-class receiver through the class dispatch tower. The well-known methods aren't defined on any user class, so the tower returned `undefined`, the closure-call fallback then read `recv.<method>` as a property value (also `undefined`), and `js_closure_callN(undef_as_i64, …)` threw `value is not a function`. With the gate flipped, these calls route through `js_native_call_method` and hit the new arms in (2).
+
+5. `crates/perry-runtime/src/closure.rs::closure_arity` + `crates/perry-codegen/src/codegen.rs::emit_string_pool` — new public helper that returns a closure's declared param count via `lookup_closure_rest_full` (rest-bearing fixed arity) or `lookup_closure_arity` (non-rest). The codegen-side `emit_string_pool` now collects every top-level user-function wrapper (`__perry_wrap_<name>`) + its declared arity into a new `user_fn_wrapper_arity` parameter and registers each via `js_register_closure_arity` at module init. The closure-property accessor in `crates/perry-runtime/src/object.rs::js_object_get_field_by_name` (`GC_TYPE_CLOSURE` arm) intercepts `name_bytes == b"length"` and returns the registered arity as a JS number. Wrappers already covered by the rest-aware registration path are skipped so the rest fixed-arity isn't overwritten.
+
+   Pre-fix, `fn.length` on every Perry closure read undefined off the dynamic-prop side table; ramda's `pluck('length', fns)` then produced an array of `undefined`s, `reduce(max, 0, …)` evaluated to `NaN`, and `_arity(NaN, …)` threw at module init. With the registration loop in place, `fn.length` returns the user-visible declared count (e.g. `function f(a, b, c) {}.length === 3`).
+
+**Test plan.** New `test-files/test_ramda_sum.ts` pins the five mini-reproducers against `node --experimental-strip-types` byte-for-byte (Array.prototype.slice.call, Object.prototype.toString.call across 5 tag shapes, hasOwnProperty/propertyIsEnumerable, Function.prototype.length, and `const g = f; g.call(...)`). `test_function_apply_call.ts` / `test_issue_711_function_prototype.ts` / `test_issue_838_prototype_methods.ts` continue to pass — none of the new arms affect existing prototype-method behavior on user classes.
+
+**Known limitation.** Full `import * as R from 'ramda'` still throws at module init; the next blocker is `XWrap.prototype['@@transducer/step'] = fn`-style prototype assignments on plain function expressions, where Perry doesn't link the prototype object's fields to instances created via `new XWrap(…)`. R.sum exercises this through `_xArrayReduce → xf['@@transducer/step'](acc, list[idx])`. A follow-up will need to wire the closure's `.prototype` object into the per-instance method-lookup chain (today `js_new_function_construct` allocates an instance with a synthetic class id but doesn't inherit fields from the constructor's prototype object). Tracked as the next ramda blocker.
+
+## v0.5.985 — fix(runtime): `string.match(regex)` honors fancy-regex fallback for backreferenced patterns (date-fns format() unblocked)
+
+**Symptom.** With v0.5.984's `Date.prototype.constructor` fix in place, date-fns 4.x `format(new Date(2024, 0, 15), 'yyyy-MM-dd')` got past `constructFrom` but then crashed:
+
+```
+[NULL_PTR_METHOD_CALL] js_native_call_method: null pointer object for method 'map'
+TypeError: Cannot read properties of undefined (reading 'map')
+```
+
+**Root cause.** date-fns' `format.js` tokenizes the format string via:
+
+```js
+const formattingTokensRegExp =
+  /[yYQqMLwIdDecihHKkms]o|(\w)\1*|''|'(''|[^'])+('|$)|./g;
+
+let parts = formatStr.match(longFormattingTokensRegExp)
+  .map(...)
+  .join("")
+  .match(formattingTokensRegExp)
+  .map(...);
+```
+
+The `(\w)\1*` backreference is fine in V8 but the Rust `regex` crate rejects it. Perry's `get_or_compile_regex` already had a fancy-regex fallback path: when the standard regex crate fails to compile a pattern, it stashes the compiled fancy-regex into `FANCY_CACHE` and substitutes a never-match `[^\s\S]` placeholder in the primary slot. The placeholder kept `js_regexp_test` / `js_regexp_exec` callers from crashing, and `js_regexp_exec` itself had explicit fancy-fallback wiring (`fancy_captures = FANCY_CACHE.with(...)` before the standard `regex.captures(...)` call).
+
+But `js_string_match` (the `String.prototype.match` entry point) never consulted `FANCY_CACHE`. It just dispatched to the never-match placeholder and returned `null`. The chained `.map(...)` then crashed with the NULL_PTR_METHOD_CALL above. `js_string_match_all` and `js_string_search_regex` had the same gap, but the failing date-fns path goes through `js_string_match` so this fix targets that entry point.
+
+**Fix.** Added `lookup_fancy_regex(re)` helper next to `js_string_match` in `crates/perry-runtime/src/regex.rs` that returns `Some(Arc<fancy_regex::Regex>)` whenever the header's `(pattern, flags)` is registered in `FANCY_CACHE`. `js_string_match` now checks the cache before falling through to the standard `regex` crate:
+
+- **Global flag**: collects all matches via `fre.find_iter(str_data)` and builds the same NaN-boxed-string array shape as the standard path.
+- **Non-global**: returns the full match plus capture groups via `fre.captures(str_data)`. (Named-capture `groups` is left null for the fancy path — none of the date-fns format regexes use named captures, and the existing standard-regex path already handles named captures via the same `LAST_EXEC_GROUPS` thread-local that gets cleared here.)
+
+**Validation.**
+
+- `format(new Date(2024, 0, 15), 'yyyy-MM-dd')` → `2024-01-15` (matches Node).
+- Additional date-fns format strings tested against Node: `'HH:mm:ss'`, `'yyyy-MM-dd HH:mm:ss'`, `'MMM yyyy'`, `'EEEE, MMMM do yyyy'` — all byte-for-byte parity.
+- New `test-files/test_date_fns_format.ts` exercises the underlying `(\w)\1*` pattern shape (global + non-global) and the no-match-returns-null case without importing date-fns directly.
+
+**Follow-ups.** `js_string_match_all`, `js_regexp_test`, and `js_string_search_regex` still consult only the placeholder regex when the pattern needed fancy-regex. None are on date-fns' `format()` hot path so they're deferred to a separate issue; the same `lookup_fancy_regex` helper can wire them in when needed.
+## v0.5.984 — feat(runtime): `.constructor` on Date / Array / Object instances + `new <inst.constructor>(...)` dispatch
+
+**Symptom.** date-fns 4.x throws `RangeError: Invalid time value` on the very first call to `format(new Date(2024, 0, 15), 'yyyy-MM-dd')`. Root cause is `constructFrom(date, value)` — the helper every other date-fns export funnels through:
+
+```js
+if (date instanceof Date) return new date.constructor(value);
+```
+
+Perry returned `undefined` from `date.constructor` (Date stores as a raw f64 timestamp, not an ObjectHeader, so the codegen receiver-tag guard at `pget.recv_bad` rejected it as non-pointer and short-circuited to `TAG_UNDEFINED` without ever calling the runtime). The downstream `new undefined(value)` then constructed an empty `ObjectHeader` placeholder; `cloned.getTime()` read garbage; the formatter threw.
+
+Same defect affected every duck-type test of the shape `inst.constructor === Date` / `arr.constructor === Array` / `obj.constructor === Object` (drizzle's `is(value, ctor)`, lodash-style `value.constructor === Array` checks, ramda’s `R.type` fast paths).
+
+**Fix.** Three coordinated changes so both `inst.constructor` reads and bare `Date` / `Array` / `Object` identifiers resolve to the same closure-pointer value, and so `new <inst.constructor>(...)` dispatches into the real factory.
+
+1. `crates/perry-hir/src/lower.rs` — bare built-in identifiers (`Date`, `Array`, `Object`, `Map`, `Set`, `Error`, …) now lower to `Expr::PropertyGet { GlobalGet(0), <name> }` instead of the bare `GlobalGet(0)` sentinel. Routes through the existing codegen `is_global_this_builtin_name` arm which materializes the singleton closure via `js_get_global_this` + `js_object_get_field_by_name_f64`. Added a parallel `is_builtin_global_value_name` helper in `crates/perry-hir/src/analysis.rs` that mirrors the codegen / runtime built-in lists. `lower_types.rs::lower_decorator_arg` extended to also recognise the new `PropertyGet { GlobalGet, name }` shape as a class ref for `@Decorator(Date)`-style use. Callable surfaces (`Date()`, `new Date(...)`, `Date.now()`, `Math.PI`) are intercepted by their dedicated HIR variants before this arm fires, so the change doesn’t disturb those.
+
+2. `crates/perry-runtime/src/object.rs::js_object_get_field_by_name` — new `"constructor"` short-circuit arms:
+   - `GC_TYPE_ARRAY` and `GC_TYPE_LAZY_ARRAY` → return `globalThis.Array` closure (was: returned `undefined`).
+   - Generic object path: `class_id == 0` → return `globalThis.Object`; `is_anon_shape_class_id(class_id)` → also `globalThis.Object` so `({ x: 1 }).constructor === Object` holds.
+   - Plus a new entry-level arm in `js_object_get_field_by_name_f64` that recognises raw-f64 Date receivers via `is_registered_date_bits` and returns `globalThis.Date` — needed because the codegen receiver-tag check filters Date out of the dispatch path otherwise.
+   - The codegen invalid-receiver fall-through (`pget.recv_bad`’s non-nullish branch) now routes through `js_object_get_field_by_name_f64` instead of emitting `TAG_UNDEFINED` directly, so the Date arm above actually fires for raw-f64 receivers.
+
+3. `crates/perry-runtime/src/object.rs::js_new_function_construct` — new `identify_global_builtin_constructor` short-circuit. Walks the singleton’s built-in entries, matches the receiver’s `ClosureHeader.func_ptr` against `global_this_builtin_noop_thunk` (GC-stable identifier — the singleton closure header itself gets evacuated and pointer-rewritten, but the embedded func ptr is read-only), and dispatches to the real factory:
+   - `Date` → `js_date_new` / `js_date_new_from_value` / `js_date_new_local_components`
+   - `Array` → `js_array_alloc` (single-finite-arg → empty array of that length; otherwise positional fill)
+   - `Object` → `js_object_alloc(0, 0)`
+
+   Plus a parallel codegen change in `crates/perry-codegen/src/expr.rs::NewDynamic`: callees of shape `PropertyGet { … }` (the date-fns `new date.constructor(value)` shape) now also route through `js_new_function_construct`. A statically-typed Date receiver short-circuits earlier to `Expr::DateNew(args)` so the hot path stays inline.
+
+4. `crates/perry-codegen/src/codegen.rs` — emit `js_register_anon_shape_class_id` at module init for every `__AnonShape_<hash>` class so the new constructor arm above can distinguish object-literal instances from user classes. The runtime exposes a matching `js_register_anon_shape_class_id` FFI declared in `crates/perry-codegen/src/runtime_decls.rs`, alongside the new `js_get_global_this_builtin_value` helper.
+
+**Validation.** `test-files/test_constructor_property.ts` covers Date / Array / Object `.constructor` reads, identity-equality with the bare global, and `new <date.constructor>(ts)` cloning — all 7 assertions match Node byte-for-byte. date-fns `format(new Date(...), 'yyyy-MM-dd')` (under `compilePackages: ["date-fns"]`) no longer trips `RangeError: Invalid time value`; the next blocker is a `Cannot read properties of undefined (reading 'map')` inside date-fns’s `normalizeDates` chain (downstream of `constructFrom` — separate gap).
+
+## v0.5.983 — feat(runtime): `Function.prototype.apply` + `Function.prototype.call` dispatch
+
+**Symptom.** `add.apply(null, [2, 3])` and `add.call(null, 2, 3)` both returned an opaque `[object Object]` stub instead of `5`. The dynamic method-dispatch path (`js_native_call_method` in `crates/perry-runtime/src/object.rs`) had a `bind` arm and the closure dynamic-prop lookup, but no `apply` / `call` arms — so any `fn.apply(thisArg, argsArr)` / `fn.call(thisArg, …)` on a closure receiver fell through the `is_closure` branch and returned the `NULL_OBJECT_BYTES` stub. This is what blocked ramda end-to-end: `_curry1`, `_curry2`, `_curry3` all wrap their bodies in `fn.apply(this, arguments)`, so the very first call to any curried export (`R.sum`, `R.add`, etc.) returned a stub instead of the dispatch result.
+
+**Fix.** Two complementary changes:
+
+1. `crates/perry-runtime/src/object.rs::js_native_call_method` — new `"call"` and `"apply"` arms, guarded on `jsval.is_pointer() && is_closure_ptr(raw_ptr)`. Both rebind `IMPLICIT_THIS` to the first arg, restore it on return, and dispatch through `js_native_call_value`:
+   - `call(thisArg, …rest)` → pass `&args_ptr[1..]` (length `args_len-1`) as positional args.
+   - `apply(thisArg, argsArr)` → if `argsArr` is a pointer to `ArrayHeader`, copy the elements into a `Vec<f64>` and forward; treat `null`/`undefined`/non-array as zero args.
+
+2. `crates/perry-hir/src/lower_decl.rs` — skip TypeScript `this:` type-only annotations at the two `FnDecl` parameter-lowering sites (top-level and nested-decl-inside-function). The `expr_function.rs` site already skipped these per `#915`, but the `lower_decl.rs` sites still treated `function greet(this: …, prefix)` as a 2-arg function, shifting every real param by one. Without this, `greet.call({name:'Bob'}, 'Hi')` bound `prefix=undefined` because the runtime call passed `'Hi'` into the synthetic `this` slot.
+
+**Verification.** `test-files/test_function_apply_call.ts` — 7 assertions covering plain `apply`/`call`, multiple invocations, `this`-rebinding on a method with a TS `this:` annotation, and method calls on arrow functions. All match Node byte-for-byte.
+
+**Ramda status.** Compile succeeds (≈2.6 MB binary). Execution still throws `TypeError: Cannot read properties of undefined (reading 'call')` during ramda's module init — a deeper issue distinct from this fix (likely CommonJS `require()` resolution returning `undefined` for an internal helper before ramda's bootstrap `.call()`s through it). Tracked as the next blocker.
+
+## v0.5.982 — fix(codegen): `export default <namedFn>` wrapper now forwards to the real body so `const fn = defaultImport; fn(…)` works
+
+**Symptom.** Calling a cross-module default-exported function through a local alias dropped the call. With `function add(a,b){return a+b}; export default add;` in one module and
+
+```ts
+import add from "./add.js";
+const fn = add;
+console.log(fn(2, 3));   // → "undefined" (should be 5)
+```
+
+in the consumer, `add(2, 3)` (direct call) returned `5`, but `fn(2, 3)` (call through a local-bound alias) returned `undefined`. The same shape is the npm-package barrel idiom — `node_modules/ramda/es/*.js`, `node_modules/date-fns/*.js`, `node_modules/lodash-es/**` all stamp out `function NAME(…){…}; export default NAME;` modules, so any code that stores a default-imported function in a local (whether explicitly via `const fn = imported` or implicitly by passing it as a callback that the callee assigns into a closure capture) silently lost the call. Ramda hit it through `var sum = reduce(add, 0)` style top-level binding; date-fns hit it through `format`'s internal `formatters[token[0]](originalDate, …)` indirection.
+
+**Root cause.** Sub-bug B of #836's wrapper-alias loop in `crates/perry-codegen/src/codegen.rs` (around L2988 pre-fix) emitted a NO-OP `__perry_wrap_perry_fn_<src>__<exported>` wrapper for every `Export::Named { local, exported }` where `local == exported` and `local` was not the name of a HIR function. The branch was originally added to make `import * as z; export { z };` (namespace-aliased re-exports) and `export { SomeClass }` style exports link — both shapes have no callable body, so a `→ undefined` wrapper was correct.
+
+But the same `local == exported && !func_by_local_name` condition ALSO fires for the canonical default-export shape:
+
+```js
+function add(a, b) { return a + b; }
+export default add;
+```
+
+The HIR lowerer at `perry-hir/src/lower.rs:5601` resolves the default-expr to `Expr::FuncRef(add_id)` (line 5606 branch) and pushes `module.exports.push(Export::Named { local: "default", exported: "default" })` plus `module.exported_functions.push(("default", add_id))`. The exports entry has `local == exported == "default"`, and `func_by_local_name` is keyed by the FUNCTION's HIR name (`"add"`) — so the no-op branch fired and emitted a wrapper that returned NaN-boxed undefined regardless of its arguments.
+
+Consumer-side, every closure-form access of the default import (`expr.rs:12099` constructs `wrap_name = "__perry_wrap_perry_fn_<src>__default"`, takes its address via `js_closure_alloc_singleton`, NaN-boxes the closure pointer) resolved to the no-op wrapper at link time. Direct calls (`expr.rs::ExternFuncRef`-as-callee path in `lower_call.rs`) routed through a different symbol (`perry_fn_<src>__default`, which IS a forwarding alias to `perry_fn_<src>__add` — emitted by the `exported_functions` loop at L2347) and worked correctly — that's why `add(2, 3)` returned `5` but `fn(2, 3)` (closure call through the alias) returned `undefined`.
+
+**Fix.** Before emitting the no-op wrapper in sub-bug-B's branch, probe `hir.exported_functions` for an alias entry pointing the `local==exported` name at a real HIR function. When found, emit a forwarding wrapper to that function's body (same shape as the `local != exported` branch at L2792, which already handles the renamed-export case correctly). The no-op branch stays as the fallback for genuinely non-callable exports (`export { ImportedNamespace }`, `export { SomeClass }`, etc.).
+
+```rust
+let aliased_func: Option<&perry_hir::Function> = hir
+    .exported_functions
+    .iter()
+    .find(|(n, _)| n == exported)
+    .and_then(|(_, fid)| hir.functions.iter().find(|f| f.id == *fid));
+if let Some(f) = aliased_func {
+    // Emit forwarding wrapper: __perry_wrap_perry_fn_<src>__<exported>(closure, a0…aN)
+    //   → tail-call perry_fn_<src>__<local-fn-name>(a0…aN)
+    let target = scoped_fn_name(&module_prefix, &f.name);
+    …emit forwarder…
+} else {
+    …existing no-op fallback…
+}
+```
+
+**Validation.**
+
+- New `test-files/test_default_import_as_value.ts` + `test_default_import_as_value_helper.ts` (cross-module helpers) exercise four value-position shapes: local alias, function-parameter pass-through, closure-capture, direct call. Perry now prints `5 / 30 / 15 / 5` byte-for-byte against `node --experimental-strip-types`.
+- `test-files/test_lodash_default_import_methods.ts` (issue #957 regression) still passes.
+- `test-files/test_issue_678_reexport_default.ts` still passes.
+
+**Out of scope (related but separate bugs).** With this fix applied, two npm packages from the original compat sweep still don't work fully:
+
+- **ramda's** `R.sum([1..5])` returns `[object Object]` instead of `15` because `Function.prototype.apply` (used by ramda's `_curry1`/`_curry2`/`_curry3` to dispatch `fn.apply(this, arguments)`) doesn't have a runtime handler at all — every `.apply()` call returns the receiver as a stub. Untriaged; will need its own issue.
+- **date-fns's** `format(new Date(), …)` throws `RangeError: Invalid time value` because `Date.prototype.constructor` returns `undefined`, breaking `constructFrom`'s `new date.constructor(value)` cloning path. Untriaged; will need its own issue.
+
+Both packages exercise the default-import-as-value shape internally many times, so this fix is a prerequisite for any future work on them — without it, the closure-dispatch would short-circuit before reaching the `apply`/`constructor` failures.
+
+**Files.**
+
+- `crates/perry-codegen/src/codegen.rs` — alias-loop branch at sub-bug-B now consults `hir.exported_functions` before emitting the no-op wrapper.
+- `test-files/test_default_import_as_value.ts` — new regression test.
+- `test-files/test_default_import_as_value_helper.ts` — cross-module helper exporting `function add` as default.
+
+## v0.5.981 — feat(manifest): register `stream.on` / `once` / `off` / `emit` / `removeListener` / `removeAllListeners` (+ the rest of the EventEmitter surface) so axios compiles past the #463 gate
+
+**Symptom.** Compiling axios (and any other npm package that extends `stream.Transform` / `stream.Readable` etc. and wires up event listeners on the resulting instance) bailed at HIR-lower with:
+
+```
+`stream.on` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)
+```
+
+The runtime already supports the full EventEmitter surface on every node:stream object — `js_node_stream_readable_new` / `_writable_new` / `_duplex_new` / `_transform_new` / `_passthrough_new` (see `crates/perry-runtime/src/node_stream.rs`) each build an `ObjectHeader` carrying NaN-boxed closure pointers for `on`, `once`, `off`, `pipe`, `read`, `write`, `end`, etc. The closures `bind` the host stream so `r.on('data', fn).on('end', fn)` chains return `this` (issue #631). What was missing was the **manifest-side** entry: the #463 unimplemented-API gate (`crates/perry-hir/src/lower/expr_member.rs::670`) walks `module_has_symbol("stream", "on")` for every `stream.on(...)` / `stream.once(...)` / etc. call site, and absent a hit it errors out before the call can resolve to the runtime closure.
+
+**Fix.** `crates/perry-api-manifest/src/entries.rs` — added 15 new `method("stream", ..., true, None)` rows covering the full Node EventEmitter surface that ships on stream instances:
+
+- `on` / `once` / `off` / `addListener` / `removeListener` / `removeAllListeners`
+- `emit` / `prependListener` / `prependOnceListener`
+- `listenerCount` / `listeners` / `rawListeners` / `eventNames`
+- `setMaxListeners` / `getMaxListeners`
+
+All entries use `has_receiver: true` because every callsite is `<streamInstance>.on(...)`, never `stream.on(...)` as a module-level helper. The matching runtime closures already exist on the per-instance ObjectHeader, so dispatch happens through the regular `PropertyGet` → `Call` path — no new `NATIVE_MODULE_TABLE` rows or new runtime symbols required.
+
+**Why this stayed missing.** The `events.on` / `events.emit` / etc. cluster was registered when the EventEmitter base class was wired (the `events` block at lines 512-527), but the node:stream classes inherit EventEmitter at runtime via constructor-time closure injection rather than through a class hierarchy the manifest tracks. The manifest's `module_has_symbol` check is keyed by `(module, name)` only — a Readable instance reads `.on` against `module: "stream"`, not `module: "events"`, so the entry has to live on `stream`.
+
+**Validation.**
+- `test-files/test_stream_on.ts` (new): `new Readable({ read() { this.push('hi'); this.push(null); } })` + `r.on('data', ...)` + `r.on('end', ...)` compiles and runs.
+- axios 1.7.7 compile-smoke: `import axios from 'axios'; console.log(typeof axios.get);` past the `stream.on is not implemented` gate (any remaining axios-internal blockers are tracked separately).
+
+**Files.**
+- `crates/perry-api-manifest/src/entries.rs` — 15 new `method("stream", ..., true, None)` rows in the stream block.
+- `test-files/test_stream_on.ts` — repro/regression fixture.
+## v0.5.980 — feat(lodash): add `sum` / `mean` / `sumBy` / `meanBy` / `tail` aggregators to the manifest
+
+**Symptom.** Manifest sweep flagged `_.sum([1,2,3,4])` as missing — `import _ from 'lodash'; _.sum(...)` errored at HIR-lower with `\`lodash.sum\` is not implemented in Perry — see \`perry --print-api-manifest\` for the supported surface`. Same shape for `_.mean`, `_.sumBy`, `_.meanBy`, and `_.tail` (tail's runtime + decl already existed but the manifest + lower_call rows were absent, so call sites couldn't reach the native function).
+
+**Fix.** Added five new lodash bindings following the existing `chunk`/`compact`/`take`/etc. pattern:
+
+- `crates/perry-stdlib/src/lodash.rs` — new `js_lodash_sum`, `js_lodash_mean`, `js_lodash_sum_by`, `js_lodash_mean_by` runtime exports. All four iterate over `*mut ArrayHeader` via `js_array_get`/`js_array_length` and accumulate via `JSValue::to_number()` (with `undefined` treated as 0 to match lodash's `baseSum`). `mean`/`meanBy` return `NaN` for empty/null arrays (0/0 case). `sumBy`/`meanBy` accept the property-shorthand iteratee form only (a string key); function iteratees return `NaN` to mirror lodash's "unusable iteratee" behaviour — closure-call plumbing across the FFI boundary is its own follow-up. Property lookup uses `js_object_get_field_by_name`.
+- `crates/perry-api-manifest/src/entries.rs` — five new `method_sig` rows (`sum`, `mean`, `sumBy`, `meanBy`, `tail`). The first four return `TypeSpec::Number` so HIR knows the return type without inference; `tail` returns `TypeSpec::Any` like the rest of the array-returning helpers.
+- `crates/perry-codegen/src/lower_call.rs` — five new `NativeModSig` rows in the lodash block of `NATIVE_MODULE_TABLE`. `sum`/`mean` take `&[NA_PTR]` → `NR_F64`; `sumBy`/`meanBy` take `&[NA_PTR, NA_F64]` → `NR_F64` (iteratee passed as a NaN-boxed `f64` and re-bit-cast to `JSValue` inside the runtime); `tail` takes `&[NA_PTR]` → `NR_PTR`.
+- `crates/perry-codegen/src/runtime_decls.rs` — four new `declare_function` rows for the new symbols (`js_lodash_sum`/`_sum_by`/`_mean`/`_mean_by`). `js_lodash_tail` was already declared.
+
+**Validation.** `test-files/test_lodash_sum.ts` (new) prints `10 / 2.5 / 3 / 1 / 3` and matches `node --experimental-strip-types` byte-for-byte. Tested via the standard manifest-route (no `compilePackages` config) since the `compilePackages: ["lodash"]` path is still blocked on a separate module-init `TypeError: Cannot read properties of undefined (reading 'prototype')` regression that pre-dates this work (reproducible with just `_.head([1,2,3])` after enabling compilePackages — not in scope here).
+
+**Files.**
+- `crates/perry-stdlib/src/lodash.rs` — new aggregator exports + helper `lodash_to_number`.
+- `crates/perry-api-manifest/src/entries.rs` — five new manifest rows.
+- `crates/perry-codegen/src/lower_call.rs` — five new `NativeModSig` rows.
+- `crates/perry-codegen/src/runtime_decls.rs` — four new symbol decls.
+- `test-files/test_lodash_sum.ts` — repro/regression fixture.
+
+## v0.5.979 — feat(globalThis): expose built-in constructors as properties so `globalThis.Array`, `context.Object`, etc. stop returning `undefined`
+
+**Symptom.** PR #963 (v0.5.977) closed the `Function('return this')()` recogniser, so the lodash module-init IIFE no longer threw `TypeError: value is not a function`. The next blocker surfaced one frame down, inside `runInContext`:
+
+```js
+var Array  = context.Array,   // context is `globalThis`
+    Object = context.Object,
+    ...
+var arrayProto = Array.prototype;   // TypeError: Cannot read properties of undefined (reading 'prototype')
+```
+
+`context` resolved to the `js_get_global_this()` singleton (the same object `globalThis[k] = v` writes target after #611). But the built-in constructors — `Array`, `Object`, `Function`, `RegExp`, `Math`, `JSON`, ... — were never *registered* as properties on that singleton, so every `context.X` read returned `undefined`. The follow-on `.prototype` access tripped the spec-shaped `TypeError: Cannot read properties of undefined (reading 'prototype')` gate (`crates/perry-runtime/src/error.rs::js_throw_type_error_property_access`) and the program exited 1 before any user code executed.
+
+The same gap surfaced through the static AST shape too: `globalThis.Array` (and `(globalThis as any).Array`) lowered to `Expr::PropertyGet { GlobalGet(0), "Array" }` and the codegen `Expr::PropertyGet` arm in `expr.rs` returned the `0.0` no-value placeholder for every property except `log` (the lone special-cased `console.log`-as-closure singleton from #236).
+
+**Fix.** Two coordinated pieces — runtime population + codegen routing — turn `globalThis.X` reads into a non-`undefined` value for the canonical JS built-ins:
+
+1. **Runtime** (`crates/perry-runtime/src/object.rs`): on first access, `js_get_global_this`'s CAS winner now calls `populate_global_this_builtins(singleton)`. Constructors (~50 names from the standard ECMA-262 list + Node / web platform globals) get a `ClosureHeader`-backed sentinel via `js_closure_alloc(global_this_builtin_noop_thunk, 0)`; namespaces (`Math` / `JSON` / `Reflect`) get a plain `js_object_alloc(0, 0)`. Each constructor closure carries a `prototype` dynamic property pointing at an empty ObjectHeader so the lodash `var arrayProto = Array.prototype` chained read sees a real pointer instead of throwing. The thunk itself is a deliberate no-op returning `undefined` — bare `new Array(n)` continues to flow through codegen's existing `lower_new` arm, so callers using the spec-canonical `new <Ident>(...)` shape are unaffected.
+
+2. **Codegen** (`crates/perry-codegen/src/expr.rs`): the `Expr::PropertyGet { GlobalGet(_), <name> }` arm now consults `is_global_this_builtin_name(<name>)` before falling through to the `0.0` placeholder. When the name matches, it routes the read through `js_get_global_this` + `js_object_get_field_by_name_f64` (same shape as the existing IndexGet arm at line ~2381 that handles `globalThis[<string>]` reads from #611). The `typeof PropertyGet { GlobalGet, X }` short-circuit gains a parallel arm: constructor names return `"function"`, the three namespace names stay `"object"`.
+
+**Why a closure, not a plain object?** `js_value_typeof` for pointer values walks the CLOSURE_MAGIC tag at offset 12 — closures report `"function"` for free, a regular `ObjectHeader` would report `"object"`. Picking a closure backing also future-proofs the call form (`globalThis.Array(3)` as a function-call rather than `new Array(3)`); right now the thunk is a no-op, but later PRs can make it dispatch into the right constructor without changing how callers see the value.
+
+**Caveats / known follow-ups.** The backing objects are *sentinels*, not the real constructors. Reading deep into them returns `undefined`:
+
+- `Array.prototype.toString` is `undefined` (real Node returns a function). lodash's `var funcToString = funcProto.toString; funcToString.call(Object)` therefore still throws — but at a later line than before. The blocker after this PR is `Cannot read properties of undefined (reading 'call')` from `lodash.js` line 1493 (`var objectCtorString = funcToString.call(Object)`), which needs real `Function.prototype.toString` support to clear.
+- `globalThis.Array === Array` is `false`. Bare `Array` still lowers to `Expr::GlobalGet(0)` → `0.0`; the singleton form returns a closure pointer. Unifying these would require widening Perry's first-class representation of built-in constructors (or rewriting bare `Array` to read off the singleton) — a separate, wider change.
+- `Math.PI` / `Number.MAX_SAFE_INTEGER` and the other static-resolution shapes are unchanged. The HIR-level constant fold in `expr_member.rs` (lines ~262-318) still fires before this codegen path is reached.
+
+**Validation.** `test-files/test_globalthis_builtins.ts` covers `typeof globalThis.{Array,Object,Function,Math,JSON}` + `Array.prototype` + `new Array(3).length` and matches `node --experimental-strip-types` byte-for-byte. The lodash `_.chunk([1,2,3,4], 2)` repro (`/tmp/perry-lodash-2`) still fails to load `_` at module init, but the throw point moved from `var arrayProto = Array.prototype` (line 1463) to `var objectCtorString = funcToString.call(Object)` (line 1493) — three property reads + one call deeper into `runInContext`.
+
+## v0.5.978 — fix(crypto/jsruntime): bare named-import `randomFillSync(buf)` (and `randomUUID()` / `randomBytes(n)`) routes to native FFI + V8 fallback ESM re-export
+
+**Symptom.** `jose` (and any package that does `import { randomFillSync } from 'node:crypto'; randomFillSync(buf)`) silently produced all-zero buffers. v0.5.952 added `randomFillSync` to Perry's native crypto code path via `Expr::CryptoRandomFillSync` → `js_crypto_random_fill_sync`, but that HIR recogniser only fired for the **object-method** form `crypto.randomFillSync(...)` (in `expr_call.rs:3118`, gated on `is_crypto_module && member.prop == "randomFillSync"`). The **bare named-import** form `randomFillSync(buf)` fell through to the generic aliased-named-import arm (`expr_call.rs:6463`) which built `Expr::NativeMethodCall { module: "crypto", method: "randomFillSync", object: None, args: [buf] }`. The codegen `NativeMethodCall` dispatcher has no `crypto` arm, so it lowered to a no-op returning `undefined` — the buffer was never touched, and `jose` happily signed JWTs with all-zero IVs.
+
+Repro before the fix:
+```ts
+import { randomFillSync } from 'node:crypto';
+const buf = new Uint8Array(8);
+randomFillSync(buf);
+console.log(typeof randomFillSync);                 // "object"   (Node: "function")
+console.log(buf[0], buf[1], buf[2], buf[3]);        // 0 0 0 0    (Node: random)
+```
+
+For Hint-1, `typeof === "object"` instead of `"function"` is the same `NativeModuleRef`-without-codegen-arm shape that's bitten `child_process` / `fs` named imports before; the existing pattern in `expr_call.rs` (~line 6150 onwards) routes those through dedicated HIR variants per module.
+
+**Root cause.** The HIR named-import recogniser had arms for `child_process`, `path`, `url`, and `fs` after the `lookup_native_module` check, but no `crypto` arm. The matching `crypto.method()` recogniser exists 3000 lines earlier (line 3060) but only sees object-member calls — bare identifiers from named imports never reach it.
+
+**Fix.**
+1. **`crates/perry-hir/src/lower/expr_call.rs`** — added a `module_name == "crypto"` arm alongside `child_process` / `path` / `url` / `fs` (line ~6458). Handles `randomFillSync` (→ `Expr::CryptoRandomFillSync`), `randomUUID` (→ `Expr::CryptoRandomUUID`), and `randomBytes` (→ `Expr::CryptoRandomBytes`). Mirrors the existing object-method arm at line 3118 so both call shapes share one codegen path. Offset/size args for `randomFillSync` default to `Expr::Undefined` (runtime maps that to "use full buffer").
+2. **`crates/perry-jsruntime/src/modules.rs`** — added `randomFillSync` and `randomUUID` to the V8/JS-runtime fallback's `node:crypto` ESM stub. Required because the fallback path (when a module isn't recognized as a native module, or runs in a non-native-eligible context) re-parses imports against `node_modules`-style ESM exports, and the stub previously only exposed `randomBytes`/`createHash`/`createHmac`/`pbkdf2Sync`/`pbkdf2`. The `randomFillSync` shim delegates to the `globalThis.crypto.getRandomValues` polyfill that `node_polyfills.js` already installs; `randomUUID` derives RFC 4122 v4 from a 16-byte `getRandomValues` block.
+
+**Files.**
+- `crates/perry-hir/src/lower/expr_call.rs` — new `if module_name == "crypto" { ... }` arm in the named-import dispatcher (lines ~6460).
+- `crates/perry-jsruntime/src/modules.rs` — `crypto` ESM stub gains `randomFillSync` + `randomUUID` named exports plus both in the default-export object.
+- `test-files/test_crypto_randomFillSync_esm.ts` — minimal repro that compiles natively, fills an 8-byte Uint8Array via the bare-named-import form, and checks `length` + at-least-one-nonzero-byte via a manual for-loop (Perry's `Uint8Array.prototype.some` is a separate pre-existing gap that returns `undefined`).
+
+**Validation.** Native compile + run of `test-files/test_crypto_randomFillSync_esm.ts` prints `8 true` matching `node --experimental-strip-types`. Probe `typeof randomFillSync` now reports `"function"` from a bare named-import binding.
+
+**Out of scope (follow-ups).**
+- `Uint8Array.prototype.some` returning `undefined` is a separate typed-array method-dispatch gap; track separately.
+- The V8 fallback's `getRandomValues` polyfill in `node_polyfills.js` uses `Math.random()`-derived bytes and is NOT cryptographically secure — the V8 fallback path is for testing/diagnostics only. Real crypto strength is on the native FFI path that this PR also unblocks.
+## v0.5.977 — fix(#957 followup): `Function('return this')()` + bare `RegExp(...)` recognisers — moves real lodash past module-init `TypeError: value is not a function`
+
+**Symptom.** PR #959 closed two of lodash's three module-init bugs (`.call(this)` IIFE bodies + `Expr::IndexUpdate` codegen) but the commit explicitly flagged the next gap: `import _ from "lodash"` still threw
+
+```
+TypeError: value is not a function
+    at <anonymous>
+```
+
+from the top-level IIFE before any user code ran, and `_` resolved to `undefined`. Two distinct call sites hit the same null-closure-handle path:
+
+1. **`var root = freeGlobal || freeSelf || Function('return this')();`** (lodash.js line 436) — the canonical "give me whatever the host calls `globalThis` here" idiom every CJS/UMD library copies. The bare `Function` ident lowered to `Expr::GlobalGet(0)` (the no-resolution sentinel; `lower.rs:8174` already lists Function in the no-warn allowlist), so the inner `Function('return this')` lowered to `Call { callee: GlobalGet(0), args: [String("return this")] }`. The generic call path dispatched through `js_closure_call1` with a null closure handle, validated, and threw via `throw_not_callable` (which hard-codes `b"value"` as the property name — hence the "value is not a function" diagnostic with no usable receiver name).
+
+2. **`var reHasEscapedHtml = RegExp(reEscapedHtml.source);`** (lodash.js line 136; ~5 more sibling sites at lines 137 / 154 / 266 / 272 / 275 / 290 / 1499 / 4613) — bare `RegExp(...)` function-call form (not `new RegExp(...)`). The `RegExp` ident lowered the same way as `Function` (GlobalGet(0)), so the call form crashed identically. `new RegExp(<non-literal>)` had a parallel hole: the `expr_new.rs` recogniser only fired for string-literal `pattern` args and otherwise fell through to generic class-instantiation, which produced an empty ObjectHeader placeholder that any subsequent `.test()` / `.exec()` would silently no-op or SIGSEGV on.
+
+**Root cause (1).** Codegen's `Call { callee: Closure }` path goes through `js_closure_callN(closure_handle, args...)` with `unbox_to_i64(callee_value)` as the handle. When the callee is `Expr::GlobalGet(0)` (which lowers to `0.0`), the handle is `0`. `js_closure_callN`'s `get_valid_func_ptr` rejects null and calls `throw_not_callable` → `js_throw_type_error_not_a_function("", "value", 5)` → the user sees the line-less "value is not a function" panic with `at <anonymous>`. Found by `nm`-grepping the debug-symbols binary for `throw_not_callable` and walking up the lldb backtrace inside `perry_closure_node_modules_lodash_lodash_js__3` (the inner IIFE body); the call site disassembled to `RegExp.source → orr STRING_TAG → js_closure_call1(closure=0, source)`.
+
+**Root cause (2).** `RegExp(...)` had no AST-shape recognizer at HIR lower time, so it fell through to the same null-callee path. `new RegExp(<dynExpr>)` was handled at the HIR level (`expr_new.rs::lower_new`) but only fired on string-literal `pattern`; the dynamic-arg case left the comment "That path is currently broken too, but at least doesn't regress on the literal case" — confirmed broken here.
+
+**Fix.**
+
+1. **New `Expr::GlobalThisExpr` HIR variant** in `crates/perry-hir/src/ir.rs` (plus walker, stable_hash tag 474, analysis, collectors arms). Codegen lowers to a single `js_get_global_this()` call — the same lazy singleton `globalThis[X] = V` already writes to (see #611, `crates/perry-runtime/src/object.rs:9767`). The HIR-side recognizer in `crates/perry-hir/src/lower/expr_call.rs` matches `Call { callee: Call { callee: Ident("Function"), args: [Lit::Str(s)] }, args: [] }` where `s.trim().trim_end_matches(';').trim() == "return this"` AND `Function` is not shadowed by a local/func binding. Whitespace and trailing semicolon variants both fold through the same path (covered by the new regression test).
+
+2. **New `Expr::RegExpDynamic { pattern: Box<Expr>, flags: Option<Box<Expr>> }` HIR variant** (walker + stable_hash 475/476/477 + analysis arms). Codegen lowers to `js_regexp_new(pattern_handle, flags_handle)` — the same runtime entry the static `/foo/g` arm uses. Missing flags fall back to interning the empty string at codegen so `js_regexp_new` always sees a real `StringHeader*` (the LLVM type system rejects a `null`-typed `ptr` in the `i64` slot). Two callsites fold into this variant:
+   - `crates/perry-hir/src/lower/expr_call.rs`: `RegExp(pattern[, flags])` with 1 or 2 args, no spread, and `RegExp` not shadowed.
+   - `crates/perry-hir/src/lower/expr_new.rs`: the existing `class_name == "RegExp"` arm now folds through `RegExpDynamic` when the literal-pattern path doesn't match (so `new RegExp(varExpr)` / `new RegExp(varExpr, varFlagsExpr)` work).
+
+**Validation.**
+
+- New regression test `test-files/test_lodash_function_return_this_regexp.ts` — 12 assertions all match `node --experimental-strip-types` byte-for-byte. Exercises `Function('return this')()` identity (the runtime cache must return the same singleton across calls), trailing-semicolon and whitespace variants, write-then-read through the singleton, `RegExp(literal)` / `RegExp(literal, "g")` / `RegExp(varPattern)` / `RegExp(/foo/.source)` (the literal lodash shape), and `new RegExp(varPattern, varFlags)` / `new RegExp(literal)` (regression guard for the path that already worked).
+- Existing `test-files/test_regex.ts` parity output unchanged (20/20 lines match node).
+- `import _ from "lodash"` no longer throws at module init — the IIFE body completes and `module.exports = _` propagates. lodash itself still hits additional unrelated compat gaps further into `runInContext()` (the empty `globalThis` doesn't expose `Array`/`Function`/`Object`/etc. as readable properties, so `var Array = context.Array` reads undefined and the subsequent `Array.prototype` throws "Cannot read properties of undefined (reading 'prototype')"); those are deeper compat work tracked separately. This PR is the IIFE-init slice — the rest of lodash needs `globalThis.Array === Array` and friends, which is its own architectural change.
+
+**Files touched.** `crates/perry-hir/src/ir.rs`, `crates/perry-hir/src/walker.rs`, `crates/perry-hir/src/stable_hash.rs`, `crates/perry-hir/src/analysis.rs`, `crates/perry-hir/src/lower/expr_call.rs`, `crates/perry-hir/src/lower/expr_new.rs`, `crates/perry-codegen/src/collectors.rs`, `crates/perry-codegen/src/expr.rs`, plus the new test fixture.
+
+## v0.5.976 — feat(zlib/crypto): `zlib.createBrotliDecompress` + `crypto.subtle.wrapKey`/`unwrapKey` — moves axios + jose past the next compile gates
+
+**Symptom.** After #955 wired `zlib.constants` + `subtle.generateKey`, the two `compilePackages` smoke targets advanced one step and tripped on the next gap:
+
+```
+$ perry main.ts -o out   # main.ts: `import axios from "axios"`
+Error: `zlib.createBrotliDecompress` is not implemented in Perry — ...
+
+$ perry main.ts -o out   # main.ts: `import * as jose from "jose"`
+Error: `crypto.subtle.wrapKey` is not implemented in Perry — ...
+```
+
+Both are module-init feature-check sites — axios checks `typeof zlib.createBrotliDecompress === 'function'` to wire up Brotli decoding only when a server replies with `content-encoding: br`; jose reaches for `wrapKey`/`unwrapKey` for `A256GCMKW` key wrap.
+
+**Fix.**
+
+1. **`zlib.createBrotliDecompress(options?)` — manifest + native shim.**
+   - Manifest entry in `crates/perry-api-manifest/src/entries.rs` (optional `options` param).
+   - `NativeModSig` row in `crates/perry-codegen/src/lower_call.rs` routing to `js_zlib_create_brotli_decompress`.
+   - Runtime: `crates/perry-stdlib/src/zlib.rs` returns a registered Buffer-shaped handle (Uint8Array-marked, 32 bytes capacity, length 0). Sufficient for axios's feature check; the real Brotli decode pipe (`write`/`end`/`on('data')`) is a follow-up — axios only invokes it when `content-encoding: br` actually arrives.
+   - `brotli = "8.0.2"` added under the `compression` feature umbrella.
+
+2. **`crypto.subtle.wrapKey` / `unwrapKey` — full HIR/codegen/runtime path.**
+   - New HIR variants `Expr::WebCryptoWrapKey` and `Expr::WebCryptoUnwrapKey` in `ir.rs`; lowering arms (`>=4` / `>=7` args) in `lower/expr_call.rs`; walker + stable-hash entries (tags 470/471 after #955's 469).
+   - Codegen lowers each to a single extern call (`js_webcrypto_wrap_key` / `js_webcrypto_unwrap_key`) and NaN-boxes the returned Promise pointer.
+   - `collect_modules.rs` flips `needs_stdlib` for both variants so auto-optimize builds perry-stdlib with `crypto`.
+   - Runtime: `crates/perry-stdlib/src/webcrypto.rs` implements AES-KW (RFC 3394 via `aes-kw` 0.3.0 — 128/192/256-bit) and AES-GCM wrap/unwrap (reusing the existing `aes_gcm_encrypt`/`decrypt` helpers). `wrapKey` returns a Uint8Array of wrapped bytes; `unwrapKey` recovers the raw bytes + `register_crypto_key` under the supplied `unwrappedKeyAlgorithm` so subsequent `encrypt`/`decrypt` on the recovered key resolves the right primitive.
+   - `aes-kw = "0.3.0"` added under the `crypto` feature umbrella.
+
+**Validation.**
+
+- `test-files/test_zlib_brotli_decompress.ts` — instantiates via `zlib.createBrotliDecompress({})` and asserts the result is an object. Passes.
+- `test-files/test_crypto_subtle_wrap_unwrap.ts` — generates two AES-GCM keys, encrypts a plaintext with the inner key, wraps the inner key with the KEK (AES-GCM wrap), unwraps to a fresh CryptoKey, then decrypts the original ciphertext with the recovered key and confirms the plaintext round-trips. Prints `hello wrap/unwrap` + `OK`.
+- `test-files/test_crypto_subtle_generateKey.ts` (#955 regression) still passes.
+
+**Files touched.** `crates/perry-api-manifest/src/entries.rs`, `crates/perry-codegen/src/lower_call.rs`, `crates/perry-codegen/src/expr.rs`, `crates/perry-codegen/src/runtime_decls.rs`, `crates/perry-hir/src/ir.rs`, `crates/perry-hir/src/lower/expr_call.rs`, `crates/perry-hir/src/walker.rs`, `crates/perry-hir/src/stable_hash.rs`, `crates/perry/src/commands/compile/collect_modules.rs`, `crates/perry-stdlib/src/webcrypto.rs`, `crates/perry-stdlib/src/zlib.rs`, `crates/perry-stdlib/Cargo.toml`, `docs/api/perry.d.ts`, `docs/src/api/reference.md`, plus the two new test files above.
+
+## v0.5.975 — fix(#957): CJS IIFE `.call(this)` + `Expr::IndexUpdate` codegen — `import _ from "lodash"` advances past `_.add` undefined
+
+**Symptom.** `import _ from "lodash"; _.add(1, 2)` under `perry.compilePackages: ["lodash"]` threw `TypeError: Cannot read properties of undefined (reading 'add')`. `typeof _` was literally `undefined`: the default import binding was empty.
+
+**Root cause — two distinct bugs surfaced on the same package.**
+
+1. **IIFE `.call(this)` body silently skipped.** Lodash (and every UMD-prelude CJS package) wraps its body in `;(function() { ... }.call(this));`. HIR lowered this as `Call { callee: PropertyGet { object: Closure {...}, property: "call" }, args: [This] }`. Codegen's generic call dispatch read `Closure.call` via `js_native_call_method`, found no `call` method on the closure handle, and silently fell through — the function body never executed. Inside the CJS-wrap's `const _cjs = (function() { ... return module.exports; })()` this meant `module.exports = _` (set by the lodash body inside the inner IIFE) was lost, so `_cjs` came back as the initial `{ exports: {} }` and `export default _cjs` resolved to that empty object. The default import bound to the wrap's *outer* `_cjs` — but accessing `.add` on it of course returned undefined. `fn.call(thisArg, ...args)` was the same shape and equally broken.
+
+2. **`Expr::IndexUpdate` bailed at codegen.** Lodash's `countBy` does `++result[key]`. HIR lowered this as `IndexUpdate { object: result, index: key, op: Add, prefix: true }`. The codegen's catch-all bailed with `perry-codegen Phase 2: expression IndexUpdate not yet supported`, and the entire lodash module got linker-stubbed under `PERRY_ALLOW_UNIMPLEMENTED=1` — so the default-import binding pointed at an empty init stub. Even after fix (1), this gate kept `_` undefined.
+
+**Fix.**
+
+1. **HIR rewrite for inline-function `.call(thisArg, ...args)` IIFE pattern.** In `expr_call.rs::lower_call`, when the callee is `Member { obj: <FnExpr | ArrowExpr>, prop: "call" }` (Paren-unwrapped) and the lowered receiver is a `Closure { captures_this: false, ... }`, rewrite to a direct `Call { callee: closure, args: args[1..] }` — drop the `thisArg`. Safe because `captures_this == false` means the body has no `this` references that depend on the bound value, and Perry has no `this`-binding mechanism through `.call()` for ordinary functions anyway. Class-method `obj.method.call(otherObj, args)` shapes keep their existing semantics (callee is a `PropertyGet`, not an inline function literal).
+
+2. **`Expr::IndexUpdate` LLVM codegen.** Added an arm in `expr.rs` modeled on `Expr::PropertyUpdate`: lower `object` + `index` into SSA registers once, call `js_dyn_index_get(obj, idx)` for the old value, `fadd`/`fsub 1.0` for the new, `js_dyn_index_set(obj, idx, new)` to write back. Return new for prefix (`++x`), old for postfix (`x++`). Added a new `js_dyn_index_set` runtime helper next to `js_dyn_index_get` that routes by `gc_type`: arrays → `js_array_set_index_or_string`, non-array objects → stringify numeric/string-key index + `js_object_set_field_by_name`, strings → no-op (matches strict-mode no-write). Extended `js_dyn_index_get` to handle string-tagged index NaN-box values (route through `js_object_get_field_by_name_f64`) — pre-fix it coerced the string box's bits via `index as i32`, producing garbage offsets, so `++obj["foo"]` returned undefined.
+
+**Validation.**
+
+- `test-files/test_lodash_default_import_methods.ts` — covers both fixes (IIFE writes-outer, IIFE arrow call with args, prefix/postfix inc/dec on object-string-key + array-numeric-index). Byte-matches `node --experimental-strip-types`.
+- The repro from the bug report (`import _ from "lodash"; _.add(1, 2)`) now advances past the `_.add` undefined symptom. Real lodash still hits separate runtime gaps (`Function('return this')()` not callable; bare `global` / `self` lower to `0.0` so `freeGlobal`/`freeSelf` come back false-y; `runInContext()` then throws `value is not a function` on `root.Object()`) — those are tracked downstream and are *not* CJS-default-import bugs.
+
+**Files touched.** `crates/perry-hir/src/lower/expr_call.rs` (IIFE `.call(this)` rewrite), `crates/perry-codegen/src/expr.rs` (`Expr::IndexUpdate` arm), `crates/perry-codegen/src/runtime_decls.rs` (extern decl for `js_dyn_index_set`), `crates/perry-runtime/src/value.rs` (`js_dyn_index_set` helper + string-key handling in `js_dyn_index_get`), `test-files/test_lodash_default_import_methods.ts` (regression).
+
+## v0.5.974 — feat(zlib/crypto): zlib.constants + subtle.generateKey (AES-GCM) — moves axios + jose past the next compile gates
+
+**Symptom.** After #952 wired `randomFillSync` + `subtle.encrypt`/`decrypt`, the two `compilePackages` smoke targets advanced one step and tripped on the next gap:
+
+```
+$ perry main.ts -o out   # main.ts: `import axios from "axios"`
+Error: `zlib.constants` is not implemented in Perry — see `perry --print-api-manifest` ...
+
+$ perry main.ts -o out   # main.ts: `import * as jose from "jose"`
+Error: `crypto.subtle.generateKey` is not implemented in Perry ...
+```
+
+**Fix.** Two same-family additions:
+
+1. **`zlib.constants`** — Node exposes ~50 constants (`Z_*`, flush/return codes, mode tags `DEFLATE`/`INFLATE`/`GZIP`/`BROTLI_*`/`ZSTD_*`) on `require('node:zlib').constants`. Added the property entry to the manifest and the value table to `get_native_module_constant` in `perry-runtime/src/object.rs`, routed through the existing `crypto.constants` / `os.constants` sub-namespace plumbing. Values match Node byte-for-byte (sourced from upstream zlib + Node's `lib/zlib.js` constant export). Axios's stream wiring reads these directly.
+
+2. **`crypto.subtle.generateKey(algorithm, extractable, keyUsages)`** — initial AES-GCM coverage (128 / 256 bit; 192-bit explicitly rejected to mirror the existing encrypt/decrypt path that's keyed on `aes-gcm` 0.10's `Aes128Gcm`/`Aes256Gcm` type set). Adds `Expr::WebCryptoGenerateKey`, the `js_webcrypto_generate_key` extern, and an HIR-lowering arm in `expr_call.rs` next to the existing `subtle.*` chain matchers. The returned `CryptoKey` is registered in `CRYPTO_KEY_REGISTRY` as `(AesGcm, Sha256)` so the existing `subtle.encrypt`/`decrypt` path round-trips on it without further work. Asymmetric algorithms (RSA / ECDSA / ECDH), `wrapKey`/`unwrapKey`, `deriveKey`, and `HMAC` keygen remain TODO follow-ups tracked alongside #561.
+
+**Validation.**
+
+- `test-files/test_zlib_constants.ts` — reads `constants.Z_NO_COMPRESSION` … `constants.BROTLI_DEFAULT_QUALITY`, output byte-matches Node.
+- `test-files/test_crypto_subtle_generateKey.ts` — generates a 256-bit AES-GCM key, encrypts + decrypts a plaintext, asserts round-trip equality + ciphertext-length-equals-plaintext-plus-16-byte-tag.
+- Axios repro (`import axios from "axios"`) advances past the `zlib.constants` gate (next gap: `zlib.createBrotliDecompress`, follow-up).
+- Jose repro (`import * as jose from "jose"`) advances past the `subtle.generateKey` gate (next gap: `subtle.wrapKey`, follow-up).
+
+**Files touched.** `crates/perry-api-manifest/src/entries.rs` (property entry), `crates/perry-hir/src/{ir,walker,stable_hash}.rs` + `lower/expr_call.rs` (`WebCryptoGenerateKey` variant + HIR lowering), `crates/perry-codegen/src/{expr,runtime_decls}.rs` (codegen + extern decl), `crates/perry-stdlib/src/webcrypto.rs` (runtime impl), `crates/perry-runtime/src/object.rs` (`zlib`/`zlib.constants` sub-namespace + `zlib_const` table), `crates/perry/src/commands/compile/collect_modules.rs` (auto-stdlib trigger picks up the three new variants).
+
+## v0.5.973 — fix(cli): surface compiler panics with an `Error:` prefix instead of a buried abort
+
+**Symptom (ioredis-via-compilePackages).** Configure `perry.compilePackages: ["ioredis"]` in a `package.json`, run `perry main.ts -o out` where `main.ts` does `import Redis from "ioredis"`, and the compiler exits with status 134 — but to a user scanning the tail of the output it looks silent: hundreds of `Warning: unknown identifier '...'` lines from ioredis's CJS bodies drown out the single line at the very end:
+
+```
+thread 'perry-main' (NNNN) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+```
+
+There is no `Error:` prefix anywhere — the libstd guard message is the only signal. Combined with the long trail of warnings, the practical effect is "perry exited non-zero with no error" from the user's POV, which is the worst possible diagnostic. The deeper compile failure is a separate bug (real recursion blow-up somewhere in HIR lower over the ~30 transitive CJS files ioredis pulls in, post-cjs-wrap — tracked separately); this PR fixes the silent-failure half so that any future deep-pipeline panic surfaces clearly.
+
+**Implementation (`crates/perry/src/main.rs`).**
+
+1. **Panic hook (`install_panic_hook`)** — installed at the top of `main()` before the worker thread is spawned. The hook prepends three lines (`Error: perry crashed unexpectedly.` + a "report at github.com/PerryTS/perry/issues" pointer) to the default panic dump, then chains to the previously-registered default hook so `RUST_BACKTRACE=1` / `RUST_BACKTRACE=full` still print the full backtrace. Any panic that goes through Rust's panic machinery (which is the vast majority of "the compiler died" paths — `unwrap()` on a malformed AST, an `unreachable!()` in lower.rs, an `assert!` violation) now produces an obvious `Error:`-prefixed line right at the top of the panic dump, regardless of how much warning noise preceded it.
+
+2. **Join-error branch (`main()` → `handler.join()`)** — rewritten from `handler.join().unwrap()` (which itself panics, producing two stacked panics) to a `match` that:
+   - On `Ok(result)`, returns the worker's `Result<()>` unchanged.
+   - On `Err(payload)`, extracts the panic message via the new `extract_panic_message` helper and returns `Err(anyhow!("perry compiler panicked: {msg}"))`. Anyhow's `Termination` then prints that as a final `Error: perry compiler panicked: <msg>` line — the user gets one more clearly-prefixed line at exit, so they don't need to scroll back through warnings to find the panic body.
+
+3. **`extract_panic_message`** — handles the three real shapes of `JoinHandle::join` payloads: `&'static str` (from `panic!("literal")` / `panic_any("literal")`), `String` (from `panic!("{}", x)` after formatting), and opaque (custom panic-any payloads like `panic_any(42_i32)`). The opaque path falls back to `"no message — see backtrace above"` so the formatted error is still grammatical.
+
+4. **perry-main stack: 64 MB → 128 MB.** Bumped to give honest deep recursion (e.g. SWC parsing of a >10K-LOC bundled file) more headroom before tripping the guard. The ioredis case still overflows at 128 MB — confirming it's an unbounded recursion bug, not just a deep one — but the bump is cheap (virtual reservation only; pages are committed lazily) and removes the floor case where 64 MB is genuinely too small.
+
+**Unit tests.** Three new `#[test]`s in `crates/perry/src/main.rs::tests` cover `extract_panic_message`:
+
+- `extract_panic_message_handles_string_panic` — `panic!("synthetic panic from String")`, payload is a `String`, helper returns the exact message.
+- `extract_panic_message_handles_static_str_panic` — `panic_any("a static str")`, payload is `&'static str`, helper returns the exact message.
+- `extract_panic_message_handles_opaque_payload` — `panic_any(42_i32)`, payload is an i32 that downcast to `&str` / `String` both fail, helper returns the documented `"no message — see backtrace above"` fallback.
+
+These run in `cargo test --release -p perry --bin perry` (~0.00s — they only synthesize threads, no I/O).
+
+**What this PR does NOT fix.** The underlying recursion in the compile pipeline that overflows the stack for `compilePackages: ["ioredis"]` is unchanged. `perry main.ts -o out` against the repro still exits 134; the stack-overflow message is still the libstd one. But the broader class of "compiler crashed and the user sees nothing" — any `unwrap()` / `unreachable!()` / `assert!` panic deep in lower.rs / codegen.rs — now produces a clearly-prefixed `Error:` line that survives any amount of preceding warning output. The stack-overflow-abort path is the one signal-handler-level abort that bypasses panic infrastructure entirely; making that one print a Perry-prefixed message requires installing a custom SIGSEGV handler that runs before libstd's stack-guard handler, which is invasive enough to defer to a follow-up.
+
+**Validation.**
+
+- `cargo test --release -p perry --bin perry -- extract_panic_message` — 3/3 pass.
+- `perry /tmp/nonexistent.ts` — existing anyhow error path still prints `Error: Failed to canonicalize ...`.
+- `perry main.ts -o out` (where main.ts is `console.log("ok")`) — still compiles cleanly to a working binary.
+
+## v0.5.972 — feat(crypto): randomFillSync + subtle.encrypt/decrypt (AES-GCM) — unblocks axios + jose under `perry.compilePackages`
+
+**Symptom.** Two of the three "compile this npm package natively" smoke tests were hitting the strict-API gate (#463) at the same surface:
+
+```
+$ perry main.ts -o out   # main.ts: `import axios from "axios"`
+Error: `crypto.randomFillSync` is not implemented in Perry
+
+$ perry main.ts -o out   # main.ts: `import * as jose from "jose"`
+Error: `crypto.subtle.encrypt` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify
+```
+
+axios's `lib/platform/node/index.js` builds request IDs via `crypto.randomFillSync(new Uint32Array(size))`. jose's `gcmEncrypt` / `gcmDecrypt` in `dist/webapi/lib/content_encryption.js` route through `crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData, tagLength: 128 }, key, plaintext)` and the matching `decrypt`. Both calls were rejected at HIR-lowering time by the strict-API gate because the manifest didn't declare them and the `crypto.subtle.<method>` chain matcher in `expr_call.rs` only had explicit arms for `digest` / `importKey` / `sign` / `verify`.
+
+**Implementation.**
+
+1. **`crypto.randomFillSync(buffer, offset?, size?)`** —
+   - New `Expr::CryptoRandomFillSync { buffer, offset, size }` IR variant (walker.rs both `walk_expr` arms, stable_hash.rs tag 468).
+   - HIR lowering in `crates/perry-hir/src/lower/expr_call.rs` matches alongside the existing `crypto.randomBytes` / `randomUUID` / `getRandomValues` arms. Missing offset/size lower as `Expr::Undefined` so the runtime defaulting path keeps working.
+   - Codegen in `crates/perry-codegen/src/expr.rs` emits a direct call to the new FFI helper.
+   - Runtime helper `js_crypto_random_fill_sync` in `crates/perry-stdlib/src/crypto.rs` handles **both** the Buffer / Uint8Array path (`BUFFER_REGISTRY`-tagged BufferHeader) and the TypedArrayHeader path (Uint32Array etc — axios's actual shape). Critically, the function accepts the value in two representations: NaN-boxed POINTER_TAG (the form Buffer / Uint8Array arrive as) AND raw heap pointer in the low 48 bits (the form `Expr::TypedArrayNew` codegen emits — see the `bitcast_i64_to_double` in `expr.rs`, no tag). The first iteration missed the raw-pointer case and silently no-op'd on Uint32Array; the probe `crypto.randomFillSync(new Uint32Array(4))` returned all-zeros until I widened the top16 check from `== 0x7FFD` to `>= 0x7FF8`.
+   - Optional `offset`/`size` args go through `nanboxed_to_usize` which handles INT32_TAG, plain `f64`, and the `undefined` / `null` sentinels; out-of-range values are clamped to the buffer's byte length (`resolve_range`) rather than throwing, matching Node's lenient bounds behavior.
+   - Manifest entry `method("crypto", "randomFillSync", false, None)` in `crates/perry-api-manifest/src/entries.rs`.
+
+2. **`crypto.subtle.encrypt(algorithm, key, data)` / `decrypt(...)`** — AES-GCM only this pass; AES-CBC, AES-CTR, and RSA-OAEP are TODO follow-ups tracked alongside #561.
+   - Two new IR variants `Expr::WebCryptoEncrypt` / `Expr::WebCryptoDecrypt` (same 3-arg shape as `WebCryptoSign`).
+   - HIR lowering extends the `crypto.subtle.<method>` chain matcher with `"encrypt"` / `"decrypt"` arms. Updated the "unsupported subtle method" diagnostic to list the new methods.
+   - Codegen mirrors `WebCryptoSign`: each emits a `js_webcrypto_encrypt`/`_decrypt` FFI call and NaN-boxes the returned `*mut Promise` with POINTER_TAG. Runtime helpers declared in `crates/perry-codegen/src/runtime_decls.rs`.
+   - Runtime implementation in `crates/perry-stdlib/src/webcrypto.rs`. Extended the existing `KeyAlgo` enum with `AesGcm` and taught `importKey` to accept either the object form `{ name: "AES-GCM" }` or the shorthand string `"AES-GCM"` (jose passes the shorthand). The encrypt/decrypt FFIs:
+     1. Read the algorithm's `name` via `extract_algo_name` (shared with importKey) — must equal "AES-GCM".
+     2. Read the required `iv` field and the optional `additionalData` field from the algorithm object via `object_field_bytes`.
+     3. Verify the key was imported as AES-GCM (`lookup_crypto_key` + `KeyAlgo::AesGcm` check).
+     4. Route to `aes_gcm_encrypt` / `aes_gcm_decrypt` which dispatch to `Aes128Gcm` or `Aes256Gcm` based on key length (192-bit AES-GCM is intentionally not in the `aes-gcm 0.10` type set; documented + tested as rejected). Output is `ciphertext || tag` per the WebCrypto spec; decrypt expects the same layout.
+   - Anything that doesn't fit the AES-GCM shape resolves to undefined rather than panicking — the existing `digest`/`sign`/`verify` rejection pattern.
+
+**Validation.**
+- New `test-files/test_crypto_randomFillSync.ts` — fills both `Uint8Array(16)` and `Uint32Array(8)`, asserts identity equality of the returned buffer and that the sum of bytes/elements is non-zero (2⁻¹²⁸ false-negative probability).
+- New `test-files/test_crypto_subtle_encrypt_decrypt.ts` — AES-GCM-128 round-trip with a 10-byte plaintext, verifies `ct.length == 26` (10 + 16-byte tag) and that decrypt recovers the plaintext byte-for-byte.
+- Four new unit tests in `webcrypto::tests`: 128-bit and 256-bit AES-GCM round-trips, short-IV rejection, and 192-bit key rejection (regression guard for the `aes-gcm 0.10` type-set decision).
+- Repro for axios now advances past `crypto.randomFillSync` and stops at `zlib.constants` (a separate known unimplemented). Repro for jose now advances past `crypto.subtle.encrypt` and stops at `crypto.subtle.generateKey` (out of scope per #561).
+- Manifest consistency suite + `webcrypto` lib tests green.
+
+**Out of scope.** AES-CBC, AES-CTR, AES-KW, and RSA-OAEP encrypt/decrypt; `subtle.generateKey`, `wrapKey`, `unwrapKey`, `deriveKey`; asymmetric sign/verify (RSA, ECDSA). The diagnostic message names the supported surface so callers see exactly what's missing.
+
+## v0.5.971 — fix(jsruntime): define `URL` / `URLSearchParams` as V8-fallback globals (unblocks `import "joi"`)
+
+**Symptom.** `import Joi from "joi"` against the V8-fallback jsruntime crashed at module-init with
+
+```
+[js_get_export] failed to get namespace: ReferenceError: URL is not defined
+    at file:///.../node_modules/@hapi/hoek/lib/types.js:32:10
+    at file:///.../node_modules/@hapi/hoek/lib/types.js:77:3
+TypeError: Cannot read properties of undefined (reading 'assert')
+    at <anonymous>
+```
+
+before any user code ran. `@hapi/hoek` (transitive dep of joi) reads `URL.prototype` as a top-level expression, and modern Node exposes `URL` as a global. Perry's V8-fallback runtime (deno_core without the `deno_url` extension) does not, so the lookup throws.
+
+**Fix.** `crates/perry-jsruntime/src/node_polyfills.js` now installs `globalThis.URL` and `globalThis.URLSearchParams` alongside the existing `Buffer` / `TextEncoder` / `TextDecoder` / `fetch` polyfills. The URL polyfill is a roughly-WHATWG-compatible parser covering the access pattern that joi/hoek and friends actually use: constructor with optional `base`, `href` / `origin` / `protocol` / `username` / `password` / `host` / `hostname` / `port` / `pathname` / `search` / `hash` getters and setters, `searchParams` with live-sync back into `_search`, plus static `URL.canParse` / `URL.parse`. `URLSearchParams` is a complete implementation (string / array-of-pairs / object init forms; `append`, `delete`, `get`, `getAll`, `has`, `set`, `sort`, `forEach`, `keys`, `values`, `entries`, `size`, `toString`, `Symbol.iterator`). Polyfills are gated on `typeof globalThis.URL === 'undefined'` so they no-op if a future deno_core upgrade ships built-in URL globals.
+
+Scope is narrow: joi still fails further into its init with `TypeError: Cannot read properties of undefined (reading 'template')`, which is a separate downstream gap left as a follow-up. This release only addresses the `URL is not defined` crash.
+
+**Validation.** New `test-files/joi_url_v8_global/` fixture forces the V8 fallback path (no `compilePackages` entry, a `.js` package in `node_modules`) and exercises `URL.prototype`, `new URL(href)`, all property getters, and `URLSearchParams` stringification — output:
+
+```
+urlProto type: object
+protocol: https:
+hostname: example.com
+pathname: /api/v1
+search: ?x=1&y=2
+search-stringify: a=1&b=2
+```
+
+Native-compile path is unaffected — perry-runtime's own `js_url_*` impl still owns native URL semantics. Manual repro (`/tmp/perry-joi-916`, `import Joi from "joi"`) confirms the V8 binary now passes the `URL is not defined` error and reaches the next downstream blocker.
+
+## v0.5.970 — feat(util): add `util.formatWithOptions(options, format, ...args)` (unblocks the `debug` npm package)
+
+**Background.** `node:util.formatWithOptions(inspectOptions, format[, ...args])` is documented at <https://nodejs.org/api/util.html#utilformatwithoptionsinspectoptions-format-args>. It's identical to `util.format` except the first argument is an `util.inspect`-options bag that gets applied to any `%o` / `%O` placeholders in the format string. Despite being a relatively obscure API on its own, it's required by the `debug` npm package — a top-1k-by-downloads logger that is a transitive dependency of `express`, `socket.io`, and roughly half of the Node ecosystem. Without this entry, any compile that pulls in `debug` (directly or transitively, even when `debug` is listed in `perry.compilePackages`) bails at HIR-lower time with:
+
+```
+`util.formatWithOptions` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)
+```
+
+That's the #463 unimplemented-API gate firing because `formatWithOptions` was absent from `perry-api-manifest`'s `util` block.
+
+**This release.** Adds `formatWithOptions` to the manifest + JS stub:
+
+- `crates/perry-api-manifest/src/entries.rs` — new `method("util", "formatWithOptions", false, None)` entry alongside `format`. This lifts the #463 gate so the symbol resolves, and feeds the auto-generated API reference + `.d.ts`.
+- `crates/perry-jsruntime/src/modules.rs` — the synthetic ESM `util` module now exports `formatWithOptions(_inspectOptions, fmt, ...args)` that ignores the options bag and delegates to the existing `format(fmt, ...args)`. Also added to the default export. Full options-passthrough (real `%o` / `%O` rendering with `colors`, `depth`, `breakLength`, etc.) is a follow-up — `debug` and the broader ecosystem just need the function to exist and to forward its format string + args.
+- `test-files/test_util_format_with_options.ts` — regression test that exercises both empty-options and options-with-properties shapes.
+- `docs/src/api/reference.md` + `docs/api/perry.d.ts` — regenerated from the manifest via `./scripts/regen_api_docs.sh` so the api-docs-drift CI check stays green.
+
+**Validation.**
+
+```
+$ ./target/release/perry test-files/test_util_format_with_options.ts -o /tmp/tfwo
+$ /tmp/tfwo
+undefined
+undefined
+```
+
+(The "undefined" output mirrors the existing `util.format` stub behavior — both currently return the format string before placeholder substitution; full `%s`/`%d`/`%o` expansion is a separate follow-up. What matters here is that the `#463` gate is lifted so consumers like `debug` can compile.)
+
+The `debug` smoke from the issue report (`import debug from "debug"; console.log(typeof debug)` with `perry.compilePackages: ["debug"]`) now links and reaches a later runtime stage; pre-fix it bailed at HIR-lower with the `util.formatWithOptions is not implemented` message. Remaining failures are downstream debug-package gaps that get tracked separately.
+
+## v0.5.969 — fix(runtime): #748 — async closure's busy-wait microtask drain no longer clobbers outer state-machine's `current_step`
+
+**Symptom.** skelpo-shop-admin's `/v1/auth/signup` Fastify route (Fastify 4.28 + @perryts/mysql + argon2 + jsonwebtoken) returned HTTP 200 with the single-byte body `0` instead of the explicit `return { accessToken, user, account, session, … }` payload. The first `await pool.exec("INSERT INTO users …")` committed (row visible in MySQL), but every subsequent `await pool.exec(…)` silently no-op'd — no rows in `accounts`, `sessions`, `members`, `auditLog`. tsx + node on the same source against the same DB returned the correct JSON with HTTP 201. Reported against perry 0.5.899; reproduced through 0.5.967.
+
+**Root cause.** Async closures (arrow / function-expression async functions assigned to consts / map values / object properties) are NOT rewritten by the `async_to_generator` pass — the pre-pass only iterates `module.functions` and skips closures by design (see comment at `crates/perry-transform/src/async_to_generator.rs:47-49`: *"Top-level functions only: nested async closures (arrow/function expressions assigned to locals) are NOT yet rewritten. They keep the pre-fix direct-call/busy-wait behavior. Follow-up."*). When such a closure executes inside an outer top-level async function's state-machine step body, the closure's `Expr::Await` lowers to the busy-wait loop in `crates/perry-codegen/src/expr.rs:10094+`, which polls via `js_promise_run_microtasks()` until the awaited Promise settles.
+
+Inside the microtask runner, every `Task::AsyncStep` dispatch wrote `INLINE_TRAP = {trap_next: next, current_step: step_closure}` before invoking the step and unconditionally cleared `INLINE_TRAP = empty` afterwards (`promise.rs:1407-1429`). That clear was correct in isolation — between dispatches the runner has no active activation — but it leaked back to whatever code had called `js_promise_run_microtasks()`. The outer top-level async function's state-machine step closure was active at the time: it was entered through `js_async_first_call(outer_step)`, which had installed `INLINE_TRAP = {trap_next: null, current_step: outer_step}` on the stack-saved value. Once control returned from the busy-wait, the outer step body's `Expr::CurrentStepClosure` (lowered to `js_get_current_step_closure`) read `INLINE_TRAP.current_step` and saw `0` instead of `outer_step` — because the inner microtask drain had wiped it.
+
+The outer step then returned `Expr::AsyncStepChain { value, step_closure: <NULL> }` for the await of the closure's result. `js_async_step_chain` queued `Task::AsyncStep(NULL, value, next, false)` onto the task queue. When the event loop drained that task, the null-step short-circuit at `promise.rs:1316-1326` fired:
+
+```rust
+if step_closure.is_null() {
+    if !next.is_null() {
+        if is_error { js_promise_reject(next, value); } else { js_promise_resolve(next, value); }
+    }
+    restore_microtask_context();
+    ran += 1;
+    continue;
+}
+```
+
+The outer step body's state-1 code (the `return { … }` and every statement after the first `await`) NEVER ran — `next` settled with whatever the awaited Promise resolved to. In the Fastify signup case that was `{ insertId: <first INSERT>, affectedRows: 1 }`, which `JSON.stringify` rendered as something that ultimately serialized to ASCII `0` (the `next`'s value flowed through Fastify's reply pipeline as the response body). The "subsequent INSERTs silently no-op" symptom is consistent: those `await pool.exec(...)` calls live in state-1+ of the outer step body, which the null-step short-circuit prevented from ever executing — `await pool.exec(...)` and `JSON.stringify` and `void reply.code(201)` and `return {...}` all became dead code at runtime.
+
+**Reproducer (no fastify / no mysql).** `test-files/test_issue_748_multi_step_await_return.ts` exercises the minimum shape: a top-level `async function main()` awaits a `Map<string, Handler>`-stored async arrow closure that itself awaits three async helpers (`createUser` / `createAccount` / `createSession`), each of which awaits a `Pool.exec` async method that awaits a `setTimeout` Promise. Pre-fix the outer `await app.inject(...)` returned `undefined`, the post-await `console.log(out)` printed nothing (the line was dead code). Post-fix it prints the full `{"ok":true,"user":{...},"account":{...},"session":{...}}` JSON byte-identical to `node --experimental-strip-types`.
+
+**Fix.** `crates/perry-runtime/src/promise.rs`: save `INLINE_TRAP` before each `Task::AsyncStep` / `Task::Inline` dispatch and restore it afterwards, instead of unconditionally clearing to empty. In the common case (no outer activation), the saved value IS empty so the restore is a no-op — but when the runner is invoked re-entrantly from inside an outer state-machine step's busy-wait, the outer's `current_step` survives. The outer step's later `Expr::CurrentStepClosure` then sees the correct `outer_step` pointer, `AsyncStepChain` queues `Task::AsyncStep(outer_step, value, next, false)` with a non-null step, and state-1 (the return-value path) runs normally.
+
+**Scope.** Runtime-only change. The fix is in the microtask runner; codegen and HIR are unchanged. The longer-term fix (extending `async_to_generator` to also rewrite async closures so they don't busy-wait at all) is tracked separately — for now this restores correctness for the busy-wait re-entrancy case without touching the transform's scope.
+
+**Validation.**
+- `test-files/test_issue_748_multi_step_await_return.ts` byte-identical to `node --experimental-strip-types`.
+- `test-files/test_issue_256_microtask_ordering.ts` — PARITY (no regression on the original async-step driver fix).
+- `/tmp/run_gap_tests.sh` — 34/36 PASS, same baseline as pre-fix (the 2 failures — `test_gap_class_advanced`, `test_gap_console_methods` — are unrelated pre-existing gaps).
+
+## v0.5.968 — test(regression): #678 — exhaustive V8-fallback symbol-link coverage
+
+**Background.** Issue #678 reported `Undefined symbols: _perry_fn_node_modules_ink_build_render_js__render` for ink + react when imports landed on the V8 fallback (modules outside `perry.compilePackages`, or modules pulled in transitively where some sibling fell back to V8). Two fixes have already landed:
+
+- v0.5.785 — `fix(codegen): #678 — re-export rename resolves to origin export name` (suffix tracking across `export { default as X } from "./Y.js"` barrels).
+- v0.5.796 followup (`fix(codegen): #678 — V8-fallback callsites route through V8 bridge`) — every consumer-side codegen site that previously formed a bare `perry_fn_<v8src>__<name>` extern now consults `import_function_v8_specifiers` first and short-circuits to `js_call_v8_export(specifier, name, args, argc)` when the source module was demoted to `ModuleKind::Interpreted`.
+
+The ink + react repro from the issue now links cleanly (the link-error symptom is gone; the entry binary fails downstream on a React-internal `Activity` runtime gap, which is a separate issue).
+
+**This release.** Adds `test-files/test_issue_678_v8_fallback_symbols.ts` — an exhaustive regression test that exercises every codegen site the V8-bridge fix has to cover so a future refactor can't silently regress one shape:
+
+1. **Named import + direct call** — `greet(...)`, `add(...)` from `./fixtures/issue_678_v8/mod.js`. Hits `lower_call.rs:~1197` (the `import_function_v8_specifiers.get(name)` short-circuit before forming `perry_fn_<src>__<name>`).
+2. **Default import + direct call** — `defaultFn(...)` from `./fixtures/issue_678_v8/default_mod.js`. Same call-site, but with `name == "default"`; pre-fix this formed `perry_fn_<default_mod_js>__default` and link-failed.
+3. **Namespace import + member call** — `ns.greet(...)` / `ns.add(...)` from `import * as ns from "./mod.js"`. Hits the separate codegen path at `lower_call.rs:~560` (member-access through a registered namespace).
+4. **Function-as-value (closure-wrapper)** — `apply1(greet, "world")`, `apply2(add, 100, 23)`. Forces the codegen to materialise `js_closure_alloc_singleton(@__perry_wrap_perry_fn_<src>__<name>)`; pre-fix the wrapper stub symbol referenced here was also missing for V8-routed imports.
+
+Paired with a new fixture `test-files/fixtures/issue_678_v8/default_mod.js` (default function export + a named export) alongside the existing `mod.js` (named-only). Both fixtures are `.js` files outside `perry.compilePackages`, so the import-collection pass mandatorily lands them in `ModuleKind::Interpreted`.
+
+**Validation.**
+
+```
+$ ./target/release/perry compile test-files/test_issue_678_v8_fallback_symbols.ts -o /tmp/t678s
+Found 3 module(s): 1 native, 2 JavaScript
+Wrote executable: /tmp/t678s
+$ diff <(/tmp/t678s) <(node --experimental-strip-types test-files/test_issue_678_v8_fallback_symbols.ts) && echo OK
+OK
+```
+
+Output:
+
+```
+named: hello perry
+named-arity2: 42
+default: v8-default: hi
+default-mod-named: v8-named: ho
+ns-named: hello ns
+ns-arity2: 30
+apply-named: hello world
+apply-default: v8-default: world
+apply-add: 123
+done
+```
+
+The existing `test-files/test_issue_678_v8_fallback.ts` (named-only smoke) and `test-files/test_issue_678_reexport_default.ts` (re-export rename) still pass unchanged. Ink + react also links cleanly (`Found 91 module(s): 68 native, 23 JavaScript` → `Wrote executable: counter`); the React `Activity` runtime gap that surfaces post-link is a separate issue.
+
 ## v0.5.967 — fix(codegen): #321 — factory-returned-class `.staticMethod(args)` bundles args into synthetic `arguments` rest
 
 **Symptom.** `import { Effect } from "effect"; console.log("smoke:", typeof (Effect as any).succeed)` advanced through Schema.ts module init past the post-#912 (gap 1 + gap 2) sites but still threw

@@ -73,6 +73,154 @@ pub fn clear_compile_packages_override() {
     COMPILE_PACKAGES_OVERRIDE.with(|cell| cell.borrow_mut().clear());
 }
 
+// ---- #503 dynamic-stdlib-dispatch refusal config ----
+
+thread_local! {
+    /// #503: when true, HIR lowering refuses compile-time `obj[expr]()` /
+    /// `obj[expr]` on known stdlib namespace receivers (`process`, `fs`,
+    /// `crypto`, `child_process`, `net`, `os`, `path`, `http`, `https`,
+    /// `stream`, `url`, `util`, `buffer`, `events`, `dns`, `tls`,
+    /// `querystring`, `zlib`) unless the index is a string literal or
+    /// compile-time-foldable string. Catches the dispatch-by-string class
+    /// of supply-chain evasion. Set to false by `perry.allowDynamicStdlibDispatch: true`
+    /// or `PERRY_ALLOW_DYNAMIC_STDLIB=1`.
+    static REFUSE_DYNAMIC_STDLIB_DISPATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+
+    /// #503: per-thread set of npm package names that opted out of the
+    /// dynamic-stdlib-dispatch refusal (`perry.allowDynamicStdlibDispatch:
+    /// ["@scope/pkg", ...]`). When the currently-lowering source file
+    /// belongs to one of these packages, the check is skipped.
+    static ALLOW_DYNAMIC_STDLIB_PACKAGES: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+
+    /// #503: source text of the module currently being lowered. Used by
+    /// the dynamic-dispatch check to look up `// @perry-allow-dynamic`
+    /// line annotations adjacent to violation sites. Set once per
+    /// `lower_module_full` invocation by the compiler driver.
+    static CURRENT_MODULE_SOURCE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// #503: enable (true) or disable (false) the dynamic-stdlib-dispatch
+/// refusal pass. Default is true (refusal active). The compile driver
+/// calls this once with the resolved configuration before kicking off
+/// HIR lowering for the build.
+pub fn set_refuse_dynamic_stdlib_dispatch(refuse: bool) {
+    REFUSE_DYNAMIC_STDLIB_DISPATCH.with(|c| c.set(refuse));
+}
+
+/// #503: is the dynamic-stdlib-dispatch refusal pass currently enabled
+/// for this thread?
+pub fn refuse_dynamic_stdlib_dispatch_enabled() -> bool {
+    REFUSE_DYNAMIC_STDLIB_DISPATCH.with(|c| c.get())
+}
+
+/// #503: install the per-thread allow-list of package names whose
+/// modules may legitimately use dynamic dispatch on stdlib namespaces.
+pub fn set_allow_dynamic_stdlib_packages(set: std::collections::HashSet<String>) {
+    ALLOW_DYNAMIC_STDLIB_PACKAGES.with(|c| *c.borrow_mut() = set);
+}
+
+/// #503: clear the per-thread allow-list.
+pub fn clear_allow_dynamic_stdlib_packages() {
+    ALLOW_DYNAMIC_STDLIB_PACKAGES.with(|c| c.borrow_mut().clear());
+}
+
+/// #503: is the given package name on the allow-list? `package_name_of`
+/// is the canonical extractor (scope-aware).
+pub fn dynamic_stdlib_allowed_for_package(pkg: &str) -> bool {
+    ALLOW_DYNAMIC_STDLIB_PACKAGES.with(|c| c.borrow().contains(pkg))
+}
+
+/// #503: install the source text of the module about to be lowered.
+/// The dynamic-dispatch check reads this to look up site annotations
+/// without re-reading the file from disk.
+pub fn set_current_module_source(src: String) {
+    CURRENT_MODULE_SOURCE.with(|c| *c.borrow_mut() = Some(src));
+}
+
+/// #503: clear the source-text thread-local.
+pub fn clear_current_module_source() {
+    CURRENT_MODULE_SOURCE.with(|c| *c.borrow_mut() = None);
+}
+
+/// #503: look up `// @perry-allow-dynamic` near `byte_offset` in the
+/// currently-installed module source. Returns true if the annotation
+/// appears on the same line as the offending site, or on any of the
+/// contiguous comment/blank lines immediately above it (so authors can
+/// stack other line comments like `// @ts-ignore` alongside the
+/// annotation without losing the opt-out).
+pub fn current_module_has_allow_dynamic_at(byte_offset: u32) -> bool {
+    CURRENT_MODULE_SOURCE.with(|cell| {
+        let borrowed = cell.borrow();
+        let Some(src) = borrowed.as_ref() else {
+            return false;
+        };
+        let offset = byte_offset as usize;
+        if offset > src.len() {
+            return false;
+        }
+        // Walk back to the start of the line containing `offset`.
+        let line_start = src[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line_end = src[offset..]
+            .find('\n')
+            .map(|i| offset + i)
+            .unwrap_or(src.len());
+        if src[line_start..line_end].contains("@perry-allow-dynamic") {
+            return true;
+        }
+        // Walk up through contiguous comment-only and blank lines.
+        // A "comment-only" line trims to either an empty string or a
+        // string starting with `//`. The walk stops at the first line
+        // that contains executable code — anything stronger would let
+        // an annotation drift arbitrarily far from its target.
+        let mut cursor = line_start;
+        while cursor > 0 {
+            let prev_end = cursor - 1; // index of '\n'
+            let prev_start = src[..prev_end].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let prev = &src[prev_start..prev_end];
+            let trimmed = prev.trim();
+            let is_comment_or_blank = trimmed.is_empty() || trimmed.starts_with("//");
+            if !is_comment_or_blank {
+                return false;
+            }
+            if prev.contains("@perry-allow-dynamic") {
+                return true;
+            }
+            cursor = prev_start;
+        }
+        false
+    })
+}
+
+/// #503: extract the package name from a source file path, if any. The
+/// path is searched for the rightmost `node_modules/` segment; the
+/// segment(s) immediately following it form the package name
+/// (scope-aware). Returns `None` for user-source files (no
+/// `node_modules/` in the path).
+pub fn package_name_for_source_path(source_path: &str) -> Option<&str> {
+    let idx = source_path.rfind("node_modules/")?;
+    let after = &source_path[idx + "node_modules/".len()..];
+    if let Some(stripped) = after.strip_prefix('@') {
+        // Scoped: `@scope/pkg/...` → `@scope/pkg`
+        let mut parts = stripped.splitn(3, '/');
+        let scope = parts.next().unwrap_or("");
+        let pkg = parts.next().unwrap_or("");
+        if scope.is_empty() || pkg.is_empty() {
+            return None;
+        }
+        let end = idx + "node_modules/".len() + 1 + scope.len() + 1 + pkg.len();
+        Some(&source_path[idx + "node_modules/".len()..end])
+    } else {
+        let pkg = after.split('/').next()?;
+        if pkg.is_empty() {
+            None
+        } else {
+            Some(pkg)
+        }
+    }
+}
+
 /// Parse the package name out of an import specifier. Mirrors the
 /// `parse_package_specifier` helper in `crates/perry/src/commands/compile/resolve.rs`
 /// but lives here so `is_native_module` doesn't gain a perry-crate dep.
@@ -1195,6 +1343,22 @@ pub enum Expr {
         value: Box<Expr>,
     },
 
+    // Read side of the JS-classic prototype-method pattern:
+    // `<funcDecl>.prototype.<name>` (or `<funcDecl>.prototype['<name>']`).
+    // Returns the closure stored in `CLASS_PROTOTYPE_METHODS` for the
+    // synthetic class id derived from the function value. Pre-fix this
+    // shape lowered to `PropertyGet(PropertyGet(funcDecl, "prototype"),
+    // name)` whose receiver evaluated to `undefined` — the user's
+    // `typeof Foo.prototype.method` came back as `'undefined'` even
+    // though `(new Foo()).method` reached the registered closure via
+    // the side-table walk. Ramda's transducer pattern only needs the
+    // assignment side, but the read side rounds out spec parity for
+    // `Constructor.prototype.method` introspection.
+    GetFunctionPrototypeMethod {
+        func: Box<Expr>,
+        method_name: String,
+    },
+
     // Static method call (e.g., Counter.increment())
     StaticMethodCall {
         class_name: String,
@@ -1230,6 +1394,19 @@ pub enum Expr {
     // access through `globalThis`/aliases where the static `.KEY` fast
     // path doesn't fire.
     ProcessEnv,
+    // `globalThis` materialized as an actual object value (not the
+    // `Expr::GlobalGet(0)` sentinel — that one routes by property
+    // name from the parent PropertyGet/Call context and lowers to
+    // the `0.0` placeholder when used bare). This variant lowers to
+    // a real `js_get_global_this()` call so that
+    // `Function('return this')()` (the canonical "get globalThis"
+    // idiom every CJS/UMD library copies — lodash, underscore,
+    // Effect, …) actually evaluates to the lazily-allocated global
+    // singleton instead of `undefined`/`0.0`. Without this fold the
+    // double call lowers as `GlobalGet(0)(literal)(): TypeError:
+    // value is not a function` at module init and the import
+    // resolves to undefined. Followup to #957 / PR #959.
+    GlobalThisExpr,
     // Process uptime: process.uptime() -> number (seconds)
     ProcessUptime,
     // Process current working directory: process.cwd() -> string
@@ -1611,6 +1788,67 @@ pub enum Expr {
         key: Box<Expr>,
         signature: Box<Expr>,
         data: Box<Expr>,
+    },
+    /// `crypto.subtle.encrypt(algorithm, key, data)` -> Promise<ArrayBuffer>
+    ///
+    /// Initial implementation covers AES-GCM (the surface jose's
+    /// `gcmEncrypt` / `rsaes` reach for); AES-CBC, AES-CTR, and
+    /// RSA-OAEP are TODO follow-ups tracked alongside #561.
+    WebCryptoEncrypt {
+        algorithm: Box<Expr>,
+        key: Box<Expr>,
+        data: Box<Expr>,
+    },
+    /// `crypto.subtle.decrypt(algorithm, key, data)` -> Promise<ArrayBuffer>
+    WebCryptoDecrypt {
+        algorithm: Box<Expr>,
+        key: Box<Expr>,
+        data: Box<Expr>,
+    },
+    /// `crypto.subtle.generateKey(algorithm, extractable, keyUsages)` ->
+    /// Promise<CryptoKey>. Initial implementation covers symmetric
+    /// AES-GCM (the shape jose's `generateSecret('A256GCM')` reaches
+    /// for); asymmetric and other algorithms are TODO follow-ups
+    /// tracked alongside #561.
+    WebCryptoGenerateKey {
+        algorithm: Box<Expr>,
+        extractable: Box<Expr>,
+        usages: Box<Expr>,
+    },
+    /// `crypto.subtle.wrapKey(format, key, wrappingKey, wrapAlgorithm)`
+    /// → Promise<Uint8Array>. Initial implementation covers AES-KW
+    /// + AES-GCM wrap (the shape jose's `wrapKey` reaches for);
+    /// asymmetric (RSA-OAEP) wrap is a TODO follow-up tracked
+    /// alongside #561.
+    WebCryptoWrapKey {
+        format: Box<Expr>,
+        key: Box<Expr>,
+        wrapping_key: Box<Expr>,
+        wrap_algorithm: Box<Expr>,
+    },
+    /// `crypto.subtle.unwrapKey(format, wrappedKey, unwrappingKey,
+    /// unwrapAlgorithm, unwrappedKeyAlgorithm, extractable, usages)`
+    /// → Promise<CryptoKey>. Mirrors `wrapKey`'s algorithm coverage;
+    /// the resulting CryptoKey is registered with the
+    /// `unwrappedKeyAlgorithm` so subsequent encrypt/decrypt calls
+    /// resolve the right primitive.
+    WebCryptoUnwrapKey {
+        format: Box<Expr>,
+        wrapped_key: Box<Expr>,
+        unwrapping_key: Box<Expr>,
+        unwrap_algorithm: Box<Expr>,
+        unwrapped_key_algorithm: Box<Expr>,
+        extractable: Box<Expr>,
+        usages: Box<Expr>,
+    },
+    /// `crypto.randomFillSync(buffer, offset?, size?)` — fills the
+    /// provided Buffer/TypedArray with random bytes in-place and
+    /// returns the same buffer. `offset` and `size` are optional
+    /// JS values (undefined sentinels OK).
+    CryptoRandomFillSync {
+        buffer: Box<Expr>,
+        offset: Box<Expr>,
+        size: Box<Expr>,
     },
 
     // OS operations
@@ -2223,6 +2461,25 @@ pub enum Expr {
     RegExp {
         pattern: String,
         flags: String,
+    },
+    /// Dynamic RegExp construction: `RegExp(pattern)` /
+    /// `RegExp(pattern, flags)` / `new RegExp(pattern, flags?)` where the
+    /// pattern (and optional flags) are runtime values, not string
+    /// literals. lodash 4 builds half a dozen of these at module init
+    /// from `someLiteralRegex.source`:
+    ///   var reHasEscapedHtml = RegExp(reEscapedHtml.source);
+    /// Pre-fix the bare `RegExp` ident lowered to `Expr::GlobalGet(0)`
+    /// and the function-call form dispatched to a null closure, which
+    /// `js_closure_call1` rejected as
+    /// `TypeError: value is not a function` at module init. The
+    /// `new RegExp(<non-literal>)` arm in `expr_new.rs` similarly fell
+    /// through to the generic class-instantiation placeholder. Both now
+    /// fold to this variant which lowers to `js_regexp_new(pattern,
+    /// flags)` (the same runtime entrypoint the static `/foo/` arm
+    /// uses). Followup to #957 / PR #959.
+    RegExpDynamic {
+        pattern: Box<Expr>,
+        flags: Option<Box<Expr>>,
     },
     /// regex.test(string) -> boolean
     RegExpTest {

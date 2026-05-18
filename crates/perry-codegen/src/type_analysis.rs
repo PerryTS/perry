@@ -972,6 +972,32 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 }
 
 /// Statically determine whether an expression evaluates to a Promise.
+/// #1008: does `expr` refer to a built-in global (e.g. `Promise`,
+/// `Array`)? Recognises both shapes that the HIR lowers bare global
+/// idents into:
+///
+/// - Legacy: `Expr::GlobalGet(_)` directly. Pre-#973 codepath.
+/// - Post-#973: `Expr::PropertyGet { object: GlobalGet(0), property:
+///   <name> }`. After PR #973, bare built-in idents lower as a
+///   property access on `globalThis` so they route through the
+///   globalThis singleton closure path. Old call sites that only
+///   matched the legacy shape silently lost specialization.
+///
+/// Pass `name = "Promise"` (etc.) to require the property-access form
+/// to actually name that built-in; the legacy `GlobalGet(_)` arm
+/// accepts any global because the original code never narrowed.
+pub(crate) fn is_global_builtin_named(expr: &Expr, name: &str) -> bool {
+    if matches!(expr, Expr::GlobalGet(_)) {
+        return true;
+    }
+    if let Expr::PropertyGet { object, property } = expr {
+        if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == name {
+            return true;
+        }
+    }
+    false
+}
+
 /// Used by `.then()` / `.catch()` / `.finally()` dispatch in lower_call
 /// to intercept promise method calls and route them through the runtime
 /// `js_promise_then` / `js_promise_catch` functions.
@@ -996,18 +1022,28 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Promise.resolve / reject / all / race / allSettled / any
         Expr::Call { callee, .. } => match callee.as_ref() {
             Expr::PropertyGet { object, property } => {
-                // `Promise.resolve(...)` etc. — GlobalGet receiver with
-                // a promise-shaped static method name.
-                if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && matches!(
-                        property.as_str(),
-                        "resolve" | "reject" | "all" | "race" | "allSettled" | "any"
-                    )
+                // `Promise.resolve(...)` etc. The receiver `Promise` can
+                // appear in two shapes:
+                //   - Legacy: bare ident → `Expr::GlobalGet(_)` directly.
+                //   - Post-#973: bare built-in idents lower to
+                //     `PropertyGet { GlobalGet(0), "Promise" }` so they
+                //     route through the globalThis singleton closure
+                //     path. Without the second arm, `is_promise_expr`
+                //     returned false for `Promise.resolve()` and the
+                //     `.then` codegen fell through to generic native
+                //     dispatch — microtask-02..07 and edge-promises went
+                //     silent (callbacks never enqueued). (#1008)
+                if matches!(
+                    property.as_str(),
+                    "resolve" | "reject" | "all" | "race" | "allSettled" | "any"
+                ) && is_global_builtin_named(object.as_ref(), "Promise")
                 {
                     return true;
                 }
                 // `Array.fromAsync(...)` returns a Promise<Array>.
-                if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == "fromAsync" {
+                if property == "fromAsync"
+                    && is_global_builtin_named(object.as_ref(), "Array")
+                {
                     return true;
                 }
                 // `.then(cb)` / `.catch(cb)` / `.finally(cb)` on a promise
