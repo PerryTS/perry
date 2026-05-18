@@ -1,0 +1,17 @@
+[package]
+name = "perry-ext-pdf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native bindings for `@perryts/pdf` (#516) — minimal PDF creation API using the `printpdf` crate. Companion to the existing PdfView widget (which handles the read/render side). v1 surface: createPdf / pdfAddText / pdfAddLine / pdfNewPage / pdfSave."
+repository.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+# Pure-Rust PDF writer. `default-features = false` drops the heavy
+# `html` feature (azul-layout, kuchiki, …) — for the v1 surface we
+# only need core text + line drawing, which lives in the base crate.
+printpdf = { version = "0.9", default-features = false }

@@ -267,3 +267,14 @@ tracking = "#466"
 crate = "perry-ext-google-auth"
 lib = "perry_ext_google_auth"
 tracking = "#674"
+# `@perryts/pdf` — official PDF creation package (issue #516).
+# Companion to the existing PdfView widget (rendering/viewing side
+# already shipped in perry-ui-{ios,visionos,macos}). The producer
+# side here wraps the pure-Rust `printpdf` crate behind a five-
+# function FFI: createPdf / pdfAddText / pdfAddLine / pdfNewPage /
+# pdfSave. Page units = PDF points (1/72"), origin = bottom-left
+# per the PDF standard.
+[bindings."@perryts/pdf"]
+crate = "perry-ext-pdf"
+lib = "perry_ext_pdf"
+tracking = "#516"

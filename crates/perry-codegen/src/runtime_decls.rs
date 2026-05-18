@@ -2217,6 +2217,24 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_nanoid", I64, &[DOUBLE]);
     module.declare_function("js_nanoid_custom", I64, &[I64, DOUBLE]);
 
+    // ========== @perryts/pdf (issue #516) ==========
+    // createPdf returns an i64 handle (NaN-boxed POINTER_TAG by
+    // codegen via NR_PTR). The mutator ops are Rust `-> ()` and
+    // therefore VOID at the LLVM ABI level.
+    module.declare_function("js_pdf_create_pdf", I64, &[DOUBLE]);
+    module.declare_function(
+        "js_pdf_add_text",
+        VOID,
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_pdf_add_line",
+        VOID,
+        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_pdf_new_page", VOID, &[I64]);
+    module.declare_function("js_pdf_save", VOID, &[I64]);
+
     // ========== Commander CLI ==========
     module.declare_function("js_commander_action", I64, &[I64, I64]);
     module.declare_function("js_commander_command", I64, &[I64, I64]);

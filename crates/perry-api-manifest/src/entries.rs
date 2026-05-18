@@ -104,6 +104,11 @@ pub const NATIVE_MODULES: &[&str] = &[
     // (#674). Bundled wrapper lives in `crates/perry-ext-google-auth`;
     // d.ts at `types/perry/google-auth/index.d.ts`.
     "@perryts/google-auth",
+    // `@perryts/pdf` — official PDF creation package (#516).
+    // Bundled wrapper lives in `crates/perry-ext-pdf`; the producer
+    // side companion to the existing PdfView widget. d.ts at
+    // `types/perry/pdf/index.d.ts`.
+    "@perryts/pdf",
 ];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
@@ -2341,4 +2346,23 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("@perryts/google-auth", "js_google_auth_sign_in", false, None),
     method("@perryts/google-auth", "js_google_auth_silent_sign_in", false, None),
     method("@perryts/google-auth", "js_google_auth_sign_out", false, None),
+    // --- @perryts/pdf (issue #516) ---
+    // Minimal PDF creation API. The five FFI entry points exported
+    // by crates/perry-ext-pdf. Param shapes intentionally loose
+    // here (mostly `p_any`) — codegen's NATIVE_MODULE_TABLE rows
+    // tighten them. createPdf takes a single options object and
+    // returns a numeric handle; pdfAddText/pdfAddLine accept
+    // positional args.
+    method_sig(
+        "@perryts/pdf",
+        "createPdf",
+        false,
+        None,
+        &[p_any("opts")],
+        TypeSpec::Number,
+    ),
+    method("@perryts/pdf", "pdfAddText", false, None),
+    method("@perryts/pdf", "pdfAddLine", false, None),
+    method("@perryts/pdf", "pdfNewPage", false, None),
+    method("@perryts/pdf", "pdfSave", false, None),
 ];

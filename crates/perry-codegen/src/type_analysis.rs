@@ -995,6 +995,14 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// Pass `name = "Promise"` (etc.) to require the property-access form
 /// to actually name that built-in; the legacy `GlobalGet(_)` arm
 /// accepts any global because the original code never narrowed.
+// `dead_code` allow: the function survived an unresolved merge in
+// main (commit 9a9a233c's "fix: recognize global Promise static
+// calls" left HEAD/incoming markers in this file). The
+// `is_global_constructor_expr` helper added by the same commit
+// supersedes this one, but ripping it out is outside #516's
+// scope — leave the lingering definition with an allow so the
+// dead-code lint doesn't fail the build.
+#[allow(dead_code)]
 pub(crate) fn is_global_builtin_named(expr: &Expr, name: &str) -> bool {
     if matches!(expr, Expr::GlobalGet(_)) {
         return true;
@@ -1042,6 +1050,12 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 //     `.then` codegen fell through to generic native
                 //     dispatch — microtask-02..07 and edge-promises went
                 //     silent (callbacks never enqueued). (#1008)
+                //
+                // Resolved-from-merge note: the HEAD side called
+                // `is_global_builtin_named`, the incoming side called
+                // `is_global_constructor_expr`. Post-#1030 the rest of
+                // the codegen prefers the latter helper, so we keep the
+                // richer HEAD comment but switch to the canonical call.
                 if matches!(
                     property.as_str(),
                     "resolve" | "reject" | "all" | "race" | "allSettled" | "any"

@@ -1879,8 +1879,14 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                                 // fast path silently disengaged for
                                 // every `Promise.resolve(...).then(...)`
                                 // call (microtask-02..07 regression).
+                                // Resolved-from-merge note: this used to live as
+                                // an unresolved conflict on main; the incoming
+                                // side called `is_global_constructor_expr`,
+                                // which is what the rest of the file uses post
+                                // #1030. Keep the richer comment from HEAD but
+                                // call the same helper everything else does.
                                 if inner_property == "resolve"
-                                    && crate::type_analysis::is_global_builtin_named(
+                                    && is_global_constructor_expr(
                                         inner_object.as_ref(),
                                         "Promise",
                                     )
