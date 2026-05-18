@@ -36,10 +36,14 @@ fn get_string_content(ptr_f64: f64) -> String {
 /// Returns (protocol, host, hostname, port, pathname, search, hash)
 fn parse_url(url_str: &str) -> (String, String, String, String, String, String, String) {
     let mut protocol = String::new();
-    let mut host = String::new();
-    let mut hostname = String::new();
+    // #854: `host`, `hostname`, `pathname` are always set by the file: /
+    // non-file branches below, so the initial empty strings were dead
+    // writes. Declared without an initial value — Rust will catch any
+    // future code path that fails to assign before use.
+    let host: String;
+    let hostname: String;
+    let pathname: String;
     let mut port = String::new();
-    let mut pathname = String::from("/");
     let mut search = String::new();
     let mut hash = String::new();
 

@@ -10093,7 +10093,9 @@ fn parse_text_content(expr: &ast::Expr) -> WidgetTextContent {
 fn parse_stack_node(kind: WidgetStackKind, args: &[ast::ExprOrSpread]) -> Option<WidgetNode> {
     let mut spacing = None;
     let mut children = Vec::new();
-    let mut modifiers = Vec::new();
+    // #854: `modifiers` was initialized to `Vec::new()` but always
+    // overwritten unconditionally by `parse_modifiers_from_args` below.
+    // Declared without an initial value.
     let mut children_arg_idx = 0;
 
     // Check if first arg is config object
@@ -10136,7 +10138,7 @@ fn parse_stack_node(kind: WidgetStackKind, args: &[ast::ExprOrSpread]) -> Option
 
     // Parse modifiers from remaining args
     let modifier_start = children_arg_idx + 1;
-    modifiers = parse_modifiers_from_args(args, modifier_start);
+    let modifiers = parse_modifiers_from_args(args, modifier_start);
 
     Some(WidgetNode::Stack {
         kind,

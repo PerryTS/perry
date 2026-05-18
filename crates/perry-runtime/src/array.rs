@@ -2398,7 +2398,8 @@ pub extern "C" fn js_array_filter(
 
         // Allocate result array with same capacity (might be smaller)
         let mut result = js_array_alloc(length);
-        let mut result_len = 0u32;
+        // #854: `js_array_push_f64` already maintains `(*result).length`, so the
+        // separate `result_len` counter that used to live here was dead.
 
         for i in 0..length as usize {
             let element = *elements_ptr.add(i);
@@ -2406,7 +2407,6 @@ pub extern "C" fn js_array_filter(
             // Proper truthy check: handles NaN-boxed booleans (TAG_FALSE != 0.0 but is falsy)
             if crate::value::js_is_truthy(keep) != 0 {
                 result = js_array_push_f64(result, element);
-                result_len += 1;
             }
         }
 

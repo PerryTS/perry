@@ -669,6 +669,11 @@ struct TransitionEntry {
 
 const TRANSITION_CACHE_SIZE: usize = 16384;
 /// Mask for slot computation: TRANSITION_CACHE_SIZE - 1
+///
+/// #854: kept alongside the size constant so future cache-resizing edits
+/// touch both in one place. Codegen-emitted slot-index expressions match
+/// against this value even when no Rust path consults it directly.
+#[allow(dead_code)]
 const TRANSITION_CACHE_MASK: usize = TRANSITION_CACHE_SIZE - 1;
 
 /// Main-thread transition cache — bypasses TLS overhead (user code is

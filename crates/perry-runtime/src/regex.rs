@@ -745,7 +745,12 @@ pub extern "C" fn js_regexp_exec(
     s: *const StringHeader,
 ) -> *mut crate::array::ArrayHeader {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    // #854: POINTER_TAG / POINTER_MASK kept co-located with the NaN-box
+    // tag contract even when this exec helper only reads TAG_UNDEFINED.
+    // Codegen and sibling helpers in regex.rs use the same values.
+    #[allow(dead_code)]
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    #[allow(dead_code)]
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
     if !is_valid_regex_ptr(re) || !is_valid_ptr(s) {

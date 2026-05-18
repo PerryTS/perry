@@ -51,9 +51,18 @@ unsafe fn buffer_payload(buf: *const BufferHeader) -> *const u8 {
     (buf as *const u8).add(std::mem::size_of::<BufferHeader>())
 }
 
+// #854: NaN-boxing tag contract — see CLAUDE.md. `POINTER_TAG`,
+// `STRING_TAG`, and `SHORT_STRING_TAG` aren't directly consulted in this
+// file but are part of the documented set of tag prefixes; kept for
+// reference next to the masks/values that this module does use, so a
+// future caller editing here can see the full encoding contract at the
+// top of the file.
+#[allow(dead_code)]
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+#[allow(dead_code)]
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+#[allow(dead_code)]
 const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;

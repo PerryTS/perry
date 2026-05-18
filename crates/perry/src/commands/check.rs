@@ -288,14 +288,15 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
         checked_files += 1;
     }
 
-    // Check dependencies if requested
-    let mut dep_issues_count = 0;
+    // Check dependencies if requested. #854: a `dep_issues_count` local
+    // used to track errors-from-deps separately but it was never read —
+    // the summary path below reads `all_diagnostics.error_count()` which
+    // already folds in everything we extend into the diagnostic stream.
     if args.check_deps {
         // Check for unresolved imports
         let unresolved = dep_resolver.get_unresolved_imports();
         if !unresolved.is_empty() {
             let unresolved_diags = unresolved_imports_to_diagnostics(unresolved, &source_cache);
-            dep_issues_count += unresolved_diags.error_count();
             all_diagnostics.extend(unresolved_diags);
         }
 
@@ -305,7 +306,6 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
             dep_resolver.get_import_locations(),
         );
         if builtin_diags.has_errors() {
-            dep_issues_count += builtin_diags.error_count();
             all_diagnostics.extend(builtin_diags);
         }
 
@@ -333,7 +333,6 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
                 }
 
                 let compat_diags = compatibility_to_diagnostics(&packages);
-                dep_issues_count += compat_diags.error_count();
                 all_diagnostics.extend(compat_diags);
             }
             Err(e) => {

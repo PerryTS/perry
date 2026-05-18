@@ -2200,6 +2200,9 @@ pub extern "C" fn js_is_promise(ptr: *mut Promise) -> i32 {
 pub extern "C" fn js_value_is_promise(value: f64) -> i32 {
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+    // #854: POINTER_MASK part of the NaN-boxing tag contract — referenced
+    // by sibling helpers and kept here so the constants stay co-located.
+    #[allow(dead_code)]
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
     let bits = value.to_bits();

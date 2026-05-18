@@ -29,6 +29,12 @@
 /// distinct from the canonical qNaN 0x7FF8 the FPU produces from arithmetic
 /// like `0/0` — code that wants to tell "Perry tagged" from "real NaN" can
 /// gate on `top16 >= 0x7FFC` (see `JSValue::is_number` below).
+///
+/// #854: part of the NaN-boxing tag contract documented in CLAUDE.md.
+/// Kept as a named constant even when no Rust code consults it directly —
+/// codegen, doc references, and external tooling all match against the
+/// numeric value.
+#[allow(dead_code)]
 const TAG_MARKER: u64 = 0x7FFC_0000_0000_0000;
 
 /// Special singleton values

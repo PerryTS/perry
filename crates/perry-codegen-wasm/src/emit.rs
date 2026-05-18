@@ -1470,10 +1470,11 @@ impl WasmModuleEmitter {
             }
         }
 
-        // _start function (entry point)
+        // _start function (entry point). #854: the trailing
+        // `user_func_idx += 1` was dead — nothing later in this function
+        // reads the counter.
         let start_idx = user_func_idx;
         let start_type = t_void;
-        user_func_idx += 1;
 
         // Register globals from all modules
         for (_, module) in modules {

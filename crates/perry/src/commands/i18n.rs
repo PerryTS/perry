@@ -132,7 +132,9 @@ fn run_extract(args: ExtractArgs, format: OutputFormat) -> Result<()> {
         };
 
         let mut new_count = 0;
-        let mut removed_count = 0;
+        // #854: `removed_count` was init'd to 0 then unconditionally
+        // overwritten — declared without an initial value.
+        let removed_count: usize;
 
         // Add new keys
         for key in &keys {

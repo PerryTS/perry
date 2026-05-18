@@ -126,15 +126,15 @@ define_class!(
             CANVAS_COMMANDS.with(|cmds| {
                 let cmds = cmds.borrow();
                 if let Some(commands) = cmds.get(&key) {
-                    // Track current path points for gradient fill
+                    // Track current path points for gradient fill.
+                    // #854: an `in_path: bool` companion used to live here
+                    // but was only ever written, never read. Removed.
                     let mut path_points: Vec<(f64, f64)> = Vec::new();
-                    let mut in_path = false;
 
                     for cmd in commands.iter() {
                         match cmd {
                             DrawCommand::BeginPath => {
                                 path_points.clear();
-                                in_path = true;
                             }
                             DrawCommand::MoveTo(x, y) => {
                                 // Flip Y coordinate (macOS origin is bottom-left)
@@ -162,7 +162,6 @@ define_class!(
                                         CGContextRestoreGState(ctx);
                                     }
                                 }
-                                in_path = false;
                             }
                             DrawCommand::FillGradient { r1, g1, b1, a1, r2, g2, b2, a2, direction } => {
                                 if path_points.len() >= 2 {
@@ -212,7 +211,6 @@ define_class!(
                                         CGContextRestoreGState(ctx);
                                     }
                                 }
-                                in_path = false;
                             }
                         }
                     }

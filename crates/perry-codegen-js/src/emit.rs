@@ -230,7 +230,9 @@ impl JsEmitter {
         } else {
             let base = self.sanitize_name(name);
             if self.used_names.contains(&base) {
-                let mut n = base.clone();
+                // #854: the loop unconditionally overwrites `n` on the
+                // first iteration, so the prior `base.clone()` was dead.
+                let mut n;
                 let mut counter = 2;
                 loop {
                     n = format!("{}_{}", base, counter);
