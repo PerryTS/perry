@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "source": "/Users/amlug/projects/perry/perry/test-files/test_gap_weakref_finalization.ts",
+      "package": null,
+      "stdlib": {}
+    }
+  ]
+}
