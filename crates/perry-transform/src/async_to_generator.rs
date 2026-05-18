@@ -76,16 +76,6 @@ use std::collections::HashSet;
 
 /// Run the pre-pass on every async function in the module.
 pub fn transform_async_to_generator(module: &mut Module) {
-    // Issue #1021: identify async closures (`Expr::Closure { is_async: true }`
-    // with awaits in their body) so codegen can later wrap them in a
-    // state-machine driver instead of busy-waiting inside a V8 trampoline
-    // frame. The detection walker runs even when the conservative-scope
-    // bailout below short-circuits the top-level fn rewrite — the closure
-    // path is independent of class-capture collisions. The actual body
-    // transform is staged as a follow-up (see CHANGELOG entry for the
-    // multi-phase plan).
-    collect_async_step_closures(module);
-
     // Conservative module-level scope: skip the rewrite ENTIRELY if the
     // module has classes with __perry_cap_* fields (the v0.5.323 issue
     // #212 capture rewrite). The async-step driver's fresh LocalId
@@ -146,10 +136,15 @@ pub fn transform_async_to_generator(module: &mut Module) {
     // blocking deno's executor from settling the accept-loop continuation
     // and deadlocking self-fetch.
     //
-    // The set populated by `collect_async_step_closures` above is the
-    // worklist. The actual rewrite runs after the top-level fn pass so
-    // the helpers (`hoist_awaits_in_stmts`, `rewrite_stmts`) share the
-    // single `next_local_id` counter without races.
+    // Populate the worklist of candidate closures NOW (after the
+    // capturing-classes bailout has cleared) so the set stays consistent
+    // with what's actually rewritten — i.e. it's never populated without
+    // a matching rewrite, and `module.async_step_closures` is a reliable
+    // ground-truth for "this closure body returns a Promise via the
+    // async-step driver" rather than just "would have been rewritten if
+    // the module-level bailout hadn't fired".
+    collect_async_step_closures(module);
+
     if !module.async_step_closures.is_empty() {
         let mut next_func_id: perry_types::FuncId =
             compute_max_func_id_module(module) + 1;
@@ -442,6 +437,8 @@ fn rewrite_async_closures_in_expr(
             body,
             captures,
             mutable_captures,
+            captures_this,
+            enclosing_class,
             is_async,
             ..
         } = expr
@@ -461,11 +458,23 @@ fn rewrite_async_closures_in_expr(
                 let owned_params = params.clone();
                 let owned_captures = captures.clone();
                 let owned_mutable_captures = mutable_captures.clone();
+                // Issue #1021 follow-up: propagate `captures_this` +
+                // `enclosing_class` through to the synthesized state-machine
+                // helpers so `Expr::This` references in the original body
+                // (which end up inlined inside the step closure) still
+                // resolve to the outer scope's receiver. Without this, an
+                // async arrow inside a class method that uses both `this`
+                // AND `await` silently halts (the step closure has
+                // captures_this=false and Expr::This doesn't lower).
+                let owned_captures_this = *captures_this;
+                let owned_enclosing_class = enclosing_class.clone();
                 let new_body = crate::generator::transform_plain_async_closure_body(
                     owned_body,
                     &owned_params,
                     &owned_captures,
                     &owned_mutable_captures,
+                    owned_captures_this,
+                    owned_enclosing_class,
                     next_local_id,
                     next_func_id,
                 );

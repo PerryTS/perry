@@ -44,6 +44,8 @@ pub fn transform_plain_async_closure_body(
     params: &[perry_hir::Param],
     outer_captures: &[LocalId],
     outer_mutable_captures: &[LocalId],
+    outer_captures_this: bool,
+    outer_enclosing_class: Option<String>,
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
 ) -> Vec<Stmt> {
@@ -76,6 +78,8 @@ pub fn transform_plain_async_closure_body(
         next_func_id,
         outer_captures,
         outer_mutable_captures,
+        outer_captures_this,
+        outer_enclosing_class,
     );
     synth.body
 }
@@ -874,6 +878,8 @@ fn transform_generator_function(
         next_func_id,
         &[],
         &[],
+        false,
+        None,
     );
 }
 
@@ -894,6 +900,8 @@ fn transform_generator_function_with_extra_captures(
     next_func_id: &mut u32,
     extra_captures: &[LocalId],
     extra_mutable_captures: &[LocalId],
+    captures_this: bool,
+    enclosing_class: Option<String>,
 ) {
     // Remember whether this was an async generator (`async function*`).
     // Async generators are still lowered via the same state-machine
@@ -1248,8 +1256,8 @@ fn transform_generator_function_with_extra_captures(
         body: return_body,
         captures: captures.clone(),
         mutable_captures: mutable_captures.clone(),
-        captures_this: false,
-        enclosing_class: None,
+        captures_this,
+        enclosing_class: enclosing_class.clone(),
         is_async: false,
     };
 
@@ -1371,8 +1379,8 @@ fn transform_generator_function_with_extra_captures(
         body: throw_body,
         captures: captures.clone(),
         mutable_captures: mutable_captures.clone(),
-        captures_this: false,
-        enclosing_class: None,
+        captures_this,
+        enclosing_class: enclosing_class.clone(),
         is_async: false,
     };
 
@@ -1419,6 +1427,8 @@ fn transform_generator_function_with_extra_captures(
             throw_closure_for_step,
             next_local_id,
             next_func_id,
+            captures_this,
+            enclosing_class.clone(),
         );
         for s in wrapper_stmts {
             new_body.push(s);
@@ -1444,8 +1454,8 @@ fn transform_generator_function_with_extra_captures(
             body: next_body,
             captures: captures.clone(),
             mutable_captures: mutable_captures.clone(),
-            captures_this: false,
-            enclosing_class: None,
+            captures_this,
+            enclosing_class: enclosing_class.clone(),
             is_async: false,
         };
         let iter_obj = Expr::Object(vec![
@@ -1502,6 +1512,8 @@ fn build_async_step_driver_direct(
     throw_closure_expr: Option<Expr>,
     next_local_id: &mut u32,
     next_func_id: &mut u32,
+    captures_this: bool,
+    enclosing_class: Option<String>,
 ) -> Vec<Stmt> {
     // When `throw_closure_expr` is None, the function had no awaiting
     // try/catch so the throw path is a plain rethrow — we inline it
@@ -1703,8 +1715,8 @@ fn build_async_step_driver_direct(
         body: step_body,
         captures: step_captures,
         mutable_captures: step_mut_captures,
-        captures_this: false,
-        enclosing_class: None,
+        captures_this,
+        enclosing_class: enclosing_class.clone(),
         is_async: false,
     };
 
