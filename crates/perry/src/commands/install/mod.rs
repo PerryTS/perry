@@ -241,7 +241,9 @@ fn print_findings(report: &scanner::report::ScanReport, use_color: bool) {
             f.package.clone()
         };
         eprintln!("  {} {} — {}", icon, pkg, f.rule);
-        eprintln!("     {}", f.message);
+        for line in f.message.lines() {
+            eprintln!("     {}", line);
+        }
         if let Some(loc) = &f.location {
             if use_color {
                 eprintln!("     \x1b[2m({})\x1b[0m", loc);

@@ -1,21 +1,27 @@
 //! P0 rule #4: obfuscation heuristics on the package's entry-point JS.
 //!
-//! v1 has one signal: **embedded base64 blob** — any entry file that
-//! contains a quoted-string literal ≥ 1,000 chars of base64-alphabet
-//! content. This catches the payload-as-string-constant pattern (the
-//! most common droppers use this shape: `eval(atob("...big base64..."))`,
-//! though here we flag the blob even if the surrounding code looks
-//! innocuous).
+//! v1 flagged any quoted ≥ 1,000-char base64-alphabet blob as a likely
+//! payload. That false-positived on legitimate packages that embed
+//! large encoded data tables: Unicode normalization data
+//! (`@adraffy/ens-normalize`), WebAssembly module bytes
+//! (`cjs-module-lexer`), and crypto / ABI / signature lookup tables
+//! (`ox`). The blob shape alone isn't distinctive — what makes a blob
+//! suspicious is whether it ends up in a *code execution* sink.
 //!
-//! A "dropper-shape" (small entry file with one very long line) rule
-//! was tried in an earlier revision but false-positived on legitimate
-//! bundled CJS distributed by mainstream packages (AWS SDK ecosystem:
-//! `path-expression-matcher`, `fast-xml-builder`, `bowser`). The shape
-//! "small file + one giant line of dense JS" turns out to be the
-//! standard bundled-output shape for a lot of npm utility libs, not a
-//! distinguishing dropper signal on its own. Removed in favor of the
-//! eval+atob / Function+Buffer rules in `patterns.rs`, which catch
-//! the most common real-world dropper shape directly.
+//! v2 only flags when a base64 blob and a code-execution sink (eval,
+//! `new Function`, `Function(`, `vm.runInThisContext`,
+//! `vm.runInNewContext`, `vm.compileFunction`) both appear in the same
+//! file. This kills the lookup-table false positives while still
+//! catching the spread-across-the-file decode-and-execute shape that
+//! the tighter `patterns.rs::src-eval-atob` / `src-eval-buffer-base64`
+//! rules (which require eval and decode to be within a few hundred
+//! chars) would miss.
+//!
+//! `atob` and `Buffer.from(..., 'base64')` are *not* treated as
+//! execution sinks on their own — both have many legitimate decode-only
+//! uses (token parsing, image data, embedded font payloads, Unicode
+//! tables). They only count when paired with eval/Function nearby, and
+//! that adjacency case is already covered by `patterns.rs`.
 
 use regex::Regex;
 use std::fs;
@@ -31,11 +37,18 @@ const BASE64_MIN_LEN: usize = 1_000;
 fn base64_blob_regex() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        // Quoted literal of >= 1000 chars in the base64 / base64url
-        // alphabet, optionally trailing '='. Matches "...", '...', or
-        // `...` delimiters.
         Regex::new(
             r#"(?:"[A-Za-z0-9+/_=-]{1000,}"|'[A-Za-z0-9+/_=-]{1000,}'|`[A-Za-z0-9+/_=-]{1000,}`)"#,
+        )
+        .expect("hardcoded scanner regex compiles")
+    })
+}
+
+fn exec_sink_regex() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(eval|new\s+Function|Function|vm\.runInThisContext|vm\.runInNewContext|vm\.compileFunction)\s*\(",
         )
         .expect("hardcoded scanner regex compiles")
     })
@@ -60,15 +73,15 @@ pub fn check(pkg: &ScannedPackage) -> Vec<Finding> {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| entry.display().to_string());
 
-        if base64_blob_regex().is_match(&content) {
+        if base64_blob_regex().is_match(&content) && exec_sink_regex().is_match(&content) {
             findings.push(Finding {
                 package: format!("{}@{}", pkg.name, pkg.version),
                 package_path: pkg.dir.display().to_string(),
                 severity: Severity::P0,
                 rule: "obfuscation-base64-blob".to_string(),
                 message: format!(
-                    "entry file contains a quoted base64-alphabet string ≥ {} chars — \
-                     likely an embedded payload",
+                    "entry file contains a quoted base64-alphabet string ≥ {} chars \
+                     alongside an eval/Function call — likely a decode-and-execute payload",
                     BASE64_MIN_LEN
                 ),
                 location: Some(rel),
@@ -79,9 +92,6 @@ pub fn check(pkg: &ScannedPackage) -> Vec<Finding> {
     findings
 }
 
-// Entry-point resolution — same shape as `patterns::collect_entry_files`,
-// kept private here to avoid cross-rule coupling. (If a third rule grows
-// up to want the same logic, it'll be worth refactoring out.)
 fn collect_entry_files(pkg: &ScannedPackage) -> Vec<PathBuf> {
     use serde_json::Value;
 
@@ -192,51 +202,79 @@ mod tests {
     }
 
     #[test]
-    fn does_not_flag_bundled_cjs_long_lines() {
-        // Real-world false-positive case: AWS SDK bundled-CJS packages
-        // (path-expression-matcher, bowser, fast-xml-builder) ship
-        // their main entry as a single long line of dense JS. The
-        // earlier "dropper-shape" rule flagged this; we removed it.
+    fn flags_base64_blob_with_eval_sink() {
         let td = TempDir::new().unwrap();
-        let mut body = String::from("module.exports = ");
-        body.push_str(&"a".repeat(6000));
-        let p = make_pkg(
-            &td,
-            json!({"name":"bundled-lib","version":"1","main":"index.js"}),
-            &[("index.js", body.as_str())],
-        );
-        assert!(check(&p).is_empty());
-    }
-
-    #[test]
-    fn flags_base64_blob_double_quoted() {
-        let td = TempDir::new().unwrap();
-        // 1100 chars of base64 alphabet inside a double-quoted literal.
         let blob: String = "A".repeat(1100);
-        let body = format!("const payload = \"{}\";\nconsole.log(payload);", blob);
+        let body = format!(
+            "const payload = \"{blob}\";\n\
+             eval(decode(payload));"
+        );
         let p = make_pkg(
             &td,
             json!({"name":"b","version":"1","main":"index.js"}),
             &[("index.js", body.as_str())],
         );
-        assert!(check(&p)
-            .iter()
-            .any(|f| f.rule == "obfuscation-base64-blob"));
+        assert!(check(&p).iter().any(|f| f.rule == "obfuscation-base64-blob"));
     }
 
     #[test]
-    fn flags_base64_blob_single_quoted() {
+    fn flags_base64_blob_with_new_function_sink() {
         let td = TempDir::new().unwrap();
         let blob: String = "B".repeat(1100);
-        let body = format!("const p = '{}';", blob);
+        let body = format!(
+            "const data = '{blob}';\n\
+             const fn = new Function('return ' + decode(data));\n\
+             fn();"
+        );
         let p = make_pkg(
             &td,
             json!({"name":"b","version":"1","main":"index.js"}),
             &[("index.js", body.as_str())],
         );
-        assert!(check(&p)
-            .iter()
-            .any(|f| f.rule == "obfuscation-base64-blob"));
+        assert!(check(&p).iter().any(|f| f.rule == "obfuscation-base64-blob"));
+    }
+
+    #[test]
+    fn does_not_flag_blob_alone() {
+        // Lookup-table shape: large base64 blob, decoded with atob but
+        // *not* fed to eval/Function. Mirrors @adraffy/ens-normalize and
+        // similar Unicode-data packages.
+        let td = TempDir::new().unwrap();
+        let blob: String = "C".repeat(1100);
+        let body = format!(
+            "const TABLE = atob(\"{blob}\");\n\
+             module.exports = function lookup(c) {{ return TABLE.charCodeAt(c); }};"
+        );
+        let p = make_pkg(
+            &td,
+            json!({"name":"normalizer","version":"1","main":"index.js"}),
+            &[("index.js", body.as_str())],
+        );
+        assert!(
+            check(&p).is_empty(),
+            "decode-only blob (no execution sink) should not fire"
+        );
+    }
+
+    #[test]
+    fn does_not_flag_wasm_blob() {
+        // cjs-module-lexer shape: embedded WASM bytes, instantiated via
+        // WebAssembly.* APIs. No eval/Function.
+        let td = TempDir::new().unwrap();
+        let blob: String = "D".repeat(1100);
+        let body = format!(
+            "const bytes = Buffer.from(\"{blob}\", 'base64');\n\
+             WebAssembly.instantiate(bytes).then(m => module.exports = m.instance.exports);"
+        );
+        let p = make_pkg(
+            &td,
+            json!({"name":"wasm-lib","version":"1","main":"index.js"}),
+            &[("index.js", body.as_str())],
+        );
+        assert!(
+            check(&p).is_empty(),
+            "WebAssembly host call should not count as an execution sink"
+        );
     }
 
     #[test]
@@ -247,7 +285,7 @@ mod tests {
             json!({"name":"s","version":"1","main":"index.js"}),
             &[(
                 "index.js",
-                "const small = 'aGVsbG8gd29ybGQ='; module.exports = small;",
+                "const small = 'aGVsbG8gd29ybGQ='; eval(atob(small));",
             )],
         );
         assert!(check(&p).is_empty());
@@ -265,5 +303,41 @@ mod tests {
             )],
         );
         assert!(check(&p).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_bundled_cjs_long_lines() {
+        // Real-world false-positive case: bundled CJS with long-line
+        // dense JS but no base64-shape blob and no eval.
+        let td = TempDir::new().unwrap();
+        let mut body = String::from("module.exports = ");
+        body.push_str(&"a".repeat(6000));
+        let p = make_pkg(
+            &td,
+            json!({"name":"bundled-lib","version":"1","main":"index.js"}),
+            &[("index.js", body.as_str())],
+        );
+        assert!(check(&p).is_empty());
+    }
+
+    #[test]
+    fn flags_when_blob_and_sink_are_far_apart() {
+        // Spread shape: blob at top of file, eval at bottom. The tighter
+        // patterns.rs rules (with their 200-400 char windows) miss this,
+        // which is exactly why this rule exists.
+        let td = TempDir::new().unwrap();
+        let blob: String = "E".repeat(1100);
+        let body = format!(
+            "const payload = \"{blob}\";\n\
+             {filler}\n\
+             eval(decode(payload));",
+            filler = "// some comment\n".repeat(500)
+        );
+        let p = make_pkg(
+            &td,
+            json!({"name":"sneaky","version":"1","main":"index.js"}),
+            &[("index.js", body.as_str())],
+        );
+        assert!(check(&p).iter().any(|f| f.rule == "obfuscation-base64-blob"));
     }
 }

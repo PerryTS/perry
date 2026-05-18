@@ -7,8 +7,12 @@
 # names. Refresh periodically; the file is embedded into the binary at
 # compile time via include_str!, so updates require a rebuild.
 #
-# Snapshot date: 2026-05-13
+# Snapshot date: 2026-05-18
 # Source: npm public registry download statistics + known attack reports.
+#
+# This list has two purposes: (a) names to compare *against* (typosquat
+# targets), and (b) names to self-suppress (a package whose own name is
+# on this list isn't a squat). Both purposes are served by the same set.
 
 # Frameworks
 react
@@ -404,3 +408,34 @@ env-cmd
 node-forge
 node-fetch-cache
 sharp-cli
+
+# Squat-shaped but legitimate — packages whose names sit at Levenshtein
+# 1-2 from a popular target but are themselves widely-used. Listed here
+# so the typosquat rule's self-skip early-out fires on them.
+gaxios
+prompts
+enquirer
+bn.js
+retry
+fp-ts
+expect
+reusify
+crypt
+aes-js
+safer-buffer
+call-bound
+is-typedarray
+scrypt-js
+follow-redirects
+form-data
+queue-microtask
+mime-types
+mime-db
+glob-parent
+fast-levenshtein
+is-stream
+is-buffer
+is-arrayish
+inherits
+util-deprecate
+process-nextick-args
