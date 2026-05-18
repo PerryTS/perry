@@ -1544,6 +1544,106 @@ pub extern "C" fn perry_ui_state_on_change(state_handle: i64, callback: f64) {
 // System APIs (perry/system module)
 // =============================================================================
 
+/// #917 — system share sheet (text). Wraps `NSSharingServicePicker`
+/// anchored to the key window's content view. `title` is currently
+/// dropped on macOS (Cocoa's picker derives its label from the
+/// item type); kept in the signature for cross-platform symmetry
+/// with iOS/Android. Both args are Perry string pointers.
+#[no_mangle]
+pub extern "C" fn perry_system_share_text(text_ptr: i64, _title_ptr: i64) {
+    fn str_from_header(ptr: *const u8) -> &'static str {
+        if ptr.is_null() {
+            return "";
+        }
+        unsafe {
+            let header = ptr as *const crate::string_header::StringHeader;
+            let len = (*header).byte_len as usize;
+            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
+        }
+    }
+    let text = str_from_header(text_ptr as *const u8);
+    if text.is_empty() {
+        return;
+    }
+    unsafe {
+        let ns_text = objc2_foundation::NSString::from_str(text);
+        let arr_cls = objc2::runtime::AnyClass::get(c"NSArray").unwrap();
+        let items: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![arr_cls, arrayWithObject: &*ns_text];
+        present_sharing_picker(items);
+    }
+}
+
+/// #917 — system share sheet (URL). Same shape as `shareText` but
+/// wraps the value as `NSURL` so the picker offers
+/// Safari / Reading List / Add to Bookmarks alongside Messages / Mail.
+#[no_mangle]
+pub extern "C" fn perry_system_share_url(url_ptr: i64, _title_ptr: i64) {
+    fn str_from_header(ptr: *const u8) -> &'static str {
+        if ptr.is_null() {
+            return "";
+        }
+        unsafe {
+            let header = ptr as *const crate::string_header::StringHeader;
+            let len = (*header).byte_len as usize;
+            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
+        }
+    }
+    let url_str = str_from_header(url_ptr as *const u8);
+    if url_str.is_empty() {
+        return;
+    }
+    unsafe {
+        let ns_str = objc2_foundation::NSString::from_str(url_str);
+        let url_cls = objc2::runtime::AnyClass::get(c"NSURL").unwrap();
+        let url: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![url_cls, URLWithString: &*ns_str];
+        let arr_cls = objc2::runtime::AnyClass::get(c"NSArray").unwrap();
+        let items: *mut objc2::runtime::AnyObject = if url.is_null() {
+            // Malformed URL → fall back to sharing as plain text.
+            objc2::msg_send![arr_cls, arrayWithObject: &*ns_str]
+        } else {
+            objc2::msg_send![arr_cls, arrayWithObject: url]
+        };
+        present_sharing_picker(items);
+    }
+}
+
+/// Build an `NSSharingServicePicker` for `items` and present it
+/// anchored to the key window's content-view bounds. Common helper
+/// so `shareText` and `shareUrl` share the presentation logic.
+unsafe fn present_sharing_picker(items: *mut objc2::runtime::AnyObject) {
+    let picker_cls = objc2::runtime::AnyClass::get(c"NSSharingServicePicker").unwrap();
+    let alloc: *mut objc2::runtime::AnyObject = objc2::msg_send![picker_cls, alloc];
+    let picker: *mut objc2::runtime::AnyObject = objc2::msg_send![alloc, initWithItems: items];
+    if picker.is_null() {
+        return;
+    }
+    let app_cls = objc2::runtime::AnyClass::get(c"NSApplication").unwrap();
+    let app: *mut objc2::runtime::AnyObject = objc2::msg_send![app_cls, sharedApplication];
+    let key_window: *mut objc2::runtime::AnyObject = objc2::msg_send![app, keyWindow];
+    if key_window.is_null() {
+        return;
+    }
+    let content_view: *mut objc2::runtime::AnyObject = objc2::msg_send![key_window, contentView];
+    if content_view.is_null() {
+        return;
+    }
+    let bounds: objc2_foundation::NSRect = objc2::msg_send![content_view, bounds];
+    // showRelativeToRect:ofView:preferredEdge: — anchor to the
+    // content view's bounds, preferred edge = NSRectEdgeMinY (1)
+    // so the popover renders above the view.
+    const NS_RECT_EDGE_MIN_Y: u64 = 1;
+    let _: () = objc2::msg_send![
+        picker,
+        showRelativeToRect: bounds,
+        ofView: content_view,
+        preferredEdge: NS_RECT_EDGE_MIN_Y
+    ];
+}
+
 /// Open a URL in the default browser/app.
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(url_ptr: i64) {

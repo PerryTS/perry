@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 901 entries across 71 modules
+// Coverage: 903 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -771,6 +771,10 @@ declare module "perry/system" {
   export function preferencesGet(...args: any[]): any;
   /** stdlib */
   export function preferencesSet(...args: any[]): any;
+  /** stdlib */
+  export function shareText(...args: any[]): any;
+  /** stdlib */
+  export function shareUrl(...args: any[]): any;
   /** stdlib */
   export function takeScreenshot(...args: any[]): any;
 }

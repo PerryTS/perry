@@ -2102,6 +2102,23 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str],
         ret: ReturnKind::Void,
     },
+    // #917 — system share sheet. Both entry points take a body
+    // string + an optional title (empty = no title); the platform
+    // implementation maps to the native share API
+    // (UIActivityViewController / NSSharingServicePicker /
+    // Intent.ACTION_SEND).
+    MethodRow {
+        method: "shareText",
+        runtime: "perry_system_share_text",
+        args: &[ArgKind::Str, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "shareUrl",
+        runtime: "perry_system_share_url",
+        args: &[ArgKind::Str, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "keychainSave",
         runtime: "perry_system_keychain_save",

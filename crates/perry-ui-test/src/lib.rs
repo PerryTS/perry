@@ -1452,6 +1452,31 @@ pub const FEATURES: &[Feature] = &[
         web: S,
         web_name: None,
     },
+    // #917: system share sheet. macOS has the real NSSharingServicePicker
+    // implementation; every other platform is a no-op stub today
+    // (per-platform native impls land as #917 follow-ups).
+    Feature {
+        name: "perry_system_share_text",
+        category: SystemApi,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: S,
+        web_name: None,
+    },
+    Feature {
+        name: "perry_system_share_url",
+        category: SystemApi,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: S,
+        web_name: None,
+    },
     Feature {
         name: "perry_system_is_dark_mode",
         category: SystemApi,

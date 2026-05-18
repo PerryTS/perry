@@ -1174,6 +1174,25 @@ pub extern "C" fn perry_ui_table_get_selected_row(_h: i64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(_url: i64) {}
+/// #917 — system share sheet stub on watchOS. WatchKit doesn't
+/// expose a public share API; AirDrop / Messages share flows are
+/// system-driven. Stub + first-call warning.
+#[no_mangle]
+pub extern "C" fn perry_system_share_text(_text_ptr: i64, _title_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_share_text",
+        "watchOS does not expose a programmatic share sheet (#917)",
+        Some("#917"),
+    );
+}
+#[no_mangle]
+pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_share_url",
+        "watchOS does not expose a programmatic share sheet (#917)",
+        Some("#917"),
+    );
+}
 #[no_mangle]
 pub extern "C" fn perry_system_request_location(_cb: f64) {}
 #[no_mangle]

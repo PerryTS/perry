@@ -1260,6 +1260,29 @@ pub extern "C" fn perry_ui_state_on_change(state_handle: i64, callback: f64) {
 // System APIs (perry/system module)
 // =============================================================================
 
+/// #917 — system share sheet stub on tvOS. Apple's tvOS doesn't
+/// expose UIActivityViewController; the typical tvOS share flow uses
+/// AirDrop only and isn't programmatically invokable. Stub + first-
+/// call warning.
+#[no_mangle]
+pub extern "C" fn perry_system_share_text(_text_ptr: i64, _title_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_share_text",
+        "tvOS does not expose a programmatic share sheet (#917)",
+        Some("#917"),
+    );
+}
+
+/// #917 — system share sheet stub on tvOS.
+#[no_mangle]
+pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_share_url",
+        "tvOS does not expose a programmatic share sheet (#917)",
+        Some("#917"),
+    );
+}
+
 /// Open a URL in the default browser/app.
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(url_ptr: i64) {

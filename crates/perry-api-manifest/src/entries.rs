@@ -2098,6 +2098,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perry/system", "getBundleId", false, None),
     method("perry/system", "getAppIcon", false, None),
     method("perry/system", "openURL", false, None),
+    // #917 — system share sheet (UIActivityViewController on iOS,
+    // NSSharingServicePicker on macOS, Intent.ACTION_SEND on
+    // Android). Two convenience entry points cover the common
+    // shapes: plain text + URL.
+    method("perry/system", "shareText", false, None),
+    method("perry/system", "shareUrl", false, None),
     method("perry/system", "keychainSave", false, None),
     method("perry/system", "keychainGet", false, None),
     method("perry/system", "keychainDelete", false, None),

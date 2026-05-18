@@ -1556,6 +1556,26 @@ pub extern "C" fn perry_system_open_url(url_ptr: i64) {
     system::open_url(url_ptr as *const u8);
 }
 
+/// #917 — system share sheet stub on Windows. A real impl will use
+/// the WinRT `DataTransferManager` (`ShowShareUI`) flow; landed
+/// as a #917 follow-up. MVP stub + first-call warning.
+#[no_mangle]
+pub extern "C" fn perry_system_share_text(_text_ptr: i64, _title_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_share_text",
+        "Windows DataTransferManager not yet wired (#917 follow-up)",
+        Some("#917"),
+    );
+}
+#[no_mangle]
+pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_share_url",
+        "Windows DataTransferManager not yet wired (#917 follow-up)",
+        Some("#917"),
+    );
+}
+
 /// Check if dark mode is enabled.
 #[no_mangle]
 pub extern "C" fn perry_system_is_dark_mode() -> i64 {

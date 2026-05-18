@@ -1381,6 +1381,27 @@ pub extern "C" fn perry_ui_state_on_change(state_handle: i64, callback: f64) {
 // System APIs (perry/system module)
 // =============================================================================
 
+/// #917 — system share sheet stub on visionOS. UIActivityViewController
+/// is available but its presentation model on visionOS is different
+/// (window-anchored rather than view-anchored). Stub + first-call
+/// warning; the visionOS native impl is tracked under #917 follow-up.
+#[no_mangle]
+pub extern "C" fn perry_system_share_text(_text_ptr: i64, _title_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_share_text",
+        "visionOS share sheet not yet implemented (#917 follow-up)",
+        Some("#917"),
+    );
+}
+#[no_mangle]
+pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_share_url",
+        "visionOS share sheet not yet implemented (#917 follow-up)",
+        Some("#917"),
+    );
+}
+
 /// Open a URL in the default browser/app.
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(url_ptr: i64) {

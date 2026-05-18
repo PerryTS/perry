@@ -1370,6 +1370,31 @@ pub extern "C" fn perry_ui_state_on_change(state_handle: i64, callback: f64) {
 // System APIs (perry/system module)
 // =============================================================================
 
+/// #917 — system share sheet (text). MVP stub on iOS: emits a
+/// first-call warning. The native implementation (issue follow-up)
+/// will wrap `UIActivityViewController` with the text in
+/// `activityItems`, anchored to the key window's root view
+/// controller. Kept stub-shaped so the symbol exists on every
+/// platform — apps can compile-test against the API.
+#[no_mangle]
+pub extern "C" fn perry_system_share_text(_text_ptr: i64, _title_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_share_text",
+        "iOS UIActivityViewController not yet implemented (#917 follow-up)",
+        Some("#917"),
+    );
+}
+
+/// #917 — system share sheet (URL). MVP stub on iOS.
+#[no_mangle]
+pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_share_url",
+        "iOS UIActivityViewController not yet implemented (#917 follow-up)",
+        Some("#917"),
+    );
+}
+
 /// Open a URL in the default browser/app.
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(url_ptr: i64) {
