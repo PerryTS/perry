@@ -898,6 +898,67 @@ fn native_promise_to_v8<'s>(
     v8_promise.into()
 }
 
+/// Materialize a snapshot v8 Object for a perry-stdlib Web Fetch handle
+/// (Request / Response). Properties are extracted via the public dispatch
+/// helpers in `perry_stdlib::fetch`. Headers/Blob ids return `v8::null`
+/// for now — they expose methods, not scalar properties, and adding method
+/// bridging requires a Proxy + HANDLE_METHOD_DISPATCH callback (future work).
+fn materialize_web_fetch_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    handle_id: usize,
+) -> v8::Local<'s, v8::Value> {
+    if handle_id == 0 {
+        return v8::null(scope).into();
+    }
+
+    // Try Request first — read a probe property to confirm membership.
+    if let Some(url_f64) = perry_stdlib::dispatch_request_property(handle_id, "url") {
+        let obj = v8::Object::new(scope);
+        let url_v8 = native_to_v8(scope, url_f64);
+        if let Some(k) = v8::String::new(scope, "url") {
+            obj.set(scope, k.into(), url_v8);
+        }
+        if let Some(method_f64) = perry_stdlib::dispatch_request_property(handle_id, "method") {
+            let m = native_to_v8(scope, method_f64);
+            if let Some(k) = v8::String::new(scope, "method") {
+                obj.set(scope, k.into(), m);
+            }
+        }
+        if let Some(body_f64) = perry_stdlib::dispatch_request_property(handle_id, "body") {
+            let b = native_to_v8(scope, body_f64);
+            if let Some(k) = v8::String::new(scope, "body") {
+                obj.set(scope, k.into(), b);
+            }
+        }
+        return obj.into();
+    }
+
+    // Then Response.
+    if let Some(status_f64) = perry_stdlib::dispatch_response_property(handle_id, "status") {
+        let obj = v8::Object::new(scope);
+        let status_v8 = native_to_v8(scope, status_f64);
+        if let Some(k) = v8::String::new(scope, "status") {
+            obj.set(scope, k.into(), status_v8);
+        }
+        if let Some(st_f64) = perry_stdlib::dispatch_response_property(handle_id, "statusText") {
+            let v = native_to_v8(scope, st_f64);
+            if let Some(k) = v8::String::new(scope, "statusText") {
+                obj.set(scope, k.into(), v);
+            }
+        }
+        if let Some(ok_f64) = perry_stdlib::dispatch_response_property(handle_id, "ok") {
+            let v = native_to_v8(scope, ok_f64);
+            if let Some(k) = v8::String::new(scope, "ok") {
+                obj.set(scope, k.into(), v);
+            }
+        }
+        return obj.into();
+    }
+
+    // Unknown handle id — return null (safe fallback, no segfault).
+    v8::null(scope).into()
+}
+
 /// Convert a native object pointer to a V8 object
 fn native_object_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -905,6 +966,28 @@ fn native_object_to_v8<'s>(
 ) -> v8::Local<'s, v8::Value> {
     if ptr.is_null() {
         return v8::null(scope).into();
+    }
+
+    // perry-stdlib's Web Fetch handles (Request / Response / Headers / Blob)
+    // arrive here NaN-boxed as POINTER_TAG values whose lower 48 bits hold a
+    // small registry id (1, 2, 3, ...) instead of a real heap pointer (see
+    // `perry_stdlib::fetch::handle_to_f64`). Mirror the perry-runtime side
+    // small-handle threshold (`object.rs:4665`, `< 0x100000`): below that,
+    // the value is a handle id, not a dereferenceable pointer. Without this
+    // guard the `gc_header_ptr = ptr - 8` arithmetic below wraps to a huge
+    // unsigned value, passes the `> 0x1000` bounds check, and segfaults when
+    // we deref `gc_header` (the hono `app.fetch(req)` crash where `req` came
+    // back from `new Request(...)` as `0x7FFD_0000_0000_0001`).
+    //
+    // For Request and Response we materialize a real v8 Object so V8-side code
+    // (hono, sveltekit, etc.) can read `request.url` / `response.status` etc.
+    // The synthesized object is a snapshot — methods like `req.text()` and
+    // streaming semantics aren't bridged here yet (would require a Proxy that
+    // calls back through HANDLE_METHOD_DISPATCH). For unknown small ids fall
+    // through to `v8::null` rather than crashing.
+    let ptr_usize = ptr as usize;
+    if ptr_usize < 0x10_0000 {
+        return materialize_web_fetch_handle(scope, ptr_usize);
     }
 
     // Issue (jose JWT blocker): Uint8Array / TypedArray pointers crossing

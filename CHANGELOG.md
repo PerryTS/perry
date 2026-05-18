@@ -2,6 +2,73 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1005 — fix(jsruntime): hono `app.fetch(req)` SIGSEGV — guard small-handle pointers in `native_object_to_v8`
+
+Hono's compat-sweep fixture
+(`/tmp/perry-compat-sweep/hono/entry.ts`) compiled cleanly (PR #987 fixed
+the bundle resolution) but crashed with `rc=139` (SIGSEGV) and empty
+stdout the moment the program reached `app.fetch(req)`.
+
+Root cause: perry-stdlib's Web Fetch handles
+(`Request` / `Response` / `Headers` / `Blob`) are returned by their
+constructors as `POINTER_TAG`-tagged f64 values whose lower 48 bits hold
+a small registry id (1, 2, 3, ...) — see
+`perry_stdlib::fetch::handle_to_f64`. The runtime side already accounts
+for this with a `(obj as usize) < 0x100000` carve-out that routes
+small-handle reads through `HANDLE_PROPERTY_DISPATCH`
+(`crates/perry-runtime/src/object.rs:4665`). But the V8 bridge in
+`perry_jsruntime::bridge::native_object_to_v8` had no such guard: it
+unconditionally computed `gc_header_ptr = (ptr as usize)
+.wrapping_sub(GC_HEADER_SIZE)` and dereferenced after a
+`> 0x1000` bounds check. With `ptr = 1`, the subtraction wraps to
+`0xffff_ffff_ffff_fff8`, which is `> 0x1000` as unsigned, so the
+dereference proceeds and the loaded address (`0xfffffffffffffffa` for
+`gc_header.gc_flags`) faults. The fault was silent because the binary
+strips symbols by default.
+
+The lldb backtrace pins it to
+`native_object_to_v8` ← `js_call_method` closure ← `js_call_method` ←
+`perry_closure_t5_fetch_ts__5`, and the args buffer at the crash site
+contains `0x7FFD_0000_0000_0001` (POINTER_TAG | 1) — exactly the value
+`new Request("...")` returned.
+
+This patch:
+
+1. Adds a small-handle guard at the top of `native_object_to_v8`: any
+   `ptr < 0x10_0000` short-circuits to a new
+   `materialize_web_fetch_handle` helper instead of dereferencing.
+2. The helper probes `perry_stdlib::dispatch_request_property` and
+   `dispatch_response_property` to identify the handle kind, then
+   builds a `v8::Object` snapshot exposing the scalar properties
+   (`url`/`method`/`body` for Request, `status`/`statusText`/`ok` for
+   Response) so V8-side code (hono, sveltekit, etc.) can read them via
+   plain property access.
+3. Unknown small ids return `v8::null` — safe no-op, no segfault.
+
+After this fix, the hono fixture no longer crashes; it reaches the
+expected next blocker (hono's `c.text(...)` building a `new Response(...)`
+in the V8 context, where `Response` isn't a registered global). Exit
+code goes from `139` to `0` with a clean V8 `ReferenceError: Response is
+not defined` instead of a silent SIGSEGV.
+
+Followup work tracked separately:
+
+- Method bridging for Web Fetch handles (`req.text()`,
+  `res.arrayBuffer()`, `headers.get(k)`) needs a v8 Proxy that calls
+  back through `HANDLE_METHOD_DISPATCH`.
+- Registering `Response` / `Request` / `Headers` / `URL` as globals in
+  the V8 context so hono's response construction works end-to-end.
+
+Validation:
+
+- Bisection harness `/tmp/hono-bisect/{t1..t5}.ts` — minimal `import`,
+  ctor, `app.get(...)`, `new Request(...)`, and `app.fetch(req)` —
+  isolates the crash to `app.fetch(req)`; t5 now exits cleanly.
+- `/tmp/perry-compat-sweep/hono/entry.ts` exit code: 139 → 0.
+- `/tmp/req_smoke.ts` (perry-native `new Request(...) + req.url/method/body`)
+  still prints expected values via the unchanged perry-native path.
+- Spot-checked unrelated gap suites (`test_gap_closures.ts`) — pass.
+
 ## v0.5.1004 — fix(runtime): `js_async_step_chain` awaits V8 Promise handles instead of treating them as primitives
 
 PR #1004 landed the marshalling layer for jose JWT (HS256) sign/verify
