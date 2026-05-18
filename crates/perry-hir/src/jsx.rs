@@ -143,6 +143,27 @@ pub(crate) fn lower_jsx_element_name(
                     Ok(Expr::LocalGet(id))
                 } else if let Some(id) = ctx.lookup_func(&n) {
                     Ok(Expr::FuncRef(id))
+                } else if let Some((module_name, method_name)) = ctx.lookup_native_module(&n) {
+                    // Native-module-imported JSX intrinsic (e.g. `<Box>` /
+                    // `<Text>` from `perry/tui`). Tag the ExternFuncRef
+                    // with a sentinel name
+                    // `__perry_jsx_intrinsic::<module>::<method>__` so the
+                    // codegen's `jsx`/`jsxs` arm can recognise it as a
+                    // built-in intrinsic and rewrite the runtime `js_jsx`
+                    // call into a direct widget-builder call. Including
+                    // the module name in the sentinel ensures the
+                    // rewriter only triggers when the JSX-named
+                    // identifier resolves to a known native module —
+                    // never a user-defined `Box` from elsewhere
+                    // (issue #689).
+                    let module = module_name.to_string();
+                    let method = method_name.unwrap_or(&n).to_string();
+                    let sentinel = format!("__perry_jsx_intrinsic::{module}::{method}__");
+                    Ok(Expr::ExternFuncRef {
+                        name: sentinel,
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    })
                 } else if let Some(orig) = ctx.lookup_imported_func(&n) {
                     Ok(Expr::ExternFuncRef {
                         name: orig.to_string(),
