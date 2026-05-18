@@ -111,29 +111,52 @@ pub(crate) fn locate_native_lib_artifact(
 /// cargo lib name (refs issue #792).
 fn lib_name_variants(lib_name: &str, target: Option<&str>) -> Vec<String> {
     let mut out = vec![lib_name.to_string()];
-    let has_ext = std::path::Path::new(lib_name).extension().is_some();
-    let has_lib_prefix = lib_name.starts_with("lib");
-    if !has_ext {
-        let is_windows = matches!(target, Some("windows"))
-            || (target.is_none() && cfg!(target_os = "windows"));
-        let is_macos = matches!(target, Some("ios") | Some("ios-simulator")
-            | Some("tvos") | Some("tvos-simulator")
-            | Some("watchos") | Some("watchos-simulator")
-            | Some("visionos") | Some("visionos-simulator")
-            | Some("macos"))
-            || (target.is_none() && cfg!(target_os = "macos"));
-        if is_windows {
-            // MSVC staticlib: `{name}.lib`, no `lib` prefix.
-            out.push(format!("{}.lib", lib_name.trim_start_matches("lib")));
-        } else if is_macos {
-            let stem = if has_lib_prefix { lib_name.to_string() } else { format!("lib{}", lib_name) };
-            out.push(format!("{}.a", stem));
-            out.push(format!("{}.dylib", stem));
-        } else {
-            let stem = if has_lib_prefix { lib_name.to_string() } else { format!("lib{}", lib_name) };
-            out.push(format!("{}.a", stem));
-            out.push(format!("{}.so", stem));
+    if std::path::Path::new(lib_name).extension().is_some() {
+        return out;
+    }
+    let is_windows =
+        matches!(target, Some("windows")) || (target.is_none() && cfg!(target_os = "windows"));
+    let is_macos = matches!(
+        target,
+        Some("ios")
+            | Some("ios-simulator")
+            | Some("tvos")
+            | Some("tvos-simulator")
+            | Some("watchos")
+            | Some("watchos-simulator")
+            | Some("visionos")
+            | Some("visionos-simulator")
+            | Some("macos")
+    ) || (target.is_none() && cfg!(target_os = "macos"));
+
+    // MSVC staticlib has no `lib` prefix — the cargo crate name *is* the
+    // filename stem. Try the literal name first (covers crates legitimately
+    // named `libfoo` → `libfoo.lib`), then the stripped variant so a
+    // wrapper that copied the macOS convention into `"lib"` (e.g.
+    // `libperry_ext_foo`) still resolves.
+    if is_windows {
+        out.push(format!("{}.lib", lib_name));
+        if let Some(stripped) = lib_name.strip_prefix("lib") {
+            out.push(format!("{}.lib", stripped));
         }
+        return out;
+    }
+
+    // Unix-like: cargo prepends `lib` to staticlib/dylib output. Try the
+    // prefixed form first; if `lib_name` already starts with `lib` we
+    // also try without it so both conventions resolve.
+    let prefixed = if lib_name.starts_with("lib") {
+        lib_name.to_string()
+    } else {
+        format!("lib{}", lib_name)
+    };
+    let exts: &[&str] = if is_macos {
+        &["a", "dylib"]
+    } else {
+        &["a", "so"]
+    };
+    for ext in exts {
+        out.push(format!("{}.{}", prefixed, ext));
     }
     out
 }
@@ -1300,6 +1323,36 @@ mod native_lib_artifact_tests {
 
         let found = locate_native_lib_artifact(&target_dir, None, "perry_ext_foo");
         assert_eq!(found.as_deref(), Some(lib_path.as_path()));
+    }
+
+    /// On MSVC, cargo emits `{crate_name}.lib` literally — there is no
+    /// automatic `lib` prefix. So a crate whose name actually starts
+    /// with `lib` (e.g. `libfoo`) produces `libfoo.lib`, and Perry's
+    /// variant logic must NOT strip the `lib` prefix in that case.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_preserves_lib_prefix_when_crate_name_starts_with_lib() {
+        let tmp = tempfile::tempdir().expect("create tmpdir");
+        let target_dir = tmp.path().join("target");
+        let release_dir = target_dir.join("release");
+        fs::create_dir_all(&release_dir).expect("mkdir release");
+        let lib_path = release_dir.join("libfoo.lib");
+        fs::write(&lib_path, b"fake archive").expect("write lib");
+
+        let found = locate_native_lib_artifact(&target_dir, None, "libfoo");
+        assert_eq!(found.as_deref(), Some(lib_path.as_path()));
+    }
+
+    /// Cross-platform check on the variant set itself so non-Windows
+    /// CI also covers the `lib`-prefix preservation logic.
+    #[test]
+    fn variant_set_for_windows_target_keeps_lib_prefix() {
+        let variants = super::lib_name_variants("libfoo", Some("windows"));
+        assert!(
+            variants.iter().any(|v| v == "libfoo.lib"),
+            "expected libfoo.lib in {:?}",
+            variants
+        );
     }
 
     #[test]
