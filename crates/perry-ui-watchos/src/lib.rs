@@ -1191,6 +1191,9 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "perry_system_share_url",
         "watchOS does not expose a programmatic share sheet (#917)",
         Some("#917"),
+    );
+}
+
 // #675 — App Group stubs on watchOS. WatchKit *does* support
 // `UserDefaults(suiteName:)` against the same App Group entitlement
 // as the iOS host, but the wiring is more complex; tracked as

@@ -1573,6 +1573,9 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "perry_system_share_url",
         "Windows DataTransferManager not yet wired (#917 follow-up)",
         Some("#917"),
+    );
+}
+
 // #675 — App Group stubs on Windows. Native impl will use
 // `%LOCALAPPDATA%\<bundle_id>\shared\` for the blob shape and a
 // JSON-backed kv store; tracked as #675 follow-up.
