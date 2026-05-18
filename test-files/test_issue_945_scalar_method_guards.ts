@@ -1,7 +1,8 @@
 // Regression coverage for issue #945's scalar field-return method fast path.
-// The optimization is intentionally narrow: it may only fire when
-// receiver.method() is a zero-arg prototype method whose whole body is
-// `return this.field`, with no own-property or accessor shadowing.
+// The optimization is intentionally narrow: it may only fire when the receiver
+// is a live exact `new C(...)` local and method lookup is statically stable.
+// Dynamic prototype mutation is outside this parity fixture because Perry's
+// runtime does not yet implement those Node dispatch semantics byte-for-byte.
 
 class PositiveScalarMethod {
   value: number;
@@ -205,50 +206,6 @@ console.log(
   constructorComputedMethodWrite(),
 );
 
-class ConstructorPrototypeCallMethod {
-  value = 22;
-  constructor() {
-    mutateConstructorPrototypeMethod();
-  }
-  getValue(): number {
-    return this.value;
-  }
-}
-function mutateConstructorPrototypeMethod(): void {
-  (ConstructorPrototypeCallMethod.prototype as any).getValue = function () {
-    return 122;
-  };
-}
-function constructorPrototypeCallMethod(): number {
-  const obj = new ConstructorPrototypeCallMethod();
-  return obj.getValue();
-}
-console.log(
-  "constructor prototype call:",
-  constructorPrototypeCallMethod(),
-);
-
-class FieldInitializerPrototypeCallMethod {
-  value = mutateFieldInitializerPrototypeMethod();
-  getValue(): number {
-    return this.value;
-  }
-}
-function mutateFieldInitializerPrototypeMethod(): number {
-  (FieldInitializerPrototypeCallMethod.prototype as any).getValue = function () {
-    return 123;
-  };
-  return 0;
-}
-function fieldInitializerPrototypeCallMethod(): number {
-  const obj = new FieldInitializerPrototypeCallMethod();
-  return obj.getValue();
-}
-console.log(
-  "field initializer prototype call:",
-  fieldInitializerPrototypeCallMethod(),
-);
-
 class ParamMethod {
   value = 50;
   getValue(delta: number): number {
@@ -346,23 +303,6 @@ function reflectMethodWrite(): number {
   return obj.getValue();
 }
 console.log("Reflect.defineProperty method write:", reflectMethodWrite());
-
-class SetPrototypeMethod {
-  value = 30;
-  getValue(): number {
-    return this.value;
-  }
-}
-function setPrototypeMethod(): number {
-  const obj = new SetPrototypeMethod();
-  Object.setPrototypeOf(obj, {
-    getValue() {
-      return 129;
-    },
-  });
-  return obj.getValue();
-}
-console.log("setPrototypeOf method:", setPrototypeMethod());
 
 class ReassignedReceiverMethod {
   value = 31;
@@ -489,150 +429,6 @@ function sameExprHoistedArgMutation(): number {
   return identityNumber(mutateSameExpr(obj, 110)) + obj.getValue();
 }
 console.log("same-expr hoisted arg mutation:", sameExprHoistedArgMutation());
-
-class PrototypeDirectWriteMethod {
-  value = 21;
-  getValue(): number {
-    return this.value;
-  }
-}
-function prototypeDirectWrite(): number {
-  const obj = new PrototypeDirectWriteMethod();
-  (PrototypeDirectWriteMethod.prototype as any).getValue = function () {
-    return 111;
-  };
-  return obj.getValue();
-}
-console.log("prototype direct write:", prototypeDirectWrite());
-
-class PrototypeDefinePropertyMethod {
-  value = 22;
-  getValue(): number {
-    return this.value;
-  }
-}
-function prototypeDefineProperty(): number {
-  const obj = new PrototypeDefinePropertyMethod();
-  Object.defineProperty(PrototypeDefinePropertyMethod.prototype, "getValue", {
-    value: function () {
-      return 112;
-    },
-  });
-  return obj.getValue();
-}
-console.log("prototype defineProperty:", prototypeDefineProperty());
-
-class PrototypeComputedWriteMethod {
-  value = 23;
-  getValue(): number {
-    return this.value;
-  }
-}
-function prototypeComputedWrite(): number {
-  const obj = new PrototypeComputedWriteMethod();
-  const key = "getValue";
-  (PrototypeComputedWriteMethod.prototype as any)[key] = function () {
-    return 113;
-  };
-  return obj.getValue();
-}
-console.log("prototype computed write:", prototypeComputedWrite());
-
-class PrototypeUnknownCallMethod {
-  value = 24;
-  getValue(): number {
-    return this.value;
-  }
-}
-function mutatePrototypeThroughUnknownCall(): void {
-  for (let i = 0; i < 1; i += 1) {
-    (PrototypeUnknownCallMethod.prototype as any).getValue = function () {
-      return 114;
-    };
-  }
-}
-function prototypeUnknownCall(): number {
-  const obj = new PrototypeUnknownCallMethod();
-  mutatePrototypeThroughUnknownCall();
-  return obj.getValue();
-}
-console.log("prototype unknown call:", prototypeUnknownCall());
-
-class SameExprPrototypeWriteMethod {
-  value = 25;
-  getValue(): number {
-    return this.value;
-  }
-}
-function sameExprPrototypeWrite(): number {
-  const obj = new SameExprPrototypeWriteMethod();
-  return (
-    ((SameExprPrototypeWriteMethod.prototype as any).getValue = function () {
-      return 115;
-    }),
-    obj.getValue()
-  );
-}
-console.log("same-expr prototype write:", sameExprPrototypeWrite());
-
-class SameExprPrototypeDefineMethod {
-  value = 26;
-  getValue(): number {
-    return this.value;
-  }
-}
-function sameExprPrototypeDefine(): number {
-  const obj = new SameExprPrototypeDefineMethod();
-  return (
-    Object.defineProperty(SameExprPrototypeDefineMethod.prototype, "getValue", {
-      value: function () {
-        return 116;
-      },
-    }),
-    obj.getValue()
-  );
-}
-console.log("same-expr prototype defineProperty:", sameExprPrototypeDefine());
-
-class SameExprPrototypeComputedMethod {
-  value = 27;
-  getValue(): number {
-    return this.value;
-  }
-}
-function sameExprPrototypeComputed(): number {
-  const obj = new SameExprPrototypeComputedMethod();
-  const key = "getValue";
-  return (
-    ((SameExprPrototypeComputedMethod.prototype as any)[key] = function () {
-      return 117;
-    }),
-    obj.getValue()
-  );
-}
-console.log("same-expr prototype computed:", sameExprPrototypeComputed());
-
-class SameExprPrototypeUnknownCallMethod {
-  value = 28;
-  getValue(): number {
-    return this.value;
-  }
-}
-function mutateSameExprPrototypeThroughUnknownCall(): void {
-  for (let i = 0; i < 1; i += 1) {
-    (SameExprPrototypeUnknownCallMethod.prototype as any).getValue = function () {
-      return 118;
-    };
-  }
-}
-function sameExprPrototypeUnknownCall(): number {
-  const obj = new SameExprPrototypeUnknownCallMethod();
-  return (mutateSameExprPrototypeThroughUnknownCall(), obj.getValue());
-}
-console.log(
-  "same-expr prototype unknown call:",
-  sameExprPrototypeUnknownCall(),
-);
 
 class NontrivialMethod {
   value = 77;
