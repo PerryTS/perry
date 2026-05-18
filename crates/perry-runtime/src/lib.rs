@@ -173,6 +173,35 @@ pub use value::{
     js_set_native_module_js_loader, js_set_new_from_handle_v8,
 };
 
+// Extension pump registration — allows extensions to register pump functions
+// that run on each timer tick without hard-link dependencies.
+mod ext_pump {
+    use std::ptr::null_mut;
+    use std::sync::atomic::{AtomicPtr, Ordering};
+
+    static EXT_PUMP_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+    /// Register an extension's process_pending function pointer.
+    /// Called by extensions during initialization.
+    #[no_mangle]
+    pub extern "C" fn js_register_ext_pump(f: extern "C" fn() -> i32) {
+        EXT_PUMP_FN.store(f as *mut (), Ordering::Release);
+    }
+
+    /// Run the registered extension pump if available. Safe to call even if no
+    /// extension is linked (no-op in that case).
+    #[no_mangle]
+    pub extern "C" fn js_run_ext_pump() {
+        let f = EXT_PUMP_FN.load(Ordering::Acquire);
+        if !f.is_null() {
+            unsafe {
+                let func: extern "C" fn() -> i32 = std::mem::transmute(f);
+                func();
+            }
+        }
+    }
+}
+
 // Stdlib pump registration — allows perry-ui-macos pump timer to call
 // js_stdlib_process_pending without a hard link dependency on perry-stdlib.
 mod stdlib_pump {

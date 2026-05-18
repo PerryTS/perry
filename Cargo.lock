@@ -5613,6 +5613,7 @@ dependencies = [
  "libc",
  "libshumate",
  "mpris-server",
+ "perry-ffi",
  "perry-runtime",
  "perry-ui",
  "perry-ui-testkit",

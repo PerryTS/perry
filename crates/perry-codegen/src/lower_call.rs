@@ -1872,7 +1872,6 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                                 property: inner_property,
                             } = inner_callee.as_ref()
                             {
-<<<<<<< HEAD
                                 // #1008: accept both the legacy `Promise` =
                                 // GlobalGet shape and the post-#973
                                 // PropertyGet { GlobalGet(0), "Promise" }
@@ -1885,10 +1884,6 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                                         inner_object.as_ref(),
                                         "Promise",
                                     )
-=======
-                                if is_global_constructor_expr(inner_object, "Promise")
-                                    && inner_property == "resolve"
->>>>>>> 92d5eab9 (fix: recognize global Promise static calls)
                                 {
                                     let inner_value = if inner_args.is_empty() {
                                         double_literal(0.0)

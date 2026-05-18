@@ -263,6 +263,15 @@ export function audioStartRecording(): void;
 /** Stop audio recording and save to file. */
 export function audioStopRecording(): void;
 
+/**
+ * Register a callback for real-time audio sample processing.
+ * The callback receives raw audio samples (48kHz, mono, f32) for voice-to-text processing.
+ */
+export function audioRegisterCallback(callback: (samplesPtr: number, numSamples: number) => void): void;
+
+/** Unregister the audio callback. */
+export function audioUnregisterCallback(): void;
+
 // -----------------------------------------------------------------------------
 // Geolocation (issue #552)
 //
