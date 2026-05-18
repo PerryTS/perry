@@ -7,9 +7,7 @@
 //! file at the diagnostic's span. Diagnostics with non-reportable codes
 //! never enqueue anything.
 
-use perry_diagnostics::compat_report::{
-    set_report_sink, PendingReport, ReportSink,
-};
+use perry_diagnostics::compat_report::{set_report_sink, PendingReport, ReportSink};
 use perry_diagnostics::{
     Diagnostic, DiagnosticCode, DiagnosticEmitter, SimpleEmitter, SourceCache, Span,
 };

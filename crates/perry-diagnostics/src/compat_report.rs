@@ -393,10 +393,7 @@ pub fn redact_snippet(input: &str) -> Result<String, RedactionError> {
         }
 
         // Numeric literal
-        if c.is_ascii_digit()
-            || (c == b'.'
-                && i + 1 < bytes.len()
-                && bytes[i + 1].is_ascii_digit())
+        if c.is_ascii_digit() || (c == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit())
         {
             // Eat digits, dots, exponent markers, hex/oct/bin prefixes,
             // underscores, BigInt 'n' suffix
@@ -753,10 +750,7 @@ pub fn set_report_sink(sink: Box<dyn ReportSink>) {
 /// Returns true if a sink has been installed. Lets the chokepoint short-
 /// circuit when reporting is disabled at every layer.
 pub fn has_report_sink() -> bool {
-    sink_slot()
-        .lock()
-        .map(|g| g.is_some())
-        .unwrap_or(false)
+    sink_slot().lock().map(|g| g.is_some()).unwrap_or(false)
 }
 
 /// Internal: forward a pending report to the installed sink, if any.

@@ -1,8 +1,6 @@
 //! Diagnostic emitters for different output formats.
 
-use crate::compat_report::{
-    is_reportable_code, maybe_enqueue_for_diagnostic, ReportStage,
-};
+use crate::compat_report::{is_reportable_code, maybe_enqueue_for_diagnostic, ReportStage};
 use crate::diagnostic::{Diagnostic, Diagnostics, Severity};
 use crate::source_cache::SourceCache;
 use crate::span::LabelStyle;
@@ -43,13 +41,7 @@ pub fn forward_to_compat_report_channel(diagnostic: &Diagnostic, cache: &SourceC
         .find(|&i| src.is_char_boundary(i))
         .unwrap_or(end);
     let snippet = &src[start..end];
-    maybe_enqueue_for_diagnostic(
-        diagnostic.code,
-        snippet,
-        ReportStage::HirLower,
-        None,
-        None,
-    );
+    maybe_enqueue_for_diagnostic(diagnostic.code, snippet, ReportStage::HirLower, None, None);
 }
 
 /// Trait for emitting diagnostics in various formats.

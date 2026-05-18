@@ -322,7 +322,10 @@ pub fn run(args: DoctorArgs, format: OutputFormat, use_color: bool) -> Result<()
     if args.clear_report_cache {
         let cleared = crate::compat_reports::clear_cache();
         if cleared {
-            println!("Cleared compatibility-report dedup cache at {}", crate::compat_reports::cache_path().display());
+            println!(
+                "Cleared compatibility-report dedup cache at {}",
+                crate::compat_reports::cache_path().display()
+            );
         } else {
             println!("No compatibility-report cache to clear.");
         }

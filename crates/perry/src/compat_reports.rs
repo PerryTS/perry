@@ -21,9 +21,7 @@ use crate::telemetry::{
     self, generate_client_id, load_telemetry_config, save_telemetry_config, CompatibilityReports,
     TelemetryConfig,
 };
-use perry_diagnostics::compat_report::{
-    CompatibilityReport, PendingReport, ReportSink,
-};
+use perry_diagnostics::compat_report::{CompatibilityReport, PendingReport, ReportSink};
 use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -60,9 +58,7 @@ impl SessionConsent {
     fn allows_send(&self) -> bool {
         matches!(
             self,
-            SessionConsent::AllowOnce
-                | SessionConsent::AllowAlways
-                | SessionConsent::AlreadyOn
+            SessionConsent::AllowOnce | SessionConsent::AllowAlways | SessionConsent::AlreadyOn
         )
     }
 }
@@ -89,10 +85,7 @@ fn counters() -> &'static Mutex<ReportCounters> {
 
 /// Snapshot of the live counters for `perry doctor` output.
 pub(crate) fn current_counters() -> ReportCounters {
-    counters()
-        .lock()
-        .map(|g| *g)
-        .unwrap_or_default()
+    counters().lock().map(|g| *g).unwrap_or_default()
 }
 
 struct QueueSink;
@@ -482,12 +475,11 @@ mod tests {
         let mut cache = ReportCache::default();
         // Pretend this hash was seen 31 days ago.
         let thirty_one_days = 31 * 24 * 60 * 60;
-        cache
-            .seen
-            .insert("sha256:stale".into(), unix_now().saturating_sub(thirty_one_days));
-        cache
-            .seen
-            .insert("sha256:fresh".into(), unix_now());
+        cache.seen.insert(
+            "sha256:stale".into(),
+            unix_now().saturating_sub(thirty_one_days),
+        );
+        cache.seen.insert("sha256:fresh".into(), unix_now());
         cache.prune();
         assert!(!cache.seen.contains_key("sha256:stale"));
         assert!(cache.seen.contains_key("sha256:fresh"));
