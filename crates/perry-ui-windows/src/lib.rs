@@ -1573,6 +1573,35 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "perry_system_share_url",
         "Windows DataTransferManager not yet wired (#917 follow-up)",
         Some("#917"),
+// #675 — App Group stubs on Windows. Native impl will use
+// `%LOCALAPPDATA%\<bundle_id>\shared\` for the blob shape and a
+// JSON-backed kv store; tracked as #675 follow-up.
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_set(_key_ptr: i64, _value_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_app_group_set",
+        "Windows %LOCALAPPDATA%-backed App Group not implemented (#675 follow-up)",
+        Some("#675"),
+    );
+}
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_get(_key_ptr: i64) -> i64 {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_app_group_get",
+        "Windows %LOCALAPPDATA%-backed App Group not implemented (#675 follow-up)",
+        Some("#675"),
+    );
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+}
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_delete(_key_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_app_group_delete",
+        "Windows %LOCALAPPDATA%-backed App Group not implemented (#675 follow-up)",
+        Some("#675"),
     );
 }
 

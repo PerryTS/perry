@@ -1644,6 +1644,117 @@ unsafe fn present_sharing_picker(items: *mut objc2::runtime::AnyObject) {
     ];
 }
 
+// #675 — App Group / cross-process shared storage on macOS.
+//
+// Backed by `NSUserDefaults(suiteName:)`. The suite name is read
+// from the `PERRY_APP_GROUP` environment variable so an app's
+// signing identity can override the default without a recompile;
+// when unset, falls back to `"group.perryapp"` which is fine for
+// the dev flow (no entitlement → the suite simply lives under
+// `~/Library/Preferences/group.perryapp.plist` instead of inside
+// the shared App Group container).
+
+fn app_group_suite() -> objc2::rc::Retained<objc2_foundation::NSString> {
+    let suite = std::env::var("PERRY_APP_GROUP").unwrap_or_else(|_| "group.perryapp".to_string());
+    objc2_foundation::NSString::from_str(&suite)
+}
+
+unsafe fn app_group_defaults() -> *mut objc2::runtime::AnyObject {
+    let cls = objc2::runtime::AnyClass::get(c"NSUserDefaults").unwrap();
+    let alloc: *mut objc2::runtime::AnyObject = objc2::msg_send![cls, alloc];
+    let suite = app_group_suite();
+    let defaults: *mut objc2::runtime::AnyObject =
+        objc2::msg_send![alloc, initWithSuiteName: &*suite];
+    defaults
+}
+
+fn appgroup_str_from_header(ptr: *const u8) -> &'static str {
+    if ptr.is_null() {
+        return "";
+    }
+    unsafe {
+        let header = ptr as *const crate::string_header::StringHeader;
+        let len = (*header).byte_len as usize;
+        let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
+    }
+}
+
+/// #675 — set a key in the App Group's `NSUserDefaults` suite.
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
+    let key = appgroup_str_from_header(key_ptr as *const u8);
+    let value = appgroup_str_from_header(value_ptr as *const u8);
+    if key.is_empty() {
+        return;
+    }
+    unsafe {
+        let defaults = app_group_defaults();
+        if defaults.is_null() {
+            return;
+        }
+        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_value = objc2_foundation::NSString::from_str(value);
+        let _: () = objc2::msg_send![defaults, setObject: &*ns_value, forKey: &*ns_key];
+        let _: () = objc2::msg_send![defaults, synchronize];
+    }
+}
+
+/// #675 — read a key from the App Group suite. Returns the empty
+/// string when the key is absent (matches the contract documented in
+/// the issue: "" if absent).
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    let empty = || unsafe { js_string_from_bytes(std::ptr::null(), 0) };
+    let key = appgroup_str_from_header(key_ptr as *const u8);
+    if key.is_empty() {
+        return empty();
+    }
+    unsafe {
+        let defaults = app_group_defaults();
+        if defaults.is_null() {
+            return empty();
+        }
+        let ns_key = objc2_foundation::NSString::from_str(key);
+        let value: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![defaults, stringForKey: &*ns_key];
+        if value.is_null() {
+            return empty();
+        }
+        // Convert NSString -> UTF-8 bytes.
+        let utf8_ptr: *const u8 = objc2::msg_send![value, UTF8String];
+        if utf8_ptr.is_null() {
+            return empty();
+        }
+        let utf8_len: usize = objc2::msg_send![value, lengthOfBytesUsingEncoding: 4u64]; // NSUTF8StringEncoding = 4
+        if utf8_len == 0 {
+            return empty();
+        }
+        js_string_from_bytes(utf8_ptr, utf8_len as i32)
+    }
+}
+
+/// #675 — remove a key from the App Group suite.
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
+    let key = appgroup_str_from_header(key_ptr as *const u8);
+    if key.is_empty() {
+        return;
+    }
+    unsafe {
+        let defaults = app_group_defaults();
+        if defaults.is_null() {
+            return;
+        }
+        let ns_key = objc2_foundation::NSString::from_str(key);
+        let _: () = objc2::msg_send![defaults, removeObjectForKey: &*ns_key];
+        let _: () = objc2::msg_send![defaults, synchronize];
+    }
+}
+
 /// Open a URL in the default browser/app.
 #[no_mangle]
 pub extern "C" fn perry_system_open_url(url_ptr: i64) {

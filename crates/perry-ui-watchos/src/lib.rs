@@ -1191,6 +1191,36 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "perry_system_share_url",
         "watchOS does not expose a programmatic share sheet (#917)",
         Some("#917"),
+// #675 — App Group stubs on watchOS. WatchKit *does* support
+// `UserDefaults(suiteName:)` against the same App Group entitlement
+// as the iOS host, but the wiring is more complex; tracked as
+// #675 follow-up.
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_set(_key_ptr: i64, _value_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_app_group_set",
+        "watchOS App Group not implemented (#675 follow-up)",
+        Some("#675"),
+    );
+}
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_get(_key_ptr: i64) -> i64 {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_app_group_get",
+        "watchOS App Group not implemented (#675 follow-up)",
+        Some("#675"),
+    );
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+}
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_delete(_key_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_app_group_delete",
+        "watchOS App Group not implemented (#675 follow-up)",
+        Some("#675"),
     );
 }
 #[no_mangle]

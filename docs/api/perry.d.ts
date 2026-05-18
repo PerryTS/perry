@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 903 entries across 71 modules
+// Coverage: 906 entries across 71 modules
 
 declare module "argon2" {
   /** stdlib */
@@ -695,6 +695,12 @@ declare module "perry/plugin" {
 declare module "perry/system" {
   /** stdlib */
   export function appGetLaunchUrl(...args: any[]): any;
+  /** stdlib */
+  export function appGroupDelete(...args: any[]): any;
+  /** stdlib */
+  export function appGroupGet(...args: any[]): any;
+  /** stdlib */
+  export function appGroupSet(...args: any[]): any;
   /** stdlib */
   export function appOnOpenUrl(...args: any[]): any;
   /** stdlib */

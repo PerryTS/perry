@@ -1280,6 +1280,36 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "perry_system_share_url",
         "tvOS does not expose a programmatic share sheet (#917)",
         Some("#917"),
+// #675 — App Group / cross-process shared storage. MVP stubs on
+// tvOS; tvOS user apps don't typically share data cross-process,
+// and the matching real impl (UserDefaults(suiteName:)) isn't
+// commonly used here. Stub + first-call warning so callers know.
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_set(_key_ptr: i64, _value_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_app_group_set",
+        "tvOS App Group not implemented (#675 follow-up)",
+        Some("#675"),
+    );
+}
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_get(_key_ptr: i64) -> i64 {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_app_group_get",
+        "tvOS App Group not implemented (#675 follow-up)",
+        Some("#675"),
+    );
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+}
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_delete(_key_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_app_group_delete",
+        "tvOS App Group not implemented (#675 follow-up)",
+        Some("#675"),
     );
 }
 

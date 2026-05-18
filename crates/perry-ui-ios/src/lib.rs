@@ -1393,6 +1393,69 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
         "iOS UIActivityViewController not yet implemented (#917 follow-up)",
         Some("#917"),
     );
+// #675 — App Group / cross-process shared storage on iOS. MVP uses
+// an in-process HashMap so the API is exercisable from user code;
+// the native impl (UserDefaults(suiteName:) read from
+// `application-groups` entitlement) is tracked under #675 follow-up.
+// First call per process per symbol prints a `[perry] warning` line
+// so developers know they're not getting cross-process behavior yet.
+fn app_group_store_ios() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    static STORE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    STORE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+fn app_group_str_from_header_ios(ptr: *const u8) -> &'static str {
+    if ptr.is_null() {
+        return "";
+    }
+    unsafe {
+        let header = ptr as *const perry_runtime::string::StringHeader;
+        let len = (*header).byte_len as usize;
+        let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
+    }
+}
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "perry_system_app_group_set",
+        "iOS App Group is an in-process HashMap in this MVP (#675 follow-up: UserDefaults(suiteName:))",
+        Some("#675"),
+    );
+    let key = app_group_str_from_header_ios(key_ptr as *const u8);
+    let value = app_group_str_from_header_ios(value_ptr as *const u8);
+    if key.is_empty() {
+        return;
+    }
+    if let Ok(mut g) = app_group_store_ios().lock() {
+        g.insert(key.to_string(), value.to_string());
+    }
+}
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    let key = app_group_str_from_header_ios(key_ptr as *const u8);
+    if key.is_empty() {
+        return unsafe { js_string_from_bytes(std::ptr::null(), 0) };
+    }
+    let value = app_group_store_ios()
+        .lock()
+        .ok()
+        .and_then(|g| g.get(key).cloned())
+        .unwrap_or_default();
+    unsafe { js_string_from_bytes(value.as_ptr(), value.len() as i32) }
+}
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
+    let key = app_group_str_from_header_ios(key_ptr as *const u8);
+    if key.is_empty() {
+        return;
+    }
+    if let Ok(mut g) = app_group_store_ios().lock() {
+        g.remove(key);
+    }
 }
 
 /// Open a URL in the default browser/app.

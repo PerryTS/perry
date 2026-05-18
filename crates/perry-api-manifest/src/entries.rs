@@ -2104,6 +2104,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // shapes: plain text + URL.
     method("perry/system", "shareText", false, None),
     method("perry/system", "shareUrl", false, None),
+    // #675 — App Group / cross-process shared storage. Widget
+    // extensions, share extensions, watchOS targets, etc. all need
+    // a way to share key/value data with the host app. macOS/iOS:
+    // `UserDefaults(suiteName:)`. Android: scoped SharedPreferences
+    // (follow-up). Every other platform: an in-process HashMap
+    // fallback so the API surface is exercisable in dev/tests; not
+    // actually cross-process there. Follow-up tracker: #675.
+    method("perry/system", "appGroupSet", false, None),
+    method("perry/system", "appGroupGet", false, None),
+    method("perry/system", "appGroupDelete", false, None),
     method("perry/system", "keychainSave", false, None),
     method("perry/system", "keychainGet", false, None),
     method("perry/system", "keychainDelete", false, None),

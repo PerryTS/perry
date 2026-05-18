@@ -2119,6 +2119,28 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str, ArgKind::Str],
         ret: ReturnKind::Void,
     },
+    // #675 — App Group / cross-process shared storage. set/get/delete
+    // map to the platform's native shared-storage suite on Apple
+    // platforms (`UserDefaults(suiteName:)`); other platforms get an
+    // in-process HashMap fallback for API parity.
+    MethodRow {
+        method: "appGroupSet",
+        runtime: "perry_system_app_group_set",
+        args: &[ArgKind::Str, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "appGroupGet",
+        runtime: "perry_system_app_group_get",
+        args: &[ArgKind::Str],
+        ret: ReturnKind::Str,
+    },
+    MethodRow {
+        method: "appGroupDelete",
+        runtime: "perry_system_app_group_delete",
+        args: &[ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "keychainSave",
         runtime: "perry_system_keychain_save",
