@@ -4763,33 +4763,13 @@ fn check_escapes_in_expr(
             check_escapes_in_expr(else_expr, candidates, classes, escaped);
         }
         Expr::Call { callee, args, .. } => {
-            // Method-call form: `local.method(...)` lowers to
-            // `Call { callee: PropertyGet { LocalGet(id), ... } }`. Most
-            // methods need a real `this` pointer, so scalar replacement has
-            // no receiver to pass. The narrow exception below is a zero-arg
-            // method whose whole body is `return this.<field>`, and whose
-            // class chain has no own-field/accessor shadow for the method
-            // name. Call lowering can satisfy that exact shape directly from
-            // the scalarized field slot.
+            // Method-call form: `local.method(...)` needs a real heap `this`
+            // pointer. HIR exact-receiver inlining is the layer that may prove
+            // a safe `return this.field` replacement; if a method call reaches
+            // codegen as a call, keep the receiver allocated.
             if let Expr::PropertyGet { object, .. } = callee.as_ref() {
                 if let Expr::LocalGet(id) = object.as_ref() {
-                    if let Some(class_name) = candidates.get(id) {
-                        if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                            if crate::type_analysis::method_scalar_summary_for_call(
-                                classes,
-                                class_name,
-                                property,
-                                args.len(),
-                            )
-                            .is_some()
-                            {
-                                check_escapes_in_expr(callee, candidates, classes, escaped);
-                                for a in args {
-                                    check_escapes_in_expr(a, candidates, classes, escaped);
-                                }
-                                return;
-                            }
-                        }
+                    if candidates.contains_key(id) {
                         escaped.insert(*id);
                     }
                 }

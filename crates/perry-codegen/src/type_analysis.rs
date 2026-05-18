@@ -4,7 +4,7 @@
 //! Used by `expr.rs`, `lower_call.rs`, `lower_string_method.rs`,
 //! `lower_conditional.rs`, and `stmt.rs`.
 
-use perry_hir::{BinaryOp, Class, Expr, Stmt, UnaryOp};
+use perry_hir::{BinaryOp, Expr, UnaryOp};
 use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
@@ -1247,111 +1247,6 @@ pub(crate) fn class_field_global_index(
         None
     }
     walk(ctx, class_name, property, 0)
-}
-
-/// Scalarization summaries for method calls on scalar-replaced receivers.
-///
-/// This is deliberately narrow and is not general method inlining. Each
-/// variant means lowering can satisfy the call without materializing a heap
-/// `this` pointer.
-pub(crate) enum MethodScalarSummary {
-    ReturnThisField { field: String },
-}
-
-/// Summarize a method call that can be satisfied from scalar-replaced fields.
-///
-/// Currently only supports a method whose whole body is `return this.<field>`.
-/// The proof is valid when a scalar-replaced `new C()` receiver can show that
-/// `receiver.method()` resolves to a prototype method whose body reads a
-/// scalarized field, with no instance field or accessor shadowing that method
-/// name first. More complex calls still take the normal heap/object path.
-pub(crate) fn method_scalar_summary_for_call(
-    classes: &std::collections::HashMap<String, &Class>,
-    class_name: &str,
-    method_name: &str,
-    arg_count: usize,
-) -> Option<MethodScalarSummary> {
-    if arg_count != 0 {
-        return None;
-    }
-
-    fn has_field(
-        classes: &std::collections::HashMap<String, &Class>,
-        class_name: &str,
-        field_name: &str,
-    ) -> bool {
-        let Some(class) = classes.get(class_name) else {
-            return false;
-        };
-        if class
-            .fields
-            .iter()
-            .any(|f| f.key_expr.is_none() && f.name == field_name)
-        {
-            return true;
-        }
-        class
-            .extends_name
-            .as_deref()
-            .map(|parent| has_field(classes, parent, field_name))
-            .unwrap_or(false)
-    }
-
-    fn class_chain_has_own_method_shadow(
-        classes: &std::collections::HashMap<String, &Class>,
-        class_name: &str,
-        method_name: &str,
-    ) -> bool {
-        let mut cur = Some(class_name.to_string());
-        while let Some(name) = cur {
-            let Some(class) = classes.get(&name) else {
-                return true;
-            };
-            if class
-                .fields
-                .iter()
-                .any(|f| f.key_expr.is_some() || f.name == method_name)
-            {
-                return true;
-            }
-            cur = class.extends_name.clone();
-        }
-        false
-    }
-
-    if class_chain_has_own_method_shadow(classes, class_name, method_name) {
-        return None;
-    }
-
-    let mut cur = Some(class_name.to_string());
-    while let Some(name) = cur {
-        let class = classes.get(&name)?;
-        let has_accessor = class.getters.iter().any(|(n, _)| n == method_name)
-            || class.setters.iter().any(|(n, _)| n == method_name);
-        let method = class.methods.iter().find(|m| m.name == method_name);
-        if has_accessor {
-            return None;
-        }
-        if let Some(method) = method {
-            if method.is_async || method.is_generator || !method.params.is_empty() {
-                return None;
-            }
-            return match method.body.as_slice() {
-                [Stmt::Return(Some(Expr::PropertyGet { object, property }))]
-                    if matches!(object.as_ref(), Expr::This)
-                        && has_field(classes, class_name, property) =>
-                {
-                    Some(MethodScalarSummary::ReturnThisField {
-                        field: property.clone(),
-                    })
-                }
-                _ => None,
-            };
-        }
-        cur = class.extends_name.clone();
-    }
-
-    None
 }
 
 /// If the expression is a known instance of a Named class type, return
