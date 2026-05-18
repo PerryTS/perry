@@ -1860,6 +1860,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("stream", "PassThrough"),
     method("stream", "pipeline", false, None),
     method("stream", "finished", false, None),
+    // `require('stream')` returns the legacy `Stream` constructor itself,
+    // which has its own `.prototype` (it extends EventEmitter). The
+    // `node_modules/send` package (express's static-file backend) does
+    // `util.inherits(SendStream, require('stream'))`, which reads
+    // `Stream.prototype` — the gate rejects the access without this entry.
+    property("stream", "prototype"),
     // `Readable.from(iterable)` — Node's static factory. Resolves
     // through the `Readable.foo` -> `stream.foo` route in
     // `lower_call.rs`, so the gate keys off `stream.from`.

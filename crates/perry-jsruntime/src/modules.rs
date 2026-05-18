@@ -1067,19 +1067,45 @@ export function networkInterfaces() { return {}; }
 export const EOL = '\n';
 export default { platform, arch, cpus, homedir, tmpdir, hostname, type, release, totalmem, freemem, uptime, loadavg, networkInterfaces, EOL };
 "#.to_string(),
-        "stream" | "stream/web" => r#"
-// Stub implementation for Node.js 'stream' module
-export class Readable {
+        "stream" => r#"
+// Stub implementation for Node.js 'stream' module.
+//
+// IMPORTANT: Node's `require('stream')` returns the legacy `Stream`
+// *constructor* (a class) with `Readable`/`Writable`/etc. attached as
+// static properties — NOT a plain namespace object. Packages like
+// `send` / `express` rely on this shape:
+//
+//     var Stream = require('stream')
+//     function SendStream() { Stream.call(this) }
+//     util.inherits(SendStream, Stream)   // reads Stream.prototype
+//
+// If the default export is `{ Readable, Writable, ... }` then
+// `Stream.prototype` is `undefined` and `util.inherits` blows up with
+// "Object prototype may only be an Object or null: undefined".
+// (See: node_modules/send/index.js:30,173.)
+//
+// So we make `Stream` a real class, attach the sub-classes as static
+// properties, and export the *class itself* as default.
+class Stream {
     constructor() {}
-    read() { return null; }
+    pipe(dest) { return dest; }
     on() { return this; }
-    pipe() { return this; }
+    once() { return this; }
+    emit() { return false; }
+    off() { return this; }
+    addListener() { return this; }
+    removeListener() { return this; }
+    removeAllListeners() { return this; }
 }
-export class Writable {
-    constructor() {}
+export class Readable extends Stream {
+    constructor() { super(); }
+    read() { return null; }
+    pipe(dest) { return dest; }
+}
+export class Writable extends Stream {
+    constructor() { super(); }
     write() { return true; }
     end() {}
-    on() { return this; }
 }
 export class Duplex extends Readable {
     write() { return true; }
@@ -1092,7 +1118,25 @@ export class WritableStream {}
 export class TransformStream {}
 export function pipeline() {}
 export function finished() {}
-export default { Readable, Writable, Duplex, Transform, PassThrough, ReadableStream, WritableStream, TransformStream, pipeline, finished };
+// Attach sub-classes as static properties so `Stream.Readable`,
+// `Stream.Writable`, etc. resolve the way Node ships them.
+Stream.Readable = Readable;
+Stream.Writable = Writable;
+Stream.Duplex = Duplex;
+Stream.Transform = Transform;
+Stream.PassThrough = PassThrough;
+Stream.pipeline = pipeline;
+Stream.finished = finished;
+export { Stream };
+// `__perry_commonjs = true` tells the wrap_commonjs() require() shim in
+// modules.rs to return `module.default` instead of the ESM namespace
+// when this module is `require()`'d. Node's `require('stream')` returns
+// the Stream class itself (with `.Readable` / `.prototype` / etc),
+// NOT a namespace object. Without this flag, `var Stream =
+// require('stream')` ends up as a copied null-proto object and
+// `Stream.prototype` becomes undefined → `util.inherits` crashes.
+export const __perry_commonjs = true;
+export default Stream;
 "#.to_string(),
         "repl" => r#"
 // Stub implementation for Node.js 'repl' module
@@ -1157,7 +1201,26 @@ export function format(fmt, ...args) { return fmt; }
 export function formatWithOptions(_inspectOptions, fmt, ...args) { return format(fmt, ...args); }
 export function debuglog() { return () => {}; }
 export function deprecate(fn) { return fn; }
-export function inherits(ctor, superCtor) { Object.setPrototypeOf(ctor.prototype, superCtor.prototype); }
+// `util.inherits(ctor, superCtor)` — Node's pre-class inheritance helper.
+// Real Node semantics:
+//   Object.defineProperty(ctor, 'super_', { value: superCtor });
+//   Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
+// Throws TypeError if either arg is missing a `.prototype`. We mirror that
+// contract so packages like `send` (which derives `SendStream` from
+// `require('stream')`) work transparently.
+export function inherits(ctor, superCtor) {
+    if (ctor === undefined || ctor === null) {
+        throw new TypeError('The constructor to "inherits" must not be null or undefined');
+    }
+    if (superCtor === undefined || superCtor === null) {
+        throw new TypeError('The super constructor to "inherits" must not be null or undefined');
+    }
+    if (superCtor.prototype === undefined) {
+        throw new TypeError('The super constructor to "inherits" must have a prototype');
+    }
+    Object.defineProperty(ctor, 'super_', { value: superCtor, writable: true, configurable: true });
+    Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
+}
 export const TextEncoder = globalThis.TextEncoder;
 export const TextDecoder = globalThis.TextDecoder;
 // util.types — Node's runtime introspection namespace. NestJS / rxjs

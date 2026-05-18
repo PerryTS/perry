@@ -2,6 +2,49 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.990 — feat(util/stream): util.inherits + stream prototype scaffold (express compile unblocked)
+
+**Symptom.** After PR #983 unblocked `safer-buffer`, `import express from 'express'` advanced one frame further and then crashed at `node_modules/send/index.js:173` with:
+
+```
+TypeError: Object prototype may only be an Object or null: undefined
+    at Object.setPrototypeOf (<anonymous>)
+    at Object.inherits (node:util:14:52)
+    at file:.../send/index.js:356:6
+```
+
+`send/index.js` does the classic pre-ES6 inheritance pattern:
+
+```js
+var Stream = require('stream')             // line 30
+function SendStream(req, path, options) { Stream.call(this); ... }
+util.inherits(SendStream, Stream)          // line 173
+```
+
+`util.inherits(ctor, superCtor)` reads `superCtor.prototype` and calls `Object.setPrototypeOf(ctor.prototype, superCtor.prototype)`. Two coupled gaps converged on the crash:
+
+1. **`node:stream` default export was a plain namespace object.** The V8-fallback `node:stream` shim in `crates/perry-jsruntime/src/modules.rs` ended with `export default { Readable, Writable, Duplex, Transform, ... }` — a literal `{}` object, not the legacy `Stream` constructor Node ships. So `require('stream').prototype` was `undefined`. Even worse, the module had no `__perry_commonjs = true` marker, so the `wrap_commonjs` require() shim took the null-prototype-namespace branch and returned a flat copied object — `Stream.Readable` was preserved but `Stream.prototype` and `Stream` callability were not.
+
+2. **`util.inherits` was minimal.** The V8-fallback `node:util` `inherits` did only `Object.setPrototypeOf(ctor.prototype, superCtor.prototype)` — no `super_` static, no input validation, no useful error message when `superCtor` had no prototype.
+
+**Fix — three coordinated changes:**
+
+1. **`crates/perry-jsruntime/src/modules.rs` (`node:stream` shim):** rewrite the legacy `Stream` value as an actual class with its own `.prototype`, give it the EventEmitter-shaped instance methods (`on`/`once`/`emit`/`off`/`addListener`/`removeListener`/`removeAllListeners`/`pipe`), and re-root `Readable`/`Writable` to extend it. Attach `Readable`/`Writable`/`Duplex`/`Transform`/`PassThrough`/`pipeline`/`finished` as static properties on `Stream` itself, then `export default Stream`. Add `export const __perry_commonjs = true;` so `wrap_commonjs`'s `__perry_require_namespace` returns the class as-is from `require('stream')`. Also splits the old `"stream" | "stream/web"` match arm — they're now distinct, which silences the `unreachable_patterns` warning and lets each module evolve independently.
+
+2. **`crates/perry-jsruntime/src/modules.rs` (`node:util` shim):** harden `inherits(ctor, superCtor)` to mirror Node's contract:
+   - throw `TypeError` on null/undefined `ctor` or `superCtor`,
+   - throw `TypeError` if `superCtor.prototype` is undefined (matches Node's error message format),
+   - `Object.defineProperty(ctor, 'super_', { value: superCtor, writable: true, configurable: true })` so derived classes can chain through `Bar.super_` (the legacy Node pattern several stdlib packages use),
+   - then the original `Object.setPrototypeOf(ctor.prototype, superCtor.prototype)`.
+
+3. **`crates/perry-api-manifest/src/entries.rs`:** add `property("stream", "prototype")` to the manifest so the #463 unimplemented-API gate doesn't reject `Stream.prototype` reads in user TS. (`util.inherits` was already in the manifest.)
+
+**Validation.**
+- `test-files/test_util_inherits.ts` + `test-files/fixtures/util_inherits_v8/inherits_mod.js` — V8-routed fixture mirroring the express/send pattern: `require('util')` + `require('stream')`, two `util.inherits()` calls, and assertions for `Stream.prototype`, `Stream.Readable.prototype`, `super_`, real-prototype-chain `instanceof`, and method resolution through the chain. All eight assertions pass under Perry.
+- Express compile reproducer (`/tmp/perry-express-2/test.ts` = `import express from 'express'; console.log(typeof express)`) now succeeds: prints `function`. Previously this hit the `util.inherits` crash at module-init time and the namespace load failed.
+
+**Caveat.** The native-compile path for `util.inherits` (TS code that imports `node:util` directly without going through the V8 fallback) is still essentially a no-op — Perry's class-id `instanceof` and prototype model don't have a runtime hook for `util.inherits`. That's separate from this fix; users of the express/send chain are in the V8 fallback by definition (those packages are not in `compilePackages` and use CJS internally), so the V8-side change is what matters.
+
 ## v0.5.989 — feat(runtime+jsruntime): expose Object.prototype methods on Buffer instances + plain-object require() namespace
 
 **Symptom.** `import express from 'express'` (and any transitive consumer of `safer-buffer`) threw `TypeError: buffer.hasOwnProperty is not a function` at module-init time. safer-buffer's `safer.js` opens with `for (key in buffer) { if (!buffer.hasOwnProperty(key)) continue; ... }` where `buffer` is the value returned by `require('buffer')`. Two distinct gaps converged on the same error message:
