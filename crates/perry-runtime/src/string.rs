@@ -2821,9 +2821,16 @@ unsafe fn concat_content_matches(
 }
 
 /// GC root scanner for the intern table.
+///
+/// #855: walk via `&raw const` + raw pointer indexing to avoid the
+/// `static_mut_refs` lint (hard error in Rust 2024). The intern table
+/// is thread-local-by-discipline (perry user code is single-threaded),
+/// so the unsafe deref is sound.
 pub fn scan_intern_table_roots(mark: &mut dyn FnMut(f64)) {
+    let base: *const InternEntry = (&raw const INTERN_TABLE).cast();
     unsafe {
-        for entry in INTERN_TABLE.iter() {
+        for i in 0..INTERN_TABLE_SIZE {
+            let entry = &*base.add(i);
             if entry.string_ptr != 0 {
                 let nanboxed =
                     0x7FFF_0000_0000_0000u64 | (entry.string_ptr as u64 & 0x0000_FFFF_FFFF_FFFFu64);

@@ -74,6 +74,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
 ] }
 
+# #855: libc::mach_host_self is deprecated; the mach2 crate is the
+# upstream-recommended replacement. Pulled in only where we actually
+# call host_statistics64 (`js_os_freemem` on macOS / iOS). Need 0.6+
+# because earlier mach2 releases didn't surface mach_host_self.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+mach2 = "0.6"
+
 # build.rs auto-generates no-op `perry_ui_*` FFI stubs for the harmonyos
 # build (cfg(feature = "ohos-napi")) by reading the dispatch tables here.
 # See `build.rs` and issue #395 for the rationale.

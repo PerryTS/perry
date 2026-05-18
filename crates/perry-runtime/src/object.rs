@@ -791,9 +791,16 @@ fn transition_cache_insert(
 /// `scan_shape_cache_roots` — without this the mark phase would free
 /// cached target arrays that no live object currently holds directly,
 /// and the next cache-hit store would dereference freed memory.
+///
+/// #855: walk the static via `&raw const` + raw pointer indexing to
+/// avoid the `static_mut_refs` lint (hard error in Rust 2024). The
+/// cache is thread-local-by-discipline (perry user code is single-
+/// threaded), so the unsafe deref is sound.
 pub fn scan_transition_cache_roots(mark: &mut dyn FnMut(f64)) {
+    let base: *const TransitionEntry = (&raw const TRANSITION_CACHE_GLOBAL).cast();
     unsafe {
-        for entry in TRANSITION_CACHE_GLOBAL.iter() {
+        for i in 0..TRANSITION_CACHE_SIZE {
+            let entry = &*base.add(i);
             if entry.next_keys != 0 {
                 let jsval = JSValue::pointer(entry.next_keys as *const u8);
                 mark(f64::from_bits(jsval.bits()));

@@ -206,12 +206,17 @@ pub extern "C" fn js_os_totalmem() -> f64 {
 pub extern "C" fn js_os_freemem() -> f64 {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
+        // #855: libc::mach_host_self is deprecated upstream — call
+        // `mach2::mach_init::mach_host_self()` instead. The rest of
+        // the host-statistics surface (host_statistics64,
+        // vm_statistics64, HOST_VM_INFO64) is still libc-provided
+        // because mach2 hasn't surfaced it yet (as of mach2 0.6).
         unsafe {
             let mut vm_info: libc::vm_statistics64 = std::mem::zeroed();
             let mut count = (std::mem::size_of::<libc::vm_statistics64>()
                 / std::mem::size_of::<libc::integer_t>()) as u32;
             let ret = libc::host_statistics64(
-                libc::mach_host_self(),
+                mach2::mach_init::mach_host_self(),
                 libc::HOST_VM_INFO64,
                 &mut vm_info as *mut _ as *mut _,
                 &mut count,
