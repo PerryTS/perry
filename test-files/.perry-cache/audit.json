@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "source": "/Users/amlug/projects/perry/perry/test-files/test_ads_compile_smoke.ts",
+      "package": null,
+      "stdlib": {}
+    }
+  ]
+}

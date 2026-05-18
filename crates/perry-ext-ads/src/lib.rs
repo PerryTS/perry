@@ -115,10 +115,7 @@ fn resolve_load_failure(promise: JsPromise, error: &'static str) {
 /// result. JSON shape: `{"shown": false, "dismissed": false, "error": "<slug>"}`.
 fn resolve_interstitial_show_failure(promise: JsPromise, error: &'static str) {
     spawn_blocking(move || {
-        let json = format!(
-            r#"{{"shown":false,"dismissed":false,"error":"{}"}}"#,
-            error
-        );
+        let json = format!(r#"{{"shown":false,"dismissed":false,"error":"{}"}}"#, error);
         promise.resolve_string(&json);
     });
 }
