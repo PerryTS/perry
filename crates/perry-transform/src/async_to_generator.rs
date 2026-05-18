@@ -146,8 +146,7 @@ pub fn transform_async_to_generator(module: &mut Module) {
     collect_async_step_closures(module);
 
     if !module.async_step_closures.is_empty() {
-        let mut next_func_id: perry_types::FuncId =
-            compute_max_func_id_module(module) + 1;
+        let mut next_func_id: perry_types::FuncId = compute_max_func_id_module(module) + 1;
         // Walk the HIR, rewriting matched async closures in-place. The
         // walker descends into nested closures so chains like
         // `async () => { items.map(async x => await f(x)) }` are
