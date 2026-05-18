@@ -1082,6 +1082,52 @@ fn transform_generator_function_with_extra_captures(
     // Build the new function body
     let mut new_body: Vec<Stmt> = Vec::new();
 
+    // Hoist variable declarations from the original body — collected
+    // here (before the prealloc emit) so the prealloc set is complete.
+    let hoisted = collect_hoisted_vars(&func.body);
+
+    // Issue #1029: the state-machine internals (`state`, `done`, `sent`)
+    // plus hoisted user-vars and the transform-allocated `extra_local_ids`
+    // are all captured-by-reference into the synthesized next/return/throw/
+    // step closures (they're in `mutable_captures` of those closures).
+    // Without an explicit box, the captures lower to NaN-boxed VALUES
+    // (TAG_FALSE / TAG_UNDEFINED / 0), and the closure cache at
+    // `js_closure_alloc_with_captures_singleton` (closure.rs:712) keys on
+    // capture-bit-equality — every call to f() produces the same bits, so
+    // the cache returns the SAME closure, whose slots still hold the
+    // terminal-state values (done=true) from call 1. Subsequent calls
+    // hit the `if (__gen_done) return iter_result(undefined, true)` short-
+    // circuit and never run the body. Symptom: call 1 of any state-
+    // machined fn returns the right value; calls 2+ return undefined.
+    //
+    // Emit a `Stmt::PreallocateBoxes` BEFORE the Lets. This:
+    //   1. Marks every listed id in `ctx.boxed_vars` via
+    //      `collect_prealloc_box_ids_in_stmts` (boxed_vars.rs:48-99) so
+    //      LocalGet/LocalSet inside the step body route through
+    //      js_box_get/js_box_set.
+    //   2. Allocates a fresh box per call (stmt.rs:1082-1102 emits
+    //      js_box_alloc into the entry block — runs every call).
+    //   3. Makes the closure cache key the BOX POINTER (distinct address
+    //      per call) — cache miss → fresh closure per call → correct
+    //      idempotency.
+    //
+    // The subsequent Stmt::Let { id, init } no longer allocates a new
+    // box; it routes through the prealloc_boxes branch in stmt.rs:594-614
+    // and just js_box_set's the init value into the existing per-call
+    // box. Net effect per call: one js_box_alloc + one js_box_set per id,
+    // versus the pre-fix path which did one js_box_alloc inside the Let
+    // (same cost, but the cache then hit on stale captures).
+    let mut prealloc_ids: Vec<LocalId> = vec![state_id, done_id, sent_id];
+    for (var_id, _, _) in &hoisted {
+        prealloc_ids.push(*var_id);
+    }
+    for extra_id in &extra_local_ids {
+        prealloc_ids.push(*extra_id);
+    }
+    prealloc_ids.sort();
+    prealloc_ids.dedup();
+    new_body.push(Stmt::PreallocateBoxes(prealloc_ids));
+
     // let __state = 0
     new_body.push(Stmt::Let {
         id: state_id,
@@ -1100,8 +1146,9 @@ fn transform_generator_function_with_extra_captures(
         init: Some(Expr::Bool(false)),
     });
 
-    // Hoist variable declarations from the original body
-    let hoisted = collect_hoisted_vars(&func.body);
+    // Re-emit hoisted Let stubs (prealloc already covered the boxes;
+    // these Lets now route through the prealloc-boxes path and just
+    // set the box value via js_box_set).
     for (var_id, var_name, var_ty) in &hoisted {
         new_body.push(Stmt::Let {
             id: *var_id,
