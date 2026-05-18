@@ -5244,7 +5244,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ads"
-version = "0.5.1006"
+version = "0.5.1007"
 dependencies = [
  "perry-ffi",
 ]

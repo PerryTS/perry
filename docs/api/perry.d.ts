@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 916 entries across 73 modules
+// Coverage: 922 entries across 74 modules
 
 declare module "@perryts/google-auth" {
   /** stdlib */
@@ -622,6 +622,21 @@ declare module "path" {
   export function resolve(...args: any[]): any;
   /** stdlib */
   export function toNamespacedPath(...args: any[]): any;
+}
+
+declare module "perry/ads" {
+  /** stdlib */
+  export function js_ads_banner_create(...args: any[]): any;
+  /** stdlib */
+  export function js_ads_banner_destroy(...args: any[]): any;
+  /** stdlib */
+  export function js_ads_interstitial_load(...args: any[]): any;
+  /** stdlib */
+  export function js_ads_interstitial_show(...args: any[]): any;
+  /** stdlib */
+  export function js_ads_rewarded_load(...args: any[]): any;
+  /** stdlib */
+  export function js_ads_rewarded_show(...args: any[]): any;
 }
 
 declare module "perry/background" {

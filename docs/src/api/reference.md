@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 916 entries across 73 modules.
+Total: 922 entries across 74 modules.
 
 ## Modules
 
@@ -49,6 +49,7 @@ Total: 916 entries across 73 modules.
 - [`nodemailer`](#nodemailer)
 - [`os`](#os)
 - [`path`](#path)
+- [`perry/ads`](#perry-ads)
 - [`perry/background`](#perry-background)
 - [`perry/i18n`](#perry-i18n)
 - [`perry/media`](#perry-media)
@@ -854,6 +855,17 @@ Total: 916 entries across 73 modules.
 - `posix`
 - `sep`
 - `win32`
+
+## `perry/ads`
+
+### Methods
+
+- `js_ads_banner_create` — module
+- `js_ads_banner_destroy` — module
+- `js_ads_interstitial_load` — module
+- `js_ads_interstitial_show` — module
+- `js_ads_rewarded_load` — module
+- `js_ads_rewarded_show` — module
 
 ## `perry/background`
 
