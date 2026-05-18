@@ -841,6 +841,9 @@ pub(crate) fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32
             walk(func, out);
             walk(value, out);
         }
+        Expr::GetFunctionPrototypeMethod { func, .. } => {
+            walk(func, out);
+        }
         Expr::MapNew | Expr::SetNew => {}
         Expr::SetNewFromArray(arr) => walk(arr, out),
         Expr::MapSet { map, key, value } => {

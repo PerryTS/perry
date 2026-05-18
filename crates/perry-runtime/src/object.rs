@@ -1488,6 +1488,47 @@ pub unsafe extern "C" fn js_register_prototype_method(
 /// `Expr::FuncRef` lowers to via `js_closure_alloc_singleton`). Anything
 /// else is a no-op — preserves the pre-fix baseline where non-callable
 /// `.prototype.m = fn` writes were silent property sets.
+/// Issue #838 followup (b) — read side: look up a method previously
+/// registered via `js_register_function_prototype_method` against the
+/// synthetic class id derived from `func_value`. Pre-fix the AST shape
+/// `<funcDecl>.prototype.<name>` lowered to a generic PropertyGet on a
+/// `Function.prototype` object that never materialised, so the read
+/// was always `undefined` — `typeof Foo.prototype.method` came back
+/// `'undefined'` even when the method was correctly dispatched through
+/// `(new Foo()).method` via the side-table walk. Pairs with the new
+/// `Expr::GetFunctionPrototypeMethod` HIR variant.
+///
+/// Returns the NaN-boxed `undefined` tag if the function value isn't a
+/// registered closure, or no method by that name was registered.
+#[no_mangle]
+pub unsafe extern "C" fn js_get_function_prototype_method(
+    func_value: f64,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> f64 {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    if name_ptr.is_null() || name_len == 0 {
+        return undef;
+    }
+    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+        Ok(s) => s,
+        Err(_) => return undef,
+    };
+    // Look up the (already-allocated) synthetic class id for this
+    // function value. Don't allocate one here — reads on a function
+    // that never had any `.prototype.x = fn` assignment should
+    // return `undefined`, matching the spec'd behavior of reading a
+    // missing property on the `Function.prototype` object.
+    let cid = function_class_id(func_value);
+    if cid == 0 {
+        return undef;
+    }
+    match lookup_prototype_method(cid, name) {
+        Some(v) => v,
+        None => undef,
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_register_function_prototype_method(
     func_value: f64,

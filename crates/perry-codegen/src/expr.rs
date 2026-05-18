@@ -10781,6 +10781,31 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(val_double)
         }
+        // Read side of #838 followup (b): `<funcDecl>.prototype.<name>`
+        // (Ident or computed-string-literal form) lowered into a direct
+        // lookup of the prototype-method side-table. Returns the closure
+        // value stored at registration time, or `undefined` if no method
+        // by that name was registered. Pre-fix this would fall through
+        // to a generic PropertyGet on a `Function.prototype` object that
+        // never materialised (so the read was always `undefined`,
+        // making `typeof Foo.prototype.method` come back `'undefined'`
+        // even though `(new Foo()).method` correctly reached the
+        // registered closure via the dispatch path).
+        Expr::GetFunctionPrototypeMethod { func, method_name } => {
+            let func_double = lower_expr(ctx, func)?;
+            let key_idx = ctx.strings.intern(method_name);
+            let key_bytes_global = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
+            let key_len = ctx.strings.entry(key_idx).byte_len.to_string();
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_get_function_prototype_method",
+                &[
+                    (DOUBLE, &func_double),
+                    (PTR, &key_bytes_global),
+                    (I64, &key_len),
+                ],
+            ))
+        }
         // `static [Symbol.for("k")] = "v"` — register in the runtime's
         // class-static-symbol side table. Refs #420 (drizzle).
         Expr::ClassStaticSymbolSet {

@@ -2,6 +2,44 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.987 — fix(hir+runtime): Constructor.prototype method dispatch for computed keys + read-side introspection (ramda transducer pattern)
+
+**Symptom.** `XWrap.prototype['@@transducer/step'] = function(acc, x) { … }` — ramda's transducer scaffolding (`_xwrap.js`) plus any pre-ES6 library that attaches instance methods through a computed string-literal key — pre-fix silently fell through to a generic `PropertySet` because the assignment-side recogniser in `lower/expr_assign.rs` only matched the `MemberProp::Ident` shape (`.method = fn`). Subsequent `(new XWrap(fn))['@@transducer/step'](acc, x)` then threw `undefined is not a function` even though the dispatch hot path was perfectly capable of finding the method via `CLASS_PROTOTYPE_METHODS` — the side-table just never got populated.
+
+A second, narrower gap: even when the assignment route worked (Ident-prop form), `(Foo.prototype as any).method` reads on the function-classic shape evaluated to `undefined` because no synthetic prototype object was ever materialised. `typeof Foo.prototype.method` returned `'undefined'` despite `(new Foo()).method` reaching the registered closure correctly.
+
+**Fix — two coordinated arms:**
+
+1. **HIR assignment-side recogniser (`crates/perry-hir/src/lower/expr_assign.rs`):** extend the `<funcDecl>.prototype.<key>` matcher to handle `MemberProp::Computed(Expr::Lit::Str)` in addition to the existing `MemberProp::Ident`. The recogniser still requires a static string-literal key (computed expressions whose value isn't compile-time-resolvable still fall through to the generic dynamic PropertySet — which is fine for the rare runtime-key case). Mirrors the same key-resolution shape `lower/expr_object.rs` uses for object-literal computed keys.
+
+2. **HIR read-side recogniser (`crates/perry-hir/src/lower/expr_member.rs`) + new HIR variant `Expr::GetFunctionPrototypeMethod`:** when the AST shape `<funcDecl>.prototype.<name>` (or `<funcDecl>.prototype['<name>']`) reaches member lowering and the receiver resolves to a function-typed local or top-level `FuncRef` (skipping `class C {}` blocks, which have a real proto object, and named native imports, which are module-managed), emit a direct lookup into the side-table via the new runtime helper `js_get_function_prototype_method(func_value, name_ptr, name_len) -> f64`. Returns the registered closure (NaN-boxed) or `undefined` if no method by that name was registered against the function's synthetic class id. Mirrors `function_class_id` (read-only — does NOT allocate a new synthetic id, so reads on a function that never had any `.prototype.x = fn` write correctly return `undefined`).
+
+Together these close the round-trip: ramda's `XWrap.prototype['@@transducer/init/result/step']` triplet now both registers and reads back, and the `typeof Foo.prototype.method === 'function'` spec idiom returns `'function'` byte-for-byte against Node's output.
+
+**Validation.**
+
+`test-files/test_constructor_prototype_method.ts` (new, four assertions covering Ident-prop assign, second Ident-prop assign, prototype-method read+typeof, computed-key assign+call) now matches `node --experimental-strip-types` line-for-line:
+
+```
+5
+10
+function
+15
+```
+
+A standalone IIFE-style transducer (mirrors ramda's `_xwrap.js`) also passes:
+
+```ts
+var XWrap = (function () { function XWrap(fn) { this.f = fn; }
+  XWrap.prototype['@@transducer/step'] = function (acc, x) { return this.f(acc, x); };
+  return XWrap; })();
+// new XWrap(add)['@@transducer/step'](10, 5) === 15
+```
+
+**Known next blocker — `import * as R from 'ramda'`:** every individual ramda module imports cleanly through the direct-path shape (`import sum from 'ramda/src/sum.js'`) — verified by bisecting all 269 entries. The combined `import * as R from 'ramda'` (or a single named import like `import { sum } from 'ramda'`) still throws `TypeError: value is not a function` at module init, before any user code runs. The failure isn't surfaced by individual-module imports, so it's a cross-module init-time interaction (likely topological-sort or shared-singleton). This is unrelated to the prototype-method shape addressed here.
+
+Files: `crates/perry-hir/src/ir.rs`, `crates/perry-hir/src/lower/expr_assign.rs`, `crates/perry-hir/src/lower/expr_member.rs`, `crates/perry-hir/src/walker.rs`, `crates/perry-hir/src/stable_hash.rs`, `crates/perry-codegen/src/expr.rs`, `crates/perry-codegen/src/collectors.rs`, `crates/perry-codegen/src/runtime_decls.rs`, `crates/perry-runtime/src/object.rs`, `test-files/test_constructor_prototype_method.ts`.
+
 ## v0.5.986 — fix(runtime+codegen): Object.prototype.toString / Array.prototype.slice / hasOwnProperty / propertyIsEnumerable / fn.length for ramda init
 
 **Symptom.** `import * as R from 'ramda'` (after #970 landed `Function.prototype.apply`/`.call`) throws three different errors at module init depending on how far evaluation gets:

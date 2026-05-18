@@ -397,6 +397,86 @@ pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) 
         }
     }
 
+    // Issue #838 followup (b) — read side: `<funcDecl>.prototype.<name>`
+    // (and the computed-string-literal form
+    // `<funcDecl>.prototype['<name>']`). The assignment side routes
+    // through `Expr::RegisterFunctionPrototypeMethod` which stores the
+    // method in `CLASS_PROTOTYPE_METHODS[synthetic_cid]`; pre-fix the
+    // matching read fell through to `PropertyGet(PropertyGet(funcDecl,
+    // "prototype"), name)` whose receiver evaluated to `undefined`, so
+    // `typeof Foo.prototype.method` came back `'undefined'` even with a
+    // working dispatch. Look up the side-table directly here. Same
+    // unwrap helper as the assignment-side recogniser so TS casts
+    // (`(Foo.prototype as any).method`) don't defeat the match.
+    {
+        fn unwrap_ts_local(e: &ast::Expr) -> &ast::Expr {
+            let mut cur = e;
+            loop {
+                match cur {
+                    ast::Expr::TsAs(x) => cur = &x.expr,
+                    ast::Expr::TsNonNull(x) => cur = &x.expr,
+                    ast::Expr::TsSatisfies(x) => cur = &x.expr,
+                    ast::Expr::TsTypeAssertion(x) => cur = &x.expr,
+                    ast::Expr::TsConstAssertion(x) => cur = &x.expr,
+                    ast::Expr::Paren(x) => cur = &x.expr,
+                    _ => return cur,
+                }
+            }
+        }
+        let method_name_opt: Option<String> = match &member.prop {
+            ast::MemberProp::Ident(p) => Some(p.sym.to_string()),
+            ast::MemberProp::Computed(c) => match c.expr.as_ref() {
+                ast::Expr::Lit(ast::Lit::Str(s)) => {
+                    Some(s.value.as_str().unwrap_or("").to_string())
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(method_name) = method_name_opt {
+            let obj_unwrapped = unwrap_ts_local(member.obj.as_ref());
+            if let ast::Expr::Member(inner) = obj_unwrapped {
+                let prop_is_prototype = matches!(
+                    &inner.prop,
+                    ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
+                );
+                if prop_is_prototype {
+                    let inner_obj = unwrap_ts_local(inner.obj.as_ref());
+                    if let ast::Expr::Ident(fn_ident) = inner_obj {
+                        let fn_name = fn_ident.sym.to_string();
+                        // Mirror the assignment-side resolution order:
+                        // function-typed local > top-level FuncRef. Skip
+                        // classes — `class C` already has a real proto
+                        // object exposed elsewhere and the side-table
+                        // walk wouldn't help here. Skip native imports
+                        // since their `.prototype` is module-managed.
+                        if ctx.lookup_class(&fn_name).is_none()
+                            && !matches!(ctx.lookup_native_module(&fn_name), Some((_, Some(_))))
+                        {
+                            let func_expr = if let Some(local_id) = ctx.lookup_local(&fn_name) {
+                                if ctx.function_valued_locals.contains(&local_id) {
+                                    Some(Expr::LocalGet(local_id))
+                                } else {
+                                    None
+                                }
+                            } else if let Some(func_id) = ctx.lookup_func(&fn_name) {
+                                Some(Expr::FuncRef(func_id))
+                            } else {
+                                None
+                            };
+                            if let Some(func_expr) = func_expr {
+                                return Ok(Expr::GetFunctionPrototypeMethod {
+                                    func: Box::new(func_expr),
+                                    method_name,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Check for native instance property access (e.g., response.status, response.ok)
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.to_string();

@@ -756,6 +756,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // invokes the constructor with IMPLICIT_THIS bound to the new
     // instance. Returns the NaN-boxed new instance pointer.
     module.declare_function("js_new_function_construct", DOUBLE, &[DOUBLE, PTR, I64]);
+    // Read side of #838 followup (b): look up a previously-registered
+    // prototype method on a function value by name. Pairs with
+    // `js_register_function_prototype_method`. Returns the NaN-boxed
+    // closure value if the synthetic-class-id derived from the function
+    // has an entry under `name`, otherwise the NaN-boxed `undefined`
+    // tag. ramda's transducer pattern + `typeof Foo.prototype.method`
+    // introspection both reach this entry point.
+    module.declare_function(
+        "js_get_function_prototype_method",
+        DOUBLE,
+        &[DOUBLE, PTR, I64],
+    );
     module.declare_function("js_typeerror_new", I64, &[I64]);
     module.declare_function("js_rangeerror_new", I64, &[I64]);
     module.declare_function("js_syntaxerror_new", I64, &[I64]);

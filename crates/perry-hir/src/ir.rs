@@ -1195,6 +1195,22 @@ pub enum Expr {
         value: Box<Expr>,
     },
 
+    // Read side of the JS-classic prototype-method pattern:
+    // `<funcDecl>.prototype.<name>` (or `<funcDecl>.prototype['<name>']`).
+    // Returns the closure stored in `CLASS_PROTOTYPE_METHODS` for the
+    // synthetic class id derived from the function value. Pre-fix this
+    // shape lowered to `PropertyGet(PropertyGet(funcDecl, "prototype"),
+    // name)` whose receiver evaluated to `undefined` — the user's
+    // `typeof Foo.prototype.method` came back as `'undefined'` even
+    // though `(new Foo()).method` reached the registered closure via
+    // the side-table walk. Ramda's transducer pattern only needs the
+    // assignment side, but the read side rounds out spec parity for
+    // `Constructor.prototype.method` introspection.
+    GetFunctionPrototypeMethod {
+        func: Box<Expr>,
+        method_name: String,
+    },
+
     // Static method call (e.g., Counter.increment())
     StaticMethodCall {
         class_name: String,

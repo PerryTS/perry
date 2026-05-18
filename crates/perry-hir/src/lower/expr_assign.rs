@@ -328,8 +328,24 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                     }
                 }
             }
-            if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                let method_name = prop_ident.sym.to_string();
+            // Extract the method name from either an Ident prop
+            // (`p.method`) or a computed string-literal prop
+            // (`p['@@transducer/step']`). ramda's transducer pattern,
+            // Symbol.iterator stand-ins, and any "method with a dash or
+            // a slash" all reach assignment through the computed form;
+            // pre-fix only the Ident shape was recognised so these went
+            // to a generic PropertySet on an unobserved prototype proxy.
+            let method_name_opt: Option<String> = match &member.prop {
+                ast::MemberProp::Ident(prop_ident) => Some(prop_ident.sym.to_string()),
+                ast::MemberProp::Computed(c) => match c.expr.as_ref() {
+                    ast::Expr::Lit(ast::Lit::Str(s)) => {
+                        Some(s.value.as_str().unwrap_or("").to_string())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(method_name) = method_name_opt {
                 let obj_unwrapped = unwrap_ts(member.obj.as_ref());
                 // Issue #838 followup (b): track whether the recognised
                 // shape resolves to a `class C {}` (HIR class name) or a
