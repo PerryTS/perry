@@ -2,6 +2,133 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1003 — fix(jsruntime): jose JWT (HS256) end-to-end through the V8 fallback
+
+`await new SignJWT({ sub: 'alice' }).setProtectedHeader({ alg: 'HS256' }).sign(key)`
+through `jose` was returning a malformed token and `jwtVerify` was
+rejecting it. The original failure surfaced as
+`JWSInvalid: Compact JWS must be a string or Uint8Array` and later as
+`TypeError: util.types.isKeyObject is not a function` / `Key for the
+HS256 algorithm must be one of type KeyObject, Uint8Array, or JSON
+Web Key. Received an instance of Array`. Root cause was six-layered:
+
+**1. Native to V8 Uint8Array marshalling lost the typed-array kind.**
+`crates/perry-jsruntime/src/bridge.rs:native_object_to_v8` dispatched
+`TypedArrayHeader`s and `BufferHeader`s through the generic
+`v8::Array::new` branch, so a perry-side `Uint8Array` (or
+`TextEncoder().encode(...)` Buffer) crossed the boundary as a plain
+`v8::Array`. Libraries that branch on `value instanceof Uint8Array`
+(jose, jsonwebtoken, every JWS impl) failed the type check and either
+threw or fell through to JWK handling on a non-JWK input.
+
+Fix: detect the typed-array / buffer registries (`lookup_typed_array_kind`
+and `is_registered_buffer` / `is_uint8array_buffer` in `perry-runtime`)
+before the generic-object arm. For each hit, allocate a V8 `ArrayBuffer`,
+copy the bytes (the source pointer is GC-owned by perry — a copy keeps
+V8's backing store independent), and wrap with the matching
+TypedArray constructor (`Uint8Array`, `Int16Array`, ...). Round-trips
+into V8 fallback modules now preserve the JS-level type.
+
+**2. `node:crypto.createHmac().update().digest()` returned an empty digest.**
+The V8 stub in `crates/perry-jsruntime/src/modules.rs` had a no-op
+`createHmac` that returned `''` from `.digest()`. jose's
+`runtime/sign.js` calls `crypto.createHmac(hmacDigest(alg), k)` then
+`.digest()` for HS*; the empty result produced a token whose signature
+section was the empty string.
+
+Fix: new `op_perry_hmac(alg, key, data)` deno op
+(`crates/perry-jsruntime/src/ops.rs`) using `hmac` + `sha2` (same
+crate versions as `perry-stdlib`'s `crypto` feature). The V8 stub's
+`createHmac` now buffers `.update(...)` chunks, concats them on
+`.digest(encoding?)`, calls the op, and returns either a `Buffer`
+(default), hex, base64, or base64url string per Node's
+`Hmac.prototype.digest` API. The HMAC output is a real Buffer so
+downstream `instanceof Uint8Array` checks succeed and
+`.toString('base64url')` works without going through the
+broken Array path.
+
+**3. `Buffer.toString('base64url')` / `Buffer.from(_, 'base64url')` were unimplemented.**
+`crates/perry-jsruntime/src/node_polyfills.js`'s `Buffer.toString`
+fell through to the utf8 branch on `base64url`, so jose's
+`base64url(signature)` (which is `Buffer.from(sig).toString('base64url')`)
+returned a binary blob smashed into a JS string. JWS tokens looked like
+`{header}.{payload}.{garbage}` and were unparseable.
+
+Fix: `Buffer.toString('base64url')` now base64-encodes, strips trailing
+`=`, and substitutes `+` to `-` / `/` to `_`. `Buffer.from(str, 'base64url')`
+normalizes back (`-` to `+`, `_` to `/`, re-add padding to a multiple of 4)
+before calling `atob`. Also added pure-JS `globalThis.btoa` / `atob`
+globals (V8 standalone does not expose them; Node has them since
+v16, and jose / jwt-decode / jsonwebtoken assume they exist).
+
+**4. `atob` decoded `'='` as `__b64chars.indexOf('=') === -1` and emitted `0xff` bytes.**
+After the base64url normalize re-added the `=` padding for a
+44-char input, the polyfill's atob treated the trailing `=` as `-1`
+and OR'd it into the last byte. Result: every base64url-decoded
+`Uint8Array` had a spurious `0xff` byte at the tail, so jose's
+`crypto.timingSafeEqual(actual, expected)` saw length 33 vs 32 and
+returned false — `jwtVerify` failed with
+`JWSSignatureVerificationFailed` even though sign produced the
+correct digest.
+
+Fix: `atob` now treats `''` and `'='` as the padding index (64) so
+the byte-emit branches skip the trailing partial group cleanly.
+
+**5. `node:crypto.createSecretKey` was a V8-only no-op.**
+Calling `createSecretKey('secret', 'utf8')` from compiled TypeScript
+returned `undefined` because the symbol existed only in the V8
+fallback stub (`crates/perry-jsruntime/src/modules.rs`) — there was
+no native dispatcher. jose's `getSignVerifyKey` then saw `undefined`
+and threw before even reaching the HMAC path.
+
+Fix: new `js_crypto_create_secret_key` in
+`crates/perry-stdlib/src/crypto.rs` returns a `BufferHeader` of the
+key bytes (utf8 string or Buffer input), marked via
+`mark_as_uint8array` so it passes `instanceof Uint8Array` everywhere.
+HS* in jose accepts Uint8Array directly per
+`getSignVerifyKey`; full KeyObject identity is not required. Wired
+through `crates/perry-codegen/src/expr.rs` (PropertyGet shape:
+`crypto.createSecretKey(...)`) and `crates/perry-hir/src/lower/expr_call.rs`
+(named-import shape: `createSecretKey(...)` after
+`import { createSecretKey } from 'node:crypto'`).
+
+**6. `util.types.isKeyObject` / `isCryptoKey` were absent and `node:crypto.KeyObject` was an empty class.**
+jose's `is_key_object.js` calls `util.types.isKeyObject(obj)` to
+distinguish KeyObject from Uint8Array on the key-input path; without
+the helper it threw `is not a function` before ever reaching the
+signing flow. Separately, the V8 stub's `KeyObject` had no body to
+match against `key instanceof KeyObject`, so `getSignVerifyKey` fell
+into the "Received undefined" branch.
+
+Fix: `crates/perry-jsruntime/src/modules.rs` now ships
+`util.types.isKeyObject` and `isCryptoKey` duck-typed against the
+KeyObject / CryptoKey shape (the V8 stub doesn't expose Node's
+internal `internalBinding('util')`, so brand checks aren't available).
+The V8 stub `KeyObject` became a real class with `type`,
+`_material` (Uint8Array of key bytes), `symmetricKeySize`, and
+`export(format?)` returning a `Buffer.from(this._material)` so
+HMAC-side `instanceof KeyObject` + `key.export()` both succeed.
+
+**Test:** `test-files/test_jose_sign.ts` runs the full
+`import { SignJWT } from 'jose'; import { createSecretKey } from 'node:crypto';`
+HS256 sign smoke. Expected output is `string` + `3` (typeof token,
+parts after split). The original task repro (with
+`await jwtVerify(token, key)` then `console.log('sub=' + payload.sub)`)
+now prints `sub=alice`.
+
+**Files touched:**
+- `crates/perry-jsruntime/Cargo.toml` — added `hmac = "0.12"`, `sha2 = "0.10"` (same versions as `perry-stdlib`).
+- `crates/perry-jsruntime/src/ops.rs` — new `op_perry_hmac` deno op, registered in `extension!(perry_ops, ops = [..., op_perry_hmac])`.
+- `crates/perry-jsruntime/src/bridge.rs` — typed-array / buffer detection in `native_object_to_v8` before the generic-object arm.
+- `crates/perry-jsruntime/src/modules.rs` — real `createHmac`, `createSecretKey`, `KeyObject`, `webcrypto`, `sign`/`verify` stubs in the `node:crypto` V8 stub. `util.types.isKeyObject` / `isCryptoKey` in the `node:util` stub.
+- `crates/perry-jsruntime/src/node_polyfills.js` — `btoa`/`atob` globals (atob `=` padding fix), `Buffer.toString('base64url')`, `Buffer.from(_, 'base64url')`.
+- `crates/perry-stdlib/src/crypto.rs` — new `js_crypto_create_secret_key` Uint8Array-marked Buffer allocator.
+- `crates/perry-codegen/src/expr.rs` — codegen dispatch for `crypto.createSecretKey(...)`.
+- `crates/perry-codegen/src/runtime_decls.rs` — extern decl for `js_crypto_create_secret_key`.
+- `crates/perry-hir/src/lower/expr_call.rs` — named-import lowering for `createSecretKey(...)` from `node:crypto`.
+- `crates/perry-api-manifest/src/entries.rs` — manifest entry for `crypto.createSecretKey` (strict-API gate).
+- `test-files/test_jose_sign.ts` — new HS256 sign smoke.
+
 ## v0.5.1002 — fix(jsruntime): Effect.pipe(map) chain composition
 
 `Effect.runSync(Effect.succeed(42).pipe(Effect.map(x => x + 1)))` returned
@@ -83,7 +210,6 @@ runs, `fn called with: 42` prints, result is `43`. Gap suite unchanged
 fixtures pass.
 
 Fixture: `test-files/test_effect_pipe_map.ts` (chain repro).
-
 ## v0.5.1001 — fix(jsruntime/http): V8 listen keepalive + express handler smoke
 
 Post-#994 the V8-fallback `http.createServer().listen(port, cb)` smoke

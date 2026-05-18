@@ -1497,10 +1497,99 @@ export function createHash(algorithm) {
         digest(encoding) { return ''; }
     };
 }
+// `crypto.createHmac(algorithm, key)` — real HMAC for HS256/384/512 via
+// `op_perry_hmac`. The op takes a normalized algorithm name plus
+// zero-copy Uint8Array buffers for the key/data. We accumulate update()
+// inputs into a single Uint8Array on .digest() to match Node's API
+// shape (Node's createHmac returns a Hmac that supports chained
+// update().update().digest()). Without this, libraries like `jose`
+// fall through to an empty signature and produce malformed JWS tokens.
+const __perry_hmac_normalize_alg = (algorithm) => {
+    if (typeof algorithm !== 'string') return null;
+    const a = algorithm.toLowerCase();
+    if (a === 'sha256' || a === 'sha-256') return 'sha256';
+    if (a === 'sha384' || a === 'sha-384') return 'sha384';
+    if (a === 'sha512' || a === 'sha-512') return 'sha512';
+    return null;
+};
+const __perry_hmac_to_bytes = (input) => {
+    if (input == null) return new Uint8Array(0);
+    if (input instanceof Uint8Array) return input;
+    if (input instanceof ArrayBuffer) return new Uint8Array(input);
+    if (ArrayBuffer.isView(input)) {
+        return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    }
+    if (typeof input === 'string') {
+        return new TextEncoder().encode(input);
+    }
+    // KeyObject / shim with .export(), ._material, or ._key — best-effort
+    // unwrap. Check _material first so we don't recurse through the Buffer
+    // returned from export() (which would already be a Uint8Array hit).
+    if (input._material instanceof Uint8Array) return input._material;
+    if (typeof input.export === 'function') {
+        try { return __perry_hmac_to_bytes(input.export()); } catch (_) {}
+    }
+    if (input._key != null) return __perry_hmac_to_bytes(input._key);
+    return new Uint8Array(0);
+};
+const __perry_hmac_concat = (chunks) => {
+    let total = 0;
+    for (const c of chunks) total += c.length;
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    return out;
+};
+const __perry_hmac_to_hex = (bytes) => {
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) {
+        s += (bytes[i] + 0x100).toString(16).slice(1);
+    }
+    return s;
+};
+const __perry_hmac_to_base64 = (bytes) => {
+    if (typeof Buffer !== 'undefined' && Buffer.from) {
+        return Buffer.from(bytes).toString('base64');
+    }
+    // Fallback (no Buffer): manual base64.
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    if (typeof btoa === 'function') return btoa(bin);
+    return bin;
+};
 export function createHmac(algorithm, key) {
+    const alg = __perry_hmac_normalize_alg(algorithm);
+    const keyBytes = __perry_hmac_to_bytes(key);
+    const chunks = [];
+    const ops = (typeof Deno !== 'undefined' && Deno.core && Deno.core.ops) ? Deno.core.ops : null;
     return {
-        update(data) { return this; },
-        digest(encoding) { return ''; }
+        update(data, _inputEncoding) {
+            chunks.push(__perry_hmac_to_bytes(data));
+            return this;
+        },
+        digest(encoding) {
+            const dataBytes = __perry_hmac_concat(chunks);
+            let out;
+            if (alg && ops && typeof ops.op_perry_hmac === 'function') {
+                out = ops.op_perry_hmac(alg, keyBytes, dataBytes);
+                if (!(out instanceof Uint8Array)) out = new Uint8Array(out || []);
+            } else {
+                out = new Uint8Array(0);
+            }
+            if (encoding === 'hex') return __perry_hmac_to_hex(out);
+            if (encoding === 'base64') return __perry_hmac_to_base64(out);
+            if (encoding === 'base64url') {
+                return __perry_hmac_to_base64(out).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+            }
+            // No encoding → Buffer/Uint8Array. Prefer Node-style Buffer
+            // (jose calls `.toString('base64url')` on the result). Buffer
+            // extends Uint8Array, so `instanceof Uint8Array` checks still
+            // pass on the returned value.
+            if (typeof Buffer !== 'undefined' && Buffer.from) {
+                return Buffer.from(out);
+            }
+            return out;
+        }
     };
 }
 export function pbkdf2Sync() { return new Uint8Array(32); }
@@ -1521,7 +1610,50 @@ export function timingSafeEqual(a, b) {
 }
 export function createCipheriv() { throw new Error('crypto.createCipheriv not supported in V8 fallback'); }
 export function createDecipheriv() { throw new Error('crypto.createDecipheriv not supported in V8 fallback'); }
-export function createSecretKey(key) { return { _key: key, type: 'secret', asymmetricKeyType: undefined, symmetricKeySize: (key && key.length) || 0, export() { return key; } }; }
+// `KeyObject` (V8 fallback shim) — must be a real class so that
+// `key instanceof KeyObject` checks in libraries like `jose` succeed.
+// `createSecretKey(key, encoding)` returns a KeyObject; for utf8 input
+// we encode via TextEncoder so the underlying bytes match what HMAC
+// expects (Node's `createSecretKey('secret', 'utf8')` byte-aligns
+// with Buffer.from('secret', 'utf8')).
+export class KeyObject {
+    constructor(opts) {
+        opts = opts || {};
+        this.type = opts.type || 'secret';
+        this.asymmetricKeyType = opts.asymmetricKeyType;
+        this.asymmetricKeyDetails = opts.asymmetricKeyDetails;
+        this._material = opts._material || new Uint8Array(0);
+        this.symmetricKeySize = this._material.length;
+    }
+    export(options) {
+        // Node returns a Buffer for secret keys when no format is given.
+        if (typeof Buffer !== 'undefined' && Buffer.from) {
+            return Buffer.from(this._material);
+        }
+        return this._material;
+    }
+    static from(cryptoKey) {
+        return new KeyObject({ type: 'secret', _material: new Uint8Array(0) });
+    }
+}
+export function createSecretKey(key, encoding) {
+    let bytes;
+    if (key instanceof Uint8Array) {
+        bytes = key;
+    } else if (typeof key === 'string') {
+        // Node accepts a string + encoding; only utf8 is common.
+        if (encoding && encoding !== 'utf8' && encoding !== 'utf-8') {
+            // Best-effort: hex / base64 decoders are not free here. Fall
+            // back to utf8 bytes so the caller still gets a valid key.
+        }
+        bytes = new TextEncoder().encode(key);
+    } else if (key && key.buffer instanceof ArrayBuffer) {
+        bytes = new Uint8Array(key.buffer, key.byteOffset || 0, key.byteLength);
+    } else {
+        bytes = new Uint8Array(0);
+    }
+    return new KeyObject({ type: 'secret', _material: bytes });
+}
 export function createPrivateKey() { throw new Error('crypto.createPrivateKey not supported in V8 fallback'); }
 export function createPublicKey() { throw new Error('crypto.createPublicKey not supported in V8 fallback'); }
 export function generateKeyPair() { throw new Error('crypto.generateKeyPair not supported in V8 fallback'); }
@@ -1529,10 +1661,6 @@ export function diffieHellman() { throw new Error('crypto.diffieHellman not supp
 export function publicEncrypt() { throw new Error('crypto.publicEncrypt not supported in V8 fallback'); }
 export function privateDecrypt() { throw new Error('crypto.privateDecrypt not supported in V8 fallback'); }
 export function getCiphers() { return []; }
-export class KeyObject {
-    constructor() { this.type = 'secret'; this.asymmetricKeyType = undefined; this.symmetricKeySize = 0; }
-    export() { return new Uint8Array(0); }
-}
 export const constants = {
     RSA_PKCS1_PADDING: 1,
     RSA_PKCS1_OAEP_PADDING: 4,
@@ -1540,7 +1668,29 @@ export const constants = {
     RSA_PSS_SALTLEN_MAX_SIGN: -2,
     RSA_PSS_SALTLEN_AUTO: -2,
 };
-export default { randomBytes, randomFillSync, randomUUID, createHash, createHmac, pbkdf2Sync, pbkdf2, timingSafeEqual, createCipheriv, createDecipheriv, createSecretKey, createPrivateKey, createPublicKey, generateKeyPair, diffieHellman, publicEncrypt, privateDecrypt, getCiphers, KeyObject, constants };
+// `crypto.webcrypto` — Node exposes the Web Crypto API namespace here.
+// jose's `webcrypto.js` reads `crypto.webcrypto.CryptoKey`; returning a
+// minimal object with the same surface lets ESM linking succeed and
+// makes `crypto.webcrypto?.CryptoKey` resolve to `undefined` rather
+// than crash with a TypeError.
+export const webcrypto = (typeof globalThis !== 'undefined' && globalThis.crypto)
+    ? globalThis.crypto
+    : { subtle: {}, getRandomValues(arr) { return arr; } };
+// `crypto.sign(algorithm, data, key, callback)` — Node's one-shot
+// signer. jose's `runtime/sign.js` does `promisify(crypto.sign)` and
+// only calls the resulting Promise variant for non-HS algorithms.
+// Throwing here keeps the V8 stub deterministic: HS* never touches
+// `crypto.sign`, and asymmetric signing is unsupported on this path.
+export function sign(algorithm, data, key, callback) {
+    const err = new Error('crypto.sign (asymmetric) not supported in V8 fallback');
+    if (typeof callback === 'function') {
+        callback(err);
+        return;
+    }
+    throw err;
+}
+export function verify() { throw new Error('crypto.verify (asymmetric) not supported in V8 fallback'); }
+export default { randomBytes, randomFillSync, randomUUID, createHash, createHmac, pbkdf2Sync, pbkdf2, timingSafeEqual, createCipheriv, createDecipheriv, createSecretKey, createPrivateKey, createPublicKey, generateKeyPair, diffieHellman, publicEncrypt, privateDecrypt, getCiphers, KeyObject, constants, webcrypto, sign, verify };
 "#.to_string(),
         "fs" => r#"
 // Stub implementation for Node.js 'fs' module
@@ -1757,6 +1907,25 @@ export const TextDecoder = globalThis.TextDecoder;
 // `false` for an unknown shape is the conservative answer (the caller
 // then falls through to its own duck-typing path).
 const _isPromiseLike = (v) => v != null && (typeof v === "object" || typeof v === "function") && typeof v.then === "function";
+// `_isKeyObjectShape` — duck-types the `node:crypto` `KeyObject` shim
+// without importing it (avoids a circular module dependency between
+// node:util and node:crypto). Real Node uses an internal class brand;
+// for our V8 fallback path the shape check is sufficient because
+// libraries (jose) only ever produce KeyObjects via `createSecretKey`
+// or `KeyObject.from`, both of which set `type: 'secret' | ...`
+// alongside a typed-array `_material` field.
+const _isKeyObjectShape = (v) => (
+    v != null && typeof v === 'object'
+    && typeof v.type === 'string'
+    && (v._material instanceof Uint8Array || v._key != null
+        || typeof v.export === 'function')
+);
+const _isCryptoKeyShape = (v) => (
+    v != null && typeof v === 'object'
+    && typeof v.algorithm === 'object'
+    && typeof v.type === 'string'
+    && typeof v.extractable === 'boolean'
+);
 export const types = {
     isPromise: (v) => _isPromiseLike(v),
     isAsyncFunction: (v) => typeof v === "function" && v.constructor && v.constructor.name === "AsyncFunction",
@@ -1777,6 +1946,13 @@ export const types = {
     isBoxedPrimitive: () => false,
     isAnyArrayBuffer: (v) => v instanceof ArrayBuffer,
     isModuleNamespaceObject: () => false,
+    // `util.types.isKeyObject` / `isCryptoKey` are required by `jose`
+    // (and other JWT/JOSE libs) to discriminate between Uint8Array,
+    // CryptoKey, and Node's KeyObject before signing/verifying. The
+    // V8 fallback path doesn't expose a real `internalBinding('util')`
+    // so we duck-type against the shape produced by our crypto shim.
+    isKeyObject: (v) => _isKeyObjectShape(v),
+    isCryptoKey: (v) => _isCryptoKeyShape(v),
 };
 export default { promisify, callbackify, inspect, format, formatWithOptions, debuglog, deprecate, inherits, TextEncoder, TextDecoder, types };
 "#.to_string(),

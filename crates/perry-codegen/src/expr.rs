@@ -11564,6 +11564,34 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &handle))
         }
 
+        // `crypto.createSecretKey(key, encoding?)` — JWT signing key for
+        // HS* algorithms. Native-side this returns a Uint8Array-marked
+        // BufferHeader; the bridge then materializes a real v8::Uint8Array
+        // when the value crosses into a V8-fallback module (jose). See
+        // `js_crypto_create_secret_key` for the encoding handling.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "createSecretKey" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let key_box = lower_expr(ctx, &args[0])?;
+            // Ignore the encoding arg if present — we only honor utf8.
+            if args.len() >= 2 {
+                let _ = lower_expr(ctx, &args[1])?;
+            }
+            let blk = ctx.block();
+            let key_handle = unbox_to_i64(blk, &key_box);
+            let buf_handle = blk.call(I64, "js_crypto_create_secret_key", &[(I64, &key_handle)]);
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
         // crypto.pbkdf2Sync(password, salt, iterations, keylen, algorithm) -> Buffer.
         // Only SHA-256 is wired through right now — that's what SCRAM needs.
         // The `algorithm` arg is validated at runtime but ignored by codegen;

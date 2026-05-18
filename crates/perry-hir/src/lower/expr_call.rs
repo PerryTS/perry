@@ -6494,6 +6494,36 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                                     )));
                                 }
                             }
+                            // `createSecretKey(key, encoding?)` from a named
+                            // import. Without this arm the call lowered to a
+                            // generic NativeMethodCall with no dispatcher for
+                            // `crypto.createSecretKey`, so the call returned
+                            // undefined and `jose.sign(undefined)` threw
+                            // "Received undefined". Reuse the same PropertyGet
+                            // shape that the `crypto.createSecretKey(...)`
+                            // call-site form already exercises (handled in
+                            // `expr.rs` near the createHash/createHmac block)
+                            // so both shapes share one codegen path.
+                            "createSecretKey" => {
+                                if !args.is_empty() {
+                                    let mut iter = args.into_iter();
+                                    let key_arg = iter.next().unwrap();
+                                    let mut new_args = vec![key_arg];
+                                    if let Some(enc) = iter.next() {
+                                        new_args.push(enc);
+                                    }
+                                    return Ok(Expr::Call {
+                                        callee: Box::new(Expr::PropertyGet {
+                                            object: Box::new(Expr::NativeModuleRef(
+                                                "crypto".to_string(),
+                                            )),
+                                            property: "createSecretKey".to_string(),
+                                        }),
+                                        args: new_args,
+                                        type_args: vec![],
+                                    });
+                                }
+                            }
                             _ => {} // Fall through
                         }
                     }

@@ -49,5 +49,12 @@ hyper-util = { version = "0.1", features = ["server", "tokio"] }
 http-body-util = "0.1"
 bytes = "1.5"
 
+# HMAC + SHA2 for `node:crypto.createHmac` in the V8 fallback path so
+# packages like `jose` can compute real HS256/HS384/HS512 signatures
+# without falling through to a no-op digest. Same crate versions as
+# `perry-stdlib`'s `crypto` feature so we don't duplicate the dep graph.
+hmac = "0.12"
+sha2 = "0.10"
+
 [features]
 default = []

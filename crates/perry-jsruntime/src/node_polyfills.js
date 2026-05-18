@@ -5,6 +5,64 @@
 (function() {
     if (typeof globalThis.Buffer !== 'undefined') return;
 
+    // btoa/atob - browser globals not present in V8 standalone runtime. Node
+    // exposes them since v16; libraries that target both browser and node
+    // (jose, jwt-decode, jsonwebtoken) assume they exist. Pure-JS impls
+    // mirror the WHATWG spec: btoa takes a binary string and emits base64,
+    // atob takes base64 and emits a binary string. Buffer.toString('base64')
+    // and Buffer.from(str, 'base64') below funnel through these.
+    if (typeof globalThis.btoa === 'undefined') {
+        const __b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        globalThis.btoa = function(input) {
+            const s = String(input);
+            let out = '';
+            for (let i = 0; i < s.length; ) {
+                const a = s.charCodeAt(i++) & 0xff;
+                const b = i < s.length ? s.charCodeAt(i++) & 0xff : NaN;
+                const c = i < s.length ? s.charCodeAt(i++) & 0xff : NaN;
+                const e1 = a >> 2;
+                const e2 = ((a & 3) << 4) | (isNaN(b) ? 0 : (b >> 4));
+                const e3 = isNaN(b) ? 64 : (((b & 15) << 2) | (isNaN(c) ? 0 : (c >> 6)));
+                const e4 = isNaN(c) ? 64 : (c & 63);
+                out += __b64chars.charAt(e1) + __b64chars.charAt(e2)
+                    + (e3 === 64 ? '=' : __b64chars.charAt(e3))
+                    + (e4 === 64 ? '=' : __b64chars.charAt(e4));
+            }
+            return out;
+        };
+        globalThis.atob = function(input) {
+            // Treat '=' and missing trailing chars as the b64 padding index
+            // (64) so the byte-emit branches below skip the trailing partial
+            // group. Without this, `indexOf('=')` returned -1 and we emitted
+            // bogus 0xFF bytes for inputs that had stripped padding (the
+            // jose base64url path normalizes `_` to `/`, re-adds `=`, then
+            // calls atob - that final `=` was decoded as -1 to 0xff and
+            // corrupted JWS signatures by one extra byte at the tail).
+            const idx = (ch) => {
+                if (ch === '' || ch === '=') return 64;
+                const i = __b64chars.indexOf(ch);
+                return i < 0 ? 64 : i;
+            };
+            const s = String(input).replace(/[^A-Za-z0-9+/=]/g, '');
+            let out = '';
+            for (let i = 0; i < s.length; ) {
+                const e1 = idx(s.charAt(i++));
+                const e2 = idx(s.charAt(i++));
+                const e3 = idx(s.charAt(i++));
+                const e4 = idx(s.charAt(i++));
+                if (e1 === 64 || e2 === 64) break;
+                out += String.fromCharCode((e1 << 2) | (e2 >> 4));
+                if (e3 !== 64) {
+                    out += String.fromCharCode(((e2 & 15) << 4) | (e3 >> 2));
+                    if (e4 !== 64) {
+                        out += String.fromCharCode(((e3 & 3) << 6) | e4);
+                    }
+                }
+            }
+            return out;
+        };
+    }
+
     class Buffer extends Uint8Array {
         static alloc(size, fill, encoding) {
             const buf = new Buffer(size);
@@ -50,8 +108,17 @@
                     }
                     return new Buffer(bytes.buffer);
                 }
-                if (encoding === 'base64') {
-                    const binary = atob(data);
+                if (encoding === 'base64' || encoding === 'base64url') {
+                    // Normalize base64url -> base64 before atob: re-add padding
+                    // and undo the URL-safe alphabet substitution. Required by
+                    // jose `decodeBase64`, jwt-decode, and most JWT libs.
+                    let normalized = data;
+                    if (encoding === 'base64url') {
+                        normalized = data.replace(/-/g, '+').replace(/_/g, '/');
+                        const padLen = (4 - (normalized.length % 4)) % 4;
+                        if (padLen > 0) normalized = normalized + '='.repeat(padLen);
+                    }
+                    const binary = atob(normalized);
                     const bytes = new Uint8Array(binary.length);
                     for (let i = 0; i < binary.length; i++) {
                         bytes[i] = binary.charCodeAt(i);
@@ -127,12 +194,19 @@
                 }
                 return hex;
             }
-            if (encoding === 'base64') {
+            if (encoding === 'base64' || encoding === 'base64url') {
                 let binary = '';
                 for (let i = 0; i < slice.length; i++) {
                     binary += String.fromCharCode(slice[i]);
                 }
-                return btoa(binary);
+                const b64 = btoa(binary);
+                // base64url - required by jose / jsonwebtoken for JWS signatures
+                // and JWT payloads. Differs from base64 by replacing `+`/`/` with
+                // URL-safe `-`/`_` and stripping trailing `=` padding.
+                if (encoding === 'base64url') {
+                    return b64.replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+                }
+                return b64;
             }
             // utf8 / utf-8 / ascii / latin1
             return new TextDecoder().decode(slice);

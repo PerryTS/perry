@@ -1701,6 +1701,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("crypto", "randomFillSync", false, None),
     method("crypto", "createHash", false, None),
     method("crypto", "createHmac", false, None),
+    // `crypto.createSecretKey(key, encoding?)` — required by jose for the
+    // JWT signing path; returns a Uint8Array-marked Buffer of the key
+    // bytes that `instanceof Uint8Array` accepts on both sides of the
+    // V8 boundary. Wired through codegen in `expr.rs` (no NATIVE_MODULE_TABLE
+    // entry — direct dispatch matches the createHash/createHmac pattern).
+    method("crypto", "createSecretKey", false, None),
     method("crypto", "pbkdf2Sync", false, None),
     method("crypto", "pbkdf2", false, None),
     // Web Crypto API (issue #561) — `crypto.subtle.*`. The HIR

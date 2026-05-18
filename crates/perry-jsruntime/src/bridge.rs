@@ -907,6 +907,106 @@ fn native_object_to_v8<'s>(
         return v8::null(scope).into();
     }
 
+    // Issue (jose JWT blocker): Uint8Array / TypedArray pointers crossing
+    // into V8 used to fall through to the generic `v8::Array` branch,
+    // which turned a perry Uint8Array into a v8 Array. Libraries running
+    // in the V8 fallback (jose, jsonwebtoken) check `instanceof Uint8Array`
+    // on signing inputs/outputs and fail with "Received an instance of
+    // Array". Detect typed-array pointers via the runtime's registry and
+    // materialize a real v8 `Uint8Array` (or matching TypedArray) with a
+    // copy of the underlying bytes so V8 owns the backing store.
+    //
+    // Two perry representations cross the boundary here:
+    //   - `TypedArrayHeader` — `new Uint8Array([..])` and TypedArray ops.
+    //   - `BufferHeader` marked via `mark_as_uint8array` — what
+    //     `TextEncoder().encode(...)` and `Buffer.from(...)` return.
+    //     Layout is identical (`length: u32, capacity: u32`) but the
+    //     "kind" is implicit (always uint8) and tracked in a separate
+    //     registry. Handle both before the generic-object branch.
+    {
+        let buf_addr = ptr as usize;
+        // BufferHeader path: registered Uint8Array buffer with the
+        // packed-u8 layout. Must materialize as v8 Uint8Array so jose's
+        // `instanceof Uint8Array` checks pass.
+        let is_buf = perry_runtime::buffer::is_registered_buffer(buf_addr);
+        let is_marked_u8 = perry_runtime::buffer::is_uint8array_buffer(buf_addr);
+        if is_buf || is_marked_u8 {
+            let buf = ptr as *const perry_runtime::buffer::BufferHeader;
+            let length = unsafe { (*buf).length } as usize;
+            let data_ptr = unsafe {
+                (ptr as *const u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>())
+            };
+            let ab = v8::ArrayBuffer::new(scope, length);
+            if length > 0 {
+                let bs = ab.get_backing_store();
+                let dst = bs.data().map(|nn| nn.as_ptr() as *mut u8);
+                if let Some(dst) = dst {
+                    unsafe { std::ptr::copy_nonoverlapping(data_ptr, dst, length) };
+                }
+            }
+            if let Some(ta) = v8::Uint8Array::new(scope, ab, 0, length) {
+                return ta.into();
+            }
+        }
+        if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(buf_addr) {
+            let ta = ptr as *const perry_runtime::typedarray::TypedArrayHeader;
+            let length = unsafe { (*ta).length } as usize;
+            let elem_size = perry_runtime::typedarray::elem_size_for_kind(kind);
+            let byte_len = length.saturating_mul(elem_size);
+            let data_ptr = unsafe {
+                (ptr as *const u8).add(std::mem::size_of::<
+                    perry_runtime::typedarray::TypedArrayHeader,
+                >())
+            };
+            // Build an ArrayBuffer owned by V8 and copy the perry bytes into it.
+            // Using a copy (not a backing-store wrapper) keeps lifetimes simple:
+            // perry's GC can reclaim the source without confusing V8.
+            let ab = v8::ArrayBuffer::new(scope, byte_len);
+            if byte_len > 0 {
+                let bs = ab.get_backing_store();
+                let dst = bs.data().map(|nn| nn.as_ptr() as *mut u8);
+                if let Some(dst) = dst {
+                    unsafe { std::ptr::copy_nonoverlapping(data_ptr, dst, byte_len) };
+                }
+            }
+            // Element kind → V8 TypedArray constructor.
+            use perry_runtime::typedarray as ta_mod;
+            let ta_value: v8::Local<v8::Value> = match kind {
+                ta_mod::KIND_INT8 => v8::Int8Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_UINT8 | ta_mod::KIND_UINT8_CLAMPED => {
+                    // V8 has Uint8ClampedArray as a separate type, but jose
+                    // / jsonwebtoken only branch on `Uint8Array`. Use the
+                    // plain Uint8Array unless we explicitly need clamped.
+                    v8::Uint8Array::new(scope, ab, 0, length)
+                        .map(|v| v.into())
+                        .unwrap_or_else(|| v8::Array::new(scope, 0).into())
+                }
+                ta_mod::KIND_INT16 => v8::Int16Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_UINT16 => v8::Uint16Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_INT32 => v8::Int32Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_UINT32 => v8::Uint32Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_FLOAT32 => v8::Float32Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                ta_mod::KIND_FLOAT64 => v8::Float64Array::new(scope, ab, 0, length)
+                    .map(|v| v.into())
+                    .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
+                _ => v8::Array::new(scope, 0).into(),
+            };
+            return ta_value;
+        }
+    }
+
     // Use GcHeader (8 bytes before user pointer) to reliably determine type.
     // All Perry arrays and objects are arena-allocated with GcHeader via arena_alloc_gc.
     let gc_header_ptr = (ptr as usize).wrapping_sub(perry_runtime::gc::GC_HEADER_SIZE);

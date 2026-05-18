@@ -518,6 +518,52 @@ fn op_perry_http_close(#[smi] server_id: i32) {
     server_registry().lock().unwrap().remove(&server_id);
 }
 
+/// `op_perry_hmac(alg, key, data)` — sync HMAC compute. `alg` is one of
+/// `"sha256" | "sha384" | "sha512"`. `key` and `data` are zero-copy
+/// `#[buffer]` views into V8 ArrayBuffers (typically Uint8Arrays). The
+/// return is a freshly-allocated Vec<u8> (the digest) which deno_core
+/// converts back into a Uint8Array on the JS side.
+///
+/// Used by the `node:crypto` V8 stub's `createHmac().update().digest()`
+/// path so that libraries running through the V8 fallback (jose, etc.)
+/// can compute real HS256/HS384/HS512 signatures instead of returning
+/// an empty digest. Unsupported algorithms fall back to an empty Vec
+/// so the JS caller sees a zero-length digest rather than crashing.
+#[op2]
+#[buffer]
+fn op_perry_hmac(#[string] alg: &str, #[buffer] key: &[u8], #[buffer] data: &[u8]) -> Vec<u8> {
+    use hmac::{Hmac, Mac};
+    use sha2::{Sha256, Sha384, Sha512};
+
+    match alg {
+        "sha256" | "SHA-256" | "SHA256" => {
+            let mut mac = match Hmac::<Sha256>::new_from_slice(key) {
+                Ok(m) => m,
+                Err(_) => return Vec::new(),
+            };
+            mac.update(data);
+            mac.finalize().into_bytes().to_vec()
+        }
+        "sha384" | "SHA-384" | "SHA384" => {
+            let mut mac = match Hmac::<Sha384>::new_from_slice(key) {
+                Ok(m) => m,
+                Err(_) => return Vec::new(),
+            };
+            mac.update(data);
+            mac.finalize().into_bytes().to_vec()
+        }
+        "sha512" | "SHA-512" | "SHA512" => {
+            let mut mac = match Hmac::<Sha512>::new_from_slice(key) {
+                Ok(m) => m,
+                Err(_) => return Vec::new(),
+            };
+            mac.update(data);
+            mac.finalize().into_bytes().to_vec()
+        }
+        _ => Vec::new(),
+    }
+}
+
 extension!(
     perry_ops,
     ops = [
@@ -529,5 +575,6 @@ extension!(
         op_perry_http_accept,
         op_perry_http_respond,
         op_perry_http_close,
+        op_perry_hmac,
     ],
 );

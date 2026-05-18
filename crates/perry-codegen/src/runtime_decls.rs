@@ -1070,6 +1070,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_crypto_pbkdf2_bytes", I64, &[I64, I64, DOUBLE, DOUBLE]);
     module.declare_function("js_crypto_random_bytes_buffer", I64, &[DOUBLE]);
     module.declare_function("js_crypto_random_uuid", I64, &[]);
+    // `crypto.createSecretKey(key, encoding?)` — returns Uint8Array-marked
+    // BufferHeader of the key bytes (jose accepts Uint8Array for HS*).
+    module.declare_function("js_crypto_create_secret_key", I64, &[I64]);
     // Web Crypto (issue #561): crypto.subtle.{digest,importKey,sign,verify}.
     // Each takes NaN-boxed JS values as f64 and returns a *mut Promise.
     module.declare_function("js_webcrypto_digest", I64, &[DOUBLE, DOUBLE]);

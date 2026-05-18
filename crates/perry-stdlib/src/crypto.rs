@@ -160,6 +160,38 @@ pub unsafe extern "C" fn js_crypto_md5(data_ptr: *const StringHeader) -> *mut St
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
 
+/// `crypto.createSecretKey(key, encoding?)` — produce a key Buffer
+/// that jose / jsonwebtoken / etc. can use as an HS* signing key.
+///
+/// In Node's surface this returns a `KeyObject`, but for the V8-fallback
+/// JWT path that's where Perry's JS shim lives. From native Perry the
+/// shortest correct value is a `BufferHeader` of the raw key bytes,
+/// marked as a `Uint8Array` so that:
+///   - jose's `key instanceof Uint8Array` check passes after the native
+///     -> V8 marshal turns the BufferHeader into a real `v8::Uint8Array`
+///     (`bridge.rs:native_object_to_v8`),
+///   - `instanceof KeyObject` is not required for HS* algorithms (jose
+///     accepts Uint8Array directly per `getSignVerifyKey`).
+///
+/// `key_ptr` may point at a Buffer (already bytes) or a StringHeader
+/// (utf8 string literal). The `encoding` arg is accepted for API parity
+/// but only utf8/utf-8 is honored today; anything else is treated as
+/// utf8 (so `'secret'` and `'secret', 'utf8'` produce identical bytes).
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_create_secret_key(
+    key_ptr: i64,
+) -> *mut perry_runtime::buffer::BufferHeader {
+    let bytes = bytes_from_ptr(key_ptr);
+    let buf = alloc_buffer_from_slice(&bytes);
+    if !buf.is_null() {
+        // Mark as Uint8Array so `instanceof Uint8Array` works, both in
+        // perry-native code and after the bridge materializes a v8
+        // Uint8Array on the V8 side.
+        perry_runtime::buffer::mark_as_uint8array(buf as usize);
+    }
+    buf
+}
+
 /// Generate random bytes and return as a Buffer
 /// crypto.randomBytes(size) -> Buffer
 #[no_mangle]
