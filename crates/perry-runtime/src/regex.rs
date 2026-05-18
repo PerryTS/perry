@@ -298,6 +298,21 @@ pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader
     }
 }
 
+/// Look up a fancy-regex fallback for the given header, if one was
+/// registered at compile-time because the `regex` crate rejected the
+/// pattern (backreferences, lookbehind, etc.).
+fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_regex::Regex>> {
+    unsafe {
+        let pat = string_as_str((*re).pattern_ptr);
+        let flags_str = string_as_str((*re).flags_ptr);
+        FANCY_CACHE.with(|fc| {
+            fc.borrow()
+                .get(&(pat.to_string(), flags_str.to_string()))
+                .cloned()
+        })
+    }
+}
+
 /// Find matches in a string
 /// string.match(regex) -> string[] | null (returns array pointer, null if no match)
 #[no_mangle]
@@ -314,6 +329,66 @@ pub extern "C" fn js_string_match(
     unsafe {
         let regex = &*(*re).regex_ptr;
         let global = (*re).global;
+
+        // If this regex couldn't be compiled by the `regex` crate (e.g.
+        // backreferences like `(\w)\1*`, used by date-fns' format token
+        // regex), `get_or_compile_regex` substituted a never-match
+        // `[^\s\S]` placeholder and stashed the real pattern in
+        // `FANCY_CACHE`. Route through fancy-regex so `.match()` returns
+        // real results instead of always-null.
+        if let Some(fre) = lookup_fancy_regex(re) {
+            if global {
+                // Collect all non-overlapping matches via fancy-regex's
+                // find_iter. Mirrors the `regex` crate global path below.
+                let mut matches: Vec<String> = Vec::new();
+                let mut iter = fre.find_iter(str_data);
+                while let Some(Ok(m)) = iter.next() {
+                    matches.push(m.as_str().to_string());
+                }
+                if matches.is_empty() {
+                    return ptr::null_mut();
+                }
+                let arr = crate::array::js_array_alloc(matches.len() as u32);
+                (*arr).length = matches.len() as u32;
+                let elements_ptr =
+                    (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                for (i, m) in matches.iter().enumerate() {
+                    let str_ptr = js_string_from_str(m);
+                    let nanboxed = js_nanbox_string(str_ptr as i64);
+                    std::ptr::write(elements_ptr.add(i), nanboxed);
+                }
+                return arr;
+            } else {
+                // Non-global: first match + capture groups (parallels the
+                // standard-regex non-global branch below).
+                match fre.captures(str_data) {
+                    Ok(Some(caps)) => {
+                        let arr = crate::array::js_array_alloc(caps.len() as u32);
+                        (*arr).length = caps.len() as u32;
+                        let elements_ptr =
+                            (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                        for i in 0..caps.len() {
+                            if let Some(m) = caps.get(i) {
+                                let str_ptr = js_string_from_str(m.as_str());
+                                let nanboxed = js_nanbox_string(str_ptr as i64);
+                                std::ptr::write(elements_ptr.add(i), nanboxed);
+                            } else {
+                                std::ptr::write(
+                                    elements_ptr.add(i),
+                                    f64::from_bits(0x7FFC_0000_0000_0001),
+                                );
+                            }
+                        }
+                        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
+                        return arr;
+                    }
+                    _ => {
+                        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
+                        return ptr::null_mut();
+                    }
+                }
+            }
+        }
 
         if global {
             // Global flag: return all matches

@@ -2,6 +2,45 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.985 — fix(runtime): `string.match(regex)` honors fancy-regex fallback for backreferenced patterns (date-fns format() unblocked)
+
+**Symptom.** With v0.5.984's `Date.prototype.constructor` fix in place, date-fns 4.x `format(new Date(2024, 0, 15), 'yyyy-MM-dd')` got past `constructFrom` but then crashed:
+
+```
+[NULL_PTR_METHOD_CALL] js_native_call_method: null pointer object for method 'map'
+TypeError: Cannot read properties of undefined (reading 'map')
+```
+
+**Root cause.** date-fns' `format.js` tokenizes the format string via:
+
+```js
+const formattingTokensRegExp =
+  /[yYQqMLwIdDecihHKkms]o|(\w)\1*|''|'(''|[^'])+('|$)|./g;
+
+let parts = formatStr.match(longFormattingTokensRegExp)
+  .map(...)
+  .join("")
+  .match(formattingTokensRegExp)
+  .map(...);
+```
+
+The `(\w)\1*` backreference is fine in V8 but the Rust `regex` crate rejects it. Perry's `get_or_compile_regex` already had a fancy-regex fallback path: when the standard regex crate fails to compile a pattern, it stashes the compiled fancy-regex into `FANCY_CACHE` and substitutes a never-match `[^\s\S]` placeholder in the primary slot. The placeholder kept `js_regexp_test` / `js_regexp_exec` callers from crashing, and `js_regexp_exec` itself had explicit fancy-fallback wiring (`fancy_captures = FANCY_CACHE.with(...)` before the standard `regex.captures(...)` call).
+
+But `js_string_match` (the `String.prototype.match` entry point) never consulted `FANCY_CACHE`. It just dispatched to the never-match placeholder and returned `null`. The chained `.map(...)` then crashed with the NULL_PTR_METHOD_CALL above. `js_string_match_all` and `js_string_search_regex` had the same gap, but the failing date-fns path goes through `js_string_match` so this fix targets that entry point.
+
+**Fix.** Added `lookup_fancy_regex(re)` helper next to `js_string_match` in `crates/perry-runtime/src/regex.rs` that returns `Some(Arc<fancy_regex::Regex>)` whenever the header's `(pattern, flags)` is registered in `FANCY_CACHE`. `js_string_match` now checks the cache before falling through to the standard `regex` crate:
+
+- **Global flag**: collects all matches via `fre.find_iter(str_data)` and builds the same NaN-boxed-string array shape as the standard path.
+- **Non-global**: returns the full match plus capture groups via `fre.captures(str_data)`. (Named-capture `groups` is left null for the fancy path — none of the date-fns format regexes use named captures, and the existing standard-regex path already handles named captures via the same `LAST_EXEC_GROUPS` thread-local that gets cleared here.)
+
+**Validation.**
+
+- `format(new Date(2024, 0, 15), 'yyyy-MM-dd')` → `2024-01-15` (matches Node).
+- Additional date-fns format strings tested against Node: `'HH:mm:ss'`, `'yyyy-MM-dd HH:mm:ss'`, `'MMM yyyy'`, `'EEEE, MMMM do yyyy'` — all byte-for-byte parity.
+- New `test-files/test_date_fns_format.ts` exercises the underlying `(\w)\1*` pattern shape (global + non-global) and the no-match-returns-null case without importing date-fns directly.
+
+**Follow-ups.** `js_string_match_all`, `js_regexp_test`, and `js_string_search_regex` still consult only the placeholder regex when the pattern needed fancy-regex. None are on date-fns' `format()` hot path so they're deferred to a separate issue; the same `lookup_fancy_regex` helper can wire them in when needed.
+
 ## v0.5.984 — feat(runtime): `.constructor` on Date / Array / Object instances + `new <inst.constructor>(...)` dispatch
 
 **Symptom.** date-fns 4.x throws `RangeError: Invalid time value` on the very first call to `format(new Date(2024, 0, 15), 'yyyy-MM-dd')`. Root cause is `constructFrom(date, value)` — the helper every other date-fns export funnels through:

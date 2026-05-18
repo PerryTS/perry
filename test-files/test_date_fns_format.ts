@@ -1,0 +1,29 @@
+// Regression: date-fns format() needs `string.match()` to honor
+// fancy-regex fallback for patterns with backreferences (`(\w)\1*`).
+// Before this fix, `formatStr.match(formattingTokensRegExp)` returned
+// null because the regex crate rejected the pattern and the fancy
+// fallback was only wired into `RegExp.prototype.exec()`. The downstream
+// `.map(...)` then crashed with NULL_PTR_METHOD_CALL.
+//
+// We don't import date-fns here (it's a compilePackages dep, not a test
+// dep). Instead, exercise the underlying regex shape that drives format().
+
+const formattingTokensRegExp =
+  /[yYQqMLwIdDecihHKkms]o|(\w)\1*|''|'(''|[^'])+('|$)|./g;
+
+const tokens = "yyyy-MM-dd HH:mm:ss".match(formattingTokensRegExp);
+console.log(tokens);
+
+const tokens2 = "EEEE, MMMM do yyyy".match(formattingTokensRegExp);
+console.log(tokens2);
+
+// Backreference + non-global (returns first match w/ captures)
+const simple = /(\w)\1*/;
+console.log("abcaaab".match(simple));
+
+// Backreference + global
+const g = /(\w)\1*/g;
+console.log("aabbbccdd".match(g));
+
+// No-match returns null
+console.log("xyz".match(/(\w)\1+/));
