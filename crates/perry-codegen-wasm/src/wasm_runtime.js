@@ -1444,7 +1444,15 @@ function wrapForI64(fn) {
     const result = fn.apply(this, convertedArgs);
     if (typeof result === 'bigint') return result;
     if (typeof result === 'number') {
-      if (Number.isInteger(result) && Math.abs(result) < 2147483648) return result;
+      // #1049 instance 1: this wrapper exists because every callee here is
+      // imported from a WASM site declared `i64`. A plain Number return —
+      // even a small integer that JS would happily round-trip — throws
+      // `TypeError: Cannot convert X to a BigInt` at the import boundary.
+      // Coerce integers via `BigInt(n)` and non-integers (NaN-boxed f64
+      // payloads) via bit-reinterpret.
+      if (Number.isInteger(result) && Math.abs(result) < 2147483648) {
+        return BigInt(result);
+      }
       _f64[0] = result;
       return _u64[0];
     }
@@ -1467,7 +1475,17 @@ function wrapFfiForI64(fn) {
     const result = fn.apply(this, convertedArgs);
     if (typeof result === 'bigint') return result;
     if (typeof result === 'number') {
-      if (Number.isInteger(result) && Math.abs(result) < 2147483648) return result;
+      // #1049 instance 1: the WASM import side declares these as `i64`
+      // returns (handles, NaN-box bits, etc.). A plain Number return —
+      // even a small integer JS could round-trip — throws
+      // `TypeError: Cannot convert X to a BigInt` at the import
+      // boundary. Coerce integers via `BigInt(n)` and non-integers
+      // (NaN-boxed f64 payloads) via bit-reinterpret. The historic
+      // small-int passthrough was the root cause of `hone_editor_create`
+      // returning handle 1 as Number 1.
+      if (Number.isInteger(result) && Math.abs(result) < 2147483648) {
+        return BigInt(result);
+      }
       _f64[0] = result;
       return _u64[0];
     }
