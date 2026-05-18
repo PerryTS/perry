@@ -22,6 +22,7 @@ mod object_cache;
 mod optimized_libs;
 mod parse_cache;
 mod resolve;
+mod sandbox_buildrs;
 mod strip_dedup;
 mod targets;
 pub mod well_known;
@@ -570,6 +571,17 @@ pub struct CompilationContext {
     /// grants this package `*` unconditionally — host code is what
     /// `--lockdown` mode (#496) is for, not per-package policy.
     pub host_package_name: Option<String>,
+    /// #505: per-package exemption list for the build.rs sandbox.
+    /// When `PERRY_SANDBOX_BUILDRS=1` is set, cargo invocations
+    /// triggered by Perry's compile pipeline for `perry.nativeLibrary`
+    /// crate builds are wrapped in `sandbox-exec` on macOS (denying
+    /// network, restricting FS writes). Packages listed here run
+    /// unsandboxed — escape hatch for build scripts with legitimate
+    /// network needs (e.g. `bindgen` calls that fetch headers, or
+    /// vendored-rebuild flows that pull crates fresh). Empty by
+    /// default; populated from `perry.allowUnsandboxedBuild` in the
+    /// host `package.json`.
+    pub allow_unsandboxed_build: Vec<String>,
 }
 
 impl std::fmt::Debug for CompilationContext {
@@ -620,6 +632,7 @@ impl CompilationContext {
             js_runtime_importers: Vec::new(),
             permissions: std::collections::BTreeMap::new(),
             host_package_name: None,
+            allow_unsandboxed_build: Vec::new(),
         }
     }
 }
@@ -1176,6 +1189,19 @@ pub fn run_with_parse_cache(
                             None => continue,
                         };
                         ctx.permissions.insert(pkg_name.clone(), token_list);
+                    }
+                }
+                // #505: per-package opt-out from the build.rs sandbox.
+                // See docs/src/cli/sandbox-buildrs.md.
+                if let Some(arr) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("allowUnsandboxedBuild"))
+                    .and_then(|v| v.as_array())
+                {
+                    for entry in arr {
+                        if let Some(s) = entry.as_str() {
+                            ctx.allow_unsandboxed_build.push(s.to_string());
+                        }
                     }
                 }
             }

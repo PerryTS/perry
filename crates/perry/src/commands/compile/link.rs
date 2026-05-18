@@ -1841,7 +1841,14 @@ pub(super) fn build_and_run_link(
                             | Some("watchos-simulator")
                     );
 
-                    let mut cargo_cmd = Command::new("cargo");
+                    // #505: optionally wrap the cargo invocation in
+                    // `sandbox-exec` on macOS to deny network and
+                    // restrict FS writes during `build.rs` execution.
+                    // Off by default for backwards compat; opted into
+                    // via `PERRY_SANDBOX_BUILDRS=1`. Packages listed
+                    // in `perry.allowUnsandboxedBuild` are exempt.
+                    let mut cargo_cmd =
+                        super::sandbox_buildrs::wrap_cargo_command(ctx, &native_lib.module);
                     if is_tier3 {
                         cargo_cmd.arg("+nightly");
                     }
