@@ -2530,6 +2530,21 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_string_decoder_write", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_string_decoder_end", DOUBLE, &[I64, DOUBLE]);
 
+    // ========== node:querystring ==========
+    // Module-level functions (no receiver). `escape` / `unescape` take
+    // a single NaN-boxed string and return one. `parse` returns a raw
+    // ObjectHeader pointer (NaN-boxed at the call site via the
+    // dispatcher's NR_PTR shape). `stringify` returns a NaN-boxed
+    // STRING_TAG value directly.
+    module.declare_function("js_querystring_escape", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_querystring_unescape", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_querystring_parse", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_querystring_stringify",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+
     // ========== Fastify ==========
     module.declare_function("js_fastify_add_hook", I32, &[I64, I64, I64]);
     module.declare_function("js_fastify_all", I32, &[I64, I64, I64]);

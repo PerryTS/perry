@@ -84,6 +84,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "async_hooks",
     "readline",
     "string_decoder",
+    "querystring",
     "tty",
     "process",
     "perry/tui",
@@ -1848,6 +1849,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("string_decoder", "lastNeed"),
     property("string_decoder", "lastTotal"),
     property("string_decoder", "lastChar"),
+    // node:querystring — legacy URL-encoded form parser. Greenfield
+    // (deprecated since Node 11 but still imported by many npm pkgs).
+    method("querystring", "escape", false, None),
+    method("querystring", "unescape", false, None),
+    method("querystring", "parse", false, None),
+    method("querystring", "stringify", false, None),
+    // `decode` / `encode` are aliases the test_parity_querystring fixture
+    // verifies are *identity-equal* to parse/stringify. Native dispatch
+    // routes both names to the same runtime symbol so the closures live
+    // at the same address.
+    method("querystring", "decode", false, None),
+    method("querystring", "encode", false, None),
     // ===========================================================
     // #513 Phase A: backfill receiver-less surface for modules that
     // previously had zero entries. Without these, `module_has_any_entries`

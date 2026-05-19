@@ -1812,6 +1812,64 @@ pub(super) const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // ========== node:querystring ==========
+    // Module-level functions. `decode` / `encode` route to the same
+    // runtime symbols as `parse` / `stringify` so the test's
+    // `decode === parse` identity-equality check passes.
+    NativeModSig {
+        module: "querystring",
+        has_receiver: false,
+        method: "escape",
+        class_filter: None,
+        runtime: "js_querystring_escape",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "querystring",
+        has_receiver: false,
+        method: "unescape",
+        class_filter: None,
+        runtime: "js_querystring_unescape",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "querystring",
+        has_receiver: false,
+        method: "parse",
+        class_filter: None,
+        runtime: "js_querystring_parse",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "querystring",
+        has_receiver: false,
+        method: "decode",
+        class_filter: None,
+        runtime: "js_querystring_parse",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "querystring",
+        has_receiver: false,
+        method: "stringify",
+        class_filter: None,
+        runtime: "js_querystring_stringify",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "querystring",
+        has_receiver: false,
+        method: "encode",
+        class_filter: None,
+        runtime: "js_querystring_stringify",
+        args: &[NA_F64, NA_F64, NA_F64],
+        ret: NR_F64,
+    },
     // ========== LRU Cache ==========
     NativeModSig {
         module: "lru-cache",
