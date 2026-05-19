@@ -21,6 +21,7 @@ use crate::ir::*;
 //   the largest single arm extracted so far).
 // - `expr_member.rs` / `expr_assign.rs` / `expr_new.rs` (v0.5.339):
 //   property access, assignment, and `new C()` constructor calls.
+mod context;
 mod expr_assign;
 mod expr_call;
 mod expr_function;
@@ -29,7 +30,6 @@ mod expr_misc;
 mod expr_new;
 mod expr_object;
 mod unimpl_hints;
-mod context;
 pub(crate) use context::*;
 mod stmt;
 pub(crate) use stmt::*;
@@ -392,7 +392,6 @@ pub struct LoweringContext {
     pub(crate) is_external_module: bool,
 }
 
-
 /// Issue #179 typed-parse: extract the field-name list in source
 /// order from a `JSON.parse<T>` AST type argument. `T` may be:
 /// - A type literal `{id: number, name: string}` — direct extraction
@@ -481,9 +480,6 @@ pub(super) fn resolve_typed_parse_ty(ctx: &LoweringContext, ty: Type) -> Type {
         other => other,
     }
 }
-
-
-
 
 // Re-export extracted module functions
 pub(crate) use crate::analysis::*;
@@ -659,7 +655,6 @@ pub(crate) fn is_known_string_prototype_method(name: &str) -> bool {
     )
 }
 
-
 pub fn lower_module_with_class_id(
     ast_module: &ast::Module,
     name: &str,
@@ -668,7 +663,6 @@ pub fn lower_module_with_class_id(
 ) -> Result<(Module, ClassId)> {
     lower_module_with_class_id_and_types(ast_module, name, source_file_path, start_class_id, None)
 }
-
 
 pub fn lower_module_with_class_id_and_types(
     ast_module: &ast::Module,
@@ -1083,11 +1077,6 @@ pub fn lower_module_full(
 
     Ok((module, ctx.next_class_id))
 }
-
-
-
-
-
 
 /// Assign a value to an expression target (used for unwrapped paren/type-assertion targets).
 /// Converts an Expr (which should be an ident or member access) into an assignment.
@@ -2263,7 +2252,6 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
     }
 }
 
-
 /// If `call` matches `Text(\`...${state.value}...\`)` with at least one State
 /// interpolation, desugar into an auto-reactive binding. Returns `Ok(None)`
 /// for anything else so the generic Call lowering runs.
@@ -2485,8 +2473,6 @@ pub(super) fn try_desugar_reactive_text(
         type_args: vec![],
     }))
 }
-
-
 
 #[cfg(test)]
 mod tests {

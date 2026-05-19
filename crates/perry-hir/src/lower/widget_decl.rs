@@ -272,7 +272,10 @@ pub(super) fn try_desugar_reactive_animate(
 
 /// Try to lower a Widget({...}) call from perry/widget into a WidgetDecl.
 /// Returns Some(WidgetDecl) if this is a widget declaration, None otherwise.
-pub(crate) fn try_lower_widget_decl(ctx: &LoweringContext, call_expr: &ast::CallExpr) -> Option<WidgetDecl> {
+pub(crate) fn try_lower_widget_decl(
+    ctx: &LoweringContext,
+    call_expr: &ast::CallExpr,
+) -> Option<WidgetDecl> {
     // Check callee is a function imported from perry/widget named "Widget"
     let callee = match &call_expr.callee {
         ast::Callee::Expr(expr) => expr,

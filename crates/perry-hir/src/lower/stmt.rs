@@ -221,7 +221,11 @@ pub(crate) fn emit_for_of_pattern_binding(
     }
 }
 
-pub(crate) fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) -> Result<()> {
+pub(crate) fn lower_stmt(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    stmt: &ast::Stmt,
+) -> Result<()> {
     match stmt {
         ast::Stmt::Decl(decl) => {
             match decl {
