@@ -23,16 +23,15 @@ use std::sync::RwLock;
 // surface (all `#[no_mangle]` FFI entry points keep their exact symbol).
 // ---------------------------------------------------------------------------
 mod alloc;
-mod field_get_set;
 mod delete_rest;
+mod field_get_set;
 mod instanceof;
 mod object_ops;
 pub use alloc::*;
-pub use field_get_set::*;
 pub use delete_rest::*;
+pub use field_get_set::*;
 pub use instanceof::*;
 pub use object_ops::*;
-
 
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.
 // Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
@@ -2463,10 +2462,6 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
         keys_array as u64,
     );
 }
-
-
-
-
 
 /// Call a method on an object with dynamic dispatch
 /// This is used for runtime method calls when the method cannot be resolved statically.

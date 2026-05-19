@@ -708,7 +708,6 @@ pub extern "C" fn js_object_get_own_field_or_undef(
     }
 }
 
-
 /// Look up the canonical NaN-boxed value of a built-in constructor /
 /// namespace stored on `globalThis` (the singleton populated by
 /// `populate_global_this_builtins`). Used by `instance.constructor`
