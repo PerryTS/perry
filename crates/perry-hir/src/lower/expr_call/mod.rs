@@ -32,10 +32,12 @@ use super::{
     LoweringContext,
 };
 
+mod reflect_args;
 mod static_receiver;
 mod stream;
 mod url_search_params;
 
+use reflect_args::{take_reflect_ktp_args, take_reflect_kvtp_args, take_reflect_tp_args};
 use static_receiver::static_receiver_class;
 use stream::{is_stream_api_method, register_super_stream_controller_params};
 use url_search_params::build_url_search_params_method_call;
@@ -6669,36 +6671,6 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             })
         }
     }
-}
-
-/// (key, value, target, propertyKey?) — `Reflect.defineMetadata`'s 3-or-4 arg
-/// shape. Defaults missing leading args to `undefined`; `property_key` stays
-/// `None` when omitted so the runtime can distinguish class-level metadata
-/// from a property-level one.
-fn take_reflect_kvtp_args(args: Vec<Expr>) -> (Expr, Expr, Expr, Option<Box<Expr>>) {
-    let mut it = args.into_iter();
-    let key = it.next().unwrap_or(Expr::Undefined);
-    let value = it.next().unwrap_or(Expr::Undefined);
-    let target = it.next().unwrap_or(Expr::Undefined);
-    let property_key = it.next().map(Box::new);
-    (key, value, target, property_key)
-}
-
-/// (key, target, propertyKey?) — `Reflect.{get,getOwn,has,hasOwn,delete}Metadata`.
-fn take_reflect_ktp_args(args: Vec<Expr>) -> (Expr, Expr, Option<Box<Expr>>) {
-    let mut it = args.into_iter();
-    let key = it.next().unwrap_or(Expr::Undefined);
-    let target = it.next().unwrap_or(Expr::Undefined);
-    let property_key = it.next().map(Box::new);
-    (key, target, property_key)
-}
-
-/// (target, propertyKey?) — `Reflect.{get,getOwn}MetadataKeys`.
-fn take_reflect_tp_args(args: Vec<Expr>) -> (Expr, Option<Box<Expr>>) {
-    let mut it = args.into_iter();
-    let target = it.next().unwrap_or(Expr::Undefined);
-    let property_key = it.next().map(Box::new);
-    (target, property_key)
 }
 
 /// Issue #886: synthesize the dedicated HIR variant for an indirect call
