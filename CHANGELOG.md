@@ -2,9 +2,9 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
-## v0.5.1011 — fix(compile) #1110 + chore(ffi) #1112: re-export-only FFI manifest collection; perry-ffi to crates.io
+## v0.5.1011 — fix(compile) #1110 + chore(ffi) #1112: re-export-only FFI manifest collection; runtime-only-link `perry_ffi_*` undef; perry-ffi to crates.io
 
-Two related changes — both fall out of trying to ship `@perryts/storekit` and similar scoped npm wrappers without a sibling Perry checkout.
+Three related changes — all fall out of trying to ship `@perryts/storekit` and similar scoped npm wrappers without a sibling Perry checkout.
 
 ### #1110: re-export-only paths missed `perry.nativeLibrary` manifest collection
 
@@ -24,6 +24,16 @@ The matching wrapper symbol (`perry_fn_wrap_ts__js_storekit_get_jws`) was emitte
 **Bundled defensive fix in `lower_call.rs`:** force the FFI-manifest path whenever `ctx.ffi_signatures` knows the name, even if some other code path registers an entry in `import_function_prefixes` (the original failure shape from #1110 still required this — the manifest path was correct but the wrapper-prefix path won by accident). Future re-export shapes that leak `import_function_prefixes` entries past the per-specifier skip in `#1085` are now defensively routed through the FFI path.
 
 **Verified.** Reproduced the LLVM IR-verifier failure end-to-end with `import { … } from "./wrap"` re-exporting from `@perryts/storekit`; post-fix `wrap.ts.o` / `main_reexport.ts.o` both reference the plain manifest symbols (`_js_storekit_get_jws`) and the link succeeds.
+
+### #1110 (also): `nativeLibrary` archives left `perry_ffi_*` undefined at link time when stdlib wasn't otherwise needed
+
+The user's actual `/tmp/repro1110_real` reduction (`import { js_storekit_get_jws } from "@perryts/storekit"; await js_storekit_get_jws()`) compiled correctly — `main_ts.o` referenced the plain manifest symbol `_js_storekit_get_jws` — but the **link** then failed with `Undefined symbols for architecture arm64: "_perry_ffi_promise_new" / "_perry_ffi_promise_resolve_bits"`.
+
+The user's TS code didn't import anything from `perry-stdlib`'s public surface (`fs` / `console` aside, neither of which currently triggers stdlib detection on its own), so `ctx.needs_stdlib` stayed `false` and the linker line was `Linking (runtime-only)…`. But every `returns: "promise"` manifest entry in a `perry.nativeLibrary` package compiles, in the wrapper crate, to a perry-ffi `JsPromise::new()` / `JsPromise::resolve_string()` call site — perry-ffi declares those C ABI shims (`perry_ffi_promise_new`, `perry_ffi_promise_resolve_bits`, …) as `extern "C"`, and the *definitions* live in `perry-stdlib::perry_ffi_async`. Without stdlib linked, the references stayed undefined.
+
+**Fix.** In `compile.rs`, right after `ffi_functions` is materialized: `if !ctx.native_libraries.is_empty() { ctx.needs_stdlib = true; }`. Any program with at least one loaded `perry.nativeLibrary` manifest now force-links `libperry_stdlib.a` regardless of whether the user's TS source touched anything else stdlib-shaped.
+
+The user-visible change is one log line — `Linking (runtime-only)…` → `Linking (with stdlib)…` — and the build now reaches `Wrote executable: repro`. Verified end-to-end with `/tmp/repro1110_real`, both the direct-import form (the user's reduction as filed) and the re-export-chain shape from the codegen fix above.
 
 ### #1112: publish perry-ffi to crates.io
 

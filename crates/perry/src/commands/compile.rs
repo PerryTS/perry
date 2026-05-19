@@ -3919,6 +3919,24 @@ pub fn run_with_parse_cache(
         })
         .collect();
 
+    // #1110 (follow-up): every loaded `perry.nativeLibrary` static
+    // archive carries unresolved references to `perry_ffi_promise_new`
+    // / `perry_ffi_promise_resolve_bits` / `perry_ffi_spawn_blocking`
+    // (the C-ABI shims that perry-ffi declares and perry-stdlib
+    // defines — see `crates/perry-stdlib/src/perry_ffi_async.rs`).
+    // Wrappers like `@perryts/storekit` invariably use them — every
+    // `returns: "promise"` manifest entry compiles to a perry-ffi
+    // call site that pulls the symbol in. If the user's TS source
+    // never touched anything else from `perry-stdlib`'s surface, the
+    // existing `ctx.needs_stdlib` heuristic stayed `false` and the
+    // link command was `Linking (runtime-only)…`, with the
+    // perry_ffi_* symbols then surfacing as `Undefined symbols for
+    // architecture arm64` at the final ld step. Force-enable stdlib
+    // linkage whenever any nativeLibrary manifest is loaded.
+    if !ctx.native_libraries.is_empty() {
+        ctx.needs_stdlib = true;
+    }
+
     // Pre-compute JS module specifiers
     let js_module_specifiers: Vec<String> = ctx.js_modules.keys().cloned().collect();
     let needs_js_runtime = ctx.needs_js_runtime || args.enable_js_runtime;
