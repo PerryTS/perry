@@ -30,6 +30,35 @@ app.get("/throw-async", async (_request, _reply) => {
   throw new Error("async route boom");
 });
 
+// Issue #1070: `instanceof`-narrowed property access on the error value
+// inside a `setErrorHandler(async (err, req, reply) => …)` callback
+// previously printed `0`. Pre-fix the first arrow param (`err`) was tagged
+// as a fastify Request native instance, so `err.<field>` lowered to a
+// NativeMethodCall whose unknown-method fall-through emits `0.0`.
+class ProblemError extends Error {
+  constructor(public readonly problem: { title: string; status: number }) {
+    super(problem.title);
+  }
+}
+app.setErrorHandler(async (err, _req, reply) => {
+  if (err instanceof ProblemError) {
+    void reply.code(err.problem.status).send(err.problem);
+    return;
+  }
+  // Defer to the default fastify envelope shape for everything else, so
+  // the pre-existing /throw-sync and /throw-async parity assertions keep
+  // their `{"statusCode":500,"error":"Internal Server Error","message":…}`
+  // bodies after this test added a user handler to the app.
+  void reply.code(500).send({
+    statusCode: 500,
+    error: "Internal Server Error",
+    message: err.message,
+  });
+});
+app.get("/throw-problem", async (_request, _reply) => {
+  throw new ProblemError({ title: "Bad Request", status: 400 });
+});
+
 app.listen({ port: port }, () => {
   // Sentinel line the harness waits for before starting curl assertions.
   console.log("ready port=" + port);

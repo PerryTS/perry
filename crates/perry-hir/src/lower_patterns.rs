@@ -285,10 +285,24 @@ pub(crate) fn pre_scan_fastify_handler_params(
         ast::Expr::Fn(_) => return None, // fn expressions handled separately
         _ => return None,
     };
-    let req_name = arrow.params.first().and_then(pat_ident_name)?;
+    // Issue #1070: `setErrorHandler(async (err, req, reply) => …)` —
+    // the first arrow param is the THROWN VALUE, not a fastify Request.
+    // Registering `err` as `("fastify", "Request")` causes `err.problem`
+    // (or any user-field access on a thrown class instance) to lower to
+    // a NativeMethodCall whose method name isn't in the fastify Request
+    // dispatch table → the lower_native_method_call fall-through emits
+    // `double_literal(0.0)`, so the access prints as `0`. Skip the first
+    // arrow param for setErrorHandler so only params[1] / params[2]
+    // (the real Request / Reply) get the native-instance tags.
+    let (req_param_idx, reply_param_idx) = if method_name == "setErrorHandler" {
+        (1, 2)
+    } else {
+        (0, 1)
+    };
+    let req_name = arrow.params.get(req_param_idx).and_then(pat_ident_name)?;
     let reply_name = arrow
         .params
-        .get(1)
+        .get(reply_param_idx)
         .and_then(pat_ident_name)
         .unwrap_or_default();
     Some((req_name, reply_name))

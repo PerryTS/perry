@@ -154,6 +154,18 @@ check "GET /throw-async body" \
 actual="$(curl -s --max-time 5 "http://127.0.0.1:$PORT/hello" || true)"
 check "GET /hello after throw" '{"hello":"world"}' "$actual"
 
+# Issue #1070: `setErrorHandler(async (err, req, reply) => …)` —
+# `err instanceof MyError` narrowing must let `err.<field>` reads
+# return the actual class-instance field instead of the `0` zero-
+# sentinel that the misregistered ("fastify","Request") tag produced.
+code_and_body="$(curl -s --max-time 5 -o "$TMP_DIR/throw_problem_body" -w '%{http_code}' \
+    "http://127.0.0.1:$PORT/throw-problem" || true)"
+throw_problem_body="$(cat "$TMP_DIR/throw_problem_body" 2>/dev/null || true)"
+check "GET /throw-problem status (#1070)" "400" "$code_and_body"
+check "GET /throw-problem body (#1070)" \
+    '{"title":"Bad Request","status":400}' \
+    "$throw_problem_body"
+
 echo
 echo "fastify-tests: $pass passed, $fail failed"
 
