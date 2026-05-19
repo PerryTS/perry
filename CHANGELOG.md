@@ -2,6 +2,27 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1009 — fix(object): skip misaligned non-object pointers in js_object_assign_one
+
+`js_object_assign_one` (the `Object.assign` single-source helper)
+decodes target/source permissively and is documented to skip
+non-object sources (`Object.assign(t, 5)` / `null`). The existing
+guards only rejected NaN-boxed specials and values `< 0x10000`; an
+untagged, unaligned bit pattern passed through and was dereferenced as
+`*ObjectHeader` at `(*src).keys_array`.
+
+A real `ObjectHeader` is heap-allocated `#[repr(C)]` with `u64` /
+pointer fields, so a valid object pointer is always 8-byte aligned.
+Observed on a Windows release build of a large Perry app: a non-pointer
+value (`0x1d81ff6950a`) reached `source`, and `(*src).keys_array` is a
+misaligned read — a hard abort under debug pointer-alignment checks,
+and in release silent memory corruption that surfaced downstream as a
+GC out-of-bounds panic (a NaN-boxed value used as a shadow-stack
+index). Adds an `% 8 != 0` alignment guard to both the target and
+source decode paths, treating a misaligned value as a non-object and
+skipping it — exactly the documented `Object.assign(t, <non-object>)`
+behaviour.
+
 ## v0.5.1008 — fix(wasm): #1037 — `String.fromCharCode` returns `undefined` on `--target web`
 
 The reduction Ralph posted on #1037 showed `s += String.fromCharCode(0)` over-appending 9 chars per iteration — but the underlying cause was not handle-ID stringification; it was simpler. The compiled `String.fromCharCode` was returning `undefined`, and `'' + undefined === 'undefined'` (which is exactly 9 chars). 16 iters × 9 = the observed 144-byte length.
