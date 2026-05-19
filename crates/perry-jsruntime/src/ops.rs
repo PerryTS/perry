@@ -529,6 +529,51 @@ fn op_perry_http_close(#[smi] server_id: i32) {
 /// can compute real HS256/HS384/HS512 signatures instead of returning
 /// an empty digest. Unsupported algorithms fall back to an empty Vec
 /// so the JS caller sees a zero-length digest rather than crashing.
+/// `op_perry_hash(alg, data)` — sync hash compute (sha1 / sha256 / sha384 /
+/// sha512 / md5). Mirrors `op_perry_hmac` but with no key. Used by the
+/// `node:crypto` V8 stub's `createHash().update().digest()` path so that
+/// libraries running through V8 fallback (NestJS's
+/// `ModuleTokenFactory`, fast-safe-stringify hashing, etc.) get real
+/// digests instead of empty strings — without this, the token generator
+/// hashes every module to `""` and only the first registered module wins.
+/// (#1021.)
+#[op2]
+#[buffer]
+fn op_perry_hash(#[string] alg: &str, #[buffer] data: &[u8]) -> Vec<u8> {
+    use md5::Md5;
+    use sha1::Sha1;
+    use sha2::{Digest, Sha256, Sha384, Sha512};
+
+    match alg {
+        "sha1" | "SHA-1" | "SHA1" => {
+            let mut h = Sha1::new();
+            h.update(data);
+            h.finalize().to_vec()
+        }
+        "sha256" | "SHA-256" | "SHA256" => {
+            let mut h = Sha256::new();
+            h.update(data);
+            h.finalize().to_vec()
+        }
+        "sha384" | "SHA-384" | "SHA384" => {
+            let mut h = Sha384::new();
+            h.update(data);
+            h.finalize().to_vec()
+        }
+        "sha512" | "SHA-512" | "SHA512" => {
+            let mut h = Sha512::new();
+            h.update(data);
+            h.finalize().to_vec()
+        }
+        "md5" | "MD5" => {
+            let mut h = Md5::new();
+            h.update(data);
+            h.finalize().to_vec()
+        }
+        _ => Vec::new(),
+    }
+}
+
 #[op2]
 #[buffer]
 fn op_perry_hmac(#[string] alg: &str, #[buffer] key: &[u8], #[buffer] data: &[u8]) -> Vec<u8> {
@@ -576,5 +621,6 @@ extension!(
         op_perry_http_respond,
         op_perry_http_close,
         op_perry_hmac,
+        op_perry_hash,
     ],
 );

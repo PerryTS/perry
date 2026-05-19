@@ -1300,6 +1300,40 @@ pub unsafe extern "C" fn js_register_class_id(class_id: u32) {
     guard.as_mut().unwrap().insert(class_id);
 }
 
+/// Maps `class_id → user-visible class name`. Populated by codegen via
+/// `js_register_class_name`. Read back by V8-bridge code when surfacing a
+/// Perry class to JS — NestJS's `ModuleTokenFactory.create()` reads
+/// `metatype.name` to build the module token, so the empty default name
+/// from `v8::Function::builder(...)` would collide every module under the
+/// same token. (#1021.)
+pub static CLASS_NAMES: RwLock<Option<HashMap<u32, String>>> = RwLock::new(None);
+
+/// Register the user-visible name of a class so the V8 bridge can label
+/// the V8-side wrapper for nice `metatype.name` reads. Idempotent.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_name(class_id: u32, name_ptr: *const u8, name_len: u32) {
+    if class_id == 0 || name_ptr.is_null() || name_len == 0 {
+        return;
+    }
+    let slice = std::slice::from_raw_parts(name_ptr, name_len as usize);
+    let name = match std::str::from_utf8(slice) {
+        Ok(s) => s.to_string(),
+        Err(_) => return,
+    };
+    let mut guard = CLASS_NAMES.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard.as_mut().unwrap().insert(class_id, name);
+}
+
+/// Look up the user-visible name of a registered class. Returns `None`
+/// when the class id was never registered with `js_register_class_name`.
+pub fn class_name_for_id(class_id: u32) -> Option<String> {
+    let guard = CLASS_NAMES.read().ok()?;
+    guard.as_ref()?.get(&class_id).cloned()
+}
+
 /// Resolve a closure-typed JSValue back to a built-in constructor name
 /// (`"Date"`/`"Array"`/`"Object"`/...) when it matches one of the
 /// singleton-installed thunks. Returns `None` for closures that aren't
@@ -8703,7 +8737,7 @@ fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -> f64 {
+pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -> f64 {
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(bits) = cache.get(&(class_id, method_name.to_string())).copied() {

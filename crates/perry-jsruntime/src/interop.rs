@@ -427,6 +427,7 @@ fn poll_pending_module_evaluations(state: &mut JsRuntimeState) -> i32 {
     }
 
     let count = completed.len() as i32;
+    let mut any_resolved = false;
     for (module_id, path, error) in completed {
         state.pending_module_evaluations.remove(&module_id);
         match error {
@@ -439,8 +440,20 @@ fn poll_pending_module_evaluations(state: &mut JsRuntimeState) -> i32 {
             }
             None => {
                 bump_jsruntime(&JSRUNTIME_MODULE_EVALS_RESOLVED);
+                any_resolved = true;
             }
         }
+    }
+    // After any module evaluates, re-assert the Reflect-metadata bridge.
+    // The npm `reflect-metadata` package (loaded transitively by NestJS,
+    // class-validator, TypeORM, etc.) installs its own `Reflect.defineMetadata`
+    // / `getMetadata` etc., which overwrites our wrappers. The bridge JS is
+    // idempotent (no-op when our wrapper is already on the descriptor) so
+    // running it every time a module finishes evaluating is cheap, and it
+    // re-wraps any replacement functions so writes mirror to Perry's
+    // `REFLECT_METADATA` store. (#1021 NestJS decorator routing.)
+    if any_resolved {
+        install_reflect_metadata_bridge(state);
     }
     count
 }

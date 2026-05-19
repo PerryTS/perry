@@ -700,6 +700,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_instanceof_dynamic", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_register_class_extends_error", VOID, &[I32]);
     module.declare_function("js_register_class_id", VOID, &[I32]);
+    // #1021 NestJS: surface Perry class names to V8 so `metatype.name`
+    // is non-empty. Codegen emits one call per registered class id at
+    // program init, mirroring `js_register_class_id`.
+    module.declare_function("js_register_class_name", VOID, &[I32, PTR, I32]);
     // Anon-shape class registration so `.constructor` reads on object
     // literals (`{ x: 1 }`) return the global `Object` constructor
     // instead of the synthetic class ref. Refs #968 / date-fns

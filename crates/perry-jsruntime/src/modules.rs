@@ -2113,10 +2113,101 @@ export function randomUUID() {
     for (let i = 0; i < 16; i++) h.push((b[i] + 0x100).toString(16).slice(1));
     return h[0]+h[1]+h[2]+h[3]+'-'+h[4]+h[5]+'-'+h[6]+h[7]+'-'+h[8]+h[9]+'-'+h[10]+h[11]+h[12]+h[13]+h[14]+h[15];
 }
+// `crypto.createHash(algorithm)` — real digest for sha1/sha256/sha384/
+// sha512/md5 via `op_perry_hash`. Mirrors the createHmac path: accumulate
+// `update()` inputs into a single Uint8Array on `digest()` to match
+// Node's API shape. Used by NestJS's `ModuleTokenFactory.hashString`
+// and `fast-safe-stringify` (`safeStableStringify` token hashing) so
+// every module token comes back unique instead of all hashing to
+// `""`. (#1021.)
 export function createHash(algorithm) {
+    const normalize = (a) => {
+        if (typeof a !== 'string') return null;
+        const x = a.toLowerCase();
+        if (x === 'sha1' || x === 'sha-1') return 'sha1';
+        if (x === 'sha256' || x === 'sha-256') return 'sha256';
+        if (x === 'sha384' || x === 'sha-384') return 'sha384';
+        if (x === 'sha512' || x === 'sha-512') return 'sha512';
+        if (x === 'md5') return 'md5';
+        return null;
+    };
+    const toBytes = (input) => {
+        if (input == null) return new Uint8Array(0);
+        if (input instanceof Uint8Array) return input;
+        if (input instanceof ArrayBuffer) return new Uint8Array(input);
+        if (ArrayBuffer.isView(input)) {
+            return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+        }
+        if (typeof input === 'string') {
+            return new TextEncoder().encode(input);
+        }
+        return new Uint8Array(0);
+    };
+    const concat = (chunks) => {
+        let total = 0;
+        for (const c of chunks) total += c.length;
+        const out = new Uint8Array(total);
+        let off = 0;
+        for (const c of chunks) { out.set(c, off); off += c.length; }
+        return out;
+    };
+    const toHex = (bytes) => {
+        let s = '';
+        for (let i = 0; i < bytes.length; i++) {
+            s += (bytes[i] + 0x100).toString(16).slice(1);
+        }
+        return s;
+    };
+    const toBase64 = (bytes) => {
+        if (typeof Buffer !== 'undefined' && Buffer.from) {
+            return Buffer.from(bytes).toString('base64');
+        }
+        let s = '';
+        for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+        return (typeof btoa === 'function') ? btoa(s) : '';
+    };
+    const alg = normalize(algorithm);
+    const ops = (typeof Deno !== 'undefined' && Deno.core && Deno.core.ops) ? Deno.core.ops : null;
+    const chunks = [];
+    let finalized = false;
     return {
-        update(data) { this._data = (this._data || '') + data; return this; },
-        digest(encoding) { return ''; }
+        update(data, _enc) {
+            if (finalized) {
+                throw new Error('Digest already called');
+            }
+            chunks.push(toBytes(data));
+            return this;
+        },
+        digest(encoding) {
+            finalized = true;
+            const merged = concat(chunks);
+            let out;
+            if (alg && ops && typeof ops.op_perry_hash === 'function') {
+                out = ops.op_perry_hash(alg, merged);
+                if (!(out instanceof Uint8Array)) out = new Uint8Array(out || []);
+            } else {
+                out = new Uint8Array(0);
+            }
+            if (!encoding || encoding === 'binary') {
+                if (typeof Buffer !== 'undefined' && Buffer.from) {
+                    return Buffer.from(out);
+                }
+                return out;
+            }
+            if (encoding === 'hex') return toHex(out);
+            if (encoding === 'base64') return toBase64(out);
+            if (encoding === 'base64url') {
+                return toBase64(out)
+                    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+            }
+            return toHex(out);
+        },
+        copy() {
+            if (finalized) throw new Error('Digest already called');
+            const clone = createHash(algorithm);
+            for (const c of chunks) clone.update(c);
+            return clone;
+        },
     };
 }
 // `crypto.createHmac(algorithm, key)` — real HMAC for HS256/384/512 via
@@ -2963,6 +3054,38 @@ export function strictEqual(a, b, message) { if (a !== b) throw new Error(messag
 export function deepStrictEqual(a, b, message) { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(message || 'Assertion failed'); }
 export function notStrictEqual(a, b, message) { if (a === b) throw new Error(message || 'Assertion failed'); }
 export default { ok, strictEqual, deepStrictEqual, notStrictEqual };
+"#.to_string(),
+        "perf_hooks" => r#"
+// Stub implementation for Node.js 'perf_hooks' module. NestJS
+// (`@nestjs/core/injector/module-token-factory.js`) reaches into
+// `performance.now()` during dynamic-module compile; without this stub
+// the import resolves to `{}` and `performance.now` throws. Minimum
+// viable surface — just enough to keep NestJS's serialization timer
+// running. (#1021.)
+export const performance = {
+    now: () => (typeof Date !== 'undefined' ? Date.now() : 0),
+    timeOrigin: 0,
+    mark() {},
+    measure() {},
+    clearMarks() {},
+    clearMeasures() {},
+    getEntries: () => [],
+    getEntriesByName: () => [],
+    getEntriesByType: () => [],
+    nodeTiming: {},
+    timerify: (fn) => fn,
+    eventLoopUtilization: () => ({ idle: 0, active: 0, utilization: 0 }),
+};
+export class PerformanceObserver {
+    constructor() {}
+    observe() {}
+    disconnect() {}
+    takeRecords() { return []; }
+}
+PerformanceObserver.supportedEntryTypes = [];
+export const constants = {};
+export const monitorEventLoopDelay = () => ({ enable() {}, disable() {}, reset() {} });
+export default { performance, PerformanceObserver, constants, monitorEventLoopDelay };
 "#.to_string(),
         _ => format!(r#"
 // Empty stub for unsupported Node.js built-in: {}

@@ -55,6 +55,12 @@ bytes = "1.5"
 # `perry-stdlib`'s `crypto` feature so we don't duplicate the dep graph.
 hmac = "0.12"
 sha2 = "0.10"
+# Plain hash digests for `op_perry_hash` so the V8-side
+# `crypto.createHash(...).update(...).digest('hex')` path returns real
+# hashes instead of empty strings — load-bearing for NestJS's
+# `ModuleTokenFactory` (#1021).
+sha1 = "0.10"
+md-5 = "0.10"
 
 [features]
 default = []

@@ -5522,6 +5522,32 @@ fn emit_string_pool(
         packed_global_names.push(name);
     }
 
+    // Pre-allocate string constants for class-name registration. We need
+    // these BEFORE `init_fn` is created, because once `init_fn` borrows
+    // `llmod` we can no longer mutate the module's constant pool. (#1021.)
+    let mut named_class_name_constants: Vec<(u32, String, usize)> = Vec::new();
+    {
+        let mut named: Vec<(u32, String)> = Vec::new();
+        for (class_name, class) in classes.iter() {
+            if *class_name != class.name {
+                continue;
+            }
+            let cid = match class_ids.get(class_name).copied() {
+                Some(c) if c != 0 => c,
+                _ => continue,
+            };
+            if !class_name.starts_with("__AnonShape_") {
+                named.push((cid, class_name.clone()));
+            }
+        }
+        named.sort_by(|a, b| a.0.cmp(&b.0));
+        named.dedup_by_key(|(cid, _)| *cid);
+        for (cid, name) in named {
+            let (const_name, byte_len) = llmod.add_string_constant(&name);
+            named_class_name_constants.push((cid, const_name, byte_len));
+        }
+    }
+
     let init_name = format!("__perry_init_strings_{}", module_prefix);
     let init_fn = llmod.define_function(&init_name, VOID, vec![]);
     let _ = init_fn.create_block("entry");
@@ -5711,6 +5737,10 @@ fn emit_string_pool(
     {
         let mut all_class_ids: Vec<u32> = Vec::new();
         let mut anon_shape_ids: Vec<u32> = Vec::new();
+        // Also collect `(cid, name)` pairs so we can mirror Perry's
+        // user-visible class name into the runtime — V8 reads it back as
+        // `metatype.name` (#1021 NestJS module token factory).
+        let mut named_classes: Vec<(u32, String)> = Vec::new();
         for (class_name, class) in classes.iter() {
             if *class_name != class.name {
                 continue;
@@ -5729,6 +5759,8 @@ fn emit_string_pool(
             // class ref.
             if class_name.starts_with("__AnonShape_") {
                 anon_shape_ids.push(cid);
+            } else {
+                named_classes.push((cid, class_name.clone()));
             }
         }
         all_class_ids.sort_unstable();
@@ -5747,6 +5779,24 @@ fn emit_string_pool(
                 &[(crate::types::I32, &cid.to_string())],
             );
         }
+        // (Class-name registration uses pre-allocated string constants — see
+        // `named_class_name_constants` below.) Drop the named_classes
+        // collection here since the pre-computed list is what we'll emit.
+        let _ = named_classes;
+    }
+    // Mirror class names into the runtime so the V8 bridge can surface them
+    // as `metatype.name`. Strings were pre-allocated above before `init_fn`
+    // borrowed `llmod`. (#1021 NestJS.)
+    for (cid, const_name, byte_len) in &named_class_name_constants {
+        let const_ref = format!("@{}", const_name);
+        blk.call_void(
+            "js_register_class_name",
+            &[
+                (crate::types::I32, &cid.to_string()),
+                (crate::types::PTR, &const_ref),
+                (crate::types::I32, &byte_len.to_string()),
+            ],
+        );
     }
 
     // Refs #486 (hono logger middleware): also register every class
