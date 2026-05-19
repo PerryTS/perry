@@ -558,6 +558,57 @@ struct ConservativePinTraceStats {
     pinned_bytes: usize,
 }
 
+const MIN_TENURED_NURSERY_BYTES: usize = 16 * 1024 * 1024;
+const MIN_CANDIDATE_BYTES: usize = 8 * 1024 * 1024;
+const MIN_CANDIDATE_RATIO_PCT: u64 = 25;
+const RSS_PRESSURE_BYTES: u64 = 192 * 1024 * 1024;
+const RSS_HARD_PRESSURE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_PREVIOUS_PAUSE_US: u64 = 20_000;
+
+#[derive(Clone, Copy, Default)]
+struct EvacuationPolicySnapshot {
+    tenured_still_in_nursery_bytes: usize,
+    candidate_bytes: usize,
+    candidate_objects: usize,
+    conservative_pinned_bytes: usize,
+    rss_bytes: u64,
+    previous_pause_us: u64,
+    pre_evac_pause_us: u64,
+}
+
+impl EvacuationPolicySnapshot {
+    #[inline]
+    fn candidate_ratio_pct(self) -> u64 {
+        if self.tenured_still_in_nursery_bytes == 0 {
+            return 0;
+        }
+        ((self.candidate_bytes as u128 * 100) / self.tenured_still_in_nursery_bytes as u128) as u64
+    }
+}
+
+#[derive(Clone, Copy)]
+struct EvacuationPolicyDecision {
+    allowed: bool,
+    considered: bool,
+    force: bool,
+    enabled: bool,
+    reason: &'static str,
+    snapshot: EvacuationPolicySnapshot,
+}
+
+impl Default for EvacuationPolicyDecision {
+    fn default() -> Self {
+        Self {
+            allowed: true,
+            considered: false,
+            force: false,
+            enabled: false,
+            reason: "not_evaluated",
+            snapshot: EvacuationPolicySnapshot::default(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct SweepTraceStats {
     freed_bytes: u64,
@@ -625,6 +676,7 @@ struct GcCycleTrace {
     conservative_pinned: usize,
     conservative_pinned_bytes: usize,
     legacy_copy_only_scanner_pinned: LegacyRootTraceStats,
+    evacuation_policy: EvacuationPolicyDecision,
     evacuation: EvacuationTraceStats,
     block_persist: BlockPersistTraceStats,
     sweep: SweepTraceStats,
@@ -664,6 +716,7 @@ impl GcCycleTrace {
             conservative_pinned: 0,
             conservative_pinned_bytes: 0,
             legacy_copy_only_scanner_pinned: LegacyRootTraceStats::default(),
+            evacuation_policy: EvacuationPolicyDecision::default(),
             evacuation: EvacuationTraceStats::default(),
             block_persist: BlockPersistTraceStats::default(),
             sweep: SweepTraceStats::default(),
@@ -719,6 +772,21 @@ impl GcCycleTrace {
                 "objects": self.evacuation.objects,
                 "bytes": self.evacuation.bytes,
             },
+            "evacuation_policy": {
+                "allowed": self.evacuation_policy.allowed,
+                "considered": self.evacuation_policy.considered,
+                "force": self.evacuation_policy.force,
+                "enabled": self.evacuation_policy.enabled,
+                "reason": self.evacuation_policy.reason,
+                "tenured_still_in_nursery_bytes": self.evacuation_policy.snapshot.tenured_still_in_nursery_bytes,
+                "candidate_bytes": self.evacuation_policy.snapshot.candidate_bytes,
+                "candidate_objects": self.evacuation_policy.snapshot.candidate_objects,
+                "candidate_ratio_pct": self.evacuation_policy.snapshot.candidate_ratio_pct(),
+                "conservative_pinned_bytes": self.evacuation_policy.snapshot.conservative_pinned_bytes,
+                "rss_bytes": self.evacuation_policy.snapshot.rss_bytes,
+                "previous_pause_us": self.evacuation_policy.snapshot.previous_pause_us,
+                "pre_evac_pause_us": self.evacuation_policy.snapshot.pre_evac_pause_us,
+            },
             "block_persist": {
                 "iterations": self.block_persist.iterations,
                 "candidate_blocks": self.block_persist.candidate_blocks,
@@ -757,6 +825,194 @@ impl GcCycleTrace {
 struct GcCollectOutcome {
     freed_bytes: u64,
     trace: Option<GcCycleTrace>,
+}
+
+fn gc_last_pause_us() -> u64 {
+    GC_STATS.with(|stats| stats.borrow().last_pause_us)
+}
+
+fn evacuation_policy_initial_decision(
+    tenured_still_in_nursery_bytes: usize,
+    rss_bytes: u64,
+    previous_pause_us: u64,
+    pre_evac_pause_us: u64,
+    allowed: bool,
+    force: bool,
+) -> EvacuationPolicyDecision {
+    let snapshot = EvacuationPolicySnapshot {
+        tenured_still_in_nursery_bytes,
+        rss_bytes,
+        previous_pause_us,
+        pre_evac_pause_us,
+        ..EvacuationPolicySnapshot::default()
+    };
+    if !allowed {
+        return EvacuationPolicyDecision {
+            allowed,
+            force,
+            reason: "disabled",
+            snapshot,
+            ..EvacuationPolicyDecision::default()
+        };
+    }
+    if force {
+        return EvacuationPolicyDecision {
+            allowed,
+            considered: true,
+            force,
+            reason: "force_considered",
+            snapshot,
+            ..EvacuationPolicyDecision::default()
+        };
+    }
+    if tenured_still_in_nursery_bytes >= MIN_TENURED_NURSERY_BYTES {
+        return EvacuationPolicyDecision {
+            allowed,
+            considered: true,
+            force,
+            reason: "nursery_pressure",
+            snapshot,
+            ..EvacuationPolicyDecision::default()
+        };
+    }
+    if rss_bytes >= RSS_PRESSURE_BYTES {
+        return EvacuationPolicyDecision {
+            allowed,
+            considered: true,
+            force,
+            reason: "rss_pressure",
+            snapshot,
+            ..EvacuationPolicyDecision::default()
+        };
+    }
+    EvacuationPolicyDecision {
+        allowed,
+        force,
+        reason: "low_pressure",
+        snapshot,
+        ..EvacuationPolicyDecision::default()
+    }
+}
+
+fn evacuation_policy_snapshot_after_mark(
+    mut snapshot: EvacuationPolicySnapshot,
+    force: bool,
+    pre_evac_pause_us: u64,
+) -> EvacuationPolicySnapshot {
+    snapshot.tenured_still_in_nursery_bytes = 0;
+    snapshot.candidate_bytes = 0;
+    snapshot.candidate_objects = 0;
+    snapshot.conservative_pinned_bytes = 0;
+    snapshot.pre_evac_pause_us = pre_evac_pause_us;
+
+    crate::arena::arena_walk_objects(|header_ptr| {
+        let header = header_ptr as *mut GcHeader;
+        unsafe {
+            let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+            if !crate::arena::pointer_in_nursery(user_ptr as usize) {
+                return;
+            }
+            let flags = (*header).gc_flags;
+            if flags & GC_FLAG_FORWARDED != 0 {
+                return;
+            }
+            let total = (*header).size as usize;
+            let is_tenured = flags & GC_FLAG_TENURED != 0;
+            if is_tenured {
+                snapshot.tenured_still_in_nursery_bytes += total;
+            }
+            if flags & GC_FLAG_MARKED == 0 {
+                return;
+            }
+            if !force && !is_tenured {
+                return;
+            }
+            if flags & GC_FLAG_PINNED != 0 {
+                return;
+            }
+            if is_conservatively_pinned(header) {
+                snapshot.conservative_pinned_bytes += total;
+                return;
+            }
+            snapshot.candidate_objects += 1;
+            snapshot.candidate_bytes += total;
+        }
+    });
+    snapshot
+}
+
+fn evacuation_policy_final_decision(
+    mut decision: EvacuationPolicyDecision,
+    snapshot: EvacuationPolicySnapshot,
+) -> EvacuationPolicyDecision {
+    decision.snapshot = snapshot;
+    decision.enabled = false;
+    if !decision.allowed {
+        decision.reason = "disabled";
+        return decision;
+    }
+    if !decision.considered {
+        decision.reason = "low_pressure";
+        return decision;
+    }
+    if snapshot.candidate_bytes == 0 {
+        decision.reason = "zero_candidates";
+        return decision;
+    }
+    if decision.force {
+        decision.enabled = true;
+        decision.reason = "force";
+        return decision;
+    }
+    if snapshot.candidate_bytes < MIN_CANDIDATE_BYTES {
+        decision.reason = "candidate_bytes_below_threshold";
+        return decision;
+    }
+    if snapshot.candidate_ratio_pct() < MIN_CANDIDATE_RATIO_PCT {
+        decision.reason = "candidate_ratio_below_threshold";
+        return decision;
+    }
+    let hard_rss_pressure = snapshot.rss_bytes >= RSS_HARD_PRESSURE_BYTES;
+    let pause_budget_exceeded = snapshot.previous_pause_us > MAX_PREVIOUS_PAUSE_US
+        || snapshot.pre_evac_pause_us > MAX_PREVIOUS_PAUSE_US;
+    if pause_budget_exceeded && !hard_rss_pressure {
+        decision.reason = "pause_budget_exceeded";
+        return decision;
+    }
+    decision.enabled = true;
+    decision.reason = if hard_rss_pressure {
+        "rss_hard_pressure"
+    } else if snapshot.rss_bytes >= RSS_PRESSURE_BYTES {
+        "rss_pressure"
+    } else {
+        "nursery_pressure"
+    };
+    decision
+}
+
+fn maybe_print_evacuation_policy_diag(
+    decision: EvacuationPolicyDecision,
+    evacuation: EvacuationTraceStats,
+) {
+    if std::env::var_os("PERRY_GC_DIAG").is_none() || !decision.considered {
+        return;
+    }
+    let snapshot = decision.snapshot;
+    eprintln!(
+        "[gc-evac-policy] enabled={} reason={} tenured={} candidate_bytes={} candidate_objects={} candidate_ratio_pct={} cons_pinned={} rss={} prev_pause_us={} pre_evac_pause_us={} evacuated_bytes={} evacuated_objects={}",
+        decision.enabled,
+        decision.reason,
+        snapshot.tenured_still_in_nursery_bytes,
+        snapshot.candidate_bytes,
+        snapshot.candidate_objects,
+        snapshot.candidate_ratio_pct(),
+        snapshot.conservative_pinned_bytes,
+        snapshot.rss_bytes,
+        snapshot.previous_pause_us,
+        snapshot.pre_evac_pause_us,
+        evacuation.bytes,
+        evacuation.objects,
+    );
 }
 
 impl GcCollectOutcome {
@@ -1704,10 +1960,9 @@ pub extern "C" fn gc_check_trigger_export() {
 /// regardless of generation. (Phase C4 will refine this if minor
 /// GC begins running on old-gen-heavy workloads.)
 ///
-/// Gated by `PERRY_GEN_GC=1` via `gen_gc_enabled()`. Default OFF —
-/// shipping as opt-in until the bench_json_roundtrip ship criterion
-/// (RSS ≤70 MB direct path) lands and proves out across the gap +
-/// parity test corpus.
+/// Enabled by default via `gen_gc_enabled()`. Set `PERRY_GEN_GC=0`,
+/// `=false`, or `=off` to route collection through the full mark-sweep
+/// path for GC bisection.
 pub fn gc_collect_minor() -> u64 {
     gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
         .emit_after_current()
@@ -1743,12 +1998,27 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     });
     let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
     let start = Instant::now();
+    let previous_pause_us = gc_last_pause_us();
+    let current_rss_bytes = crate::process::get_rss_bytes();
+    let evacuation_policy_allowed = gen_gc_evacuate_enabled();
+    let force_evacuation = gc_force_evacuate_enabled();
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
     clear_mark_seeds();
     let phase_start = trace_phase_start(&trace);
     let valid_ptrs = build_valid_pointer_set();
     trace_phase_record(&mut trace, "build_valid_pointer_set", phase_start);
+    let mut evacuation_policy = evacuation_policy_initial_decision(
+        valid_ptrs.tenured_nursery_bytes(),
+        current_rss_bytes,
+        previous_pause_us,
+        start.elapsed().as_micros() as u64,
+        evacuation_policy_allowed,
+        force_evacuation,
+    );
+    if let Some(trace) = trace.as_mut() {
+        trace.evacuation_policy = evacuation_policy;
+    }
 
     // === MARK PHASE (minor) ===
     // Order matters for the C4b pinning policy:
@@ -1775,20 +2045,17 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // pass.
     let phase_start = trace_phase_start(&trace);
     let conservative_root_stats = mark_stack_roots(&valid_ptrs);
-    // CONS_PINNED is only consumed by `evacuate_tenured_nursery_objects`,
-    // which is gated on `gen_gc_evacuate_enabled()`. When evacuation is
-    // off (the default), `pin_currently_marked_as_conservative` is a
-    // full arena walk producing a HashSet nobody reads. Gate it behind
-    // the same flag.
-    let evac = gen_gc_evacuate_enabled();
-    let conservative_pin_stats = if evac {
+    // CONS_PINNED is only consumed by `evacuate_tenured_nursery_objects`.
+    // Stage 1 keeps the low-pressure path from doing the pinning walk.
+    let consider_evacuation = evacuation_policy.considered;
+    let conservative_pin_stats = if consider_evacuation {
         pin_currently_marked_as_conservative()
     } else {
         ConservativePinTraceStats::default()
     };
     mark_mutable_root_slots(&valid_ptrs);
     mark_mutable_registered_roots(&valid_ptrs);
-    let legacy_root_stats = mark_registered_roots(&valid_ptrs, evac);
+    let legacy_root_stats = mark_registered_roots(&valid_ptrs, consider_evacuation);
     if let Some(trace) = trace.as_mut() {
         trace.conservative_root_count = conservative_root_stats.root_count;
         trace.conservative_pinned = conservative_pin_stats.pinned_roots;
@@ -1839,42 +2106,45 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // promises. They stay PHYSICALLY in nursery (no copying) so RSS
     // doesn't drop until Phase C4b lands real evacuation.
 
-    // === EVACUATION PASS (Phase C4b-β + C4b-γ-2, opt-in) ===
-    // Copy non-pinned tenured nursery objects into OLD_ARENA and
-    // install forwarding pointers in the original nursery slots,
-    // then rewrite every reference site we own (shadow stack,
-    // module globals, all marked heap objects' fields) to point
-    // at the new addresses. After rewriting, the original nursery
-    // slots are stale and the sweep that follows reclaims their
-    // blocks (their MARKED bit was cleared at evac time).
-    //
-    // Conservative-stack discoveries are pinned by
-    // `pin_currently_marked_as_conservative` above so their
-    // referenced objects are not evacuated — we never rewrite
-    // C-stack words.
-    if gen_gc_evacuate_enabled() {
+    // === EVACUATION PASS (Phase C4b-β + C4b-γ-2, auto-policy) ===
+    // Copy productive sets of non-pinned tenured nursery objects into
+    // OLD_ARENA and install forwarding pointers in the original nursery
+    // slots. Stage 2 runs after mark/trace/block-persist so the policy
+    // uses measured movable candidate bytes, pinned bytes, RSS, and
+    // pause telemetry instead of a simple env-var opt-in.
+    if evacuation_policy.considered {
+        let snapshot = evacuation_policy_snapshot_after_mark(
+            evacuation_policy.snapshot,
+            evacuation_policy.force,
+            start.elapsed().as_micros() as u64,
+        );
+        evacuation_policy = evacuation_policy_final_decision(evacuation_policy, snapshot);
+    } else {
+        evacuation_policy.snapshot.pre_evac_pause_us = start.elapsed().as_micros() as u64;
+    }
+    if let Some(trace) = trace.as_mut() {
+        trace.evacuation_policy = evacuation_policy;
+    }
+    let mut evacuation = EvacuationTraceStats::default();
+    if evacuation_policy.enabled {
         let phase_start = trace_phase_start(&trace);
-        let evacuation = evacuate_tenured_nursery_objects();
+        evacuation = evacuate_tenured_nursery_objects_with_force(evacuation_policy.force);
         trace_phase_record(&mut trace, "evacuation", phase_start);
         if let Some(trace) = trace.as_mut() {
             trace.evacuation = evacuation;
         }
-        let phase_start = trace_phase_start(&trace);
-        rewrite_forwarded_references(&valid_ptrs);
-        trace_phase_record(&mut trace, "reference_rewrite", phase_start);
-        if gc_verify_evacuation_enabled() {
+        if evacuation.objects > 0 {
             let phase_start = trace_phase_start(&trace);
-            verify_evacuated_no_stale_forwarded_refs(&valid_ptrs);
-            trace_phase_record(&mut trace, "evacuation_verify", phase_start);
-        }
-        if std::env::var_os("PERRY_GC_DIAG").is_some() {
-            eprintln!(
-                "[gc-evac] evacuated={} cons_pinned={}",
-                evacuation.objects,
-                cons_pinned_count()
-            );
+            rewrite_forwarded_references(&valid_ptrs);
+            trace_phase_record(&mut trace, "reference_rewrite", phase_start);
+            if gc_verify_evacuation_enabled() {
+                let phase_start = trace_phase_start(&trace);
+                verify_evacuated_no_stale_forwarded_refs(&valid_ptrs);
+                trace_phase_record(&mut trace, "evacuation_verify", phase_start);
+            }
         }
     }
+    maybe_print_evacuation_policy_diag(evacuation_policy, evacuation);
 
     // === SWEEP PHASE ===
     // `do_age_bump = true` folds the per-object HAS_SURVIVED / TENURED
@@ -1942,8 +2212,8 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
 /// Why generational is the default now: Phase C (v0.5.222-228) wired
 /// the nursery / old-gen split, write barriers, remembered set, and
 /// non-moving tenuring; Phase C4b (v0.5.229-236) added forwarding
-/// pointer infrastructure, conservative-pinning safety, evacuation
-/// (still gated `PERRY_GEN_GC_EVACUATE=1`), reference rewriting,
+/// pointer infrastructure, conservative-pinning safety, policy-gated
+/// evacuation, reference rewriting,
 /// idle-block deallocation, and the trigger ceiling that bounds
 /// peak nursery occupancy. The minor-GC path has been the proven-
 /// equivalent default in every regression suite (168 unit tests,
@@ -1961,22 +2231,17 @@ pub fn gen_gc_enabled() -> bool {
     })
 }
 
-/// Gen-GC Phase C4b: `PERRY_GEN_GC_EVACUATE=1` enables the
-/// experimental copying evacuation that physically relocates
-/// tenured non-pinned nursery objects into OLD_ARENA. Default OFF
-/// — opt-in for testing until C4b-γ (reference rewriting) lands
-/// and the evacuation is correctness-complete on all reference
-/// sites. Without C4b-γ, evacuated objects' nursery slots hold
-/// forwarding pointers but references to those slots still point
-/// at the old (forwarded) location — reads through those refs
-/// get garbage.
+/// Gen-GC Phase C4b: evacuation is policy-driven by default.
+/// `PERRY_GEN_GC_EVACUATE=0`, `=false`, or `=off` disables the
+/// policy. `=1`, `=true`, and `=on` are accepted for compatibility
+/// but mean "allow the auto-policy", not unconditional evacuation.
 pub fn gen_gc_evacuate_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        matches!(
+        !matches!(
             std::env::var("PERRY_GEN_GC_EVACUATE").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
 }
@@ -2193,6 +2458,11 @@ pub(crate) struct ValidPointerSet {
     // function pointers. Cheap to maintain regardless.
     range_min: usize,
     range_max: usize,
+    /// Bytes of logically tenured objects that are still physically
+    /// resident in nursery blocks at collection entry. Populated while
+    /// building the pointer set so evacuation policy Stage 1 doesn't
+    /// need a second full arena walk on low-pressure cycles.
+    tenured_nursery_bytes: usize,
 }
 
 impl ValidPointerSet {
@@ -2211,6 +2481,7 @@ impl ValidPointerSet {
             ),
             range_min: usize::MAX,
             range_max: 0,
+            tenured_nursery_bytes: 0,
         }
     }
     /// Caller must guarantee that pushes happen in ascending address
@@ -2218,6 +2489,12 @@ impl ValidPointerSet {
     /// `arena_walk_objects_addr_sorted`.
     fn push_arena(&mut self, ptr: usize) {
         self.arena_sorted.push(ptr);
+    }
+    fn record_tenured_nursery_bytes(&mut self, bytes: usize) {
+        self.tenured_nursery_bytes += bytes;
+    }
+    fn tenured_nursery_bytes(&self) -> usize {
+        self.tenured_nursery_bytes
     }
     fn finalize(&mut self) {
         // `merged_sorted` is arena-only — `build_valid_pointer_set`
@@ -2345,6 +2622,16 @@ fn build_valid_pointer_set() -> ValidPointerSet {
     crate::arena::arena_walk_objects_addr_sorted(|header_ptr| {
         let user_ptr = unsafe { (header_ptr as *mut u8).add(GC_HEADER_SIZE) };
         set.push_arena(user_ptr as usize);
+        unsafe {
+            let header = header_ptr as *const GcHeader;
+            let flags = (*header).gc_flags;
+            if flags & GC_FLAG_TENURED != 0
+                && flags & GC_FLAG_FORWARDED == 0
+                && crate::arena::pointer_in_nursery(user_ptr as usize)
+            {
+                set.record_tenured_nursery_bytes((*header).size as usize);
+            }
+        }
     });
 
     // Malloc objects: insert *directly* into the lookup_set,
@@ -4008,8 +4295,8 @@ fn drain_trace_worklist_inner(
             if minor_only {
                 // Skip tracing only when the object is BOTH tenured AND
                 // physically in old-gen arena. Tenured-in-nursery
-                // objects (`PERRY_GEN_GC_EVACUATE` is opt-in default
-                // OFF) still hold pointers to young-gen children, and
+                // objects (until the evacuation policy moves them) still
+                // hold pointers to young-gen children, and
                 // skipping their fields without a write barrier on
                 // every store leaves those children unmarked. ECS
                 // demo-simple regressed when an archetype that had
@@ -5147,16 +5434,14 @@ fn pin_currently_marked_as_conservative() -> ConservativePinTraceStats {
 /// dead and the nursery block can reset; the new copy is marked
 /// MARKED so the rewrite walk picks up its (copied) fields and so
 /// sweep keeps it alive.
-fn evacuate_tenured_nursery_objects() -> EvacuationTraceStats {
+fn evacuate_tenured_nursery_objects_with_force(force_evacuation: bool) -> EvacuationTraceStats {
     let mut evacuated = EvacuationTraceStats::default();
-    let force_evacuation = gc_force_evacuate_enabled();
     crate::arena::arena_walk_objects(|header_ptr| {
         let header = header_ptr as *mut GcHeader;
         unsafe {
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-            // Skip if not in nursery (LONGLIVED + OLD have their
-            // own arenas).
-            if crate::arena::pointer_in_old_gen(user_ptr as usize) {
+            // Skip if not in nursery (LONGLIVED + OLD have their own arenas).
+            if !crate::arena::pointer_in_nursery(user_ptr as usize) {
                 return;
             }
             let flags = (*header).gc_flags;
@@ -5172,6 +5457,9 @@ fn evacuate_tenured_nursery_objects() -> EvacuationTraceStats {
                 return;
             }
             if !force_evacuation && flags & GC_FLAG_TENURED == 0 {
+                return;
+            }
+            if flags & GC_FLAG_PINNED != 0 {
                 return;
             }
             // Conservative-pinning blocks evacuation.
@@ -5210,6 +5498,11 @@ fn evacuate_tenured_nursery_objects() -> EvacuationTraceStats {
         }
     });
     evacuated
+}
+
+#[cfg(test)]
+fn evacuate_tenured_nursery_objects() -> EvacuationTraceStats {
+    evacuate_tenured_nursery_objects_with_force(gc_force_evacuate_enabled())
 }
 
 /// Gen-GC Phase C4b-γ-2: rewrite a single NaN-boxed (or raw)
@@ -8329,6 +8622,157 @@ mod tests {
 
         clear_marks();
         CONS_PINNED.with(|s| s.borrow_mut().clear());
+    }
+
+    #[test]
+    fn test_evacuation_policy() {
+        fn snapshot(
+            tenured: usize,
+            candidate: usize,
+            candidate_objects: usize,
+            pinned: usize,
+            rss: u64,
+            previous_pause_us: u64,
+            pre_evac_pause_us: u64,
+        ) -> EvacuationPolicySnapshot {
+            EvacuationPolicySnapshot {
+                tenured_still_in_nursery_bytes: tenured,
+                candidate_bytes: candidate,
+                candidate_objects,
+                conservative_pinned_bytes: pinned,
+                rss_bytes: rss,
+                previous_pause_us,
+                pre_evac_pause_us,
+            }
+        }
+
+        fn decide(
+            snapshot: EvacuationPolicySnapshot,
+            considered: bool,
+            force: bool,
+        ) -> EvacuationPolicyDecision {
+            evacuation_policy_final_decision(
+                EvacuationPolicyDecision {
+                    allowed: true,
+                    considered,
+                    force,
+                    enabled: false,
+                    reason: "test",
+                    snapshot,
+                },
+                snapshot,
+            )
+        }
+
+        let zero_candidates = decide(
+            snapshot(MIN_TENURED_NURSERY_BYTES, 0, 0, 0, 0, 0, 0),
+            true,
+            false,
+        );
+        assert!(!zero_candidates.enabled);
+        assert_eq!(zero_candidates.reason, "zero_candidates");
+
+        let productive = decide(
+            snapshot(
+                MIN_TENURED_NURSERY_BYTES * 2,
+                MIN_CANDIDATE_BYTES * 2,
+                2,
+                0,
+                0,
+                0,
+                0,
+            ),
+            true,
+            false,
+        );
+        assert!(productive.enabled);
+        assert_eq!(productive.reason, "nursery_pressure");
+
+        let rss_pressure = decide(
+            snapshot(
+                MIN_CANDIDATE_BYTES,
+                MIN_CANDIDATE_BYTES,
+                1,
+                0,
+                RSS_PRESSURE_BYTES,
+                0,
+                0,
+            ),
+            true,
+            false,
+        );
+        assert!(rss_pressure.enabled);
+        assert_eq!(rss_pressure.reason, "rss_pressure");
+
+        let pinned_dominated = decide(
+            snapshot(
+                MIN_TENURED_NURSERY_BYTES * 4,
+                MIN_CANDIDATE_BYTES,
+                1,
+                MIN_TENURED_NURSERY_BYTES * 3,
+                0,
+                0,
+                0,
+            ),
+            true,
+            false,
+        );
+        assert!(!pinned_dominated.enabled);
+        assert_eq!(pinned_dominated.reason, "candidate_ratio_below_threshold");
+
+        let pause_skip = decide(
+            snapshot(
+                MIN_TENURED_NURSERY_BYTES,
+                MIN_CANDIDATE_BYTES,
+                1,
+                0,
+                0,
+                MAX_PREVIOUS_PAUSE_US + 1,
+                0,
+            ),
+            true,
+            false,
+        );
+        assert!(!pause_skip.enabled);
+        assert_eq!(pause_skip.reason, "pause_budget_exceeded");
+
+        let hard_rss_override = decide(
+            snapshot(
+                MIN_TENURED_NURSERY_BYTES,
+                MIN_CANDIDATE_BYTES,
+                1,
+                0,
+                RSS_HARD_PRESSURE_BYTES,
+                MAX_PREVIOUS_PAUSE_US + 1,
+                0,
+            ),
+            true,
+            false,
+        );
+        assert!(hard_rss_override.enabled);
+        assert_eq!(hard_rss_override.reason, "rss_hard_pressure");
+
+        let force = decide(snapshot(0, 64, 1, 0, 0, 0, 0), true, true);
+        assert!(force.enabled);
+        assert_eq!(force.reason, "force");
+
+        let low_pressure =
+            evacuation_policy_initial_decision(0, RSS_PRESSURE_BYTES - 1, 0, 0, true, false);
+        assert!(!low_pressure.considered);
+        assert!(!low_pressure.enabled);
+        assert_eq!(low_pressure.reason, "low_pressure");
+
+        let disabled = evacuation_policy_initial_decision(
+            MIN_TENURED_NURSERY_BYTES,
+            RSS_HARD_PRESSURE_BYTES,
+            0,
+            0,
+            false,
+            true,
+        );
+        assert!(!disabled.considered);
+        assert!(!disabled.enabled);
+        assert_eq!(disabled.reason, "disabled");
     }
 
     #[test]

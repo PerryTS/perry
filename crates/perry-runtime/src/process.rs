@@ -66,7 +66,7 @@ pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader 
 }
 
 /// Get resident set size (RSS) in bytes using platform-specific APIs
-fn get_rss_bytes() -> u64 {
+pub(crate) fn get_rss_bytes() -> u64 {
     #[cfg(target_os = "macos")]
     {
         use std::mem;

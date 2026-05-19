@@ -86,7 +86,7 @@ Perry uses two-bit aging encoded in `gc_flags` (`gc.rs:64`):
 
 `PROMOTION_AGE = 2`. The two-bit scheme avoids needing a counter field in the header.
 
-By default, tenured objects stay physically where they are in the nursery — promotion is a flag flip, not a copy. An optional **evacuation pass** (`PERRY_GEN_GC_EVACUATE=1`) copies tenured non-pinned objects into `OLD_ARENA` and rewrites all references to point at the new locations. Evacuation is correctness-safe and complete, but defaults off because on workloads where nothing tenures it's pure overhead.
+Tenured objects initially stay physically where they are in the nursery — promotion is a flag flip, not a copy. A telemetry-driven **evacuation policy** copies tenured non-pinned objects into `OLD_ARENA` and rewrites all references to point at the new locations only when nursery/RSS pressure and measured movable candidates justify the extra work. Low-pressure cycles and cycles with no movable candidates skip evacuation and reference rewriting.
 
 ### Write barriers and the remembered set
 
@@ -113,11 +113,11 @@ Idle nursery blocks observed empty for 2 GC cycles are `dealloc`'d back to the O
 | Env var | Effect |
 |---|---|
 | `PERRY_GEN_GC=0` / `off` / `false` | Disable generational mode; fall back to full mark-sweep (intended for bisection only). |
-| `PERRY_GEN_GC_EVACUATE=1` | Enable the copying evacuation pass for tenured objects. |
-| `PERRY_GC_FORCE_EVACUATE=1` | With evacuation enabled, stress-copy every marked non-pinned nursery object instead of only tenured survivors. |
-| `PERRY_GC_VERIFY_EVACUATION=1` | With evacuation enabled, panic if any mutable live slot still points at a forwarded nursery object after rewrite. |
+| `PERRY_GEN_GC_EVACUATE=0` / `off` / `false` | Disable policy evacuation. `=1` / `on` / `true` is accepted as "allow the auto-policy", not as unconditional evacuation. |
+| `PERRY_GC_FORCE_EVACUATE=1` | With policy evacuation allowed, stress-copy every marked non-pinned nursery object instead of only tenured survivors. |
+| `PERRY_GC_VERIFY_EVACUATION=1` | After an evacuation that actually forwards objects, panic if any mutable live slot still points at a forwarded nursery object after rewrite. |
 | `PERRY_WRITE_BARRIERS=1` | Tell codegen to emit `js_write_barrier` calls on pointer stores. |
-| `PERRY_GC_DIAG=1` | Print per-cycle diagnostics (live bytes, freed bytes, time, pin count). |
+| `PERRY_GC_DIAG=1` | Print per-cycle diagnostics, including one evacuation-policy line for cycles where evacuation was considered. |
 
 ## Why this design
 
