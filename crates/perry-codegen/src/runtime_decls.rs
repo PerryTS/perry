@@ -1965,6 +1965,18 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_jwt_verify", I64, &[I64, I64]);
     module.declare_function("js_jwt_verify_es256", I64, &[I64, I64]);
     module.declare_function("js_jwt_verify_rs256", I64, &[I64, I64]);
+    // #1074: runtime-algorithm dispatchers. The codegen `lower_jsonwebtoken_*`
+    // fast paths still hard-route literal `algorithm: "ES256"` to the typed
+    // helpers above; non-literal shapes (const-bound ident, spread, ternary)
+    // are routed here with the alg name lowered as a string at runtime.
+    module.declare_function("js_jwt_sign_dyn", I64, &[I64, I64, I64, DOUBLE, I64]);
+    module.declare_function("js_jwt_verify_dyn", I64, &[I64, I64, I64]);
+    // #1074 case C: options is a whole non-extractable expression
+    // (`const opts = { algorithm: "ES256" }; jwt.sign(p, k, opts)`). We
+    // pass `opts` as a NaN-boxed JSValue and the runtime helper extracts
+    // `algorithm` / `expiresIn` / `keyid` via `js_object_get_field_by_name`.
+    module.declare_function("js_jwt_sign_dyn_opts", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_jwt_verify_dyn_opts", I64, &[I64, I64, DOUBLE]);
 
     // ========== axios / node-fetch ==========
     module.declare_function("js_axios_create", DOUBLE, &[I64]);

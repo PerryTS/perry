@@ -4,7 +4,9 @@
 //! Provides JWT sign, verify, and decode functionality.
 
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use perry_runtime::{js_string_from_bytes, StringHeader};
+use perry_runtime::{
+    js_object_get_field_by_name, js_string_from_bytes, ObjectHeader, StringHeader,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -209,6 +211,135 @@ pub unsafe extern "C" fn js_jwt_sign_rs256(
         &key,
         kid_ptr,
     )
+}
+
+/// Dynamic-algorithm `jwt.sign` dispatcher (#1074).
+///
+/// The codegen fast path in `lower_jsonwebtoken_sign` routes inline-literal
+/// `{ algorithm: "ES256" }` to `js_jwt_sign_es256` / `…_rs256` at compile
+/// time. When `algorithm` is anything else — a const-bound identifier
+/// (`const ALG = "ES256"; jwt.sign(p, k, { algorithm: ALG })`), a property
+/// spread, a ternary, etc. — the fast path falls through and previously
+/// silently signed with HS256 keyed by the user's PEM (cryptographic
+/// downgrade: the token is HMAC-signed with the PEM bytes, on-wire
+/// `header.alg` reads `"HS256"`, so any verifier that accepts either
+/// HMAC OR EC/RSA quietly accepted the downgrade).
+///
+/// This entry point reads the algorithm name from `alg_ptr` at runtime and
+/// dispatches to the same `sign_common` paths the typed helpers use. The
+/// inline-literal fast path remains for the common case; everything else
+/// goes through here.
+#[no_mangle]
+pub unsafe extern "C" fn js_jwt_sign_dyn(
+    alg_ptr: *const StringHeader,
+    payload_ptr: *const StringHeader,
+    secret_ptr: *const StringHeader,
+    expires_in_secs: f64,
+    kid_ptr: *const StringHeader,
+) -> i64 {
+    let alg_name = string_from_header(alg_ptr).unwrap_or_else(|| "HS256".to_string());
+    match alg_name.as_str() {
+        "ES256" => js_jwt_sign_es256(payload_ptr, secret_ptr, expires_in_secs, kid_ptr),
+        "RS256" => js_jwt_sign_rs256(payload_ptr, secret_ptr, expires_in_secs, kid_ptr),
+        "HS256" | "" => js_jwt_sign(payload_ptr, secret_ptr, expires_in_secs, kid_ptr),
+        other => {
+            // Unknown alg — treat as HS256 fallback (matches the legacy
+            // non-literal behavior) but log under PERRY_DEBUG so callers
+            // can diagnose. The header.alg will still say HS256, so the
+            // user's verifier rejects it properly — this is a safer
+            // failure mode than the pre-#1074 silent downgrade.
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                eprintln!(
+                    "[jwt-sign-dyn] unknown algorithm `{}`; falling back to HS256",
+                    other
+                );
+            }
+            js_jwt_sign(payload_ptr, secret_ptr, expires_in_secs, kid_ptr)
+        }
+    }
+}
+
+/// Coerce a NaN-boxed JSValue (`f64`) into a raw `*const ObjectHeader`
+/// pointer. Mirrors the upper-bits sniff used in `perry-stdlib/src/http.rs`.
+/// Returns null when the value isn't pointer-shaped.
+unsafe fn jsvalue_to_object_ptr(obj_f64: f64) -> *const ObjectHeader {
+    let obj_bits = obj_f64.to_bits();
+    let upper = obj_bits >> 48;
+    if upper >= 0x7FF8 {
+        (obj_bits & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader
+    } else if upper == 0 && obj_bits >= 0x10000 {
+        obj_bits as *const ObjectHeader
+    } else {
+        std::ptr::null()
+    }
+}
+
+/// Read a named property off a NaN-boxed object value, returning its
+/// string-typed result as a `*const StringHeader` (or null when missing/
+/// not-a-string). The field name is materialized as a transient
+/// `*const StringHeader` because that's `js_object_get_field_by_name`'s
+/// signature.
+unsafe fn opts_get_string_field(obj_f64: f64, field: &str) -> *const StringHeader {
+    let obj_ptr = jsvalue_to_object_ptr(obj_f64);
+    if obj_ptr.is_null() {
+        return std::ptr::null();
+    }
+    let key = js_string_from_bytes(field.as_ptr(), field.len() as u32);
+    let val = js_object_get_field_by_name(obj_ptr, key);
+    if val.is_undefined() || val.is_null() {
+        return std::ptr::null();
+    }
+    if val.is_string() {
+        return val.as_string_ptr();
+    }
+    std::ptr::null()
+}
+
+/// Read a named property as f64. Returns 0.0 when missing/non-numeric
+/// (matches `lower_jsonwebtoken_sign`'s `expires_in = double_literal(0.0)`
+/// default).
+unsafe fn opts_get_number_field(obj_f64: f64, field: &str) -> f64 {
+    let obj_ptr = jsvalue_to_object_ptr(obj_f64);
+    if obj_ptr.is_null() {
+        return 0.0;
+    }
+    let key = js_string_from_bytes(field.as_ptr(), field.len() as u32);
+    let val = js_object_get_field_by_name(obj_ptr, key);
+    if val.is_undefined() || val.is_null() {
+        return 0.0;
+    }
+    if val.is_number() {
+        return val.as_number();
+    }
+    0.0
+}
+
+/// `jwt.sign(payload, secret, options)` where `options` is a non-extractable
+/// expression (e.g. `const opts = { algorithm: "ES256", ... }; jwt.sign(p, k, opts)`)
+/// — #1074 case C. The codegen lowers `opts` as a NaN-boxed JSValue and we
+/// extract `algorithm` / `expiresIn` / `keyid` at runtime, then defer to
+/// `js_jwt_sign_dyn`. Reads each option via `js_object_get_field_by_name`
+/// (which works for ordinary `Expr::Object` literals → `__AnonShape_*` class
+/// instances).
+#[no_mangle]
+pub unsafe extern "C" fn js_jwt_sign_dyn_opts(
+    payload_ptr: *const StringHeader,
+    secret_ptr: *const StringHeader,
+    options_value: f64,
+) -> i64 {
+    let alg_ptr = opts_get_string_field(options_value, "algorithm");
+    // `keyid` is the spec-correct field name; `kid` is accepted as an alias
+    // (matches the inline-literal codegen path which special-cases both).
+    let kid_ptr = {
+        let p = opts_get_string_field(options_value, "keyid");
+        if p.is_null() {
+            opts_get_string_field(options_value, "kid")
+        } else {
+            p
+        }
+    };
+    let expires_in = opts_get_number_field(options_value, "expiresIn");
+    js_jwt_sign_dyn(alg_ptr, payload_ptr, secret_ptr, expires_in, kid_ptr)
 }
 
 /// Shared verify path — runs the decode + returns claims as JSON, or
@@ -451,6 +582,82 @@ pub unsafe extern "C" fn js_jwt_verify_rs256(
     };
 
     verify_decode(&token, &key, Algorithm::RS256, debug)
+}
+
+/// Dynamic-algorithm `jwt.verify` dispatcher (#1074).
+///
+/// Mirrors `js_jwt_sign_dyn`. The codegen fast path resolves
+/// `algorithms: ["ES256"]` to `js_jwt_verify_es256` at compile time;
+/// const-ref or computed shapes fell through to `js_jwt_verify` (HS256)
+/// and silently rejected ES/RS tokens. This entry point reads the
+/// algorithm name from `alg_ptr` at runtime and dispatches.
+#[no_mangle]
+pub unsafe extern "C" fn js_jwt_verify_dyn(
+    alg_ptr: *const StringHeader,
+    token_ptr: *const StringHeader,
+    secret_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    let alg_name = string_from_header(alg_ptr).unwrap_or_else(|| "HS256".to_string());
+    match alg_name.as_str() {
+        "ES256" => js_jwt_verify_es256(token_ptr, secret_ptr),
+        "RS256" => js_jwt_verify_rs256(token_ptr, secret_ptr),
+        "HS256" | "" => js_jwt_verify(token_ptr, secret_ptr),
+        other => {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                eprintln!(
+                    "[jwt-verify-dyn] unknown algorithm `{}`; falling back to HS256",
+                    other
+                );
+            }
+            js_jwt_verify(token_ptr, secret_ptr)
+        }
+    }
+}
+
+/// `jwt.verify(token, secret, options)` where `options` is a non-extractable
+/// expression (case C, #1074). Extract `algorithm` (singular) or the first
+/// entry of `algorithms` (plural array) at runtime and defer to
+/// `js_jwt_verify_dyn`. The plural-array first-entry rule mirrors the
+/// compile-time fast path in `lower_jsonwebtoken_verify` — the underlying
+/// `jsonwebtoken` crate verifies against one algorithm at a time, so we
+/// pick the first.
+#[no_mangle]
+pub unsafe extern "C" fn js_jwt_verify_dyn_opts(
+    token_ptr: *const StringHeader,
+    secret_ptr: *const StringHeader,
+    options_value: f64,
+) -> *mut StringHeader {
+    // Try singular `algorithm: "..."` first.
+    let mut alg_ptr = opts_get_string_field(options_value, "algorithm");
+    // Then plural `algorithms: ["..."]`. Read the field, then index [0]
+    // through `js_array_get_f64` to mirror the compile-time fast path.
+    if alg_ptr.is_null() {
+        let obj_ptr = jsvalue_to_object_ptr(options_value);
+        if !obj_ptr.is_null() {
+            let key = js_string_from_bytes("algorithms".as_ptr(), "algorithms".len() as u32);
+            let arr_val = js_object_get_field_by_name(obj_ptr, key);
+            // Array is pointer-tagged in NaN-boxing; extract pointer if
+            // present. We reuse the existing array_get_f64 entry point
+            // because it's the most-tested path for array.[i] reads.
+            if !arr_val.is_undefined() && !arr_val.is_null() {
+                // The array NaN-box is POINTER_TAG-shaped just like an
+                // object — strip the upper bits to recover the raw
+                // ArrayHeader*. `js_array_get_f64` does its own tag
+                // strip too, but we already have an authoritative
+                // pointer here so just pass it through.
+                let arr_bits = arr_val.bits();
+                let arr_ptr =
+                    (arr_bits & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::ArrayHeader;
+                if !arr_ptr.is_null() {
+                    let first_jsval = perry_runtime::js_array_get(arr_ptr, 0);
+                    if first_jsval.is_string() {
+                        alg_ptr = first_jsval.as_string_ptr();
+                    }
+                }
+            }
+        }
+    }
+    js_jwt_verify_dyn(alg_ptr, token_ptr, secret_ptr)
 }
 
 /// Decode a JWT without verification (just parse the payload)
