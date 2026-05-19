@@ -3585,19 +3585,19 @@ fn shadow_stack_enabled() -> bool {
     })
 }
 
-/// Gen-GC Phase C2 emission gate. PERRY_WRITE_BARRIERS=1 / on /
-/// true → emit `js_write_barrier(parent_bits, child_bits)` after
-/// every heap-store site. Default OFF — barriers cost a function
-/// call per store. The runtime entry uses arena page side metadata
-/// for old-vs-young classification; flipping the default remains a
-/// later policy decision after barriered workloads are measured.
+/// Gen-GC write-barrier emission gate. Default ON: emit a
+/// `js_write_barrier_slot(parent_bits, slot_addr, child_bits)` call, or
+/// the compatibility wrapper, after every heap-store site. Set
+/// `PERRY_WRITE_BARRIERS=0`/`off`/`false` to disable emission for
+/// benchmark/debug bisection. `=1`/`on`/`true` remain accepted and
+/// equivalent to the default.
 pub(crate) fn write_barriers_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        matches!(
+        !matches!(
             std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
 }

@@ -94,7 +94,7 @@ Generational collectors have one fundamental problem: if an old-gen object point
 
 The fix is a **write barrier**: every time a pointer field is written, the runtime checks "is this old → young?" and, if so, records the parent in a **remembered set**. Minor GCs treat remembered-set entries as additional roots.
 
-In Perry, the runtime barrier is always present: `js_write_barrier(parent, child)` (`gc.rs:3773`). Whether codegen emits a call to it on every pointer store is gated by `PERRY_WRITE_BARRIERS=1` (default off — barrier emission costs cycles even when the barrier is trivially a no-op, and on workloads that don't tenure old objects there are no old → young writes to record anyway). When the flag is off, the runtime falls back to scanning more conservatively.
+In Perry, the runtime barrier is always present: `js_write_barrier(parent, child)` (`gc.rs:3773`). Codegen emits write-barrier calls by default so copied minor GC and evacuation can rely on exact dirty-page data. Set `PERRY_WRITE_BARRIERS=0`/`off`/`false` during compile to suppress generated barrier calls for benchmark/debug bisection; at runtime, the same setting disables runtime exact helper barriers. Copied-minor and evacuation then treat barrier data as inactive and fall back to conservative paths.
 
 ## Triggers and tuning
 
@@ -116,7 +116,7 @@ Idle nursery blocks observed empty for 2 GC cycles are `dealloc`'d back to the O
 | `PERRY_GEN_GC_EVACUATE=0` / `off` / `false` | Disable policy evacuation. `=1` / `on` / `true` is accepted as "allow the auto-policy", not as unconditional evacuation. |
 | `PERRY_GC_FORCE_EVACUATE=1` | With generated write barriers active and policy evacuation allowed, stress-copy every marked non-pinned nursery object instead of only tenured survivors. |
 | `PERRY_GC_VERIFY_EVACUATION=1` | After an evacuation that actually forwards objects, panic if any mutable live slot still points at a forwarded nursery object after rewrite. |
-| `PERRY_WRITE_BARRIERS=1` | Tell codegen to emit `js_write_barrier` calls on pointer stores. |
+| `PERRY_WRITE_BARRIERS=0` / `off` / `false` | Disable codegen-emitted write barriers at compile time and runtime exact helper barriers at runtime for benchmark/debug bisection. Unset, `=1`, `=on`, and `=true` keep barriers enabled. |
 | `PERRY_GC_DIAG=1` | Print per-cycle diagnostics, including one evacuation-policy line for cycles where evacuation was considered and for `barriers_inactive` skips. |
 
 ## Why this design

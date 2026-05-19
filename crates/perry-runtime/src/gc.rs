@@ -2483,7 +2483,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         start.elapsed().as_micros() as u64,
         evacuation_policy_allowed,
         force_evacuation,
-        generated_write_barriers_emitted(),
+        old_to_young_tracking_complete(),
     );
     if let Some(trace) = trace.as_mut() {
         trace.evacuation_policy = evacuation_policy;
@@ -5908,7 +5908,7 @@ fn scan_remembered_dirty_slots_copying(
 }
 
 fn copying_static_preflight_reason() -> Option<&'static str> {
-    if !generated_write_barriers_emitted() {
+    if !old_to_young_tracking_complete() {
         return Some("barriers_inactive");
     }
     if matches!(
@@ -7220,13 +7220,17 @@ fn generated_write_barriers_emitted() -> bool {
 pub(crate) fn write_barriers_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    generated_write_barriers_emitted()
-        || *CACHED.get_or_init(|| {
-            matches!(
-                std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
-                Ok("1") | Ok("on") | Ok("true")
-            )
-        })
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_WRITE_BARRIERS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+#[inline]
+fn old_to_young_tracking_complete() -> bool {
+    generated_write_barriers_emitted() && write_barriers_enabled()
 }
 
 #[inline]
@@ -8389,7 +8393,8 @@ pub extern "C" fn js_write_barrier(parent: u64, child: u64) {
 }
 
 /// Gen-GC Phase C1: slot-aware write barrier. Called by
-/// codegen-emitted store sites when `PERRY_WRITE_BARRIERS=1`.
+/// codegen-emitted store sites unless `PERRY_WRITE_BARRIERS=0`/
+/// `off`/`false` disabled barrier emission at compile time.
 ///
 /// Decode the parent + child as raw addresses. If parent's
 /// GcHeader sits in the old-gen arena AND child's NaN-boxed
@@ -8399,7 +8404,7 @@ pub extern "C" fn js_write_barrier(parent: u64, child: u64) {
 /// dirtying every occupied page in the parent object.
 ///
 /// Hot-path constraints: this fires on EVERY heap store in
-/// compiled code when `PERRY_WRITE_BARRIERS=1`. Must be cheap:
+/// compiled code by default. Must be cheap:
 /// generation checks use arena page side metadata rather than
 /// scanning every arena block.
 #[no_mangle]

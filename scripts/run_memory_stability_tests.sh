@@ -30,10 +30,10 @@
 #            bench_gc_pressure <= 80 ms / 128 MB RSS.
 #
 # Each test runs under FOUR GC mode combos:
-#   - default (now generational GC as of Phase D, v0.5.237)
+#   - default (generational GC + generated write barriers)
 #   - mark-sweep (PERRY_GEN_GC=0 — bisection escape hatch)
-#   - PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1
-#   - force-evac+verify (write barriers + forced evacuation verifier:
+#   - explicit generational GC (PERRY_GEN_GC=1)
+#   - force-evac+verify (default write barriers + forced evacuation verifier:
 #     PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1
 #     PERRY_GC_VERIFY_EVACUATION=1)
 # so a regression in any mode is caught.
@@ -88,9 +88,10 @@ run_one() {
     fi
 }
 
-# Compile once per GC/barrier mode. The write-barrier mode must be compiled
-# with PERRY_WRITE_BARRIERS=1 so generated store sites actually emit the
-# barrier calls that the runtime copying nursery relies on.
+# Compile once per GC mode. Generated write barriers are on by default;
+# PERRY_WRITE_BARRIERS=0/off/false is the benchmark/debug escape hatch
+# that suppresses barrier emission at compile time and disables runtime
+# exact helper barriers.
 PASS=0
 FAIL=0
 
@@ -102,8 +103,8 @@ run_test() {
     local mode_specs=(
         "default||"
         "mark-sweep||PERRY_GEN_GC=0"
-        "gen-gc+wb|PERRY_WRITE_BARRIERS=1|PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1"
-        "force-evac+verify|PERRY_WRITE_BARRIERS=1|PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1 PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
+        "gen-gc-explicit||PERRY_GEN_GC=1"
+        "force-evac+verify||PERRY_GEN_GC=1 PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
     )
 
     for spec in "${mode_specs[@]}"; do
@@ -362,8 +363,7 @@ for (let i = 0; i < 1000; i++) {
 console.log("gc_trace_probe:" + acc);
 EOF
 
-    if ! env PERRY_WRITE_BARRIERS=1 \
-        $PERRY compile --no-cache "$ts" -o "$bin" >"$compile_output" 2>&1; then
+    if ! $PERRY compile --no-cache "$ts" -o "$bin" >"$compile_output" 2>&1; then
         printf "  FAIL [gc-trace] %-40s compile failed\n" "copied minor precise probe"
         sed 's/^/    /' "$compile_output"
         FAIL=$((FAIL + 1))
@@ -373,7 +373,6 @@ EOF
     run_one "$bin" \
         PERRY_GC_TRACE=1 \
         PERRY_GEN_GC=1 \
-        PERRY_WRITE_BARRIERS=1 \
         PERRY_CONSERVATIVE_STACK_SCAN=0
 
     if [[ "$LAST_EXIT" -ne 0 ]]; then
@@ -475,7 +474,7 @@ echo "=== Forced-evacuation verifier canaries ==="
 run_canary "evacuation verifier surfaces" \
     cargo test -p perry-runtime --release test_evacuation_verify
 run_canary "barriers inactive force-evac gate" \
-    env PERRY_GC_FORCE_EVACUATE=1 \
+    env PERRY_WRITE_BARRIERS=0 PERRY_GC_FORCE_EVACUATE=1 \
     cargo test -p perry-runtime --release test_forced_evacuation_barriers_inactive_does_not_forward_candidate
 run_canary "old parent remembers young child" \
     env PERRY_GC_FORCE_EVACUATE=1 \
@@ -485,7 +484,7 @@ echo ""
 echo "=== GC acceptance telemetry (PERRY_GC_TRACE=1 JSON gates) ==="
 run_gc_trace_probe
 run_traced_canary "barriers inactive telemetry" "barriers_inactive" \
-    env PERRY_GC_TRACE=1 PERRY_GC_FORCE_EVACUATE=1 \
+    env PERRY_GC_TRACE=1 PERRY_WRITE_BARRIERS=0 PERRY_GC_FORCE_EVACUATE=1 \
     cargo test -p perry-runtime --release test_forced_evacuation_barriers_inactive_does_not_forward_candidate -- --nocapture
 run_traced_canary "productive evacuation telemetry" "evacuation_productive" \
     env PERRY_GC_TRACE=1 PERRY_GC_FORCE_EVACUATE=1 \

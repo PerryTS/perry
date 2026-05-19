@@ -1059,11 +1059,12 @@ impl<'a> FnCtx<'a> {
 
 /// Lower an expression to a raw LLVM `double` value. Returns the string form
 /// of the value (either a `%rN` register or a literal like `42.0`).
-/// Gen-GC Phase C2 helper: emit a write barrier after heap-store sites
-/// when `PERRY_WRITE_BARRIERS=1`. Sites with a precise field/element
-/// address use `js_write_barrier_slot`; opaque helper stores keep using
-/// the compatibility wrapper, which conservatively marks the parent span.
-/// The env gate is read once and OnceLock-cached at codegen time.
+/// Gen-GC helper: emit a write barrier after heap-store sites unless
+/// `PERRY_WRITE_BARRIERS=0`/`off`/`false` disables it. Sites with a
+/// precise field/element address use `js_write_barrier_slot`; opaque
+/// helper stores keep using the compatibility wrapper, which
+/// conservatively marks the parent span. The env gate is read once and
+/// OnceLock-cached at codegen time.
 fn emit_write_barrier(ctx: &mut FnCtx<'_>, parent_bits: &str, child_bits: &str) {
     if !crate::codegen::write_barriers_enabled() {
         return;

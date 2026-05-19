@@ -2,10 +2,9 @@
 # Tier 4 — gc_stress
 #
 # Wraps scripts/run_memory_stability_tests.sh. Today's wiring runs the
-# default GC mode (generational, no codegen WB, no evac). The full GC mode
-# matrix from CLAUDE.md (PERRY_GEN_GC=0 / PERRY_GEN_GC_EVACUATE=1 /
-# PERRY_WRITE_BARRIERS=1) is a follow-on enhancement: the underlying script
-# already loops modes internally, but this tier wrapper currently only
+# default GC mode (generational, generated write barriers on, policy evac).
+# The underlying script also loops mark-sweep, explicit gen-GC, and forced
+# evacuation verifier modes internally, but this tier wrapper currently only
 # captures the aggregate pass/fail count. Per-mode breakout will land when
 # the script gains a JSON-array summary (single PERRY_TEST_SUMMARY_OUT
 # entry per mode would be a richer shape — left for a later iteration).

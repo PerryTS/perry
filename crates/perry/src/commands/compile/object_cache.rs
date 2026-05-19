@@ -108,10 +108,11 @@ impl Djb2Hasher {
 /// same final HIR reuse the cached `.o`. Behavior changes still produce
 /// a different HIR and miss the cache as before.
 ///
-/// We also mix in three environment variables that `perry-codegen` reads
+/// We also mix in four environment variables that `perry-codegen` reads
 /// at compile time but that aren't part of `CompileOptions`:
-/// `PERRY_DEBUG_INIT`, `PERRY_DEBUG_SYMBOLS`, `PERRY_LLVM_CLANG`. See the
-/// env-var block at the bottom of this function for the rationale.
+/// `PERRY_DEBUG_INIT`, `PERRY_DEBUG_SYMBOLS`, `PERRY_LLVM_CLANG`, and
+/// `PERRY_WRITE_BARRIERS`. See the env-var block at the bottom of this
+/// function for the rationale.
 ///
 /// NOT captured in the key: the host CPU. `compile_ll_to_object` passes
 /// `-mcpu=native`/`-march=native` to clang, so the emitted `.o` bakes in
@@ -485,6 +486,8 @@ pub fn compute_object_cache_key(
     //     into the object (linker.rs).
     //   - PERRY_LLVM_CLANG selects which clang binary compiles .ll → .o;
     //     different clang versions/builds emit different bytes (linker.rs).
+    //   - PERRY_WRITE_BARRIERS=0/off/false suppresses generated barrier
+    //     calls at heap-store sites (codegen.rs / expr.rs).
     // Hashing the values (not just presence) means a persistent override
     // like PERRY_LLVM_CLANG=/opt/homebrew/opt/llvm/bin/clang in a shell rc
     // still gets cache reuse across runs, while flipping a debug flag on
@@ -502,6 +505,12 @@ pub fn compute_object_cache_key(
     h.field(
         "env_llvm_clang",
         std::env::var("PERRY_LLVM_CLANG").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_write_barriers",
+        std::env::var("PERRY_WRITE_BARRIERS")
+            .as_deref()
+            .unwrap_or(""),
     );
 
     h.finish()
@@ -889,9 +898,10 @@ mod object_cache_tests {
     #[test]
     fn key_changes_with_codegen_env_vars() {
         // Flipping an env var that perry-codegen reads (PERRY_DEBUG_INIT,
-        // PERRY_DEBUG_SYMBOLS, PERRY_LLVM_CLANG) must invalidate the key
-        // so we don't serve a cached .o that was built with different
-        // debug sections / a different clang binary.
+        // PERRY_DEBUG_SYMBOLS, PERRY_LLVM_CLANG, PERRY_WRITE_BARRIERS)
+        // must invalidate the key so we don't serve a cached .o that was
+        // built with different debug sections, a different clang binary,
+        // or different generated barrier calls.
         //
         // Uses unique var names (suffixed with a test-local marker) would
         // be cleaner, but we're checking behavior against the *actual*
@@ -901,30 +911,31 @@ mod object_cache_tests {
         // keeps it from racing with other tests that happen to read the
         // same vars (none today).
         let opts = empty_opts();
-        let var = "PERRY_DEBUG_INIT";
-        // Sample state without the var, with the var, and with a different
-        // value — all three keys must be distinct.
-        let prev = std::env::var_os(var);
-        // SAFETY: Rust 1.80+ flags env::set_var/remove_var as unsafe
-        // because they're racy with other threads reading env. cargo's
-        // in-process test runner can parallelize tests; this test is
-        // still correct because `compute_object_cache_key` reads the
-        // env at call time and we don't span a .await / yield. The
-        // remaining race is another *test* reading PERRY_DEBUG_INIT
-        // mid-flight, which none do.
-        unsafe { std::env::remove_var(var) };
-        let k_unset = compute_object_cache_key(&opts, 1, "0.5.156");
-        unsafe { std::env::set_var(var, "1") };
-        let k_set = compute_object_cache_key(&opts, 1, "0.5.156");
-        unsafe { std::env::set_var(var, "2") };
-        let k_two = compute_object_cache_key(&opts, 1, "0.5.156");
-        // Restore.
-        match prev {
-            Some(v) => unsafe { std::env::set_var(var, v) },
-            None => unsafe { std::env::remove_var(var) },
+        for var in ["PERRY_DEBUG_INIT", "PERRY_WRITE_BARRIERS"] {
+            // Sample state without the var, with the var, and with a different
+            // value — all three keys must be distinct.
+            let prev = std::env::var_os(var);
+            // SAFETY: Rust 1.80+ flags env::set_var/remove_var as unsafe
+            // because they're racy with other threads reading env. cargo's
+            // in-process test runner can parallelize tests; this test is
+            // still correct because `compute_object_cache_key` reads the
+            // env at call time and we don't span a .await / yield. The
+            // remaining race is another *test* reading these vars
+            // mid-flight, which none do.
+            unsafe { std::env::remove_var(var) };
+            let k_unset = compute_object_cache_key(&opts, 1, "0.5.156");
+            unsafe { std::env::set_var(var, "1") };
+            let k_set = compute_object_cache_key(&opts, 1, "0.5.156");
+            unsafe { std::env::set_var(var, "2") };
+            let k_two = compute_object_cache_key(&opts, 1, "0.5.156");
+            // Restore.
+            match prev {
+                Some(v) => unsafe { std::env::set_var(var, v) },
+                None => unsafe { std::env::remove_var(var) },
+            }
+            assert_ne!(k_unset, k_set, "setting {} must change key", var);
+            assert_ne!(k_set, k_two, "changing {} value must change key", var);
         }
-        assert_ne!(k_unset, k_set, "setting {} must change key", var);
-        assert_ne!(k_set, k_two, "changing {} value must change key", var);
     }
 
     #[test]
