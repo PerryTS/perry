@@ -1156,6 +1156,411 @@ fn emit_harmonyos_arkts_stubs(
     Ok(())
 }
 
+/// Issue #1105 (PR 1): self-contained sub-routines extracted from
+/// `run_with_parse_cache`. Pure refactor — each helper holds a
+/// linear block lifted verbatim from the orchestrator. No logic
+/// change; signatures take only the references each block already
+/// touched in the inline form. The orchestrator stays the single
+/// owner of state; these are convenience wrappers so phase
+/// boundaries are visible in the file outline.
+fn maybe_init_type_checker(
+    args: &CompileArgs,
+    project_root: &Path,
+    format: OutputFormat,
+    ctx: &mut CompilationContext,
+) {
+    if !args.type_check {
+        return;
+    }
+    match super::typecheck::TsGoClient::spawn(project_root) {
+        Ok(mut client) => {
+            // Try to load the project's tsconfig.json
+            if let Some(tsconfig) = super::typecheck::find_tsconfig(project_root) {
+                match format {
+                    OutputFormat::Text => println!("  Type checking enabled (tsgo)"),
+                    OutputFormat::Json => {}
+                }
+                if let Err(e) = client.load_project(&tsconfig) {
+                    match format {
+                        OutputFormat::Text => eprintln!(
+                            "  Warning: tsgo project load failed: {}. Continuing without type checking.",
+                            e
+                        ),
+                        OutputFormat::Json => {}
+                    }
+                } else {
+                    ctx.type_checker = Some(client);
+                }
+            } else {
+                match format {
+                    OutputFormat::Text => {
+                        eprintln!("  Warning: No tsconfig.json found. Type checking disabled.")
+                    }
+                    OutputFormat::Json => {}
+                }
+            }
+        }
+        Err(e) => match format {
+            OutputFormat::Text => eprintln!("  Warning: {}", e),
+            OutputFormat::Json => {}
+        },
+    }
+}
+
+/// #495 wrapper: emit the behavioral SBOM at `.perry-cache/audit.json`,
+/// best-effort. The SBOM is observational metadata, not a correctness
+/// gate, so an I/O failure becomes a warning and the build continues.
+fn write_audit_manifest_logging_failures(ctx: &CompilationContext, format: OutputFormat) {
+    if let Err(e) = write_audit_manifest(ctx) {
+        match format {
+            OutputFormat::Text => {
+                eprintln!("warning: failed to write .perry-cache/audit.json: {}", e);
+            }
+            OutputFormat::Json => {}
+        }
+    }
+}
+
+/// Strip debug symbols from the final binary (reduces size significantly).
+/// Skipped for: dylib output, every cross-compilation target whose host
+/// `strip` can't parse foreign object formats (iOS/visionOS/tvOS/watchOS/
+/// HarmonyOS/Android), and when `PERRY_DEBUG_SYMBOLS=1` is set so crash
+/// backtraces stay symbolicated.
+///
+/// When `ctx.needs_plugins` is true the build uses `strip -x` to retain
+/// exported symbols — `dlopen`'d plugins resolve `hone_host_api_*` from
+/// the main executable's symbol table.
+#[allow(clippy::too_many_arguments)]
+fn strip_final_binary(
+    ctx: &CompilationContext,
+    exe_path: &Path,
+    target: Option<&str>,
+    is_dylib: bool,
+    is_ios: bool,
+    is_visionos: bool,
+    is_tvos: bool,
+    is_watchos: bool,
+    is_harmonyos: bool,
+) {
+    if is_dylib
+        || is_ios
+        || is_visionos
+        || is_tvos
+        || is_watchos
+        || is_harmonyos
+        || target == Some("android")
+        || std::env::var("PERRY_DEBUG_SYMBOLS").is_ok()
+    {
+        return;
+    }
+    if ctx.needs_plugins {
+        let _ = std::process::Command::new("strip")
+            .arg("-x")
+            .arg(exe_path)
+            .status();
+    } else {
+        let _ = std::process::Command::new("strip").arg(exe_path).status();
+    }
+}
+
+/// #504: emit `<binary>.attest.json` AFTER strip/codesign so the captured
+/// SHA-256 matches what users will actually download. Best-effort —
+/// errors log and continue.
+fn emit_attestation_sidecar(ctx: &CompilationContext, exe_path: &Path, format: OutputFormat) {
+    if !ctx.emit_attest {
+        return;
+    }
+    match super::attest::build_attestation(exe_path, &ctx.project_root) {
+        Ok(manifest) => match super::attest::write_attestation(exe_path, &manifest) {
+            Ok(sidecar) => {
+                if let OutputFormat::Text = format {
+                    println!("Wrote attestation: {}", sidecar.display())
+                }
+            }
+            Err(e) => {
+                if let OutputFormat::Text = format {
+                    eprintln!("warning: failed to write attestation: {}", e)
+                }
+            }
+        },
+        Err(e) => {
+            if let OutputFormat::Text = format {
+                eprintln!("warning: failed to build attestation: {}", e)
+            }
+        }
+    }
+}
+
+fn print_binary_size(format: OutputFormat, exe_path: &Path) {
+    if let OutputFormat::Text = format {
+        if let Ok(meta) = fs::metadata(exe_path) {
+            let size_mb = meta.len() as f64 / 1_048_576.0;
+            println!("Binary size: {:.1}MB", size_mb);
+        }
+    }
+}
+
+/// Collect each `--bundle-extensions` entry into the same
+/// `CompilationContext` as the user entry. Returns `(canonical_path,
+/// plugin_id)` pairs so the orchestrator can later embed the plugin
+/// IDs in the final binary.
+#[allow(clippy::too_many_arguments)]
+fn bundle_extensions_into_ctx(
+    ext_dir: &Path,
+    args: &CompileArgs,
+    ctx: &mut CompilationContext,
+    visited: &mut HashSet<PathBuf>,
+    next_class_id: &mut perry_hir::ClassId,
+    skip_transforms: bool,
+    mut parse_cache: Option<&mut ParseCache>,
+    format: OutputFormat,
+) -> Result<Vec<(PathBuf, String)>> {
+    let ext_entries = discover_extension_entries(ext_dir)?;
+    match format {
+        OutputFormat::Text => println!("Bundling {} extension(s)...", ext_entries.len()),
+        OutputFormat::Json => {}
+    }
+    let mut bundled_extensions: Vec<(PathBuf, String)> = Vec::new();
+    for (entry_path, plugin_id) in &ext_entries {
+        match format {
+            OutputFormat::Text => {
+                println!("  Extension: {} ({})", plugin_id, entry_path.display())
+            }
+            OutputFormat::Json => {}
+        }
+        collect_modules(
+            entry_path,
+            ctx,
+            visited,
+            args.enable_js_runtime,
+            format,
+            args.target.as_deref(),
+            next_class_id,
+            skip_transforms,
+            parse_cache.as_deref_mut(),
+        )?;
+        bundled_extensions.push((entry_path.canonicalize()?, plugin_id.clone()));
+    }
+    Ok(bundled_extensions)
+}
+
+/// Cross-module class field type propagation pass. Pass 1 lowered every
+/// native module without knowledge of imported classes' field types, so
+/// for-of loops over fields like `someLocal.removes` (where `someLocal:
+/// SomeClassFromAnotherModule`, `removes: Set<...>`) silently iterated 0
+/// times — the iterable's static type was unknown and the `SetValues`
+/// wrap at `lower_decl.rs:3737-3747` was skipped. Harvest field types
+/// from every just-lowered class, then re-lower the entire module set
+/// with that map seeded into each `LoweringContext`. The double pass is
+/// wasted work for modules that only consume locally-defined classes,
+/// but the per-module cost is dominated by SWC parsing (cached by
+/// `parse_cache`) not HIR lowering, so the overhead in practice is
+/// small. See ECS demo-simple repro / #412.
+#[allow(clippy::too_many_arguments)]
+fn rerun_collect_with_class_field_types(
+    args: &CompileArgs,
+    ctx: &mut CompilationContext,
+    visited: &mut HashSet<PathBuf>,
+    next_class_id: &mut perry_hir::ClassId,
+    skip_transforms: bool,
+    mut parse_cache: Option<&mut ParseCache>,
+    format: OutputFormat,
+) -> Result<()> {
+    if ctx.native_modules.len() <= 1 {
+        return Ok(());
+    }
+    let mut field_map: HashMap<String, Vec<(String, perry_types::Type)>> = HashMap::new();
+    for hir_module in ctx.native_modules.values() {
+        for class in &hir_module.classes {
+            let fields: Vec<(String, perry_types::Type)> = class
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), f.ty.clone()))
+                .collect();
+            field_map.entry(class.name.clone()).or_insert(fields);
+        }
+    }
+    if field_map.is_empty() {
+        return Ok(());
+    }
+    ctx.cross_module_class_field_types = field_map;
+    ctx.native_modules.clear();
+    visited.clear();
+    *next_class_id = 1;
+    collect_modules(
+        &args.input,
+        ctx,
+        visited,
+        args.enable_js_runtime,
+        format,
+        args.target.as_deref(),
+        next_class_id,
+        skip_transforms,
+        parse_cache.as_deref_mut(),
+    )?;
+    if let Some(ext_dir) = &args.bundle_extensions {
+        let ext_entries = discover_extension_entries(ext_dir)?;
+        for (entry_path, _plugin_id) in &ext_entries {
+            collect_modules(
+                entry_path,
+                ctx,
+                visited,
+                args.enable_js_runtime,
+                format,
+                args.target.as_deref(),
+                next_class_id,
+                skip_transforms,
+                parse_cache.as_deref_mut(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Apply the geisterhand CLI knobs (`--enable-geisterhand`,
+/// `--geisterhand-port=<N>`) to the compilation context. Geisterhand
+/// is the in-process input fuzzer; setting `needs_geisterhand=true`
+/// links the geisterhand-enabled runtime and starts an HTTP server
+/// at runtime.
+fn apply_geisterhand_args(args: &CompileArgs, ctx: &mut CompilationContext) {
+    if args.enable_geisterhand || args.geisterhand_port.is_some() {
+        ctx.needs_geisterhand = true;
+        if let Some(port) = args.geisterhand_port {
+            ctx.geisterhand_port = port;
+        }
+    }
+}
+
+/// i18n: write the key registry to `.perry/i18n-keys.json` for tooling
+/// (translators, key-extraction scripts) that needs a flat list of
+/// emitted keys + their string-table indices. Best-effort.
+fn write_i18n_key_registry(
+    ctx: &CompilationContext,
+    i18n_table: Option<&perry_transform::i18n::I18nStringTable>,
+) {
+    let table = match i18n_table {
+        Some(t) if !t.keys.is_empty() => t,
+        _ => return,
+    };
+    let perry_dir = ctx.project_root.join(".perry");
+    let _ = fs::create_dir_all(&perry_dir);
+    let registry: Vec<serde_json::Value> = table
+        .keys
+        .iter()
+        .enumerate()
+        .map(|(i, key)| {
+            serde_json::json!({
+                "key": key,
+                "string_idx": i,
+            })
+        })
+        .collect();
+    let registry_json = serde_json::json!({ "keys": registry });
+    let _ = fs::write(
+        perry_dir.join("i18n-keys.json"),
+        serde_json::to_string_pretty(&registry_json).unwrap_or_default(),
+    );
+}
+
+/// Remove intermediate `.o` files unless `--keep-intermediates` was passed.
+fn cleanup_intermediates(keep_intermediates: bool, obj_paths: &[PathBuf]) {
+    if keep_intermediates {
+        return;
+    }
+    for obj_path in obj_paths {
+        let _ = fs::remove_file(obj_path);
+    }
+}
+
+/// Bundle the object cache's hit/miss/store counters for the
+/// `CompileResult` return value. `None` when the cache was disabled
+/// (`--no-cache`, `PERRY_NO_CACHE=1`, or bitcode-link mode).
+fn summarize_codegen_cache_stats(
+    object_cache: &ObjectCache,
+) -> Option<(usize, usize, usize, usize)> {
+    if !object_cache.is_enabled() {
+        return None;
+    }
+    Some((
+        object_cache.hits(),
+        object_cache.misses(),
+        object_cache.stores(),
+        object_cache.store_errors(),
+    ))
+}
+
+/// i18n: emit `res/values-<locale>/strings.xml` next to the Android
+/// `.so` for every configured locale. Best-effort; failures don't
+/// abort the build. Keys are sanitized to `[A-Za-z0-9_]+` (Android
+/// resource-name grammar) and values get the usual XML entity escape.
+fn emit_android_i18n_resources(
+    is_android: bool,
+    i18n_table: Option<&perry_transform::i18n::I18nStringTable>,
+    i18n_config: Option<&perry_transform::i18n::I18nConfig>,
+    exe_path: &Path,
+    format: OutputFormat,
+) {
+    if !is_android {
+        return;
+    }
+    let (table, config) = match (i18n_table, i18n_config) {
+        (Some(t), Some(c)) => (t, c),
+        _ => return,
+    };
+    if table.keys.is_empty() {
+        return;
+    }
+    let output_dir = exe_path.parent().unwrap_or(Path::new("."));
+    let res_dir = output_dir.join("res");
+    for (locale_idx, locale) in config.locales.iter().enumerate() {
+        let values_dir = if locale_idx == 0 {
+            res_dir.join("values") // default locale
+        } else {
+            res_dir.join(format!("values-{}", locale))
+        };
+        let _ = fs::create_dir_all(&values_dir);
+        let mut xml =
+            String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n");
+        for (key_idx, key) in table.keys.iter().enumerate() {
+            let flat_idx = locale_idx * table.keys.len() + key_idx;
+            let value = table
+                .translations
+                .get(flat_idx)
+                .cloned()
+                .unwrap_or_else(|| key.clone());
+            let res_name: String = key
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let escaped = value
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+                .replace('\'', "\\'");
+            xml.push_str(&format!(
+                "    <string name=\"{}\">{}</string>\n",
+                res_name, escaped
+            ));
+        }
+        xml.push_str("</resources>\n");
+        let _ = fs::write(values_dir.join("strings.xml"), &xml);
+    }
+    match format {
+        OutputFormat::Text => println!(
+            "  Generated res/values-*/strings.xml for {} locale(s)",
+            config.locales.len()
+        ),
+        OutputFormat::Json => {}
+    }
+}
+
 pub fn run(
     args: CompileArgs,
     format: OutputFormat,
@@ -1801,39 +2206,7 @@ pub fn run_with_parse_cache(
         }
     }
 
-    // Initialize tsgo type checker if --type-check is enabled
-    if args.type_check {
-        match super::typecheck::TsGoClient::spawn(&project_root) {
-            Ok(mut client) => {
-                // Try to load the project's tsconfig.json
-                if let Some(tsconfig) = super::typecheck::find_tsconfig(&project_root) {
-                    match format {
-                        OutputFormat::Text => println!("  Type checking enabled (tsgo)"),
-                        OutputFormat::Json => {}
-                    }
-                    if let Err(e) = client.load_project(&tsconfig) {
-                        match format {
-                            OutputFormat::Text => eprintln!("  Warning: tsgo project load failed: {}. Continuing without type checking.", e),
-                            OutputFormat::Json => {}
-                        }
-                    } else {
-                        ctx.type_checker = Some(client);
-                    }
-                } else {
-                    match format {
-                        OutputFormat::Text => {
-                            eprintln!("  Warning: No tsconfig.json found. Type checking disabled.")
-                        }
-                        OutputFormat::Json => {}
-                    }
-                }
-            }
-            Err(e) => match format {
-                OutputFormat::Text => eprintln!("  Warning: {}", e),
-                OutputFormat::Json => {}
-            },
-        }
-    }
+    maybe_init_type_checker(&args, &project_root, format, &mut ctx);
 
     let mut visited = HashSet::new();
     let mut next_class_id: perry_hir::ClassId = 1; // Start at 1, 0 is reserved for "no parent"
@@ -1863,93 +2236,30 @@ pub fn run_with_parse_cache(
     )?;
 
     // Bundle extensions if --bundle-extensions specified
-    let mut bundled_extensions: Vec<(PathBuf, String)> = Vec::new();
-    if let Some(ext_dir) = &args.bundle_extensions {
-        let ext_entries = discover_extension_entries(ext_dir)?;
-        match format {
-            OutputFormat::Text => println!("Bundling {} extension(s)...", ext_entries.len()),
-            OutputFormat::Json => {}
-        }
-        for (entry_path, plugin_id) in &ext_entries {
-            match format {
-                OutputFormat::Text => {
-                    println!("  Extension: {} ({})", plugin_id, entry_path.display())
-                }
-                OutputFormat::Json => {}
-            }
-            collect_modules(
-                entry_path,
-                &mut ctx,
-                &mut visited,
-                args.enable_js_runtime,
-                format,
-                args.target.as_deref(),
-                &mut next_class_id,
-                skip_transforms,
-                parse_cache.as_deref_mut(),
-            )?;
-            bundled_extensions.push((entry_path.canonicalize()?, plugin_id.clone()));
-        }
-    }
+    let bundled_extensions: Vec<(PathBuf, String)> = if let Some(ext_dir) = args.bundle_extensions.clone() {
+        bundle_extensions_into_ctx(
+            &ext_dir,
+            &args,
+            &mut ctx,
+            &mut visited,
+            &mut next_class_id,
+            skip_transforms,
+            parse_cache.as_deref_mut(),
+            format,
+        )?
+    } else {
+        Vec::new()
+    };
 
-    // Cross-module class field type propagation pass. Pass 1 (above) lowered
-    // every native module without knowledge of imported classes' field types,
-    // so for-of loops over fields like `someLocal.removes` (where `someLocal:
-    // SomeClassFromAnotherModule`, `removes: Set<...>`) silently iterated 0
-    // times — the iterable's static type was unknown and the SetValues wrap
-    // at `lower_decl.rs:3737-3747` was skipped. Harvest field types from
-    // every just-lowered class, then re-lower the entire module set with
-    // that map seeded into each LoweringContext. The double pass is wasted
-    // work for modules that only consume locally-defined classes, but the
-    // per-module cost is dominated by SWC parsing (cached by `parse_cache`)
-    // not HIR lowering, so the overhead in practice is small. See ECS
-    // demo-simple repro / #412.
-    if ctx.native_modules.len() > 1 {
-        let mut field_map: HashMap<String, Vec<(String, perry_types::Type)>> = HashMap::new();
-        for hir_module in ctx.native_modules.values() {
-            for class in &hir_module.classes {
-                let fields: Vec<(String, perry_types::Type)> = class
-                    .fields
-                    .iter()
-                    .map(|f| (f.name.clone(), f.ty.clone()))
-                    .collect();
-                field_map.entry(class.name.clone()).or_insert(fields);
-            }
-        }
-        if !field_map.is_empty() {
-            ctx.cross_module_class_field_types = field_map;
-            ctx.native_modules.clear();
-            visited.clear();
-            next_class_id = 1;
-            collect_modules(
-                &args.input,
-                &mut ctx,
-                &mut visited,
-                args.enable_js_runtime,
-                format,
-                args.target.as_deref(),
-                &mut next_class_id,
-                skip_transforms,
-                parse_cache.as_deref_mut(),
-            )?;
-            if let Some(ext_dir) = &args.bundle_extensions {
-                let ext_entries = discover_extension_entries(ext_dir)?;
-                for (entry_path, _plugin_id) in &ext_entries {
-                    collect_modules(
-                        entry_path,
-                        &mut ctx,
-                        &mut visited,
-                        args.enable_js_runtime,
-                        format,
-                        args.target.as_deref(),
-                        &mut next_class_id,
-                        skip_transforms,
-                        parse_cache.as_deref_mut(),
-                    )?;
-                }
-            }
-        }
-    }
+    rerun_collect_with_class_field_types(
+        &args,
+        &mut ctx,
+        &mut visited,
+        &mut next_class_id,
+        skip_transforms,
+        parse_cache.as_deref_mut(),
+        format,
+    )?;
 
     // #499: gate `perry-jsruntime` linkage on explicit host opt-in.
     // The runtime is the one remaining vector in a Perry-compiled
@@ -2276,21 +2586,9 @@ pub fn run_with_parse_cache(
     // — a missing directory or filesystem error is logged but
     // doesn't fail the build, since the SBOM is observational
     // metadata, not a correctness gate.
-    if let Err(e) = write_audit_manifest(&ctx) {
-        match format {
-            OutputFormat::Text => {
-                eprintln!("warning: failed to write .perry-cache/audit.json: {}", e);
-            }
-            OutputFormat::Json => {}
-        }
-    }
+    write_audit_manifest_logging_failures(&ctx, format);
 
-    if args.enable_geisterhand || args.geisterhand_port.is_some() {
-        ctx.needs_geisterhand = true;
-        if let Some(port) = args.geisterhand_port {
-            ctx.geisterhand_port = port;
-        }
-    }
+    apply_geisterhand_args(&args, &mut ctx);
 
     // Validate --min-windows-version. Accepted: "7", "8", "10". Anything
     // else is a hard error so typos like `--min-windows-version=11` fail
@@ -2619,29 +2917,7 @@ pub fn run_with_parse_cache(
         }
     }
 
-    // --- i18n: write key registry ---
-    if let Some(ref table) = i18n_table {
-        if !table.keys.is_empty() {
-            let perry_dir = ctx.project_root.join(".perry");
-            let _ = fs::create_dir_all(&perry_dir);
-            let registry: Vec<serde_json::Value> = table
-                .keys
-                .iter()
-                .enumerate()
-                .map(|(i, key)| {
-                    serde_json::json!({
-                        "key": key,
-                        "string_idx": i,
-                    })
-                })
-                .collect();
-            let registry_json = serde_json::json!({ "keys": registry });
-            let _ = fs::write(
-                perry_dir.join("i18n-keys.json"),
-                serde_json::to_string_pretty(&registry_json).unwrap_or_default(),
-            );
-        }
-    }
+    write_i18n_key_registry(&ctx, i18n_table.as_ref());
 
     match format {
         OutputFormat::Text => println!("Generating code..."),
@@ -8369,145 +8645,34 @@ pub fn run_with_parse_cache(
         }
     }
 
-    // --- i18n: generate Android values-xx/ resources ---
-    if is_android {
-        if let (Some(ref table), Some(ref config)) = (&i18n_table, &i18n_config) {
-            if !table.keys.is_empty() {
-                let output_dir = exe_path.parent().unwrap_or(Path::new("."));
-                let res_dir = output_dir.join("res");
-                for (locale_idx, locale) in config.locales.iter().enumerate() {
-                    let values_dir = if locale_idx == 0 {
-                        res_dir.join("values") // default locale
-                    } else {
-                        res_dir.join(format!("values-{}", locale))
-                    };
-                    let _ = fs::create_dir_all(&values_dir);
-                    let mut xml =
-                        String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n");
-                    for (key_idx, key) in table.keys.iter().enumerate() {
-                        let flat_idx = locale_idx * table.keys.len() + key_idx;
-                        let value = table
-                            .translations
-                            .get(flat_idx)
-                            .cloned()
-                            .unwrap_or_else(|| key.clone());
-                        // Sanitize key for Android resource name (alphanumeric + underscore)
-                        let res_name: String = key
-                            .chars()
-                            .map(|c| {
-                                if c.is_alphanumeric() || c == '_' {
-                                    c
-                                } else {
-                                    '_'
-                                }
-                            })
-                            .collect();
-                        // Escape XML special chars
-                        let escaped = value
-                            .replace('&', "&amp;")
-                            .replace('<', "&lt;")
-                            .replace('>', "&gt;")
-                            .replace('"', "&quot;")
-                            .replace('\'', "\\'");
-                        xml.push_str(&format!(
-                            "    <string name=\"{}\">{}</string>\n",
-                            res_name, escaped
-                        ));
-                    }
-                    xml.push_str("</resources>\n");
-                    let _ = fs::write(values_dir.join("strings.xml"), &xml);
-                }
-                match format {
-                    OutputFormat::Text => println!(
-                        "  Generated res/values-*/strings.xml for {} locale(s)",
-                        config.locales.len()
-                    ),
-                    OutputFormat::Json => {}
-                }
-            }
-        }
-    }
+    emit_android_i18n_resources(
+        is_android,
+        i18n_table.as_ref(),
+        i18n_config.as_ref(),
+        &exe_path,
+        format,
+    );
 
-    // Strip debug symbols from the final binary (reduces size significantly)
-    // Skip for iOS/Android/HarmonyOS cross-compilation — host strip can't handle
-    // foreign architectures (macOS BSD strip fails on ELF with the noisy
-    // "non-object and non-archive file" warning).
-    // Skip for watchOS — bundling above already moved exe_path into the .app
-    // Skip when PERRY_DEBUG_SYMBOLS=1 is set — keep symbols for crash debugging
-    if !is_dylib
-        && !is_ios
-        && !is_visionos
-        && !is_tvos
-        && !is_watchos
-        && !is_harmonyos
-        && target.as_deref() != Some("android")
-        && std::env::var("PERRY_DEBUG_SYMBOLS").is_err()
-    {
-        if ctx.needs_plugins {
-            // When plugins are enabled, use strip -x to keep exported symbols
-            // (dlopen'd plugins need to resolve hone_host_api_* from the main executable)
-            let _ = std::process::Command::new("strip")
-                .arg("-x")
-                .arg(&exe_path)
-                .status();
-        } else {
-            let _ = std::process::Command::new("strip").arg(&exe_path).status();
-        }
-    }
+    strip_final_binary(
+        &ctx,
+        &exe_path,
+        target.as_deref(),
+        is_dylib,
+        is_ios,
+        is_visionos,
+        is_tvos,
+        is_watchos,
+        is_harmonyos,
+    );
 
-    // #504 — emit `<binary>.attest.json` AFTER strip/codesign/etc. so
-    // the captured SHA-256 matches the file users will actually
-    // download. (Hooked here, not next to `Wrote executable:`, because
-    // strip rewrites the file between the linker and the final
-    // shipped form.) Best-effort: errors log and continue.
-    if ctx.emit_attest {
-        match super::attest::build_attestation(&exe_path, &ctx.project_root) {
-            Ok(manifest) => match super::attest::write_attestation(&exe_path, &manifest) {
-                Ok(sidecar) => {
-                    if let OutputFormat::Text = format {
-                        println!("Wrote attestation: {}", sidecar.display())
-                    }
-                }
-                Err(e) => {
-                    if let OutputFormat::Text = format {
-                        eprintln!("warning: failed to write attestation: {}", e)
-                    }
-                }
-            },
-            Err(e) => {
-                if let OutputFormat::Text = format {
-                    eprintln!("warning: failed to build attestation: {}", e)
-                }
-            }
-        }
-    }
+    emit_attestation_sidecar(&ctx, &exe_path, format);
 
-    // Print binary size
-    if let OutputFormat::Text = format {
-        if let Ok(meta) = fs::metadata(&exe_path) {
-            let size_mb = meta.len() as f64 / 1_048_576.0;
-            println!("Binary size: {:.1}MB", size_mb);
-        }
-    }
+    print_binary_size(format, &exe_path);
 
-    if !args.keep_intermediates {
-        for obj_path in &obj_paths {
-            let _ = fs::remove_file(obj_path);
-        }
-    }
+    cleanup_intermediates(args.keep_intermediates, &obj_paths);
 
     let final_output_path = result_app_dir.unwrap_or(exe_path);
-
-    let codegen_cache_stats = if object_cache.is_enabled() {
-        Some((
-            object_cache.hits(),
-            object_cache.misses(),
-            object_cache.stores(),
-            object_cache.store_errors(),
-        ))
-    } else {
-        None
-    };
+    let codegen_cache_stats = summarize_codegen_cache_stats(&object_cache);
 
     Ok(CompileResult {
         output_path: final_output_path,
