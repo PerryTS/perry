@@ -39,12 +39,17 @@ static SLOTS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 /// Pre-fix only numeric-state demos worked; storing an array reference
 /// then triggering allocation freed it (#679 follow-up).
 pub fn scan_state_slot_roots(mark: &mut dyn FnMut(f64)) {
-    let s = match SLOTS.try_lock() {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_state_slot_roots_mut(&mut visitor);
+}
+
+pub fn scan_state_slot_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut s = match SLOTS.try_lock() {
         Ok(g) => g,
         Err(_) => return,
     };
-    for bits in s.iter() {
-        mark(f64::from_bits(*bits));
+    for bits in s.iter_mut() {
+        visitor.visit_nanbox_u64_slot(bits);
     }
 }
 
@@ -83,6 +88,12 @@ pub extern "C" fn js_perry_tui_state_set(handle: i64, value: f64) -> f64 {
         }
     }
     f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+#[cfg(test)]
+pub(crate) fn test_reset_state_slots() {
+    SLOTS.lock().unwrap().clear();
+    STATE_DIRTY.store(false, Ordering::Release);
 }
 
 #[cfg(test)]

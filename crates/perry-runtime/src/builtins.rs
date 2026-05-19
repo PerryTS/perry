@@ -226,11 +226,12 @@ pub extern "C" fn js_console_log_as_closure() -> f64 {
 /// GC root scanner: pin the lazily-allocated `console.log`-as-closure
 /// singleton against the next sweep.
 pub fn scan_console_log_singleton_roots(mark: &mut dyn FnMut(f64)) {
-    let cached = CONSOLE_LOG_SINGLETON.load(Ordering::Acquire);
-    if cached != 0 {
-        let v = JSValue::pointer(cached as *const u8);
-        mark(f64::from_bits(v.bits()));
-    }
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_console_log_singleton_roots_mut(&mut visitor);
+}
+
+pub fn scan_console_log_singleton_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    visitor.visit_atomic_i64_slot(&CONSOLE_LOG_SINGLETON, Ordering::Acquire, Ordering::Release);
 }
 
 /// Print a number to stdout (optimized path for known numbers)
@@ -3022,15 +3023,49 @@ pub extern "C" fn js_drain_queued_microtasks() {
 }
 
 pub fn scan_queued_microtask_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_queued_microtask_roots_mut(&mut visitor);
+}
+
+pub fn scan_queued_microtask_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     QUEUED_MICROTASKS.with(|q| {
-        for (callback, context, _, _) in q.borrow().iter() {
-            if *callback != 0 {
-                let boxed = f64::from_bits(
-                    0x7FFD_0000_0000_0000 | (*callback as u64 & 0x0000_FFFF_FFFF_FFFF),
-                );
-                mark(boxed);
-            }
-            crate::async_context::scan_snapshot_roots(context, mark);
+        for (callback, context, _, _) in q.borrow_mut().iter_mut() {
+            visitor.visit_i64_slot(callback);
+            crate::async_context::scan_snapshot_roots_mut(context, visitor);
         }
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_console_log_singleton(ptr: i64) {
+    CONSOLE_LOG_SINGLETON.store(ptr, Ordering::Release);
+}
+
+#[cfg(test)]
+pub(crate) fn test_console_log_singleton() -> i64 {
+    CONSOLE_LOG_SINGLETON.load(Ordering::Acquire)
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_queued_microtask(callback: i64, context_store: f64) {
+    let context = crate::async_context::test_snapshot_with_store(context_store);
+    QUEUED_MICROTASKS.with(|q| {
+        let mut q = q.borrow_mut();
+        q.clear();
+        q.push((callback, context, 0, 0));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_queued_microtask_snapshot() -> (usize, u64) {
+    QUEUED_MICROTASKS.with(|q| {
+        let q = q.borrow();
+        let Some((callback, context, _, _)) = q.first() else {
+            return (0, 0);
+        };
+        let store_bits = crate::async_context::test_snapshot_first_store(context)
+            .map(f64::to_bits)
+            .unwrap_or(0);
+        (*callback as usize, store_bits)
+    })
 }

@@ -72,10 +72,15 @@ pub extern "C" fn js_box_alloc(initial_value: f64) -> *mut Box {
 /// scanner protocol: dispatch every stored f64 to `mark` and let the
 /// GC trace into it.
 pub fn scan_box_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_box_roots_mut(&mut visitor);
+}
+
+pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     BOX_REGISTRY.with(|r| {
         let r = r.borrow();
         for &addr in r.iter() {
-            let ptr = addr as *const Box;
+            let ptr = addr as *mut Box;
             // Defensive: the registry should only contain valid live
             // pointers, but if a stale entry slipped through we'd
             // segfault on the deref. The tight bounds check on the
@@ -83,8 +88,9 @@ pub fn scan_box_roots(mark: &mut dyn FnMut(f64)) {
             // matches `is_plausible_box_ptr` to keep this a no-op for
             // any pathological entry.
             if addr >= 0x1000 && addr < 0x0001_0000_0000_0000 && addr % 8 == 0 {
-                let v = unsafe { (*ptr).value };
-                mark(v);
+                unsafe {
+                    visitor.visit_nanbox_f64_raw_slot(&raw mut (*ptr).value);
+                }
             }
         }
     });

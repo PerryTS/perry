@@ -943,14 +943,26 @@ pub extern "C" fn js_regexp_exec_get_groups() -> i64 {
 /// alongside `regex.exec(str)`: a sequence of match calls plus
 /// allocations between them was enough to trigger nursery GC mid-test.
 pub fn scan_last_exec_groups_root(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_last_exec_groups_root_mut(&mut visitor);
+}
+
+pub fn scan_last_exec_groups_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     LAST_EXEC_GROUPS.with(|g| {
-        let ptr = *g.borrow();
-        if !ptr.is_null() {
-            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-            mark(f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK)));
-        }
+        visitor.visit_raw_mut_ptr_slot(&mut *g.borrow_mut());
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_last_exec_groups(ptr: *mut ObjectHeader) {
+    LAST_EXEC_GROUPS.with(|g| {
+        *g.borrow_mut() = ptr;
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_last_exec_groups() -> usize {
+    LAST_EXEC_GROUPS.with(|g| *g.borrow() as usize)
 }
 
 /// Get regex.source — returns the pattern string

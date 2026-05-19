@@ -58,20 +58,47 @@ pub extern "C" fn js_template_raw(cooked: *const ArrayHeader) -> i64 {
 /// next read miss; for now the map grows unbounded but it's tiny in
 /// practice (one entry per distinct tagged-template call site).
 pub fn scan_template_raw_roots(mark: &mut dyn FnMut(f64)) {
-    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_template_raw_roots_mut(&mut visitor);
+}
+
+pub fn scan_template_raw_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     TEMPLATE_RAW_MAP.with(|m| {
-        for (cooked_addr, raw_ptr) in m.borrow().iter() {
-            mark(f64::from_bits(
-                POINTER_TAG | (*cooked_addr as u64 & POINTER_MASK),
-            ));
-            if !raw_ptr.is_null() {
-                mark(f64::from_bits(
-                    POINTER_TAG | (*raw_ptr as u64 & POINTER_MASK),
-                ));
+        let mut map = m.borrow_mut();
+        let mut moved = Vec::new();
+        for (&cooked_addr, raw_ptr) in map.iter_mut() {
+            let mut new_cooked_addr = cooked_addr;
+            if visitor.visit_usize_slot(&mut new_cooked_addr) {
+                moved.push((cooked_addr, new_cooked_addr));
+            }
+            visitor.visit_raw_mut_ptr_slot(raw_ptr);
+        }
+        for (old_addr, new_addr) in moved {
+            if let Some(raw_ptr) = map.remove(&old_addr) {
+                map.insert(new_addr, raw_ptr);
             }
         }
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_template_raw_roots(cooked: *mut ArrayHeader, raw: *mut ArrayHeader) {
+    TEMPLATE_RAW_MAP.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        m.insert(cooked as usize, raw);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_template_raw_roots() -> (usize, usize) {
+    TEMPLATE_RAW_MAP.with(|m| {
+        let m = m.borrow();
+        let Some((&cooked, raw)) = m.iter().next() else {
+            return (0, 0);
+        };
+        (cooked, *raw as usize)
+    })
 }
 
 /// Strip NaN-boxing tags from an array pointer and guard against invalid values.

@@ -503,19 +503,22 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
 /// allocated by this module against the next sweep. Wired up from
 /// `gc::gc_init`.
 pub fn scan_node_submodule_singleton_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_node_submodule_singleton_roots_mut(&mut visitor);
+}
+
+pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     if ANY_SINGLETON_ALLOCATED.load(Ordering::Acquire) == 0 {
         return;
     }
     EXPORT_SINGLETONS.with(|m| {
-        for &closure_ptr in m.borrow().values() {
-            let v = JSValue::pointer(closure_ptr as *const u8);
-            mark(f64::from_bits(v.bits()));
+        for closure_ptr in m.borrow_mut().values_mut() {
+            visitor.visit_raw_mut_ptr_slot(closure_ptr);
         }
     });
     NAMESPACE_SINGLETONS.with(|m| {
-        for &obj_ptr in m.borrow().values() {
-            let v = JSValue::pointer(obj_ptr as *const u8);
-            mark(f64::from_bits(v.bits()));
+        for obj_ptr in m.borrow_mut().values_mut() {
+            visitor.visit_raw_mut_ptr_slot(obj_ptr);
         }
     });
     // #906 follow-up: the no-op closure shared by every TracingChannel /
@@ -523,11 +526,48 @@ pub fn scan_node_submodule_singleton_roots(mark: &mut dyn FnMut(f64)) {
     // returned stub objects themselves are caller-owned (we don't cache
     // them) so they're traced through normal allocator roots.
     DIAG_NOOP_CLOSURE.with(|slot| {
-        if let Some(ptr) = *slot.borrow() {
-            let v = JSValue::pointer(ptr as *const u8);
-            mark(f64::from_bits(v.bits()));
+        let mut slot = slot.borrow_mut();
+        if let Some(ptr) = slot.as_mut() {
+            visitor.visit_raw_mut_ptr_slot(ptr);
         }
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_node_submodule_roots(
+    closure: *mut ClosureHeader,
+    namespace: *mut ObjectHeader,
+    diag_noop: *mut ClosureHeader,
+) {
+    EXPORT_SINGLETONS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        m.insert((1, 2), closure);
+    });
+    NAMESPACE_SINGLETONS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        m.insert(3, namespace);
+    });
+    DIAG_NOOP_CLOSURE.with(|slot| {
+        *slot.borrow_mut() = Some(diag_noop);
+    });
+    ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
+}
+
+#[cfg(test)]
+pub(crate) fn test_node_submodule_roots() -> (usize, usize, usize) {
+    let closure = EXPORT_SINGLETONS.with(|m| {
+        m.borrow()
+            .get(&(1, 2))
+            .map(|ptr| *ptr as usize)
+            .unwrap_or(0)
+    });
+    let namespace =
+        NAMESPACE_SINGLETONS.with(|m| m.borrow().get(&3).map(|ptr| *ptr as usize).unwrap_or(0));
+    let diag =
+        DIAG_NOOP_CLOSURE.with(|slot| slot.borrow().as_ref().map(|ptr| *ptr as usize).unwrap_or(0));
+    (closure, namespace, diag)
 }
 
 // ----- FFI entry points -----

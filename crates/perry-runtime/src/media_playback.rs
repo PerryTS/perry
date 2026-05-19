@@ -56,7 +56,7 @@ thread_local! {
 fn ensure_gc_scanner_registered() {
     GC_SCANNER_REGISTERED.with(|flag| {
         if !flag.get() {
-            crate::gc::gc_register_root_scanner(media_callbacks_root_scanner);
+            crate::gc::gc_register_mutable_root_scanner(media_callbacks_root_scanner_mut);
             flag.set(true);
         }
     });
@@ -523,16 +523,50 @@ fn fire_time_callback(closure_d: f64, current: f64, duration: f64) {
 /// Called from `gc_init` (gated on `ohos-napi`) so the generational
 /// mark-sweep doesn't reclaim closure bodies between AVPlayer events.
 pub fn media_callbacks_root_scanner(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    media_callbacks_root_scanner_mut(&mut visitor);
+}
+
+pub fn media_callbacks_root_scanner_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     if let Ok(guard) = MEDIA_STATE_INBOX.try_lock() {
-        if let Some(map) = guard.as_ref() {
-            for obs in map.values() {
-                if let Some(c) = obs.on_state_change {
-                    mark(c);
+        let mut guard = guard;
+        if let Some(map) = guard.as_mut() {
+            for obs in map.values_mut() {
+                if let Some(c) = obs.on_state_change.as_mut() {
+                    visitor.visit_nanbox_f64_slot(c);
                 }
-                if let Some(c) = obs.on_time_update {
-                    mark(c);
+                if let Some(c) = obs.on_time_update.as_mut() {
+                    visitor.visit_nanbox_f64_slot(c);
                 }
             }
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_media_callback_roots(
+    handle: i64,
+    on_state_change: f64,
+    on_time_update: f64,
+) {
+    with_inbox(|m| {
+        let obs = m.entry(handle).or_default();
+        obs.on_state_change = Some(on_state_change);
+        obs.on_time_update = Some(on_time_update);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_media_callback_roots(handle: i64) -> (u64, u64) {
+    let guard = MEDIA_STATE_INBOX.lock().unwrap();
+    let Some(map) = guard.as_ref() else {
+        return (0, 0);
+    };
+    let Some(obs) = map.get(&handle) else {
+        return (0, 0);
+    };
+    (
+        obs.on_state_change.map(f64::to_bits).unwrap_or(0),
+        obs.on_time_update.map(f64::to_bits).unwrap_or(0),
+    )
 }

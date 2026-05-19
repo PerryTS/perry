@@ -91,7 +91,12 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 /// always 0 today; when cleanup-on-dep-change wiring lands the
 /// scanner will need to emit it too.
 pub fn scan_hook_slot_roots(mark: &mut dyn FnMut(f64)) {
-    let s = match SLOTS.try_lock() {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_hook_slot_roots_mut(&mut visitor);
+}
+
+pub fn scan_hook_slot_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let mut s = match SLOTS.try_lock() {
         Ok(g) => g,
         // The render loop holds the lock while building widgets; if GC
         // fires from inside that path we just skip this scan rather
@@ -99,25 +104,61 @@ pub fn scan_hook_slot_roots(mark: &mut dyn FnMut(f64)) {
         // local will still be picked up by the conservative stack scan.
         Err(_) => return,
     };
-    for slot in s.iter() {
+    for slot in s.iter_mut() {
         match slot {
-            HookSlot::State { value_bits } => mark(f64::from_bits(*value_bits)),
+            HookSlot::State { value_bits } => {
+                visitor.visit_nanbox_u64_slot(value_bits);
+            }
             HookSlot::Memo {
                 value_bits,
                 computed,
                 ..
             } => {
                 if *computed {
-                    mark(f64::from_bits(*value_bits));
+                    visitor.visit_nanbox_u64_slot(value_bits);
                 }
             }
-            HookSlot::Ref { value_bits } => mark(f64::from_bits(*value_bits)),
+            HookSlot::Ref { value_bits } => {
+                visitor.visit_nanbox_u64_slot(value_bits);
+            }
             // TODO: when useEffect cleanup-on-dep-change wiring lands,
             // emit `cleanup` here too — it'll hold a NaN-boxed POINTER
             // to a Perry closure that the GC otherwise can't see.
             HookSlot::Effect { .. } | HookSlot::Focus { .. } => {}
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_hook_slot_roots(value_bits: u64) {
+    let mut slots = SLOTS.lock().unwrap();
+    slots.clear();
+    slots.push(HookSlot::State { value_bits });
+    slots.push(HookSlot::Memo {
+        last_deps_hash: 0,
+        value_bits,
+        computed: true,
+    });
+    slots.push(HookSlot::Ref { value_bits });
+    NEXT_HOOK_IDX.store(0, Ordering::Release);
+}
+
+#[cfg(test)]
+pub(crate) fn test_hook_slot_roots() -> (u64, u64, u64) {
+    let slots = SLOTS.lock().unwrap();
+    let state = match slots.first() {
+        Some(HookSlot::State { value_bits }) => *value_bits,
+        _ => 0,
+    };
+    let memo = match slots.get(1) {
+        Some(HookSlot::Memo { value_bits, .. }) => *value_bits,
+        _ => 0,
+    };
+    let reference = match slots.get(2) {
+        Some(HookSlot::Ref { value_bits }) => *value_bits,
+        _ => 0,
+    };
+    (state, memo, reference)
 }
 
 /// Reset the hook index at the top of each render. Called by run.rs.

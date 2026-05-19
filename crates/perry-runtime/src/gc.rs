@@ -147,6 +147,8 @@ const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 
+pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
+
 /// GC statistics
 pub struct GcStats {
     pub collection_count: u64,
@@ -236,8 +238,13 @@ thread_local! {
         last_pause_us: 0,
     }) };
 
-    /// Registered Rust root scanner functions (promise queue, timers, etc.)
+    /// Legacy Rust root scanners that expose copied f64 values only.
+    /// Runtime-owned scanners should use MUTABLE_ROOT_SCANNERS instead.
     static ROOT_SCANNERS: RefCell<Vec<fn(&mut dyn FnMut(f64))>> = RefCell::new(Vec::new());
+
+    /// Registered runtime-owned root slot scanners. These expose mutable
+    /// storage so evacuation can rewrite forwarded references in place.
+    static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScanner>> = RefCell::new(Vec::new());
 
     /// Registered root scanner functions from perry-ffi/native packages.
     static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());
@@ -535,6 +542,12 @@ struct EvacuationTraceStats {
 }
 
 #[derive(Clone, Copy, Default)]
+struct LegacyRootTraceStats {
+    pinned_roots: usize,
+    pinned_bytes: usize,
+}
+
+#[derive(Clone, Copy, Default)]
 struct SweepTraceStats {
     freed_bytes: u64,
     reset_blocks: usize,
@@ -598,6 +611,8 @@ struct GcCycleTrace {
     remembered_set_before: usize,
     remembered_set: RememberedSetTraceStats,
     conservative_pinned: usize,
+    conservative_pinned_bytes: usize,
+    legacy_copy_only_scanner_pinned: LegacyRootTraceStats,
     evacuation: EvacuationTraceStats,
     block_persist: BlockPersistTraceStats,
     sweep: SweepTraceStats,
@@ -634,6 +649,8 @@ impl GcCycleTrace {
             remembered_set_before: remembered_set_size(),
             remembered_set: RememberedSetTraceStats::default(),
             conservative_pinned: 0,
+            conservative_pinned_bytes: 0,
+            legacy_copy_only_scanner_pinned: LegacyRootTraceStats::default(),
             evacuation: EvacuationTraceStats::default(),
             block_persist: BlockPersistTraceStats::default(),
             sweep: SweepTraceStats::default(),
@@ -679,6 +696,11 @@ impl GcCycleTrace {
                 "dirty_slots_scanned": self.remembered_set.dirty_slots_scanned,
             },
             "conservative_pinned": self.conservative_pinned,
+            "conservative_pinned_bytes": self.conservative_pinned_bytes,
+            "legacy_copy_only_scanner_pinned": {
+                "roots": self.legacy_copy_only_scanner_pinned.pinned_roots,
+                "bytes": self.legacy_copy_only_scanner_pinned.pinned_bytes,
+            },
             "evacuation": {
                 "objects": self.evacuation.objects,
                 "bytes": self.evacuation.bytes,
@@ -1196,6 +1218,15 @@ pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
     });
 }
 
+/// Register a runtime-owned root scanner that exposes mutable slots.
+/// These scanners are marked like ordinary roots, but their storage is
+/// revisited after evacuation so forwarded references can be rewritten.
+pub fn gc_register_mutable_root_scanner(scanner: MutableRootScanner) {
+    MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners.borrow_mut().push(scanner);
+    });
+}
+
 type PerryFfiRootMarker = extern "C" fn(value: f64, ctx: *mut c_void);
 type PerryFfiRootScanner = extern "C" fn(mark: PerryFfiRootMarker, ctx: *mut c_void);
 
@@ -1648,8 +1679,11 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     //   2. Mutable root slots (shadow stack + registered globals).
     //      These are real slots we can rewrite after forwarding, so
     //      they stay out of CONS_PINNED.
-    //   3. Registered Rust/FFI scanners. Their API exposes copied
-    //      f64 values only; when evacuation is enabled the scanner
+    //   3. Mutable registered scanners. These expose runtime-owned
+    //      slots and are revisited by the forwarding rewrite pass, so
+    //      they also stay out of CONS_PINNED.
+    //   4. Legacy Rust/FFI scanners. Their API exposes copied f64
+    //      values only; when evacuation is enabled the scanner
     //      callbacks pin each discovery directly.
     //
     // Pinning only root-direct discoveries keeps heap-field reachability
@@ -1659,16 +1693,19 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     mark_stack_roots(&valid_ptrs);
     // CONS_PINNED is only consumed by `evacuate_tenured_nursery_objects`,
     // which is gated on `gen_gc_evacuate_enabled()`. When evacuation is
-    // off (the default), each `pin_currently_marked_as_conservative` call
-    // is a full arena walk producing a HashSet nobody reads — at ~1.6M
-    // objects in perf-comprehensive that's two ~10ms walks per minor GC
-    // burned for nothing. Gate both pin calls behind the same flag.
+    // off (the default), `pin_currently_marked_as_conservative` is a
+    // full arena walk producing a HashSet nobody reads. Gate it behind
+    // the same flag.
     let evac = gen_gc_evacuate_enabled();
     if evac {
         pin_currently_marked_as_conservative();
     }
     mark_mutable_root_slots(&valid_ptrs);
-    mark_registered_roots(&valid_ptrs, evac);
+    mark_mutable_registered_roots(&valid_ptrs);
+    let legacy_root_stats = mark_registered_roots(&valid_ptrs, evac);
+    if let Some(trace) = trace.as_mut() {
+        trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
+    }
     trace_phase_record(&mut trace, "root_marking", phase_start);
     let phase_start = trace_phase_start(&trace);
     let remembered_set = mark_remembered_set_roots(&valid_ptrs);
@@ -1733,6 +1770,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         if let Some(trace) = trace.as_mut() {
             trace.evacuation = evacuation;
             trace.conservative_pinned = cons_pinned_count();
+            trace.conservative_pinned_bytes = cons_pinned_bytes();
         }
         let phase_start = trace_phase_start(&trace);
         rewrite_forwarded_references(&valid_ptrs);
@@ -1746,6 +1784,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         }
     } else if let Some(trace) = trace.as_mut() {
         trace.conservative_pinned = cons_pinned_count();
+        trace.conservative_pinned_bytes = cons_pinned_bytes();
     }
 
     // === SWEEP PHASE ===
@@ -1888,8 +1927,12 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // 2. Scan mutable roots (shadow stack + registered globals)
     mark_mutable_root_slots(&valid_ptrs);
 
-    // 3. Run registered root scanners (promise queues, timers, etc.)
-    mark_registered_roots(&valid_ptrs, false);
+    // 3. Run runtime-owned mutable scanners, then legacy copy-only scanners.
+    mark_mutable_registered_roots(&valid_ptrs);
+    let legacy_root_stats = mark_registered_roots(&valid_ptrs, false);
+    if let Some(trace) = trace.as_mut() {
+        trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
+    }
     trace_phase_record(&mut trace, "root_marking", phase_start);
 
     // 3b. Gen-GC Phase C3: scan remembered set as additional roots.
@@ -2330,6 +2373,25 @@ fn try_mark_value(value_bits: u64, valid_ptrs: &ValidPointerSet) -> bool {
     }
 }
 
+#[inline]
+fn try_mark_raw_root_addr(addr: usize, valid_ptrs: &ValidPointerSet) -> bool {
+    if addr == 0 || !valid_ptrs.contains(&addr) {
+        return false;
+    }
+    unsafe {
+        let header = header_from_user_ptr(addr as *const u8);
+        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
+            return false;
+        }
+        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+            return false;
+        }
+        (*header).gc_flags |= GC_FLAG_MARKED;
+        push_mark_seed(header);
+        true
+    }
+}
+
 /// Conservative stack scan: scan the current thread's stack for heap pointers.
 /// Handles BOTH NaN-boxed pointers (POINTER_TAG/STRING_TAG/BIGINT_TAG) AND raw I64 pointers.
 /// Raw I64 pointers arise from Perry's `is_array`/`is_string`/`is_pointer`/`is_closure` local
@@ -2705,6 +2767,328 @@ fn get_stack_bottom() -> usize {
     0 // Stack scanning not supported on this OS/arch
 }
 
+enum RuntimeRootVisitMode<'a> {
+    Mark { valid_ptrs: &'a ValidPointerSet },
+    Rewrite { valid_ptrs: &'a ValidPointerSet },
+    Copy { mark: &'a mut dyn FnMut(f64) },
+}
+
+/// Mutable runtime-root visitor used by GC-owned scanner families.
+///
+/// A scanner calls the slot method that matches its storage. During mark,
+/// root slots mark their current referent. During evacuation rewrite, the
+/// same scanner is revisited and any forwarded referent is written back to
+/// the runtime-owned slot. Compatibility copy mode powers the legacy
+/// `scan_*_roots(mark)` wrappers.
+pub struct RuntimeRootVisitor<'a> {
+    mode: RuntimeRootVisitMode<'a>,
+}
+
+impl<'a> RuntimeRootVisitor<'a> {
+    fn for_mark(valid_ptrs: &'a ValidPointerSet) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::Mark { valid_ptrs },
+        }
+    }
+
+    fn for_rewrite(valid_ptrs: &'a ValidPointerSet) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::Rewrite { valid_ptrs },
+        }
+    }
+
+    pub fn for_copy(mark: &'a mut dyn FnMut(f64)) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::Copy { mark },
+        }
+    }
+
+    #[inline]
+    fn visit_nanbox_bits(&mut self, bits: u64) -> Option<u64> {
+        match &mut self.mode {
+            RuntimeRootVisitMode::Mark { valid_ptrs } => {
+                try_mark_value(bits, valid_ptrs);
+                None
+            }
+            RuntimeRootVisitMode::Rewrite { valid_ptrs } => {
+                try_rewrite_nanboxed_value(bits, valid_ptrs)
+            }
+            RuntimeRootVisitMode::Copy { mark } => {
+                (*mark)(f64::from_bits(bits));
+                None
+            }
+        }
+    }
+
+    #[inline]
+    fn visit_tagged_raw_addr(&mut self, addr: usize, copy_tag: u64) -> Option<usize> {
+        if addr == 0 {
+            return None;
+        }
+        match &mut self.mode {
+            RuntimeRootVisitMode::Mark { valid_ptrs } => {
+                try_mark_raw_root_addr(addr, valid_ptrs);
+                None
+            }
+            RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
+            RuntimeRootVisitMode::Copy { mark } => {
+                (*mark)(f64::from_bits(copy_tag | (addr as u64 & POINTER_MASK)));
+                None
+            }
+        }
+    }
+
+    #[inline]
+    fn visit_metadata_raw_addr(&mut self, addr: usize) -> Option<usize> {
+        if addr == 0 {
+            return None;
+        }
+        match &mut self.mode {
+            RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
+            RuntimeRootVisitMode::Mark { .. } | RuntimeRootVisitMode::Copy { .. } => None,
+        }
+    }
+
+    /// Visit a mutable NaN-boxed JSValue stored as `f64`.
+    /// Returns true when rewrite mode changed the slot.
+    pub fn visit_nanbox_f64_slot(&mut self, slot: &mut f64) -> bool {
+        let bits = slot.to_bits();
+        if let Some(new_bits) = self.visit_nanbox_bits(bits) {
+            *slot = f64::from_bits(new_bits);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a mutable NaN-boxed JSValue stored as `u64` bits.
+    /// Returns true when rewrite mode changed the slot.
+    pub fn visit_nanbox_u64_slot(&mut self, slot: &mut u64) -> bool {
+        if let Some(new_bits) = self.visit_nanbox_bits(*slot) {
+            *slot = new_bits;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw `f64` slot address when the owner cannot hand out a
+    /// Rust `&mut f64` (for example `static mut` storage).
+    ///
+    /// # Safety
+    /// `slot` must be valid for a read and, in rewrite mode, a write.
+    pub unsafe fn visit_nanbox_f64_raw_slot(&mut self, slot: *mut f64) -> bool {
+        if slot.is_null() {
+            return false;
+        }
+        let bits = (*slot).to_bits();
+        if let Some(new_bits) = self.visit_nanbox_bits(bits) {
+            *slot = f64::from_bits(new_bits);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw `u64` slot address when the owner cannot hand out a
+    /// Rust `&mut u64`.
+    ///
+    /// # Safety
+    /// `slot` must be valid for a read and, in rewrite mode, a write.
+    pub unsafe fn visit_nanbox_u64_raw_slot(&mut self, slot: *mut u64) -> bool {
+        if slot.is_null() {
+            return false;
+        }
+        if let Some(new_bits) = self.visit_nanbox_bits(*slot) {
+            *slot = new_bits;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a `Cell<f64>` that stores a NaN-boxed JSValue.
+    pub fn visit_cell_f64_slot(&mut self, slot: &Cell<f64>) -> bool {
+        let bits = slot.get().to_bits();
+        if let Some(new_bits) = self.visit_nanbox_bits(bits) {
+            slot.set(f64::from_bits(new_bits));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a root slot that stores a raw mutable heap pointer.
+    pub fn visit_raw_mut_ptr_slot<T>(&mut self, slot: &mut *mut T) -> bool {
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, POINTER_TAG) {
+            *slot = new_addr as *mut T;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a root slot that stores a raw const heap pointer.
+    pub fn visit_raw_const_ptr_slot<T>(&mut self, slot: &mut *const T) -> bool {
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, POINTER_TAG) {
+            *slot = new_addr as *const T;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw const heap pointer slot, using a specific NaN-box tag
+    /// when the visitor is running in compatibility copy mode.
+    pub fn visit_tagged_raw_const_ptr_slot<T>(&mut self, slot: &mut *const T, tag: u64) -> bool {
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, tag) {
+            *slot = new_addr as *const T;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a root slot that stores a raw heap pointer as `usize`.
+    pub fn visit_usize_slot(&mut self, slot: &mut usize) -> bool {
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot, POINTER_TAG) {
+            *slot = new_addr;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw heap pointer stored as `usize`, using a specific
+    /// NaN-box tag when the visitor is running in compatibility copy mode.
+    pub fn visit_tagged_usize_slot(&mut self, slot: &mut usize, tag: u64) -> bool {
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot, tag) {
+            *slot = new_addr;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a root slot that stores a raw heap pointer as `i64`.
+    pub fn visit_i64_slot(&mut self, slot: &mut i64) -> bool {
+        if *slot <= 0 {
+            return false;
+        }
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot as usize, POINTER_TAG) {
+            *slot = new_addr as i64;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw `usize` slot address.
+    ///
+    /// # Safety
+    /// `slot` must be valid for a read and, in rewrite mode, a write.
+    pub unsafe fn visit_usize_raw_slot(&mut self, slot: *mut usize) -> bool {
+        if slot.is_null() {
+            return false;
+        }
+        if let Some(new_addr) = self.visit_tagged_raw_addr(*slot, POINTER_TAG) {
+            *slot = new_addr;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit an atomic raw pointer root slot.
+    pub fn visit_atomic_raw_mut_ptr_slot<T>(
+        &mut self,
+        slot: &std::sync::atomic::AtomicPtr<T>,
+        load_ordering: std::sync::atomic::Ordering,
+        store_ordering: std::sync::atomic::Ordering,
+    ) -> bool {
+        let current = slot.load(load_ordering);
+        if let Some(new_addr) = self.visit_tagged_raw_addr(current as usize, POINTER_TAG) {
+            slot.store(new_addr as *mut T, atomic_store_ordering(store_ordering));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit an atomic `i64` root slot containing a raw heap pointer.
+    pub fn visit_atomic_i64_slot(
+        &mut self,
+        slot: &std::sync::atomic::AtomicI64,
+        load_ordering: std::sync::atomic::Ordering,
+        store_ordering: std::sync::atomic::Ordering,
+    ) -> bool {
+        let current = slot.load(load_ordering);
+        if current <= 0 {
+            return false;
+        }
+        if let Some(new_addr) = self.visit_tagged_raw_addr(current as usize, POINTER_TAG) {
+            slot.store(new_addr as i64, atomic_store_ordering(store_ordering));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a metadata-only raw heap pointer key. The value is rewritten
+    /// if forwarded, but it is not marked as a root and copy mode emits
+    /// nothing.
+    pub fn visit_metadata_usize_slot(&mut self, slot: &mut usize) -> bool {
+        if let Some(new_addr) = self.visit_metadata_raw_addr(*slot) {
+            *slot = new_addr;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a metadata-only raw heap pointer key stored as `i64`.
+    pub fn visit_metadata_i64_slot(&mut self, slot: &mut i64) -> bool {
+        if *slot <= 0 {
+            return false;
+        }
+        if let Some(new_addr) = self.visit_metadata_raw_addr(*slot as usize) {
+            *slot = new_addr as i64;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a raw metadata-only `usize` slot address.
+    ///
+    /// # Safety
+    /// `slot` must be valid for a read and, in rewrite mode, a write.
+    pub unsafe fn visit_metadata_usize_raw_slot(&mut self, slot: *mut usize) -> bool {
+        if slot.is_null() {
+            return false;
+        }
+        if let Some(new_addr) = self.visit_metadata_raw_addr(*slot) {
+            *slot = new_addr;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[inline]
+fn atomic_store_ordering(ordering: std::sync::atomic::Ordering) -> std::sync::atomic::Ordering {
+    match ordering {
+        std::sync::atomic::Ordering::Relaxed => std::sync::atomic::Ordering::Relaxed,
+        std::sync::atomic::Ordering::Acquire | std::sync::atomic::Ordering::Release => {
+            std::sync::atomic::Ordering::Release
+        }
+        std::sync::atomic::Ordering::AcqRel => std::sync::atomic::Ordering::Release,
+        std::sync::atomic::Ordering::SeqCst => std::sync::atomic::Ordering::SeqCst,
+        _ => std::sync::atomic::Ordering::SeqCst,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MutableRootSlotKind {
     ShadowStack,
@@ -2795,15 +3179,7 @@ fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
     // against valid_ptrs and mark the target, without the conservative
     // interior-pointer fallback used by stack scanning.
     let raw_ptr = bits as usize;
-    if raw_ptr != 0 && valid_ptrs.contains(&raw_ptr) {
-        unsafe {
-            let header = header_from_user_ptr(raw_ptr as *const u8);
-            if (*header).gc_flags & GC_FLAG_MARKED == 0 && (*header).gc_flags & GC_FLAG_PINNED == 0
-            {
-                (*header).gc_flags |= GC_FLAG_MARKED;
-            }
-        }
-    }
+    try_mark_raw_root_addr(raw_ptr, valid_ptrs);
 }
 
 /// Mark mutable roots (shadow-stack slots and registered globals).
@@ -2836,16 +3212,21 @@ fn nanboxed_root_header(value_bits: u64, valid_ptrs: &ValidPointerSet) -> Option
 }
 
 #[inline]
-fn pin_conservative_root_header(header: *mut GcHeader) {
+fn pin_conservative_root_header(header: *mut GcHeader) -> bool {
     CONS_PINNED.with(|s| {
-        s.borrow_mut().insert(header as usize);
-    });
+        let mut pinned = s.borrow_mut();
+        pinned.insert(header as usize)
+    })
 }
 
 #[inline]
-fn mark_copy_only_scanner_bits(bits: u64, valid_ptrs: &ValidPointerSet, pin_discoveries: bool) {
+fn mark_copy_only_scanner_bits(
+    bits: u64,
+    valid_ptrs: &ValidPointerSet,
+    pin_discoveries: bool,
+) -> Option<usize> {
     let Some(header) = nanboxed_root_header(bits, valid_ptrs) else {
-        return;
+        return None;
     };
     unsafe {
         let flags = (*header).gc_flags;
@@ -2855,8 +3236,11 @@ fn mark_copy_only_scanner_bits(bits: u64, valid_ptrs: &ValidPointerSet, pin_disc
         }
     }
     if pin_discoveries {
-        pin_conservative_root_header(header);
+        if pin_conservative_root_header(header) {
+            return Some(unsafe { (*header).size as usize });
+        }
     }
+    None
 }
 
 #[inline]
@@ -2878,16 +3262,37 @@ fn mark_singleton_closure_root(user: usize, valid_ptrs: &ValidPointerSet, pin_di
 struct RegisteredRootMarkContext {
     valid_ptrs: *const ValidPointerSet,
     pin_discoveries: bool,
+    legacy_stats: *mut LegacyRootTraceStats,
 }
 
-/// Run registered root scanners (promise queues, timers, exception state).
-fn mark_registered_roots(valid_ptrs: &ValidPointerSet, pin_discoveries: bool) {
+/// Run registered runtime-owned scanners that expose mutable slots.
+fn mark_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
+    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let mut visitor = RuntimeRootVisitor::for_mark(valid_ptrs);
+    for scanner in scanners {
+        scanner(&mut visitor);
+    }
+}
+
+/// Run legacy copy-only root scanners. When evacuation is enabled,
+/// every discovered root is pinned because the scanner API gives us no
+/// slot to rewrite after forwarding.
+fn mark_registered_roots(
+    valid_ptrs: &ValidPointerSet,
+    pin_discoveries: bool,
+) -> LegacyRootTraceStats {
+    let mut legacy_stats = LegacyRootTraceStats::default();
     // Collect scanners first to avoid borrow conflicts
     let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
 
     for scanner in scanners {
         scanner(&mut |value: f64| {
-            mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, pin_discoveries);
+            if let Some(bytes) =
+                mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, pin_discoveries)
+            {
+                legacy_stats.pinned_roots += 1;
+                legacy_stats.pinned_bytes += bytes;
+            }
         });
     }
 
@@ -2895,6 +3300,7 @@ fn mark_registered_roots(valid_ptrs: &ValidPointerSet, pin_discoveries: bool) {
     let mut ctx = RegisteredRootMarkContext {
         valid_ptrs: valid_ptrs as *const ValidPointerSet,
         pin_discoveries,
+        legacy_stats: &mut legacy_stats as *mut LegacyRootTraceStats,
     };
     let ctx = &mut ctx as *mut RegisteredRootMarkContext as *mut c_void;
     for scanner in ffi_scanners {
@@ -2909,6 +3315,7 @@ fn mark_registered_roots(valid_ptrs: &ValidPointerSet, pin_discoveries: bool) {
         let user = closure_ptr as usize;
         mark_singleton_closure_root(user, valid_ptrs, pin_discoveries);
     }
+    legacy_stats
 }
 
 extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
@@ -2920,7 +3327,16 @@ extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
         return;
     }
     let valid_ptrs = unsafe { &*ctx.valid_ptrs };
-    mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, ctx.pin_discoveries);
+    if let Some(bytes) =
+        mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, ctx.pin_discoveries)
+    {
+        if !ctx.legacy_stats.is_null() {
+            unsafe {
+                (*ctx.legacy_stats).pinned_roots += 1;
+                (*ctx.legacy_stats).pinned_bytes += bytes;
+            }
+        }
+    }
 }
 
 /// Gen-GC Phase C3: mark the remembered set as roots. Old-gen
@@ -4264,14 +4680,26 @@ pub fn promise_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::promise::scan_promise_roots(mark);
 }
 
+pub fn promise_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::promise::scan_promise_roots_mut(visitor);
+}
+
 /// Root scanner for timer callbacks
 pub fn timer_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::timer::scan_timer_roots(mark);
 }
 
+pub fn timer_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::timer::scan_timer_roots_mut(visitor);
+}
+
 /// Root scanner for current exception
 pub fn exception_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::exception::scan_exception_roots(mark);
+}
+
+pub fn exception_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::exception::scan_exception_roots_mut(visitor);
 }
 
 /// Root scanner for active AsyncLocalStorage context.
@@ -4280,14 +4708,27 @@ pub fn async_context_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::builtins::scan_queued_microtask_roots(mark);
 }
 
+pub fn async_context_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::async_context::scan_active_context_roots_mut(visitor);
+    crate::builtins::scan_queued_microtask_roots_mut(visitor);
+}
+
 /// Root scanner for async_hooks hook callbacks and user resource references.
 pub fn async_hooks_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::async_hooks::scan_async_hooks_roots(mark);
 }
 
+pub fn async_hooks_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::async_hooks::scan_async_hooks_roots_mut(visitor);
+}
+
 /// Root scanner for object shape cache (keys arrays shared across objects with same shape)
 pub fn shape_cache_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::object::scan_shape_cache_roots(mark);
+}
+
+pub fn shape_cache_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::object::scan_shape_cache_roots_mut(visitor);
 }
 
 /// Root scanner for the shape-transition cache used by the dynamic-key
@@ -4298,9 +4739,17 @@ pub fn transition_cache_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::object::scan_transition_cache_roots(mark);
 }
 
+pub fn transition_cache_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::object::scan_transition_cache_roots_mut(visitor);
+}
+
 /// Root scanner for OVERFLOW_FIELDS (per-object extra properties beyond inline slots)
 pub fn overflow_fields_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::object::scan_overflow_fields_roots(mark);
+}
+
+pub fn overflow_fields_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::object::scan_overflow_fields_roots_mut(visitor);
 }
 
 /// Root scanner for in-progress JSON.parse frames (issue #46).
@@ -4308,6 +4757,10 @@ pub fn overflow_fields_root_scanner(mark: &mut dyn FnMut(f64)) {
 /// and the fresh string/object values about to be pushed into them.
 pub fn json_parse_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::json::scan_parse_roots(mark);
+}
+
+pub fn json_parse_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::json::scan_parse_roots_mut(visitor);
 }
 
 // ---------------------------------------------------------------------------
@@ -4581,6 +5034,29 @@ fn try_rewrite_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
     }
 }
 
+fn try_rewrite_nanboxed_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
+    let tag = bits & TAG_MASK;
+    if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
+        return None;
+    }
+    let ptr_addr = (bits & POINTER_MASK) as usize;
+    let new_user = try_rewrite_raw_addr(ptr_addr, valid_ptrs)?;
+    Some(tag | (new_user as u64 & POINTER_MASK))
+}
+
+fn try_rewrite_raw_addr(ptr_addr: usize, valid_ptrs: &ValidPointerSet) -> Option<usize> {
+    if ptr_addr == 0 || !valid_ptrs.contains(&ptr_addr) {
+        return None;
+    }
+    unsafe {
+        let header = (ptr_addr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
+        if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
+            return None;
+        }
+        Some(forwarding_address(header) as usize)
+    }
+}
+
 /// In-place rewrite helper: read `*slot`, run it through
 /// `try_rewrite_value`, write back if a rewrite was produced.
 #[inline]
@@ -4774,15 +5250,23 @@ fn rewrite_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
     });
 }
 
+fn rewrite_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
+    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let mut visitor = RuntimeRootVisitor::for_rewrite(valid_ptrs);
+    for scanner in scanners {
+        scanner(&mut visitor);
+    }
+}
+
 /// Top-level Phase C4b-γ-2 entry: rewrite every reference site we
 /// own. Skipped: conservatively-discovered C-stack words (we can't
 /// safely overwrite arbitrary stack memory; pinning of conservative-
 /// root targets in `gc_collect_minor` keeps those references valid
-/// without rewriting). Skipped: registered root scanners (their
-/// API is copy-only); when evacuation is enabled those callbacks pin
-/// their own discoveries directly during root marking.
+/// without rewriting). Legacy copy-only scanners still pin their own
+/// discoveries directly during root marking.
 fn rewrite_forwarded_references(valid_ptrs: &ValidPointerSet) {
     rewrite_mutable_root_slots(valid_ptrs);
+    rewrite_mutable_registered_roots(valid_ptrs);
     rewrite_heap_objects(valid_ptrs);
 }
 
@@ -4797,6 +5281,15 @@ pub fn is_conservatively_pinned(header: *const GcHeader) -> bool {
 /// Test-only diagnostic: number of objects pinned this cycle.
 pub fn cons_pinned_count() -> usize {
     CONS_PINNED.with(|s| s.borrow().len())
+}
+
+fn cons_pinned_bytes() -> usize {
+    CONS_PINNED.with(|s| {
+        s.borrow()
+            .iter()
+            .map(|&header| unsafe { (*(header as *const GcHeader)).size as usize })
+            .sum()
+    })
 }
 
 /// Gen-GC Phase C1: compatibility write barrier. Test callers and
@@ -5092,36 +5585,38 @@ pub fn shadow_stack_root_scanner(mark: &mut dyn FnMut(f64)) {
 
 /// Initialize GC root scanners. Called once at runtime startup.
 pub fn gc_init() {
-    gc_register_root_scanner(promise_root_scanner);
-    gc_register_root_scanner(timer_root_scanner);
-    gc_register_root_scanner(exception_root_scanner);
-    gc_register_root_scanner(async_context_root_scanner);
-    gc_register_root_scanner(async_hooks_root_scanner);
-    gc_register_root_scanner(shape_cache_root_scanner);
-    gc_register_root_scanner(crate::regex::scan_last_exec_groups_root);
-    gc_register_root_scanner(crate::array::scan_template_raw_roots);
-    gc_register_root_scanner(transition_cache_root_scanner);
-    gc_register_root_scanner(overflow_fields_root_scanner);
-    gc_register_root_scanner(json_parse_root_scanner);
-    gc_register_root_scanner(intern_table_root_scanner);
-    gc_register_root_scanner(crate::builtins::scan_console_log_singleton_roots);
+    gc_register_mutable_root_scanner(promise_mutable_root_scanner);
+    gc_register_mutable_root_scanner(timer_mutable_root_scanner);
+    gc_register_mutable_root_scanner(exception_mutable_root_scanner);
+    gc_register_mutable_root_scanner(async_context_mutable_root_scanner);
+    gc_register_mutable_root_scanner(async_hooks_mutable_root_scanner);
+    gc_register_mutable_root_scanner(shape_cache_mutable_root_scanner);
+    gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
+    gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
+    gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
+    gc_register_mutable_root_scanner(overflow_fields_mutable_root_scanner);
+    gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+    gc_register_mutable_root_scanner(intern_table_mutable_root_scanner);
+    gc_register_mutable_root_scanner(crate::builtins::scan_console_log_singleton_roots_mut);
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by
     // `node_submodules.rs`. Without this scanner the next GC cycle
     // after first import-binding use would reclaim the singletons
     // (nothing else holds them — they live for the program's lifetime
     // via codegen `getter` calls, not via a user-visible JSValue root).
-    gc_register_root_scanner(crate::node_submodules::scan_node_submodule_singleton_roots);
+    gc_register_mutable_root_scanner(
+        crate::node_submodules::scan_node_submodule_singleton_roots_mut,
+    );
     // Box-capture root scanner (mutable closure captures, esp. the
     // generator state-machine's `__iter` and `__step` boxes that hold
     // the iter object + step closure across awaits).
-    gc_register_root_scanner(crate::r#box::scan_box_roots);
+    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
     // Iter-result scratch slot — the async-step fast path stows the
     // generator's most recent yield value here; it stays live until
     // the step driver reads it back.
-    gc_register_root_scanner(crate::promise::scan_iter_result_root);
+    gc_register_mutable_root_scanner(crate::promise::scan_iter_result_root_mut);
     // Async-step thunk single-slot cache (build_async_step_thunks).
-    gc_register_root_scanner(crate::promise::scan_async_step_thunk_cache);
+    gc_register_mutable_root_scanner(crate::promise::scan_async_step_thunk_cache_mut);
     // perry/tui hook + state slot pools — they store raw NaN-boxed
     // value bits but the GC has no other way to know which slots hold
     // heap pointers (arrays/objects/strings stashed via setState /
@@ -5130,15 +5625,19 @@ pub fn gc_init() {
     // the next allocation triggered minor GC, and the array was
     // reclaimed because nothing else held it — `messages.map(…)` on
     // the stale pointer produced an empty render.
-    gc_register_root_scanner(crate::tui::hooks::scan_hook_slot_roots);
-    gc_register_root_scanner(crate::tui::state::scan_state_slot_roots);
+    gc_register_mutable_root_scanner(crate::tui::hooks::scan_hook_slot_roots_mut);
+    gc_register_mutable_root_scanner(crate::tui::state::scan_state_slot_roots_mut);
     #[cfg(feature = "ohos-napi")]
-    gc_register_root_scanner(crate::arkts_callbacks::arkts_callbacks_root_scanner);
+    gc_register_mutable_root_scanner(crate::arkts_callbacks::arkts_callbacks_root_scanner_mut);
 }
 
 /// Root scanner for the string intern table.
 pub fn intern_table_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::string::scan_intern_table_roots(mark);
+}
+
+pub fn intern_table_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::string::scan_intern_table_roots_mut(visitor);
 }
 
 /// FFI: initialize GC (called from compiled code startup)
@@ -6433,6 +6932,424 @@ mod tests {
         );
 
         js_shadow_frame_pop(shadow);
+    }
+
+    #[test]
+    fn test_runtime_root_visitor_marks_and_rewrites_nanbox_slot() {
+        let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let valid_ptrs = build_valid_pointer_set();
+        let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        let nursery_hdr = unsafe { header_from_user_ptr(nursery_user) as *mut GcHeader };
+        unsafe {
+            set_forwarding_address(nursery_hdr, old_user);
+        }
+
+        let mut slot = f64::from_bits(POINTER_TAG | (nursery_user as u64 & POINTER_MASK));
+        RuntimeRootVisitor::for_mark(&valid_ptrs).visit_nanbox_f64_slot(&mut slot);
+        unsafe {
+            assert_ne!((*nursery_hdr).gc_flags & GC_FLAG_MARKED, 0);
+        }
+
+        RuntimeRootVisitor::for_rewrite(&valid_ptrs).visit_nanbox_f64_slot(&mut slot);
+        assert_eq!(
+            slot.to_bits(),
+            POINTER_TAG | (old_user as u64 & POINTER_MASK)
+        );
+    }
+
+    #[test]
+    fn test_runtime_root_visitor_rewrites_raw_pointer_slots() {
+        let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let valid_ptrs = build_valid_pointer_set();
+        let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        unsafe {
+            set_forwarding_address(
+                header_from_user_ptr(nursery_user) as *mut GcHeader,
+                old_user,
+            );
+        }
+
+        let mut mut_ptr = nursery_user;
+        let mut const_ptr = nursery_user as *const u8;
+        let mut usize_slot = nursery_user as usize;
+        let mut i64_slot = nursery_user as i64;
+
+        let mut visitor = RuntimeRootVisitor::for_rewrite(&valid_ptrs);
+        visitor.visit_raw_mut_ptr_slot(&mut mut_ptr);
+        visitor.visit_raw_const_ptr_slot(&mut const_ptr);
+        visitor.visit_usize_slot(&mut usize_slot);
+        visitor.visit_i64_slot(&mut i64_slot);
+
+        assert_eq!(mut_ptr, old_user);
+        assert_eq!(const_ptr, old_user as *const u8);
+        assert_eq!(usize_slot, old_user as usize);
+        assert_eq!(i64_slot, old_user as i64);
+    }
+
+    #[test]
+    fn test_runtime_root_visitor_rewrites_cell_and_atomic_slots() {
+        let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let valid_ptrs = build_valid_pointer_set();
+        let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        unsafe {
+            set_forwarding_address(
+                header_from_user_ptr(nursery_user) as *mut GcHeader,
+                old_user,
+            );
+        }
+
+        let cell = Cell::new(f64::from_bits(
+            POINTER_TAG | (nursery_user as u64 & POINTER_MASK),
+        ));
+        let atomic = std::sync::atomic::AtomicPtr::new(nursery_user);
+        let atomic_i64 = std::sync::atomic::AtomicI64::new(nursery_user as i64);
+
+        let mut visitor = RuntimeRootVisitor::for_rewrite(&valid_ptrs);
+        visitor.visit_cell_f64_slot(&cell);
+        visitor.visit_atomic_raw_mut_ptr_slot(
+            &atomic,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Release,
+        );
+        visitor.visit_atomic_i64_slot(
+            &atomic_i64,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Release,
+        );
+
+        assert_eq!(
+            cell.get().to_bits(),
+            POINTER_TAG | (old_user as u64 & POINTER_MASK)
+        );
+        assert_eq!(atomic.load(std::sync::atomic::Ordering::Acquire), old_user);
+        assert_eq!(
+            atomic_i64.load(std::sync::atomic::Ordering::Acquire),
+            old_user as i64
+        );
+    }
+
+    #[test]
+    fn test_runtime_root_visitor_rewrites_metadata_without_marking() {
+        let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let valid_ptrs = build_valid_pointer_set();
+        let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        let nursery_hdr = unsafe { header_from_user_ptr(nursery_user) as *mut GcHeader };
+        unsafe {
+            set_forwarding_address(nursery_hdr, old_user);
+        }
+
+        let mut metadata = nursery_user as usize;
+        RuntimeRootVisitor::for_mark(&valid_ptrs).visit_metadata_usize_slot(&mut metadata);
+        unsafe {
+            assert_eq!(
+                (*nursery_hdr).gc_flags & GC_FLAG_MARKED,
+                0,
+                "metadata-only slots must not become roots"
+            );
+        }
+
+        RuntimeRootVisitor::for_rewrite(&valid_ptrs).visit_metadata_usize_slot(&mut metadata);
+        assert_eq!(metadata, old_user as usize);
+    }
+
+    #[test]
+    fn test_promise_iter_result_mutable_scanner_rewrites_slot() {
+        let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let valid_ptrs = build_valid_pointer_set();
+        let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        unsafe {
+            set_forwarding_address(
+                header_from_user_ptr(nursery_user) as *mut GcHeader,
+                old_user,
+            );
+        }
+
+        let initial = f64::from_bits(POINTER_TAG | (nursery_user as u64 & POINTER_MASK));
+        crate::promise::js_iter_result_set(initial, 0);
+
+        let mut visitor = RuntimeRootVisitor::for_rewrite(&valid_ptrs);
+        crate::promise::scan_iter_result_root_mut(&mut visitor);
+
+        assert_eq!(
+            crate::promise::js_iter_result_get_value().to_bits(),
+            POINTER_TAG | (old_user as u64 & POINTER_MASK)
+        );
+        crate::promise::js_iter_result_set(0.0, 0);
+    }
+
+    struct ForwardedRootFixture {
+        valid_ptrs: ValidPointerSet,
+        nursery_user: *mut u8,
+        old_user: *mut u8,
+        nursery_bits: u64,
+        old_bits: u64,
+    }
+
+    impl ForwardedRootFixture {
+        fn new() -> Self {
+            let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+            let valid_ptrs = build_valid_pointer_set();
+            let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+            unsafe {
+                set_forwarding_address(
+                    header_from_user_ptr(nursery_user) as *mut GcHeader,
+                    old_user,
+                );
+            }
+            Self {
+                valid_ptrs,
+                nursery_user,
+                old_user,
+                nursery_bits: POINTER_TAG | (nursery_user as u64 & POINTER_MASK),
+                old_bits: POINTER_TAG | (old_user as u64 & POINTER_MASK),
+            }
+        }
+
+        fn nursery_value(&self) -> f64 {
+            f64::from_bits(self.nursery_bits)
+        }
+
+        fn old_addr(&self) -> usize {
+            self.old_user as usize
+        }
+
+        fn nursery_addr(&self) -> usize {
+            self.nursery_user as usize
+        }
+
+        fn nursery_i64(&self) -> i64 {
+            self.nursery_user as i64
+        }
+    }
+
+    #[test]
+    fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
+        let fixture = ForwardedRootFixture::new();
+        let active_context_handle = -724_331;
+        let shape_id = 0x51A9_E001;
+        let box_ptr = crate::r#box::js_box_alloc(fixture.nursery_value());
+
+        crate::promise::test_seed_promise_scanner_roots(
+            fixture.nursery_user as *mut crate::promise::Promise,
+            fixture.nursery_value(),
+            fixture.nursery_value(),
+            fixture.nursery_user as *const crate::closure::ClosureHeader,
+            fixture.nursery_user as *mut crate::promise::Promise,
+        );
+        crate::timer::test_seed_timer_scanner_roots(
+            fixture.nursery_user as *mut crate::promise::Promise,
+            fixture.nursery_value(),
+            fixture.nursery_i64(),
+            fixture.nursery_value(),
+            fixture.nursery_value(),
+        );
+        crate::exception::test_set_exception(fixture.nursery_value());
+        crate::async_context::clear_store(active_context_handle);
+        crate::async_context::enter_with(active_context_handle, fixture.nursery_value());
+        crate::builtins::test_seed_queued_microtask(fixture.nursery_i64(), fixture.nursery_value());
+        crate::async_hooks::test_seed_async_hooks_scanner_roots(
+            fixture.nursery_user as *const crate::closure::ClosureHeader,
+            fixture.nursery_value(),
+        );
+        crate::object::test_seed_shape_cache_root(
+            shape_id,
+            fixture.nursery_user as *mut crate::array::ArrayHeader,
+        );
+        crate::regex::test_set_last_exec_groups(
+            fixture.nursery_user as *mut crate::object::ObjectHeader,
+        );
+        crate::array::test_seed_template_raw_roots(
+            fixture.nursery_user as *mut crate::array::ArrayHeader,
+            fixture.nursery_user as *mut crate::array::ArrayHeader,
+        );
+        crate::object::test_seed_transition_cache_root(fixture.nursery_addr());
+        crate::object::test_seed_overflow_fields_root(fixture.nursery_addr(), fixture.nursery_bits);
+        crate::json::test_seed_parse_roots(
+            fixture.nursery_value(),
+            fixture.nursery_user as *const crate::string::StringHeader,
+        );
+        crate::string::test_seed_intern_table_root(fixture.nursery_addr());
+        crate::builtins::test_set_console_log_singleton(fixture.nursery_i64());
+        crate::node_submodules::test_seed_node_submodule_roots(
+            fixture.nursery_user as *mut crate::closure::ClosureHeader,
+            fixture.nursery_user as *mut crate::object::ObjectHeader,
+            fixture.nursery_user as *mut crate::closure::ClosureHeader,
+        );
+        crate::promise::js_iter_result_set(fixture.nursery_value(), 0);
+        crate::promise::test_seed_async_step_thunk_cache(
+            fixture.nursery_addr(),
+            fixture.nursery_user as *mut crate::closure::ClosureHeader,
+            fixture.nursery_user as *mut crate::closure::ClosureHeader,
+        );
+        crate::tui::hooks::test_seed_hook_slot_roots(fixture.nursery_bits);
+        crate::tui::state::test_reset_state_slots();
+        let tui_state = crate::tui::state::js_perry_tui_state_alloc(fixture.nursery_value());
+
+        let mut visitor = RuntimeRootVisitor::for_rewrite(&fixture.valid_ptrs);
+        promise_mutable_root_scanner(&mut visitor);
+        timer_mutable_root_scanner(&mut visitor);
+        exception_mutable_root_scanner(&mut visitor);
+        async_context_mutable_root_scanner(&mut visitor);
+        async_hooks_mutable_root_scanner(&mut visitor);
+        shape_cache_mutable_root_scanner(&mut visitor);
+        crate::regex::scan_last_exec_groups_root_mut(&mut visitor);
+        crate::array::scan_template_raw_roots_mut(&mut visitor);
+        transition_cache_mutable_root_scanner(&mut visitor);
+        overflow_fields_mutable_root_scanner(&mut visitor);
+        json_parse_mutable_root_scanner(&mut visitor);
+        intern_table_mutable_root_scanner(&mut visitor);
+        crate::builtins::scan_console_log_singleton_roots_mut(&mut visitor);
+        crate::node_submodules::scan_node_submodule_singleton_roots_mut(&mut visitor);
+        crate::r#box::scan_box_roots_mut(&mut visitor);
+        crate::promise::scan_iter_result_root_mut(&mut visitor);
+        crate::promise::scan_async_step_thunk_cache_mut(&mut visitor);
+        crate::tui::hooks::scan_hook_slot_roots_mut(&mut visitor);
+        crate::tui::state::scan_state_slot_roots_mut(&mut visitor);
+
+        let promise = crate::promise::test_promise_scanner_snapshot();
+        assert_eq!(promise.task_promise_ptr, fixture.old_addr());
+        assert_eq!(promise.task_value_bits, fixture.old_bits);
+        assert_eq!(promise.task_context_store_bits, fixture.old_bits);
+        assert_eq!(promise.inline_callback_ptr, fixture.old_addr());
+        assert_eq!(promise.inline_next_ptr, fixture.old_addr());
+        assert_eq!(promise.inline_value_bits, fixture.old_bits);
+        assert_eq!(promise.async_step_callback_ptr, fixture.old_addr());
+        assert_eq!(promise.async_step_next_ptr, fixture.old_addr());
+        assert_eq!(promise.async_step_value_bits, fixture.old_bits);
+        assert_eq!(promise.promise_context_key, fixture.old_addr());
+        assert_eq!(promise.promise_context_store_bits, fixture.old_bits);
+        assert_eq!(promise.scheduled_promise_ptr, fixture.old_addr());
+        assert_eq!(promise.scheduled_value_bits, fixture.old_bits);
+
+        let timer = crate::timer::test_timer_scanner_snapshot();
+        assert_eq!(timer.timeout_promise_ptr, fixture.old_addr());
+        assert_eq!(timer.timeout_value_bits, fixture.old_bits);
+        assert_eq!(timer.callback_ptr, fixture.old_addr());
+        assert_eq!(timer.callback_arg_bits, fixture.old_bits);
+        assert_eq!(timer.callback_context_store_bits, fixture.old_bits);
+        assert_eq!(timer.interval_callback_ptr, fixture.old_addr());
+        assert_eq!(timer.interval_context_store_bits, fixture.old_bits);
+
+        assert_eq!(
+            crate::exception::js_get_exception().to_bits(),
+            fixture.old_bits
+        );
+        assert_eq!(
+            crate::async_context::get_store(active_context_handle)
+                .map(f64::to_bits)
+                .unwrap_or(0),
+            fixture.old_bits
+        );
+        assert_eq!(
+            crate::builtins::test_queued_microtask_snapshot(),
+            (fixture.old_addr(), fixture.old_bits)
+        );
+        assert_eq!(
+            crate::async_hooks::test_async_hooks_scanner_snapshot(),
+            (fixture.old_addr(), fixture.old_bits)
+        );
+        assert_eq!(
+            crate::object::test_shape_cache_root(shape_id),
+            (fixture.old_addr(), fixture.old_addr())
+        );
+        assert_eq!(crate::regex::test_last_exec_groups(), fixture.old_addr());
+        assert_eq!(
+            crate::array::test_template_raw_roots(),
+            (fixture.old_addr(), fixture.old_addr())
+        );
+        assert_eq!(
+            crate::object::test_transition_cache_root(),
+            fixture.old_addr()
+        );
+        assert_eq!(
+            crate::object::test_overflow_fields_root(),
+            (fixture.old_addr(), fixture.old_bits)
+        );
+        assert_eq!(
+            crate::json::test_parse_roots_snapshot(),
+            (fixture.old_bits, fixture.old_addr())
+        );
+        assert_eq!(crate::string::test_intern_table_root(), fixture.old_addr());
+        assert_eq!(
+            crate::builtins::test_console_log_singleton() as usize,
+            fixture.old_addr()
+        );
+        assert_eq!(
+            crate::node_submodules::test_node_submodule_roots(),
+            (fixture.old_addr(), fixture.old_addr(), fixture.old_addr())
+        );
+        assert_eq!(
+            crate::r#box::js_box_get(box_ptr).to_bits(),
+            fixture.old_bits
+        );
+        assert_eq!(
+            crate::promise::js_iter_result_get_value().to_bits(),
+            fixture.old_bits
+        );
+        assert_eq!(
+            crate::promise::test_async_step_thunk_cache(),
+            (fixture.old_addr(), fixture.old_addr(), fixture.old_addr())
+        );
+        assert_eq!(
+            crate::tui::hooks::test_hook_slot_roots(),
+            (fixture.old_bits, fixture.old_bits, fixture.old_bits)
+        );
+        assert_eq!(
+            crate::tui::state::js_perry_tui_state_get(tui_state).to_bits(),
+            fixture.old_bits
+        );
+
+        crate::promise::test_clear_promise_scanner_roots();
+        crate::timer::test_clear_timer_scanner_roots(fixture.nursery_addr(), fixture.old_addr());
+        crate::exception::js_clear_exception();
+        crate::async_context::clear_store(active_context_handle);
+        crate::object::test_clear_transition_cache_root();
+        crate::string::test_clear_intern_table_root();
+        crate::builtins::test_set_console_log_singleton(0);
+        crate::async_hooks::reset_for_tests();
+        crate::promise::js_iter_result_set(0.0, 0);
+        crate::tui::state::test_reset_state_slots();
+    }
+
+    #[cfg(feature = "ohos-napi")]
+    #[test]
+    fn test_arkts_callbacks_mutable_scanner_rewrites_callback_slots() {
+        let fixture = ForwardedRootFixture::new();
+        let callback_idx = 3;
+        crate::arkts_callbacks::test_clear_arkts_callback_roots();
+        crate::arkts_callbacks::test_seed_arkts_callback_root(
+            callback_idx,
+            fixture.nursery_value(),
+        );
+
+        let mut visitor = RuntimeRootVisitor::for_rewrite(&fixture.valid_ptrs);
+        crate::arkts_callbacks::arkts_callbacks_root_scanner_mut(&mut visitor);
+
+        assert_eq!(
+            crate::arkts_callbacks::test_arkts_callback_root(callback_idx),
+            fixture.old_bits
+        );
+        crate::arkts_callbacks::test_clear_arkts_callback_roots();
+    }
+
+    #[cfg(feature = "ohos-napi")]
+    #[test]
+    fn test_lazy_media_mutable_scanner_rewrites_callback_slots() {
+        let fixture = ForwardedRootFixture::new();
+        let handle = i64::MIN + 377;
+        crate::media_playback::test_seed_media_callback_roots(
+            handle,
+            fixture.nursery_value(),
+            fixture.nursery_value(),
+        );
+
+        let mut visitor = RuntimeRootVisitor::for_rewrite(&fixture.valid_ptrs);
+        crate::media_playback::media_callbacks_root_scanner_mut(&mut visitor);
+
+        assert_eq!(
+            crate::media_playback::test_media_callback_roots(handle),
+            (fixture.old_bits, fixture.old_bits)
+        );
     }
 
     #[test]
