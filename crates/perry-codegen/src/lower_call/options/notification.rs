@@ -23,7 +23,10 @@ use crate::types::{DOUBLE, I64, VOID};
 ///
 /// `repeats` is passed as a NaN-boxed JS value; the runtime calls
 /// `js_is_truthy` to coerce. Missing fields default to 0.0.
-pub(in crate::lower_call) fn lower_notification_schedule(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Result<String> {
+pub(in crate::lower_call) fn lower_notification_schedule(
+    ctx: &mut FnCtx<'_>,
+    args: &[Expr],
+) -> Result<String> {
     if args.len() != 1 {
         bail!(
             "notificationSchedule(...) takes one argument: \
