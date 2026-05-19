@@ -14,14 +14,14 @@ use crate::OutputFormat;
 // `compile/` directory. The `compile.rs` orchestrator stays as the
 // public API surface; helpers move to focused modules so unrelated
 // changes don't churn this file.
+mod bundle_apple;
 mod cjs_wrap;
 mod collect_modules;
+mod i18n_emit;
 mod library_search;
 mod link;
 mod object_cache;
 mod optimized_libs;
-mod bundle_apple;
-mod i18n_emit;
 mod parse_cache;
 mod post_link;
 mod resolve;
@@ -34,10 +34,6 @@ mod widget_build;
 use bundle_apple::{bundle_for_tvos, bundle_for_visionos, bundle_for_watchos};
 use collect_modules::collect_modules;
 use i18n_emit::{emit_android_i18n_resources, write_i18n_key_registry};
-use post_link::{
-    cleanup_intermediates, emit_attestation_sidecar, print_binary_size, strip_final_binary,
-    summarize_codegen_cache_stats,
-};
 pub use library_search::find_library;
 pub(crate) use library_search::host_target_triple;
 use library_search::{
@@ -52,6 +48,10 @@ pub use object_cache::ObjectCache;
 use optimized_libs::{build_optimized_libs, OptimizedLibs};
 use parse_cache::parse_cached;
 pub use parse_cache::ParseCache;
+use post_link::{
+    cleanup_intermediates, emit_attestation_sidecar, print_binary_size, strip_final_binary,
+    summarize_codegen_cache_stats,
+};
 pub use resolve::find_perry_workspace_root;
 use resolve::{
     cached_resolve_import, compute_module_prefix, discover_extension_entries,
@@ -1231,7 +1231,6 @@ fn write_audit_manifest_logging_failures(ctx: &CompilationContext, format: Outpu
     }
 }
 
-
 /// Collect each `--bundle-extensions` entry into the same
 /// `CompilationContext` as the user entry. Returns `(canonical_path,
 /// plugin_id)` pairs so the orchestrator can later embed the plugin
@@ -1362,10 +1361,6 @@ fn apply_geisterhand_args(args: &CompileArgs, ctx: &mut CompilationContext) {
         }
     }
 }
-
-
-
-
 
 pub fn run(
     args: CompileArgs,
@@ -2042,20 +2037,21 @@ pub fn run_with_parse_cache(
     )?;
 
     // Bundle extensions if --bundle-extensions specified
-    let bundled_extensions: Vec<(PathBuf, String)> = if let Some(ext_dir) = args.bundle_extensions.clone() {
-        bundle_extensions_into_ctx(
-            &ext_dir,
-            &args,
-            &mut ctx,
-            &mut visited,
-            &mut next_class_id,
-            skip_transforms,
-            parse_cache.as_deref_mut(),
-            format,
-        )?
-    } else {
-        Vec::new()
-    };
+    let bundled_extensions: Vec<(PathBuf, String)> =
+        if let Some(ext_dir) = args.bundle_extensions.clone() {
+            bundle_extensions_into_ctx(
+                &ext_dir,
+                &args,
+                &mut ctx,
+                &mut visited,
+                &mut next_class_id,
+                skip_transforms,
+                parse_cache.as_deref_mut(),
+                format,
+            )?
+        } else {
+            Vec::new()
+        };
 
     rerun_collect_with_class_field_types(
         &args,
@@ -7908,13 +7904,25 @@ pub fn run_with_parse_cache(
         result_bundle_id = Some(bundle_id);
         result_app_dir = Some(app_dir);
     } else if is_watchos {
-        let (app_dir, bundle_id) =
-            bundle_for_watchos(&exe_path, stem, target.as_deref(), &args.input, &ctx, format)?;
+        let (app_dir, bundle_id) = bundle_for_watchos(
+            &exe_path,
+            stem,
+            target.as_deref(),
+            &args.input,
+            &ctx,
+            format,
+        )?;
         result_bundle_id = Some(bundle_id);
         result_app_dir = Some(app_dir);
     } else if is_tvos {
-        let (app_dir, bundle_id) =
-            bundle_for_tvos(&exe_path, stem, target.as_deref(), &args.input, &ctx, format)?;
+        let (app_dir, bundle_id) = bundle_for_tvos(
+            &exe_path,
+            stem,
+            target.as_deref(),
+            &args.input,
+            &ctx,
+            format,
+        )?;
         result_bundle_id = Some(bundle_id);
         result_app_dir = Some(app_dir);
     } else {

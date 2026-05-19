@@ -75,8 +75,7 @@ pub(super) fn emit_android_i18n_resources(
             res_dir.join(format!("values-{}", locale))
         };
         let _ = fs::create_dir_all(&values_dir);
-        let mut xml =
-            String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n");
+        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n");
         for (key_idx, key) in table.keys.iter().enumerate() {
             let flat_idx = locale_idx * table.keys.len() + key_idx;
             let value = table
@@ -143,8 +142,7 @@ pub(super) fn write_lproj_localized_strings(
                 .unwrap_or_else(|| key.clone());
             let escaped_key = key.replace('\\', "\\\\").replace('"', "\\\"");
             let escaped_val = value.replace('\\', "\\\\").replace('"', "\\\"");
-            strings_content
-                .push_str(&format!("\"{}\" = \"{}\";\n", escaped_key, escaped_val));
+            strings_content.push_str(&format!("\"{}\" = \"{}\";\n", escaped_key, escaped_val));
         }
         let _ = fs::write(lproj_dir.join("Localizable.strings"), &strings_content);
     }
