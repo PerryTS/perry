@@ -7,7 +7,10 @@ use crate::*;
 /// Walk a Vec<Stmt> and rewrite any `state.set(v)` calls (where state's
 /// LocalId is in the registry) to `setText(synth_id, v)` calls. Recurses
 /// into closure bodies, blocks, control flow.
-pub(crate) fn rewrite_state_calls_in_stmts(stmts: &mut Vec<Stmt>, reg: &HashMap<LocalId, StateBinding>) {
+pub(crate) fn rewrite_state_calls_in_stmts(
+    stmts: &mut Vec<Stmt>,
+    reg: &HashMap<LocalId, StateBinding>,
+) {
     for stmt in stmts.iter_mut() {
         rewrite_state_in_stmt(stmt, reg);
     }

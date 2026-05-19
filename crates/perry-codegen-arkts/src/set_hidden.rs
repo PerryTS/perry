@@ -20,7 +20,10 @@ pub(crate) fn rewrite_set_hidden_calls_in_stmts(
     }
 }
 
-pub(crate) fn rewrite_set_hidden_in_stmt(stmt: &mut Stmt, bindings: &HashMap<LocalId, VisibilityBinding>) {
+pub(crate) fn rewrite_set_hidden_in_stmt(
+    stmt: &mut Stmt,
+    bindings: &HashMap<LocalId, VisibilityBinding>,
+) {
     match stmt {
         Stmt::Expr(e) => rewrite_set_hidden_in_expr(e, bindings),
         Stmt::Let { init: Some(e), .. } => rewrite_set_hidden_in_expr(e, bindings),
@@ -67,7 +70,10 @@ pub(crate) fn rewrite_set_hidden_in_stmt(stmt: &mut Stmt, bindings: &HashMap<Loc
     }
 }
 
-pub(crate) fn rewrite_set_hidden_in_expr(e: &mut Expr, bindings: &HashMap<LocalId, VisibilityBinding>) {
+pub(crate) fn rewrite_set_hidden_in_expr(
+    e: &mut Expr,
+    bindings: &HashMap<LocalId, VisibilityBinding>,
+) {
     // Detect the rewrite target FIRST (most specific shape), before
     // recursing into children — otherwise children of the call to
     // rewrite would be visited as if they were in a regular call.

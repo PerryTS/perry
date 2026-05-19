@@ -54,36 +54,36 @@ use std::collections::HashMap;
 // Every helper retains its original flat-namespace visibility via
 // `pub(crate) use <mod>::*;` so cross-module calls and the inline
 // test module keep working unchanged.
-mod types;
-mod inline;
-mod bindings;
-mod widget_walks;
-mod view_builders;
-mod set_hidden;
-mod mutations;
-mod conditions;
-mod state_rewrite;
 mod app_extract;
-mod media;
+mod bindings;
+mod conditions;
 mod emit_widget;
-mod util;
-mod widgets;
+mod inline;
+mod media;
+mod mutations;
+mod set_hidden;
+mod state_rewrite;
 #[cfg(test)]
 mod tests;
+mod types;
+mod util;
+mod view_builders;
+mod widget_walks;
+mod widgets;
 
-pub(crate) use types::*;
-pub(crate) use inline::*;
-pub(crate) use bindings::*;
-pub(crate) use widget_walks::*;
-pub(crate) use view_builders::*;
-pub(crate) use set_hidden::*;
-pub(crate) use mutations::*;
-pub(crate) use conditions::*;
-pub(crate) use state_rewrite::*;
 pub(crate) use app_extract::*;
-pub(crate) use media::*;
+pub(crate) use bindings::*;
+pub(crate) use conditions::*;
 pub(crate) use emit_widget::*;
+pub(crate) use inline::*;
+pub(crate) use media::*;
+pub(crate) use mutations::*;
+pub(crate) use set_hidden::*;
+pub(crate) use state_rewrite::*;
+pub(crate) use types::*;
 pub(crate) use util::*;
+pub(crate) use view_builders::*;
+pub(crate) use widget_walks::*;
 pub(crate) use widgets::*;
 
 // Public crate surface (consumed by perry::commands::compile and
@@ -361,4 +361,3 @@ pub fn emit_index_ets(module: &mut Module) -> Result<Option<HarvestResult>> {
         callbacks,
     }))
 }
-

@@ -131,7 +131,10 @@ pub(crate) fn mutator_target_local_id(args: &[Expr]) -> Option<LocalId> {
 /// to one. Anything else (HStack/VStack content, dynamic strings,
 /// closure-captured locals) returns None and the caller falls back
 /// to a comment.
-pub(crate) fn resolve_tooltip_text(expr: &Expr, bindings: &HashMap<LocalId, Expr>) -> Option<String> {
+pub(crate) fn resolve_tooltip_text(
+    expr: &Expr,
+    bindings: &HashMap<LocalId, Expr>,
+) -> Option<String> {
     let mut cur = expr;
     for _ in 0..16 {
         match cur {
@@ -158,7 +161,10 @@ pub(crate) fn resolve_tooltip_text(expr: &Expr, bindings: &HashMap<LocalId, Expr
 /// Build the `.backgroundColor('rgba(R, G, B, A)')` modifier string from
 /// the 4 channel args of a `widgetSetBackgroundColor(w, r, g, b, a)` call.
 /// Channels are 0..1 floats matching the perry-ui-* TS surface.
-pub(crate) fn mutator_background_color(args: &[Expr], bindings: &HashMap<LocalId, Expr>) -> Option<String> {
+pub(crate) fn mutator_background_color(
+    args: &[Expr],
+    bindings: &HashMap<LocalId, Expr>,
+) -> Option<String> {
     // Resolve through bindings so theme-bound calls work — Mango's
     // `widgetSetBackgroundColor(btn, moR, moG, moB, 1.0)` where moR/G/B
     // are const-bound brand-color numbers needed `numeric_arg_resolved`,
@@ -335,7 +341,10 @@ pub(crate) fn drain_loop_body() -> String {
 /// to discover the constructor; falls back to `HorizontalAlign` (the
 /// VStack default) when the binding can't be resolved or doesn't name
 /// a recognized stack constructor.
-pub(crate) fn stack_axis_align_enum(target_id: LocalId, bindings: &HashMap<LocalId, Expr>) -> &'static str {
+pub(crate) fn stack_axis_align_enum(
+    target_id: LocalId,
+    bindings: &HashMap<LocalId, Expr>,
+) -> &'static str {
     let Some(init) = bindings.get(&target_id) else {
         return "HorizontalAlign";
     };

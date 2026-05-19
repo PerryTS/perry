@@ -20,7 +20,10 @@ pub(crate) fn walk_for_set_hidden_targets_in_stmts(
 /// is what makes "module-init top-level widgetSetHidden stays static" work
 /// while "widgetSetHidden inside an onClick closure earns a binding"
 /// also work — same module, different scope.
-pub(crate) fn walk_init_for_closure_targets(stmts: &[Stmt], out: &mut std::collections::BTreeSet<LocalId>) {
+pub(crate) fn walk_init_for_closure_targets(
+    stmts: &[Stmt],
+    out: &mut std::collections::BTreeSet<LocalId>,
+) {
     for stmt in stmts {
         walk_init_for_closure_targets_in_stmt(stmt, out);
     }
@@ -77,7 +80,10 @@ pub(crate) fn walk_init_for_closure_targets_in_stmt(
     }
 }
 
-pub(crate) fn walk_init_for_closure_targets_in_expr(e: &Expr, out: &mut std::collections::BTreeSet<LocalId>) {
+pub(crate) fn walk_init_for_closure_targets_in_expr(
+    e: &Expr,
+    out: &mut std::collections::BTreeSet<LocalId>,
+) {
     // The whole point: a Closure body switches to the unrestricted walker.
     if let Expr::Closure { body, .. } = e {
         walk_for_set_hidden_targets_in_stmts(body, out);
@@ -137,7 +143,10 @@ pub(crate) fn walk_init_for_closure_targets_in_expr(e: &Expr, out: &mut std::col
     }
 }
 
-pub(crate) fn walk_for_set_hidden_targets_in_stmt(stmt: &Stmt, out: &mut std::collections::BTreeSet<LocalId>) {
+pub(crate) fn walk_for_set_hidden_targets_in_stmt(
+    stmt: &Stmt,
+    out: &mut std::collections::BTreeSet<LocalId>,
+) {
     match stmt {
         Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
             walk_for_set_hidden_targets_in_expr(e, out);
@@ -185,7 +194,10 @@ pub(crate) fn walk_for_set_hidden_targets_in_stmt(stmt: &Stmt, out: &mut std::co
     }
 }
 
-pub(crate) fn walk_for_set_hidden_targets_in_expr(e: &Expr, out: &mut std::collections::BTreeSet<LocalId>) {
+pub(crate) fn walk_for_set_hidden_targets_in_expr(
+    e: &Expr,
+    out: &mut std::collections::BTreeSet<LocalId>,
+) {
     // Detect `widgetSetHidden(LocalGet(target), _)` shape first.
     if let Some((target, _)) =
         extract_widget_set_hidden_literal(e).or_else(|| extract_widget_set_hidden_target(e))
