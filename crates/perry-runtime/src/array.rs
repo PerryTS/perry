@@ -1024,8 +1024,11 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // so any stale reference (e.g. an async function's caller still
         // holding the pre-grow pointer in its parameter slot) resolves
         // to the new head via clean_arr_ptr's GC_FLAG_FORWARDED follow.
-        // Reuses the GC's existing evac-forwarding mechanism — first 8
-        // bytes of payload (length+capacity) become the new user ptr.
+        // Uses the same forwarding-slot representation as GC evacuation:
+        // first 8 bytes of payload (length+capacity) become the new user
+        // ptr. Unlike GC-evacuation originals, array-growth stubs stay
+        // retained because stale array references rely on clean_arr_ptr
+        // following this chain.
         // Only valid for arena-allocated arrays (which have a GcHeader
         // 8 bytes before the user pointer); guard with a heap-bounds
         // check that mirrors clean_arr_ptr's HEAP_MIN to skip pointers

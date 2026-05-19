@@ -83,15 +83,26 @@ pub const GC_FLAG_TENURED: u8 = 0x20;
 /// to TENURED. Two-bit aging (HAS_SURVIVED → TENURED) gives
 /// PROMOTION_AGE=2 without needing a counter field.
 pub const GC_FLAG_HAS_SURVIVED: u8 = 0x40;
-/// Gen-GC Phase C4b: object has been evacuated (copied) to a new
-/// location. The new address is stored in the **user-payload's
-/// first 8 bytes** (immediately after the GcHeader). Walkers that
-/// encounter a FORWARDED header read the forwarding address and
-/// follow it; ref-rewrite passes update every NaN-boxed pointer
-/// they observe to the forwarded address. Conservative-stack
-/// scans STILL get the old (now-stale) address; objects that
-/// might be conservatively referenced are pinned out of the
-/// evacuation set via `GC_FLAG_PINNED` to avoid corrupting reads
+/// Object's user payload begins with a forwarding address. The new
+/// address is stored in the **user-payload's first 8 bytes**
+/// (immediately after the GcHeader). Walkers that encounter a
+/// FORWARDED header read the forwarding address and follow it;
+/// ref-rewrite passes update every NaN-boxed pointer they observe to
+/// the forwarded address.
+///
+/// Two runtime paths use the same bit and payload layout:
+/// - GC evacuation/copying stubs are short-lived. Evacuation keeps an
+///   explicit list of original nursery headers and clears this bit
+///   after owned references have been rewritten/verified, so sweep can
+///   reclaim the original slot. Copying nursery stubs disappear when
+///   from-space is reset.
+/// - Array-growth stubs are intentionally retained. `clean_arr_ptr`
+///   follows those chains for stale array references that the runtime
+///   cannot rewrite.
+///
+/// Conservative-stack scans STILL get the old (now-stale) address;
+/// objects that might be conservatively referenced are pinned out of
+/// the evacuation set via `GC_FLAG_PINNED` to avoid corrupting reads
 /// from those words.
 ///
 /// This is the last bit in the u8 gc_flags. Adding more flags
@@ -100,12 +111,12 @@ pub const GC_FLAG_HAS_SURVIVED: u8 = 0x40;
 /// genuinely needs more bits).
 pub const GC_FLAG_FORWARDED: u8 = 0x80;
 
-/// Read the forwarding address embedded in an evacuated object's
-/// user payload. Caller must verify `gc_flags & GC_FLAG_FORWARDED`
-/// is set; reading otherwise returns garbage. The forwarded
-/// address is the **user pointer** of the new location — i.e.
-/// what `arena_alloc_gc_old` returned for the new copy. Callers
-/// that need the new GcHeader subtract `GC_HEADER_SIZE` themselves.
+/// Read the forwarding address embedded in a forwarded object's user
+/// payload. Caller must verify `gc_flags & GC_FLAG_FORWARDED` is set;
+/// reading otherwise returns garbage. The forwarded address is the
+/// **user pointer** of the new location — i.e. what the allocating
+/// path returned for the new copy. Callers that need the new GcHeader
+/// subtract `GC_HEADER_SIZE` themselves.
 ///
 /// # Safety
 /// `header` must point to a valid GcHeader whose user payload is
@@ -121,12 +132,15 @@ pub unsafe fn forwarding_address(header: *const GcHeader) -> *mut u8 {
     *user_ptr
 }
 
-/// Install a forwarding address in an evacuated object's user
-/// payload and set `GC_FLAG_FORWARDED` on its header. The first 8
-/// bytes of the user payload become the forwarding pointer (the
-/// new user address — what `arena_alloc_gc_old` returned).
-/// Subsequent reads via `forwarding_address` recover the new
-/// location.
+/// Install a forwarding address in an object's user payload and set
+/// `GC_FLAG_FORWARDED` on its header. The first 8 bytes of the user
+/// payload become the forwarding pointer (the new user address).
+/// Subsequent reads via `forwarding_address` recover the new location.
+///
+/// GC evacuation must later clear this bit only for the originals it
+/// just moved. Array growth uses the same representation but leaves the
+/// stub retained so stale array references can continue to resolve via
+/// `clean_arr_ptr`.
 ///
 /// # Safety
 /// As `forwarding_address`. The user payload must be at least 8
@@ -796,8 +810,15 @@ struct BlockPersistTraceStats {
 
 #[derive(Clone, Copy, Default)]
 struct EvacuationTraceStats {
+    // Compatibility fields: historically these were the moved counts.
     objects: usize,
     bytes: usize,
+    moved_objects: usize,
+    moved_bytes: usize,
+    released_original_objects: usize,
+    released_original_bytes: usize,
+    retained_forwarded_stub_objects: usize,
+    retained_forwarded_stub_bytes: usize,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -839,6 +860,10 @@ struct EvacuationPolicySnapshot {
     tenured_still_in_nursery_bytes: usize,
     candidate_bytes: usize,
     candidate_objects: usize,
+    reclaimable_candidate_bytes: usize,
+    reclaimable_candidate_objects: usize,
+    retained_forwarded_stub_bytes: usize,
+    retained_forwarded_stub_objects: usize,
     conservative_pinned_bytes: usize,
     rss_bytes: u64,
     previous_pause_us: u64,
@@ -852,6 +877,15 @@ impl EvacuationPolicySnapshot {
             return 0;
         }
         ((self.candidate_bytes as u128 * 100) / self.tenured_still_in_nursery_bytes as u128) as u64
+    }
+
+    #[inline]
+    fn reclaimable_candidate_ratio_pct(self) -> u64 {
+        if self.tenured_still_in_nursery_bytes == 0 {
+            return 0;
+        }
+        ((self.reclaimable_candidate_bytes as u128 * 100)
+            / self.tenured_still_in_nursery_bytes as u128) as u64
     }
 }
 
@@ -884,6 +918,8 @@ struct SweepTraceStats {
     reset_blocks: usize,
     deallocated_blocks: usize,
     deallocated_bytes: usize,
+    retained_forwarded_stub_objects: usize,
+    retained_forwarded_stub_bytes: usize,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1046,6 +1082,12 @@ impl GcCycleTrace {
             "evacuation": {
                 "objects": self.evacuation.objects,
                 "bytes": self.evacuation.bytes,
+                "moved_objects": self.evacuation.moved_objects,
+                "moved_bytes": self.evacuation.moved_bytes,
+                "released_original_objects": self.evacuation.released_original_objects,
+                "released_original_bytes": self.evacuation.released_original_bytes,
+                "retained_forwarded_stub_objects": self.evacuation.retained_forwarded_stub_objects,
+                "retained_forwarded_stub_bytes": self.evacuation.retained_forwarded_stub_bytes,
             },
             "copying_nursery": {
                 "copied_objects": self.copying_nursery.copied_objects,
@@ -1065,6 +1107,11 @@ impl GcCycleTrace {
                 "candidate_bytes": self.evacuation_policy.snapshot.candidate_bytes,
                 "candidate_objects": self.evacuation_policy.snapshot.candidate_objects,
                 "candidate_ratio_pct": self.evacuation_policy.snapshot.candidate_ratio_pct(),
+                "reclaimable_candidate_bytes": self.evacuation_policy.snapshot.reclaimable_candidate_bytes,
+                "reclaimable_candidate_objects": self.evacuation_policy.snapshot.reclaimable_candidate_objects,
+                "reclaimable_candidate_ratio_pct": self.evacuation_policy.snapshot.reclaimable_candidate_ratio_pct(),
+                "retained_forwarded_stub_bytes": self.evacuation_policy.snapshot.retained_forwarded_stub_bytes,
+                "retained_forwarded_stub_objects": self.evacuation_policy.snapshot.retained_forwarded_stub_objects,
                 "conservative_pinned_bytes": self.evacuation_policy.snapshot.conservative_pinned_bytes,
                 "rss_bytes": self.evacuation_policy.snapshot.rss_bytes,
                 "previous_pause_us": self.evacuation_policy.snapshot.previous_pause_us,
@@ -1081,6 +1128,8 @@ impl GcCycleTrace {
                 "reset_blocks": self.sweep.reset_blocks,
                 "deallocated_blocks": self.sweep.deallocated_blocks,
                 "deallocated_bytes": self.sweep.deallocated_bytes,
+                "retained_forwarded_stub_objects": self.sweep.retained_forwarded_stub_objects,
+                "retained_forwarded_stub_bytes": self.sweep.retained_forwarded_stub_bytes,
             },
             "write_barrier": {
                 "calls": self.write_barrier.calls,
@@ -1192,13 +1241,28 @@ fn evacuation_policy_snapshot_after_mark(
     force: bool,
     pre_evac_pause_us: u64,
 ) -> EvacuationPolicySnapshot {
+    #[derive(Clone, Copy, Default)]
+    struct BlockCandidateState {
+        candidate_bytes: usize,
+        candidate_objects: usize,
+        retained_live: bool,
+    }
+
     snapshot.tenured_still_in_nursery_bytes = 0;
     snapshot.candidate_bytes = 0;
     snapshot.candidate_objects = 0;
+    snapshot.reclaimable_candidate_bytes = 0;
+    snapshot.reclaimable_candidate_objects = 0;
+    snapshot.retained_forwarded_stub_bytes = 0;
+    snapshot.retained_forwarded_stub_objects = 0;
     snapshot.conservative_pinned_bytes = 0;
     snapshot.pre_evac_pause_us = pre_evac_pause_us;
 
-    crate::arena::arena_walk_objects(|header_ptr| {
+    let n_blocks = crate::arena::arena_block_count();
+    let general_n = crate::arena::general_block_count();
+    let mut blocks = vec![BlockCandidateState::default(); n_blocks];
+
+    crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
         let header = header_ptr as *mut GcHeader;
         unsafe {
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
@@ -1206,31 +1270,63 @@ fn evacuation_policy_snapshot_after_mark(
                 return;
             }
             let flags = (*header).gc_flags;
+            let total = (*header).size as usize;
             if flags & GC_FLAG_FORWARDED != 0 {
+                if block_idx < general_n {
+                    snapshot.retained_forwarded_stub_objects += 1;
+                    snapshot.retained_forwarded_stub_bytes += total;
+                }
+                if let Some(block) = blocks.get_mut(block_idx) {
+                    block.retained_live = true;
+                }
                 return;
             }
-            let total = (*header).size as usize;
             let is_tenured = flags & GC_FLAG_TENURED != 0;
             if is_tenured {
                 snapshot.tenured_still_in_nursery_bytes += total;
             }
             if flags & GC_FLAG_MARKED == 0 {
-                return;
-            }
-            if !force && !is_tenured {
+                if flags & GC_FLAG_PINNED != 0 {
+                    if let Some(block) = blocks.get_mut(block_idx) {
+                        block.retained_live = true;
+                    }
+                }
                 return;
             }
             if flags & GC_FLAG_PINNED != 0 {
+                if let Some(block) = blocks.get_mut(block_idx) {
+                    block.retained_live = true;
+                }
                 return;
             }
             if is_conservatively_pinned(header) {
                 snapshot.conservative_pinned_bytes += total;
+                if let Some(block) = blocks.get_mut(block_idx) {
+                    block.retained_live = true;
+                }
+                return;
+            }
+            if !force && !is_tenured {
+                if let Some(block) = blocks.get_mut(block_idx) {
+                    block.retained_live = true;
+                }
                 return;
             }
             snapshot.candidate_objects += 1;
             snapshot.candidate_bytes += total;
+            if let Some(block) = blocks.get_mut(block_idx) {
+                block.candidate_objects += 1;
+                block.candidate_bytes += total;
+            }
         }
     });
+
+    for block in blocks.iter().take(general_n) {
+        if block.candidate_bytes > 0 && !block.retained_live {
+            snapshot.reclaimable_candidate_objects += block.candidate_objects;
+            snapshot.reclaimable_candidate_bytes += block.candidate_bytes;
+        }
+    }
     snapshot
 }
 
@@ -1257,12 +1353,16 @@ fn evacuation_policy_final_decision(
         decision.reason = "force";
         return decision;
     }
-    if snapshot.candidate_bytes < MIN_CANDIDATE_BYTES {
-        decision.reason = "candidate_bytes_below_threshold";
+    if snapshot.reclaimable_candidate_bytes == 0 {
+        decision.reason = "zero_reclaimable_candidates";
         return decision;
     }
-    if snapshot.candidate_ratio_pct() < MIN_CANDIDATE_RATIO_PCT {
-        decision.reason = "candidate_ratio_below_threshold";
+    if snapshot.reclaimable_candidate_bytes < MIN_CANDIDATE_BYTES {
+        decision.reason = "reclaimable_candidate_bytes_below_threshold";
+        return decision;
+    }
+    if snapshot.reclaimable_candidate_ratio_pct() < MIN_CANDIDATE_RATIO_PCT {
+        decision.reason = "reclaimable_candidate_ratio_below_threshold";
         return decision;
     }
     let hard_rss_pressure = snapshot.rss_bytes >= RSS_HARD_PRESSURE_BYTES;
@@ -1295,19 +1395,28 @@ fn maybe_print_evacuation_policy_diag(
     }
     let snapshot = decision.snapshot;
     eprintln!(
-        "[gc-evac-policy] enabled={} reason={} tenured={} candidate_bytes={} candidate_objects={} candidate_ratio_pct={} cons_pinned={} rss={} prev_pause_us={} pre_evac_pause_us={} evacuated_bytes={} evacuated_objects={}",
+        "[gc-evac-policy] enabled={} reason={} tenured={} candidate_bytes={} candidate_objects={} candidate_ratio_pct={} reclaimable_candidate_bytes={} reclaimable_candidate_objects={} reclaimable_candidate_ratio_pct={} policy_retained_forwarded_stub_bytes={} policy_retained_forwarded_stub_objects={} cons_pinned={} rss={} prev_pause_us={} pre_evac_pause_us={} moved_bytes={} moved_objects={} released_original_bytes={} released_original_objects={} sweep_retained_forwarded_stub_bytes={} sweep_retained_forwarded_stub_objects={}",
         decision.enabled,
         decision.reason,
         snapshot.tenured_still_in_nursery_bytes,
         snapshot.candidate_bytes,
         snapshot.candidate_objects,
         snapshot.candidate_ratio_pct(),
+        snapshot.reclaimable_candidate_bytes,
+        snapshot.reclaimable_candidate_objects,
+        snapshot.reclaimable_candidate_ratio_pct(),
+        snapshot.retained_forwarded_stub_bytes,
+        snapshot.retained_forwarded_stub_objects,
         snapshot.conservative_pinned_bytes,
         snapshot.rss_bytes,
         snapshot.previous_pause_us,
         snapshot.pre_evac_pause_us,
-        evacuation.bytes,
-        evacuation.objects,
+        evacuation.moved_bytes,
+        evacuation.moved_objects,
+        evacuation.released_original_bytes,
+        evacuation.released_original_objects,
+        evacuation.retained_forwarded_stub_bytes,
+        evacuation.retained_forwarded_stub_objects,
     );
 }
 
@@ -2449,10 +2558,13 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
 
     // === EVACUATION PASS (Phase C4b-β + C4b-γ-2, auto-policy) ===
     // Copy productive sets of non-pinned tenured nursery objects into
-    // OLD_ARENA and install forwarding pointers in the original nursery
-    // slots. Stage 2 runs after mark/trace/block-persist so the policy
-    // uses measured movable candidate bytes, pinned bytes, RSS, and
-    // pause telemetry instead of a simple env-var opt-in.
+    // OLD_ARENA and install short-lived forwarding pointers in the
+    // original nursery slots. After owned references are rewritten and
+    // optionally verified, those original stubs release FORWARDED so sweep
+    // can reclaim them. Stage 2 runs after mark/trace/block-persist so
+    // the policy uses measured movable bytes, block-reclaimable candidate
+    // bytes, retained forwarded stubs, pinned bytes, RSS, and pause
+    // telemetry instead of a simple env-var opt-in.
     if evacuation_policy.considered {
         let snapshot = evacuation_policy_snapshot_after_mark(
             evacuation_policy.snapshot,
@@ -2470,28 +2582,30 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let mut evacuation_sticky = StickyRememberedSet::default();
     if evacuation_policy.enabled {
         let phase_start = trace_phase_start(&trace);
-        let mut evacuated_headers = Vec::new();
+        let mut evacuated_new_headers = Vec::new();
+        let mut evacuated_original_headers = Vec::new();
         evacuation = evacuate_tenured_nursery_objects_collecting(
             evacuation_policy.force,
-            &mut evacuated_headers,
+            &mut evacuated_new_headers,
+            &mut evacuated_original_headers,
         );
         trace_phase_record(&mut trace, "evacuation", phase_start);
-        if let Some(trace) = trace.as_mut() {
-            trace.evacuation = evacuation;
-        }
         if evacuation.objects > 0 {
             let phase_start = trace_phase_start(&trace);
             rewrite_forwarded_references(&valid_ptrs);
-            evacuation_sticky = rebuild_evacuated_old_to_young_remembered_set(&evacuated_headers);
+            evacuation_sticky =
+                rebuild_evacuated_old_to_young_remembered_set(&evacuated_new_headers);
             trace_phase_record(&mut trace, "reference_rewrite", phase_start);
             if gc_verify_evacuation_enabled() {
                 let phase_start = trace_phase_start(&trace);
                 verify_evacuated_no_stale_forwarded_refs(&valid_ptrs);
                 trace_phase_record(&mut trace, "evacuation_verify", phase_start);
             }
+            let released = release_evacuated_original_forwarding_stubs(&evacuated_original_headers);
+            evacuation.released_original_objects = released.released_original_objects;
+            evacuation.released_original_bytes = released.released_original_bytes;
         }
     }
-    maybe_print_evacuation_policy_diag(evacuation_policy, evacuation);
 
     // === SWEEP PHASE ===
     // `do_age_bump = true` folds the per-object HAS_SURVIVED / TENURED
@@ -2501,7 +2615,11 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let sweep = sweep_with_age_bump(true);
     trace_phase_record(&mut trace, "sweep", phase_start);
     let freed_bytes = sweep.freed_bytes;
+    evacuation.retained_forwarded_stub_objects = sweep.retained_forwarded_stub_objects;
+    evacuation.retained_forwarded_stub_bytes = sweep.retained_forwarded_stub_bytes;
+    maybe_print_evacuation_policy_diag(evacuation_policy, evacuation);
     if let Some(trace) = trace.as_mut() {
+        trace.evacuation = evacuation;
         trace.sweep = sweep;
     }
 
@@ -5795,6 +5913,8 @@ fn gc_collect_minor_copying_fast_path(
             reset_blocks: reset.reset_blocks,
             deallocated_blocks: 0,
             deallocated_bytes: 0,
+            retained_forwarded_stub_objects: 0,
+            retained_forwarded_stub_bytes: 0,
         };
         trace.pause_us = start.elapsed().as_micros() as u64;
     }
@@ -6486,6 +6606,8 @@ fn sweep() -> u64 {
 /// for the same gate).
 fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
     let mut freed_bytes: u64 = 0;
+    let mut retained_forwarded_stub_objects: usize = 0;
+    let mut retained_forwarded_stub_bytes: usize = 0;
 
     // Sweep malloc objects.
     //
@@ -6604,11 +6726,7 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
     // Inclusive upper bound on indices that age. `general_block_count()`
     // is the first non-general index; objects with `block_idx < general_n`
     // are nursery-resident and need the age-bump update.
-    let general_n = if do_age_bump {
-        crate::arena::general_block_count()
-    } else {
-        0
-    };
+    let resettable_general_n = crate::arena::general_block_count();
 
     // Hoist the OVERFLOW_FIELDS empty check out of the per-dead-object
     // loop. perf-comprehensive's sweep walks ~1.6 M dead arena headers
@@ -6629,7 +6747,7 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
             // age-bump's gate (skip old-gen, skip already-tenured, skip
             // unmarked-and-unpinned) and runs BEFORE the mark bit is
             // cleared so the MARKED check stays meaningful.
-            let age_bump_this = do_age_bump && block_idx < general_n;
+            let age_bump_this = do_age_bump && block_idx < resettable_general_n;
             let flags = (*header).gc_flags;
             // Fast path: `flags == 0` means the object is dead (MARKED=0)
             // AND has no special bits (PINNED/FORWARDED/HAS_SURVIVED/
@@ -6665,22 +6783,32 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
                 }
                 return;
             }
-            // FORWARDED objects must keep their containing block alive.
+            // Retained FORWARDED objects must keep their containing block alive.
             // `trace_array` short-circuits on FORWARDED (it pushes the
             // forwarding TARGET onto the worklist instead of marking the
-            // OLD itself), so OLD reaches sweep as MARKED == 0 even
-            // though its first 8 bytes hold a load-bearing forwarding
-            // pointer. If OLD's block ends up with zero MARKED objects,
+            // stub itself), so array-growth stubs reach sweep as
+            // MARKED == 0 even though their first 8 bytes hold a
+            // load-bearing forwarding pointer. GC-evacuation originals
+            // are different: they are tracked explicitly and have
+            // FORWARDED cleared after reference rewrite/verification, so
+            // they fall through to the dead-object path below. If a
+            // retained array-growth stub's block ends up with zero MARKED objects,
             // `arena_reset_empty_blocks` wipes it to offset=0, the
             // forwarding chain breaks, and `clean_arr_ptr` on any stale
-            // OLD reference returns null. ECS demo-simple's `pipeline`
+            // old-array reference returns null. ECS demo-simple's `pipeline`
             // forEach hits this when `archetypesByComponent`'s value
             // array was reached via a forwarded chain — the next query
             // call's Map.get pointed at wiped memory and forEach
             // iterated zero entities. Treat FORWARDED as live for the
-            // block-keep gate; the OLD payload is just an 8-byte
-            // forwarding pointer, harmless to retain.
+            // block-keep gate; the old payload is just an 8-byte
+            // forwarding pointer, harmless to retain. Count only
+            // reset-eligible general-nursery stubs in diagnostics because
+            // those are the stubs that can keep a nursery block resident.
             if flags & GC_FLAG_FORWARDED != 0 {
+                if block_idx < resettable_general_n {
+                    retained_forwarded_stub_objects += 1;
+                    retained_forwarded_stub_bytes += (*header).size as usize;
+                }
                 if block_idx < block_has_live.len() {
                     block_has_live[block_idx] = true;
                 }
@@ -6729,16 +6857,21 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
     // Reset every block that ended up with zero live objects.
     // Diagnostic: PERRY_GC_DIAG=1 reports block-level liveness.
     if std::env::var_os("PERRY_GC_DIAG").is_some() {
-        let general_n = crate::arena::general_block_count();
-        let live_general = (0..general_n).filter(|&i| block_has_live[i]).count();
-        let live_ll = (general_n..n_blocks).filter(|&i| block_has_live[i]).count();
+        let live_general = (0..resettable_general_n)
+            .filter(|&i| block_has_live[i])
+            .count();
+        let live_ll = (resettable_general_n..n_blocks)
+            .filter(|&i| block_has_live[i])
+            .count();
         eprintln!(
-            "[gc] blocks: general={} ({} live), longlived={} ({} live), freed_bytes={}",
-            general_n,
+            "[gc] blocks: general={} ({} live), longlived={} ({} live), freed_bytes={} retained_forwarded_stub_bytes={} retained_forwarded_stub_objects={}",
+            resettable_general_n,
             live_general,
-            n_blocks - general_n,
+            n_blocks - resettable_general_n,
             live_ll,
-            freed_bytes
+            freed_bytes,
+            retained_forwarded_stub_bytes,
+            retained_forwarded_stub_objects,
         );
     }
     let reset = crate::arena::arena_reset_empty_blocks(&block_has_live);
@@ -6748,6 +6881,8 @@ fn sweep_with_age_bump(do_age_bump: bool) -> SweepTraceStats {
         reset_blocks: reset.reset_blocks,
         deallocated_blocks: reset.deallocated_blocks,
         deallocated_bytes: reset.deallocated_bytes,
+        retained_forwarded_stub_objects,
+        retained_forwarded_stub_bytes,
     }
 }
 
@@ -7035,9 +7170,9 @@ fn pin_currently_marked_as_conservative() -> ConservativePinTraceStats {
 }
 
 /// Gen-GC Phase C4b-β: walk arena nursery objects and copy
-/// non-pinned tenured ones into OLD_ARENA. Install a forwarding
-/// pointer at the original nursery slot's user-payload start.
-/// Returns evacuated object and byte counts (diagnostic only).
+/// non-pinned tenured ones into OLD_ARENA. Install a short-lived GC
+/// forwarding pointer at the original nursery slot's user-payload
+/// start. Returns evacuated object and byte counts (diagnostic only).
 ///
 /// Candidate filter: the object must be
 /// - in the nursery arena (not OLD, not LONGLIVED)
@@ -7048,18 +7183,20 @@ fn pin_currently_marked_as_conservative() -> ConservativePinTraceStats {
 /// - NOT already FORWARDED (idempotent; duplicate evacuation is
 ///   safe-skipped)
 ///
-/// Phase C4b-γ-2: this function is paired with
-/// `rewrite_forwarded_references` — every reference site (heap
-/// fields, shadow stack, global roots) is rewalked AFTER this
-/// function returns and any pointer to a forwarded object is
-/// updated to the new address. The original's MARKED bit is
-/// cleared at evac time so sweep treats the now-stale slot as
-/// dead and the nursery block can reset; the new copy is marked
-/// MARKED so the rewrite walk picks up its (copied) fields and so
-/// sweep keeps it alive.
+/// Phase C4b-γ-2/3: this function is paired with
+/// `rewrite_forwarded_references` and
+/// `release_evacuated_original_forwarding_stubs` — every reference
+/// site (heap fields, shadow stack, global roots) is rewalked AFTER
+/// this function returns and any pointer to a forwarded object is
+/// updated to the new address. The original's MARKED bit is cleared at
+/// evac time, then its FORWARDED bit is cleared after rewrite/verify so
+/// sweep treats the now-stale slot as dead and the nursery block can
+/// reset; the new copy is marked MARKED so the rewrite walk picks up
+/// its (copied) fields and so sweep keeps it alive.
 fn evacuate_tenured_nursery_objects_collecting(
     force_evacuation: bool,
-    evacuated_headers: &mut Vec<*mut GcHeader>,
+    evacuated_new_headers: &mut Vec<*mut GcHeader>,
+    evacuated_original_headers: &mut Vec<*mut GcHeader>,
 ) -> EvacuationTraceStats {
     let mut evacuated = EvacuationTraceStats::default();
     crate::arena::arena_walk_objects(|header_ptr| {
@@ -7102,12 +7239,14 @@ fn evacuate_tenured_nursery_objects_collecting(
             // copy the OLD header (its flags / size match the
             // new alloc by construction).
             std::ptr::copy_nonoverlapping(user_ptr, new_user, payload);
-            // Install forwarding pointer at the OLD location.
+            // Install a GC-evacuation forwarding pointer at the original
+            // nursery location. It is load-bearing only until the
+            // rewrite/verify phase finishes.
             set_forwarding_address(header, new_user);
-            // Clear MARKED on the original so sweep frees its
-            // (now-stale) nursery slot. The block can reset once
-            // every object in it is either FORWARDED-cleared or
-            // unmarked dead.
+            // Clear MARKED on the original so, after the short-lived
+            // FORWARDED bit is released, sweep frees its (now-stale)
+            // nursery slot. The block can reset once every object in it
+            // is either a released evacuation original or unmarked dead.
             (*header).gc_flags &= !GC_FLAG_MARKED;
             // Mark the new copy so (a) the rewrite walk visits
             // its fields and (b) sweep keeps it alive. The mark
@@ -7121,18 +7260,51 @@ fn evacuate_tenured_nursery_objects_collecting(
             // age-bump pass on the next cycle would treat it as
             // a fresh young object.
             (*new_header).gc_flags |= GC_FLAG_TENURED;
-            evacuated_headers.push(new_header);
+            evacuated_original_headers.push(header);
+            evacuated_new_headers.push(new_header);
             evacuated.objects += 1;
             evacuated.bytes += total;
+            evacuated.moved_objects += 1;
+            evacuated.moved_bytes += total;
         }
     });
     evacuated
 }
 
+fn release_evacuated_original_forwarding_stubs(
+    evacuated_original_headers: &[*mut GcHeader],
+) -> EvacuationTraceStats {
+    let mut released = EvacuationTraceStats::default();
+    for &header in evacuated_original_headers {
+        if header.is_null() {
+            continue;
+        }
+        unsafe {
+            let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+            if !crate::arena::pointer_in_nursery(user_ptr as usize) {
+                continue;
+            }
+            let flags = (*header).gc_flags;
+            if flags & GC_FLAG_FORWARDED == 0 {
+                continue;
+            }
+            (*header).gc_flags = flags & !GC_FLAG_FORWARDED;
+            released.released_original_objects += 1;
+            released.released_original_bytes += (*header).size as usize;
+        }
+    }
+    released
+}
+
 #[cfg(test)]
 fn evacuate_tenured_nursery_objects_with_force(force_evacuation: bool) -> EvacuationTraceStats {
-    let mut evacuated_headers = Vec::new();
-    evacuate_tenured_nursery_objects_collecting(force_evacuation, &mut evacuated_headers)
+    let mut evacuated_new_headers = Vec::new();
+    let mut evacuated_original_headers = Vec::new();
+    evacuate_tenured_nursery_objects_collecting(
+        force_evacuation,
+        &mut evacuated_new_headers,
+        &mut evacuated_original_headers,
+    )
 }
 
 #[cfg(test)]
@@ -9863,6 +10035,17 @@ mod tests {
         POINTER_TAG | (addr as u64 & POINTER_MASK)
     }
 
+    fn arena_block_index_for_user(user: usize) -> Option<usize> {
+        let mut found = None;
+        crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
+            let current_user = unsafe { (header_ptr as *mut u8).add(GC_HEADER_SIZE) as usize };
+            if current_user == user {
+                found = Some(block_idx);
+            }
+        });
+        found
+    }
+
     extern "C" fn test_no_capture_singleton_func(
         _closure: *const crate::closure::ClosureHeader,
     ) -> f64 {
@@ -11822,6 +12005,10 @@ mod tests {
                 tenured_still_in_nursery_bytes: tenured,
                 candidate_bytes: candidate,
                 candidate_objects,
+                reclaimable_candidate_bytes: candidate,
+                reclaimable_candidate_objects: candidate_objects,
+                retained_forwarded_stub_bytes: 0,
+                retained_forwarded_stub_objects: 0,
                 conservative_pinned_bytes: pinned,
                 rss_bytes: rss,
                 previous_pause_us,
@@ -11901,7 +12088,36 @@ mod tests {
             false,
         );
         assert!(!pinned_dominated.enabled);
-        assert_eq!(pinned_dominated.reason, "candidate_ratio_below_threshold");
+        assert_eq!(
+            pinned_dominated.reason,
+            "reclaimable_candidate_ratio_below_threshold"
+        );
+
+        let retained_stub_dominated = decide(
+            EvacuationPolicySnapshot {
+                tenured_still_in_nursery_bytes: MIN_TENURED_NURSERY_BYTES * 2,
+                candidate_bytes: MIN_CANDIDATE_BYTES * 2,
+                candidate_objects: 16,
+                reclaimable_candidate_bytes: 0,
+                reclaimable_candidate_objects: 0,
+                retained_forwarded_stub_bytes: 64,
+                retained_forwarded_stub_objects: 1,
+                conservative_pinned_bytes: 0,
+                rss_bytes: 0,
+                previous_pause_us: 0,
+                pre_evac_pause_us: 0,
+            },
+            true,
+            false,
+        );
+        assert!(
+            !retained_stub_dominated.enabled,
+            "movable bytes alone must not enable evacuation when retained forwarded stubs keep the candidate blocks live"
+        );
+        assert_eq!(
+            retained_stub_dominated.reason,
+            "zero_reclaimable_candidates"
+        );
 
         let pause_skip = decide(
             snapshot(
@@ -11977,6 +12193,59 @@ mod tests {
         assert!(!disabled.considered);
         assert!(!disabled.enabled);
         assert_eq!(disabled.reason, "disabled");
+    }
+
+    #[test]
+    fn test_evacuation_policy_snapshot_excludes_retained_forwarded_stub_blocks() {
+        clear_marks();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+
+        let mut pair = None;
+        for _ in 0..64 {
+            let candidate = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT) as usize;
+            let stub = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
+            let candidate_block = arena_block_index_for_user(candidate);
+            let stub_block = arena_block_index_for_user(stub);
+            if candidate_block.is_some()
+                && candidate_block == stub_block
+                && candidate_block.unwrap() < crate::arena::general_block_count()
+            {
+                pair = Some((candidate, stub));
+                break;
+            }
+        }
+        let (candidate, stub) =
+            pair.expect("test setup should find two nursery allocations in one general block");
+        let candidate_header = unsafe { header_from_user_ptr(candidate as *const u8) };
+        let stub_header = unsafe { header_from_user_ptr(stub as *const u8) };
+        let stub_target = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY);
+        unsafe {
+            (*candidate_header).gc_flags |= GC_FLAG_MARKED | GC_FLAG_TENURED;
+            set_forwarding_address(stub_header, stub_target);
+        }
+
+        let snapshot =
+            evacuation_policy_snapshot_after_mark(EvacuationPolicySnapshot::default(), false, 0);
+        let candidate_size = unsafe { (*candidate_header).size as usize };
+        let stub_size = unsafe { (*stub_header).size as usize };
+        assert!(
+            snapshot.candidate_bytes >= candidate_size,
+            "marked tenured object should be a movable candidate"
+        );
+        assert_eq!(
+            snapshot.reclaimable_candidate_bytes, 0,
+            "candidate sharing a block with a retained forwarded stub is not block-reclaimable"
+        );
+        assert!(
+            snapshot.retained_forwarded_stub_bytes >= stub_size,
+            "policy snapshot should report retained forwarded stubs that keep blocks live"
+        );
+
+        unsafe {
+            (*candidate_header).gc_flags &= !(GC_FLAG_MARKED | GC_FLAG_TENURED);
+            (*stub_header).gc_flags &= !GC_FLAG_FORWARDED;
+        }
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
     }
 
     #[test]
@@ -12076,6 +12345,83 @@ mod tests {
         }
         unsafe {
             (*header).gc_flags &= !(GC_FLAG_MARKED | GC_FLAG_TENURED);
+        }
+    }
+
+    #[test]
+    fn test_release_evacuated_original_forwarding_stub_before_sweep() {
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+        clear_marks();
+        let user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let header = unsafe { header_from_user_ptr(user) as *mut GcHeader };
+        unsafe {
+            (*header).gc_flags |= GC_FLAG_MARKED | GC_FLAG_TENURED;
+        }
+        let total = unsafe { (*header).size as usize };
+        let mut evacuated_new_headers = Vec::new();
+        let mut evacuated_original_headers = Vec::new();
+        let moved = evacuate_tenured_nursery_objects_collecting(
+            false,
+            &mut evacuated_new_headers,
+            &mut evacuated_original_headers,
+        );
+        assert_eq!(moved.moved_objects, 1);
+        assert_eq!(moved.moved_bytes, total);
+        assert_eq!(evacuated_original_headers, vec![header]);
+        unsafe {
+            assert_ne!(
+                (*header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "evacuation must install a forwarding stub for rewrite"
+            );
+        }
+
+        let released = release_evacuated_original_forwarding_stubs(&evacuated_original_headers);
+        assert_eq!(released.released_original_objects, 1);
+        assert_eq!(released.released_original_bytes, total);
+        unsafe {
+            assert_eq!(
+                (*header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "GC-evacuation originals should release FORWARDED before sweep"
+            );
+        }
+
+        let sweep = sweep_with_age_bump(false);
+        assert!(
+            sweep.freed_bytes >= total as u64,
+            "released evacuation original should contribute to sweep reclaimable bytes"
+        );
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+    }
+
+    #[test]
+    fn test_sweep_reports_and_retains_non_evacuation_forwarded_stub() {
+        clear_marks();
+        let stub = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY);
+        let target = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY);
+        let stub_header = unsafe { header_from_user_ptr(stub) as *mut GcHeader };
+        let total = unsafe { (*stub_header).size as usize };
+        unsafe {
+            set_forwarding_address(stub_header, target);
+        }
+
+        let sweep = sweep_with_age_bump(false);
+        assert!(
+            sweep.retained_forwarded_stub_objects >= 1,
+            "sweep should count retained non-evacuation forwarding stubs"
+        );
+        assert!(
+            sweep.retained_forwarded_stub_bytes >= total,
+            "sweep should report bytes retained by non-evacuation forwarding stubs"
+        );
+        unsafe {
+            assert_ne!(
+                (*stub_header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "sweep must not clear array-growth forwarding stubs"
+            );
+            (*stub_header).gc_flags &= !GC_FLAG_FORWARDED;
         }
     }
 
@@ -12198,12 +12544,11 @@ mod tests {
             "evacuated parent should live in old-gen"
         );
         unsafe {
-            assert_ne!(
+            assert_eq!(
                 (*parent_header).gc_flags & GC_FLAG_FORWARDED,
                 0,
-                "original nursery parent should hold a forwarding pointer"
+                "original nursery parent should release its GC forwarding pointer after rewrite"
             );
-            assert_eq!(forwarding_address(parent_header) as usize, parent_after);
         }
 
         let parent_after_fields = unsafe {
