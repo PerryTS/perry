@@ -201,9 +201,30 @@ fn layout_stack(handle: i64, width: i32, height: i32, vertical: bool) {
                 } else {
                     (pos, inset_top, size, cross)
                 };
+                // Win32 COMBOBOX quirk (issue #1061): the height passed to
+                // MoveWindow bounds the *drop-down list*, not just the closed
+                // edit/selection box. The layout intrinsic for Picker /
+                // Combobox is the closed height (~28px); applying it verbatim
+                // clips the dropdown to zero, so the control renders but never
+                // opens ("static control, click does nothing — works on
+                // Linux/AppKit"). picker::create / combobox::create deliberately
+                // pass a 200px height at CreateWindowExW for exactly this
+                // reason; relayout was then destroying it. Inflate only the
+                // combobox's own window height — sibling stacking still uses
+                // the closed `size` (`pos += size` below is unchanged), so
+                // layout is unaffected and the extra height is purely the
+                // dropdown's maximum extent.
+                let move_h = if ci_info
+                    .as_ref()
+                    .is_some_and(|ci| matches!(ci.kind, WidgetKind::Picker | WidgetKind::Combobox))
+                {
+                    h.max(28) + 200
+                } else {
+                    h
+                };
                 // position child
                 unsafe {
-                    let _ = MoveWindow(child_hwnd, x, y, w, h, true);
+                    let _ = MoveWindow(child_hwnd, x, y, w, move_h, true);
                 }
                 // Apply deferred corner radius now that widget has its final size
                 widgets::apply_corner_radius(child);
