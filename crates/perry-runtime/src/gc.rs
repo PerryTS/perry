@@ -294,22 +294,23 @@ pub struct GcStats {
 pub(crate) struct MallocState {
     /// Malloc-allocated objects tracked for GC (strings/closures/bigints/…)
     pub(crate) objects: Vec<*mut GcHeader>,
-    /// O(1) lookup set for validating malloc pointers — lazily built
-    /// from `objects` on first `gc_realloc` call. The vast majority of
-    /// `gc_malloc`-heavy workloads (anything that doesn't call
-    /// `gc_realloc` directly — promise/closure/Map/etc. allocation
-    /// kernels) never touch this. Building it eagerly on every
-    /// allocation was the single hottest leaf (~16 % self-time on
-    /// `promise_all_chains`: 200 k `set.insert` calls × hashbrown's
-    /// group-probe cost). Now `gc_malloc` only pushes to `objects`
-    /// (Vec push amortized O(1)), and `gc_realloc` calls
-    /// `ensure_set_built` to populate the set on demand.
-    /// `set_dirty` is set when an allocation/sweep happens since the
-    /// set was built; cleared on rebuild. Empty initially.
+    /// O(1) exact header registry for validating malloc pointers. It starts
+    /// inactive so malloc-heavy workloads that never need pointer validation
+    /// pay only the `objects.push` cost. The first caller that needs exact
+    /// validation (`gc_realloc`, tests, or future non-copying validation paths)
+    /// activates the registry by rebuilding it from `objects`; after that,
+    /// allocation, realloc, and sweep keep it synchronized inline.
     pub(crate) set: crate::fast_hash::PtrHashSet<usize>,
-    /// True while `set` does not reflect `objects`. Allocations and
-    /// sweep both set this; `ensure_set_built` consumes it.
-    pub(crate) set_dirty: bool,
+    /// Registry availability/consistency. Copied-minor GC may consult an
+    /// already-active exact registry, but must never rebuild it on the fast
+    /// path because that would scale with total malloc churn.
+    registry_state: MallocRegistryState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MallocRegistryState {
+    Inactive,
+    ActiveConsistent,
 }
 
 /// Pre-allocated capacity for `MallocState.objects` and `.set`.
@@ -341,8 +342,7 @@ thread_local! {
             MALLOC_STATE_INITIAL_CAPACITY,
             crate::fast_hash::PtrHasher,
         ),
-        // No allocations yet — set is consistent with empty objects.
-        set_dirty: false,
+        registry_state: MallocRegistryState::Inactive,
     });
 
     /// Free list of arena slots available for reuse: (user_ptr, payload_size)
@@ -828,6 +828,8 @@ struct CopyingNurseryTraceStats {
     promoted_objects: usize,
     promoted_bytes: usize,
     reset_blocks: usize,
+    malloc_validation_lookups: usize,
+    malloc_registry_rebuilds: u64,
     fallback_reason: &'static str,
 }
 
@@ -1095,6 +1097,8 @@ impl GcCycleTrace {
                 "promoted_objects": self.copying_nursery.promoted_objects,
                 "promoted_bytes": self.copying_nursery.promoted_bytes,
                 "reset_blocks": self.copying_nursery.reset_blocks,
+                "malloc_validation_lookups": self.copying_nursery.malloc_validation_lookups,
+                "malloc_registry_rebuilds": self.copying_nursery.malloc_registry_rebuilds,
                 "fallback_reason": self.copying_nursery.fallback_reason,
             },
             "evacuation_policy": {
@@ -1784,11 +1788,9 @@ pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
         MALLOC_STATE.with(|s| {
             let mut s = s.borrow_mut();
             s.objects.push(header);
-            // Lazy-set: `gc_realloc` rebuilds the lookup set on demand.
-            // Mark dirty so the next `ensure_set_built` rebuilds from
-            // the updated `objects` Vec. Skips a ~50 ns hashbrown
-            // group-probe per allocation on the hot path.
-            s.set_dirty = true;
+            if s.malloc_registry_available() {
+                s.set.insert(header as usize);
+            }
         });
         GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_IN_ALLOC));
 
@@ -1831,8 +1833,9 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
         MALLOC_STATE.with(|s| {
             let mut s = s.borrow_mut();
             s.objects.extend_from_slice(&headers);
-            // Lazy-set: see `gc_malloc` for rationale.
-            s.set_dirty = true;
+            if s.malloc_registry_available() {
+                s.set.extend(headers.iter().map(|&h| h as usize));
+            }
         });
 
         GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_IN_ALLOC));
@@ -1841,20 +1844,33 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
     results
 }
 
-/// Lazily build `MallocState.set` from `MallocState.objects` if dirty.
-/// `gc_malloc` flips `set_dirty = true` instead of inserting into the
-/// hashset; callers that actually need the set (`gc_realloc` and the
-/// sweep's removal path) call this first to refresh it. For typical
-/// allocation-heavy kernels (`promise_all_chains`, object_create) the
-/// set is never built at all because they never call `gc_realloc`.
+impl MallocState {
+    #[inline]
+    fn malloc_registry_available(&self) -> bool {
+        self.registry_state == MallocRegistryState::ActiveConsistent
+    }
+}
+
+thread_local! {
+    static MALLOC_REGISTRY_REBUILD_COUNT: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Lazily activate `MallocState.set` from `MallocState.objects`.
+///
+/// Once activated, the registry stays exact: `gc_malloc`,
+/// `gc_malloc_batch`, `gc_realloc`, and `sweep_malloc_objects` update it
+/// inline. This preserves the malloc hot path for workloads that never need
+/// exact validation, while keeping copied-minor from rebuilding the registry
+/// during nursery collection.
 #[inline]
 fn ensure_set_built(s: &mut MallocState) {
-    if !s.set_dirty {
+    if s.malloc_registry_available() {
         return;
     }
     s.set.clear();
     s.set.extend(s.objects.iter().map(|&h| h as usize));
-    s.set_dirty = false;
+    s.registry_state = MallocRegistryState::ActiveConsistent;
+    MALLOC_REGISTRY_REBUILD_COUNT.with(|c| c.set(c.get().saturating_add(1)));
 }
 
 /// Reallocate a malloc-tracked object, preserving GcHeader.
@@ -5064,35 +5080,49 @@ struct CopyingPointer {
 }
 
 struct CopyingPointerSet {
-    malloc_users: crate::fast_hash::PtrHashSet<usize>,
+    malloc_registry_available: bool,
+    malloc_validation_lookups: Cell<usize>,
+    malloc_registry_rebuild_count_start: u64,
 }
 
 impl CopyingPointerSet {
     fn new() -> Self {
-        let mut malloc_users = crate::fast_hash::new_ptr_hash_set();
-        MALLOC_STATE.with(|s| {
-            let s = s.borrow();
-            for &header in s.objects.iter() {
-                let user = unsafe { (header as *mut u8).add(GC_HEADER_SIZE) } as usize;
-                malloc_users.insert(user);
-            }
-        });
-        Self { malloc_users }
+        let malloc_registry_available =
+            MALLOC_STATE.with(|s| s.borrow().malloc_registry_available());
+        let malloc_registry_rebuild_count_start = MALLOC_REGISTRY_REBUILD_COUNT.with(|c| c.get());
+        Self {
+            malloc_registry_available,
+            malloc_validation_lookups: Cell::new(0),
+            malloc_registry_rebuild_count_start,
+        }
     }
 
     #[inline]
     fn classify(&self, addr: usize) -> Option<CopyingPointer> {
+        self.classify_arena(addr)
+            .or_else(|| self.classify_malloc(addr))
+    }
+
+    #[inline]
+    fn classify_for_preflight(
+        &self,
+        addr: usize,
+        possible_malloc: bool,
+    ) -> Result<Option<CopyingPointer>, &'static str> {
+        if let Some(ptr) = self.classify_arena(addr) {
+            return Ok(Some(ptr));
+        }
+        if possible_malloc && !self.malloc_registry_available {
+            return Err("malloc_registry_unavailable");
+        }
+        Ok(self.classify_malloc(addr))
+    }
+
+    #[inline]
+    fn classify_arena(&self, addr: usize) -> Option<CopyingPointer> {
         if addr < GC_HEADER_SIZE {
             return None;
         }
-        if self.malloc_users.contains(&addr) {
-            let header = unsafe { header_from_user_ptr(addr as *const u8) };
-            return unsafe { plausible_gc_header(header, false) }.then_some(CopyingPointer {
-                header,
-                kind: CopyingPointerKind::Malloc,
-            });
-        }
-
         let space = crate::arena::classify_heap_space(addr);
         if matches!(space, crate::arena::HeapSpace::Unknown) {
             return None;
@@ -5126,6 +5156,29 @@ impl CopyingPointerSet {
     }
 
     #[inline]
+    fn classify_malloc(&self, addr: usize) -> Option<CopyingPointer> {
+        if addr < GC_HEADER_SIZE || !self.malloc_registry_available {
+            return None;
+        }
+        let header = unsafe { header_from_user_ptr(addr as *const u8) };
+        self.malloc_validation_lookups
+            .set(self.malloc_validation_lookups.get().saturating_add(1));
+        let tracked = MALLOC_STATE.with(|s| s.borrow().set.contains(&(header as usize)));
+        if !tracked {
+            return None;
+        }
+        unsafe { plausible_gc_header(header, false) }.then_some(CopyingPointer {
+            header,
+            kind: CopyingPointerKind::Malloc,
+        })
+    }
+
+    #[inline]
+    fn raw_pointer_candidate(bits: u64) -> bool {
+        (0x1000..=POINTER_MASK).contains(&bits) && bits & 0x7 == 0
+    }
+
+    #[inline]
     fn decode_bits(&self, bits: u64) -> Option<(usize, bool, u64)> {
         let tag = bits & TAG_MASK;
         if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
@@ -5135,8 +5188,47 @@ impl CopyingPointerSet {
         if tag >= 0x7FF8_0000_0000_0000 {
             return None;
         }
+        if !Self::raw_pointer_candidate(bits) {
+            return None;
+        }
         let addr = bits as usize;
         self.classify(addr).map(|_| (addr, false, 0))
+    }
+
+    #[inline]
+    fn decode_bits_for_preflight(
+        &self,
+        bits: u64,
+    ) -> Result<Option<(usize, CopyingPointer)>, &'static str> {
+        let tag = bits & TAG_MASK;
+        if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+            let addr = (bits & POINTER_MASK) as usize;
+            if addr == 0 {
+                return Ok(None);
+            }
+            return self
+                .classify_for_preflight(addr, true)
+                .map(|ptr| ptr.map(|ptr| (addr, ptr)));
+        }
+        if tag >= 0x7FF8_0000_0000_0000 || !Self::raw_pointer_candidate(bits) {
+            return Ok(None);
+        }
+        let addr = bits as usize;
+        self.classify_for_preflight(addr, true)
+            .map(|ptr| ptr.map(|ptr| (addr, ptr)))
+    }
+
+    #[inline]
+    fn malloc_validation_lookups(&self) -> usize {
+        self.malloc_validation_lookups.get()
+    }
+
+    #[inline]
+    fn malloc_registry_rebuilds(&self) -> u64 {
+        MALLOC_REGISTRY_REBUILD_COUNT.with(|c| {
+            c.get()
+                .saturating_sub(self.malloc_registry_rebuild_count_start)
+        })
     }
 }
 
@@ -5184,8 +5276,13 @@ impl CopyingNurseryPreflight {
     }
 
     fn check_bits_with_reason(&mut self, bits: u64, pinned_reason: &'static str) {
-        if let Some((addr, _, _)) = self.ptrs().decode_bits(bits) {
-            self.check_addr_with_reason(addr, pinned_reason);
+        if self.fallback_reason.is_some() {
+            return;
+        }
+        match self.ptrs().decode_bits_for_preflight(bits) {
+            Ok(Some((_addr, ptr))) => self.check_ptr_with_reason(ptr, pinned_reason),
+            Ok(None) => {}
+            Err(reason) => self.fallback_reason = Some(reason),
         }
     }
 
@@ -5197,9 +5294,18 @@ impl CopyingNurseryPreflight {
         if self.fallback_reason.is_some() {
             return;
         }
-        let Some(ptr) = self.ptrs().classify(addr) else {
-            return;
+        let ptr = match self.ptrs().classify_for_preflight(addr, true) {
+            Ok(Some(ptr)) => ptr,
+            Ok(None) => return,
+            Err(reason) => {
+                self.fallback_reason = Some(reason);
+                return;
+            }
         };
+        self.check_ptr_with_reason(ptr, pinned_reason);
+    }
+
+    fn check_ptr_with_reason(&mut self, ptr: CopyingPointer, pinned_reason: &'static str) {
         unsafe {
             if matches!(
                 ptr.kind,
@@ -5801,7 +5907,7 @@ fn scan_remembered_dirty_slots_copying(
     stats
 }
 
-fn copying_preflight_reason(ptrs: &CopyingPointerSet) -> Option<&'static str> {
+fn copying_static_preflight_reason() -> Option<&'static str> {
     if !generated_write_barriers_emitted() {
         return Some("barriers_inactive");
     }
@@ -5814,7 +5920,10 @@ fn copying_preflight_reason(ptrs: &CopyingPointerSet) -> Option<&'static str> {
     if copying_legacy_root_scanners_present() {
         return Some("copy_only_roots");
     }
+    None
+}
 
+fn copying_preflight_reason(ptrs: &CopyingPointerSet) -> Option<&'static str> {
     let mut checker = CopyingNurseryPreflight::new(ptrs, "pinned_young_root");
     visit_mutable_root_slots(|slot| unsafe {
         checker.check_bits(slot.read());
@@ -5849,10 +5958,19 @@ fn gc_collect_minor_copying_fast_path(
     start: Instant,
     malloc_sweep_due: bool,
 ) -> Option<u64> {
+    if let Some(reason) = copying_static_preflight_reason() {
+        if let Some(trace) = trace.as_mut() {
+            trace.copying_nursery.fallback_reason = reason;
+        }
+        return None;
+    }
+
     let ptrs = CopyingPointerSet::new();
     if let Some(reason) = copying_preflight_reason(&ptrs) {
         if let Some(trace) = trace.as_mut() {
             trace.copying_nursery.fallback_reason = reason;
+            trace.copying_nursery.malloc_validation_lookups = ptrs.malloc_validation_lookups();
+            trace.copying_nursery.malloc_registry_rebuilds = ptrs.malloc_registry_rebuilds();
         }
         return None;
     }
@@ -5925,6 +6043,8 @@ fn gc_collect_minor_copying_fast_path(
     CONS_PINNED.with(|s| s.borrow_mut().clear());
     let nursery_freed_bytes = from_space_bytes.saturating_sub(collector.live_from_bytes) as u64;
     let freed_bytes = nursery_freed_bytes.saturating_add(malloc_freed_bytes);
+    collector.stats.malloc_validation_lookups = collector.ptrs.malloc_validation_lookups();
+    collector.stats.malloc_registry_rebuilds = collector.ptrs.malloc_registry_rebuilds();
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = collector.stats;
         trace.sweep = SweepTraceStats {
@@ -6612,21 +6732,16 @@ fn sweep() -> u64 {
 fn sweep_malloc_objects() -> u64 {
     let mut freed_bytes: u64 = 0;
 
-    // Lazy-set: instead of `set.remove(...)` per freed object (50 ns ×
-    // tens of thousands of dead entries = several ms per GC cycle), we
-    // flip `set_dirty = true` once and the next `gc_realloc` rebuilds
-    // the set from the updated `objects` Vec. Most kernels never call
-    // `gc_realloc` between collections, so the rebuild is amortized
-    // away entirely. The set IS kept in sync inline for callers that
-    // need consistency between sweep and a later mid-cycle realloc —
-    // but the common path is just the bool flip.
+    // The malloc header registry is maintained only after activation. When
+    // inactive, sweep remains a pure `objects` compaction. Once active, remove
+    // freed headers inline so copied-minor can use the registry later without
+    // rebuilding it.
     MALLOC_STATE.with(|s| {
         let mut s = s.borrow_mut();
-        let MallocState { objects, .. } = &mut *s;
         let mut i = 0;
-        let mut any_freed = false;
-        while i < objects.len() {
-            let header = objects[i];
+        let registry_available = s.malloc_registry_available();
+        while i < s.objects.len() {
+            let header = s.objects[i];
             unsafe {
                 if (*header).gc_flags & GC_FLAG_PINNED != 0 {
                     // Pinned objects are always kept alive — clear mark bit inline
@@ -6665,8 +6780,10 @@ fn sweep_malloc_objects() -> u64 {
 
                     let layout = Layout::from_size_align(total_size, 8).unwrap();
                     dealloc(header as *mut u8, layout);
-                    objects.swap_remove(i);
-                    any_freed = true;
+                    s.objects.swap_remove(i);
+                    if registry_available {
+                        s.set.remove(&(header as usize));
+                    }
                     // Don't increment i — swap_remove moved last element here
                 } else {
                     // Surviving object — clear mark bit inline to avoid separate heap walk
@@ -6674,9 +6791,6 @@ fn sweep_malloc_objects() -> u64 {
                     i += 1;
                 }
             }
-        }
-        if any_freed {
-            s.set_dirty = true;
         }
     });
 
@@ -9406,6 +9520,25 @@ mod tests {
         MALLOC_STATE.with(|s| s.borrow().objects.iter().any(|&tracked| tracked == header))
     }
 
+    fn activate_malloc_registry_for_tests() {
+        MALLOC_STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            ensure_set_built(&mut s);
+        });
+    }
+
+    fn deactivate_malloc_registry_for_tests() {
+        MALLOC_STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            s.set.clear();
+            s.registry_state = MallocRegistryState::Inactive;
+        });
+    }
+
+    fn malloc_registry_active_for_tests() -> bool {
+        MALLOC_STATE.with(|s| s.borrow().malloc_registry_available())
+    }
+
     fn gc_collection_count() -> u64 {
         GC_STATS.with(|s| s.borrow().collection_count)
     }
@@ -10128,6 +10261,18 @@ mod tests {
         (*closure).type_tag = crate::closure::CLOSURE_MAGIC;
     }
 
+    unsafe fn init_test_closure_with_one_capture(ptr: *mut u8, capture_bits: u64) -> *mut u64 {
+        let closure = ptr as *mut crate::closure::ClosureHeader;
+        (*closure).func_ptr = std::ptr::null();
+        (*closure).capture_count = 1;
+        (*closure).type_tag = crate::closure::CLOSURE_MAGIC;
+        let capture_slot =
+            ptr.add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
+        *capture_slot = capture_bits;
+        layout_note_slot(ptr as usize, 0, capture_bits);
+        capture_slot
+    }
+
     #[inline(never)]
     fn allocate_dead_malloc_churn_headers(per_type: usize) -> Vec<usize> {
         let mut headers = Vec::with_capacity(per_type * 3);
@@ -10364,6 +10509,7 @@ mod tests {
         };
         assert_eq!(unsafe { *capture_slot }, capture_bits);
 
+        activate_malloc_registry_for_tests();
         js_shadow_slot_set(0, 0);
         let _ = gc_collect_minor();
 
@@ -10506,6 +10652,7 @@ mod tests {
             init_test_closure(live_malloc);
         }
         js_shadow_slot_set(1, ptr_bits(live_malloc as usize));
+        activate_malloc_registry_for_tests();
 
         let churn_headers = allocate_dead_malloc_churn_headers(32);
         assert_eq!(
@@ -10558,6 +10705,7 @@ mod tests {
             init_test_closure(live_malloc);
         }
         js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+        activate_malloc_registry_for_tests();
 
         let churn_headers = allocate_dead_malloc_churn_headers(48);
         assert_eq!(
@@ -10595,6 +10743,124 @@ mod tests {
             next_malloc_trigger,
             survivors_after + malloc_step_after,
             "gc_check_trigger should rebaseline the next malloc trigger to survivors + step"
+        );
+    }
+
+    #[test]
+    fn test_copied_minor_malloc_scaling_no_roots_skips_registry_walk() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        deactivate_malloc_registry_for_tests();
+
+        let churn_headers = allocate_dead_malloc_churn_headers(512);
+        let tracked_before = tracked_malloc_headers_matching(&churn_headers);
+        assert_eq!(tracked_before, churn_headers.len());
+        let live_young = young_leaf();
+        js_shadow_slot_set(0, ptr_bits(live_young));
+
+        let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
+            kind: GcTriggerKind::Direct,
+            steps_before: Some(GcStepSnapshot::current()),
+        });
+        let trace = outcome.trace.expect("test requested GC trace capture");
+
+        assert_eq!(trace.copying_nursery.fallback_reason, "none");
+        assert_eq!(
+            trace.copying_nursery.malloc_validation_lookups, 0,
+            "copied-minor should not probe malloc entries when no roots mention malloc"
+        );
+        assert_eq!(
+            trace.copying_nursery.malloc_registry_rebuilds, 0,
+            "copied-minor must not rebuild the malloc registry"
+        );
+        assert!(
+            !malloc_registry_active_for_tests(),
+            "copied-minor should leave an inactive malloc registry inactive"
+        );
+        assert_eq!(
+            tracked_malloc_headers_matching(&churn_headers),
+            tracked_before,
+            "malloc sweep was not due, so dead churn should remain tracked without being walked"
+        );
+    }
+
+    #[test]
+    fn test_copied_minor_malloc_scaling_live_root_with_active_registry() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let live_child = young_leaf();
+        let live_malloc = gc_malloc(
+            std::mem::size_of::<crate::closure::ClosureHeader>() + std::mem::size_of::<u64>(),
+            GC_TYPE_CLOSURE,
+        );
+        let capture_slot =
+            unsafe { init_test_closure_with_one_capture(live_malloc, ptr_bits(live_child)) };
+        js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+        activate_malloc_registry_for_tests();
+        assert!(malloc_registry_active_for_tests());
+
+        let churn_headers = allocate_dead_malloc_churn_headers(128);
+        trigger_guard.make_malloc_sweep_due();
+        let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
+            kind: GcTriggerKind::ArenaBytes,
+            steps_before: Some(GcStepSnapshot::current()),
+        });
+        let trace = outcome.trace.expect("test requested GC trace capture");
+
+        assert_eq!(trace.copying_nursery.fallback_reason, "none");
+        assert!(
+            trace.copying_nursery.malloc_validation_lookups > 0,
+            "active registry should validate the live malloc root"
+        );
+        assert!(
+            trace.copying_nursery.malloc_validation_lookups < churn_headers.len(),
+            "malloc validation should scale with reachable candidates, not dead churn"
+        );
+        assert_eq!(
+            trace.copying_nursery.malloc_registry_rebuilds, 0,
+            "copied-minor should use the active registry without rebuilding it"
+        );
+        assert_eq!(tracked_malloc_headers_matching(&churn_headers), 0);
+        assert!(malloc_user_ptr_tracked(live_malloc));
+        let capture_after = unsafe { (*capture_slot & POINTER_MASK) as usize };
+        assert_ne!(capture_after, live_child);
+        assert!(crate::arena::pointer_in_nursery(capture_after));
+    }
+
+    #[test]
+    fn test_copied_minor_malloc_scaling_falls_back_when_registry_unavailable() {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let live_malloc = gc_malloc(
+            std::mem::size_of::<crate::closure::ClosureHeader>(),
+            GC_TYPE_CLOSURE,
+        );
+        unsafe {
+            init_test_closure(live_malloc);
+        }
+        let mut raw_root = live_malloc as u64;
+        js_gc_register_global_root(&mut raw_root as *mut u64 as i64);
+        deactivate_malloc_registry_for_tests();
+
+        let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
+            kind: GcTriggerKind::Direct,
+            steps_before: Some(GcStepSnapshot::current()),
+        });
+        let trace = outcome.trace.expect("test requested GC trace capture");
+
+        assert_eq!(
+            trace.copying_nursery.fallback_reason,
+            "malloc_registry_unavailable"
+        );
+        assert_eq!(
+            trace.copying_nursery.malloc_registry_rebuilds, 0,
+            "copied-minor fallback must not rebuild the malloc registry"
+        );
+        assert!(malloc_user_ptr_tracked(live_malloc));
+        assert_eq!(raw_root as usize, live_malloc as usize);
+        assert!(
+            !malloc_registry_active_for_tests(),
+            "fallback mark-sweep should not activate the copied-minor malloc registry"
         );
     }
 
