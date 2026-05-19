@@ -4496,6 +4496,23 @@ pub fn run_with_parse_cache(
                     Some(m) => sanitize_name(&m.name),
                     None => continue,
                 };
+                // PerryTS/storekit#1: when the import source is a package that
+                // declares `perry.nativeLibrary` (e.g. `@perryts/storekit`),
+                // its `.ts` source is a wrapper holding ambient `export
+                // declare function` signatures — the real implementation lives
+                // in the linked static library. There is no Perry wrapper
+                // symbol `perry_fn_<src>__<name>` for the source to emit, so
+                // registering the FFI specifier in `import_function_prefixes`
+                // would route the caller through an undefined wrapper and
+                // fail at link time. The per-specifier skip below lets
+                // `lower_call.rs` fall through to the FFI-manifest path
+                // (consults `ctx.ffi_signatures`, emits the call against the
+                // FFI symbol declared in `package.json :: perry.nativeLibrary.
+                // functions` plus a matching `declare external`).
+                let native_library_for_import = ctx
+                    .native_libraries
+                    .iter()
+                    .find(|nl| nl.module == import.source);
 
                 for spec in &import.specifiers {
                     // Handle namespace imports (import * as X)
@@ -4631,6 +4648,21 @@ pub fn run_with_parse_cache(
                         }
                         perry_hir::ImportSpecifier::Namespace { .. } => unreachable!(),
                     };
+
+                    // PerryTS/storekit#1: skip the wrapper-fn registration
+                    // when this specifier names an FFI function declared in
+                    // the source package's `perry.nativeLibrary.functions`
+                    // manifest. See the comment at `native_library_for_import`
+                    // above for the full rationale — the short version is
+                    // that the source `.ts` is ambient and has no Perry
+                    // wrapper for the linker to resolve, so we want the
+                    // FFI-manifest path in `lower_call.rs` to win.
+                    if native_library_for_import
+                        .map(|nl| nl.functions.iter().any(|f| f.name == exported_name))
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
 
                     // Issue #310: when the source module re-exports the
                     // imported name as a namespace (`export * as Foo from
