@@ -9,9 +9,7 @@ use crate::ir::*;
 /// shape. Defaults missing leading args to `undefined`; `property_key` stays
 /// `None` when omitted so the runtime can distinguish class-level metadata
 /// from a property-level one.
-pub(super) fn take_reflect_kvtp_args(
-    args: Vec<Expr>,
-) -> (Expr, Expr, Expr, Option<Box<Expr>>) {
+pub(super) fn take_reflect_kvtp_args(args: Vec<Expr>) -> (Expr, Expr, Expr, Option<Box<Expr>>) {
     let mut it = args.into_iter();
     let key = it.next().unwrap_or(Expr::Undefined);
     let value = it.next().unwrap_or(Expr::Undefined);

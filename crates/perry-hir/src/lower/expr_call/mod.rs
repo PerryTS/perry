@@ -6674,4 +6674,3 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         }
     }
 }
-
