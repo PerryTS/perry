@@ -21,280 +21,280 @@ use wasm_encoder::{
 };
 
 #[derive(Clone)]
-enum EnumResolvedValue {
+pub(super) enum EnumResolvedValue {
     Number(f64),
     String(String),
 }
 
 /// Helper: create an F64Const instruction from raw f64 bits
-fn f64_const(val: f64) -> Instruction<'static> {
+pub(super) fn f64_const(val: f64) -> Instruction<'static> {
     Instruction::F64Const(Ieee64::from(val))
 }
 
 /// Helper: create an F64Const instruction from NaN-boxed tag bits (kept for potential future use)
 #[allow(dead_code)]
-fn f64_const_bits(bits: u64) -> Instruction<'static> {
+pub(super) fn f64_const_bits(bits: u64) -> Instruction<'static> {
     Instruction::F64Const(Ieee64::from(f64::from_bits(bits)))
 }
 
 // NaN-boxing constants (must match perry-runtime and wasm_runtime.js)
-const STRING_TAG: u64 = 0x7FFF;
-const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+pub(super) const STRING_TAG: u64 = 0x7FFF;
+pub(super) const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+pub(super) const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+pub(super) const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+pub(super) const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 /// Import function indices (must match the order imports are added)
 /// Most fields are unused directly but their indices define the WASM import order.
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
-struct RuntimeImports {
-    string_new: u32,
-    console_log: u32,
-    console_warn: u32,
-    console_error: u32,
-    string_concat: u32,
-    js_add: u32,
-    string_eq: u32,
-    string_len: u32,
-    jsvalue_to_string: u32,
-    is_truthy: u32,
-    js_strict_eq: u32,
-    math_floor: u32,
-    math_ceil: u32,
-    math_round: u32,
-    math_abs: u32,
-    math_sqrt: u32,
-    math_pow: u32,
-    math_random: u32,
-    math_log: u32,
-    date_now: u32,
-    js_typeof: u32,
-    math_min: u32,
-    math_max: u32,
-    parse_int: u32,
-    parse_float: u32,
+pub(super) struct RuntimeImports {
+    pub(super) string_new: u32,
+    pub(super) console_log: u32,
+    pub(super) console_warn: u32,
+    pub(super) console_error: u32,
+    pub(super) string_concat: u32,
+    pub(super) js_add: u32,
+    pub(super) string_eq: u32,
+    pub(super) string_len: u32,
+    pub(super) jsvalue_to_string: u32,
+    pub(super) is_truthy: u32,
+    pub(super) js_strict_eq: u32,
+    pub(super) math_floor: u32,
+    pub(super) math_ceil: u32,
+    pub(super) math_round: u32,
+    pub(super) math_abs: u32,
+    pub(super) math_sqrt: u32,
+    pub(super) math_pow: u32,
+    pub(super) math_random: u32,
+    pub(super) math_log: u32,
+    pub(super) date_now: u32,
+    pub(super) js_typeof: u32,
+    pub(super) math_min: u32,
+    pub(super) math_max: u32,
+    pub(super) parse_int: u32,
+    pub(super) parse_float: u32,
     // Phase 0 additions
-    js_mod: u32,
-    is_null_or_undefined: u32,
+    pub(super) js_mod: u32,
+    pub(super) is_null_or_undefined: u32,
     // Phase 1: Object operations
-    object_new: u32,
-    object_set: u32,
-    object_get: u32,
-    object_get_dynamic: u32,
-    object_set_dynamic: u32,
-    object_delete: u32,
-    object_delete_dynamic: u32,
-    object_keys: u32,
-    object_values: u32,
-    object_entries: u32,
-    object_has_property: u32,
-    object_assign: u32,
+    pub(super) object_new: u32,
+    pub(super) object_set: u32,
+    pub(super) object_get: u32,
+    pub(super) object_get_dynamic: u32,
+    pub(super) object_set_dynamic: u32,
+    pub(super) object_delete: u32,
+    pub(super) object_delete_dynamic: u32,
+    pub(super) object_keys: u32,
+    pub(super) object_values: u32,
+    pub(super) object_entries: u32,
+    pub(super) object_has_property: u32,
+    pub(super) object_assign: u32,
     // Phase 1: Array operations
-    array_new: u32,
-    array_push: u32,
-    array_pop: u32,
-    array_get: u32,
-    array_set: u32,
-    array_length: u32,
-    array_slice: u32,
-    array_splice: u32,
-    array_shift: u32,
-    array_unshift: u32,
-    array_join: u32,
-    array_index_of: u32,
-    array_includes: u32,
-    array_concat: u32,
-    array_reverse: u32,
-    array_flat: u32,
-    array_is_array: u32,
-    array_from: u32,
-    array_push_spread: u32,
+    pub(super) array_new: u32,
+    pub(super) array_push: u32,
+    pub(super) array_pop: u32,
+    pub(super) array_get: u32,
+    pub(super) array_set: u32,
+    pub(super) array_length: u32,
+    pub(super) array_slice: u32,
+    pub(super) array_splice: u32,
+    pub(super) array_shift: u32,
+    pub(super) array_unshift: u32,
+    pub(super) array_join: u32,
+    pub(super) array_index_of: u32,
+    pub(super) array_includes: u32,
+    pub(super) array_concat: u32,
+    pub(super) array_reverse: u32,
+    pub(super) array_flat: u32,
+    pub(super) array_is_array: u32,
+    pub(super) array_from: u32,
+    pub(super) array_push_spread: u32,
     // Phase 1: String methods
-    string_char_at: u32,
-    string_substring: u32,
-    string_index_of: u32,
-    string_slice: u32,
-    string_to_lower_case: u32,
-    string_to_upper_case: u32,
-    string_trim: u32,
-    string_includes: u32,
-    string_starts_with: u32,
-    string_ends_with: u32,
-    string_replace: u32,
-    string_split: u32,
-    string_from_char_code: u32,
-    string_pad_start: u32,
-    string_pad_end: u32,
-    string_repeat: u32,
-    string_match: u32,
-    math_log2: u32,
-    math_log10: u32,
+    pub(super) string_char_at: u32,
+    pub(super) string_substring: u32,
+    pub(super) string_index_of: u32,
+    pub(super) string_slice: u32,
+    pub(super) string_to_lower_case: u32,
+    pub(super) string_to_upper_case: u32,
+    pub(super) string_trim: u32,
+    pub(super) string_includes: u32,
+    pub(super) string_starts_with: u32,
+    pub(super) string_ends_with: u32,
+    pub(super) string_replace: u32,
+    pub(super) string_split: u32,
+    pub(super) string_from_char_code: u32,
+    pub(super) string_pad_start: u32,
+    pub(super) string_pad_end: u32,
+    pub(super) string_repeat: u32,
+    pub(super) string_match: u32,
+    pub(super) math_log2: u32,
+    pub(super) math_log10: u32,
     // Phase 2: Closure operations
-    closure_new: u32,
-    closure_set_capture: u32,
-    closure_call_0: u32,
-    closure_call_1: u32,
-    closure_call_2: u32,
-    closure_call_3: u32,
-    closure_call_spread: u32,
+    pub(super) closure_new: u32,
+    pub(super) closure_set_capture: u32,
+    pub(super) closure_call_0: u32,
+    pub(super) closure_call_1: u32,
+    pub(super) closure_call_2: u32,
+    pub(super) closure_call_3: u32,
+    pub(super) closure_call_spread: u32,
     // Phase 2: Array higher-order methods
-    array_map: u32,
-    array_filter: u32,
-    array_for_each: u32,
-    array_reduce: u32,
-    array_find: u32,
-    array_find_index: u32,
-    array_sort: u32,
-    array_some: u32,
-    array_every: u32,
+    pub(super) array_map: u32,
+    pub(super) array_filter: u32,
+    pub(super) array_for_each: u32,
+    pub(super) array_reduce: u32,
+    pub(super) array_find: u32,
+    pub(super) array_find_index: u32,
+    pub(super) array_sort: u32,
+    pub(super) array_some: u32,
+    pub(super) array_every: u32,
     // Phase 3: Class operations
-    class_new: u32,
-    class_set_method: u32,
-    class_call_method: u32,
-    class_get_field: u32,
-    class_set_field: u32,
-    class_set_static: u32,
-    class_get_static: u32,
-    class_instanceof: u32,
+    pub(super) class_new: u32,
+    pub(super) class_set_method: u32,
+    pub(super) class_call_method: u32,
+    pub(super) class_get_field: u32,
+    pub(super) class_set_field: u32,
+    pub(super) class_set_static: u32,
+    pub(super) class_get_static: u32,
+    pub(super) class_instanceof: u32,
     // Phase 4: JSON
-    json_parse: u32,
-    json_stringify: u32,
+    pub(super) json_parse: u32,
+    pub(super) json_stringify: u32,
     // Phase 4: Map
-    map_new: u32,
-    map_set: u32,
-    map_get: u32,
-    map_has: u32,
-    map_delete: u32,
-    map_size: u32,
-    map_clear: u32,
-    map_entries: u32,
-    map_keys: u32,
-    map_values: u32,
+    pub(super) map_new: u32,
+    pub(super) map_set: u32,
+    pub(super) map_get: u32,
+    pub(super) map_has: u32,
+    pub(super) map_delete: u32,
+    pub(super) map_size: u32,
+    pub(super) map_clear: u32,
+    pub(super) map_entries: u32,
+    pub(super) map_keys: u32,
+    pub(super) map_values: u32,
     // Phase 4: Set
-    set_new: u32,
-    set_new_from_array: u32,
-    set_add: u32,
-    set_has: u32,
-    set_delete: u32,
-    set_size: u32,
-    set_clear: u32,
-    set_values: u32,
+    pub(super) set_new: u32,
+    pub(super) set_new_from_array: u32,
+    pub(super) set_add: u32,
+    pub(super) set_has: u32,
+    pub(super) set_delete: u32,
+    pub(super) set_size: u32,
+    pub(super) set_clear: u32,
+    pub(super) set_values: u32,
     // Phase 4: Date
-    date_new: u32,
-    date_get_time: u32,
-    date_to_iso_string: u32,
-    date_get_full_year: u32,
-    date_get_month: u32,
-    date_get_date: u32,
-    date_get_day: u32,
-    date_get_hours: u32,
-    date_get_minutes: u32,
-    date_get_seconds: u32,
-    date_get_milliseconds: u32,
+    pub(super) date_new: u32,
+    pub(super) date_get_time: u32,
+    pub(super) date_to_iso_string: u32,
+    pub(super) date_get_full_year: u32,
+    pub(super) date_get_month: u32,
+    pub(super) date_get_date: u32,
+    pub(super) date_get_day: u32,
+    pub(super) date_get_hours: u32,
+    pub(super) date_get_minutes: u32,
+    pub(super) date_get_seconds: u32,
+    pub(super) date_get_milliseconds: u32,
     // Phase 4: Error
-    error_new: u32,
-    error_message: u32,
+    pub(super) error_new: u32,
+    pub(super) error_message: u32,
     // Phase 4: RegExp
-    regexp_new: u32,
-    regexp_test: u32,
+    pub(super) regexp_new: u32,
+    pub(super) regexp_test: u32,
     // Phase 4: Globals
-    number_coerce: u32,
-    is_nan: u32,
-    is_finite: u32,
+    pub(super) number_coerce: u32,
+    pub(super) is_nan: u32,
+    pub(super) is_finite: u32,
     // Phase 5: Misc
-    console_log_multi: u32,
+    pub(super) console_log_multi: u32,
     // Phase 1 addition: Class inheritance
-    class_set_parent: u32,
+    pub(super) class_set_parent: u32,
     // Phase 3: Try/Catch
-    try_start: u32,
-    try_end: u32,
-    throw_value: u32,
-    has_exception: u32,
-    get_exception: u32,
+    pub(super) try_start: u32,
+    pub(super) try_end: u32,
+    pub(super) throw_value: u32,
+    pub(super) has_exception: u32,
+    pub(super) get_exception: u32,
     // Phase 4: URL
-    url_parse: u32,
-    url_get_href: u32,
-    url_get_pathname: u32,
-    url_get_hostname: u32,
-    url_get_port: u32,
-    url_get_search: u32,
-    url_get_hash: u32,
-    url_get_origin: u32,
-    url_get_protocol: u32,
-    url_get_search_params: u32,
-    searchparams_get: u32,
-    searchparams_has: u32,
-    searchparams_set: u32,
-    searchparams_append: u32,
-    searchparams_delete: u32,
-    searchparams_to_string: u32,
+    pub(super) url_parse: u32,
+    pub(super) url_get_href: u32,
+    pub(super) url_get_pathname: u32,
+    pub(super) url_get_hostname: u32,
+    pub(super) url_get_port: u32,
+    pub(super) url_get_search: u32,
+    pub(super) url_get_hash: u32,
+    pub(super) url_get_origin: u32,
+    pub(super) url_get_protocol: u32,
+    pub(super) url_get_search_params: u32,
+    pub(super) searchparams_get: u32,
+    pub(super) searchparams_has: u32,
+    pub(super) searchparams_set: u32,
+    pub(super) searchparams_append: u32,
+    pub(super) searchparams_delete: u32,
+    pub(super) searchparams_to_string: u32,
     // Phase 4: Crypto
-    crypto_random_uuid: u32,
-    crypto_random_bytes: u32,
+    pub(super) crypto_random_uuid: u32,
+    pub(super) crypto_random_bytes: u32,
     // Phase 4: Path
-    path_join: u32,
-    path_dirname: u32,
-    path_basename: u32,
-    path_extname: u32,
-    path_resolve: u32,
+    pub(super) path_join: u32,
+    pub(super) path_dirname: u32,
+    pub(super) path_basename: u32,
+    pub(super) path_extname: u32,
+    pub(super) path_resolve: u32,
     // Phase 4: Process/OS
-    os_platform: u32,
-    process_argv: u32,
-    process_cwd: u32,
+    pub(super) os_platform: u32,
+    pub(super) process_argv: u32,
+    pub(super) process_cwd: u32,
     // Phase 6: Buffer
-    buffer_alloc: u32,
-    buffer_from_string: u32,
-    buffer_to_string: u32,
-    buffer_get: u32,
-    buffer_set: u32,
-    buffer_length: u32,
-    buffer_slice: u32,
-    buffer_concat: u32,
-    uint8array_new: u32,
-    uint8array_from: u32,
-    uint8array_length: u32,
-    uint8array_get: u32,
-    uint8array_set: u32,
+    pub(super) buffer_alloc: u32,
+    pub(super) buffer_from_string: u32,
+    pub(super) buffer_to_string: u32,
+    pub(super) buffer_get: u32,
+    pub(super) buffer_set: u32,
+    pub(super) buffer_length: u32,
+    pub(super) buffer_slice: u32,
+    pub(super) buffer_concat: u32,
+    pub(super) uint8array_new: u32,
+    pub(super) uint8array_from: u32,
+    pub(super) uint8array_length: u32,
+    pub(super) uint8array_get: u32,
+    pub(super) uint8array_set: u32,
     // Timers
-    set_timeout: u32,
-    set_interval: u32,
-    clear_timeout: u32,
-    clear_interval: u32,
+    pub(super) set_timeout: u32,
+    pub(super) set_interval: u32,
+    pub(super) clear_timeout: u32,
+    pub(super) clear_interval: u32,
     // Response properties
-    response_status: u32,
-    response_ok: u32,
-    response_headers_get: u32,
-    response_url: u32,
+    pub(super) response_status: u32,
+    pub(super) response_ok: u32,
+    pub(super) response_headers_get: u32,
+    pub(super) response_url: u32,
     // Buffer extras
-    buffer_copy: u32,
-    buffer_write: u32,
-    buffer_equals: u32,
-    buffer_is_buffer: u32,
-    buffer_byte_length: u32,
+    pub(super) buffer_copy: u32,
+    pub(super) buffer_write: u32,
+    pub(super) buffer_equals: u32,
+    pub(super) buffer_is_buffer: u32,
+    pub(super) buffer_byte_length: u32,
     // Crypto extras
-    crypto_sha256: u32,
-    crypto_md5: u32,
+    pub(super) crypto_sha256: u32,
+    pub(super) crypto_md5: u32,
     // Path extras
-    path_is_absolute: u32,
+    pub(super) path_is_absolute: u32,
     // Phase 5: Async/Promise/Fetch
-    fetch_url: u32,
-    fetch_with_options: u32,
-    response_json: u32,
-    response_text: u32,
-    promise_new: u32,
-    promise_resolve: u32,
-    promise_then: u32,
-    await_promise: u32,
+    pub(super) fetch_url: u32,
+    pub(super) fetch_with_options: u32,
+    pub(super) response_json: u32,
+    pub(super) response_text: u32,
+    pub(super) promise_new: u32,
+    pub(super) promise_resolve: u32,
+    pub(super) promise_then: u32,
+    pub(super) await_promise: u32,
     // Bridge via WASM memory — Firefox canonicalizes NaN in function params,
     // so we write f64 args to memory (preserves NaN bits) and pass only plain numbers.
-    mem_call: u32,     // (func_name_id, arg_count) -> result; args at mem[ARG_BASE..]
-    mem_call_i32: u32, // (func_name_id, arg_count) -> i32; for is_truthy, string_eq, etc.
+    pub(super) mem_call: u32,     // (func_name_id, arg_count) -> result; args at mem[ARG_BASE..]
+    pub(super) mem_call_i32: u32, // (func_name_id, arg_count) -> i32; for is_truthy, string_eq, etc.
 }
 
 /// Map perry/ui and perry/system method names to bridge function names.
 /// Mirrors the mapping in perry-codegen-js's emit_ui_method_call.
-fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static str {
+pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static str {
     match method {
         // Widget creation
         "App" | "app_create" => "perry_ui_app_create",
@@ -549,63 +549,63 @@ pub fn compile_to_wasm_with_async(
     emitter.compile(modules)
 }
 
-struct WasmModuleEmitter {
+pub(super) struct WasmModuleEmitter {
     /// String literal table: content → (string_id, offset, length)
-    string_table: Vec<(String, u32, u32)>, // (content, offset, len)
-    string_map: BTreeMap<String, u32>, // content → string_id
-    string_data: Vec<u8>,              // packed string bytes
+    pub(super) string_table: Vec<(String, u32, u32)>, // (content, offset, len)
+    pub(super) string_map: BTreeMap<String, u32>, // content → string_id
+    pub(super) string_data: Vec<u8>,              // packed string bytes
     /// Type section entries: (params, results)
-    types: Vec<(Vec<ValType>, Vec<ValType>)>,
-    type_map: BTreeMap<(Vec<ValType>, Vec<ValType>), u32>,
+    pub(super) types: Vec<(Vec<ValType>, Vec<ValType>)>,
+    pub(super) type_map: BTreeMap<(Vec<ValType>, Vec<ValType>), u32>,
     /// Function index mapping: FuncId → wasm function index
-    func_map: BTreeMap<FuncId, u32>,
+    pub(super) func_map: BTreeMap<FuncId, u32>,
     /// Reverse table map: wasm function index → table index
-    func_to_table_idx: BTreeMap<u32, u32>,
+    pub(super) func_to_table_idx: BTreeMap<u32, u32>,
     /// Import count (import functions come first in the index space)
-    num_imports: u32,
+    pub(super) num_imports: u32,
     /// Runtime import indices
-    rt: Option<RuntimeImports>,
+    pub(super) rt: Option<RuntimeImports>,
     /// Global variable mapping: GlobalId → wasm global index
-    global_map: BTreeMap<GlobalId, u32>,
-    num_globals: u32,
+    pub(super) global_map: BTreeMap<GlobalId, u32>,
+    pub(super) num_globals: u32,
     /// Module-level Let bindings promoted to WASM globals: (mod_idx, LocalId) → wasm global idx.
     /// Module-level `let`/`const` declarations live in module.init as Stmt::Let, but
     /// are accessed by functions in the same module via LocalGet. They need to be
     /// stored in WASM globals so cross-function references work, and so module-init
     /// LocalIds don't collide with other modules' identical LocalIds.
-    module_let_globals: BTreeMap<(usize, LocalId), u32>,
+    pub(super) module_let_globals: BTreeMap<(usize, LocalId), u32>,
     /// Current module index when compiling functions/methods, so LocalGet can resolve
     /// module-level Lets to the correct WASM global.
-    current_mod_idx: usize,
+    pub(super) current_mod_idx: usize,
     /// Class constructor map: class_name → wasm function index
-    class_ctor_map: BTreeMap<String, u32>,
+    pub(super) class_ctor_map: BTreeMap<String, u32>,
     /// Class method map: class_name → {method_name → wasm function index}
-    class_method_map: BTreeMap<String, BTreeMap<String, u32>>,
+    pub(super) class_method_map: BTreeMap<String, BTreeMap<String, u32>>,
     /// Class static method map: class_name → {method_name → wasm function index}
-    class_static_map: BTreeMap<String, BTreeMap<String, u32>>,
+    pub(super) class_static_map: BTreeMap<String, BTreeMap<String, u32>>,
     /// Function name → wasm function index (for cross-module ExternFuncRef resolution)
-    func_name_map: BTreeMap<String, u32>,
+    pub(super) func_name_map: BTreeMap<String, u32>,
     /// FFI imports: (name, param_count, has_return) — registered as WASM imports under "ffi" namespace
-    ffi_imports: Vec<(String, usize, bool)>,
+    pub(super) ffi_imports: Vec<(String, usize, bool)>,
     /// Class parent map: child_class_name → parent_class_name
-    class_parent_map: BTreeMap<String, String>,
+    pub(super) class_parent_map: BTreeMap<String, String>,
     /// Enum member values: (enum_name, member_name) → numeric value or string
-    enum_values: BTreeMap<(String, String), EnumResolvedValue>,
+    pub(super) enum_values: BTreeMap<(String, String), EnumResolvedValue>,
     /// Global index for NaN-safe temp storage (global.set/get may preserve NaN in Firefox)
-    nan_temp_global: u32,
+    pub(super) nan_temp_global: u32,
     /// Async function names (compiled to JS, not WASM)
-    async_func_imports: Vec<(String, u32, usize)>, // (name, import_idx, param_count)
+    pub(super) async_func_imports: Vec<(String, u32, usize)>, // (name, import_idx, param_count)
     /// Generated JS code for async functions
-    async_js_code: Vec<String>,
+    pub(super) async_js_code: Vec<String>,
     /// Per-module func_map snapshots: FuncRef(id) is only unique within a module,
     /// so each module needs its own FuncId→wasm_idx mapping.
-    module_func_maps: Vec<BTreeMap<FuncId, u32>>,
+    pub(super) module_func_maps: Vec<BTreeMap<FuncId, u32>>,
     /// Set of WASM function indices that return void (no return value).
     /// Used to push TAG_UNDEFINED after calling void functions via FuncRef.
-    void_funcs: std::collections::BTreeSet<u32>,
+    pub(super) void_funcs: std::collections::BTreeSet<u32>,
     /// WASM function index → expected parameter count.
     /// Used to pad missing arguments with TAG_UNDEFINED for optional params.
-    func_param_counts: BTreeMap<u32, usize>,
+    pub(super) func_param_counts: BTreeMap<u32, usize>,
     /// Issue #1071: cross-module imported VARIABLE resolution.
     /// Maps `(consumer_mod_idx, imported_local_name)` → WASM global index
     /// of the source module's `Stmt::Let` that backs the export. Pre-fix
@@ -616,7 +616,7 @@ struct WasmModuleEmitter {
     /// module-let globals, the ExternFuncRef value path resolves to a
     /// `GlobalGet(gidx)` reading the live module-let slot, matching the
     /// LLVM target's `perry_fn_<src>__<name>()` getter path.
-    imported_var_globals: BTreeMap<(usize, String), u32>,
+    pub(super) imported_var_globals: BTreeMap<(usize, String), u32>,
 }
 
 impl WasmModuleEmitter {
@@ -3969,30 +3969,30 @@ impl WasmModuleEmitter {
 }
 
 /// Context for emitting a single function body
-struct FuncEmitCtx<'a> {
-    emitter: &'a WasmModuleEmitter,
-    local_map: &'a BTreeMap<LocalId, u32>,
+pub(super) struct FuncEmitCtx<'a> {
+    pub(super) emitter: &'a WasmModuleEmitter,
+    pub(super) local_map: &'a BTreeMap<LocalId, u32>,
     /// Block nesting depth for break/continue
-    break_depth: Vec<u32>,
-    loop_depth: Vec<u32>,
-    block_depth: u32,
+    pub(super) break_depth: Vec<u32>,
+    pub(super) loop_depth: Vec<u32>,
+    pub(super) block_depth: u32,
     /// Stack of (label, break_depth, continue_depth) for labeled break/continue.
     /// When `Labeled { label, body }` is a loop, this ties the label to the loop's blocks.
-    label_stack: Vec<(String, u32, u32)>,
+    pub(super) label_stack: Vec<(String, u32, u32)>,
     /// Pending label to attach to the next loop encountered.
-    pending_label: Option<String>,
+    pub(super) pending_label: Option<String>,
     /// Current class name (set when compiling class methods/constructors)
-    current_class: Option<String>,
+    pub(super) current_class: Option<String>,
     /// Index of a temp i64 local
-    temp_local: u32,
+    pub(super) temp_local: u32,
     /// Index of a temp i32 local (for mem_call base address)
-    temp_local_i32: u32,
+    pub(super) temp_local_i32: u32,
     /// Index of a second temp i64 local for emit_store_arg
-    temp_store_local: u32,
+    pub(super) temp_store_local: u32,
     /// Current frame size for emit_store_arg address computation
-    current_frame_size: u32,
+    pub(super) current_frame_size: u32,
     /// Stack of saved frame sizes for nested frame support
-    frame_stack: Vec<u32>,
+    pub(super) frame_stack: Vec<u32>,
 }
 
 impl<'a> FuncEmitCtx<'a> {
