@@ -1383,10 +1383,8 @@ function buildImports() {
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
         let result;
         const coreFn = __memDispatch[name];
-        if (name?.startsWith('object')) console.log("mem_call:", name, "args:", args, "base:", base);
         if (coreFn) {
           result = coreFn(...args);
-          if (name?.startsWith('object')) console.log("  result:", result, "bits:", __jsValueToBits(result)?.toString(16));
         } else {
           const uiFn = __perryUiDispatch[name];
           if (uiFn) {
@@ -1427,6 +1425,44 @@ function buildImports() {
   };
 }
 
+// rt-namespace imports whose WASM-declared return type is NOT i64.
+// `wrapForI64` MUST NOT BigInt-coerce Number returns for these — the
+// WASM caller expects an i32 or f64, and a BigInt return throws
+// "Cannot convert a BigInt value to a number" at the import boundary
+// (#1049 instances 2/3). Built from the type tables in `emit.rs`:
+// every entry with a `t_*_i32` signature plus the f64-return `mem_call`.
+const __NON_I64_RETURN_IMPORTS = new Set([
+  // i32 return
+  'string_eq', 'is_truthy', 'js_strict_eq', 'is_null_or_undefined',
+  'object_has_property', 'array_includes', 'array_is_array',
+  'string_includes', 'string_startsWith', 'string_endsWith',
+  'array_some', 'array_every', 'class_instanceof', 'map_has', 'set_has',
+  'regexp_test', 'is_nan', 'is_finite', 'has_exception',
+  'searchparams_has', 'response_ok', 'buffer_equals', 'buffer_is_buffer',
+  'path_is_absolute',
+  // f64 return — dummy 0, real result is in WASM memory
+  'mem_call',
+  // i32-return memory-bridge
+  'mem_call_i32',
+  // void return — wrapper passes through `undefined`, but listing here
+  // makes the contract explicit and guards against future changes to the
+  // wrapper that might try to coerce `0` for a void callee.
+  'string_new', 'console_log', 'console_warn', 'console_error',
+  'console_log_multi',
+  'object_delete', 'object_delete_dynamic',
+  'array_unshift', 'array_forEach',
+  'try_start', 'try_end', 'throw_value',
+  'map_clear', 'map_delete',
+  'set_clear', 'set_add', 'set_delete',
+  'searchparams_set', 'searchparams_append', 'searchparams_delete',
+  'class_set_method', 'class_set_field', 'class_set_static', 'class_set_parent',
+  'object_set_dynamic',
+  'array_set', 'buffer_set', 'buffer_copy', 'buffer_write',
+  'uint8array_set',
+  'set_timeout', 'set_interval', 'clear_timeout', 'clear_interval',
+  'promise_resolve',
+]);
+
 // Wrap a JS function so it interoperates with WASM i64 params/results.
 //
 // Default wrapping (used for the rt namespace): convert BigInt i64 args to f64
@@ -1434,7 +1470,16 @@ function buildImports() {
 // working. Number results are coerced back to BigInt for WASM i64 return.
 // Necessary because BigInt(NaN) throws. Escape hatch: set `fn.__rawBigint = true`
 // on the callee to skip the wrapper entirely and receive raw BigInt bits.
-function wrapForI64(fn) {
+//
+// `coerceNumberToBigInt` (default true) is set to false at the wrap site for
+// imports whose declared WASM return is `i32`/`f64`/void — see
+// `__NON_I64_RETURN_IMPORTS`. Without this guard, #1049 instance 1's
+// `BigInt(result)` would mis-encode every i32-return import (is_truthy,
+// js_strict_eq, mem_call_i32, …) and the f64-return `mem_call`, throwing
+// "Cannot convert a BigInt value to a number" on the very first call
+// (instances 2/3 reproduce as soon as `_start` invokes `class_set_method`
+// via `mem_call`).
+function wrapForI64(fn, coerceNumberToBigInt = true) {
   if (fn.__rawBigint === true) return fn;
   return function(...args) {
     const convertedArgs = args.map(a => {
@@ -1444,15 +1489,18 @@ function wrapForI64(fn) {
     const result = fn.apply(this, convertedArgs);
     if (typeof result === 'bigint') return result;
     if (typeof result === 'number') {
-      // #1049 instance 1: this wrapper exists because every callee here is
+      // #1049 instance 1: this wrapper exists because most callees here are
       // imported from a WASM site declared `i64`. A plain Number return —
       // even a small integer that JS would happily round-trip — throws
       // `TypeError: Cannot convert X to a BigInt` at the import boundary.
       // Coerce integers via `BigInt(n)` and non-integers (NaN-boxed f64
-      // payloads) via bit-reinterpret.
-      if (Number.isInteger(result) && Math.abs(result) < 2147483648) {
+      // payloads) via bit-reinterpret. Skipped for non-i64-return imports
+      // (#1049 instances 2/3) — those declare i32/f64 returns and would
+      // reject a BigInt with the inverse error.
+      if (coerceNumberToBigInt && Number.isInteger(result) && Math.abs(result) < 2147483648) {
         return BigInt(result);
       }
+      if (!coerceNumberToBigInt) return result;
       _f64[0] = result;
       return _u64[0];
     }
@@ -1479,15 +1527,14 @@ function wrapFfiForI64(fn) {
       // returns (handles, NaN-box bits, etc.). A plain Number return —
       // even a small integer JS could round-trip — throws
       // `TypeError: Cannot convert X to a BigInt` at the import
-      // boundary. Coerce integers via `BigInt(n)` and non-integers
-      // (NaN-boxed f64 payloads) via bit-reinterpret. The historic
-      // small-int passthrough was the root cause of `hone_editor_create`
-      // returning handle 1 as Number 1.
-      if (Number.isInteger(result) && Math.abs(result) < 2147483648) {
-        return BigInt(result);
-      }
-      _f64[0] = result;
-      return _u64[0];
+      // boundary. NaN-box the Number via f64 bit-reinterpret for ALL
+      // integers (not just non-integers): a raw `BigInt(1)` round-trips
+      // as i64=1 which Perry then mis-reads as f64=5e-324 inside the WASM
+      // body (#1049 instance 3 with `add_numbers` returning 7 surfacing
+      // as `3.5e-323`). NaN-boxing via __jsValueToBits encodes the value
+      // as a proper JSValue so downstream WASM code that reinterprets
+      // i64 → f64 sees the original Number.
+      return __jsValueToBits(result);
     }
     // Non-numeric result: encode via __jsValueToBits so callers that thread results
     // back into Perry get proper NaN-box bits.
@@ -1506,11 +1553,31 @@ function wrapNamespace(ns, wrapper) {
   });
 }
 
+// rt-namespace Proxy: pass each import's name into `wrapForI64` so it knows
+// whether to BigInt-coerce Number returns. Names listed in
+// `__NON_I64_RETURN_IMPORTS` have a non-i64 WASM-declared return (#1049
+// instances 2/3) and must pass Numbers through unchanged.
+function wrapRtNamespace(ns) {
+  return new Proxy(ns, {
+    get(target, prop) {
+      const v = target[prop];
+      if (typeof v === 'function') {
+        const coerce = !__NON_I64_RETURN_IMPORTS.has(prop);
+        return wrapForI64(v, coerce);
+      }
+      return v;
+    },
+  });
+}
+
 function wrapImportsForI64(imports) {
   const wrapped = {};
   for (const nsName in imports) {
-    const wrapper = nsName === 'ffi' ? wrapFfiForI64 : wrapForI64;
-    wrapped[nsName] = wrapNamespace(imports[nsName], wrapper);
+    if (nsName === 'ffi') {
+      wrapped[nsName] = wrapNamespace(imports[nsName], wrapFfiForI64);
+    } else {
+      wrapped[nsName] = wrapRtNamespace(imports[nsName]);
+    }
   }
   return wrapped;
 }
