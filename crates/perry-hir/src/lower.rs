@@ -66,8 +66,7 @@ pub struct LoweringContext {
     /// runtime `arguments` array. Padding inflates `arguments.length` to
     /// the declared fixed-param count regardless of how many args the
     /// caller actually passed (issue #1069).
-    pub(crate) func_defaults:
-        Vec<(FuncId, Vec<Option<Expr>>, Vec<LocalId>, Option<usize>, bool)>,
+    pub(crate) func_defaults: Vec<(FuncId, Vec<Option<Expr>>, Vec<LocalId>, Option<usize>, bool)>,
     /// Classes: name -> id
     pub(crate) classes: Vec<(String, ClassId)>,
     /// Static members of classes: class_name -> (static_field_names, static_method_names)
@@ -4501,8 +4500,13 @@ fn lower_module_decl(
                         .params
                         .last()
                         .is_some_and(|p| p.is_rest && p.name == "arguments");
-                    ctx.func_defaults
-                        .push((func.id, defaults, param_ids, rest_idx, has_synth_args));
+                    ctx.func_defaults.push((
+                        func.id,
+                        defaults,
+                        param_ids,
+                        rest_idx,
+                        has_synth_args,
+                    ));
                     module.functions.push(func);
                     // Track in exports
                     module.exports.push(Export::Named {
@@ -5516,8 +5520,13 @@ fn lower_module_decl(
                                 .params
                                 .last()
                                 .is_some_and(|p| p.is_rest && p.name == "arguments");
-                            ctx.func_defaults
-                                .push((func.id, defaults, param_ids, rest_idx, has_synth_args));
+                            ctx.func_defaults.push((
+                                func.id,
+                                defaults,
+                                param_ids,
+                                rest_idx,
+                                has_synth_args,
+                            ));
                             module.functions.push(func);
                             // Register under both names: callable locally as
                             // `<ident>` (some modules also `export { foo }`
@@ -5590,8 +5599,13 @@ fn lower_module_decl(
                             .params
                             .last()
                             .is_some_and(|p| p.is_rest && p.name == "arguments");
-                        ctx.func_defaults
-                            .push((func.id, defaults, param_ids, rest_idx, has_synth_args));
+                        ctx.func_defaults.push((
+                            func.id,
+                            defaults,
+                            param_ids,
+                            rest_idx,
+                            has_synth_args,
+                        ));
                         module.functions.push(func);
                         // Both the named export entry (so the importer's
                         // namespace populator sees `default`) and the
@@ -6165,8 +6179,13 @@ fn lower_stmt(ctx: &mut LoweringContext, module: &mut Module, stmt: &ast::Stmt) 
                         .params
                         .last()
                         .is_some_and(|p| p.is_rest && p.name == "arguments");
-                    ctx.func_defaults
-                        .push((func.id, defaults, param_ids, rest_idx, has_synth_args));
+                    ctx.func_defaults.push((
+                        func.id,
+                        defaults,
+                        param_ids,
+                        rest_idx,
+                        has_synth_args,
+                    ));
                     module.functions.push(func);
                 }
                 ast::Decl::Var(var_decl) => {
