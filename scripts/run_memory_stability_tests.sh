@@ -19,7 +19,8 @@
 #     default-env copied-minor must report fallback_reason=none without
 #     rebuilding the malloc registry, precise low-pressure runs must not pin bytes,
 #     forced policy evacuation must move and release originals cleanly,
-#     and fallback reasons must remain explicit known values.
+#     fallback reasons must remain explicit known values, and representative
+#     traced workloads emit a copied-minor fallback evidence report.
 #   - targeted low-pressure benchmarks are compiled into $TMPDIR and run
 #     under /usr/bin/time:
 #       $PERRY compile --no-cache benchmarks/suite/07_object_create.ts -o $TMPDIR/07_object_create
@@ -470,6 +471,259 @@ EOF
     assert_gc_trace "default copied minor churn" "$LAST_STDERR_FILE" "copied_minor_default"
 }
 
+write_copied_minor_fallback_workloads() {
+    local out_dir="$1"
+
+    cat >"$out_dir/json_roundtrip.ts" <<'EOF'
+declare function gc(): void;
+
+function payload(i: number): string {
+  const items: any[] = [];
+  for (let j = 0; j < 24; j++) {
+    items.push({
+      id: i * 24 + j,
+      name: "item_" + j + "_for_" + i,
+      nested: { x: j, y: j * 3 },
+    });
+  }
+  return JSON.stringify({
+    id: i,
+    route: "/api/items/" + i,
+    ok: (i % 2) === 0,
+    items,
+  });
+}
+
+let checksum = 0;
+for (let batch = 0; batch < 8; batch++) {
+  for (let k = 0; k < 80; k++) {
+    const i = batch * 80 + k;
+    const parsed: any = JSON.parse(payload(i));
+    const reshaped = JSON.stringify({
+      id: parsed.id,
+      first: parsed.items[0].name,
+      count: parsed.items.length,
+      lastY: parsed.items[23].nested.y,
+    });
+    const again: any = JSON.parse(reshaped);
+    checksum += again.id + again.count + again.first.length + again.lastY;
+  }
+  gc();
+}
+
+console.log("json_roundtrip:" + checksum);
+EOF
+
+    cat >"$out_dir/string_churn.ts" <<'EOF'
+declare function gc(): void;
+
+function label(i: number): string {
+  return "request_" + i + "_tenant_" + (i % 17) + "_segment_" + (i % 5);
+}
+
+let total = 0;
+for (let batch = 0; batch < 10; batch++) {
+  for (let k = 0; k < 400; k++) {
+    const i = batch * 400 + k;
+    const shortText = "s" + (i % 9);
+    const mediumText = "field_" + i;
+    const longText = label(i) + "_payload_" + (i * 13);
+    const combined = shortText + "|" + mediumText + "|" + longText;
+    total += shortText.length + mediumText.length + longText.length + combined.length;
+    if ((i % 4) === 0) {
+      total += ("copy_" + combined).length;
+    }
+  }
+  gc();
+}
+
+console.log("string_churn:" + total);
+EOF
+
+    cat >"$out_dir/object_property_churn.ts" <<'EOF'
+declare function gc(): void;
+
+function makeRecord(i: number): any {
+  return {
+    id: i,
+    name: "record_" + i,
+    status: (i % 3) === 0 ? "open" : "closed",
+    nested: { count: i * 3, tag: "tag_" + (i % 11) },
+    a: i + 1,
+    b: i + 2,
+  };
+}
+
+let checksum = 0;
+for (let batch = 0; batch < 10; batch++) {
+  for (let k = 0; k < 300; k++) {
+    const i = batch * 300 + k;
+    const record: any = makeRecord(i);
+    const slot = "slot_" + (i % 4);
+    record.lastSeen = "tick_" + i;
+    record.score = record.a + record.b + record.nested.count;
+    record[slot] = record.score + i;
+    const copy: any = {
+      id: record.id,
+      name: record.name,
+      score: record.score,
+      slotValue: record[slot],
+      tag: record.nested.tag,
+    };
+    checksum += copy.id + copy.name.length + copy.score + copy.slotValue + copy.tag.length;
+  }
+  gc();
+}
+
+console.log("object_property_churn:" + checksum);
+EOF
+
+    cat >"$out_dir/mixed_request_shaping.ts" <<'EOF'
+declare function gc(): void;
+
+function makeRequest(i: number): any {
+  return {
+    method: (i % 2) === 0 ? "GET" : "POST",
+    url: "/v1/accounts/" + (i % 31) + "/events/" + i,
+    headers: {
+      requestId: "req_" + i,
+      tenant: "tenant_" + (i % 7),
+    },
+    body: JSON.stringify({
+      id: i,
+      amount: i * 9,
+      labels: ["alpha_" + i, "beta_" + (i % 13), "stable"],
+    }),
+  };
+}
+
+function handle(req: any): any {
+  const body: any = JSON.parse(req.body);
+  const responseBody = {
+    ok: true,
+    id: body.id,
+    route: req.url,
+    method: req.method,
+    labels: body.labels,
+    tenant: req.headers.tenant,
+  };
+  return {
+    status: 200 + (body.id % 3),
+    requestId: req.headers.requestId,
+    body: JSON.stringify(responseBody),
+  };
+}
+
+let checksum = 0;
+for (let batch = 0; batch < 8; batch++) {
+  for (let k = 0; k < 96; k++) {
+    const i = batch * 96 + k;
+    const response: any = handle(makeRequest(i));
+    const parsed: any = JSON.parse(response.body);
+    checksum += response.status + response.requestId.length + parsed.id;
+    checksum += parsed.route.length + parsed.labels.length + parsed.tenant.length;
+  }
+  gc();
+}
+
+console.log("mixed_request_shaping:" + checksum);
+EOF
+}
+
+run_copied_minor_fallback_workload() {
+    local name="$1"
+    local ts="$2"
+    local bin="$TMPDIR/${name}_copied_minor_fallback"
+    local compile_output="$TMPDIR/${name}_copied_minor_fallback_compile.$$.$RANDOM"
+
+    if ! $PERRY compile --no-cache "$ts" -o "$bin" >"$compile_output" 2>&1; then
+        printf "  FAIL [gc-trace] %-40s compile failed\n" "$name"
+        sed 's/^/    /' "$compile_output"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+
+    run_one "$bin" PERRY_GC_TRACE=1
+
+    if [[ "$LAST_EXIT" -ne 0 ]]; then
+        printf "  FAIL [gc-trace] %-40s exit=%d\n" "$name" "$LAST_EXIT"
+        sed 's/^/    /' "$LAST_STDERR_FILE"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+    if ! grep -q "^${name}:" "$LAST_STDOUT_FILE"; then
+        printf "  FAIL [gc-trace] %-40s stdout missing workload marker\n" "$name"
+        sed 's/^/    /' "$LAST_STDOUT_FILE"
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+
+    printf "  PASS [gc-trace] %-40s trace=%s\n" "$name" "$LAST_STDERR_FILE"
+    PASS=$((PASS + 1))
+    return 0
+}
+
+run_copied_minor_fallback_report() {
+    local workloads_dir="$TMPDIR/copied_minor_fallback_workloads"
+    mkdir -p "$workloads_dir"
+    write_copied_minor_fallback_workloads "$workloads_dir"
+
+    local workload_specs=(
+        "json_roundtrip:$workloads_dir/json_roundtrip.ts"
+        "string_churn:$workloads_dir/string_churn.ts"
+        "object_property_churn:$workloads_dir/object_property_churn.ts"
+        "mixed_request_shaping:$workloads_dir/mixed_request_shaping.ts"
+    )
+
+    local report_args=()
+    local workload_failed=0
+    local spec
+    for spec in "${workload_specs[@]}"; do
+        local name="${spec%%:*}"
+        local ts="${spec#*:}"
+        if run_copied_minor_fallback_workload "$name" "$ts"; then
+            report_args+=(--workload "$name=$LAST_STDERR_FILE")
+        else
+            workload_failed=1
+        fi
+    done
+
+    if [[ "$workload_failed" -ne 0 ]]; then
+        return
+    fi
+
+    local report_out="${PERRY_COPIED_MINOR_FALLBACK_REPORT_OUT:-$TMPDIR/copied_minor_fallback_report.json}"
+    local parser_output="$TMPDIR/copied_minor_fallback_report_parser.$$.$RANDOM"
+    if "$PYTHON" scripts/copied_minor_fallback_report.py \
+        "${report_args[@]}" \
+        --out "$report_out" >"$parser_output" 2>&1; then
+        local top_summary
+        top_summary=$("$PYTHON" - "$report_out" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    report = json.load(fh)
+top = report.get("top_remaining_reason")
+if top is None:
+    print("top_remaining_reason=none")
+else:
+    print(f"top_remaining_reason={top['reason']} count={top['count']}")
+PY
+)
+        printf "  PASS [gc-trace] %-40s %s report=%s\n" \
+            "copied-minor fallback evidence" "$top_summary" "$report_out"
+        PASS=$((PASS + 1))
+    else
+        printf "  FAIL [gc-trace] %-40s\n" "copied-minor fallback evidence"
+        sed 's/^/    /' "$parser_output"
+        if [[ -f "$report_out" ]]; then
+            printf "    report=%s\n" "$report_out"
+        fi
+        FAIL=$((FAIL + 1))
+    fi
+}
+
 run_traced_canary() {
     local label="$1"
     local mode="$2"
@@ -568,6 +822,10 @@ run_traced_canary "barriers inactive telemetry" "barriers_inactive" \
 run_traced_canary "productive evacuation telemetry" "evacuation_productive" \
     env PERRY_GC_TRACE=1 PERRY_GC_FORCE_EVACUATE=1 \
     cargo test -p perry-runtime --release test_evacuated_old_parent_re_remembers_young_child_canary -- --nocapture
+
+echo ""
+echo "=== Copied-minor fallback evidence report ==="
+run_copied_minor_fallback_report
 
 echo ""
 echo "=== Targeted low-pressure benchmark gates ==="
