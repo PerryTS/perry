@@ -9528,6 +9528,25 @@ mod tests {
         (obj, fields)
     }
 
+    unsafe fn alloc_nursery_test_object(
+        field_count: u32,
+    ) -> (*mut crate::object::ObjectHeader, *mut u64) {
+        let payload = std::mem::size_of::<crate::object::ObjectHeader>() + field_count as usize * 8;
+        let obj = crate::arena::arena_alloc_gc(payload, 8, GC_TYPE_OBJECT)
+            as *mut crate::object::ObjectHeader;
+        (*obj).object_type = 1;
+        (*obj).class_id = 0;
+        (*obj).parent_class_id = 0;
+        (*obj).field_count = field_count;
+        (*obj).keys_array = std::ptr::null_mut();
+        let fields =
+            (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+        for i in 0..field_count as usize {
+            *fields.add(i) = 0;
+        }
+        (obj, fields)
+    }
+
     unsafe fn alloc_old_test_array(length: u32) -> (*mut crate::array::ArrayHeader, *mut u64) {
         let payload = std::mem::size_of::<crate::array::ArrayHeader>() + length as usize * 8;
         let arr = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_ARRAY)
@@ -11586,6 +11605,111 @@ mod tests {
         unsafe {
             (*header).gc_flags &= !(GC_FLAG_MARKED | GC_FLAG_TENURED);
         }
+    }
+
+    #[test]
+    #[ignore = "canary for evacuation-reremember-old-young: PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_CONSERVATIVE_STACK_SCAN=auto cargo test -p perry-runtime test_evacuated_old_parent_re_remembers_young_child_canary -- --ignored --nocapture --test-threads=1"]
+    fn test_evacuated_old_parent_re_remembers_young_child_canary() {
+        struct ResetGcTestState;
+
+        impl Drop for ResetGcTestState {
+            fn drop(&mut self) {
+                reset_shadow_stack();
+                reset_global_roots();
+                reset_remembered_set();
+                clear_marks();
+                clear_mark_seeds();
+                CONS_PINNED.with(|s| s.borrow_mut().clear());
+            }
+        }
+
+        let _reset = ResetGcTestState;
+        reset_shadow_stack();
+        reset_global_roots();
+        reset_remembered_set();
+        clear_marks();
+        clear_mark_seeds();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+        assert!(
+            !generated_write_barriers_emitted(),
+            "this canary must exercise the evacuation path, not the copying nursery fast path"
+        );
+
+        let frame = js_shadow_frame_push(1);
+        let (parent, fields) = unsafe { alloc_nursery_test_object(1) };
+        let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+        let parent_user = parent as usize;
+        let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };
+        let child_header = unsafe { header_from_user_ptr(child as *const u8) };
+
+        unsafe {
+            *fields = ptr_bits(child);
+            (*parent_header).gc_flags |= GC_FLAG_TENURED;
+        }
+        js_shadow_slot_set(0, ptr_bits(parent_user));
+        CONS_PINNED.with(|s| {
+            s.borrow_mut().insert(child_header as usize);
+        });
+
+        assert!(
+            gc_force_evacuate_enabled(),
+            "run this canary with PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1"
+        );
+        let _ = gc_collect_minor();
+
+        let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert_ne!(
+            parent_after, parent_user,
+            "rooted parent should be rewritten to its evacuated old-gen copy"
+        );
+        assert!(
+            crate::arena::pointer_in_old_gen(parent_after),
+            "evacuated parent should live in old-gen"
+        );
+        unsafe {
+            assert_ne!(
+                (*parent_header).gc_flags & GC_FLAG_FORWARDED,
+                0,
+                "original nursery parent should hold a forwarding pointer"
+            );
+            assert_eq!(forwarding_address(parent_header) as usize, parent_after);
+        }
+
+        let parent_after_fields = unsafe {
+            (parent_after as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+                as *mut u64
+        };
+        let child_after = unsafe { (*parent_after_fields & POINTER_MASK) as usize };
+        assert_eq!(
+            child_after, child,
+            "evacuated parent should still point at the pinned nursery child"
+        );
+        assert!(
+            crate::arena::pointer_in_nursery(child_after),
+            "child should remain young after parent evacuation"
+        );
+
+        assert!(
+            remembered_set_size() > 0,
+            "evacuated old parent retaining a nursery child must be re-remembered after the collection clear"
+        );
+
+        clear_marks();
+        let valid_ptrs = build_valid_pointer_set();
+        let stats = mark_remembered_set_roots(&valid_ptrs);
+        assert!(
+            stats.newly_marked > 0,
+            "remembered scan should mark the nursery child reachable only from the evacuated old parent"
+        );
+        unsafe {
+            assert_ne!(
+                (*child_header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "remembered scan should mark the pinned nursery child"
+            );
+        }
+
+        js_shadow_frame_pop(frame);
     }
 
     #[test]
