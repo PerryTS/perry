@@ -3466,14 +3466,14 @@ fn layout_visit_pointer_slots<F: FnMut(usize)>(
         };
         match (*header)._reserved & GC_LAYOUT_STATE_MASK {
             GC_LAYOUT_POINTER_FREE => true,
-            GC_LAYOUT_SIDE_MASK => LAYOUT_SLOT_MASKS.with(|m| {
-                let masks = m.borrow();
-                let Some(mask) = masks.get(&user_ptr) else {
+            GC_LAYOUT_SIDE_MASK => {
+                let mask = LAYOUT_SLOT_MASKS.with(|m| m.borrow().get(&user_ptr).cloned());
+                let Some(mask) = mask else {
                     return false;
                 };
                 mask.visit_slots(slot_count, &mut visit);
                 true
-            }),
+            }
             _ => false,
         }
     }
@@ -10853,6 +10853,40 @@ mod tests {
         assert_ne!(child_after, child);
         assert!(crate::arena::pointer_in_nursery(arr_after));
         assert!(crate::arena::pointer_in_nursery(child_after));
+    }
+
+    #[test]
+    fn test_copying_minor_moves_layout_masked_transitive_object() {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let arr = crate::array::js_array_alloc(1);
+        let (child, _child_fields) = unsafe { alloc_nursery_test_object(0) };
+        unsafe {
+            (*arr).length = 1;
+            let elements =
+                (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+            *elements = ptr_bits(child as usize);
+            layout_note_slot(arr as usize, 0, *elements);
+        }
+        js_shadow_slot_set(0, ptr_bits(arr as usize));
+
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        let child_after = unsafe {
+            let elements = (arr_after as *mut u8)
+                .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                as *mut u64;
+            (*elements & POINTER_MASK) as usize
+        };
+
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        assert_ne!(arr_after, arr as usize);
+        assert_ne!(child_after, child as usize);
+        assert!(crate::arena::pointer_in_nursery(arr_after));
+        assert!(crate::arena::pointer_in_nursery(child_after));
+        assert!(
+            trace.copying_nursery.copied_objects >= 2,
+            "root array and transitive object should both move"
+        );
     }
 
     #[test]

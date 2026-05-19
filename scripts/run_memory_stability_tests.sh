@@ -16,8 +16,8 @@
 #   - test_gc_*.ts force aggressive GC scheduling during sensitive
 #     operations. Test passes ⟺ exit code 0 + correct stdout.
 #   - PERRY_GC_TRACE=1 JSON lines are parsed for GC acceptance gates:
-#     copied-minor must report fallback_reason=none without rebuilding
-#     the malloc registry, precise low-pressure runs must not pin bytes,
+#     default-env copied-minor must report fallback_reason=none without
+#     rebuilding the malloc registry, precise low-pressure runs must not pin bytes,
 #     forced policy evacuation must move and release originals cleanly,
 #     and fallback reasons must remain explicit known values.
 #   - targeted low-pressure benchmarks are compiled into $TMPDIR and run
@@ -263,7 +263,7 @@ for idx, cycle in enumerate(cycles):
         if isinstance(pointers, int) and isinstance(rewritten, int) and rewritten > pointers:
             errors.append(f"cycle {idx}: shadow_roots.rewritten_slots={rewritten} > pointer_roots={pointers}")
 
-if mode == "copied_minor_precise":
+if mode in ("copied_minor_precise", "copied_minor_default"):
     for idx, cycle in enumerate(cycles):
         if cycle.get("collection_kind") != "minor":
             errors.append(f"cycle {idx}: collection_kind={cycle.get('collection_kind')!r}, want 'minor'")
@@ -304,7 +304,7 @@ if mode == "copied_minor_precise":
         errors.append("copied-minor trace did not report shadow_roots.nonzero_slots")
     elif nonzero_shadow_roots[-1] > nonzero_shadow_roots[0]:
         errors.append(
-            "shadow_roots.nonzero_slots grew across copied-minor precise probe: "
+            "shadow_roots.nonzero_slots grew across copied-minor probe: "
             f"{nonzero_shadow_roots}"
         )
 elif mode == "evacuation_productive":
@@ -386,49 +386,88 @@ PY
 }
 
 run_gc_trace_probe() {
-    local ts="$TMPDIR/gc_trace_probe.ts"
-    local bin="$TMPDIR/gc_trace_probe"
-    local compile_output="$TMPDIR/gc_trace_probe_compile.$$.$RANDOM"
+    local ts="$TMPDIR/default_copied_minor_churn.ts"
+    local bin="$TMPDIR/default_copied_minor_churn"
+    local compile_output="$TMPDIR/default_copied_minor_churn_compile.$$.$RANDOM"
 
     cat >"$ts" <<'EOF'
 declare function gc(): void;
 
-let acc = 0;
-for (let i = 0; i < 1000; i++) {
-  const obj: any = { x: i, y: i + 1 };
-  if ((i & 127) === 0) gc();
-  acc += obj.x;
+function smallBlob(i: number): string {
+  return JSON.stringify({ id: i, name: "small_" + i, value: i * 7 });
 }
 
-console.log("gc_trace_probe:" + acc);
+function largeBlob(i: number): string {
+  const items: any[] = [];
+  for (let j = 0; j < 18; j++) {
+    items.push({
+      id: i * 18 + j,
+      name: "item_" + j,
+      nested: { x: j, y: j * 2 },
+    });
+  }
+  return JSON.stringify(items);
+}
+
+function churnBatch(base: number): number {
+  let checksum = 0;
+  for (let k = 0; k < 64; k++) {
+    const i = base + k;
+    const s: any = JSON.parse(smallBlob(i));
+    const l: any = JSON.parse(largeBlob(i));
+    const shortText = "s" + (i % 9);
+    const name = "record_" + i + "_value_" + (i * 3);
+    const obj: any = { id: i, left: s, right: l[0], n: shortText.length + name.length };
+    checksum += s.id + l.length + l[0].id + obj.n;
+  }
+  return checksum;
+}
+
+function copiedProbe(i: number): number {
+  const live: any[] = [];
+  live.push(i);
+  live.push(i + 1);
+  live.push(i + 2);
+  gc();
+  return i + 3;
+}
+
+function main(): number {
+  let checksum = 0;
+  for (let batch = 0; batch < 10; batch++) {
+    checksum += churnBatch(batch * 64);
+    checksum += copiedProbe(batch * 64);
+  }
+  return checksum;
+}
+
+const result = main();
+console.log("default_copied_minor_churn:" + result);
 EOF
 
     if ! $PERRY compile --no-cache "$ts" -o "$bin" >"$compile_output" 2>&1; then
-        printf "  FAIL [gc-trace] %-40s compile failed\n" "copied minor precise probe"
+        printf "  FAIL [gc-trace] %-40s compile failed\n" "default copied minor churn"
         sed 's/^/    /' "$compile_output"
         FAIL=$((FAIL + 1))
         return
     fi
 
-    run_one "$bin" \
-        PERRY_GC_TRACE=1 \
-        PERRY_GEN_GC=1 \
-        PERRY_CONSERVATIVE_STACK_SCAN=0
+    run_one "$bin" PERRY_GC_TRACE=1
 
     if [[ "$LAST_EXIT" -ne 0 ]]; then
-        printf "  FAIL [gc-trace] %-40s exit=%d\n" "copied minor precise probe" "$LAST_EXIT"
+        printf "  FAIL [gc-trace] %-40s exit=%d\n" "default copied minor churn" "$LAST_EXIT"
         sed 's/^/    /' "$LAST_STDERR_FILE"
         FAIL=$((FAIL + 1))
         return
     fi
-    if ! grep -qF "gc_trace_probe:499500" "$LAST_STDOUT_FILE"; then
-        printf "  FAIL [gc-trace] %-40s stdout mismatch\n" "copied minor precise probe"
+    if ! grep -qF "default_copied_minor_churn:3913788" "$LAST_STDOUT_FILE"; then
+        printf "  FAIL [gc-trace] %-40s stdout mismatch\n" "default copied minor churn"
         sed 's/^/    /' "$LAST_STDOUT_FILE"
         FAIL=$((FAIL + 1))
         return
     fi
 
-    assert_gc_trace "copied minor precise probe" "$LAST_STDERR_FILE" "copied_minor_precise"
+    assert_gc_trace "default copied minor churn" "$LAST_STDERR_FILE" "copied_minor_default"
 }
 
 run_traced_canary() {
