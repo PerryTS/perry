@@ -154,6 +154,18 @@ external-http-server-pump = ["async-runtime"]
 # the program exits before any callback fires. Issue #769.
 external-http-client-pump = ["async-runtime"]
 
+# Activated by `optimized_libs::build_optimized_libs` when the well-known
+# flip routes `import 'fastify'` to perry-ext-fastify (which is the
+# default path for the bundled-fastify feature). Tells perry-stdlib's
+# `js_stdlib_process_pending` / `js_stdlib_has_active_handles` to call
+# into perry-ext-fastify's `js_fastify_process_pending` /
+# `js_fastify_has_active` externs each tick. Without this, the
+# (now non-blocking) `listen()` returns but no main-thread code ever
+# drains pending requests — programs that combine fastify with an
+# in-process `fetch` against itself, lifecycle hooks, or async route
+# handlers hang. Mirrors `external-http-server-pump`.
+external-fastify-pump = ["async-runtime"]
+
 # TLS — direct `tls.connect()` and `socket.upgradeToTLS()` (Postgres SSLRequest flow).
 # Uses rustls (not native-tls) to avoid OpenSSL on every platform and keep Android
 # cross-compile unblocked; matches reqwest/tokio-tungstenite/mongodb feature flags.

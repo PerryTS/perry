@@ -343,6 +343,20 @@ pub(super) fn build_optimized_libs(
             if original_features.contains(&"bundled-ws") {
                 features.insert("external-ws-pump");
             }
+            // Same shape for fastify. The compat-sweep fastify fixture
+            // hit a hang at `await app.listen(...)` because
+            // perry-ext-fastify's `js_fastify_listen` entered a blocking
+            // event loop that never returned. With `listen()` now non-
+            // blocking, the per-server mpsc receiver lives inside the
+            // FastifyServerHandle and is drained by
+            // `js_fastify_process_pending`. Activating this feature
+            // wires that pump call into perry-stdlib's
+            // `js_stdlib_process_pending` / `_has_active_handles` so
+            // requests flow on the main TS thread once the flip routes
+            // `import 'fastify'` to perry-ext-fastify.
+            if original_features.contains(&"bundled-fastify") {
+                features.insert("external-fastify-pump");
+            }
             // Closes #604 — when the well-known flip routes `node:http` /
             // `node:https` / `node:http2` to perry-ext-http (which bundles
             // perry-ext-http-server), activate `external-http-server-pump`

@@ -6499,6 +6499,24 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[NA_F64, NA_PTR],
         ret: NR_VOID,
     },
+    // `app.close()` — shut down every server bound to this
+    // FastifyApp. Pre-fix, this method had no entry in the dispatch
+    // table at all, so codegen for the `NativeMethodCall` shape fell
+    // through to the "unknown native method" arm and emitted a no-op
+    // 0.0 return. With `listen()` now non-blocking, the program
+    // doesn't exit until something marks the server as no-longer-
+    // listening — `app.close()` is how user code does that. The
+    // runtime fn walks the handle registry for matching
+    // `FastifyServerHandle` rows and clears the listening flag.
+    NativeModSig {
+        module: "fastify",
+        has_receiver: true,
+        method: "close",
+        class_filter: None,
+        runtime: "js_fastify_app_close",
+        args: &[],
+        ret: NR_VOID,
+    },
     // Fastify request methods
     NativeModSig {
         module: "fastify",

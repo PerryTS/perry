@@ -106,6 +106,25 @@ where
     }
 }
 
+/// Like `for_each_handle_of`, but yields handle ids instead of refs.
+/// Callers need the id so they can later mutate the entry (`get_handle_mut`)
+/// or call `take_handle`/`drop_handle` — neither of which is possible
+/// while holding the iterator's read lock on the DashMap. The fastify
+/// pump uses this to drain per-server `request_rx` channels without
+/// keeping the registry locked across the dispatch (which may itself
+/// register/drop handles).
+pub fn iter_handle_ids_of<T, F>(mut f: F)
+where
+    T: 'static + Send + Sync,
+    F: FnMut(Handle),
+{
+    for entry in HANDLES.iter() {
+        if entry.value().downcast_ref::<T>().is_some() {
+            f(*entry.key());
+        }
+    }
+}
+
 /// Clone a handle's value if it implements Clone
 pub fn clone_handle<T: 'static + Send + Sync + Clone>(handle: Handle) -> Option<Handle> {
     HANDLES.get(&handle).and_then(|entry| {

@@ -68,6 +68,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "setErrorHandler"
             | "register"
             | "listen"
+            | "close"
     ) && with_handle::<crate::fastify::FastifyApp, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return dispatch_fastify_app(handle, method_name, args);
@@ -397,6 +398,17 @@ unsafe fn dispatch_fastify_app(handle: i64, method: &str, args: &[f64]) -> f64 {
                 0
             };
             crate::fastify::js_fastify_listen(handle, args[0], callback);
+            f64::from_bits(0x7FF8_0000_0000_0001) // undefined (void)
+        }
+        "close" => {
+            // `app.close()` — shut down every server bound to this
+            // FastifyApp. Walks the handle registry for matching
+            // `FastifyServerHandle` rows and marks each as no-longer
+            // listening so `js_fastify_has_active_handles` lets the
+            // runtime's event loop exit. Pre-fix `close` was not
+            // routed here — fell through to "unknown method" and was a
+            // no-op, so the server kept the loop alive forever.
+            crate::fastify::js_fastify_app_close(handle);
             f64::from_bits(0x7FF8_0000_0000_0001) // undefined (void)
         }
         _ => {

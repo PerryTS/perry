@@ -2503,6 +2503,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_fastify_get", I32, &[I64, I64, I64]);
     module.declare_function("js_fastify_head", I32, &[I64, I64, I64]);
     module.declare_function("js_fastify_listen", VOID, &[I64, DOUBLE, I64]);
+    // `app.close()` — shuts every server bound to this FastifyApp.
+    // Declared so the dispatch-table arm in lower_call.rs can emit a
+    // call site. Returns void (Rust signature returns bool, but the
+    // codegen-side caller discards the result).
+    module.declare_function("js_fastify_app_close", VOID, &[I64]);
     module.declare_function("js_fastify_options", I32, &[I64, I64, I64]);
     module.declare_function("js_fastify_patch", I32, &[I64, I64, I64]);
     module.declare_function("js_fastify_post", I32, &[I64, I64, I64]);

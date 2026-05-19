@@ -432,6 +432,34 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     // reader's queue and dispatches to question/line/close callbacks.
     count += crate::readline::js_readline_process_pending();
 
+    // Process pending fastify requests. With the bundled-fastify
+    // adapter, `app.listen()` used to block the main TS thread inside
+    // its own inner event loop forever, so an `await app.listen(...)`
+    // never returned and no subsequent user code (in-process `fetch`,
+    // `app.close()`, etc.) ever ran. The pump now mirrors how
+    // perry-ext-http-server handles dispatch (#604): `listen()` returns
+    // immediately and the per-server mpsc is drained here on each tick.
+    //
+    // Two activation paths:
+    //   * `http-server` — the bundled adapter (`perry-stdlib::fastify`)
+    //     is compiled in. Call its pump directly.
+    //   * `external-fastify-pump` — the well-known flip routed
+    //     `import 'fastify'` to perry-ext-fastify and stripped
+    //     `bundled-fastify`. The symbol is provided by the external
+    //     crate; declare and call it via extern. Mirrors how
+    //     `external-net-pump` and `external-ws-pump` work.
+    #[cfg(feature = "http-server")]
+    {
+        count += crate::fastify::js_fastify_process_pending();
+    }
+    #[cfg(all(feature = "external-fastify-pump", not(feature = "http-server")))]
+    {
+        extern "C" {
+            fn js_fastify_process_pending() -> i32;
+        }
+        count += unsafe { js_fastify_process_pending() };
+    }
+
     count
 }
 
@@ -563,6 +591,31 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     // / `rl.question()` programs don't exit before the user types.
     if crate::readline::js_readline_has_active() != 0 {
         return 1;
+    }
+    // Bundled-fastify — keep the loop alive while any FastifyServerHandle
+    // is in the "listening" state. Paired with
+    // `js_fastify_process_pending` in `js_stdlib_process_pending` above
+    // (closes the compat-sweep timeout for `await app.listen(...)` +
+    // in-process `fetch`).
+    #[cfg(feature = "http-server")]
+    {
+        if crate::fastify::js_fastify_has_active_handles() != 0 {
+            return 1;
+        }
+    }
+    // External fastify (perry-ext-fastify) — when the well-known flip
+    // routes `import 'fastify'` to perry-ext-fastify and strips
+    // `bundled-fastify`, the symbol below is provided by the external
+    // crate at link time. Mirrors the `external-{net,ws,http-server}-pump`
+    // arms above.
+    #[cfg(all(feature = "external-fastify-pump", not(feature = "http-server")))]
+    {
+        extern "C" {
+            fn js_fastify_has_active() -> i32;
+        }
+        if unsafe { js_fastify_has_active() } != 0 {
+            return 1;
+        }
     }
     0
 }

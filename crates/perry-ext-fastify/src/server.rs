@@ -11,7 +11,8 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::os::raw::c_int;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -23,8 +24,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use perry_ffi::{
-    alloc_string, get_handle, register_handle, Handle, JsClosure, JsValue, RawClosureHeader,
-    StringHeader,
+    alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, register_handle, Handle,
+    JsClosure, JsValue, RawClosureHeader, StringHeader,
 };
 
 use crate::app::{ClosurePtr, FastifyApp, Route};
@@ -137,10 +138,31 @@ pub struct ErrorHeader {
 }
 
 /// Server handle returned by `js_fastify_listen`.
+///
+/// Pre-fix, `listen()` blocked the main TS thread inside an inner
+/// `event_loop` that never returned, so `await app.listen(...)` in
+/// user code never resumed and any subsequent code (an in-process
+/// `fetch` against the same process, `app.close()`, etc.) never ran —
+/// the compat-sweep fixture timed out at gtimeout(30s). The fix
+/// mirrors what perry-ext-http-server did in #604: `listen()` returns
+/// immediately after spawning the accept loop, and a new
+/// `js_fastify_process_pending` extern wired into perry-stdlib's main
+/// pump drains the per-server mpsc each tick. The receiver lives
+/// inside the handle so the pump can find it after `listen()` returns.
 pub struct FastifyServerHandle {
     pub port: u16,
     pub app_handle: Handle,
     pub shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Drained by `js_fastify_process_pending` from the main TS thread
+    /// each tick. `Mutex` because the handle registry hands out `&'static`
+    /// references but the pump needs `&mut` access to `try_recv` and
+    /// we can't statically prove the pump is the only mutator.
+    pub request_rx: Mutex<Option<mpsc::Receiver<FastifyPendingRequest>>>,
+    /// True between `listen()` and `close()`. The
+    /// `js_fastify_has_active` extern returns 1 while any server has
+    /// this set, keeping the runtime's main event loop alive until the
+    /// user explicitly closes the server.
+    pub listening: AtomicBool,
 }
 
 /// Pending request waiting for the TS handler to produce a response.
@@ -256,11 +278,16 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
         });
     });
 
-    // Register the server handle so `js_fastify_close` can find it.
+    // Register the server handle so `js_fastify_close` and the
+    // process_pending pump can find it. The receiver lives inside the
+    // handle so the pump (driven from perry-stdlib's main loop) can
+    // drain it after `listen()` returns.
     let _server_handle = register_handle(FastifyServerHandle {
         port,
         app_handle,
         shutdown_tx: Some(shutdown_tx),
+        request_rx: Mutex::new(Some(request_rx)),
+        listening: AtomicBool::new(true),
     });
 
     // Fire the user's `(err, address) => { ... }` callback — null
@@ -283,22 +310,112 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
 
     println!("Server listening on http://0.0.0.0:{}", port);
 
-    // Enter the main event loop — drain pending requests + dispatch
-    // to user handlers until the process exits.
-    let mut request_rx = request_rx;
-    event_loop(app_handle, &mut request_rx);
+    // `listen()` is now non-blocking — the accept loop is already
+    // spawned above, and `js_fastify_process_pending` drains pending
+    // requests from the registered handle on every tick of
+    // perry-stdlib's main pump. Pre-fix this function entered the
+    // blocking `event_loop(...)` and never returned, so
+    // `await app.listen(...)` in user code never resumed — every
+    // subsequent line (the in-process `fetch` against itself,
+    // `app.close()`, etc.) was unreachable.
 }
 
-/// Close the server by dropping the registered handle.
+/// Close one specific server by its `FastifyServerHandle` id. Marks
+/// the server as no-longer-listening (so `js_fastify_has_active`
+/// stops reporting it as active), drops the request receiver, and
+/// fires the shutdown oneshot so the accept loop exits. Idempotent —
+/// safe to call multiple times.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_close(server_handle: Handle) -> bool {
-    if let Some(_server) = get_handle::<FastifyServerHandle>(server_handle) {
-        // Shutdown sender drops when the handle is dropped — the
-        // accept loop's `tokio::select!` picks up the channel close
-        // and terminates. Simpler than threading the sender out.
+    if let Some(server) = get_handle_mut::<FastifyServerHandle>(server_handle) {
+        server.listening.store(false, Ordering::Release);
+        *server.request_rx.lock().unwrap() = None;
+        if let Some(tx) = server.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
         return true;
     }
     false
+}
+
+/// `app.close()` — close every server bound to `app_handle`. Walks the
+/// handle registry for matching `FastifyServerHandle` rows and marks
+/// each as no-longer listening so `js_fastify_has_active` lets the
+/// runtime's event loop exit. Returns void — TS-side dispatch arm
+/// just discards the result.
+#[no_mangle]
+pub unsafe extern "C" fn js_fastify_app_close(app_handle: Handle) {
+    let mut server_ids: Vec<Handle> = Vec::new();
+    iter_handle_ids_of::<FastifyServerHandle, _>(|id| {
+        if let Some(s) = get_handle::<FastifyServerHandle>(id) {
+            if s.app_handle == app_handle {
+                server_ids.push(id);
+            }
+        }
+    });
+    for id in server_ids {
+        let _ = js_fastify_close(id);
+    }
+}
+
+/// Pump entrypoint — drain pending requests from every registered
+/// `FastifyServerHandle` and dispatch each on the main TS thread.
+/// Wired into perry-stdlib's `js_stdlib_process_pending` via the
+/// `external-fastify-pump` feature so the runtime's outer event loop
+/// drives us each tick.
+///
+/// Returns the number of requests processed (matches the convention
+/// other pump arms follow — `js_ws_process_pending`,
+/// `js_node_http_server_process_pending`, etc.).
+#[no_mangle]
+pub extern "C" fn js_fastify_process_pending() -> i32 {
+    let mut server_handles: Vec<Handle> = Vec::new();
+    iter_handle_ids_of::<FastifyServerHandle, _>(|id| {
+        server_handles.push(id);
+    });
+    let mut count = 0i32;
+    for h in server_handles {
+        let app_handle = match get_handle::<FastifyServerHandle>(h) {
+            Some(s) => s.app_handle,
+            None => continue,
+        };
+        loop {
+            let pending = match get_handle::<FastifyServerHandle>(h) {
+                Some(s) => {
+                    let mut guard = s.request_rx.lock().unwrap();
+                    match guard.as_mut() {
+                        Some(rx) => rx.try_recv().ok(),
+                        None => None,
+                    }
+                }
+                None => None,
+            };
+            let pending = match pending {
+                Some(p) => p,
+                None => break,
+            };
+            process_request(app_handle, pending);
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Reports whether any registered fastify server is currently in the
+/// "listening" state. Wired into perry-stdlib's
+/// `js_stdlib_has_active_handles` so the runtime's main event loop
+/// keeps running until the user explicitly closes every server.
+#[no_mangle]
+pub extern "C" fn js_fastify_has_active() -> i32 {
+    let mut active = 0i32;
+    iter_handle_ids_of::<FastifyServerHandle, _>(|id| {
+        if let Some(s) = get_handle::<FastifyServerHandle>(id) {
+            if s.listening.load(Ordering::Acquire) {
+                active = 1;
+            }
+        }
+    });
+    active
 }
 
 // ============================================================================
@@ -392,60 +509,6 @@ async fn handle_request(
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Full::new(Bytes::from("Handler error")))
             .unwrap()),
-    }
-}
-
-/// Main thread event loop — drains pending requests and runs user
-/// handlers (and lifecycle hooks) synchronously.
-fn event_loop(app_handle: Handle, request_rx: &mut mpsc::Receiver<FastifyPendingRequest>) {
-    loop {
-        // Pump stdlib so perry-ext-{ws,net,http,fetch} events that
-        // accumulated on tokio workers get dispatched on the JS main
-        // thread. Without this, listeners registered before
-        // `app.listen()` (e.g. `wss.on('connection', ...)` against a
-        // separate WebSocketServer) never see incoming traffic. See
-        // #747 — and #746, whose symptom is the same in any program
-        // that combines `fastify` with `ws` / `net` / `http`.
-        unsafe {
-            js_run_stdlib_pump();
-        }
-
-        // Drain microtasks queued by previous handler runs.
-        unsafe {
-            js_promise_run_microtasks();
-        }
-
-        // Try to receive a request with a 10ms timeout. Keeps the
-        // event loop responsive without busy-spinning.
-        let result = match try_recv_with_timeout(request_rx) {
-            Some(p) => p,
-            None => continue,
-        };
-
-        process_request(app_handle, result);
-    }
-}
-
-/// Receive a pending request, blocking up to 10ms. We can't easily
-/// re-enter perry-stdlib's tokio runtime from this thread (we're
-/// outside any tokio context here), so we use `try_recv` in a tight
-/// loop with a small `thread::sleep`.
-fn try_recv_with_timeout(
-    request_rx: &mut mpsc::Receiver<FastifyPendingRequest>,
-) -> Option<FastifyPendingRequest> {
-    use std::time::{Duration, Instant};
-    let deadline = Instant::now() + Duration::from_millis(10);
-    loop {
-        match request_rx.try_recv() {
-            Ok(p) => return Some(p),
-            Err(mpsc::error::TryRecvError::Disconnected) => return None,
-            Err(mpsc::error::TryRecvError::Empty) => {
-                if Instant::now() >= deadline {
-                    return None;
-                }
-                std::thread::sleep(Duration::from_micros(200));
-            }
-        }
     }
 }
 
