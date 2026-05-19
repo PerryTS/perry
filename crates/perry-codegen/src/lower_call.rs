@@ -7561,6 +7561,21 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         args: &[],
         ret: NR_VOID,
     },
+    // #1113 — `wss.handleUpgrade(req, socket, head, cb)` for a
+    // `new WebSocketServer({ noServer: true })`. The receiver is the
+    // noServer WsServerHandle (unboxed to i64 by the dispatcher);
+    // req/socket/head are NaN-boxed JSValues passed through as f64;
+    // cb is the user closure (unboxed to i64). Returns the server
+    // handle (NR_PTR).
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "handleUpgrade",
+        class_filter: None,
+        runtime: "js_ws_handle_upgrade",
+        args: &[NA_F64, NA_F64, NA_F64, NA_PTR],
+        ret: NR_PTR,
+    },
     // Issue #577 Phase 4 — `("ws", "Client")` instance methods.
     // The wsId delivered to `Server.on('upgrade', (req, wsId, head) => …)`
     // is NaN-boxed POINTER_TAG so unbox_to_i64 (called by the dispatch
