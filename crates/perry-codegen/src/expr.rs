@@ -10486,6 +10486,57 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &promise))
         }
+
+        // Issue #1123 — `net.createServer(handler?)` / `net.createServer(opts,
+        // handler?)`. HIR lowering at `crates/perry-hir/src/lower/expr_call.rs`
+        // produces `Expr::NetCreateServer { options, connection_listener }`
+        // for the dotted (`import * as net from "node:net"`) form; the
+        // LLVM backend previously had no arm here and dropped through to
+        // the `"expression NetCreateServer not yet supported"` Phase-2
+        // catch-all. The runtime symbol lives at
+        // `crates/perry-ext-net/src/lib.rs::js_net_create_server`
+        // (perry-runtime/src/net.rs is gated off at lib.rs:79 since
+        // A1/A1.5; net.Socket moved to perry-stdlib/perry-ext-net's
+        // event-driven model, and this fix adds the missing createServer
+        // entry on the same side). It's declared at `runtime_decls.rs:2690`
+        // as `(I64, I64) -> DOUBLE`. The first slot is the options object
+        // pointer (or `0` for omitted — the runtime tolerates a null
+        // options ptr); the second slot is the connection-listener
+        // closure pointer (or `0` for omitted, same tolerance). Closures
+        // arrive NaN-boxed with POINTER_TAG; strip the tag with
+        // `unbox_to_i64` before handing to the FFI signature. Options
+        // here are an optional plain object — pass the value through
+        // after stripping the NaN-box tag so the runtime sees the raw
+        // `*ObjectHeader`. The returned `f64` is a raw handle (positive
+        // small integer) that subsequent server-side ops would consume;
+        // no extra NaN-boxing required at this layer (callers store the
+        // value through the JSValue F64 slot, matching the historic
+        // contract carried over from the deprecated runtime entry).
+        Expr::NetCreateServer {
+            options,
+            connection_listener,
+        } => {
+            let options_i64 = if let Some(opts_expr) = options {
+                let opts_box = lower_expr(ctx, opts_expr)?;
+                let blk = ctx.block();
+                unbox_to_i64(blk, &opts_box)
+            } else {
+                "0".to_string()
+            };
+            let listener_i64 = if let Some(cb_expr) = connection_listener {
+                let cb_box = lower_expr(ctx, cb_expr)?;
+                let blk = ctx.block();
+                unbox_to_i64(blk, &cb_box)
+            } else {
+                "0".to_string()
+            };
+            let blk = ctx.block();
+            Ok(blk.call(
+                DOUBLE,
+                "js_net_create_server",
+                &[(I64, &options_i64), (I64, &listener_i64)],
+            ))
+        }
         Expr::DateParse(s) => {
             let s_box = lower_expr(ctx, s)?;
             let blk = ctx.block();

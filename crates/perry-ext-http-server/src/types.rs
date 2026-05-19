@@ -1,7 +1,7 @@
 //! Shared NaN-boxing constants, runtime extern declarations, and
 //! port/host extraction helpers.
 
-use perry_ffi::{JsValue, StringHeader};
+use perry_ffi::{BufferHeader, JsValue, StringHeader};
 
 pub const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -17,6 +17,12 @@ extern "C" {
     pub fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
     pub fn js_gc_enter_unsafe_zone();
     pub fn js_gc_exit_unsafe_zone();
+    /// Issue #1124 — returns 1 if `ptr` is a registered Buffer / Uint8Array
+    /// in the runtime's BUFFER_REGISTRY (which is the only safe way to tell
+    /// a `BufferHeader` apart from a `StringHeader` after both have been
+    /// NaN-boxed with POINTER_TAG and stripped to a raw pointer). Defined
+    /// in `crates/perry-runtime/src/buffer.rs::js_buffer_is_buffer`.
+    pub fn js_buffer_is_buffer(ptr: i64) -> i32;
 }
 
 /// Opaque marker for the runtime's Promise struct — pass pointers
@@ -131,11 +137,44 @@ pub fn jsvalue_to_body_bytes(value: f64) -> Option<Vec<u8>> {
         }
         return read_string_header_bytes(ptr);
     }
-    // Buffer / Uint8Array follow StringHeader-shaped layout in perry's
-    // current runtime — read as bytes through the same path.
+    // Issue #1124 — Buffer / Uint8Array do NOT follow the
+    // `StringHeader` layout: `BufferHeader` is `{ length: u32,
+    // capacity: u32 }` (8 bytes, data immediately after), while
+    // `StringHeader` is `{ utf16_len, byte_len, capacity, refcount,
+    // flags }` (20 bytes, data after that). Reading a buffer through
+    // the string-shaped header used to surface the buffer's
+    // `capacity` slot as `byte_len` (often equal to the requested
+    // size, so the length was preserved) but indexed the data from
+    // `ptr + sizeof(StringHeader)` — past the actual bytes — so the
+    // wire body was all zeros (#1124 repro). Probe the runtime's
+    // `BUFFER_REGISTRY` first to pick the correct layout; fall back
+    // to `StringHeader` only for non-buffer pointer-tagged values
+    // (the existing string-body path still has to work via this
+    // branch when the caller already pre-strung a value into the
+    // string-tag slot, e.g. some chunked `res.write(stringValue)`
+    // call sites).
     if v.is_pointer() {
         let bits = value.to_bits();
-        let ptr = (bits & PTR_MASK) as *mut StringHeader;
+        let raw = (bits & PTR_MASK) as i64;
+        // SAFETY: `js_buffer_is_buffer` is a C-exposed registry check
+        // that handles null / sub-0x1000 garbage internally.
+        let is_buffer = unsafe { js_buffer_is_buffer(raw) } != 0;
+        if is_buffer {
+            let buf = raw as *const BufferHeader;
+            if !buf.is_null() {
+                unsafe {
+                    let len = (*buf).length as usize;
+                    let data =
+                        (buf as *const u8).add(std::mem::size_of::<BufferHeader>());
+                    let slice = std::slice::from_raw_parts(data, len);
+                    return Some(slice.to_vec());
+                }
+            }
+        }
+        // Non-buffer pointer — try the string-shaped header (shared
+        // layout for runtime strings the codegen NaN-boxed as
+        // POINTER_TAG instead of STRING_TAG).
+        let ptr = raw as *mut StringHeader;
         if !ptr.is_null() {
             if let Some(b) = read_string_header_bytes(ptr) {
                 return Some(b);

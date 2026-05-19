@@ -674,6 +674,61 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
     id
 }
 
+// ─── FFI: net.createServer(options?, connectionListener?) ────────────────────
+
+/// Issue #1123 — `net.createServer(options?, connectionListener?)`. Allocates
+/// a placeholder server handle so the dotted (`net.createServer(...)`) and
+/// named-import (`import { createServer } from "node:net"`) forms both have
+/// a non-undefined return value to bind to `server`. The full event-driven
+/// accept loop (mirroring `js_node_http_server_listen`) is a separate
+/// follow-up — today this is just enough for the codegen lowering (`Expr::
+/// NetCreateServer` in `crates/perry-codegen/src/expr.rs`) and the HIR
+/// named-import bridge (`crates/perry-hir/src/lower/expr_call.rs`'s
+/// `("net", "createServer")` arm) to compile + link + run without
+/// "expression NetCreateServer not yet supported" / `_js_net_create_server`
+/// link errors.
+///
+/// Returns a positive integer handle as `f64` (the same convention as
+/// `js_net_socket_alloc` for the i64 socket id — callers store it through
+/// the codegen's DOUBLE return slot, so a raw small-integer f64 is the
+/// expected wire format here). If a `connectionListener` closure is
+/// provided (POINTER_TAG-tagged i64 from the codegen's `unbox_to_i64`),
+/// we stash it under the `'connection'` event slot in `NET_LISTENERS`
+/// so a future full implementation of `js_net_server_listen` can fire
+/// it. Options are accepted but ignored for now.
+///
+/// # Safety
+///
+/// `connection_listener_i64` may be 0 (no listener provided) or a raw
+/// (`POINTER_TAG`-stripped) `*const RawClosureHeader`. We only walk the
+/// pointer through `JsClosure::from_raw`'s null-tolerant API.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_create_server(
+    _options_i64: i64,
+    connection_listener_i64: i64,
+) -> f64 {
+    ensure_gc_scanner_registered();
+    let id = next_id();
+    statics::listeners()
+        .lock()
+        .unwrap()
+        .insert(id, HashMap::new());
+    if connection_listener_i64 != 0 {
+        if let Ok(mut listeners) = statics::listeners().lock() {
+            listeners
+                .entry(id)
+                .or_default()
+                .entry("connection".to_string())
+                .or_default()
+                .push(connection_listener_i64);
+        }
+    }
+    // The codegen's `DOUBLE` return slot just stores the raw bits via
+    // the JSValue F64 path — no NaN-boxing of the handle here. Match
+    // the historic perry-runtime/src/net.rs:35 contract.
+    id as f64
+}
+
 // ─── FFI: socket.connect(port, host) (instance method on existing handle) ─────
 
 /// `socket.connect(port, host)` — initiates a TCP connection on a socket

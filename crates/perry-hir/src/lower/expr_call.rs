@@ -6515,6 +6515,43 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
                     }
                 }
 
+                // Issue #1123 — `import { createServer } from "node:net";
+                // createServer(handler)` (named-import form). Pre-fix this
+                // fell through to the generic `Expr::NativeMethodCall`
+                // arm right below, and the LLVM codegen's
+                // `lower_native_method_call` had no `("net", "createServer")`
+                // row in `NATIVE_MODULE_TABLE` (unlike the http sibling at
+                // `lower_call.rs:10620`), so the call dropped through every
+                // path and returned `TAG_UNDEFINED`. Synthesize the same
+                // `Expr::NetCreateServer` node the dotted form
+                // (`net.createServer(...)`) produces at sites 1899 / 3393,
+                // so both forms converge on the new codegen arm in
+                // `crates/perry-codegen/src/expr.rs` (the `Expr::FetchPostWithAuth`
+                // neighbor, added in the same fix). `createServer` accepts
+                // either `(listener)` or `(options, listener)`; mirror the
+                // dotted-form positional handling: 1 arg → listener-only,
+                // 2+ args → first is options, second is listener.
+                if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name) {
+                    if module_name == "net" && method_name == "createServer" {
+                        let (options, connection_listener) = if args.len() >= 2 {
+                            let mut args_iter = args.into_iter();
+                            let opts = args_iter.next().map(Box::new);
+                            let listener = args_iter.next().map(Box::new);
+                            (opts, listener)
+                        } else {
+                            // 0 or 1 args — treat the single arg (if any) as
+                            // the connection listener. Matches Node's
+                            // `net.createServer(connectionListener)` shorthand.
+                            let listener = args.into_iter().next().map(Box::new);
+                            (None, listener)
+                        };
+                        return Ok(Expr::NetCreateServer {
+                            options,
+                            connection_listener,
+                        });
+                    }
+                }
+
                 // Check if this is a direct call on an aliased named import
                 // e.g., uuid() where import { v4 as uuid } from 'uuid'
                 if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name)

@@ -1,0 +1,7 @@
+A typeof: number
+A truthy: true
+B typeof: number
+B truthy: true
+A === B: false
+A > 0: true
+B > 0: true
