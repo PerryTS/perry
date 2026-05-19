@@ -2453,9 +2453,14 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         trace.evacuation_policy = evacuation_policy;
     }
     let mut evacuation = EvacuationTraceStats::default();
+    let mut evacuation_sticky = StickyRememberedSet::default();
     if evacuation_policy.enabled {
         let phase_start = trace_phase_start(&trace);
-        evacuation = evacuate_tenured_nursery_objects_with_force(evacuation_policy.force);
+        let mut evacuated_headers = Vec::new();
+        evacuation = evacuate_tenured_nursery_objects_collecting(
+            evacuation_policy.force,
+            &mut evacuated_headers,
+        );
         trace_phase_record(&mut trace, "evacuation", phase_start);
         if let Some(trace) = trace.as_mut() {
             trace.evacuation = evacuation;
@@ -2463,6 +2468,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         if evacuation.objects > 0 {
             let phase_start = trace_phase_start(&trace);
             rewrite_forwarded_references(&valid_ptrs);
+            evacuation_sticky = rebuild_evacuated_old_to_young_remembered_set(&evacuated_headers);
             trace_phase_record(&mut trace, "reference_rewrite", phase_start);
             if gc_verify_evacuation_enabled() {
                 let phase_start = trace_phase_start(&trace);
@@ -2488,6 +2494,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // RS clear — see gc_collect_inner for the rationale.
     let phase_start = trace_phase_start(&trace);
     remembered_set_clear();
+    evacuation_sticky.restore();
     trace_phase_record(&mut trace, "remembered_set_clear", phase_start);
     // Conservative-pinning is per-cycle; clear so next cycle
     // re-discovers fresh.
@@ -4872,6 +4879,31 @@ unsafe fn scan_dirty_lazy_array_slots(
         visit_slot,
     );
     scan_dirty_raw_ptr_slot(&(*lazy).materialized_bitmap, dirty_pages, stats, visit_slot);
+
+    let cached_length = (*lazy).cached_length as usize;
+    let cache = (*lazy).materialized_elements;
+    let bitmap = (*lazy).materialized_bitmap;
+    if cache.is_null() || bitmap.is_null() || cached_length == 0 {
+        return;
+    }
+    let bitmap_words = cached_length.div_ceil(64);
+    for w in 0..bitmap_words {
+        let word = *bitmap.add(w);
+        if word == 0 {
+            continue;
+        }
+        let base_idx = w * 64;
+        for b in 0..64usize {
+            if word & (1u64 << b) == 0 {
+                continue;
+            }
+            let i = base_idx + b;
+            if i >= cached_length {
+                break;
+            }
+            scan_dirty_slot(cache.add(i) as *mut u64, dirty_pages, stats, visit_slot);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7011,7 +7043,10 @@ fn pin_currently_marked_as_conservative() -> ConservativePinTraceStats {
 /// dead and the nursery block can reset; the new copy is marked
 /// MARKED so the rewrite walk picks up its (copied) fields and so
 /// sweep keeps it alive.
-fn evacuate_tenured_nursery_objects_with_force(force_evacuation: bool) -> EvacuationTraceStats {
+fn evacuate_tenured_nursery_objects_collecting(
+    force_evacuation: bool,
+    evacuated_headers: &mut Vec<*mut GcHeader>,
+) -> EvacuationTraceStats {
     let mut evacuated = EvacuationTraceStats::default();
     crate::arena::arena_walk_objects(|header_ptr| {
         let header = header_ptr as *mut GcHeader;
@@ -7072,11 +7107,18 @@ fn evacuate_tenured_nursery_objects_with_force(force_evacuation: bool) -> Evacua
             // age-bump pass on the next cycle would treat it as
             // a fresh young object.
             (*new_header).gc_flags |= GC_FLAG_TENURED;
+            evacuated_headers.push(new_header);
             evacuated.objects += 1;
             evacuated.bytes += total;
         }
     });
     evacuated
+}
+
+#[cfg(test)]
+fn evacuate_tenured_nursery_objects_with_force(force_evacuation: bool) -> EvacuationTraceStats {
+    let mut evacuated_headers = Vec::new();
+    evacuate_tenured_nursery_objects_collecting(force_evacuation, &mut evacuated_headers)
 }
 
 #[cfg(test)]
@@ -7341,6 +7383,259 @@ unsafe fn rewrite_heap_object_fields(header: *mut GcHeader, valid_ptrs: &ValidPo
         GC_TYPE_STRING | GC_TYPE_BIGINT => {}
         _ => {}
     }
+}
+
+// Evacuation copies land in OLD_ARENA after the remembered-set scan
+// for this cycle has already run. Rebuild only the pages for copied
+// old objects that still hold nursery children so the next minor GC
+// sees those old→young edges after the normal collection clear.
+#[inline]
+unsafe fn remember_evacuated_old_to_young_slot(
+    sticky: &mut StickyRememberedSet,
+    parent_header: *mut GcHeader,
+    slot: *mut u64,
+) {
+    if slot.is_null() {
+        return;
+    }
+    let child_addr = decode_heap_addr(*slot);
+    if child_addr == 0 || !crate::arena::pointer_in_nursery(child_addr) {
+        return;
+    }
+    let external = !matches!(
+        crate::arena::classify_heap_generation(slot as usize),
+        crate::arena::HeapGeneration::Old
+    );
+    sticky.remember_slot(parent_header, slot, external);
+}
+
+unsafe fn remember_evacuated_old_to_young_slot_range(
+    sticky: &mut StickyRememberedSet,
+    parent_header: *mut GcHeader,
+    user_ptr: *mut u8,
+    slots: *mut u64,
+    slot_count: usize,
+) {
+    if slots.is_null() || slot_count == 0 {
+        return;
+    }
+    if layout_visit_pointer_slots(user_ptr as usize, slot_count, |i| unsafe {
+        remember_evacuated_old_to_young_slot(sticky, parent_header, slots.add(i));
+    }) {
+        return;
+    }
+    for i in 0..slot_count {
+        remember_evacuated_old_to_young_slot(sticky, parent_header, slots.add(i));
+    }
+}
+
+unsafe fn remember_evacuated_array_young_slots(
+    sticky: &mut StickyRememberedSet,
+    header: *mut GcHeader,
+    user_ptr: *mut u8,
+) {
+    let arr = user_ptr as *const crate::array::ArrayHeader;
+    let length = (*arr).length;
+    let capacity = (*arr).capacity;
+    if length > capacity || length > 16_000_000 {
+        return;
+    }
+    let elements = user_ptr.add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+    remember_evacuated_old_to_young_slot_range(sticky, header, user_ptr, elements, length as usize);
+}
+
+unsafe fn remember_evacuated_object_young_slots(
+    sticky: &mut StickyRememberedSet,
+    header: *mut GcHeader,
+    user_ptr: *mut u8,
+) {
+    let obj = user_ptr as *const crate::object::ObjectHeader;
+    let field_count = (*obj).field_count;
+    if field_count > 1_000_000 {
+        return;
+    }
+    remember_evacuated_old_to_young_slot(
+        sticky,
+        header,
+        &(*obj).keys_array as *const _ as *mut u64,
+    );
+    let fields = user_ptr.add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+    remember_evacuated_old_to_young_slot_range(
+        sticky,
+        header,
+        user_ptr,
+        fields,
+        field_count as usize,
+    );
+}
+
+unsafe fn remember_evacuated_closure_young_slots(
+    sticky: &mut StickyRememberedSet,
+    header: *mut GcHeader,
+    user_ptr: *mut u8,
+) {
+    let closure = user_ptr as *const crate::closure::ClosureHeader;
+    let capture_count = crate::closure::real_capture_count((*closure).capture_count);
+    let captures = user_ptr.add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
+    remember_evacuated_old_to_young_slot_range(
+        sticky,
+        header,
+        user_ptr,
+        captures,
+        capture_count as usize,
+    );
+}
+
+unsafe fn remember_evacuated_promise_young_slots(
+    sticky: &mut StickyRememberedSet,
+    header: *mut GcHeader,
+    user_ptr: *mut u8,
+) {
+    let promise = user_ptr as *mut crate::promise::Promise;
+    remember_evacuated_old_to_young_slot(
+        sticky,
+        header,
+        &(*promise).value as *const f64 as *mut u64,
+    );
+    remember_evacuated_old_to_young_slot(
+        sticky,
+        header,
+        &(*promise).reason as *const f64 as *mut u64,
+    );
+    remember_evacuated_old_to_young_slot(
+        sticky,
+        header,
+        &(*promise).on_fulfilled as *const _ as *mut u64,
+    );
+    remember_evacuated_old_to_young_slot(
+        sticky,
+        header,
+        &(*promise).on_rejected as *const _ as *mut u64,
+    );
+    remember_evacuated_old_to_young_slot(sticky, header, &(*promise).next as *const _ as *mut u64);
+}
+
+unsafe fn remember_evacuated_error_young_slots(
+    sticky: &mut StickyRememberedSet,
+    header: *mut GcHeader,
+    user_ptr: *mut u8,
+) {
+    let error = user_ptr as *mut crate::error::ErrorHeader;
+    remember_evacuated_old_to_young_slot(sticky, header, &(*error).message as *const _ as *mut u64);
+    remember_evacuated_old_to_young_slot(sticky, header, &(*error).name as *const _ as *mut u64);
+    remember_evacuated_old_to_young_slot(sticky, header, &(*error).stack as *const _ as *mut u64);
+    remember_evacuated_old_to_young_slot(sticky, header, &(*error).cause as *const f64 as *mut u64);
+    remember_evacuated_old_to_young_slot(sticky, header, &(*error).errors as *const _ as *mut u64);
+}
+
+unsafe fn remember_evacuated_map_young_slots(
+    sticky: &mut StickyRememberedSet,
+    header: *mut GcHeader,
+    user_ptr: *mut u8,
+) {
+    let map = user_ptr as *const crate::map::MapHeader;
+    let size = (*map).size;
+    let capacity = (*map).capacity;
+    if size > capacity || size > 100_000 || (*map).entries.is_null() {
+        return;
+    }
+    let entries = (*map).entries as *mut u64;
+    for i in 0..(size as usize) {
+        remember_evacuated_old_to_young_slot(sticky, header, entries.add(i * 2));
+        remember_evacuated_old_to_young_slot(sticky, header, entries.add(i * 2 + 1));
+    }
+}
+
+unsafe fn remember_evacuated_lazy_array_young_slots(
+    sticky: &mut StickyRememberedSet,
+    header: *mut GcHeader,
+    user_ptr: *mut u8,
+) {
+    let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
+    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
+        return;
+    }
+    remember_evacuated_old_to_young_slot(sticky, header, &(*lazy).blob_str as *const _ as *mut u64);
+    remember_evacuated_old_to_young_slot(
+        sticky,
+        header,
+        &(*lazy).materialized as *const _ as *mut u64,
+    );
+    remember_evacuated_old_to_young_slot(
+        sticky,
+        header,
+        &(*lazy).materialized_elements as *const _ as *mut u64,
+    );
+    remember_evacuated_old_to_young_slot(
+        sticky,
+        header,
+        &(*lazy).materialized_bitmap as *const _ as *mut u64,
+    );
+
+    let cached_length = (*lazy).cached_length as usize;
+    let cache = (*lazy).materialized_elements;
+    let bitmap = (*lazy).materialized_bitmap;
+    if cache.is_null() || bitmap.is_null() || cached_length == 0 {
+        return;
+    }
+    let bitmap_words = cached_length.div_ceil(64);
+    for w in 0..bitmap_words {
+        let word = *bitmap.add(w);
+        if word == 0 {
+            continue;
+        }
+        let base_idx = w * 64;
+        for b in 0..64usize {
+            if word & (1u64 << b) == 0 {
+                continue;
+            }
+            let i = base_idx + b;
+            if i >= cached_length {
+                break;
+            }
+            remember_evacuated_old_to_young_slot(sticky, header, cache.add(i) as *mut u64);
+        }
+    }
+}
+
+unsafe fn remember_evacuated_old_copy_young_slots(
+    sticky: &mut StickyRememberedSet,
+    header: *mut GcHeader,
+) {
+    if header.is_null() {
+        return;
+    }
+    let flags = (*header).gc_flags;
+    if flags & GC_FLAG_FORWARDED != 0 || flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+        return;
+    }
+    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+    if !crate::arena::pointer_in_old_gen(user_ptr as usize) {
+        return;
+    }
+    match (*header).obj_type {
+        GC_TYPE_ARRAY => remember_evacuated_array_young_slots(sticky, header, user_ptr),
+        GC_TYPE_OBJECT => remember_evacuated_object_young_slots(sticky, header, user_ptr),
+        GC_TYPE_CLOSURE => remember_evacuated_closure_young_slots(sticky, header, user_ptr),
+        GC_TYPE_PROMISE => remember_evacuated_promise_young_slots(sticky, header, user_ptr),
+        GC_TYPE_ERROR => remember_evacuated_error_young_slots(sticky, header, user_ptr),
+        GC_TYPE_MAP => remember_evacuated_map_young_slots(sticky, header, user_ptr),
+        GC_TYPE_LAZY_ARRAY => remember_evacuated_lazy_array_young_slots(sticky, header, user_ptr),
+        GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+        _ => {}
+    }
+}
+
+fn rebuild_evacuated_old_to_young_remembered_set(
+    evacuated_headers: &[*mut GcHeader],
+) -> StickyRememberedSet {
+    let mut sticky = StickyRememberedSet::default();
+    for &header in evacuated_headers {
+        unsafe {
+            remember_evacuated_old_copy_young_slots(&mut sticky, header);
+        }
+    }
+    sticky
 }
 
 unsafe fn verify_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
@@ -9849,6 +10144,14 @@ mod tests {
             (*header_from_user_ptr(child as *const u8)).gc_flags |= GC_FLAG_PINNED;
             elements
         };
+        if gc_force_evacuate_enabled() {
+            // This test is about copying-preflight fallback; forced
+            // evacuation would otherwise move the parent after fallback.
+            let arr_header = unsafe { header_from_user_ptr(arr as *const u8) };
+            CONS_PINNED.with(|s| {
+                s.borrow_mut().insert(arr_header as usize);
+            });
+        }
         js_shadow_slot_set(0, ptr_bits(arr as usize));
 
         let _ = gc_collect_minor();
@@ -10317,6 +10620,76 @@ mod tests {
             assert_eq!((*clean_header).gc_flags & GC_FLAG_MARKED, 0);
             retire_old_test_map(map, entries, layout);
         }
+        clear_marks();
+        remembered_set_clear();
+    }
+
+    #[test]
+    fn test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child() {
+        reset_remembered_set();
+        clear_marks();
+
+        let cached_length = 4usize;
+        let lazy = crate::arena::arena_alloc_gc_old(
+            std::mem::size_of::<crate::json_tape::LazyArrayHeader>(),
+            8,
+            GC_TYPE_LAZY_ARRAY,
+        ) as *mut crate::json_tape::LazyArrayHeader;
+        let cache_bytes = cached_length * std::mem::size_of::<crate::value::JSValue>();
+        let cache = crate::arena::arena_alloc_gc(cache_bytes, 8, GC_TYPE_STRING)
+            as *mut crate::value::JSValue;
+        let bitmap =
+            crate::arena::arena_alloc_gc(std::mem::size_of::<u64>(), 8, GC_TYPE_STRING) as *mut u64;
+        let selected_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+        let unselected_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+
+        unsafe {
+            std::ptr::write_bytes(cache as *mut u8, 0, cache_bytes);
+            *bitmap = 0;
+            (*lazy).cached_length = cached_length as u32;
+            (*lazy).magic = crate::json_tape::LAZY_ARRAY_MAGIC;
+            (*lazy).root_idx = 0;
+            (*lazy).tape_len = 0;
+            (*lazy).blob_str = std::ptr::null();
+            (*lazy).materialized = std::ptr::null_mut();
+            (*lazy).materialized_elements = cache;
+            (*lazy).materialized_bitmap = bitmap;
+            (*lazy).walk_idx = u32::MAX;
+            (*lazy).walk_tape_pos = 0;
+            (*lazy).cumulative_walk_steps = 0;
+
+            *(cache.add(1) as *mut u64) = ptr_bits(selected_child);
+            *(cache.add(2) as *mut u64) = ptr_bits(unselected_child);
+            *bitmap = 1u64 << 1;
+        }
+
+        let lazy_header = unsafe { header_from_user_ptr(lazy as *const u8) };
+        let dirty_cache_page =
+            crate::arena::generation_page_for_addr(unsafe { cache.add(1) } as usize);
+        assert!(mark_dirty_external_slot_page(
+            lazy_header as usize,
+            dirty_cache_page
+        ));
+
+        let valid_ptrs = build_valid_pointer_set();
+        let stats = mark_remembered_set_roots(&valid_ptrs);
+        assert_eq!(stats.old_objects_considered, 1);
+        assert_eq!(stats.dirty_objects_scanned, 1);
+        assert_eq!(
+            stats.newly_marked, 1,
+            "external lazy-array cache page should mark bitmap-selected nursery values"
+        );
+        unsafe {
+            let selected_header = header_from_user_ptr(selected_child as *const u8);
+            let unselected_header = header_from_user_ptr(unselected_child as *const u8);
+            assert_ne!((*selected_header).gc_flags & GC_FLAG_MARKED, 0);
+            assert_eq!(
+                (*unselected_header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "unset cache bitmap entries must not be treated as live slots"
+            );
+        }
+
         clear_marks();
         remembered_set_clear();
     }
@@ -11608,7 +11981,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "canary for evacuation-reremember-old-young: PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_CONSERVATIVE_STACK_SCAN=auto cargo test -p perry-runtime test_evacuated_old_parent_re_remembers_young_child_canary -- --ignored --nocapture --test-threads=1"]
     fn test_evacuated_old_parent_re_remembers_young_child_canary() {
         struct ResetGcTestState;
 
@@ -11630,6 +12002,9 @@ mod tests {
         clear_marks();
         clear_mark_seeds();
         CONS_PINNED.with(|s| s.borrow_mut().clear());
+        if !gc_force_evacuate_enabled() {
+            return;
+        }
         assert!(
             !generated_write_barriers_emitted(),
             "this canary must exercise the evacuation path, not the copying nursery fast path"
@@ -11651,10 +12026,6 @@ mod tests {
             s.borrow_mut().insert(child_header as usize);
         });
 
-        assert!(
-            gc_force_evacuate_enabled(),
-            "run this canary with PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1"
-        );
         let _ = gc_collect_minor();
 
         let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
@@ -11706,6 +12077,30 @@ mod tests {
                 (*child_header).gc_flags & GC_FLAG_MARKED,
                 0,
                 "remembered scan should mark the pinned nursery child"
+            );
+        }
+
+        clear_marks();
+        CONS_PINNED.with(|s| {
+            s.borrow_mut().insert(child_header as usize);
+        });
+        let _ = gc_collect_minor();
+
+        let parent_after_second = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert_eq!(
+            parent_after_second, parent_after,
+            "second minor GC should keep using the evacuated old parent"
+        );
+        let child_after_second = unsafe { (*parent_after_fields & POINTER_MASK) as usize };
+        assert_eq!(
+            child_after_second, child,
+            "second minor GC should keep the nursery child alive through the rebuilt remembered entry"
+        );
+        unsafe {
+            assert_ne!(
+                (*child_header).gc_flags & GC_FLAG_TENURED,
+                0,
+                "second minor GC should mark and age the nursery child"
             );
         }
 
