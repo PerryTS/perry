@@ -3700,6 +3700,45 @@ impl<'a> RuntimeRootVisitor<'a> {
     }
 
     #[inline]
+    fn visit_heap_word_bits(&mut self, bits: u64) -> Option<u64> {
+        match &mut self.mode {
+            RuntimeRootVisitMode::Mark { valid_ptrs } => {
+                try_mark_value_or_raw(bits, valid_ptrs);
+                None
+            }
+            RuntimeRootVisitMode::CopyingCheck { checker } => {
+                checker.check_bits(bits);
+                None
+            }
+            RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_value_bits(bits),
+            RuntimeRootVisitMode::CopyingRewrite { collector } => {
+                collector.rewrite_value_bits(bits)
+            }
+            RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_value(bits, valid_ptrs),
+            RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            } => {
+                if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
+                    panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+                }
+                None
+            }
+            RuntimeRootVisitMode::Copy { mark } => {
+                let tag = bits & TAG_MASK;
+                if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+                    (*mark)(f64::from_bits(bits));
+                } else if tag < 0x7FF8_0000_0000_0000
+                    && (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits)
+                {
+                    (*mark)(f64::from_bits(POINTER_TAG | (bits & POINTER_MASK)));
+                }
+                None
+            }
+        }
+    }
+
+    #[inline]
     fn visit_tagged_raw_addr(&mut self, addr: usize, copy_tag: u64) -> Option<usize> {
         if addr == 0 {
             return None;
@@ -3776,6 +3815,20 @@ impl<'a> RuntimeRootVisitor<'a> {
     /// Returns true when rewrite mode changed the slot.
     pub fn visit_nanbox_u64_slot(&mut self, slot: &mut u64) -> bool {
         if let Some(new_bits) = self.visit_nanbox_bits(*slot) {
+            *slot = new_bits;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Visit a mutable heap word that may store either a NaN-boxed JSValue
+    /// pointer or a raw heap pointer.
+    ///
+    /// This matches heap-field rewrite semantics for runtime-owned caches
+    /// whose keys are bit copies of closure captures or object fields.
+    pub fn visit_heap_word_u64_slot(&mut self, slot: &mut u64) -> bool {
+        if let Some(new_bits) = self.visit_heap_word_bits(*slot) {
             *slot = new_bits;
             true
         } else {
@@ -4155,22 +4208,6 @@ fn mark_copy_only_scanner_bits(
     None
 }
 
-#[inline]
-fn mark_singleton_closure_root(user: usize, valid_ptrs: &ValidPointerSet, pin_discoveries: bool) {
-    if user == 0 || !valid_ptrs.contains(&user) {
-        return;
-    }
-    let header = unsafe { header_from_user_ptr(user as *const u8) };
-    unsafe {
-        if (*header).gc_flags & GC_FLAG_MARKED == 0 && (*header).gc_flags & GC_FLAG_PINNED == 0 {
-            (*header).gc_flags |= GC_FLAG_MARKED;
-        }
-    }
-    if pin_discoveries {
-        pin_conservative_root_header(header);
-    }
-}
-
 struct RegisteredRootMarkContext {
     valid_ptrs: *const ValidPointerSet,
     pin_discoveries: bool,
@@ -4217,15 +4254,6 @@ fn mark_registered_roots(
     let ctx = &mut ctx as *mut RegisteredRootMarkContext as *mut c_void;
     for scanner in ffi_scanners {
         scanner(perry_ffi_mark_root, ctx);
-    }
-
-    // Singleton closures (no-capture closures cached by `js_closure_alloc_singleton`)
-    // are reachable from emitted code via cached pointers, not via JSValue refs the
-    // tracer would otherwise find. Mark them explicitly so the sweep doesn't
-    // reclaim a cached entry that's about to be loaded by the next call site.
-    for closure_ptr in crate::closure::snapshot_singleton_closures() {
-        let user = closure_ptr as usize;
-        mark_singleton_closure_root(user, valid_ptrs, pin_discoveries);
     }
     legacy_stats
 }
@@ -7492,14 +7520,6 @@ fn verify_copy_only_registered_roots(valid_ptrs: &ValidPointerSet) {
     for scanner in ffi_scanners {
         scanner(perry_ffi_verify_root, ctx);
     }
-
-    for closure_ptr in crate::closure::snapshot_singleton_closures() {
-        verify_copy_only_scanner_bits(
-            POINTER_TAG | (closure_ptr as u64 & POINTER_MASK),
-            valid_ptrs,
-            "singleton closure root",
-        );
-    }
 }
 
 fn verify_remembered_dirty_ranges(valid_ptrs: &ValidPointerSet) {
@@ -7904,6 +7924,10 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::promise::scan_iter_result_root_mut);
     // Async-step thunk single-slot cache (build_async_step_thunks).
     gc_register_mutable_root_scanner(crate::promise::scan_async_step_thunk_cache_mut);
+    // Closure singleton caches. Captured-closure cache keys mirror closure
+    // capture heap words, so copied-minor must rewrite them after moving
+    // captured young values or future cache hits miss on stale addresses.
+    gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
     // perry/tui hook + state slot pools — they store raw NaN-boxed
     // value bits but the GC has no other way to know which slots hold
     // heap pointers (arrays/objects/strings stashed via setState /
@@ -8925,6 +8949,18 @@ mod tests {
         POINTER_TAG | (addr as u64 & POINTER_MASK)
     }
 
+    extern "C" fn test_no_capture_singleton_func(
+        _closure: *const crate::closure::ClosureHeader,
+    ) -> f64 {
+        0.0
+    }
+
+    extern "C" fn test_captured_singleton_func(
+        _closure: *const crate::closure::ClosureHeader,
+    ) -> f64 {
+        0.0
+    }
+
     unsafe fn init_test_closure(ptr: *mut u8) {
         let closure = ptr as *mut crate::closure::ClosureHeader;
         (*closure).func_ptr = std::ptr::null();
@@ -9037,6 +9073,103 @@ mod tests {
         assert_ne!(child_after, child);
         assert!(crate::arena::pointer_in_nursery(arr_after));
         assert!(crate::arena::pointer_in_nursery(child_after));
+    }
+
+    #[test]
+    fn test_copying_minor_rewrites_singleton_closure_caches() {
+        struct SingletonClosureCacheGuard;
+
+        impl Drop for SingletonClosureCacheGuard {
+            fn drop(&mut self) {
+                crate::closure::test_clear_singleton_closure_caches();
+            }
+        }
+
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _cache_guard = SingletonClosureCacheGuard;
+        crate::closure::test_clear_singleton_closure_caches();
+        gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
+
+        let no_capture_func = test_no_capture_singleton_func as *const u8;
+        let no_capture = crate::closure::js_closure_alloc_singleton(no_capture_func);
+        assert_eq!(
+            crate::closure::test_singleton_closure_cache_entry(no_capture_func),
+            Some(no_capture)
+        );
+
+        let captured_value = young_leaf();
+        let capture_bits = ptr_bits(captured_value);
+        js_shadow_slot_set(0, capture_bits);
+
+        let captured_func = test_captured_singleton_func as *const u8;
+        let captures = [capture_bits];
+        let captured = crate::closure::js_closure_alloc_with_captures_singleton(
+            captured_func,
+            1,
+            captures.as_ptr(),
+        );
+        assert_eq!(
+            crate::closure::js_closure_alloc_with_captures_singleton(
+                captured_func,
+                1,
+                captures.as_ptr(),
+            ),
+            captured,
+            "captured singleton cache should hit before GC"
+        );
+
+        let before_entries =
+            crate::closure::test_captured_singleton_closure_cache_entries(captured_func);
+        assert_eq!(before_entries.len(), 1);
+        assert_eq!(before_entries[0].0, vec![capture_bits]);
+        assert_eq!(before_entries[0].1, captured);
+
+        let capture_slot = unsafe {
+            (captured as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
+                as *mut u64
+        };
+        assert_eq!(unsafe { *capture_slot }, capture_bits);
+
+        js_shadow_slot_set(0, 0);
+        let _ = gc_collect_minor();
+
+        assert_eq!(
+            crate::closure::js_closure_alloc_singleton(no_capture_func),
+            no_capture,
+            "no-capture singleton should remain a cache hit across copied-minor"
+        );
+
+        let capture_after_bits = unsafe { *capture_slot };
+        let capture_after = (capture_after_bits & POINTER_MASK) as usize;
+        assert_ne!(
+            capture_after, captured_value,
+            "captured young value should move out of eden"
+        );
+        assert_eq!(
+            crate::arena::classify_heap_space(capture_after),
+            crate::arena::active_survivor_space()
+        );
+
+        let after_entries =
+            crate::closure::test_captured_singleton_closure_cache_entries(captured_func);
+        assert_eq!(after_entries.len(), 1);
+        assert_eq!(after_entries[0].1, captured);
+        assert_eq!(
+            after_entries[0].0,
+            vec![capture_after_bits],
+            "captured-cache key should be rewritten to the moved capture"
+        );
+
+        let rewritten_captures = [capture_after_bits];
+        assert_eq!(
+            crate::closure::js_closure_alloc_with_captures_singleton(
+                captured_func,
+                1,
+                rewritten_captures.as_ptr(),
+            ),
+            captured,
+            "future cache lookups should hit with the rewritten capture key"
+        );
     }
 
     #[test]
@@ -10363,6 +10496,16 @@ mod tests {
             fixture.nursery_user as *mut crate::closure::ClosureHeader,
             fixture.nursery_user as *mut crate::closure::ClosureHeader,
         );
+        crate::closure::test_clear_singleton_closure_caches();
+        crate::closure::test_seed_singleton_closure_cache(
+            test_no_capture_singleton_func as *const u8,
+            fixture.nursery_user as *mut crate::closure::ClosureHeader,
+        );
+        crate::closure::test_seed_captured_singleton_closure_cache(
+            test_captured_singleton_func as *const u8,
+            vec![fixture.nursery_bits],
+            fixture.nursery_user as *mut crate::closure::ClosureHeader,
+        );
         crate::tui::hooks::test_seed_hook_slot_roots(fixture.nursery_bits);
         crate::tui::state::test_reset_state_slots();
         let tui_state = crate::tui::state::js_perry_tui_state_alloc(fixture.nursery_value());
@@ -10385,6 +10528,7 @@ mod tests {
         crate::r#box::scan_box_roots_mut(&mut visitor);
         crate::promise::scan_iter_result_root_mut(&mut visitor);
         crate::promise::scan_async_step_thunk_cache_mut(&mut visitor);
+        crate::closure::scan_singleton_closure_roots_mut(&mut visitor);
         crate::tui::hooks::scan_hook_slot_roots_mut(&mut visitor);
         crate::tui::state::scan_state_slot_roots_mut(&mut visitor);
 
@@ -10473,6 +10617,22 @@ mod tests {
             (fixture.old_addr(), fixture.old_addr(), fixture.old_addr())
         );
         assert_eq!(
+            crate::closure::test_singleton_closure_cache_entry(
+                test_no_capture_singleton_func as *const u8
+            )
+            .map(|ptr| ptr as usize),
+            Some(fixture.old_addr())
+        );
+        assert_eq!(
+            crate::closure::test_captured_singleton_closure_cache_entries(
+                test_captured_singleton_func as *const u8
+            ),
+            vec![(
+                vec![fixture.old_bits],
+                fixture.old_user as *mut crate::closure::ClosureHeader
+            )]
+        );
+        assert_eq!(
             crate::tui::hooks::test_hook_slot_roots(),
             (fixture.old_bits, fixture.old_bits, fixture.old_bits)
         );
@@ -10490,6 +10650,7 @@ mod tests {
         crate::builtins::test_set_console_log_singleton(0);
         crate::async_hooks::reset_for_tests();
         crate::promise::js_iter_result_set(0.0, 0);
+        crate::closure::test_clear_singleton_closure_caches();
         crate::tui::state::test_reset_state_slots();
     }
 
