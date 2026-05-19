@@ -64,6 +64,21 @@ pub fn set_string(handle: i64, text_ptr: *const u8) {
 ///                 Button that don't respond to `setTextColor:` and
 ///                 would raise `unrecognized selector` → non-unwinding
 ///                 panic across the FFI boundary → process abort)
+///
+/// Issue #1107 — on iOS 26 devices a partial-alpha UIColor passed to
+/// `setTextColor:` causes UILabel to render zero glyphs (alpha == 1.0
+/// works; iOS 17 simulator works; iOS 26 device fails). The
+/// `AttributedText` widget's path (UIColor as the `NSColor`/
+/// `NSForegroundColorAttributeName` value inside an
+/// `NSAttributedString`'s attributes dict, applied via
+/// `setAttributedText:`) is the one path the reporter confirmed renders
+/// correctly with sub-1.0 alpha. So for the alpha < 1.0 case we mirror
+/// that path: read the label's current `text` + `font`, build an
+/// `NSAttributedString` with `NSFont` + `NSColor` attrs, and call
+/// `setAttributedText:`. `textColor` is still set as well so future
+/// `setText:` calls (which clobber the attributed buffer) still pick up
+/// at least the solid-color approximation rather than reverting to
+/// system default.
 pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     let Some(view) = super::get_widget(handle) else {
         return;
@@ -91,7 +106,76 @@ pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             alpha: a as objc2_core_foundation::CGFloat
         ];
         let _: () = msg_send![&*view, setTextColor: &*color];
+
+        // iOS 26 partial-alpha workaround (issue #1107).
+        // alpha == 1.0 is unaffected by the bug, keep the simple
+        // setTextColor: path so we don't disturb intrinsic-content sizing.
+        if a < 1.0 {
+            apply_label_color_via_attributed(&view, &color);
+        } else {
+            // Clear any prior attributedText we may have set so the plain
+            // textColor path takes effect again.
+            clear_label_attributed_text(&view);
+        }
     }
+}
+
+/// Issue #1107 workaround — mirror `AttributedText::append`'s code
+/// path so a partial-alpha NSColor actually paints glyphs on iOS 26.
+/// Pulls the current `text` + `font` off the label and re-applies them
+/// via `setAttributedText:` with `NSFont` + `NSColor` attrs.
+unsafe fn apply_label_color_via_attributed(view: &UIView, color: &objc2::runtime::AnyObject) {
+    use objc2::runtime::AnyObject;
+
+    let current_text: *const objc2_foundation::NSString = msg_send![view, text];
+    if current_text.is_null() {
+        return;
+    }
+    let length: u64 = msg_send![current_text, length];
+    if length == 0 {
+        return;
+    }
+
+    let dict_cls = AnyClass::get(c"NSMutableDictionary").unwrap();
+    let attrs: Retained<AnyObject> = msg_send![dict_cls, new];
+
+    // Always emit NSFont — without it, iOS 26's Liquid Glass text
+    // renderer appears to skip glyph emission for sub-1.0 alpha.
+    let font: *mut AnyObject = msg_send![view, font];
+    if !font.is_null() {
+        let font_key = NSString::from_str("NSFont");
+        let _: () = msg_send![&*attrs, setObject: font, forKey: &*font_key];
+    }
+
+    let color_key = NSString::from_str("NSColor");
+    let _: () = msg_send![&*attrs, setObject: color, forKey: &*color_key];
+
+    let attr_cls = AnyClass::get(c"NSAttributedString").unwrap();
+    let alloc: *mut AnyObject = msg_send![attr_cls, alloc];
+    let attr_str: *mut AnyObject = msg_send![
+        alloc,
+        initWithString: current_text,
+        attributes: &*attrs
+    ];
+    if !attr_str.is_null() {
+        let _: () = msg_send![view, setAttributedText: attr_str];
+    }
+}
+
+/// Counterpart to `apply_label_color_via_attributed` — for alpha == 1.0
+/// (or color cleared) we want plain `textColor` rendering to win again,
+/// so explicitly drop the attributedText we may have set earlier by
+/// rebuilding it from the current plain string with no attributes.
+unsafe fn clear_label_attributed_text(view: &UIView) {
+    use objc2::runtime::AnyObject;
+    let current_text: *const objc2_foundation::NSString = msg_send![view, text];
+    if current_text.is_null() {
+        return;
+    }
+    // Re-issuing setText: with the same string forces UILabel to
+    // discard any internal attributedText state. This is cheaper than
+    // building a no-op NSAttributedString.
+    let _: () = msg_send![view, setText: current_text as *const AnyObject];
 }
 
 /// Determine the correct target for font/text operations.
