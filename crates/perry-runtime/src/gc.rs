@@ -1286,6 +1286,9 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
 
 /// Register a root scanner function.
 /// Each scanner is called during the mark phase to discover roots.
+/// This legacy API exposes copied values only. When evacuation is
+/// enabled, every discovered target is treated as pinned because the GC
+/// has no mutable slot it can rewrite after forwarding.
 pub fn gc_register_root_scanner(scanner: fn(&mut dyn FnMut(f64))) {
     ROOT_SCANNERS.with(|scanners| {
         scanners.borrow_mut().push(scanner);
@@ -1308,7 +1311,9 @@ type PerryFfiRootScanner = extern "C" fn(mark: PerryFfiRootMarker, ctx: *mut c_v
 ///
 /// `perry-ffi` adapts its Rust-facing `fn(&mut dyn FnMut(f64))`
 /// convenience API to this callback shape so native wrapper archives
-/// can stay runtime-free.
+/// can stay runtime-free. Like the Rust legacy scanner API, this is
+/// copy-only storage from the GC's perspective; evacuation pins those
+/// roots instead of attempting to rewrite native-owned slots.
 #[no_mangle]
 pub extern "C" fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner) {
     FFI_ROOT_SCANNERS.with(|scanners| {
@@ -1857,6 +1862,11 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         let phase_start = trace_phase_start(&trace);
         rewrite_forwarded_references(&valid_ptrs);
         trace_phase_record(&mut trace, "reference_rewrite", phase_start);
+        if gc_verify_evacuation_enabled() {
+            let phase_start = trace_phase_start(&trace);
+            verify_evacuated_no_stale_forwarded_refs(&valid_ptrs);
+            trace_phase_record(&mut trace, "evacuation_verify", phase_start);
+        }
         if std::env::var_os("PERRY_GC_DIAG").is_some() {
             eprintln!(
                 "[gc-evac] evacuated={} cons_pinned={}",
@@ -1969,6 +1979,21 @@ pub fn gen_gc_evacuate_enabled() -> bool {
             Ok("1") | Ok("on") | Ok("true")
         )
     })
+}
+
+fn gc_force_evacuate_enabled() -> bool {
+    gen_gc_evacuate_enabled()
+        && matches!(
+            std::env::var("PERRY_GC_FORCE_EVACUATE").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+}
+
+fn gc_verify_evacuation_enabled() -> bool {
+    matches!(
+        std::env::var("PERRY_GC_VERIFY_EVACUATION").as_deref(),
+        Ok("1") | Ok("on") | Ok("true")
+    )
 }
 
 #[cfg(test)]
@@ -2873,9 +2898,19 @@ fn get_stack_bottom() -> usize {
 }
 
 enum RuntimeRootVisitMode<'a> {
-    Mark { valid_ptrs: &'a ValidPointerSet },
-    Rewrite { valid_ptrs: &'a ValidPointerSet },
-    Copy { mark: &'a mut dyn FnMut(f64) },
+    Mark {
+        valid_ptrs: &'a ValidPointerSet,
+    },
+    Rewrite {
+        valid_ptrs: &'a ValidPointerSet,
+    },
+    Verify {
+        valid_ptrs: &'a ValidPointerSet,
+        surface: &'static str,
+    },
+    Copy {
+        mark: &'a mut dyn FnMut(f64),
+    },
 }
 
 /// Mutable runtime-root visitor used by GC-owned scanner families.
@@ -2902,6 +2937,15 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
     }
 
+    fn for_verify(valid_ptrs: &'a ValidPointerSet, surface: &'static str) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            },
+        }
+    }
+
     pub fn for_copy(mark: &'a mut dyn FnMut(f64)) -> Self {
         Self {
             mode: RuntimeRootVisitMode::Copy { mark },
@@ -2917,6 +2961,15 @@ impl<'a> RuntimeRootVisitor<'a> {
             }
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => {
                 try_rewrite_nanboxed_value(bits, valid_ptrs)
+            }
+            RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            } => {
+                if let Some(new_bits) = try_rewrite_nanboxed_value(bits, valid_ptrs) {
+                    panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+                }
+                None
             }
             RuntimeRootVisitMode::Copy { mark } => {
                 (*mark)(f64::from_bits(bits));
@@ -2936,6 +2989,20 @@ impl<'a> RuntimeRootVisitor<'a> {
                 None
             }
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
+            RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            } => {
+                if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
+                    panic_stale_forwarded_reference(
+                        surface,
+                        0,
+                        copy_tag | (addr as u64 & POINTER_MASK),
+                        copy_tag | (new_addr as u64 & POINTER_MASK),
+                    );
+                }
+                None
+            }
             RuntimeRootVisitMode::Copy { mark } => {
                 (*mark)(f64::from_bits(copy_tag | (addr as u64 & POINTER_MASK)));
                 None
@@ -2950,6 +3017,15 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
         match &mut self.mode {
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
+            RuntimeRootVisitMode::Verify {
+                valid_ptrs,
+                surface,
+            } => {
+                if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
+                    panic_stale_forwarded_reference(surface, 0, addr as u64, new_addr as u64);
+                }
+                None
+            }
             RuntimeRootVisitMode::Mark { .. } | RuntimeRootVisitMode::Copy { .. } => None,
         }
     }
@@ -3444,13 +3520,15 @@ extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
     }
 }
 
-/// Gen-GC Phase C3: mark the remembered set as roots. Old-gen
-/// dirty pages may hold pointers to young-gen objects that would
-/// otherwise be missed by a minor GC. This is Perry's compact
-/// equivalent of MMTk's modbuf / ProcessModBuf: barriers log old
-/// pages, this phase scans those bounded regions, and the clear at
-/// collection end gives the log consumed semantics.
-fn mark_remembered_set_roots(valid_ptrs: &ValidPointerSet) -> RememberedSetTraceStats {
+/// Snapshot the remembered dirty ranges before the collection clears them.
+struct RememberedDirtySnapshot {
+    dirty_old_pages: crate::fast_hash::PtrHashSet<usize>,
+    external_dirty_entries: Vec<(usize, usize)>,
+    dirty_pages: crate::fast_hash::PtrHashSet<usize>,
+    fallback_headers: Vec<usize>,
+}
+
+fn remembered_dirty_snapshot() -> RememberedDirtySnapshot {
     let dirty_old_pages: crate::fast_hash::PtrHashSet<usize> =
         DIRTY_OLD_PAGES.with(|s| s.borrow().iter().copied().collect());
     let external_dirty_entries: Vec<(usize, usize)> = EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
@@ -3463,47 +3541,44 @@ fn mark_remembered_set_roots(valid_ptrs: &ValidPointerSet) -> RememberedSetTrace
     for (page, _) in &external_dirty_entries {
         dirty_pages.insert(*page);
     }
-    let fallback_snapshot: Vec<usize> =
-        REMEMBERED_SET.with(|s| s.borrow().iter().copied().collect());
+    let fallback_headers = REMEMBERED_SET.with(|s| s.borrow().iter().copied().collect());
+
+    RememberedDirtySnapshot {
+        dirty_old_pages,
+        external_dirty_entries,
+        dirty_pages,
+        fallback_headers,
+    }
+}
+
+/// Gen-GC Phase C3: mark the remembered set as roots. Old-gen
+/// dirty pages may hold pointers to young-gen objects that would
+/// otherwise be missed by a minor GC. This is Perry's compact
+/// equivalent of MMTk's modbuf / ProcessModBuf: barriers log old
+/// pages, this phase scans those bounded regions, and the clear at
+/// collection end gives the log consumed semantics.
+fn mark_remembered_set_roots(valid_ptrs: &ValidPointerSet) -> RememberedSetTraceStats {
+    let snapshot = remembered_dirty_snapshot();
     let mut stats = RememberedSetTraceStats {
-        entries_scanned: dirty_old_pages.len()
-            + external_dirty_entries.len()
-            + fallback_snapshot.len(),
-        dirty_pages_before: dirty_pages.len(),
-        dirty_pages_scanned: dirty_pages.len(),
+        entries_scanned: snapshot.dirty_old_pages.len()
+            + snapshot.external_dirty_entries.len()
+            + snapshot.fallback_headers.len(),
+        dirty_pages_before: snapshot.dirty_pages.len(),
+        dirty_pages_scanned: snapshot.dirty_pages.len(),
         ..RememberedSetTraceStats::default()
     };
 
-    if !dirty_old_pages.is_empty() || !external_dirty_entries.is_empty() {
-        let mut seen_headers = crate::fast_hash::new_ptr_hash_set();
-        if !dirty_old_pages.is_empty() {
-            crate::arena::old_arena_walk_objects_on_pages(&dirty_old_pages, |header_ptr| unsafe {
-                let header = header_ptr as *mut GcHeader;
-                if !seen_headers.insert(header as usize) {
-                    return;
-                }
-                scan_dirty_header_once(header, &dirty_pages, valid_ptrs, &mut stats);
-            });
+    let mut mark_slot = |slot: *mut u64, stats: &mut RememberedSetTraceStats| unsafe {
+        if try_mark_young_value_as_seed(*slot, valid_ptrs) {
+            stats.newly_marked += 1;
         }
-        for (_, header_addr) in external_dirty_entries {
-            if !seen_headers.insert(header_addr) {
-                continue;
-            }
-            unsafe {
-                scan_dirty_header_once(
-                    header_addr as *mut GcHeader,
-                    &dirty_pages,
-                    valid_ptrs,
-                    &mut stats,
-                );
-            }
-        }
-    }
+    };
+    scan_remembered_dirty_slot_ranges(&snapshot, valid_ptrs, &mut stats, &mut mark_slot);
 
     // Test-only fallback path. Production barriers no longer insert
     // object headers here, but keeping the scan lets tests compare the
     // old object-set behavior against the dirty-page path.
-    for header_addr in fallback_snapshot {
+    for header_addr in snapshot.fallback_headers {
         // Header sits at GcHeader; user pointer is +GC_HEADER_SIZE.
         let user_ptr = header_addr + GC_HEADER_SIZE;
         if !valid_ptrs.contains(&user_ptr) {
@@ -3519,11 +3594,57 @@ fn mark_remembered_set_roots(valid_ptrs: &ValidPointerSet) -> RememberedSetTrace
     stats
 }
 
+fn scan_remembered_dirty_slot_ranges(
+    snapshot: &RememberedDirtySnapshot,
+    valid_ptrs: &ValidPointerSet,
+    stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
+) {
+    if snapshot.dirty_old_pages.is_empty() && snapshot.external_dirty_entries.is_empty() {
+        return;
+    }
+
+    let mut seen_headers = crate::fast_hash::new_ptr_hash_set();
+    if !snapshot.dirty_old_pages.is_empty() {
+        crate::arena::old_arena_walk_objects_on_pages(
+            &snapshot.dirty_old_pages,
+            |header_ptr| unsafe {
+                let header = header_ptr as *mut GcHeader;
+                if !seen_headers.insert(header as usize) {
+                    return;
+                }
+                scan_dirty_header_once(
+                    header,
+                    &snapshot.dirty_pages,
+                    valid_ptrs,
+                    stats,
+                    visit_slot,
+                );
+            },
+        );
+    }
+    for &(_, header_addr) in &snapshot.external_dirty_entries {
+        if !seen_headers.insert(header_addr) {
+            continue;
+        }
+        unsafe {
+            scan_dirty_header_once(
+                header_addr as *mut GcHeader,
+                &snapshot.dirty_pages,
+                valid_ptrs,
+                stats,
+                visit_slot,
+            );
+        }
+    }
+}
+
 unsafe fn scan_dirty_header_once(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     let total_size = (*header).size as usize;
     if total_size == 0 {
@@ -3536,7 +3657,7 @@ unsafe fn scan_dirty_header_once(
     stats.old_objects_considered += 1;
     stats.valid_roots += 1;
     stats.dirty_objects_scanned += 1;
-    scan_dirty_object_slots(header, dirty_pages, valid_ptrs, stats);
+    scan_dirty_object_slots(header, dirty_pages, stats, visit_slot);
 }
 
 #[inline]
@@ -3548,72 +3669,55 @@ fn dirty_pages_contains_addr(
 }
 
 unsafe fn scan_dirty_slot(
-    slot: *const u64,
+    slot: *mut u64,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     if !dirty_pages_contains_addr(dirty_pages, slot as usize) {
         return;
     }
     stats.dirty_slots_scanned += 1;
-    if try_mark_young_value_as_seed(*slot, valid_ptrs) {
-        stats.newly_marked += 1;
-    }
+    visit_slot(slot, stats);
 }
 
 unsafe fn scan_dirty_raw_ptr_slot<T>(
     slot: *const *mut T,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
-    scan_dirty_raw_ptr_value_slot(
-        slot as usize,
-        *slot as usize,
-        dirty_pages,
-        valid_ptrs,
-        stats,
-    );
+    scan_dirty_raw_ptr_value_slot(slot as *mut u64, dirty_pages, stats, visit_slot);
 }
 
 unsafe fn scan_dirty_const_raw_ptr_slot<T>(
     slot: *const *const T,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
-    scan_dirty_raw_ptr_value_slot(
-        slot as usize,
-        *slot as usize,
-        dirty_pages,
-        valid_ptrs,
-        stats,
-    );
+    scan_dirty_raw_ptr_value_slot(slot as *mut u64, dirty_pages, stats, visit_slot);
 }
 
 fn scan_dirty_raw_ptr_value_slot(
-    slot_addr: usize,
-    ptr: usize,
+    slot: *mut u64,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
-    if !dirty_pages_contains_addr(dirty_pages, slot_addr) {
+    if !dirty_pages_contains_addr(dirty_pages, slot as usize) {
         return;
     }
     stats.dirty_slots_scanned += 1;
-    if try_mark_young_user_ptr_as_seed(ptr, valid_ptrs) {
-        stats.newly_marked += 1;
-    }
+    visit_slot(slot, stats);
 }
 
 unsafe fn scan_dirty_slot_range(
-    slots: *const u64,
+    slots: *mut u64,
     slot_count: usize,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     if slots.is_null() || slot_count == 0 || dirty_pages.is_empty() {
         return;
@@ -3665,9 +3769,7 @@ unsafe fn scan_dirty_slot_range(
         stats.dirty_slot_ranges_scanned += 1;
         for i in start..end {
             stats.dirty_slots_scanned += 1;
-            if try_mark_young_value_as_seed(*slots.add(i), valid_ptrs) {
-                stats.newly_marked += 1;
-            }
+            visit_slot(slots.add(i), stats);
         }
     }
 }
@@ -3675,18 +3777,18 @@ unsafe fn scan_dirty_slot_range(
 unsafe fn scan_dirty_object_slots(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
     match (*header).obj_type {
-        GC_TYPE_ARRAY => scan_dirty_array_slots(user_ptr, dirty_pages, valid_ptrs, stats),
-        GC_TYPE_OBJECT => scan_dirty_object_field_slots(user_ptr, dirty_pages, valid_ptrs, stats),
-        GC_TYPE_CLOSURE => scan_dirty_closure_slots(user_ptr, dirty_pages, valid_ptrs, stats),
-        GC_TYPE_PROMISE => scan_dirty_promise_slots(user_ptr, dirty_pages, valid_ptrs, stats),
-        GC_TYPE_ERROR => scan_dirty_error_slots(user_ptr, dirty_pages, valid_ptrs, stats),
-        GC_TYPE_MAP => scan_dirty_map_slots(user_ptr, dirty_pages, valid_ptrs, stats),
-        GC_TYPE_LAZY_ARRAY => scan_dirty_lazy_array_slots(user_ptr, dirty_pages, valid_ptrs, stats),
+        GC_TYPE_ARRAY => scan_dirty_array_slots(user_ptr, dirty_pages, stats, visit_slot),
+        GC_TYPE_OBJECT => scan_dirty_object_field_slots(user_ptr, dirty_pages, stats, visit_slot),
+        GC_TYPE_CLOSURE => scan_dirty_closure_slots(user_ptr, dirty_pages, stats, visit_slot),
+        GC_TYPE_PROMISE => scan_dirty_promise_slots(user_ptr, dirty_pages, stats, visit_slot),
+        GC_TYPE_ERROR => scan_dirty_error_slots(user_ptr, dirty_pages, stats, visit_slot),
+        GC_TYPE_MAP => scan_dirty_map_slots(user_ptr, dirty_pages, stats, visit_slot),
+        GC_TYPE_LAZY_ARRAY => scan_dirty_lazy_array_slots(user_ptr, dirty_pages, stats, visit_slot),
         GC_TYPE_STRING | GC_TYPE_BIGINT => {}
         _ => {}
     }
@@ -3695,8 +3797,8 @@ unsafe fn scan_dirty_object_slots(
 unsafe fn scan_dirty_array_slots(
     user_ptr: *mut u8,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
     if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
@@ -3709,94 +3811,94 @@ unsafe fn scan_dirty_array_slots(
         return;
     }
     let elements =
-        (user_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
-    scan_dirty_slot_range(elements, length as usize, dirty_pages, valid_ptrs, stats);
+        (user_ptr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+    scan_dirty_slot_range(elements, length as usize, dirty_pages, stats, visit_slot);
 }
 
 unsafe fn scan_dirty_object_field_slots(
     user_ptr: *mut u8,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     let obj = user_ptr as *const crate::object::ObjectHeader;
     let field_count = (*obj).field_count;
     if field_count > 1_000_000 {
         return;
     }
-    scan_dirty_raw_ptr_slot(&(*obj).keys_array, dirty_pages, valid_ptrs, stats);
-    let fields = (user_ptr as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
-        as *const u64;
-    scan_dirty_slot_range(fields, field_count as usize, dirty_pages, valid_ptrs, stats);
+    scan_dirty_raw_ptr_slot(&(*obj).keys_array, dirty_pages, stats, visit_slot);
+    let fields =
+        (user_ptr as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+    scan_dirty_slot_range(fields, field_count as usize, dirty_pages, stats, visit_slot);
 }
 
 unsafe fn scan_dirty_closure_slots(
     user_ptr: *mut u8,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     let closure = user_ptr as *const crate::closure::ClosureHeader;
     let capture_count = crate::closure::real_capture_count((*closure).capture_count);
-    let captures = (user_ptr as *const u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
-        as *const u64;
+    let captures =
+        (user_ptr as *mut u8).add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
     scan_dirty_slot_range(
         captures,
         capture_count as usize,
         dirty_pages,
-        valid_ptrs,
         stats,
+        visit_slot,
     );
 }
 
 unsafe fn scan_dirty_promise_slots(
     user_ptr: *mut u8,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     let promise = user_ptr as *const crate::promise::Promise;
     scan_dirty_slot(
-        &(*promise).value as *const f64 as *const u64,
+        &(*promise).value as *const f64 as *mut u64,
         dirty_pages,
-        valid_ptrs,
         stats,
+        visit_slot,
     );
     scan_dirty_slot(
-        &(*promise).reason as *const f64 as *const u64,
+        &(*promise).reason as *const f64 as *mut u64,
         dirty_pages,
-        valid_ptrs,
         stats,
+        visit_slot,
     );
-    scan_dirty_const_raw_ptr_slot(&(*promise).on_fulfilled, dirty_pages, valid_ptrs, stats);
-    scan_dirty_const_raw_ptr_slot(&(*promise).on_rejected, dirty_pages, valid_ptrs, stats);
-    scan_dirty_raw_ptr_slot(&(*promise).next, dirty_pages, valid_ptrs, stats);
+    scan_dirty_const_raw_ptr_slot(&(*promise).on_fulfilled, dirty_pages, stats, visit_slot);
+    scan_dirty_const_raw_ptr_slot(&(*promise).on_rejected, dirty_pages, stats, visit_slot);
+    scan_dirty_raw_ptr_slot(&(*promise).next, dirty_pages, stats, visit_slot);
 }
 
 unsafe fn scan_dirty_error_slots(
     user_ptr: *mut u8,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     let error = user_ptr as *const crate::error::ErrorHeader;
-    scan_dirty_raw_ptr_slot(&(*error).message, dirty_pages, valid_ptrs, stats);
-    scan_dirty_raw_ptr_slot(&(*error).name, dirty_pages, valid_ptrs, stats);
-    scan_dirty_raw_ptr_slot(&(*error).stack, dirty_pages, valid_ptrs, stats);
+    scan_dirty_raw_ptr_slot(&(*error).message, dirty_pages, stats, visit_slot);
+    scan_dirty_raw_ptr_slot(&(*error).name, dirty_pages, stats, visit_slot);
+    scan_dirty_raw_ptr_slot(&(*error).stack, dirty_pages, stats, visit_slot);
     scan_dirty_slot(
-        &(*error).cause as *const f64 as *const u64,
+        &(*error).cause as *const f64 as *mut u64,
         dirty_pages,
-        valid_ptrs,
         stats,
+        visit_slot,
     );
-    scan_dirty_raw_ptr_slot(&(*error).errors, dirty_pages, valid_ptrs, stats);
+    scan_dirty_raw_ptr_slot(&(*error).errors, dirty_pages, stats, visit_slot);
 }
 
 unsafe fn scan_dirty_map_slots(
     user_ptr: *mut u8,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     let map = user_ptr as *const crate::map::MapHeader;
     let size = (*map).size;
@@ -3805,28 +3907,34 @@ unsafe fn scan_dirty_map_slots(
         return;
     }
     let entries = (*map).entries as *const u64;
-    scan_dirty_slot_range(entries, size as usize * 2, dirty_pages, valid_ptrs, stats);
+    scan_dirty_slot_range(
+        entries as *mut u64,
+        size as usize * 2,
+        dirty_pages,
+        stats,
+        visit_slot,
+    );
 }
 
 unsafe fn scan_dirty_lazy_array_slots(
     user_ptr: *mut u8,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
 ) {
     let lazy = user_ptr as *const crate::json_tape::LazyArrayHeader;
     if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
         return;
     }
-    scan_dirty_const_raw_ptr_slot(&(*lazy).blob_str, dirty_pages, valid_ptrs, stats);
-    scan_dirty_raw_ptr_slot(&(*lazy).materialized, dirty_pages, valid_ptrs, stats);
+    scan_dirty_const_raw_ptr_slot(&(*lazy).blob_str, dirty_pages, stats, visit_slot);
+    scan_dirty_raw_ptr_slot(&(*lazy).materialized, dirty_pages, stats, visit_slot);
     scan_dirty_raw_ptr_slot(
         &(*lazy).materialized_elements,
         dirty_pages,
-        valid_ptrs,
         stats,
+        visit_slot,
     );
-    scan_dirty_raw_ptr_slot(&(*lazy).materialized_bitmap, dirty_pages, valid_ptrs, stats);
+    scan_dirty_raw_ptr_slot(&(*lazy).materialized_bitmap, dirty_pages, stats, visit_slot);
 }
 
 fn try_mark_young_value_as_seed(value_bits: u64, valid_ptrs: &ValidPointerSet) -> bool {
@@ -5024,7 +5132,8 @@ fn pin_currently_marked_as_conservative() -> ConservativePinTraceStats {
 /// Candidate filter: the object must be
 /// - in the nursery arena (not OLD, not LONGLIVED)
 /// - MARKED (alive this cycle)
-/// - TENURED (survived ≥2 minor GCs)
+/// - TENURED (survived ≥2 minor GCs), unless
+///   `PERRY_GC_FORCE_EVACUATE=1` is active for stress verification
 /// - NOT in CONS_PINNED (no conservative root reaches it)
 /// - NOT already FORWARDED (idempotent; duplicate evacuation is
 ///   safe-skipped)
@@ -5040,6 +5149,7 @@ fn pin_currently_marked_as_conservative() -> ConservativePinTraceStats {
 /// sweep keeps it alive.
 fn evacuate_tenured_nursery_objects() -> EvacuationTraceStats {
     let mut evacuated = EvacuationTraceStats::default();
+    let force_evacuation = gc_force_evacuate_enabled();
     crate::arena::arena_walk_objects(|header_ptr| {
         let header = header_ptr as *mut GcHeader;
         unsafe {
@@ -5055,11 +5165,13 @@ fn evacuate_tenured_nursery_objects() -> EvacuationTraceStats {
             if flags & GC_FLAG_FORWARDED != 0 {
                 return;
             }
-            // Must be alive AND tenured.
+            // Must be alive and normally tenured. The force mode is
+            // evacuation stress only and is active exclusively when the
+            // outer evacuation gate is enabled.
             if flags & GC_FLAG_MARKED == 0 {
                 return;
             }
-            if flags & GC_FLAG_TENURED == 0 {
+            if !force_evacuation && flags & GC_FLAG_TENURED == 0 {
                 return;
             }
             // Conservative-pinning blocks evacuation.
@@ -5169,6 +5281,18 @@ fn try_rewrite_raw_addr(ptr_addr: usize, valid_ptrs: &ValidPointerSet) -> Option
     }
 }
 
+#[cold]
+fn panic_stale_forwarded_reference(
+    surface: &str,
+    slot_addr: usize,
+    old_bits: u64,
+    new_bits: u64,
+) -> ! {
+    panic!(
+        "gc evacuation verification failed: stale forwarded pointer in {surface}: slot=0x{slot_addr:x} old=0x{old_bits:x} forwarded_to=0x{new_bits:x}"
+    );
+}
+
 /// In-place rewrite helper: read `*slot`, run it through
 /// `try_rewrite_value`, write back if a rewrite was produced.
 #[inline]
@@ -5176,6 +5300,14 @@ unsafe fn rewrite_slot(slot: *mut u64, valid_ptrs: &ValidPointerSet) {
     let bits = *slot;
     if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
         *slot = new_bits;
+    }
+}
+
+#[inline]
+unsafe fn verify_slot(slot: *const u64, valid_ptrs: &ValidPointerSet, surface: &str) {
+    let bits = *slot;
+    if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
+        panic_stale_forwarded_reference(surface, slot as usize, bits, new_bits);
     }
 }
 
@@ -5306,6 +5438,217 @@ unsafe fn rewrite_lazy_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointer
     }
 }
 
+unsafe fn rewrite_heap_object_fields(header: *mut GcHeader, valid_ptrs: &ValidPointerSet) {
+    let flags = (*header).gc_flags;
+    if flags & GC_FLAG_FORWARDED != 0 {
+        return;
+    }
+    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+    match (*header).obj_type {
+        GC_TYPE_ARRAY => rewrite_array_fields(user_ptr, valid_ptrs),
+        GC_TYPE_OBJECT => rewrite_object_fields(user_ptr, valid_ptrs),
+        GC_TYPE_CLOSURE => rewrite_closure_fields(user_ptr, valid_ptrs),
+        GC_TYPE_PROMISE => rewrite_promise_fields(user_ptr, valid_ptrs),
+        GC_TYPE_ERROR => rewrite_error_fields(user_ptr, valid_ptrs),
+        GC_TYPE_MAP => rewrite_map_fields(user_ptr, valid_ptrs),
+        GC_TYPE_LAZY_ARRAY => rewrite_lazy_array_fields(user_ptr, valid_ptrs),
+        GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+        _ => {}
+    }
+}
+
+unsafe fn verify_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+    let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
+    if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+        return;
+    }
+    let arr = user_ptr as *const crate::array::ArrayHeader;
+    let length = (*arr).length;
+    let capacity = (*arr).capacity;
+    if length > capacity || length > 16_000_000 {
+        return;
+    }
+    let elements =
+        (user_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+    for i in 0..length as usize {
+        verify_slot(elements.add(i), valid_ptrs, surface);
+    }
+}
+
+unsafe fn verify_object_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+    let obj = user_ptr as *const crate::object::ObjectHeader;
+    let field_count = (*obj).field_count;
+    if field_count > 1_000_000 {
+        return;
+    }
+    let fields = (user_ptr as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+        as *const u64;
+    for i in 0..field_count as usize {
+        verify_slot(fields.add(i), valid_ptrs, surface);
+    }
+    verify_slot(
+        &(*obj).keys_array as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+}
+
+unsafe fn verify_map_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+    let map = user_ptr as *const crate::map::MapHeader;
+    let size = (*map).size;
+    let capacity = (*map).capacity;
+    if size > capacity || size > 100_000 || (*map).entries.is_null() {
+        return;
+    }
+    let entries = (*map).entries as *const u64;
+    for i in 0..(size as usize) {
+        verify_slot(entries.add(i * 2), valid_ptrs, surface);
+        verify_slot(entries.add(i * 2 + 1), valid_ptrs, surface);
+    }
+}
+
+unsafe fn verify_closure_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+    let closure = user_ptr as *const crate::closure::ClosureHeader;
+    let capture_count = crate::closure::real_capture_count((*closure).capture_count);
+    let captures = (user_ptr as *const u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
+        as *const u64;
+    for i in 0..capture_count as usize {
+        verify_slot(captures.add(i), valid_ptrs, surface);
+    }
+}
+
+unsafe fn verify_promise_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+    let promise = user_ptr as *const crate::promise::Promise;
+    verify_slot(
+        &(*promise).value as *const f64 as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*promise).reason as *const f64 as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*promise).on_fulfilled as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*promise).on_rejected as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*promise).next as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+}
+
+unsafe fn verify_error_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+    let error = user_ptr as *const crate::error::ErrorHeader;
+    verify_slot(
+        &(*error).message as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*error).name as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*error).stack as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*error).cause as *const f64 as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*error).errors as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+}
+
+unsafe fn verify_lazy_array_fields(user_ptr: *mut u8, valid_ptrs: &ValidPointerSet, surface: &str) {
+    let lazy = user_ptr as *const crate::json_tape::LazyArrayHeader;
+    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
+        return;
+    }
+    verify_slot(
+        &(*lazy).blob_str as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*lazy).materialized as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*lazy).materialized_elements as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+    verify_slot(
+        &(*lazy).materialized_bitmap as *const _ as *const u64,
+        valid_ptrs,
+        surface,
+    );
+
+    let cached_length = (*lazy).cached_length as usize;
+    let cache = (*lazy).materialized_elements;
+    let bitmap = (*lazy).materialized_bitmap;
+    if !cache.is_null() && !bitmap.is_null() && cached_length > 0 {
+        let bitmap_words = cached_length.div_ceil(64);
+        for w in 0..bitmap_words {
+            let word = *bitmap.add(w);
+            if word == 0 {
+                continue;
+            }
+            let base_idx = w * 64;
+            for b in 0..64usize {
+                if word & (1u64 << b) == 0 {
+                    continue;
+                }
+                let i = base_idx + b;
+                if i >= cached_length {
+                    break;
+                }
+                verify_slot(cache.add(i) as *const u64, valid_ptrs, surface);
+            }
+        }
+    }
+}
+
+unsafe fn verify_heap_object_fields(
+    header: *mut GcHeader,
+    valid_ptrs: &ValidPointerSet,
+    surface: &'static str,
+) {
+    let flags = (*header).gc_flags;
+    if flags & GC_FLAG_FORWARDED != 0 {
+        return;
+    }
+    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+    match (*header).obj_type {
+        GC_TYPE_ARRAY => verify_array_fields(user_ptr, valid_ptrs, surface),
+        GC_TYPE_OBJECT => verify_object_fields(user_ptr, valid_ptrs, surface),
+        GC_TYPE_CLOSURE => verify_closure_fields(user_ptr, valid_ptrs, surface),
+        GC_TYPE_PROMISE => verify_promise_fields(user_ptr, valid_ptrs, surface),
+        GC_TYPE_ERROR => verify_error_fields(user_ptr, valid_ptrs, surface),
+        GC_TYPE_MAP => verify_map_fields(user_ptr, valid_ptrs, surface),
+        GC_TYPE_LAZY_ARRAY => verify_lazy_array_fields(user_ptr, valid_ptrs, surface),
+        GC_TYPE_STRING | GC_TYPE_BIGINT => {}
+        _ => {}
+    }
+}
+
 /// Walk every live (MARKED, non-FORWARDED) object on the heap and
 /// rewrite any forwarded references in its fields. Includes new
 /// evac copies (marked at evac time) and surviving non-evacuated
@@ -5324,18 +5667,7 @@ fn rewrite_heap_objects(valid_ptrs: &ValidPointerSet) {
             if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
                 return;
             }
-            let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-            match (*header).obj_type {
-                GC_TYPE_ARRAY => rewrite_array_fields(user_ptr, valid_ptrs),
-                GC_TYPE_OBJECT => rewrite_object_fields(user_ptr, valid_ptrs),
-                GC_TYPE_CLOSURE => rewrite_closure_fields(user_ptr, valid_ptrs),
-                GC_TYPE_PROMISE => rewrite_promise_fields(user_ptr, valid_ptrs),
-                GC_TYPE_ERROR => rewrite_error_fields(user_ptr, valid_ptrs),
-                GC_TYPE_MAP => rewrite_map_fields(user_ptr, valid_ptrs),
-                GC_TYPE_LAZY_ARRAY => rewrite_lazy_array_fields(user_ptr, valid_ptrs),
-                GC_TYPE_STRING | GC_TYPE_BIGINT => {} // leaf
-                _ => {}
-            }
+            rewrite_heap_object_fields(header, valid_ptrs);
         }
     };
     crate::arena::arena_walk_objects(|hp| rewrite_one(hp as *mut GcHeader));
@@ -5345,6 +5677,25 @@ fn rewrite_heap_objects(valid_ptrs: &ValidPointerSet) {
             rewrite_one(h);
         }
     });
+}
+
+fn rewrite_remembered_dirty_ranges(valid_ptrs: &ValidPointerSet) {
+    let snapshot = remembered_dirty_snapshot();
+    let mut stats = RememberedSetTraceStats::default();
+    let mut rewrite_dirty_slot = |slot: *mut u64, _stats: &mut RememberedSetTraceStats| unsafe {
+        rewrite_slot(slot, valid_ptrs);
+    };
+    scan_remembered_dirty_slot_ranges(&snapshot, valid_ptrs, &mut stats, &mut rewrite_dirty_slot);
+
+    for header_addr in snapshot.fallback_headers {
+        let user_ptr = header_addr + GC_HEADER_SIZE;
+        if !valid_ptrs.contains(&user_ptr) {
+            continue;
+        }
+        unsafe {
+            rewrite_heap_object_fields(header_addr as *mut GcHeader, valid_ptrs);
+        }
+    }
 }
 
 /// Walk every mutable root slot and rewrite forwarded pointers.
@@ -5370,6 +5721,129 @@ fn rewrite_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
     }
 }
 
+fn verify_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
+    visit_mutable_root_slots(|slot| unsafe {
+        let bits = slot.read();
+        if bits == 0 {
+            return;
+        }
+        if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
+            let surface = match slot.kind {
+                MutableRootSlotKind::ShadowStack => "shadow stack roots",
+                MutableRootSlotKind::GlobalRoot => "global roots",
+            };
+            panic_stale_forwarded_reference(surface, slot.ptr as usize, bits, new_bits);
+        }
+    });
+}
+
+fn verify_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
+    let scanners: Vec<MutableRootScanner> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let mut visitor = RuntimeRootVisitor::for_verify(valid_ptrs, "runtime mutable root scanner");
+    for scanner in scanners {
+        scanner(&mut visitor);
+    }
+}
+
+fn verify_copy_only_scanner_bits(bits: u64, valid_ptrs: &ValidPointerSet, surface: &'static str) {
+    if let Some(new_bits) = try_rewrite_nanboxed_value(bits, valid_ptrs) {
+        panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+    }
+}
+
+struct RegisteredRootVerifyContext {
+    valid_ptrs: *const ValidPointerSet,
+}
+
+extern "C" fn perry_ffi_verify_root(value: f64, ctx: *mut c_void) {
+    if ctx.is_null() {
+        return;
+    }
+    let ctx = unsafe { &*(ctx as *const RegisteredRootVerifyContext) };
+    if ctx.valid_ptrs.is_null() {
+        return;
+    }
+    let valid_ptrs = unsafe { &*ctx.valid_ptrs };
+    verify_copy_only_scanner_bits(value.to_bits(), valid_ptrs, "ffi copy-only root scanner");
+}
+
+fn verify_copy_only_registered_roots(valid_ptrs: &ValidPointerSet) {
+    let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for scanner in scanners {
+        scanner(&mut |value: f64| {
+            verify_copy_only_scanner_bits(value.to_bits(), valid_ptrs, "copy-only root scanner");
+        });
+    }
+
+    let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    let mut ctx = RegisteredRootVerifyContext {
+        valid_ptrs: valid_ptrs as *const ValidPointerSet,
+    };
+    let ctx = &mut ctx as *mut RegisteredRootVerifyContext as *mut c_void;
+    for scanner in ffi_scanners {
+        scanner(perry_ffi_verify_root, ctx);
+    }
+
+    for closure_ptr in crate::closure::snapshot_singleton_closures() {
+        verify_copy_only_scanner_bits(
+            POINTER_TAG | (closure_ptr as u64 & POINTER_MASK),
+            valid_ptrs,
+            "singleton closure root",
+        );
+    }
+}
+
+fn verify_remembered_dirty_ranges(valid_ptrs: &ValidPointerSet) {
+    let snapshot = remembered_dirty_snapshot();
+    let mut stats = RememberedSetTraceStats::default();
+    let mut verify_dirty_slot = |slot: *mut u64, _stats: &mut RememberedSetTraceStats| unsafe {
+        verify_slot(slot as *const u64, valid_ptrs, "remembered dirty ranges");
+    };
+    scan_remembered_dirty_slot_ranges(&snapshot, valid_ptrs, &mut stats, &mut verify_dirty_slot);
+
+    for header_addr in snapshot.fallback_headers {
+        let user_ptr = header_addr + GC_HEADER_SIZE;
+        if !valid_ptrs.contains(&user_ptr) {
+            continue;
+        }
+        unsafe {
+            verify_heap_object_fields(
+                header_addr as *mut GcHeader,
+                valid_ptrs,
+                "remembered fallback headers",
+            );
+        }
+    }
+}
+
+fn verify_heap_objects(valid_ptrs: &ValidPointerSet) {
+    let verify_one = |header: *mut GcHeader| unsafe {
+        let flags = (*header).gc_flags;
+        if flags & GC_FLAG_FORWARDED != 0 {
+            return;
+        }
+        if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+            return;
+        }
+        verify_heap_object_fields(header, valid_ptrs, "heap fields");
+    };
+    crate::arena::arena_walk_objects(|hp| verify_one(hp as *mut GcHeader));
+    MALLOC_STATE.with(|s| {
+        let s = s.borrow();
+        for &h in s.objects.iter() {
+            verify_one(h);
+        }
+    });
+}
+
+fn verify_evacuated_no_stale_forwarded_refs(valid_ptrs: &ValidPointerSet) {
+    verify_mutable_root_slots(valid_ptrs);
+    verify_mutable_registered_roots(valid_ptrs);
+    verify_copy_only_registered_roots(valid_ptrs);
+    verify_remembered_dirty_ranges(valid_ptrs);
+    verify_heap_objects(valid_ptrs);
+}
+
 /// Top-level Phase C4b-γ-2 entry: rewrite every reference site we
 /// own. Skipped: conservatively-discovered C-stack words (we can't
 /// safely overwrite arbitrary stack memory; pinning of conservative-
@@ -5379,6 +5853,7 @@ fn rewrite_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
 fn rewrite_forwarded_references(valid_ptrs: &ValidPointerSet) {
     rewrite_mutable_root_slots(valid_ptrs);
     rewrite_mutable_registered_roots(valid_ptrs);
+    rewrite_remembered_dirty_ranges(valid_ptrs);
     rewrite_heap_objects(valid_ptrs);
 }
 
@@ -6105,6 +6580,24 @@ mod tests {
             reset_shadow_stack();
             reset_global_roots();
         }
+    }
+
+    fn assert_panics_with(expected: &str, f: impl FnOnce()) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        let Err(payload) = result else {
+            panic!("expected panic containing {expected:?}");
+        };
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "<non-string panic>"
+        };
+        assert!(
+            message.contains(expected),
+            "panic message {message:?} did not contain {expected:?}"
+        );
     }
 
     #[test]
@@ -6897,6 +7390,126 @@ mod tests {
     }
 
     #[test]
+    fn test_rewrite_remembered_dirty_range_updates_unmarked_old_parent_slot() {
+        reset_remembered_set();
+        clear_marks();
+        let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+        let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+        unsafe {
+            *fields = POINTER_TAG | child as u64;
+        }
+        js_write_barrier_slot(
+            POINTER_TAG | old_obj as u64,
+            fields as u64,
+            POINTER_TAG | child as u64,
+        );
+        let valid_ptrs = build_valid_pointer_set();
+        let new_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+        unsafe {
+            set_forwarding_address(
+                header_from_user_ptr(child as *const u8),
+                new_child as *mut u8,
+            );
+            let old_header = header_from_user_ptr(old_obj as *const u8);
+            assert_eq!(
+                (*old_header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "test must prove dirty rewrite does not depend on marked parent walk"
+            );
+        }
+
+        rewrite_remembered_dirty_ranges(&valid_ptrs);
+
+        unsafe {
+            assert_eq!(
+                *fields,
+                POINTER_TAG | new_child as u64,
+                "dirty old parent slot should be rewritten even when parent is unmarked"
+            );
+        }
+        remembered_set_clear();
+    }
+
+    #[test]
+    fn test_rewrite_remembered_dirty_range_updates_map_external_entry_span() {
+        reset_remembered_set();
+        clear_marks();
+        let dirty_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+        let clean_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+        let (map, entries, layout) = unsafe { alloc_old_test_map(2048) };
+        unsafe {
+            (*map).size = 2048;
+        }
+        let (dirty_idx, clean_idx) = unsafe { field_indices_on_distinct_pages(entries, 4096) };
+        let dirty_slot = unsafe { entries.add(dirty_idx) };
+        unsafe {
+            *dirty_slot = POINTER_TAG | dirty_child as u64;
+            *entries.add(clean_idx) = POINTER_TAG | clean_child as u64;
+        }
+        write_barrier_slot_inner(
+            POINTER_TAG | map as u64,
+            dirty_slot as usize,
+            POINTER_TAG | dirty_child as u64,
+            true,
+        );
+        let valid_ptrs = build_valid_pointer_set();
+        let new_dirty_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+        let new_clean_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+        unsafe {
+            set_forwarding_address(
+                header_from_user_ptr(dirty_child as *const u8),
+                new_dirty_child as *mut u8,
+            );
+            set_forwarding_address(
+                header_from_user_ptr(clean_child as *const u8),
+                new_clean_child as *mut u8,
+            );
+        }
+
+        rewrite_remembered_dirty_ranges(&valid_ptrs);
+
+        unsafe {
+            assert_eq!(*dirty_slot, POINTER_TAG | new_dirty_child as u64);
+            assert_eq!(
+                *entries.add(clean_idx),
+                POINTER_TAG | clean_child as u64,
+                "external dirty rewrite should stay bounded to the logged entry page"
+            );
+            retire_old_test_map(map, entries, layout);
+        }
+        remembered_set_clear();
+    }
+
+    #[test]
+    fn test_rewrite_remembered_fallback_header_updates_fields() {
+        reset_remembered_set();
+        clear_marks();
+        let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+        let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+        unsafe {
+            *fields = POINTER_TAG | child as u64;
+        }
+        REMEMBERED_SET.with(|s| {
+            s.borrow_mut().insert(old_obj as usize - GC_HEADER_SIZE);
+        });
+        let valid_ptrs = build_valid_pointer_set();
+        let new_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+        unsafe {
+            set_forwarding_address(
+                header_from_user_ptr(child as *const u8),
+                new_child as *mut u8,
+            );
+        }
+
+        rewrite_remembered_dirty_ranges(&valid_ptrs);
+
+        unsafe {
+            assert_eq!(*fields, POINTER_TAG | new_child as u64);
+        }
+        remembered_set_clear();
+    }
+
+    #[test]
     fn test_object_hashset_fallback_still_scans() {
         reset_remembered_set();
         clear_marks();
@@ -7235,6 +7848,111 @@ mod tests {
             POINTER_TAG | (old_user as u64 & POINTER_MASK)
         );
         crate::promise::js_iter_result_set(0.0, 0);
+    }
+
+    #[test]
+    fn test_evacuation_verify_detects_stale_forwarded_root_slot() {
+        let _guard = ShadowAndGlobalRootResetGuard;
+        reset_shadow_stack();
+        reset_global_roots();
+        let fixture = ForwardedRootFixture::new();
+        let shadow = js_shadow_frame_push(1);
+        js_shadow_slot_set(0, fixture.nursery_bits);
+
+        assert_panics_with("shadow stack roots", || {
+            verify_mutable_root_slots(&fixture.valid_ptrs);
+        });
+
+        js_shadow_frame_pop(shadow);
+    }
+
+    #[test]
+    fn test_evacuation_verify_detects_stale_forwarded_runtime_scanner_slot() {
+        let fixture = ForwardedRootFixture::new();
+        crate::promise::test_seed_promise_scanner_roots(
+            fixture.nursery_user as *mut crate::promise::Promise,
+            fixture.nursery_value(),
+            fixture.nursery_value(),
+            fixture.nursery_user as *const crate::closure::ClosureHeader,
+            fixture.nursery_user as *mut crate::promise::Promise,
+        );
+
+        assert_panics_with("runtime mutable root scanner", || {
+            let mut visitor =
+                RuntimeRootVisitor::for_verify(&fixture.valid_ptrs, "runtime mutable root scanner");
+            promise_mutable_root_scanner(&mut visitor);
+        });
+
+        crate::promise::test_clear_promise_scanner_roots();
+    }
+
+    #[test]
+    fn test_evacuation_verify_detects_stale_forwarded_dirty_range_slot() {
+        reset_remembered_set();
+        clear_marks();
+        let child = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+        let child_bits = POINTER_TAG | (child as u64 & POINTER_MASK);
+        unsafe {
+            *fields = child_bits;
+        }
+        js_write_barrier_slot(POINTER_TAG | old_obj as u64, fields as u64, child_bits);
+        let valid_ptrs = build_valid_pointer_set();
+        let old_child = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        unsafe {
+            set_forwarding_address(header_from_user_ptr(child), old_child);
+        }
+
+        assert_panics_with("remembered dirty ranges", || {
+            verify_remembered_dirty_ranges(&valid_ptrs);
+        });
+
+        remembered_set_clear();
+    }
+
+    #[test]
+    fn test_evacuation_verify_detects_stale_forwarded_heap_field() {
+        clear_marks();
+        let fixture = ForwardedRootFixture::new();
+        let (old_obj, fields) = unsafe { alloc_old_test_object(1) };
+        unsafe {
+            *fields = fixture.nursery_bits;
+            let header = header_from_user_ptr(old_obj as *const u8);
+            (*header).gc_flags |= GC_FLAG_MARKED;
+            assert_panics_with("heap fields", || {
+                verify_heap_object_fields(header, &fixture.valid_ptrs, "heap fields");
+            });
+            (*header).gc_flags &= !GC_FLAG_MARKED;
+        }
+    }
+
+    #[test]
+    fn test_evacuation_verify_copy_only_pinned_root_allows_non_forwarded_target() {
+        let user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let valid_ptrs = build_valid_pointer_set();
+        unsafe {
+            (*header_from_user_ptr(user)).gc_flags |= GC_FLAG_PINNED;
+        }
+        verify_copy_only_scanner_bits(
+            POINTER_TAG | (user as u64 & POINTER_MASK),
+            &valid_ptrs,
+            "copy-only root scanner",
+        );
+        unsafe {
+            (*header_from_user_ptr(user)).gc_flags &= !GC_FLAG_PINNED;
+        }
+    }
+
+    #[test]
+    fn test_evacuation_verify_copy_only_root_rejects_forwarded_target() {
+        let fixture = ForwardedRootFixture::new();
+        assert_panics_with("copy-only root scanner", || {
+            verify_copy_only_scanner_bits(
+                fixture.nursery_bits,
+                &fixture.valid_ptrs,
+                "copy-only root scanner",
+            );
+        });
     }
 
     struct ForwardedRootFixture {

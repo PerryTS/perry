@@ -114,6 +114,8 @@ Idle nursery blocks observed empty for 2 GC cycles are `dealloc`'d back to the O
 |---|---|
 | `PERRY_GEN_GC=0` / `off` / `false` | Disable generational mode; fall back to full mark-sweep (intended for bisection only). |
 | `PERRY_GEN_GC_EVACUATE=1` | Enable the copying evacuation pass for tenured objects. |
+| `PERRY_GC_FORCE_EVACUATE=1` | With evacuation enabled, stress-copy every marked non-pinned nursery object instead of only tenured survivors. |
+| `PERRY_GC_VERIFY_EVACUATION=1` | With evacuation enabled, panic if any mutable live slot still points at a forwarded nursery object after rewrite. |
 | `PERRY_WRITE_BARRIERS=1` | Tell codegen to emit `js_write_barrier` calls on pointer stores. |
 | `PERRY_GC_DIAG=1` | Print per-cycle diagnostics (live bytes, freed bytes, time, pin count). |
 
