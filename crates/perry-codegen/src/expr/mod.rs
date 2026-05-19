@@ -46,23 +46,20 @@ mod url_helpers;
 mod v8_interop;
 mod write_barrier;
 
+pub(crate) use array_literal::lower_array_literal;
 #[allow(unused_imports)] // ChannelReduction kept reachable for surface stability
 pub(crate) use channel::{
     extract_array_of_object_shape, lower_channel_reduction, try_match_channel_reduction,
     variant_name, ChannelReduction,
 };
-pub(crate) use i32_fast_path::{
-    can_lower_expr_as_i32, is_known_finite, lower_expr_as_i32, try_flat_const_2d_int,
-    try_lower_flat_const_index_get,
-};
-pub(crate) use write_barrier::{
-    emit_write_barrier, emit_write_barrier_slot_on_block, lower_stream_super_init,
-};
-pub(crate) use array_literal::lower_array_literal;
 pub(crate) use helpers::{
     buffer_alias_metadata_suffix, is_global_this_builtin_function_name,
     is_global_this_builtin_name, lower_js_args_array, proxy_build_args_array, unbox_str_handle,
     unbox_to_i64,
+};
+pub(crate) use i32_fast_path::{
+    can_lower_expr_as_i32, is_known_finite, lower_expr_as_i32, try_flat_const_2d_int,
+    try_lower_flat_const_index_get,
 };
 pub(crate) use index::lower_index_set_fast;
 pub(crate) use nanbox_inline::{
@@ -74,6 +71,9 @@ pub(crate) use strings::emit_string_literal_global;
 pub(crate) use url_helpers::lower_url_string_getter;
 pub(crate) use v8_interop::{
     emit_v8_export_call, emit_v8_member_method_call, import_origin_suffix, try_static_class_name,
+};
+pub(crate) use write_barrier::{
+    emit_write_barrier, emit_write_barrier_slot_on_block, lower_stream_super_init,
 };
 
 /// Per-function codegen context. Held briefly during lowering, never stored.
