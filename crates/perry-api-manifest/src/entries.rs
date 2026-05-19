@@ -264,6 +264,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fastify", "setErrorHandler", true, None),
     method("fastify", "register", true, None),
     method("fastify", "listen", true, None),
+    method("fastify", "close", true, None),
     method("fastify", "method", true, None),
     method("fastify", "url", true, None),
     // Manifest-consistency catch-up (release-sweep gate).
