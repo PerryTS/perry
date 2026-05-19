@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    OnceLock,
+    Mutex, MutexGuard, OnceLock,
 };
 use std::time::{Duration, Instant};
 
@@ -594,6 +594,32 @@ impl GcTriggerKind {
 }
 
 #[derive(Clone, Copy)]
+enum DeferredGcRequest {
+    None,
+    CheckTrigger,
+    DirectMinor,
+    Collect(GcTriggerKind),
+}
+
+impl DeferredGcRequest {
+    #[inline]
+    fn merge(self, next: DeferredGcRequest) -> DeferredGcRequest {
+        use DeferredGcRequest::*;
+        match (self, next) {
+            (None, request) => request,
+            (request, None) => request,
+            (Collect(GcTriggerKind::Manual), _) | (_, Collect(GcTriggerKind::Manual)) => {
+                Collect(GcTriggerKind::Manual)
+            }
+            (Collect(kind), _) => Collect(kind),
+            (_, Collect(kind)) => Collect(kind),
+            (DirectMinor, _) | (_, DirectMinor) => DirectMinor,
+            (CheckTrigger, CheckTrigger) => CheckTrigger,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct GcStepSnapshot {
     arena_step_bytes: usize,
     next_arena_trigger_bytes: usize,
@@ -627,6 +653,120 @@ impl GcTriggerSnapshot {
         Self {
             kind,
             steps_before: gc_trace_enabled().then(GcStepSnapshot::current),
+        }
+    }
+}
+
+thread_local! {
+    static GC_ROOT_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static GC_DEFERRED_REQUEST: Cell<DeferredGcRequest> =
+        const { Cell::new(DeferredGcRequest::None) };
+}
+
+/// Guard returned by `lock_gc_root_registry`.
+///
+/// The mutex is released before any deferred GC request is flushed. That
+/// drop order is what lets scanner-owned registries use ordinary blocking
+/// locks in their root scanners: a GC request made while the same mutex is
+/// held records pending work, returns immediately, and the final guard drop
+/// runs the collection only after the scanner can reacquire the mutex.
+pub(crate) struct GcRootRegistryGuard<'a, T> {
+    guard: Option<MutexGuard<'a, T>>,
+}
+
+impl<T> std::ops::Deref for GcRootRegistryGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.guard
+            .as_deref()
+            .expect("GC root registry guard missing")
+    }
+}
+
+impl<T> std::ops::DerefMut for GcRootRegistryGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.guard
+            .as_deref_mut()
+            .expect("GC root registry guard missing")
+    }
+}
+
+impl<T> Drop for GcRootRegistryGuard<'_, T> {
+    fn drop(&mut self) {
+        drop(self.guard.take());
+        exit_gc_root_lock();
+    }
+}
+
+pub(crate) fn lock_gc_root_registry<T>(mutex: &Mutex<T>) -> GcRootRegistryGuard<'_, T> {
+    let guard = mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    enter_gc_root_lock();
+    GcRootRegistryGuard { guard: Some(guard) }
+}
+
+#[inline]
+fn enter_gc_root_lock() {
+    GC_ROOT_LOCK_DEPTH.with(|depth| depth.set(depth.get() + 1));
+}
+
+fn exit_gc_root_lock() {
+    let should_flush = GC_ROOT_LOCK_DEPTH.with(|depth| {
+        let current = depth.get();
+        debug_assert!(current > 0, "GC root lock depth underflow");
+        if current == 0 {
+            return false;
+        }
+        depth.set(current - 1);
+        current == 1
+    });
+    if should_flush {
+        flush_deferred_gc_request();
+    }
+}
+
+#[inline]
+fn defer_gc_request(request: DeferredGcRequest) -> bool {
+    let locked = GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0);
+    if locked {
+        GC_DEFERRED_REQUEST.with(|pending| {
+            pending.set(pending.get().merge(request));
+        });
+    }
+    locked
+}
+
+fn take_deferred_gc_request() -> DeferredGcRequest {
+    GC_DEFERRED_REQUEST.with(|pending| {
+        let request = pending.get();
+        pending.set(DeferredGcRequest::None);
+        request
+    })
+}
+
+fn flush_deferred_gc_request() {
+    if std::thread::panicking() {
+        let _ = take_deferred_gc_request();
+        return;
+    }
+    match take_deferred_gc_request() {
+        DeferredGcRequest::None => {}
+        DeferredGcRequest::CheckTrigger => gc_check_trigger(),
+        DeferredGcRequest::DirectMinor => {
+            gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
+                .emit_after_current();
+        }
+        DeferredGcRequest::Collect(GcTriggerKind::Manual) => {
+            if manual_gc_blocked_by_unsafe_zone() {
+                return;
+            }
+            gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
+                .emit_after_current();
+        }
+        DeferredGcRequest::Collect(kind) => {
+            gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(kind)).emit_after_current();
         }
     }
 }
@@ -1833,6 +1973,9 @@ pub fn gc_check_trigger() {
     if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0 {
         return;
     }
+    if defer_gc_request(DeferredGcRequest::CheckTrigger) {
+        return;
+    }
     use crate::arena::arena_total_bytes;
     let total = arena_total_bytes();
     let next_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
@@ -2041,20 +2184,34 @@ static GC_UNSAFE_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 /// worker threads are active (see GC_UNSAFE_ZONES).
 #[no_mangle]
 pub extern "C" fn js_gc_collect() {
-    if GC_UNSAFE_ZONES.load(std::sync::atomic::Ordering::Acquire) > 0 {
-        // One-shot warning — user likely has `setInterval(() => gc(), N)`
-        // in a server; we don't want to print every 30s.
-        if !GC_UNSAFE_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            eprintln!(
-                "perry: gc() skipped — a tokio-based server (WebSocket/HTTP) is active \
-                 and may hold JSValue refs on worker threads that the main-thread GC \
-                 can't see. Manual gc() is a no-op for the rest of this process."
-            );
-        }
+    if manual_gc_blocked_by_unsafe_zone() {
+        return;
+    }
+    if defer_gc_request(DeferredGcRequest::Collect(GcTriggerKind::Manual)) {
         return;
     }
     gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
         .emit_after_current();
+}
+
+fn manual_gc_blocked_by_unsafe_zone() -> bool {
+    if GC_UNSAFE_ZONES.load(std::sync::atomic::Ordering::Acquire) <= 0 {
+        return false;
+    }
+    unsafe_zone_manual_gc_warning();
+    true
+}
+
+fn unsafe_zone_manual_gc_warning() {
+    if !GC_UNSAFE_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        // One-shot warning — user likely has `setInterval(() => gc(), N)`
+        // in a server; we don't want to print every 30s.
+        eprintln!(
+            "perry: gc() skipped — a tokio-based server (WebSocket/HTTP) is active \
+             and may hold JSValue refs on worker threads that the main-thread GC \
+             can't see. Manual gc() is a no-op for the rest of this process."
+        );
+    }
 }
 
 /// Increment GC_UNSAFE_ZONES. Called by stdlib when spawning tokio tasks
@@ -2109,6 +2266,9 @@ pub extern "C" fn gc_check_trigger_export() {
 /// `=false`, or `=off` to route collection through the full mark-sweep
 /// path for GC bisection.
 pub fn gc_collect_minor() -> u64 {
+    if defer_gc_request(DeferredGcRequest::DirectMinor) {
+        return 0;
+    }
     gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
         .emit_after_current()
 }
@@ -2430,6 +2590,9 @@ fn gc_verify_evacuation_enabled() -> bool {
 
 #[cfg(test)]
 fn gc_collect_inner() -> u64 {
+    if defer_gc_request(DeferredGcRequest::Collect(GcTriggerKind::Direct)) {
+        return 0;
+    }
     gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
         .emit_after_current()
 }
@@ -8676,6 +8839,384 @@ mod tests {
         assert!(
             message.contains(expected),
             "panic message {message:?} did not contain {expected:?}"
+        );
+    }
+
+    thread_local! {
+        static LOCK_SAFE_RUNTIME_SCANNERS_REGISTERED: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+    }
+
+    static LOCK_SAFE_RUNTIME_SCANNER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_safe_runtime_scanner_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        LOCK_SAFE_RUNTIME_SCANNER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn ensure_lock_safe_runtime_scanners_registered() {
+        LOCK_SAFE_RUNTIME_SCANNERS_REGISTERED.with(|registered| {
+            if registered.get() {
+                return;
+            }
+            gc_register_mutable_root_scanner(crate::tui::hooks::scan_hook_slot_roots_mut);
+            gc_register_mutable_root_scanner(crate::tui::state::scan_state_slot_roots_mut);
+            #[cfg(feature = "ohos-napi")]
+            {
+                gc_register_mutable_root_scanner(
+                    crate::arkts_callbacks::arkts_callbacks_root_scanner_mut,
+                );
+                gc_register_mutable_root_scanner(
+                    crate::media_playback::media_callbacks_root_scanner_mut,
+                );
+            }
+            registered.set(true);
+        });
+    }
+
+    struct ActiveShadowFrame(u64);
+
+    impl ActiveShadowFrame {
+        fn push_empty() -> Self {
+            reset_shadow_stack();
+            Self(js_shadow_frame_push(0))
+        }
+    }
+
+    impl Drop for ActiveShadowFrame {
+        fn drop(&mut self) {
+            js_shadow_frame_pop(self.0);
+        }
+    }
+
+    fn lock_safe_runtime_scanner_closure() -> (*mut u8, u64, f64) {
+        let ptr = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0)
+            as *mut u8;
+        let bits = POINTER_TAG | (ptr as u64 & POINTER_MASK);
+        (ptr, bits, f64::from_bits(bits))
+    }
+
+    fn malloc_user_ptr_tracked(ptr: *mut u8) -> bool {
+        let header = unsafe { header_from_user_ptr(ptr) };
+        MALLOC_STATE.with(|s| s.borrow().objects.iter().any(|&tracked| tracked == header))
+    }
+
+    fn gc_collection_count() -> u64 {
+        GC_STATS.with(|s| s.borrow().collection_count)
+    }
+
+    struct GcUnsafeZoneResetGuard;
+
+    impl GcUnsafeZoneResetGuard {
+        fn clear() -> Self {
+            GC_UNSAFE_ZONES.store(0, std::sync::atomic::Ordering::Release);
+            GC_UNSAFE_WARNED.store(false, std::sync::atomic::Ordering::Release);
+            Self
+        }
+
+        fn enter() -> Self {
+            let guard = Self::clear();
+            GC_UNSAFE_ZONES.store(1, std::sync::atomic::Ordering::Release);
+            guard
+        }
+    }
+
+    impl Drop for GcUnsafeZoneResetGuard {
+        fn drop(&mut self) {
+            GC_UNSAFE_ZONES.store(0, std::sync::atomic::Ordering::Release);
+            GC_UNSAFE_WARNED.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn lock_safe_runtime_scanners_tui_state_defers_gc_check_trigger() {
+        let _test_lock = lock_safe_runtime_scanner_test_guard();
+        let _reset = ShadowAndGlobalRootResetGuard;
+        ensure_lock_safe_runtime_scanners_registered();
+        crate::tui::state::test_reset_state_slots();
+
+        let (ptr, bits, value) = lock_safe_runtime_scanner_closure();
+        let handle = crate::tui::state::js_perry_tui_state_alloc(value);
+        GC_NEXT_MALLOC_TRIGGER.with(|trigger| {
+            trigger.set(MALLOC_STATE.with(|s| s.borrow().objects.len()));
+        });
+
+        let before = gc_collection_count();
+        let _shadow = ActiveShadowFrame::push_empty();
+        crate::tui::state::test_with_state_slots_locked(|| {
+            gc_check_trigger();
+            assert_eq!(
+                gc_collection_count(),
+                before,
+                "gc_check_trigger should defer while a state root lock is held"
+            );
+        });
+
+        assert!(
+            gc_collection_count() > before,
+            "deferred trigger check should run after the state root lock is released"
+        );
+        assert!(
+            malloc_user_ptr_tracked(ptr),
+            "state slot root should survive the deferred collection"
+        );
+        assert_eq!(
+            crate::tui::state::js_perry_tui_state_get(handle).to_bits(),
+            bits
+        );
+        crate::tui::state::test_reset_state_slots();
+    }
+
+    #[test]
+    fn lock_safe_runtime_scanners_tui_hooks_defers_direct_minor_gc() {
+        let _test_lock = lock_safe_runtime_scanner_test_guard();
+        let _reset = ShadowAndGlobalRootResetGuard;
+        ensure_lock_safe_runtime_scanners_registered();
+
+        let (ptr, bits, _value) = lock_safe_runtime_scanner_closure();
+        crate::tui::hooks::test_seed_hook_slot_roots(bits);
+
+        let before = gc_collection_count();
+        let _shadow = ActiveShadowFrame::push_empty();
+        crate::tui::hooks::test_with_hook_slots_locked(|| {
+            let freed = gc_collect_minor();
+            assert_eq!(freed, 0);
+            assert_eq!(
+                gc_collection_count(),
+                before,
+                "direct minor GC should defer while a hook root lock is held"
+            );
+        });
+
+        assert!(
+            gc_collection_count() > before,
+            "deferred direct minor GC should run after the hook root lock is released"
+        );
+        assert!(
+            malloc_user_ptr_tracked(ptr),
+            "hook slot root should survive the deferred collection"
+        );
+        assert_eq!(
+            crate::tui::hooks::test_hook_slot_roots(),
+            (bits, bits, bits)
+        );
+    }
+
+    #[test]
+    fn lock_safe_runtime_scanners_tui_state_defers_manual_gc() {
+        let _test_lock = lock_safe_runtime_scanner_test_guard();
+        let _reset = ShadowAndGlobalRootResetGuard;
+        ensure_lock_safe_runtime_scanners_registered();
+        crate::tui::state::test_reset_state_slots();
+        let _unsafe_zone = GcUnsafeZoneResetGuard::clear();
+
+        let (ptr, bits, value) = lock_safe_runtime_scanner_closure();
+        let handle = crate::tui::state::js_perry_tui_state_alloc(value);
+
+        let before = gc_collection_count();
+        let _shadow = ActiveShadowFrame::push_empty();
+        crate::tui::state::test_with_state_slots_locked(|| {
+            js_gc_collect();
+            assert_eq!(
+                gc_collection_count(),
+                before,
+                "manual GC should defer while a state root lock is held"
+            );
+        });
+
+        assert!(
+            gc_collection_count() > before,
+            "deferred manual GC should run after the state root lock is released"
+        );
+        assert!(
+            malloc_user_ptr_tracked(ptr),
+            "state slot root should survive deferred manual GC"
+        );
+        assert_eq!(
+            crate::tui::state::js_perry_tui_state_get(handle).to_bits(),
+            bits
+        );
+        crate::tui::state::test_reset_state_slots();
+    }
+
+    #[test]
+    fn lock_safe_runtime_scanners_manual_gc_unsafe_zone_stays_noop_after_unlock() {
+        let _test_lock = lock_safe_runtime_scanner_test_guard();
+        let _reset = ShadowAndGlobalRootResetGuard;
+        ensure_lock_safe_runtime_scanners_registered();
+        crate::tui::state::test_reset_state_slots();
+        let _unsafe_zone = GcUnsafeZoneResetGuard::enter();
+
+        let (_ptr, bits, value) = lock_safe_runtime_scanner_closure();
+        let handle = crate::tui::state::js_perry_tui_state_alloc(value);
+
+        let before = gc_collection_count();
+        let _shadow = ActiveShadowFrame::push_empty();
+        crate::tui::state::test_with_state_slots_locked(|| {
+            js_gc_collect();
+            assert_eq!(
+                gc_collection_count(),
+                before,
+                "manual GC should no-op while unsafe zones are active"
+            );
+        });
+
+        assert_eq!(
+            gc_collection_count(),
+            before,
+            "manual GC skipped by an unsafe zone must not flush after the state root lock unlocks"
+        );
+        assert_eq!(
+            crate::tui::state::js_perry_tui_state_get(handle).to_bits(),
+            bits
+        );
+        crate::tui::state::test_reset_state_slots();
+    }
+
+    #[test]
+    fn lock_safe_runtime_scanners_deferred_manual_gc_respects_unsafe_zone_at_flush() {
+        let _test_lock = lock_safe_runtime_scanner_test_guard();
+        let _reset = ShadowAndGlobalRootResetGuard;
+        ensure_lock_safe_runtime_scanners_registered();
+        crate::tui::state::test_reset_state_slots();
+        let _unsafe_zone = GcUnsafeZoneResetGuard::clear();
+
+        let (_ptr, bits, value) = lock_safe_runtime_scanner_closure();
+        let handle = crate::tui::state::js_perry_tui_state_alloc(value);
+
+        let before = gc_collection_count();
+        let _shadow = ActiveShadowFrame::push_empty();
+        crate::tui::state::test_with_state_slots_locked(|| {
+            js_gc_collect();
+            assert_eq!(
+                gc_collection_count(),
+                before,
+                "manual GC should defer while a state root lock is held"
+            );
+            GC_UNSAFE_ZONES.store(1, std::sync::atomic::Ordering::Release);
+        });
+
+        assert_eq!(
+            gc_collection_count(),
+            before,
+            "deferred manual GC should re-check unsafe zones before flushing after unlock"
+        );
+        assert_eq!(
+            crate::tui::state::js_perry_tui_state_get(handle).to_bits(),
+            bits
+        );
+        crate::tui::state::test_reset_state_slots();
+    }
+
+    #[test]
+    fn lock_safe_runtime_scanners_tui_hooks_defers_direct_full_gc() {
+        let _test_lock = lock_safe_runtime_scanner_test_guard();
+        let _reset = ShadowAndGlobalRootResetGuard;
+        ensure_lock_safe_runtime_scanners_registered();
+
+        let (ptr, bits, _value) = lock_safe_runtime_scanner_closure();
+        crate::tui::hooks::test_seed_hook_slot_roots(bits);
+
+        let before = gc_collection_count();
+        let _shadow = ActiveShadowFrame::push_empty();
+        crate::tui::hooks::test_with_hook_slots_locked(|| {
+            let freed = gc_collect_inner();
+            assert_eq!(freed, 0);
+            assert_eq!(
+                gc_collection_count(),
+                before,
+                "direct full GC should defer while a hook root lock is held"
+            );
+        });
+
+        assert!(
+            gc_collection_count() > before,
+            "deferred direct full GC should run after the hook root lock is released"
+        );
+        assert!(
+            malloc_user_ptr_tracked(ptr),
+            "hook slot root should survive deferred direct full GC"
+        );
+        assert_eq!(
+            crate::tui::hooks::test_hook_slot_roots(),
+            (bits, bits, bits)
+        );
+    }
+
+    #[cfg(feature = "ohos-napi")]
+    #[test]
+    fn lock_safe_runtime_scanners_arkts_callbacks_defers_direct_minor_gc() {
+        let _test_lock = lock_safe_runtime_scanner_test_guard();
+        let _reset = ShadowAndGlobalRootResetGuard;
+        ensure_lock_safe_runtime_scanners_registered();
+        crate::arkts_callbacks::test_clear_arkts_callback_roots();
+
+        let (ptr, bits, value) = lock_safe_runtime_scanner_closure();
+        let callback_idx = 17;
+        crate::arkts_callbacks::test_seed_arkts_callback_root(callback_idx, value);
+
+        let before = gc_collection_count();
+        let _shadow = ActiveShadowFrame::push_empty();
+        crate::arkts_callbacks::test_with_arkts_callback_roots_locked(|| {
+            let freed = gc_collect_minor();
+            assert_eq!(freed, 0);
+            assert_eq!(
+                gc_collection_count(),
+                before,
+                "direct minor GC should defer while ArkTS callback roots are locked"
+            );
+        });
+
+        assert!(
+            gc_collection_count() > before,
+            "deferred direct minor GC should run after ArkTS callback roots unlock"
+        );
+        assert!(
+            malloc_user_ptr_tracked(ptr),
+            "ArkTS callback root should survive deferred GC"
+        );
+        assert_eq!(
+            crate::arkts_callbacks::test_arkts_callback_root(callback_idx),
+            bits
+        );
+        crate::arkts_callbacks::test_clear_arkts_callback_roots();
+    }
+
+    #[cfg(feature = "ohos-napi")]
+    #[test]
+    fn lock_safe_runtime_scanners_media_callbacks_defers_direct_minor_gc() {
+        let _test_lock = lock_safe_runtime_scanner_test_guard();
+        let _reset = ShadowAndGlobalRootResetGuard;
+        ensure_lock_safe_runtime_scanners_registered();
+
+        let (ptr, bits, value) = lock_safe_runtime_scanner_closure();
+        let handle = i64::MIN + 861;
+        crate::media_playback::test_seed_media_callback_roots(handle, value, value);
+
+        let before = gc_collection_count();
+        let _shadow = ActiveShadowFrame::push_empty();
+        crate::media_playback::test_with_media_callback_roots_locked(|| {
+            let freed = gc_collect_minor();
+            assert_eq!(freed, 0);
+            assert_eq!(
+                gc_collection_count(),
+                before,
+                "direct minor GC should defer while media callback roots are locked"
+            );
+        });
+
+        assert!(
+            gc_collection_count() > before,
+            "deferred direct minor GC should run after media callback roots unlock"
+        );
+        assert!(
+            malloc_user_ptr_tracked(ptr),
+            "media callback root should survive deferred GC"
+        );
+        assert_eq!(
+            crate::media_playback::test_media_callback_roots(handle),
+            (bits, bits)
         );
     }
 

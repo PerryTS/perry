@@ -188,7 +188,7 @@ impl Default for PlayerObservation {
 static MEDIA_STATE_INBOX: Mutex<Option<HashMap<i64, PlayerObservation>>> = Mutex::new(None);
 
 fn with_inbox<R, F: FnOnce(&mut HashMap<i64, PlayerObservation>) -> R>(f: F) -> R {
-    let mut guard = MEDIA_STATE_INBOX.lock().unwrap();
+    let mut guard = crate::gc::lock_gc_root_registry(&MEDIA_STATE_INBOX);
     let map = guard.get_or_insert_with(HashMap::new);
     f(map)
 }
@@ -528,16 +528,14 @@ pub fn media_callbacks_root_scanner(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn media_callbacks_root_scanner_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if let Ok(guard) = MEDIA_STATE_INBOX.try_lock() {
-        let mut guard = guard;
-        if let Some(map) = guard.as_mut() {
-            for obs in map.values_mut() {
-                if let Some(c) = obs.on_state_change.as_mut() {
-                    visitor.visit_nanbox_f64_slot(c);
-                }
-                if let Some(c) = obs.on_time_update.as_mut() {
-                    visitor.visit_nanbox_f64_slot(c);
-                }
+    let mut guard = crate::gc::lock_gc_root_registry(&MEDIA_STATE_INBOX);
+    if let Some(map) = guard.as_mut() {
+        for obs in map.values_mut() {
+            if let Some(c) = obs.on_state_change.as_mut() {
+                visitor.visit_nanbox_f64_slot(c);
+            }
+            if let Some(c) = obs.on_time_update.as_mut() {
+                visitor.visit_nanbox_f64_slot(c);
             }
         }
     }
@@ -558,7 +556,7 @@ pub(crate) fn test_seed_media_callback_roots(
 
 #[cfg(test)]
 pub(crate) fn test_media_callback_roots(handle: i64) -> (u64, u64) {
-    let guard = MEDIA_STATE_INBOX.lock().unwrap();
+    let guard = crate::gc::lock_gc_root_registry(&MEDIA_STATE_INBOX);
     let Some(map) = guard.as_ref() else {
         return (0, 0);
     };
@@ -569,4 +567,10 @@ pub(crate) fn test_media_callback_roots(handle: i64) -> (u64, u64) {
         obs.on_state_change.map(f64::to_bits).unwrap_or(0),
         obs.on_time_update.map(f64::to_bits).unwrap_or(0),
     )
+}
+
+#[cfg(test)]
+pub(crate) fn test_with_media_callback_roots_locked<R>(f: impl FnOnce() -> R) -> R {
+    let _inbox = crate::gc::lock_gc_root_registry(&MEDIA_STATE_INBOX);
+    f()
 }
