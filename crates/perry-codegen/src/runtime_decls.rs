@@ -1130,6 +1130,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // h.update(x); h.digest()`. Returns a NaN-boxed POINTER_TAG handle id;
     // subsequent method dispatch flows through HANDLE_METHOD_DISPATCH.
     module.declare_function("js_crypto_create_hash", DOUBLE, &[I64]);
+    // Hmac-handle form (issue #1076): `crypto.createHmac(alg, key).update(d).
+    // digest(enc)` when `alg` isn't a literal string the chain-collapse
+    // recognizes (`const alg = "sha256"`, for-of bindings, ternaries, etc.).
+    // Same handle protocol as `js_crypto_create_hash` — POINTER_TAG box, then
+    // HANDLE_METHOD_DISPATCH routes `.update` / `.digest` to `dispatch_hmac`.
+    module.declare_function("js_crypto_create_hmac", DOUBLE, &[I64, I64]);
     module.declare_function("js_string_from_bytes", I64, &[I64, I32]);
     module.declare_function("js_string_from_wtf8_bytes", I64, &[I64, I32]);
     // Buffer.alloc(size, fill) — returns raw *mut BufferHeader.

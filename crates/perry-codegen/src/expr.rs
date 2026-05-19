@@ -11490,20 +11490,120 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
                 _ => {
-                    // Unsupported — return empty string so the test
-                    // can continue (length check fails but no crash).
-                    for a in digest_args {
-                        let _ = lower_expr(ctx, a)?;
+                    // Fallback for non-literal alg (#1076) and for algorithms
+                    // we don't have a direct FFI helper for (sha1, sha512,
+                    // md5 for HMAC; sha1, sha512 for hash). Route through
+                    // the same handle protocol the standalone `createHash`
+                    // / `createHmac` arms use: allocate a Hash/Hmac handle,
+                    // chain `.update(data).digest(enc)` via runtime method
+                    // dispatch. Previously this arm returned `""` silently —
+                    // see #1076 (HMAC signature verification always failing
+                    // when `alg` was a `const`-bound or for-of-bound name).
+                    if create_args.is_empty() || update_args.is_empty() {
+                        // Mirror the legacy empty-string return for malformed
+                        // input so downstream chains keep their shape.
+                        let blk = ctx.block();
+                        let empty =
+                            blk.call(I64, "js_string_from_bytes", &[(I64, "0"), (I32, "0")]);
+                        return Ok(nanbox_string_inline(blk, &empty));
                     }
-                    for a in update_args {
-                        let _ = lower_expr(ctx, a)?;
-                    }
-                    for a in create_args {
-                        let _ = lower_expr(ctx, a)?;
-                    }
+                    // Lower all the sub-expressions before any FFI call so
+                    // their side-effects run in the source order Node sees.
+                    let alg_box = lower_expr(ctx, &create_args[0])?;
+                    let key_box_opt = if create_method == "createHmac" && create_args.len() >= 2 {
+                        Some(lower_expr(ctx, &create_args[1])?)
+                    } else {
+                        None
+                    };
+                    let data_box = lower_expr(ctx, &update_args[0])?;
+                    let enc_box_opt = if digest_args.is_empty() {
+                        None
+                    } else {
+                        Some(lower_expr(ctx, &digest_args[0])?)
+                    };
+
                     let blk = ctx.block();
-                    let empty = blk.call(I64, "js_string_from_bytes", &[(I64, "0"), (I32, "0")]);
-                    Ok(nanbox_string_inline(blk, &empty))
+                    let alg_handle = unbox_to_i64(blk, &alg_box);
+                    // Allocate the handle. Both helpers return f64 already
+                    // NaN-boxed with POINTER_TAG, suitable as the receiver
+                    // for `js_native_call_method`.
+                    let recv = if create_method == "createHmac" {
+                        let key_box = key_box_opt.expect("createHmac needs a key arg");
+                        let key_handle = unbox_to_i64(blk, &key_box);
+                        blk.call(
+                            DOUBLE,
+                            "js_crypto_create_hmac",
+                            &[(I64, &alg_handle), (I64, &key_handle)],
+                        )
+                    } else {
+                        blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)])
+                    };
+
+                    // Invoke `.update(data)` via the runtime's generic
+                    // handle-method dispatcher. Builds a 1-arg `double*`
+                    // arg buffer and a `js_string_from_bytes` rodata key.
+                    let update_name = emit_string_literal_global(ctx, "update");
+                    let blk = ctx.block();
+                    let update_args_buf = ctx.func.alloca_entry_array(DOUBLE, 1);
+                    {
+                        let blk = ctx.block();
+                        let slot = blk.gep(DOUBLE, &update_args_buf, &[(I64, "0")]);
+                        blk.store(DOUBLE, &data_box, &slot);
+                    }
+                    let update_args_ptr = {
+                        let blk = ctx.block();
+                        let reg = blk.next_reg();
+                        blk.emit_raw(format!(
+                            "{} = getelementptr [1 x double], ptr {}, i64 0, i64 0",
+                            reg, update_args_buf
+                        ));
+                        reg
+                    };
+                    let blk = ctx.block();
+                    let updated = blk.call(
+                        DOUBLE,
+                        "js_native_call_method",
+                        &[
+                            (DOUBLE, &recv),
+                            (PTR, &update_name),
+                            (I64, &format!("{}", "update".len())),
+                            (PTR, &update_args_ptr),
+                            (I64, "1"),
+                        ],
+                    );
+
+                    // Invoke `.digest(enc?)` — 0 or 1 args.
+                    let digest_name = emit_string_literal_global(ctx, "digest");
+                    let (digest_args_ptr, digest_argc) = if let Some(enc_box) = enc_box_opt {
+                        let buf = ctx.func.alloca_entry_array(DOUBLE, 1);
+                        {
+                            let blk = ctx.block();
+                            let slot = blk.gep(DOUBLE, &buf, &[(I64, "0")]);
+                            blk.store(DOUBLE, &enc_box, &slot);
+                        }
+                        let blk = ctx.block();
+                        let reg = blk.next_reg();
+                        blk.emit_raw(format!(
+                            "{} = getelementptr [1 x double], ptr {}, i64 0, i64 0",
+                            reg, buf
+                        ));
+                        (reg, "1".to_string())
+                    } else {
+                        ("null".to_string(), "0".to_string())
+                    };
+                    let blk = ctx.block();
+                    let result = blk.call(
+                        DOUBLE,
+                        "js_native_call_method",
+                        &[
+                            (DOUBLE, &updated),
+                            (PTR, &digest_name),
+                            (I64, &format!("{}", "digest".len())),
+                            (PTR, &digest_args_ptr),
+                            (I64, &digest_argc),
+                        ],
+                    );
+                    Ok(result)
                 }
             }
         }
@@ -11533,6 +11633,44 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let alg_handle = unbox_to_i64(blk, &alg_box);
             // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
             Ok(blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)]))
+        }
+
+        // Standalone `crypto.createHmac(alg, key)` — same shape as
+        // `createHash` above. Closes #1076 for the `const h = createHmac(...)`
+        // / for-of patterns where the chain-collapse can't match because
+        // `.update()` / `.digest()` happen on subsequent statements (or
+        // because the alg isn't a literal the fast path recognizes).
+        // `js_crypto_create_hmac` returns a NaN-boxed handle; dispatch_hmac
+        // (registered in `perry-stdlib/src/common/dispatch.rs`) handles the
+        // method routing.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "createHmac" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                // Lower whatever's there to honor side effects, then
+                // return undefined — Node throws here, but our other
+                // crypto arms degrade gracefully rather than panic.
+                for a in args {
+                    let _ = lower_expr(ctx, a)?;
+                }
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let key_box = lower_expr(ctx, &args[1])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let key_handle = unbox_to_i64(blk, &key_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_create_hmac",
+                &[(I64, &alg_handle), (I64, &key_handle)],
+            ))
         }
 
         // Phase H crypto: `crypto.randomBytes(n)` as a Buffer.

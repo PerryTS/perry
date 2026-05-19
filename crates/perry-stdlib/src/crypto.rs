@@ -786,3 +786,129 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
 fn is_undefined_f64(v: f64) -> bool {
     v.to_bits() == 0x7FFC_0000_0000_0001
 }
+
+// ---------------------------------------------------------------------------
+// HMAC handle — covers the same #1076 silent-empty bug shape that the hash
+// handle covers for `createHash`. The chain-collapse in
+// `perry-codegen/src/expr.rs` only emits the literal-`"sha256"` fast path
+// for `crypto.createHmac(alg, key).update(data).digest(enc)`. When `alg`
+// is a `const`-bound identifier, a for-of binding, a ternary, or anything
+// else that isn't an inline `Expr::String`, the codegen falls back to
+// `js_crypto_create_hmac` which returns a handle. Subsequent `.update(...)`
+// and `.digest(...)` calls dispatch through `HANDLE_METHOD_DISPATCH` →
+// `dispatch_hmac` below. Supports sha1, sha256, sha512, and md5 — Node's
+// commonly-used HMAC algorithms. Unknown algorithms return undefined so
+// the symptom (silent empty hex) becomes a real `undefined.update is not
+// a function` at the call site instead of a wrong answer.
+// ---------------------------------------------------------------------------
+
+pub enum HmacState {
+    Sha1(hmac::Hmac<Sha1>),
+    Sha256(hmac::Hmac<Sha256>),
+    Sha512(hmac::Hmac<Sha512>),
+    Md5(hmac::Hmac<Md5>),
+}
+
+pub struct HmacHandle {
+    /// `Option` so `digest()` can `take()` ownership of the MAC
+    /// (`finalize()` consumes `self`).
+    state: std::sync::Mutex<Option<HmacState>>,
+}
+
+/// Allocate a new HMAC handle for `(alg, key)`. Mirrors `js_crypto_create_hash`
+/// in shape: returns the handle id NaN-boxed with `POINTER_TAG`. Unknown
+/// algorithms return undefined.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_create_hmac(alg_ptr: i64, key_ptr: i64) -> f64 {
+    use hmac::Mac;
+    let alg_bytes = bytes_from_ptr(alg_ptr);
+    let alg = std::str::from_utf8(&alg_bytes)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let key = bytes_from_ptr(key_ptr);
+    let state = match alg.as_str() {
+        "sha1" | "sha-1" => match hmac::Hmac::<Sha1>::new_from_slice(&key) {
+            Ok(m) => HmacState::Sha1(m),
+            Err(_) => return f64::from_bits(0x7FFC_0000_0000_0001),
+        },
+        "sha256" | "sha-256" => match hmac::Hmac::<Sha256>::new_from_slice(&key) {
+            Ok(m) => HmacState::Sha256(m),
+            Err(_) => return f64::from_bits(0x7FFC_0000_0000_0001),
+        },
+        "sha512" | "sha-512" => match hmac::Hmac::<Sha512>::new_from_slice(&key) {
+            Ok(m) => HmacState::Sha512(m),
+            Err(_) => return f64::from_bits(0x7FFC_0000_0000_0001),
+        },
+        "md5" => match hmac::Hmac::<Md5>::new_from_slice(&key) {
+            Ok(m) => HmacState::Md5(m),
+            Err(_) => return f64::from_bits(0x7FFC_0000_0000_0001),
+        },
+        _ => return f64::from_bits(0x7FFC_0000_0000_0001),
+    };
+    let handle: Handle = register_handle(HmacHandle {
+        state: std::sync::Mutex::new(Some(state)),
+    });
+    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+}
+
+/// Dispatch `update` / `digest` on an HmacHandle. Called from
+/// `common/dispatch.rs::js_handle_method_dispatch`.
+pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
+    use hmac::Mac;
+    let h = match get_handle_mut::<HmacHandle>(handle) {
+        Some(h) => h,
+        None => return f64::from_bits(0x7FFC_0000_0000_0001),
+    };
+    match method {
+        "update" if !args.is_empty() => {
+            let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+            let bytes = bytes_from_ptr(ptr);
+            let mut guard = h.state.lock().unwrap();
+            if let Some(state) = guard.as_mut() {
+                match state {
+                    HmacState::Sha1(x) => Mac::update(x, &bytes),
+                    HmacState::Sha256(x) => Mac::update(x, &bytes),
+                    HmacState::Sha512(x) => Mac::update(x, &bytes),
+                    HmacState::Md5(x) => Mac::update(x, &bytes),
+                }
+            }
+            // Return the same handle (NaN-boxed) so the chain
+            // `hmac.update(data).digest(enc)` continues against the same
+            // state. Mirrors Node's behavior (`update` returns `this`).
+            f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+        }
+        "digest" => {
+            let state = {
+                let mut guard = h.state.lock().unwrap();
+                guard.take()
+            };
+            let digest: Vec<u8> = match state {
+                Some(HmacState::Sha1(x)) => x.finalize().into_bytes().to_vec(),
+                Some(HmacState::Sha256(x)) => x.finalize().into_bytes().to_vec(),
+                Some(HmacState::Sha512(x)) => x.finalize().into_bytes().to_vec(),
+                Some(HmacState::Md5(x)) => x.finalize().into_bytes().to_vec(),
+                None => return f64::from_bits(0x7FFC_0000_0000_0001),
+            };
+            if args.is_empty() || is_undefined_f64(args[0]) {
+                let buf = alloc_buffer_from_slice(&digest);
+                f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
+            } else {
+                let enc_ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                let enc_bytes = bytes_from_ptr(enc_ptr);
+                let enc = std::str::from_utf8(&enc_bytes)
+                    .unwrap_or("hex")
+                    .to_ascii_lowercase();
+                let encoded = match enc.as_str() {
+                    "hex" => hex::encode(&digest),
+                    "base64" => base64::engine::general_purpose::STANDARD.encode(&digest),
+                    "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest),
+                    "binary" | "latin1" => String::from_utf8_lossy(&digest).into_owned(),
+                    _ => hex::encode(&digest),
+                };
+                let s = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
+                f64::from_bits(0x7FFF_0000_0000_0000u64 | ((s as u64) & 0x0000_FFFF_FFFF_FFFF))
+            }
+        }
+        _ => f64::from_bits(0x7FFC_0000_0000_0001),
+    }
+}

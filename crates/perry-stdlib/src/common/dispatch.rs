@@ -126,6 +126,16 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::crypto::dispatch_hash(handle, method_name, args);
     }
 
+    // crypto Hmac handle: createHmac(alg, key).update(...).digest(). Routes
+    // the runtime path the codegen falls back to whenever `alg` isn't a
+    // literal `"sha256"`. See #1076 for the silent-empty bug this closes.
+    #[cfg(feature = "crypto")]
+    if matches!(method_name, "update" | "digest")
+        && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_hmac(handle, method_name, args);
+    }
+
     // SQLite Statement handle: stmt.raw() / .all() / .get() / .run() —
     // routes the dynamic-receiver path used by drizzle's
     // `this.stmt.raw().all(...params)` chain (where `this.stmt` is
