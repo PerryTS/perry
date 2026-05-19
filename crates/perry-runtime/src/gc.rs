@@ -1639,34 +1639,22 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     trace_phase_record(&mut trace, "build_valid_pointer_set", phase_start);
 
     // === MARK PHASE (minor) ===
-    // Order matters for the C4b pinning policy. We pin from every
-    // root source whose internal data structure isn't yet wired
-    // for reference-rewriting (= sources that need their pointer
-    // slots updated post-evacuation; if we can't rewrite, we must
-    // not move):
+    // Order matters for the C4b pinning policy:
     //
-    //   1. Conservative C-stack scan (mark_stack_roots) — can't
-    //      rewrite stack words discovered by bit-pattern matching.
-    //   2. The 9 registered root scanners (mark_registered_roots) —
-    //      their callback API exposes only mutable-mark, not
-    //      mutable-rewrite. C4b-γ would refactor each scanner; for
-    //      now we pin their discoveries.
+    //   1. Conservative C-stack/register scan first. Those words
+    //      cannot be rewritten, so when evacuation is enabled we pin
+    //      the objects discovered by this phase before any rewriteable
+    //      root source can add marks.
+    //   2. Mutable root slots (shadow stack + registered globals).
+    //      These are real slots we can rewrite after forwarding, so
+    //      they stay out of CONS_PINNED.
+    //   3. Registered Rust/FFI scanners. Their API exposes copied
+    //      f64 values only; when evacuation is enabled the scanner
+    //      callbacks pin each discovery directly.
     //
-    // Sources we DO plan to rewrite in a future C4b-γ pass and
-    // therefore do NOT pin from:
-    //
-    //   - Module globals (GLOBAL_ROOTS) — Vec<*mut JSValue>,
-    //     iterable mutable.
-    //   - Shadow stack — direct Vec<u64> we already walk in
-    //     `shadow_stack_root_scanner`.
-    //   - Marked-object heap fields (incl. RS-parent fields) —
-    //     trace_*-family walks them per obj_type; a parallel
-    //     rewrite_*-family will land in C4b-γ-2.
-    //
-    // The pinning calls fire BEFORE trace so they capture only
-    // root-direct discoveries, not transitive heap reachability —
-    // transitively-discovered objects came via heap fields that
-    // C4b-γ-2 will walk to rewrite.
+    // Pinning only root-direct discoveries keeps heap-field reachability
+    // movable: heap fields are handled later by the reference-rewrite
+    // pass.
     let phase_start = trace_phase_start(&trace);
     mark_stack_roots(&valid_ptrs);
     // CONS_PINNED is only consumed by `evacuate_tenured_nursery_objects`,
@@ -1679,15 +1667,8 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     if evac {
         pin_currently_marked_as_conservative();
     }
-    mark_global_roots(&valid_ptrs);
-    mark_registered_roots(&valid_ptrs);
-    // C4b-γ-1: pin again to capture scanner-discovered objects
-    // (objects that mark_registered_roots added since the prior
-    // pin call). The HashSet absorbs the redundant inserts of
-    // already-pinned conservative discoveries cheaply.
-    if evac {
-        pin_currently_marked_as_conservative();
-    }
+    mark_mutable_root_slots(&valid_ptrs);
+    mark_registered_roots(&valid_ptrs, evac);
     trace_phase_record(&mut trace, "root_marking", phase_start);
     let phase_start = trace_phase_start(&trace);
     let remembered_set = mark_remembered_set_roots(&valid_ptrs);
@@ -1904,11 +1885,11 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let phase_start = trace_phase_start(&trace);
     mark_stack_roots(&valid_ptrs);
 
-    // 2. Scan registered global roots (module-level variables)
-    mark_global_roots(&valid_ptrs);
+    // 2. Scan mutable roots (shadow stack + registered globals)
+    mark_mutable_root_slots(&valid_ptrs);
 
     // 3. Run registered root scanners (promise queues, timers, etc.)
-    mark_registered_roots(&valid_ptrs);
+    mark_registered_roots(&valid_ptrs, false);
     trace_phase_record(&mut trace, "root_marking", phase_start);
 
     // 3b. Gen-GC Phase C3: scan remembered set as additional roots.
@@ -2613,7 +2594,7 @@ unsafe fn mark_field_into_worklist(
     (*header).gc_flags = flags | GC_FLAG_MARKED;
     // Push directly onto the caller's worklist. No MARK_SEEDS push —
     // that's only needed for root-phase callers that don't own a
-    // worklist (mark_global_roots, mark_registered_roots,
+    // worklist (mark_mutable_root_slots, mark_registered_roots,
     // mark_remembered_set_roots, mark_stack_roots). The trace drain
     // already owns and consumes this worklist.
     worklist.push(header);
@@ -2724,52 +2705,198 @@ fn get_stack_bottom() -> usize {
     0 // Stack scanning not supported on this OS/arch
 }
 
-/// Mark global roots (module-level variables registered by codegen).
-fn mark_global_roots(valid_ptrs: &ValidPointerSet) {
-    GLOBAL_ROOTS.with(|roots| {
-        let roots = roots.borrow();
-        for &root_ptr in roots.iter() {
-            if !root_ptr.is_null() {
-                let value = unsafe { *root_ptr };
-                // First try NaN-boxed interpretation (exported globals, closures, etc.)
-                if !try_mark_value(value, valid_ptrs) {
-                    // Module variable globals store raw I64 pointers (not NaN-boxed).
-                    // The codegen stores raw pointer values for is_pointer && !is_union types
-                    // but the GC needs NaN-box tags to identify heap pointers.
-                    // Try the raw value directly as a heap pointer address.
-                    // This is safe: we validate against valid_ptrs (known heap allocations),
-                    // and f64 number values have upper bits set (exponent) so they won't
-                    // falsely match real heap addresses in the lower 48-bit address space.
-                    let raw_ptr = value as usize;
-                    if raw_ptr != 0 && valid_ptrs.contains(&raw_ptr) {
-                        unsafe {
-                            let header = header_from_user_ptr(raw_ptr as *const u8);
-                            if (*header).gc_flags & GC_FLAG_MARKED == 0
-                                && (*header).gc_flags & GC_FLAG_PINNED == 0
-                            {
-                                (*header).gc_flags |= GC_FLAG_MARKED;
-                            }
-                        }
-                    }
-                }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MutableRootSlotKind {
+    ShadowStack,
+    GlobalRoot,
+}
+
+#[derive(Clone, Copy)]
+struct MutableRootSlot {
+    kind: MutableRootSlotKind,
+    ptr: *mut u64,
+}
+
+impl MutableRootSlot {
+    #[inline]
+    unsafe fn read(self) -> u64 {
+        *self.ptr
+    }
+
+    #[inline]
+    unsafe fn write(self, bits: u64) {
+        *self.ptr = bits;
+    }
+}
+
+/// Visit every live shadow-stack slot. The visitor receives real
+/// mutable slot addresses so the same walk can support mark-only
+/// scanning and post-forwarding rewrites.
+fn visit_shadow_stack_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
+    SHADOW.with(|cell| unsafe {
+        let s = &mut *cell.get();
+        if s.stack.is_empty() {
+            return;
+        }
+        let mut top = s.frame_top;
+        while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
+            let header_base = top - SHADOW_STACK_HEADER_SLOTS;
+            if header_base + 1 >= s.stack.len() {
+                break;
             }
+            let slot_count = s.stack[header_base + 1] as usize;
+            let slots_end = top + slot_count;
+            if slots_end > s.stack.len() {
+                break;
+            }
+            let base = s.stack.as_mut_ptr().add(top);
+            for i in 0..slot_count {
+                visit(MutableRootSlot {
+                    kind: MutableRootSlotKind::ShadowStack,
+                    ptr: base.add(i),
+                });
+            }
+            top = s.stack[header_base] as usize;
         }
     });
 }
 
+/// Visit every registered module-global root slot.
+fn visit_global_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
+    GLOBAL_ROOTS.with(|roots| {
+        let roots = roots.borrow();
+        for &root_ptr in roots.iter() {
+            if root_ptr.is_null() {
+                continue;
+            }
+            visit(MutableRootSlot {
+                kind: MutableRootSlotKind::GlobalRoot,
+                ptr: root_ptr,
+            });
+        }
+    });
+}
+
+/// Visit the root slots whose storage is owned by this runtime and can
+/// therefore be rewritten after evacuation.
+fn visit_mutable_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
+    visit_shadow_stack_root_slots(&mut visit);
+    visit_global_root_slots(&mut visit);
+}
+
+#[inline]
+fn mark_global_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
+    // First try NaN-boxed interpretation (exported globals, closures, etc.).
+    if try_mark_value(bits, valid_ptrs) {
+        return;
+    }
+    // Module variable globals store raw I64 pointers (not NaN-boxed).
+    // Preserve the historical direct-object-start behavior: validate
+    // against valid_ptrs and mark the target, without the conservative
+    // interior-pointer fallback used by stack scanning.
+    let raw_ptr = bits as usize;
+    if raw_ptr != 0 && valid_ptrs.contains(&raw_ptr) {
+        unsafe {
+            let header = header_from_user_ptr(raw_ptr as *const u8);
+            if (*header).gc_flags & GC_FLAG_MARKED == 0 && (*header).gc_flags & GC_FLAG_PINNED == 0
+            {
+                (*header).gc_flags |= GC_FLAG_MARKED;
+            }
+        }
+    }
+}
+
+/// Mark mutable roots (shadow-stack slots and registered globals).
+fn mark_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
+    visit_mutable_root_slots(|slot| unsafe {
+        let bits = slot.read();
+        if bits == 0 {
+            return;
+        }
+        match slot.kind {
+            MutableRootSlotKind::ShadowStack => {
+                try_mark_value(bits, valid_ptrs);
+            }
+            MutableRootSlotKind::GlobalRoot => mark_global_root_bits(bits, valid_ptrs),
+        }
+    });
+}
+
+#[inline]
+fn nanboxed_root_header(value_bits: u64, valid_ptrs: &ValidPointerSet) -> Option<*mut GcHeader> {
+    let tag = value_bits & TAG_MASK;
+    if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
+        return None;
+    }
+    let ptr_val = (value_bits & POINTER_MASK) as usize;
+    if ptr_val == 0 || !valid_ptrs.maybe_contains(ptr_val) || !valid_ptrs.contains(&ptr_val) {
+        return None;
+    }
+    Some(unsafe { header_from_user_ptr(ptr_val as *const u8) })
+}
+
+#[inline]
+fn pin_conservative_root_header(header: *mut GcHeader) {
+    CONS_PINNED.with(|s| {
+        s.borrow_mut().insert(header as usize);
+    });
+}
+
+#[inline]
+fn mark_copy_only_scanner_bits(bits: u64, valid_ptrs: &ValidPointerSet, pin_discoveries: bool) {
+    let Some(header) = nanboxed_root_header(bits, valid_ptrs) else {
+        return;
+    };
+    unsafe {
+        let flags = (*header).gc_flags;
+        if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+            (*header).gc_flags = flags | GC_FLAG_MARKED;
+            push_mark_seed(header);
+        }
+    }
+    if pin_discoveries {
+        pin_conservative_root_header(header);
+    }
+}
+
+#[inline]
+fn mark_singleton_closure_root(user: usize, valid_ptrs: &ValidPointerSet, pin_discoveries: bool) {
+    if user == 0 || !valid_ptrs.contains(&user) {
+        return;
+    }
+    let header = unsafe { header_from_user_ptr(user as *const u8) };
+    unsafe {
+        if (*header).gc_flags & GC_FLAG_MARKED == 0 && (*header).gc_flags & GC_FLAG_PINNED == 0 {
+            (*header).gc_flags |= GC_FLAG_MARKED;
+        }
+    }
+    if pin_discoveries {
+        pin_conservative_root_header(header);
+    }
+}
+
+struct RegisteredRootMarkContext {
+    valid_ptrs: *const ValidPointerSet,
+    pin_discoveries: bool,
+}
+
 /// Run registered root scanners (promise queues, timers, exception state).
-fn mark_registered_roots(valid_ptrs: &ValidPointerSet) {
+fn mark_registered_roots(valid_ptrs: &ValidPointerSet, pin_discoveries: bool) {
     // Collect scanners first to avoid borrow conflicts
     let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
 
     for scanner in scanners {
         scanner(&mut |value: f64| {
-            try_mark_value(value.to_bits(), valid_ptrs);
+            mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, pin_discoveries);
         });
     }
 
     let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
-    let ctx = valid_ptrs as *const ValidPointerSet as *mut c_void;
+    let mut ctx = RegisteredRootMarkContext {
+        valid_ptrs: valid_ptrs as *const ValidPointerSet,
+        pin_discoveries,
+    };
+    let ctx = &mut ctx as *mut RegisteredRootMarkContext as *mut c_void;
     for scanner in ffi_scanners {
         scanner(perry_ffi_mark_root, ctx);
     }
@@ -2780,16 +2907,7 @@ fn mark_registered_roots(valid_ptrs: &ValidPointerSet) {
     // reclaim a cached entry that's about to be loaded by the next call site.
     for closure_ptr in crate::closure::snapshot_singleton_closures() {
         let user = closure_ptr as usize;
-        if user != 0 && valid_ptrs.contains(&user) {
-            unsafe {
-                let header = header_from_user_ptr(user as *const u8);
-                if (*header).gc_flags & GC_FLAG_MARKED == 0
-                    && (*header).gc_flags & GC_FLAG_PINNED == 0
-                {
-                    (*header).gc_flags |= GC_FLAG_MARKED;
-                }
-            }
-        }
+        mark_singleton_closure_root(user, valid_ptrs, pin_discoveries);
     }
 }
 
@@ -2797,8 +2915,12 @@ extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
     if ctx.is_null() {
         return;
     }
-    let valid_ptrs = unsafe { &*(ctx as *const ValidPointerSet) };
-    try_mark_value(value.to_bits(), valid_ptrs);
+    let ctx = unsafe { &*(ctx as *const RegisteredRootMarkContext) };
+    if ctx.valid_ptrs.is_null() {
+        return;
+    }
+    let valid_ptrs = unsafe { &*ctx.valid_ptrs };
+    mark_copy_only_scanner_bits(value.to_bits(), valid_ptrs, ctx.pin_discoveries);
 }
 
 /// Gen-GC Phase C3: mark the remembered set as roots. Old-gen
@@ -4296,12 +4418,12 @@ fn take_write_barrier_trace_counters() -> BarrierTraceCounters {
 
 /// Gen-GC Phase C4b: walk the current arena+malloc marked set and
 /// record every header address as conservatively pinned. Called
-/// AFTER `mark_stack_roots` (the conservative scan) and BEFORE
-/// `mark_global_roots` / `mark_registered_roots` / RS scan — so
-/// only the conservative-scan results are captured. Subsequently-
-/// marked objects (precise sources) get marked but stay out of
-/// `CONS_PINNED`, making them eligible for evacuation if they
-/// also tenure.
+/// after `mark_stack_roots` (the conservative scan) and before
+/// mutable roots, registered scanners, and RS scan — so only the
+/// conservative-scan results are captured. Subsequently-marked
+/// objects from rewriteable precise sources stay out of CONS_PINNED,
+/// and copy-only scanner roots are pinned directly by their callback
+/// path when evacuation is enabled.
 ///
 /// Called only from the minor-GC path. The full GC path
 /// (`gc_collect_inner`) doesn't evacuate so doesn't need pinning.
@@ -4637,58 +4759,17 @@ fn rewrite_heap_objects(valid_ptrs: &ValidPointerSet) {
     });
 }
 
-/// Walk every shadow-stack slot and rewrite forwarded pointers.
-/// Mirrors `shadow_stack_root_scanner` but writes back instead of
-/// only reading. Slots hold NaN-boxed `JSValue` bits — same
-/// encoding `try_rewrite_value` understands.
-fn rewrite_shadow_stack_slots(valid_ptrs: &ValidPointerSet) {
-    SHADOW.with(|cell| unsafe {
-        let s = &mut *cell.get();
-        if s.stack.is_empty() {
+/// Walk every mutable root slot and rewrite forwarded pointers.
+/// Shadow slots are NaN-boxed JSValues; globals can be NaN-boxed or
+/// raw object-start pointers. `try_rewrite_value` handles both forms.
+fn rewrite_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
+    visit_mutable_root_slots(|slot| unsafe {
+        let bits = slot.read();
+        if bits == 0 {
             return;
         }
-        let mut top = s.frame_top;
-        while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
-            let header_base = top - SHADOW_STACK_HEADER_SLOTS;
-            if header_base + 1 >= s.stack.len() {
-                break;
-            }
-            let slot_count = s.stack[header_base + 1] as usize;
-            let slots_end = top + slot_count;
-            if slots_end > s.stack.len() {
-                break;
-            }
-            for i in 0..slot_count {
-                let bits = s.stack[top + i];
-                if bits == 0 {
-                    continue;
-                }
-                if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
-                    s.stack[top + i] = new_bits;
-                }
-            }
-            top = s.stack[header_base] as usize;
-        }
-    });
-}
-
-/// Walk every registered module-global address and rewrite
-/// forwarded pointers. Mirrors `mark_global_roots` but writes
-/// back. Both NaN-boxed and raw-pointer encodings are handled by
-/// `try_rewrite_value` via tag inspection.
-fn rewrite_global_roots(valid_ptrs: &ValidPointerSet) {
-    GLOBAL_ROOTS.with(|roots| {
-        let roots = roots.borrow();
-        for &root_ptr in roots.iter() {
-            if root_ptr.is_null() {
-                continue;
-            }
-            unsafe {
-                let bits = *root_ptr;
-                if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
-                    *root_ptr = new_bits;
-                }
-            }
+        if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
+            slot.write(new_bits);
         }
     });
 }
@@ -4698,11 +4779,10 @@ fn rewrite_global_roots(valid_ptrs: &ValidPointerSet) {
 /// safely overwrite arbitrary stack memory; pinning of conservative-
 /// root targets in `gc_collect_minor` keeps those references valid
 /// without rewriting). Skipped: registered root scanners (their
-/// API is mark-only); the conservative-pinning policy also covers
-/// objects they would have discovered.
+/// API is copy-only); when evacuation is enabled those callbacks pin
+/// their own discoveries directly during root marking.
 fn rewrite_forwarded_references(valid_ptrs: &ValidPointerSet) {
-    rewrite_shadow_stack_slots(valid_ptrs);
-    rewrite_global_roots(valid_ptrs);
+    rewrite_mutable_root_slots(valid_ptrs);
     rewrite_heap_objects(valid_ptrs);
 }
 
@@ -4983,7 +5063,7 @@ pub fn remembered_set_clear() {
     REMEMBERED_SET.with(|s| s.borrow_mut().clear());
 }
 
-/// Root scanner for the shadow stack (gen-GC Phase A sub-phase 4).
+/// Compatibility scanner for the shadow stack.
 /// Walks every live slot in every pushed frame and invokes `mark`
 /// with the slot's NaN-boxed f64 value. The mark callback's
 /// `try_mark_value` pipeline already knows how to distinguish
@@ -4991,14 +5071,10 @@ pub fn remembered_set_clear() {
 /// POINTER_TAG / STRING_TAG / BIGINT_TAG / SHORT_STRING_TAG
 /// values that refer to heap objects.
 ///
-/// Runs IN PARALLEL with the conservative stack scanner — this is
-/// the Phase A design: shadow stack adds precise roots that the
-/// conservative scanner would also have found via register/stack
-/// walk, just as a separate direct source. Correctness-safe
-/// overlap: marking an already-marked object is a no-op. Phase B+
-/// will start dropping conservative-scanner coverage for stack
-/// slots that the shadow stack authoritatively covers, reducing
-/// over-promotion in the generational GC.
+/// GC marking now walks shadow slots through `mark_mutable_root_slots`
+/// so they can share the same slot visitor used by forwarding rewrite.
+/// This public function keeps the previous scanner shape available to
+/// tests and any internal caller that still wants mark-only iteration.
 ///
 /// Zero-slot frames (functions where no local is pointer-typed)
 /// contribute nothing — the inner loop's `slots_count == 0` exits
@@ -5006,33 +5082,10 @@ pub fn remembered_set_clear() {
 /// active, or PERRY_SHADOW_STACK=0 at compile time so push/pop
 /// never emitted) also contributes nothing.
 pub fn shadow_stack_root_scanner(mark: &mut dyn FnMut(f64)) {
-    SHADOW.with(|cell| unsafe {
-        let s = &*cell.get();
-        if s.stack.is_empty() {
-            return;
-        }
-        // Walk every frame by chasing prev_frame_top pointers from
-        // the current top. Each frame's layout:
-        //   [slot_0 .. slot_{n-1}]  with header at prev
-        //     = [prev_frame_top, slot_count] at (top - 2, top - 1)
-        let mut top = s.frame_top;
-        while top != usize::MAX && top >= SHADOW_STACK_HEADER_SLOTS {
-            let header_base = top - SHADOW_STACK_HEADER_SLOTS;
-            if header_base + 1 >= s.stack.len() {
-                break;
-            }
-            let slot_count = s.stack[header_base + 1] as usize;
-            let slots_end = top + slot_count;
-            if slots_end > s.stack.len() {
-                break;
-            }
-            for i in 0..slot_count {
-                let bits = s.stack[top + i];
-                if bits != 0 {
-                    mark(f64::from_bits(bits));
-                }
-            }
-            top = s.stack[header_base] as usize;
+    visit_shadow_stack_root_slots(|slot| unsafe {
+        let bits = slot.read();
+        if bits != 0 {
+            mark(f64::from_bits(bits));
         }
     });
 }
@@ -5051,7 +5104,6 @@ pub fn gc_init() {
     gc_register_root_scanner(overflow_fields_root_scanner);
     gc_register_root_scanner(json_parse_root_scanner);
     gc_register_root_scanner(intern_table_root_scanner);
-    gc_register_root_scanner(shadow_stack_root_scanner);
     gc_register_root_scanner(crate::builtins::scan_console_log_singleton_roots);
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by
@@ -5438,6 +5490,19 @@ mod tests {
             s.stack.clear();
             s.frame_top = usize::MAX;
         });
+    }
+
+    fn reset_global_roots() {
+        GLOBAL_ROOTS.with(|roots| roots.borrow_mut().clear());
+    }
+
+    struct ShadowAndGlobalRootResetGuard;
+
+    impl Drop for ShadowAndGlobalRootResetGuard {
+        fn drop(&mut self) {
+            reset_shadow_stack();
+            reset_global_roots();
+        }
     }
 
     #[test]
@@ -6331,6 +6396,43 @@ mod tests {
             let raw = nursery_user as *const *mut u8;
             assert_eq!(*raw, target);
         }
+    }
+
+    #[test]
+    fn test_rewrite_mutable_root_slots_updates_shadow_and_global_roots() {
+        let _guard = ShadowAndGlobalRootResetGuard;
+        reset_shadow_stack();
+        reset_global_roots();
+
+        let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let valid_ptrs = build_valid_pointer_set();
+        let old_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+        unsafe {
+            let nursery_hdr = header_from_user_ptr(nursery_user) as *mut GcHeader;
+            set_forwarding_address(nursery_hdr, old_user);
+        }
+
+        let shadow_bits = POINTER_TAG | ((nursery_user as u64) & POINTER_MASK);
+        let expected_shadow_bits = POINTER_TAG | ((old_user as u64) & POINTER_MASK);
+        let shadow = js_shadow_frame_push(1);
+        js_shadow_slot_set(0, shadow_bits);
+
+        let mut global_bits = nursery_user as u64;
+        js_gc_register_global_root((&mut global_bits as *mut u64) as i64);
+
+        rewrite_mutable_root_slots(&valid_ptrs);
+
+        assert_eq!(
+            js_shadow_slot_get(0),
+            expected_shadow_bits,
+            "shadow stack slot should be rewritten to the forwarding target"
+        );
+        assert_eq!(
+            global_bits, old_user as u64,
+            "registered global root slot should be rewritten in place"
+        );
+
+        js_shadow_frame_pop(shadow);
     }
 
     #[test]
