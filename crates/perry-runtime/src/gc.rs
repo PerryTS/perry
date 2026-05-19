@@ -4,7 +4,7 @@
 //! - 8-byte GcHeader prepended to every heap allocation (invisible to callers)
 //! - Arena objects (arrays/objects): discovered by walking arena blocks linearly (zero per-alloc tracking cost)
 //! - Malloc objects (strings/closures/promises/bigints/errors): tracked in MALLOC_STATE
-//! - Mark phase: conservative stack scan + explicit thread-local root scanning + type-specific tracing
+//! - Mark phase: precise thread-local roots + optional conservative stack scan + type-specific tracing
 //! - Sweep phase: free malloc objects; arena objects added to free list for reuse
 //! - Trigger: only checked on new arena block allocation or explicit gc() call
 
@@ -548,6 +548,17 @@ struct LegacyRootTraceStats {
 }
 
 #[derive(Clone, Copy, Default)]
+struct ConservativeRootTraceStats {
+    root_count: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ConservativePinTraceStats {
+    pinned_roots: usize,
+    pinned_bytes: usize,
+}
+
+#[derive(Clone, Copy, Default)]
 struct SweepTraceStats {
     freed_bytes: u64,
     reset_blocks: usize,
@@ -610,6 +621,7 @@ struct GcCycleTrace {
     malloc_before: usize,
     remembered_set_before: usize,
     remembered_set: RememberedSetTraceStats,
+    conservative_root_count: usize,
     conservative_pinned: usize,
     conservative_pinned_bytes: usize,
     legacy_copy_only_scanner_pinned: LegacyRootTraceStats,
@@ -648,6 +660,7 @@ impl GcCycleTrace {
             malloc_before: malloc_object_count(),
             remembered_set_before: remembered_set_size(),
             remembered_set: RememberedSetTraceStats::default(),
+            conservative_root_count: 0,
             conservative_pinned: 0,
             conservative_pinned_bytes: 0,
             legacy_copy_only_scanner_pinned: LegacyRootTraceStats::default(),
@@ -695,6 +708,7 @@ impl GcCycleTrace {
                 "dirty_slot_ranges_scanned": self.remembered_set.dirty_slot_ranges_scanned,
                 "dirty_slots_scanned": self.remembered_set.dirty_slots_scanned,
             },
+            "conservative_root_count": self.conservative_root_count,
             "conservative_pinned": self.conservative_pinned,
             "conservative_pinned_bytes": self.conservative_pinned_bytes,
             "legacy_copy_only_scanner_pinned": {
@@ -1006,6 +1020,66 @@ pub fn shadow_stack_depth() -> usize {
         }
         depth
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConservativeStackScanMode {
+    Auto,
+    Disabled,
+    Full,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConservativeStackScanDecision {
+    Scan,
+    SkipDisabled,
+    SkipShadowStackActive,
+}
+
+fn conservative_stack_scan_mode_from_value(value: Option<&str>) -> ConservativeStackScanMode {
+    let Some(value) = value else {
+        return ConservativeStackScanMode::Auto;
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" => ConservativeStackScanMode::Auto,
+        "0" | "off" | "false" => ConservativeStackScanMode::Disabled,
+        "1" | "on" | "true" | "full" | "debug" => ConservativeStackScanMode::Full,
+        _ => ConservativeStackScanMode::Auto,
+    }
+}
+
+fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
+    match std::env::var("PERRY_CONSERVATIVE_STACK_SCAN") {
+        Ok(value) => conservative_stack_scan_mode_from_value(Some(&value)),
+        Err(_) => ConservativeStackScanMode::Auto,
+    }
+}
+
+#[inline]
+fn shadow_stack_has_active_frame() -> bool {
+    SHADOW.with(|cell| unsafe { (*cell.get()).frame_top != usize::MAX })
+}
+
+#[inline]
+fn conservative_stack_scan_decision_for(
+    mode: ConservativeStackScanMode,
+    shadow_frame_active: bool,
+) -> ConservativeStackScanDecision {
+    match mode {
+        ConservativeStackScanMode::Disabled => ConservativeStackScanDecision::SkipDisabled,
+        ConservativeStackScanMode::Full => ConservativeStackScanDecision::Scan,
+        ConservativeStackScanMode::Auto if shadow_frame_active => {
+            ConservativeStackScanDecision::SkipShadowStackActive
+        }
+        ConservativeStackScanMode::Auto => ConservativeStackScanDecision::Scan,
+    }
+}
+
+fn conservative_stack_scan_decision() -> ConservativeStackScanDecision {
+    conservative_stack_scan_decision_for(
+        conservative_stack_scan_mode(),
+        shadow_stack_has_active_frame(),
+    )
 }
 
 /// Allocate memory via malloc with GcHeader prepended.
@@ -1610,8 +1684,10 @@ pub extern "C" fn gc_check_trigger_export() {
 ///   recorded the parent in the RS (codegen emits the barrier at
 ///   every PropertySet / IndexSet / closure-capture-set site —
 ///   see `crates/perry-codegen/src/expr.rs::emit_write_barrier`).
-/// - The conservative C-stack scan still runs; any young pointer
-///   reachable via runtime register-roots stays live.
+/// - Precise mutable roots (shadow stack, globals, runtime scanners)
+///   keep compiled-frame values live. The conservative C-stack scan
+///   is a fallback for non-shadow-stack runtime frames and debug
+///   bisects (`PERRY_CONSERVATIVE_STACK_SCAN=full`).
 /// - Old-gen objects' MARK bit gets set during the trace step
 ///   (caller pushes them onto the worklist); the MINOR trace just
 ///   doesn't recurse through them.
@@ -1672,10 +1748,13 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // === MARK PHASE (minor) ===
     // Order matters for the C4b pinning policy:
     //
-    //   1. Conservative C-stack/register scan first. Those words
-    //      cannot be rewritten, so when evacuation is enabled we pin
-    //      the objects discovered by this phase before any rewriteable
-    //      root source can add marks.
+    //   1. Optional conservative C-stack/register scan first. Those
+    //      words cannot be rewritten, so when evacuation is enabled
+    //      we pin objects discovered by this phase before any
+    //      rewriteable root source can add marks. Default `auto`
+    //      mode skips this scan while a precise shadow-stack frame is
+    //      active; `PERRY_CONSERVATIVE_STACK_SCAN=full` restores the
+    //      legacy always-scan fallback.
     //   2. Mutable root slots (shadow stack + registered globals).
     //      These are real slots we can rewrite after forwarding, so
     //      they stay out of CONS_PINNED.
@@ -1690,20 +1769,25 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     // movable: heap fields are handled later by the reference-rewrite
     // pass.
     let phase_start = trace_phase_start(&trace);
-    mark_stack_roots(&valid_ptrs);
+    let conservative_root_stats = mark_stack_roots(&valid_ptrs);
     // CONS_PINNED is only consumed by `evacuate_tenured_nursery_objects`,
     // which is gated on `gen_gc_evacuate_enabled()`. When evacuation is
     // off (the default), `pin_currently_marked_as_conservative` is a
     // full arena walk producing a HashSet nobody reads. Gate it behind
     // the same flag.
     let evac = gen_gc_evacuate_enabled();
-    if evac {
-        pin_currently_marked_as_conservative();
-    }
+    let conservative_pin_stats = if evac {
+        pin_currently_marked_as_conservative()
+    } else {
+        ConservativePinTraceStats::default()
+    };
     mark_mutable_root_slots(&valid_ptrs);
     mark_mutable_registered_roots(&valid_ptrs);
     let legacy_root_stats = mark_registered_roots(&valid_ptrs, evac);
     if let Some(trace) = trace.as_mut() {
+        trace.conservative_root_count = conservative_root_stats.root_count;
+        trace.conservative_pinned = conservative_pin_stats.pinned_roots;
+        trace.conservative_pinned_bytes = conservative_pin_stats.pinned_bytes;
         trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
     }
     trace_phase_record(&mut trace, "root_marking", phase_start);
@@ -1769,8 +1853,6 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
         trace_phase_record(&mut trace, "evacuation", phase_start);
         if let Some(trace) = trace.as_mut() {
             trace.evacuation = evacuation;
-            trace.conservative_pinned = cons_pinned_count();
-            trace.conservative_pinned_bytes = cons_pinned_bytes();
         }
         let phase_start = trace_phase_start(&trace);
         rewrite_forwarded_references(&valid_ptrs);
@@ -1782,9 +1864,6 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
                 cons_pinned_count()
             );
         }
-    } else if let Some(trace) = trace.as_mut() {
-        trace.conservative_pinned = cons_pinned_count();
-        trace.conservative_pinned_bytes = cons_pinned_bytes();
     }
 
     // === SWEEP PHASE ===
@@ -1920,9 +1999,11 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
 
     // === MARK PHASE ===
 
-    // 1. Conservative stack scan
+    // 1. Optional conservative stack scan. Default `auto` mode skips
+    // this while a precise shadow-stack frame is active; the fallback
+    // remains available with `PERRY_CONSERVATIVE_STACK_SCAN=full`.
     let phase_start = trace_phase_start(&trace);
-    mark_stack_roots(&valid_ptrs);
+    let conservative_root_stats = mark_stack_roots(&valid_ptrs);
 
     // 2. Scan mutable roots (shadow stack + registered globals)
     mark_mutable_root_slots(&valid_ptrs);
@@ -1931,6 +2012,7 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     mark_mutable_registered_roots(&valid_ptrs);
     let legacy_root_stats = mark_registered_roots(&valid_ptrs, false);
     if let Some(trace) = trace.as_mut() {
+        trace.conservative_root_count = conservative_root_stats.root_count;
         trace.legacy_copy_only_scanner_pinned = legacy_root_stats;
     }
     trace_phase_record(&mut trace, "root_marking", phase_start);
@@ -2392,11 +2474,27 @@ fn try_mark_raw_root_addr(addr: usize, valid_ptrs: &ValidPointerSet) -> bool {
     }
 }
 
+/// Conservative stack scan policy wrapper. In default `auto` mode,
+/// compiled frames that have a precise shadow-stack frame skip this
+/// native stack/register scan. Runtime-only frames without shadow roots
+/// still get the legacy fallback; `PERRY_CONSERVATIVE_STACK_SCAN=full`
+/// forces that legacy path for debugging.
+fn mark_stack_roots(valid_ptrs: &ValidPointerSet) -> ConservativeRootTraceStats {
+    match conservative_stack_scan_decision() {
+        ConservativeStackScanDecision::Scan => mark_stack_roots_unchecked(valid_ptrs),
+        ConservativeStackScanDecision::SkipDisabled
+        | ConservativeStackScanDecision::SkipShadowStackActive => {
+            ConservativeRootTraceStats::default()
+        }
+    }
+}
+
 /// Conservative stack scan: scan the current thread's stack for heap pointers.
 /// Handles BOTH NaN-boxed pointers (POINTER_TAG/STRING_TAG/BIGINT_TAG) AND raw I64 pointers.
 /// Raw I64 pointers arise from Perry's `is_array`/`is_string`/`is_pointer`/`is_closure` local
 /// variables — codegen stores these as raw I64 words (not NaN-boxed) in registers and on stack.
-fn mark_stack_roots(valid_ptrs: &ValidPointerSet) {
+fn mark_stack_roots_unchecked(valid_ptrs: &ValidPointerSet) -> ConservativeRootTraceStats {
+    let mut stats = ConservativeRootTraceStats::default();
     // Capture callee-saved registers into a buffer via setjmp.
     //
     // On Apple platforms the C `setjmp(3)` saves the signal mask via a
@@ -2424,7 +2522,9 @@ fn mark_stack_roots(valid_ptrs: &ValidPointerSet) {
 
     // Scan the register buffer (covers callee-saved regs: x19-x28 on AArch64, rbx/rbp/r12-r15 on x86_64)
     for &word in &jmp_buf {
-        try_mark_value_or_raw(word, valid_ptrs);
+        if try_mark_value_or_raw(word, valid_ptrs) {
+            stats.root_count += 1;
+        }
     }
 
     // Issue #73: setjmp only captures callee-saved registers. On
@@ -2476,7 +2576,9 @@ fn mark_stack_roots(valid_ptrs: &ValidPointerSet) {
             options(nostack, preserves_flags),
         );
         for &word in &fp_regs {
-            try_mark_value_or_raw(word, valid_ptrs);
+            if try_mark_value_or_raw(word, valid_ptrs) {
+                stats.root_count += 1;
+            }
         }
     }
 
@@ -2497,12 +2599,12 @@ fn mark_stack_roots(valid_ptrs: &ValidPointerSet) {
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         // Fallback: skip stack scan on unsupported architectures
-        return;
+        return stats;
     }
 
     let stack_bottom = get_stack_bottom();
     if stack_bottom == 0 {
-        return; // Can't determine stack bounds
+        return stats; // Can't determine stack bounds
     }
 
     // Walk the stack from current SP to stack bottom.
@@ -2510,9 +2612,12 @@ fn mark_stack_roots(valid_ptrs: &ValidPointerSet) {
     let mut addr = stack_top;
     while addr < stack_bottom {
         let word = unsafe { *(addr as *const u64) };
-        try_mark_value_or_raw(word, valid_ptrs);
+        if try_mark_value_or_raw(word, valid_ptrs) {
+            stats.root_count += 1;
+        }
         addr += 8;
     }
+    stats
 }
 
 /// Mark a value if it is a heap pointer — either NaN-boxed OR a raw I64 pointer.
@@ -4870,7 +4975,10 @@ fn take_write_barrier_trace_counters() -> BarrierTraceCounters {
 }
 
 /// Gen-GC Phase C4b: walk the current arena+malloc marked set and
-/// record every header address as conservatively pinned. Called
+/// record every header address as conservatively pinned. Returns the
+/// count/bytes inserted by this stack-scan snapshot only; later
+/// legacy copy-only scanner pins share CONS_PINNED for evacuation
+/// safety but are reported separately in GC trace output. Called
 /// after `mark_stack_roots` (the conservative scan) and before
 /// mutable roots, registered scanners, and RS scan — so only the
 /// conservative-scan results are captured. Subsequently-marked
@@ -4880,14 +4988,16 @@ fn take_write_barrier_trace_counters() -> BarrierTraceCounters {
 ///
 /// Called only from the minor-GC path. The full GC path
 /// (`gc_collect_inner`) doesn't evacuate so doesn't need pinning.
-fn pin_currently_marked_as_conservative() {
+fn pin_currently_marked_as_conservative() -> ConservativePinTraceStats {
+    let mut stats = ConservativePinTraceStats::default();
     CONS_PINNED.with(|s| {
         let mut pinned = s.borrow_mut();
         crate::arena::arena_walk_objects(|header_ptr| {
             let header = header_ptr as *mut GcHeader;
             unsafe {
-                if (*header).gc_flags & GC_FLAG_MARKED != 0 {
-                    pinned.insert(header as usize);
+                if (*header).gc_flags & GC_FLAG_MARKED != 0 && pinned.insert(header as usize) {
+                    stats.pinned_roots += 1;
+                    stats.pinned_bytes += (*header).size as usize;
                 }
             }
         });
@@ -4895,13 +5005,15 @@ fn pin_currently_marked_as_conservative() {
             let m = m.borrow();
             for &header in m.objects.iter() {
                 unsafe {
-                    if (*header).gc_flags & GC_FLAG_MARKED != 0 {
-                        pinned.insert(header as usize);
+                    if (*header).gc_flags & GC_FLAG_MARKED != 0 && pinned.insert(header as usize) {
+                        stats.pinned_roots += 1;
+                        stats.pinned_bytes += (*header).size as usize;
                     }
                 }
             }
         });
     });
+    stats
 }
 
 /// Gen-GC Phase C4b-β: walk arena nursery objects and copy
@@ -5281,15 +5393,6 @@ pub fn is_conservatively_pinned(header: *const GcHeader) -> bool {
 /// Test-only diagnostic: number of objects pinned this cycle.
 pub fn cons_pinned_count() -> usize {
     CONS_PINNED.with(|s| s.borrow().len())
-}
-
-fn cons_pinned_bytes() -> usize {
-    CONS_PINNED.with(|s| {
-        s.borrow()
-            .iter()
-            .map(|&header| unsafe { (*(header as *const GcHeader)).size as usize })
-            .sum()
-    })
 }
 
 /// Gen-GC Phase C1: compatibility write barrier. Test callers and
@@ -6001,6 +6104,63 @@ mod tests {
         fn drop(&mut self) {
             reset_shadow_stack();
             reset_global_roots();
+        }
+    }
+
+    #[test]
+    fn test_conservative_stack_scan_auto_policy_skips_active_shadow_frame() {
+        let _guard = ShadowAndGlobalRootResetGuard;
+        reset_shadow_stack();
+        assert_eq!(
+            conservative_stack_scan_mode_from_value(None),
+            ConservativeStackScanMode::Auto
+        );
+        assert_eq!(
+            conservative_stack_scan_decision_for(ConservativeStackScanMode::Auto, false),
+            ConservativeStackScanDecision::Scan
+        );
+
+        let h = js_shadow_frame_push(1);
+        assert!(shadow_stack_has_active_frame());
+        assert_eq!(
+            conservative_stack_scan_decision_for(
+                ConservativeStackScanMode::Auto,
+                shadow_stack_has_active_frame()
+            ),
+            ConservativeStackScanDecision::SkipShadowStackActive
+        );
+        js_shadow_frame_pop(h);
+    }
+
+    #[test]
+    fn test_conservative_stack_scan_env_off_disables_decision() {
+        for value in ["0", "off", "false"] {
+            let mode = conservative_stack_scan_mode_from_value(Some(value));
+            assert_eq!(mode, ConservativeStackScanMode::Disabled);
+            assert_eq!(
+                conservative_stack_scan_decision_for(mode, false),
+                ConservativeStackScanDecision::SkipDisabled
+            );
+            assert_eq!(
+                conservative_stack_scan_decision_for(mode, true),
+                ConservativeStackScanDecision::SkipDisabled
+            );
+        }
+    }
+
+    #[test]
+    fn test_conservative_stack_scan_full_preserves_legacy_fallback_decision() {
+        for value in ["1", "on", "true", "full", "debug"] {
+            let mode = conservative_stack_scan_mode_from_value(Some(value));
+            assert_eq!(mode, ConservativeStackScanMode::Full);
+            assert_eq!(
+                conservative_stack_scan_decision_for(mode, false),
+                ConservativeStackScanDecision::Scan
+            );
+            assert_eq!(
+                conservative_stack_scan_decision_for(mode, true),
+                ConservativeStackScanDecision::Scan
+            );
         }
     }
 
@@ -7374,16 +7534,19 @@ mod tests {
         // Manually mark an arena object, then run the pinning
         // scan. The pinned set should contain the marked header.
         CONS_PINNED.with(|s| s.borrow_mut().clear());
+        clear_marks();
         let user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
         let header = unsafe { header_from_user_ptr(user) as *mut GcHeader };
         unsafe {
             (*header).gc_flags |= GC_FLAG_MARKED;
         }
-        pin_currently_marked_as_conservative();
+        let stats = pin_currently_marked_as_conservative();
         assert!(
             is_conservatively_pinned(header),
             "marked header should land in CONS_PINNED"
         );
+        assert_eq!(stats.pinned_roots, 1);
+        assert_eq!(stats.pinned_bytes, unsafe { (*header).size as usize });
         // Cleanup for test isolation.
         unsafe {
             (*header).gc_flags &= !GC_FLAG_MARKED;
@@ -7394,17 +7557,60 @@ mod tests {
     #[test]
     fn test_pin_currently_marked_skips_unmarked() {
         CONS_PINNED.with(|s| s.borrow_mut().clear());
+        clear_marks();
         let user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
         let header = unsafe { header_from_user_ptr(user) as *const GcHeader };
         // Ensure unmarked.
         unsafe {
             assert_eq!((*(header as *mut GcHeader)).gc_flags & GC_FLAG_MARKED, 0);
         }
-        pin_currently_marked_as_conservative();
+        let stats = pin_currently_marked_as_conservative();
+        assert_eq!(stats.pinned_roots, 0);
+        assert_eq!(stats.pinned_bytes, 0);
         assert!(
             !is_conservatively_pinned(header),
             "unmarked header should NOT land in CONS_PINNED"
         );
+    }
+
+    #[test]
+    fn test_conservative_pin_stats_exclude_legacy_copy_only_scanner_pins() {
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
+        clear_marks();
+        let conservative_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let legacy_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+        let conservative_header =
+            unsafe { header_from_user_ptr(conservative_user) as *mut GcHeader };
+        let legacy_header = unsafe { header_from_user_ptr(legacy_user) as *mut GcHeader };
+        unsafe {
+            (*conservative_header).gc_flags |= GC_FLAG_MARKED;
+        }
+
+        let stats = pin_currently_marked_as_conservative();
+        let conservative_bytes = unsafe { (*conservative_header).size as usize };
+        assert_eq!(stats.pinned_roots, 1);
+        assert_eq!(stats.pinned_bytes, conservative_bytes);
+
+        let valid_ptrs = build_valid_pointer_set();
+        let legacy_bits = POINTER_TAG | (legacy_user as u64 & POINTER_MASK);
+        let legacy_bytes = mark_copy_only_scanner_bits(legacy_bits, &valid_ptrs, true);
+        assert_eq!(
+            legacy_bytes,
+            Some(unsafe { (*legacy_header).size as usize })
+        );
+        assert_eq!(
+            cons_pinned_count(),
+            2,
+            "evacuation set still contains both conservative and legacy pins"
+        );
+        assert_eq!(
+            stats.pinned_roots, 1,
+            "conservative pin stats must not absorb later legacy scanner pins"
+        );
+        assert_eq!(stats.pinned_bytes, conservative_bytes);
+
+        clear_marks();
+        CONS_PINNED.with(|s| s.borrow_mut().clear());
     }
 
     #[test]
