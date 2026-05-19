@@ -312,8 +312,7 @@ fn write_utf16le(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
         if let Some(h) = high_surrogate.take() {
             // Expecting a low surrogate to pair with the buffered high.
             if (0xDC00..=0xDFFF).contains(&unit) {
-                let cp =
-                    0x10000 + (((h - 0xD800) as u32) << 10) + ((unit - 0xDC00) as u32);
+                let cp = 0x10000 + (((h - 0xD800) as u32) << 10) + ((unit - 0xDC00) as u32);
                 if let Some(c) = char::from_u32(cp) {
                     out.push(c);
                 } else {
@@ -399,8 +398,7 @@ fn encode_base64_tail(tail: &[u8], out: &mut String) {
 /// base64 text). Buffer 0..2 bytes if the running total isn't a multiple
 /// of 3 so the next `write` can resume encoding cleanly.
 fn write_base64(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
-    let mut combined: Vec<u8> =
-        Vec::with_capacity(state.base64_partial.len() + bytes.len());
+    let mut combined: Vec<u8> = Vec::with_capacity(state.base64_partial.len() + bytes.len());
     combined.extend_from_slice(&state.base64_partial);
     combined.extend_from_slice(bytes);
     state.base64_partial.clear();
