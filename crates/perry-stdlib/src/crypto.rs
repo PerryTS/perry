@@ -1273,3 +1273,37 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
         _ => nanbox_undefined(),
     }
 }
+
+/// Property reads on a CipherHandle — `c.getAuthTag` / `c.setAuthTag` /
+/// `c.update` / `c.final` / `c.setAAD`. Issue #1111: without this,
+/// `c.getAuthTag?.()` short-circuited because the property access
+/// returned undefined (small handles have no field storage), so the
+/// `?.` lowering's `c.getAuthTag == null` check fired and the call
+/// never happened.
+///
+/// Each known method name returns a bound-method closure (via
+/// `js_class_method_bind`) whose `this` is the POINTER_TAG-NaN-boxed
+/// handle. When invoked the closure routes through
+/// `js_native_call_method` → `HANDLE_METHOD_DISPATCH` → `dispatch_cipher`,
+/// the exact path `c.method(args)` takes when called inline. So
+/// `typeof c.getAuthTag === "function"` and `const g = c.getAuthTag; g()`
+/// both work, mirroring Node's `Cipher` shape.
+pub unsafe fn dispatch_cipher_property(handle: i64, property: &str) -> f64 {
+    let name_bytes: &'static [u8] = match property {
+        "update" => b"update",
+        "final" => b"final",
+        "getAuthTag" => b"getAuthTag",
+        "setAuthTag" => b"setAuthTag",
+        "setAAD" => b"setAAD",
+        _ => return nanbox_undefined(),
+    };
+    let this_f64 = nanbox_pointer_f64(handle as usize);
+    extern "C" {
+        fn js_class_method_bind(
+            instance: f64,
+            method_name_ptr: *const u8,
+            method_name_len: usize,
+        ) -> f64;
+    }
+    js_class_method_bind(this_f64, name_bytes.as_ptr(), name_bytes.len())
+}

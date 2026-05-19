@@ -2,6 +2,76 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1010 — fix(crypto): #1111 — CipherHandle property reads return bound-method closures so `c.getAuthTag?.()` doesn't short-circuit
+
+#1075 wired the runtime side of `createCipheriv("aes-256-gcm", ...)` —
+`dispatch_cipher` in `crates/perry-stdlib/src/crypto.rs` already
+handled `update` / `final` / `getAuthTag` / `setAuthTag` / `setAAD`,
+and the AES-GCM ciphertext matched Node byte-for-byte. But
+`c.getAuthTag?.()` still returned undefined and the GCM auth-tag
+round-trip didn't authenticate.
+
+Root cause: CipherHandle is a small registry id (NaN-boxed POINTER_TAG
+| handle, raw < 0x100000), and the optional-call lowering in
+`crates/perry-hir/src/lower.rs::OptChainBase::Call` evaluates the
+property as the null-check expression:
+
+```rust
+Expr::Conditional {
+    condition: Compare { op: LooseEq, left: c.getAuthTag, right: Null },
+    then_expr: Undefined,
+    else_expr: c.getAuthTag(args),
+}
+```
+
+`c.getAuthTag` (property access on a small handle) routed through
+`HANDLE_PROPERTY_DISPATCH` in `crates/perry-stdlib/src/common/dispatch.rs`,
+which had no `CipherHandle` arm and fell through to the
+`f64::from_bits(0x7FFC_0000_0000_0001)` (undefined) catch-all. The
+loose `undefined == null` check then fired and the call was skipped —
+`tag` stayed undefined, the `if (tag) d.setAuthTag(tag)` line was
+also skipped, and `d.final()` returned undefined because
+`state.auth_tag` was still `None` (GCM-decrypt requires the tag). The
+final `Buffer.concat([d.update(ct), d.final()])` then produced `""`.
+
+Ciphertext matched Node because `c.update(plain)` and `c.final()` are
+inline calls (`Expr::Call { callee: PropertyGet { ... } }`) routed
+through `js_native_call_method` → `HANDLE_METHOD_DISPATCH` →
+`dispatch_cipher`, never going through property dispatch at all.
+
+Fix mirrors the StringDecoder pattern from #848:
+
+- `crates/perry-stdlib/src/crypto.rs`: new `dispatch_cipher_property`
+  returns `js_class_method_bind(this, "<method>", len)` for the five
+  known method names. The bound closure captures the POINTER_TAG'd
+  handle as `this` and the method-name byte pointer/length (as a
+  bounded `&'static [u8]` leak of five fixed strings).
+- `crates/perry-stdlib/src/common/dispatch.rs`:
+  `js_handle_property_dispatch` gains a `#[cfg(feature = "crypto")]`
+  arm gated on (a) method-name vocabulary and (b)
+  `with_handle::<CipherHandle, ...>` to avoid handle-id collisions
+  with other registries (same disjoint-method-set discipline as the
+  existing method-dispatch arms).
+
+When the bound closure is invoked, `BOUND_METHOD_FUNC_PTR` routes
+through `js_native_call_method(this, method_name, args)`, the
+POINTER_TAG strips to a small handle, and dispatch lands at
+`dispatch_cipher` — the exact path the inline call already took.
+
+Result: `c.getAuthTag?.()`, `typeof c.getAuthTag === "function"`, and
+`const g = c.getAuthTag; g.call(c)` all work, and the full
+encrypt → getAuthTag → setAuthTag → decrypt round-trip matches Node
+byte-for-byte:
+
+```
+ct: 727b71f1caf79d78815b7a tag: c14c93ec76f514dd0c0aecfe5acccec6
+decrypted: hello world
+```
+
+Validation: 12-line repro from #1111 + three additional variants
+(direct call, optional chain, method-as-value extraction, full
+roundtrip) all match `node --experimental-strip-types`.
+
 ## v0.5.1009 — fix(object): skip misaligned non-object pointers in js_object_assign_one
 
 `js_object_assign_one` (the `Object.assign` single-source helper)

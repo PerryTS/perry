@@ -812,6 +812,20 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return crate::string_decoder::dispatch_string_decoder_property(handle, property_name);
     }
 
+    // Issue #1111: CipherHandle method-as-value reads. Returns a
+    // bound-method closure for `update` / `final` / `getAuthTag` /
+    // `setAuthTag` / `setAAD` so `c.getAuthTag?.()` doesn't short-circuit
+    // on the optional-chain `c.getAuthTag == null` check. Same disjoint
+    // method-name gate as the method-dispatch arm above.
+    #[cfg(feature = "crypto")]
+    if matches!(
+        property_name,
+        "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD"
+    ) && with_handle::<crate::crypto::CipherHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_cipher_property(handle, property_name);
+    }
+
     // Unknown handle type - return undefined
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
