@@ -87,15 +87,35 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
     let label = str_from_header(label_ptr);
 
     unsafe {
-        // UIButton.buttonWithType: 0 = UIButtonTypeCustom, 1 = UIButtonTypeSystem
+        // Issue #1122 — UIButton.buttonWithType:UIButtonTypeSystem (1)
+        // goes through iOS 26's Liquid Glass rendering path, which
+        // overrides explicit `setTitleColor:` / `setBackgroundColor:`
+        // values with the system tint/translucent fill. Custom (0)
+        // bypasses that and honors the colors we set directly — which
+        // matches what every styled Perry button author actually wants.
+        // Trade-off: Custom buttons don't get the system blue tint by
+        // default, so we set a sensible default label color (system
+        // label, i.e. dynamic black-on-light / white-on-dark) so a
+        // bare `Button("x", cb)` is still visible.
         let button: Retained<UIButton> = msg_send![
             objc2::runtime::AnyClass::get(c"UIButton").unwrap(),
-            buttonWithType: 1i64  // UIButtonTypeSystem
+            buttonWithType: 0i64  // UIButtonTypeCustom
         ];
 
         let ns_string = NSString::from_str(label);
         let _: () = msg_send![&*button, setTitle: &*ns_string, forState: 0u64]; // UIControlStateNormal = 0
         let _: () = msg_send![&*button, setAccessibilityLabel: &*ns_string];
+
+        // UIButtonTypeCustom's default title color is white, which is
+        // invisible on light backgrounds. Set the system label color
+        // (dynamic, dark-mode aware) so a bare `Button("x", cb)` is
+        // visible without callers needing `textSetColor`. Apps override
+        // via textSetColor when they want something else.
+        let uicolor_cls = objc2::runtime::AnyClass::get(c"UIColor").unwrap();
+        let default_title: *mut AnyObject = msg_send![uicolor_cls, labelColor];
+        if !default_title.is_null() {
+            let _: () = msg_send![&*button, setTitleColor: default_title, forState: 0u64];
+        }
 
         // Issue #709: honor `\n` in button labels. UIButton's titleLabel
         // defaults to numberOfLines=1 and silently collapses newlines into
@@ -167,9 +187,9 @@ pub fn set_bordered(handle: i64, bordered: bool) {
 
 /// Set the text color of a button.
 ///
-/// Issue #1107 — on iOS 26 devices a partial-alpha title color set via
-/// `setTitleColor:forState:` results in zero glyphs being painted (the
-/// reporter confirmed alpha == 1.0 is fine, AttributedText's
+/// Issue #1107 / #1122 — on iOS 26 devices a partial-alpha title color
+/// set via `setTitleColor:forState:` results in zero glyphs being
+/// painted (alpha == 1.0 is fine on Custom buttons, AttributedText's
 /// NSAttributedString-with-NSColor path is also fine, and iOS 17
 /// simulator is unaffected). For alpha < 1.0 we additionally emit an
 /// `NSAttributedString` (NSFont + NSColor attrs) via
@@ -178,6 +198,14 @@ pub fn set_bordered(handle: i64, bordered: bool) {
 /// the attributed title (custom UIButton subclasses, future
 /// `setTitle:forState:` clobbers, etc.) still has a reasonable
 /// fallback color.
+///
+/// PR #1109 previously also called `setAttributedTitle:nil forState:0`
+/// for alpha == 1.0 to revert to the plain-title path. On iOS 26 that
+/// nil-clear path additionally suppressed the button's `setTitle:` /
+/// `setBackgroundColor:` rendering, leaving the button entirely
+/// invisible. We now always leave the attributed-title state alone for
+/// alpha == 1.0 — Custom buttons honor `setTitleColor:` directly with
+/// no need to touch the attributed-title slot.
 pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(view) = super::get_widget(handle) {
         unsafe {
@@ -193,18 +221,20 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
 
             if a < 1.0 {
                 apply_button_title_color_via_attributed(&view, &color);
-            } else {
-                clear_button_attributed_title(&view);
             }
         }
     }
 }
 
-/// Issue #1107 workaround — build an NSAttributedString with NSFont +
-/// NSColor attrs from the button's current title-for-Normal and apply
-/// it via `setAttributedTitle:forState:UIControlStateNormal`. This is
-/// the only path the reporter has shown actually renders glyphs on
-/// iOS 26 device when the foreground color carries alpha < 1.0.
+/// Issue #1107 / #1122 workaround — build an NSAttributedString with
+/// NSFont + NSColor attrs from the button's current title-for-Normal
+/// and apply it via `setAttributedTitle:forState:UIControlStateNormal`.
+/// PR #1109's first take read the borrowed `titleLabel.font` pointer
+/// directly; on real device that didn't paint glyphs. This version
+/// builds a fresh `[UIFont systemFontOfSize:]` matching the titleLabel's
+/// current point size and retains the resulting NSAttributedString —
+/// the exact pattern `AttributedText::append` uses, which we know
+/// renders correctly with sub-1.0 alpha on iOS 26.
 unsafe fn apply_button_title_color_via_attributed(view: &objc2_ui_kit::UIView, color: &AnyObject) {
     use objc2::runtime::AnyClass;
 
@@ -221,40 +251,41 @@ unsafe fn apply_button_title_color_via_attributed(view: &objc2_ui_kit::UIView, c
     let dict_cls = AnyClass::get(c"NSMutableDictionary").unwrap();
     let attrs: Retained<AnyObject> = msg_send![dict_cls, new];
 
-    // Pull the titleLabel's current font and pin it into the attributes
-    // dict. Without an NSFont, iOS 26's text renderer skips glyphs when
-    // the color carries sub-1.0 alpha (see issue #1107).
+    // Build a fresh UIFont from the titleLabel's current point size —
+    // mirrors AttributedText's working path. Defaults to 17pt
+    // (UILabel's documented default) if the size read fails.
     let title_label: *mut AnyObject = msg_send![view, titleLabel];
-    if !title_label.is_null() {
-        let font: *mut AnyObject = msg_send![title_label, font];
-        if !font.is_null() {
-            let font_key = NSString::from_str("NSFont");
-            let _: () = msg_send![&*attrs, setObject: font, forKey: &*font_key];
+    let size: objc2_core_foundation::CGFloat = if !title_label.is_null() {
+        let f: *mut AnyObject = msg_send![title_label, font];
+        if !f.is_null() {
+            msg_send![f, pointSize]
+        } else {
+            17.0
         }
-    }
+    } else {
+        17.0
+    };
+    let font_cls = AnyClass::get(c"UIFont").unwrap();
+    let fresh_font: Retained<AnyObject> = msg_send![
+        font_cls,
+        systemFontOfSize: size
+    ];
+    let font_key = NSString::from_str("NSFont");
+    let _: () = msg_send![&*attrs, setObject: &*fresh_font, forKey: &*font_key];
 
     let color_key = NSString::from_str("NSColor");
     let _: () = msg_send![&*attrs, setObject: color, forKey: &*color_key];
 
     let attr_cls = AnyClass::get(c"NSAttributedString").unwrap();
     let alloc: *mut AnyObject = msg_send![attr_cls, alloc];
-    let attr_str: *mut AnyObject = msg_send![
+    let raw: *mut AnyObject = msg_send![
         alloc,
         initWithString: current_title,
         attributes: &*attrs
     ];
-    if !attr_str.is_null() {
-        let _: () = msg_send![view, setAttributedTitle: attr_str, forState: 0u64];
+    if let Some(attr_str) = Retained::from_raw(raw) {
+        let _: () = msg_send![view, setAttributedTitle: &*attr_str, forState: 0u64];
     }
-}
-
-/// alpha == 1.0 was never affected by #1107, so drop any previously
-/// applied attributed title and let `setTitleColor:`/`setTitle:` win
-/// again. Passing `nil` for the attributed title is the documented way
-/// to revert to the plain-title rendering path.
-unsafe fn clear_button_attributed_title(view: &objc2_ui_kit::UIView) {
-    let nil_attr: *const AnyObject = std::ptr::null();
-    let _: () = msg_send![view, setAttributedTitle: nil_attr, forState: 0u64];
 }
 
 /// Set the title text of a button.

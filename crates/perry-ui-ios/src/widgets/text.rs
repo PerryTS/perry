@@ -120,10 +120,16 @@ pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     }
 }
 
-/// Issue #1107 workaround — mirror `AttributedText::append`'s code
-/// path so a partial-alpha NSColor actually paints glyphs on iOS 26.
-/// Pulls the current `text` + `font` off the label and re-applies them
-/// via `setAttributedText:` with `NSFont` + `NSColor` attrs.
+/// Issue #1107 / #1122 workaround — mirror `AttributedText::append`'s
+/// code path so a partial-alpha NSColor actually paints glyphs on iOS 26.
+///
+/// PR #1109's first attempt at this read `view.font` and `view.text`
+/// straight off the label and passed them through. That didn't paint on
+/// real device — the borrowed-font reference plus the un-retained
+/// NSAttributedString result both differ from `AttributedText::append`'s
+/// path. This version builds a fresh `[UIFont systemFontOfSize:]` from
+/// the label's current point size and retains the resulting
+/// NSAttributedString, exactly like the AttributedText widget.
 unsafe fn apply_label_color_via_attributed(view: &UIView, color: &objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
 
@@ -139,26 +145,40 @@ unsafe fn apply_label_color_via_attributed(view: &UIView, color: &objc2::runtime
     let dict_cls = AnyClass::get(c"NSMutableDictionary").unwrap();
     let attrs: Retained<AnyObject> = msg_send![dict_cls, new];
 
-    // Always emit NSFont — without it, iOS 26's Liquid Glass text
-    // renderer appears to skip glyph emission for sub-1.0 alpha.
-    let font: *mut AnyObject = msg_send![view, font];
-    if !font.is_null() {
-        let font_key = NSString::from_str("NSFont");
-        let _: () = msg_send![&*attrs, setObject: font, forKey: &*font_key];
-    }
+    // Build a fresh UIFont rather than re-using the label's borrowed
+    // font pointer — this matches AttributedText's working path. Pull
+    // the size off the existing font (defaulting to UILabel's 17pt
+    // default) so any prior textSetFontSize is preserved.
+    let existing_font: *mut AnyObject = msg_send![view, font];
+    let size: objc2_core_foundation::CGFloat = if !existing_font.is_null() {
+        msg_send![existing_font, pointSize]
+    } else {
+        17.0
+    };
+    let font_cls = AnyClass::get(c"UIFont").unwrap();
+    let fresh_font: Retained<AnyObject> = msg_send![
+        font_cls,
+        systemFontOfSize: size
+    ];
+    let font_key = NSString::from_str("NSFont");
+    let _: () = msg_send![&*attrs, setObject: &*fresh_font, forKey: &*font_key];
 
     let color_key = NSString::from_str("NSColor");
     let _: () = msg_send![&*attrs, setObject: color, forKey: &*color_key];
 
     let attr_cls = AnyClass::get(c"NSAttributedString").unwrap();
     let alloc: *mut AnyObject = msg_send![attr_cls, alloc];
-    let attr_str: *mut AnyObject = msg_send![
+    // Retain — initWithString:attributes: returns a +1 retain that we
+    // own. setAttributedText: copies the value, but holding the retain
+    // until after that call avoids a partially-constructed object being
+    // observed by UIKit if the autorelease pool drains unexpectedly.
+    let raw: *mut AnyObject = msg_send![
         alloc,
         initWithString: current_text,
         attributes: &*attrs
     ];
-    if !attr_str.is_null() {
-        let _: () = msg_send![view, setAttributedText: attr_str];
+    if let Some(attr_str) = Retained::from_raw(raw) {
+        let _: () = msg_send![view, setAttributedText: &*attr_str];
     }
 }
 
