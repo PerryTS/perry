@@ -4449,6 +4449,19 @@ impl<'a> FuncEmitCtx<'a> {
             Stmt::Return(expr) => {
                 if let Some(e) = expr {
                     self.emit_expr(func, e);
+                    // Issue #1081: some Expr arms (notably `console.log/warn/error`
+                    // and other void-returning calls in `Expr::Call` -> PropertyGet)
+                    // intentionally do not push a result onto the operand stack.
+                    // When such an expression is the body of `return e` (e.g. the
+                    // expression-bodied arrow `v => console.log(v)`), the WASM
+                    // function signature still expects exactly one i64 result, so
+                    // the bare `return` would fail validation with
+                    // "expected 1 elements on the stack for return, found 0".
+                    // Push `undefined` in that case to mirror JS semantics
+                    // (a void call returns `undefined`).
+                    if in_returning_func && !self.expr_has_value(e) {
+                        func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                    }
                 } else if in_returning_func {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
