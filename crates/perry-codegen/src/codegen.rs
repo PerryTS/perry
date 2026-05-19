@@ -3585,6 +3585,21 @@ fn shadow_stack_enabled() -> bool {
     })
 }
 
+fn enable_module_init_shadow_frame(
+    func: &mut crate::function::LlFunction,
+    stmts: &[perry_hir::Stmt],
+) -> (HashMap<u32, u32>, HashMap<usize, Vec<u32>>) {
+    if !shadow_stack_enabled() {
+        return (HashMap::new(), HashMap::new());
+    }
+
+    let shadow_slot_map = crate::collectors::collect_pointer_typed_locals(&[], stmts);
+    func.enable_post_init_shadow_frame(shadow_slot_map.len() as u32);
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(stmts, &shadow_slot_map);
+    (shadow_slot_map, shadow_slot_clears_after_stmt)
+}
+
 /// Gen-GC write-barrier emission gate. Default ON: emit a
 /// `js_write_barrier_slot(parent_bits, slot_addr, child_bits)` call, or
 /// the compatibility wrapper, after every heap-store site. Set
@@ -4820,6 +4835,8 @@ fn compile_module_entry(
         // on every freshly allocated object and field-by-name lookup
         // returns undefined.
         main.mark_entry_init_boundary();
+        let (main_shadow_slot_map, main_shadow_slot_clears_after_stmt) =
+            enable_module_init_shadow_frame(main, &hir.init);
 
         let main_boxed_vars = module_boxed_vars.clone();
         let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
@@ -4914,8 +4931,8 @@ fn compile_module_entry(
             try_depth: 0,
             pending_declares: Vec::new(),
             integer_locals: &main_integer_locals,
-            shadow_slot_map: std::collections::HashMap::new(),
-            shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
+            shadow_slot_map: main_shadow_slot_map,
+            shadow_slot_clears_after_stmt: main_shadow_slot_clears_after_stmt,
             arena_state_slot: None,
             class_keys_slots: HashMap::new(),
             cached_lengths: HashMap::new(),
@@ -4971,7 +4988,7 @@ fn compile_module_entry(
         // computed-Symbol-key static fields whose key/init reference
         // module-level lets see populated slots.
         init_static_fields_early(&mut ctx, hir)?;
-        stmt::lower_stmts(&mut ctx, &hir.init)
+        stmt::lower_top_level_stmts(&mut ctx, &hir.init)
             .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
         init_static_fields_late(&mut ctx, hir)?;
 
@@ -5208,6 +5225,8 @@ fn compile_module_entry(
         // setup must run AFTER the strings init populates module
         // globals like `@perry_class_keys_*`.
         init_fn.mark_entry_init_boundary();
+        let (init_shadow_slot_map, init_shadow_slot_clears_after_stmt) =
+            enable_module_init_shadow_frame(init_fn, &hir.init);
 
         let init_boxed_vars = module_boxed_vars.clone();
         let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
@@ -5300,8 +5319,8 @@ fn compile_module_entry(
             try_depth: 0,
             pending_declares: Vec::new(),
             integer_locals: &init_integer_locals,
-            shadow_slot_map: std::collections::HashMap::new(),
-            shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
+            shadow_slot_map: init_shadow_slot_map,
+            shadow_slot_clears_after_stmt: init_shadow_slot_clears_after_stmt,
             arena_state_slot: None,
             class_keys_slots: HashMap::new(),
             cached_lengths: HashMap::new(),
@@ -5342,12 +5361,12 @@ fn compile_module_entry(
         // right after js_gc_init, so by the time any user code executes
         // every module's globals are already GC-rooted.
         register_module_globals_as_gc_roots(&mut ctx, module_globals);
-        // Issue #894: split into early/late around `lower_stmts` so a
+        // Issue #894: split into early/late around top-level lowering so a
         // computed-Symbol-key static field whose key/init reference
         // top-level module lets (e.g. effect's `make()` factory:
         // `static [TypeId] = variance`) sees populated globals.
         init_static_fields_early(&mut ctx, hir)?;
-        stmt::lower_stmts(&mut ctx, &hir.init).with_context(|| {
+        stmt::lower_top_level_stmts(&mut ctx, &hir.init).with_context(|| {
             format!(
                 "lowering init statements of non-entry module '{}'",
                 hir.name
@@ -5360,7 +5379,7 @@ fn compile_module_entry(
         // The entry main has already called this module's __init AFTER
         // every static-import dependency's __init (topo sort) — so
         // re-export sources have populated their getters. Local
-        // exports' bindings are also set because `lower_stmts` ran
+        // exports' bindings are also set because top-level lowering ran
         // above. The dispatcher in `Expr::DynamicImport` loads
         // `@__perry_ns_<prefix>` and wraps it in `js_promise_resolved`.
         // Issue #842: also run the populator for side-effect-only

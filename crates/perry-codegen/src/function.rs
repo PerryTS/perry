@@ -72,9 +72,9 @@ pub struct LlFunction {
     /// Shadow-stack frame slot (gen-GC Phase A sub-phase 2). When
     /// `Some(slot_reg)`, `to_ir()` rewrites every `ret` in the
     /// function body to call `js_shadow_frame_pop` first, reading
-    /// the frame handle stored at `slot_reg`. The push is emitted
-    /// into `entry_allocas` by `enable_shadow_frame` — runs at the
-    /// very top of block 0, before any user code.
+    /// the frame handle stored at `slot_reg`. The push is emitted by
+    /// either `enable_shadow_frame` (top of entry) or
+    /// `enable_post_init_shadow_frame` (after the entry init prelude).
     ///
     /// `None` means no shadow frame — `ret` instructions pass
     /// through unchanged. Currently gated per-function so we can
@@ -128,6 +128,20 @@ impl LlFunction {
     /// to_ir() rewrite pass keys off `shadow_frame_slot.is_some()`,
     /// so no matching pop is emitted either.
     pub fn enable_shadow_frame(&mut self, slot_count: u32) {
+        self.enable_shadow_frame_inner(slot_count, false);
+    }
+
+    /// Enable shadow-stack frame emission for entry/module-init functions
+    /// whose first block contains runtime init prelude calls. The handle slot
+    /// still lives in `entry_allocas` so it dominates all returns, but the
+    /// `js_shadow_frame_push` call runs through `entry_post_init_setup`, after
+    /// `mark_entry_init_boundary()` has marked `js_gc_init` / string-init
+    /// completion and before any top-level user code is lowered.
+    pub fn enable_post_init_shadow_frame(&mut self, slot_count: u32) {
+        self.enable_shadow_frame_inner(slot_count, true);
+    }
+
+    fn enable_shadow_frame_inner(&mut self, slot_count: u32, post_init: bool) {
         use crate::types::I64;
         if self.shadow_frame_slot.is_some() {
             return;
@@ -137,12 +151,18 @@ impl LlFunction {
         }
         let handle_slot = self.alloca_entry(I64);
         let handle_reg = format!("%r{}", self.reg_counter.next());
-        self.entry_allocas.push(format!(
+        let push_line = format!(
             "  {} = call i64 @js_shadow_frame_push(i32 {})",
             handle_reg, slot_count
-        ));
-        self.entry_allocas
-            .push(format!("  store i64 {}, ptr {}", handle_reg, handle_slot));
+        );
+        let store_line = format!("  store i64 {}, ptr {}", handle_reg, handle_slot);
+        if post_init {
+            self.entry_post_init_setup.push(push_line);
+            self.entry_post_init_setup.push(store_line);
+        } else {
+            self.entry_allocas.push(push_line);
+            self.entry_allocas.push(store_line);
+        }
         self.shadow_frame_slot = Some(handle_slot);
     }
 
