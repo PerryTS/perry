@@ -41,20 +41,24 @@ server.listen(PORT, () => {
     // Fire the client request once the server is bound. Note:
     // `http.get(url)` returns a ClientRequest; the response
     // callback is the trailing arg.
-    // Rename the IncomingMessage param to `resp` instead of `res`. A
-    // pre-existing HIR scope-leak (tracked separately) keeps the outer
-    // `(_req, res)` createServer-handler param's `("http",
-    // "ServerResponse")` native-instance tag visible from inside the
-    // listen() callback, so a same-named `(res) =>` inside `http.get`
-    // would resolve to the wrong dispatch class and `res.on('end',
-    // cb)` would route through the server-side `IncomingMessage.on`
-    // FFI instead of the client-side IncomingMessage path.
-    get("http://127.0.0.1:" + PORT + "/", (resp: any) => {
+    //
+    // Issue #1132 — the inner response callback param is `res`, the
+    // SAME name as the outer `(_req, res)` createServer handler. This
+    // used to require renaming to `resp` to sidestep a HIR scope
+    // leak: the outer `res`'s `("http", "ServerResponse")`
+    // native-instance tag (registered first, never scope-truncated)
+    // shadowed the inner `res`, so `res.on('data')` / `res.on('end')`
+    // misrouted through ServerResponse dispatch instead of the
+    // client-side IncomingMessage path. Fixed in v0.5.1015
+    // (last-match-wins `lookup_native_instance` + pre-scan tags
+    // scoped to the owning call). This file now uses `res` to also
+    // serve as a #1132 regression guard.
+    get("http://127.0.0.1:" + PORT + "/", (res: any) => {
         const chunks: any[] = [];
-        resp.on("data", (c: any) => {
+        res.on("data", (c: any) => {
             chunks.push(c);
         });
-        resp.on("end", () => {
+        res.on("end", () => {
             // `Buffer.concat(chunks)` flattens the per-chunk
             // Buffers into one contiguous block. Slice(0,8)
             // takes the magic-byte prefix; `Array.from(...)`

@@ -1367,15 +1367,29 @@ impl LoweringContext {
     }
 
     pub(crate) fn lookup_native_instance(&self, name: &str) -> Option<(&str, &str)> {
-        // Check scoped instances first (function-local variables)
+        // Issue #1132 — walk the scoped instances back-to-front so a
+        // later (inner-scope) registration shadows an earlier
+        // (outer-scope) one with the same name. `native_instances` is
+        // a push-only Vec ordered by registration; an inner arrow
+        // callback that re-binds a name already tagged by an outer
+        // callback (the classic `createServer((req, res) => httpGet(…,
+        // (res) => …))` shape) pushes its tag AFTER the outer one, so
+        // last-match-wins is the correct lexical-shadowing direction.
+        // (Pre-fix this was `.iter().find()` — first-match — so the
+        // inner `res` always resolved to the outer `("http",
+        // "ServerResponse")` tag and `res.on('data')` misrouted
+        // through ServerResponse dispatch instead of IncomingMessage.)
         self.native_instances
             .iter()
+            .rev()
             .find(|(n, _, _)| n == name)
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
             .or_else(|| {
-                // Check module-level instances (survive scope exits)
+                // Check module-level instances (survive scope exits).
+                // Same last-match-wins rule for consistency.
                 self.module_native_instances
                     .iter()
+                    .rev()
                     .find(|(n, _, _)| n == name)
                     .map(|(_, module, class)| (module.as_str(), class.as_str()))
             })

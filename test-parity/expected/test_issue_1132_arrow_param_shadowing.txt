@@ -1,0 +1,5 @@
+READY
+HTTP body=ping
+NET got=hi
+TRIPLE body=zzz
+DONE

@@ -154,7 +154,49 @@ fn static_receiver_class(ctx: &LoweringContext, obj: &ast::Expr) -> Option<&'sta
     None
 }
 
+/// Issue #1132 — scope the native-instance param tags that
+/// `lower_call_inner`'s pre-scans register (createServer's
+/// `(req, res)`, http.get's `(res)`, fastify's `(req, reply)`, the
+/// `'upgrade'` `wsId`, …) to the call expression that owns the
+/// handler arrow.
+///
+/// Those pre-scans `register_native_instance(...)` BEFORE the handler
+/// arrow's `lower_arrow` runs (so the arrow body can see the tag),
+/// which means the tag is pushed at the *enclosing* scope position —
+/// before the arrow's own `enter_scope` mark — so the arrow's
+/// `exit_scope` does NOT truncate it. Pre-#1132 the tag therefore
+/// leaked into the whole enclosing function/module scope. Combined
+/// with the old first-match `lookup_native_instance`, an inner
+/// callback re-binding the same name (`createServer((req, res) =>
+/// httpGet(url, (res) => …))`) resolved its `res` to the outer
+/// `("http", "ServerResponse")` tag.
+///
+/// Fix (option 2 from the issue — "register inner, restore on scope
+/// exit"): snapshot `native_instances.len()` here, run the real
+/// lowering (which registers + uses the pre-scan tags while the
+/// handler arrow body is lowered, all within this call), then
+/// truncate back to the snapshot on the way out. The pre-scan tags
+/// only ever matter while their handler arrow's body is being lowered
+/// — which happens inside this `lower_call` invocation — so dropping
+/// them when the call returns restores any outer binding of the same
+/// name without affecting correctness. Nested calls each get their
+/// own snapshot, so an inner http.get's `(res)` tag is dropped when
+/// the inner call returns, re-exposing the outer createServer's
+/// `(res)` for any later use in the outer body.
 pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<Expr> {
+    let ni_mark = ctx.native_instances.len();
+    let result = lower_call_inner(ctx, call);
+    // Restore: drop any native-instance tags this call's pre-scans
+    // added (and anything nested calls left above the mark — those
+    // are likewise out of scope once we unwind past their owning
+    // call). `truncate` is a no-op when nothing was added.
+    if ctx.native_instances.len() > ni_mark {
+        ctx.native_instances.truncate(ni_mark);
+    }
+    result
+}
+
+fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<Expr> {
     // Check if any argument has spread
     let has_spread = call.args.iter().any(|arg| arg.spread.is_some());
 
