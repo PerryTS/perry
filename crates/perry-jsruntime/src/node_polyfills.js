@@ -938,6 +938,22 @@
             nextTick: (fn, ...args) => Promise.resolve().then(() => fn(...args)),
             stdout: { write: (s) => {} },
             stderr: { write: (s) => {} },
+            // Frameworks (nest, pino, etc.) sometimes call `process.exit(code)`
+            // in fatal error paths. We don't have a real exit hook from the V8
+            // fallback runtime; the best we can do is log the call (so the
+            // user sees the framework wanted to bail) and return without
+            // tearing down the host process. Throwing here would lose the
+            // upstream error that triggered the exit, so we deliberately do
+            // not throw.
+            exit: (code) => {
+                try { console.error('[perry] process.exit(' + (code === undefined ? '' : code) + ') called -- ignored under V8 fallback'); } catch (_) {}
+            },
         };
+    } else {
+        if (typeof globalThis.process.exit !== 'function') {
+            globalThis.process.exit = (code) => {
+                try { console.error('[perry] process.exit(' + (code === undefined ? '' : code) + ') called -- ignored under V8 fallback'); } catch (_) {}
+            };
+        }
     }
 })();
