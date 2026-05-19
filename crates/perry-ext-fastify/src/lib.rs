@@ -128,6 +128,13 @@ fn scan_fastify_roots(mark: &mut dyn FnMut(f64)) {
         for plugin in app.plugins.iter() {
             mark_cb(plugin.handler, mark);
         }
+        // #1113: upgrade handlers registered via
+        // `app.server.on("upgrade", cb)`. Pin them so a GC cycle
+        // between registration and an Upgrade request doesn't sweep
+        // the closure.
+        for cb in app.upgrade_handlers.iter() {
+            mark_cb(*cb, mark);
+        }
     });
 }
 

@@ -265,6 +265,16 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("fastify", "register", true, None),
     method("fastify", "listen", true, None),
     method("fastify", "close", true, None),
+    // #1113 — `app.server` is a Node-compatible getter returning the
+    // FastifyApp handle (pointer-tagged) so `typeof app.server ===
+    // "object"`. Lowered as a zero-arg NativeMethodCall by the HIR
+    // property-as-method path; the runtime side is
+    // `js_fastify_app_server`. `app.server.on(event, cb)` then
+    // dispatches against the same handle (the `"on"` arm below).
+    // Today only `"upgrade"` is stored; bidirectional WebSocket
+    // upgrade through hyper is the tracked follow-up.
+    method("fastify", "server", true, None),
+    method("fastify", "on", true, None),
     method("fastify", "method", true, None),
     method("fastify", "url", true, None),
     // Manifest-consistency catch-up (release-sweep gate).

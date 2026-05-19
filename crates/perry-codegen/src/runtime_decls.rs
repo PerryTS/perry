@@ -2536,6 +2536,19 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // call site. Returns void (Rust signature returns bool, but the
     // codegen-side caller discards the result).
     module.declare_function("js_fastify_app_close", VOID, &[I64]);
+    // #1113: `app.server` getter — returns the same FastifyApp handle
+    // id (raw i64). The `NATIVE_MODULE_TABLE` arm at
+    // `module: "fastify", method: "server"` declares the return as
+    // NR_PTR so the codegen NaN-boxes it with POINTER_TAG before it
+    // reaches the JS world, making `typeof app.server === "object"`
+    // and routing `.on(…)` back into the FastifyApp method dispatch.
+    module.declare_function("js_fastify_app_server", I64, &[I64]);
+    // #1113: `app.server.on(event, cb)` — registers an event handler.
+    // `event` arrives as a NaN-boxed string pointer (i64); `cb` as a
+    // raw ClosureHeader pointer (i64). Returns void at the C ABI
+    // (the FastifyApp dispatch wraps it to return the handle for
+    // chaining, matching Node's `EventEmitter.on` contract).
+    module.declare_function("js_fastify_app_on", VOID, &[I64, I64, I64]);
     module.declare_function("js_fastify_options", I32, &[I64, I64, I64]);
     module.declare_function("js_fastify_patch", I32, &[I64, I64, I64]);
     module.declare_function("js_fastify_post", I32, &[I64, I64, I64]);

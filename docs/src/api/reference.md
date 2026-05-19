@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 930 entries across 74 modules.
+Total: 932 entries across 74 modules.
 
 ## Modules
 
@@ -421,6 +421,7 @@ Total: 930 entries across 74 modules.
 - `json` — instance
 - `listen` — instance
 - `method` — instance
+- `on` — instance
 - `options` — instance
 - `param` — instance
 - `params` — instance
@@ -433,6 +434,7 @@ Total: 930 entries across 74 modules.
 - `register` — instance
 - `route` — instance
 - `send` — instance
+- `server` — instance
 - `setErrorHandler` — instance
 - `status` — instance
 - `text` — instance

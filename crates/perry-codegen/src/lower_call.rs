@@ -640,6 +640,41 @@ fn fold_string_concat(mut elems: Vec<Expr>) -> Expr {
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // #1113 — `app.server.on(event, cb)` and similar
+    // `nativeMethodCallReceiver.<prop>(args)` chains. The HIR shape
+    // is `Call { callee: PropertyGet { object: NativeMethodCall {
+    // module, … }, property: P }, args }` — `app.server` lowered as
+    // `NativeMethodCall(module="fastify", method="server")` returning
+    // the FastifyApp handle, but `.on(…)` then went through the
+    // generic property-get path (because TypeScript's structural
+    // typing on the return shape doesn't propagate the native-module
+    // tag through `.server`). The property read returned undefined
+    // and the call silently no-op'd (`(undefined)(…)` returns NaN in
+    // Perry's runtime today — no exception). User code patterns like
+    //
+    //   app.server.on("upgrade", (req, socket, head) => …)
+    //
+    // therefore ran without throwing but never registered the
+    // callback. Forward the call into the NATIVE_MODULE_TABLE arm
+    // for `(module, P)` whenever the inner NativeMethodCall's module
+    // recognises `P` as one of its methods (the dispatch table is
+    // already the authoritative source for "what method names this
+    // native module exposes"). Scoped narrowly — falls back to the
+    // existing call lowering if the lookup misses.
+    if let Expr::PropertyGet { object, property } = callee {
+        if let Expr::NativeMethodCall { module, .. } = object.as_ref() {
+            if native_module_lookup(module, true, property, None).is_some() {
+                return crate::lower_call::native::lower_native_method_call(
+                    ctx,
+                    module,
+                    None,
+                    property,
+                    Some(object.as_ref()),
+                    args,
+                );
+            }
+        }
+    }
     // v0.5.754: `obj[strKey](args)` computed-key method call. Drizzle's
     // `this.session[isOneTimeQuery ? "prepareOneTimeQuery" : "prepareQuery"](...)`
     // lowers as Call { callee: IndexGet { object, index }, args }. Pre-fix
@@ -6531,6 +6566,44 @@ const NATIVE_MODULE_TABLE: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_fastify_app_close",
         args: &[],
+        ret: NR_VOID,
+    },
+    // #1113 — `app.server` (property access, lowered to a zero-arg
+    // NativeMethodCall by the HIR property-as-method path). Pre-fix,
+    // this fell through to the "unknown native method" sentinel
+    // (`double 0.0`), so `typeof app.server` was `"number"` and
+    // `app.server.on("upgrade", …)` threw `(number).on is not a
+    // function` at boot. Returns the same FastifyApp handle id
+    // pointer-tagged (NR_PTR) so `typeof` resolves to `"object"` and
+    // `.on(…)` routes through HANDLE_METHOD_DISPATCH back into the
+    // FastifyApp arm. See `js_fastify_app_server` in
+    // perry-stdlib/src/fastify/app.rs for the rationale and the gap
+    // still owed (hyper accept-loop doesn't yet dispatch incoming
+    // `Upgrade:` requests to the registered handlers).
+    NativeModSig {
+        module: "fastify",
+        has_receiver: true,
+        method: "server",
+        class_filter: None,
+        runtime: "js_fastify_app_server",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // #1113 — `app.server.on(event, cb)`. `app.server` returns the
+    // FastifyApp handle (pointer-tagged), so `.on(…)` lowers as a
+    // 2-arg NativeMethodCall on the same module. The runtime fn
+    // records the callback for the recognised event names
+    // (currently just `"upgrade"`); other names are silently
+    // accepted so handlers like `app.server.on("error", …)`
+    // registered at boot don't crash. Full EventEmitter parity is a
+    // tracked follow-up.
+    NativeModSig {
+        module: "fastify",
+        has_receiver: true,
+        method: "on",
+        class_filter: None,
+        runtime: "js_fastify_app_on",
+        args: &[NA_STR, NA_PTR],
         ret: NR_VOID,
     },
     // Fastify request methods

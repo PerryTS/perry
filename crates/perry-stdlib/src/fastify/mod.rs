@@ -90,6 +90,13 @@ fn scan_fastify_roots(mark: &mut dyn FnMut(f64)) {
         for plugin in app.plugins.iter() {
             mark_cb(plugin.handler, mark);
         }
+        // #1113: upgrade handlers registered via `app.server.on("upgrade", cb)`
+        // live in the same handle registry slot — pin them too so a
+        // GC cycle between registration and an incoming Upgrade
+        // request doesn't sweep them.
+        for cb in app.upgrade_handlers.iter() {
+            mark_cb(*cb, mark);
+        }
     });
 }
 
@@ -151,6 +158,25 @@ pub struct FastifyApp {
     pub prefix: String,
     /// Server configuration
     pub config: FastifyConfig,
+    /// #1113: callbacks registered through `app.server.on("upgrade", cb)`.
+    /// Storage lives on the app (not on `FastifyServerHandle`) because
+    /// the user pattern is `app.server.on(...)` — accessing the
+    /// `server` getter after `await app.listen(...)` returns the
+    /// **app** handle (object-tagged) and `.on()` dispatches against
+    /// that same handle. Mirrors Node `http.Server extends
+    /// EventEmitter` semantics with a tiny stub: storing the callback
+    /// makes the user's boot-time `app.server.on("upgrade", …)` line
+    /// stop throwing `(number).on is not a function`.
+    ///
+    /// **Today only stores the callbacks** — the hyper accept-loop in
+    /// `server.rs` doesn't yet route `Upgrade:` requests through
+    /// `hyper::upgrade::on(req)` and hand the raw socket + head bytes
+    /// back to TypeScript, so registered upgrade handlers never fire.
+    /// A diagnostic line at request-time tells the user when an upgrade
+    /// arrived (`PERRY_DEBUG=1` or always when a handler is registered).
+    /// Full bidirectional upgrade dispatch through `perry-ext-ws`'s
+    /// `noServer` mode is tracked as the #1113 follow-up.
+    pub upgrade_handlers: Vec<ClosurePtr>,
 }
 
 /// Server configuration options
@@ -174,6 +200,7 @@ impl FastifyApp {
             plugins: Vec::new(),
             prefix: String::new(),
             config: FastifyConfig::default(),
+            upgrade_handlers: Vec::new(),
         }
     }
 
@@ -186,6 +213,7 @@ impl FastifyApp {
             plugins: Vec::new(),
             prefix,
             config: FastifyConfig::default(),
+            upgrade_handlers: Vec::new(),
         }
     }
 

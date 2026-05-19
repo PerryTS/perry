@@ -53,6 +53,9 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // this is the surgical version.
 
     // Fastify app: routes for HTTP verbs + lifecycle methods.
+    // #1113 adds `"on"` here — `app.server.on(event, cb)` dispatches
+    // against the same FastifyApp handle the user code holds (the
+    // `app.server` getter returns the app handle pointer-tagged).
     #[cfg(feature = "http-server")]
     if matches!(
         method_name,
@@ -69,6 +72,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "register"
             | "listen"
             | "close"
+            | "on"
     ) && with_handle::<crate::fastify::FastifyApp, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return dispatch_fastify_app(handle, method_name, args);
@@ -435,6 +439,24 @@ unsafe fn dispatch_fastify_app(handle: i64, method: &str, args: &[f64]) -> f64 {
             crate::fastify::js_fastify_app_close(handle);
             f64::from_bits(0x7FF8_0000_0000_0001) // undefined (void)
         }
+        "on" if args.len() >= 2 => {
+            // #1113: `app.server.on(event, cb)` — see the function-level
+            // doc on `js_fastify_app_server` for why `app.server`
+            // shares the FastifyApp handle. Storing the callback
+            // unblocks the user's boot-time
+            // `app.server.on("upgrade", …)` line from throwing
+            // `(number).on is not a function`. The hyper accept loop
+            // doesn't yet route upgrade requests through the
+            // registered handler list (full bidirectional WebSocket
+            // upgrade dispatch is the tracked #1113 follow-up).
+            let event_ptr = args[0].to_bits() as i64;
+            let cb_ptr = args[1].to_bits() as i64;
+            crate::fastify::js_fastify_app_on(handle, event_ptr, cb_ptr);
+            // Mirror Node's `EventEmitter.on` contract: return the
+            // emitter (the FastifyApp handle pointer-tagged) so
+            // chained `app.server.on("a", …).on("b", …)` works.
+            f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
+        }
         _ => {
             // Unknown method - return undefined
             f64::from_bits(0x7FF8_0000_0000_0001)
@@ -653,6 +675,27 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     };
     let _ = property_name;
     let _ = handle;
+
+    // #1113: `app.server` — return the FastifyApp handle pointer-tagged
+    // so `typeof app.server === "object"` and `.on("upgrade", …)`
+    // routes through HANDLE_METHOD_DISPATCH back into the FastifyApp
+    // arm (see `js_fastify_app_server` for full rationale). Gated on
+    // membership in the FastifyApp registry AND the literal `"server"`
+    // property name so unrelated handle ids that happen to land on
+    // `.server` access don't accidentally claim the path.
+    #[cfg(feature = "http-server")]
+    if property_name == "server"
+        && with_handle::<crate::fastify::FastifyApp, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        // `js_fastify_app_server` returns the bare i64 handle; the
+        // codegen-side NATIVE_MODULE_TABLE arm NaN-boxes it via
+        // `NR_PTR`. The property-dispatch path lives below that
+        // (handles dynamic small-handle `.server` reads when codegen
+        // didn't recognise the receiver), so we tag the handle
+        // inline here to keep the JS-visible shape consistent.
+        let h = crate::fastify::js_fastify_app_server(handle);
+        return f64::from_bits(0x7FFD_0000_0000_0000u64 | ((h as u64) & 0x0000_FFFF_FFFF_FFFF));
+    }
 
     // Try Fastify context dispatch (request/reply properties)
     #[cfg(feature = "http-server")]

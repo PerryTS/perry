@@ -60,6 +60,18 @@ pub struct FastifyApp {
     pub plugins: Vec<Plugin>,
     pub prefix: String,
     pub config: FastifyConfig,
+    /// #1113: callbacks registered via `app.server.on("upgrade", cb)`.
+    /// See the doc-comment on `js_fastify_app_server` for the full
+    /// rationale — the short version is that `app.server` returns the
+    /// FastifyApp handle pointer-tagged so `.on(…)` dispatches back
+    /// into this same struct's `upgrade_handlers` Vec. Today only
+    /// stores the callbacks — the hyper accept-loop in `server.rs`
+    /// doesn't yet route `Upgrade:` requests through
+    /// `hyper::upgrade::on(req)` and hand the raw socket + head
+    /// bytes back to TypeScript. Full bidirectional WebSocket
+    /// upgrade dispatch through perry-ext-ws's `noServer` mode is
+    /// the tracked #1113 follow-up.
+    pub upgrade_handlers: Vec<ClosurePtr>,
 }
 
 /// Server configuration parsed from the `Fastify({ ... })` call.
@@ -79,6 +91,7 @@ impl FastifyApp {
             plugins: Vec::new(),
             prefix: String::new(),
             config: FastifyConfig::default(),
+            upgrade_handlers: Vec::new(),
         }
     }
 
@@ -395,6 +408,79 @@ pub unsafe extern "C" fn js_fastify_register(app_handle: Handle, plugin: i64, op
     }
 
     true
+}
+
+// ============================================================================
+// FFI: #1113 — app.server EventEmitter (minimum-viable shape)
+// ============================================================================
+
+/// `app.server` — Node-compatible getter that returns an
+/// object-shaped value supporting `.on(event, cb)`.
+///
+/// In Node, `app.server` is the underlying `http.Server` (or
+/// `http2.Http2Server`) which `extends EventEmitter`. The canonical
+/// pattern for attaching a WebSocket server without opening a second
+/// port is:
+///
+/// ```ts
+/// import { WebSocketServer } from "ws";
+/// const wss = new WebSocketServer({ noServer: true });
+/// app.server.on("upgrade", (req, socket, head) => {
+///   wss.handleUpgrade(req, socket, head, (sock) => { … });
+/// });
+/// ```
+///
+/// Pre-fix `app.server` fell through to the generic property getter
+/// on the FastifyApp handle and returned the raw handle id as a JS
+/// number — so `typeof app.server` was `"number"` and `app.server.on`
+/// was `undefined`. The user-side `.on("upgrade", …)` call then threw
+/// `(number).on is not a function` and the boot `catch` arm logged
+/// `fatal:` and exited.
+///
+/// We return the same FastifyApp handle id — the codegen-side
+/// `NATIVE_MODULE_TABLE` arm at `module: "fastify", method: "server"`
+/// NaN-boxes it via `NR_PTR` before it reaches the JS world. Perry's
+/// `typeof` against `POINTER_TAG` returns `"object"` and `.on(…)`
+/// routes through the same FastifyApp method dispatch (the
+/// `"on"` arm in `js_fastify_app_on` below).
+///
+/// **Today only stores the handler list** — the hyper accept loop in
+/// `server.rs` doesn't yet route `Upgrade:` requests through
+/// `hyper::upgrade::on(req)` and hand the raw socket + head bytes
+/// back to TypeScript, so registered upgrade handlers never fire.
+/// Full bidirectional WebSocket upgrade dispatch through
+/// `perry-ext-ws`'s `noServer` mode is tracked as the #1113
+/// follow-up. The diagnostic line emitted from `server.rs` at
+/// request-dispatch time tells the user when an Upgrade arrived
+/// despite the gap.
+#[no_mangle]
+pub unsafe extern "C" fn js_fastify_app_server(app_handle: Handle) -> Handle {
+    app_handle
+}
+
+/// `app.server.on(event, cb)` — register an event handler. Only
+/// `"upgrade"` is meaningful today; other event names
+/// (`"connection"`, `"error"`, `"listening"`, …) are silently
+/// accepted so boot-time registrations don't crash, but the
+/// hyper accept loop doesn't currently fire them. See
+/// `js_fastify_app_server` for the broader rationale.
+#[no_mangle]
+pub unsafe extern "C" fn js_fastify_app_on(app_handle: Handle, event: i64, callback: i64) {
+    if callback == 0 {
+        return;
+    }
+    let event_name = match string_from_nanboxed(event) {
+        Some(s) => s,
+        None => return,
+    };
+    let raw_cb = strip_pointer_tag(callback);
+    if event_name == "upgrade" {
+        if let Some(app) = get_handle_mut::<FastifyApp>(app_handle) {
+            app.upgrade_handlers.push(raw_cb);
+        }
+    }
+    // Other event names (e.g. "connection", "error", "listening") are
+    // silently accepted — see the function-level comment.
 }
 
 // Suppress unused-import warnings for FFI surface re-exports the

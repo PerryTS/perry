@@ -247,6 +247,62 @@ async fn handle_request(
         }
     }
 
+    // #1113: detect HTTP Upgrade requests. The user's pattern
+    //
+    //   import { WebSocketServer } from "ws";
+    //   const wss = new WebSocketServer({ noServer: true });
+    //   app.server.on("upgrade", (req, socket, head) => {
+    //     wss.handleUpgrade(req, socket, head, (sock) => { ... });
+    //   });
+    //
+    // expects the fastify accept loop to surface upgrade requests via
+    // `app.server`'s registered `"upgrade"` handler. Today we only
+    // RECORD that the handler list exists (in
+    // `FastifyApp::upgrade_handlers`) — invoking it would need to
+    // bypass hyper's normal response flow, call
+    // `hyper::upgrade::on(req)` to get the raw upgraded IO, and hand
+    // a Node-compatible `req` / `socket` / `head` triple back to
+    // TypeScript so `wss.handleUpgrade(...)` can complete the WS
+    // handshake on the same socket. That's a substantial follow-up;
+    // for now we emit a one-line diagnostic so a user who's wired up
+    // `app.server.on("upgrade", …)` sees clearly that the request
+    // arrived but went unhandled, then return a 501 rather than the
+    // boilerplate 404 (which would lead to confusing client behavior
+    // on the JS side, where ws's handshake retry typically follows
+    // 401/500 but bails on 404).
+    if headers
+        .get("upgrade")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        let mut any_handler_registered = false;
+        for_each_handle_of::<FastifyApp, _>(|app| {
+            if !app.upgrade_handlers.is_empty() {
+                any_handler_registered = true;
+            }
+        });
+        if any_handler_registered {
+            eprintln!(
+                "[fastify] HTTP Upgrade requested (Upgrade: {}) — \
+                 `app.server.on(\"upgrade\", …)` handlers are registered \
+                 but bidirectional WebSocket upgrade dispatch through \
+                 hyper isn't yet wired (#1113 follow-up). Use \
+                 perry-ext-ws on a separate port for now.",
+                headers.get("upgrade").map(String::as_str).unwrap_or("?")
+            );
+            return Ok(Response::builder()
+                .status(StatusCode::NOT_IMPLEMENTED)
+                .header("content-type", "application/json")
+                .body(Full::new(Bytes::from(
+                    "{\"error\":\"WebSocket upgrade via fastify.server not yet implemented (perry #1113)\"}",
+                )))
+                .unwrap());
+        }
+        // No handler registered — fall through to normal 404 path
+        // below so unrelated `Upgrade: h2c` probes from misbehaving
+        // clients don't get a confusing 501.
+    }
+
     // Read body
     let body = match req.collect().await {
         Ok(collected) => {

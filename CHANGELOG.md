@@ -50,6 +50,24 @@ The user-visible change is one log line — `Linking (runtime-only)…` → `Lin
 
 Adds `crates/perry-ffi/README.md` as the documentation rendered on crates.io.
 
+### #1113: `FastifyInstance.server` returned a JS number instead of an EventEmitter handle
+
+Pre-fix: `typeof app.server === "number"`, `app.server.on === undefined`, `app.server.on("upgrade", cb)` threw `(number).on is not a function` at boot. shop-admin's `server/realtime/server.ts` registers an upgrade handler at startup, the boot `catch` logged `fatal:`, the process exited — no WebSocket transport possible at all.
+
+Root cause: `app.server` fell through the generic property getter on the FastifyApp handle and returned the raw handle id as a JS number. There was no `js_fastify_app_server` extern, no `.on(…)` arm in the FastifyApp method dispatch, and no NATIVE_MODULE_TABLE row for either.
+
+This PR ships the **minimum boot-unblocking shape**: `app.server` returns the FastifyApp handle pointer-tagged (`typeof === "object"`), `.on(event, cb)` dispatches into a new `js_fastify_app_on` extern that stores upgrade callbacks in `FastifyApp::upgrade_handlers`, the GC scanner pins those closures across cycles, and the hyper accept loop emits a clear `501 Not Implemented` + diagnostic line when an `Upgrade:` request arrives against a registered handler.
+
+The follow-up still owed is the **bidirectional dispatch**: hyper's accept loop doesn't yet call `hyper::upgrade::on(req)` to get the raw upgraded IO, nor does it hand a Node-compatible `req` / `socket` / `head` triple back to TypeScript. Until that lands, user code calling `wss.handleUpgrade(req, socket, head, …)` from inside the registered callback can't complete the WS handshake — the diagnostic at request-dispatch time tells the user to use `perry-ext-ws` on a separate port. This is the same restriction the in-tree fastify code documents at `crates/perry-ext-fastify/src/lib.rs`'s "Punted gaps" section.
+
+Codegen path: a `Call { callee: PropertyGet { object: NativeMethodCall { module, … }, property: P }, args }` chain is now forwarded into the `NATIVE_MODULE_TABLE` arm for `(module, P)` whenever the table recognises `P` as a method of `module`. The HIR shape pre-PR (TypeScript's structural typing doesn't propagate the native-module tag through a `.server` return) had the property read returning undefined and the call silently no-op'd (`(undefined)(…)` returns NaN in Perry's runtime today — no exception). The forward is scoped narrowly — falls back to the existing generic Call lowering if the lookup misses. Verified end-to-end with the repro under `/tmp/repro1113`: boot completes cleanly, `app.server.on("upgrade", cb)` registers the closure (visible via the FastifyApp registry), and a probe with `Upgrade: websocket` headers gets the new 501 diagnostic.
+
+Mirror changes landed in both perry-stdlib's `crate::fastify` (the `bundled-fastify` path) and `perry-ext-fastify` (the auto-optimize-flipped path) since either can be live depending on whether `import 'fastify'` got routed through the well-known flip. Inadvertently testing this surfaced that the auto-optimize cache (`target/perry-auto-<hash>/`) doesn't always invalidate on perry-stdlib / perry-ext-fastify source touches — once during development the rebuild produced a stale lib without the new symbols. `rm -rf target/perry-auto-*` between rebuilds was needed; the proper cache-invalidation fix is its own follow-up (#TBD).
+
+### Issues still open after this PR
+
+- **#1114** — `setInterval` + async `@perryts/mysql` query loop wedges the runtime with `madvise` hot in profile, regressed from v0.5.1008 → v0.5.1009. The user's minimal repro didn't trigger it, and shop-admin's ~68-server-file shape is too specific to recreate from scratch. Bisect candidates (most fastify-flavoured first): `634e1f58` (fastify non-blocking listen + main-thread pump), `7e3bd5a4` (codegen #321 effect succeed via named-import-of-namespace-reexport), `3856caad` (transform #1047 async early return + unreached await), `52847008` (jsruntime #1021 V8-fallback CJS require cycles + process.exit shim). Needs the user's actual repro to land cleanly. See `scripts/bisect_1114.sh` for a harness the user can run against their actual shop-admin binary.
+
 ## v0.5.1010 — fix(crypto): #1111 — CipherHandle property reads return bound-method closures so `c.getAuthTag?.()` doesn't short-circuit
 
 #1075 wired the runtime side of `createCipheriv("aes-256-gcm", ...)` —

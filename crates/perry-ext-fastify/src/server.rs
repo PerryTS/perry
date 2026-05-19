@@ -24,8 +24,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, register_handle, Handle,
-    JsClosure, JsValue, RawClosureHeader, StringHeader,
+    alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, iter_handles_of, register_handle,
+    Handle, JsClosure, JsValue, RawClosureHeader, StringHeader,
 };
 
 use crate::app::{ClosurePtr, FastifyApp, Route};
@@ -440,6 +440,56 @@ async fn handle_request(
     for (name, value) in req.headers() {
         if let Ok(v) = value.to_str() {
             headers.insert(name.to_string().to_lowercase(), v.to_string());
+        }
+    }
+
+    // #1113: detect HTTP Upgrade requests. The user's pattern
+    //
+    //   import { WebSocketServer } from "ws";
+    //   const wss = new WebSocketServer({ noServer: true });
+    //   app.server.on("upgrade", (req, socket, head) => {
+    //     wss.handleUpgrade(req, socket, head, (sock) => { ... });
+    //   });
+    //
+    // expects the fastify accept loop to surface upgrade requests via
+    // `app.server`'s registered `"upgrade"` handler. Today we only
+    // RECORD that the handler list exists (in
+    // `FastifyApp::upgrade_handlers`) — invoking it would need to
+    // bypass hyper's normal response flow, call
+    // `hyper::upgrade::on(req)` to get the raw upgraded IO, and hand
+    // a Node-compatible `req` / `socket` / `head` triple back to
+    // TypeScript so `wss.handleUpgrade(...)` can complete the WS
+    // handshake on the same socket. That's a substantial follow-up;
+    // for now we emit a one-line diagnostic so a user who's wired
+    // `app.server.on("upgrade", …)` sees clearly that the request
+    // arrived but went unhandled, then return a 501.
+    if headers
+        .get("upgrade")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        let mut any_handler_registered = false;
+        iter_handles_of::<FastifyApp, _>(|app| {
+            if !app.upgrade_handlers.is_empty() {
+                any_handler_registered = true;
+            }
+        });
+        if any_handler_registered {
+            eprintln!(
+                "[fastify] HTTP Upgrade requested (Upgrade: {}) — \
+                 `app.server.on(\"upgrade\", …)` handlers are registered \
+                 but bidirectional WebSocket upgrade dispatch through \
+                 hyper isn't yet wired (#1113 follow-up). Use \
+                 perry-ext-ws on a separate port for now.",
+                headers.get("upgrade").map(String::as_str).unwrap_or("?")
+            );
+            return Ok(Response::builder()
+                .status(StatusCode::NOT_IMPLEMENTED)
+                .header("content-type", "application/json")
+                .body(Full::new(Bytes::from(
+                    "{\"error\":\"WebSocket upgrade via fastify.server not yet implemented (perry #1113)\"}",
+                )))
+                .unwrap());
         }
     }
 
