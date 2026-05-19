@@ -29,6 +29,8 @@ mod expr_misc;
 mod expr_new;
 mod expr_object;
 mod unimpl_hints;
+mod template;
+pub(crate) use template::*;
 mod widget_decl;
 pub(crate) use widget_decl::*;
 
@@ -9230,40 +9232,6 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
     }
 }
 
-/// Unescape template literal strings (handle \n, \t, etc.)
-fn _unescape_template() {}
-
-/// Lower a template literal AST node to its desugared string-concat HIR
-/// expression: `\`pre${x}post\`` → `Expr::Binary(Add, "pre", x) + "post"`.
-/// Mirrors the inline Tpl lowering at `ast::Expr::Tpl` — extracted so the
-/// reactive-Text desugaring can re-lower the same template twice (once for
-/// the initial widget value, once inside the rebuild closure).
-fn lower_tpl_to_concat(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Expr> {
-    if tpl.quasis.is_empty() {
-        return Ok(Expr::String(String::new()));
-    }
-    let first_raw = tpl.quasis.first().map(|q| q.raw.as_ref()).unwrap_or("");
-    let mut result = Expr::String(unescape_template(first_raw));
-    for (i, expr) in tpl.exprs.iter().enumerate() {
-        let lowered = lower_expr(ctx, expr)?;
-        result = Expr::Binary {
-            op: BinaryOp::Add,
-            left: Box::new(result),
-            right: Box::new(lowered),
-        };
-        if let Some(quasi) = tpl.quasis.get(i + 1) {
-            let quasi_str: &str = quasi.raw.as_ref();
-            if !quasi_str.is_empty() {
-                result = Expr::Binary {
-                    op: BinaryOp::Add,
-                    left: Box::new(result),
-                    right: Box::new(Expr::String(unescape_template(quasi_str))),
-                };
-            }
-        }
-    }
-    Ok(result)
-}
 
 /// If `call` matches `Text(\`...${state.value}...\`)` with at least one State
 /// interpolation, desugar into an auto-reactive binding. Returns `Ok(None)`
