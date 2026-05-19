@@ -16,10 +16,13 @@
 #   - test_gc_*.ts force aggressive GC scheduling during sensitive
 #     operations. Test passes ⟺ exit code 0 + correct stdout.
 #
-# Each test runs under THREE GC mode combos:
+# Each test runs under FOUR GC mode combos:
 #   - default (now generational GC as of Phase D, v0.5.237)
 #   - mark-sweep (PERRY_GEN_GC=0 — bisection escape hatch)
 #   - PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1
+#   - force-evac+verify (write barriers + forced evacuation verifier:
+#     PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1
+#     PERRY_GC_VERIFY_EVACUATION=1)
 # so a regression in any mode is caught.
 #
 # Usage:  scripts/run_memory_stability_tests.sh
@@ -81,6 +84,7 @@ run_test() {
         "default||"
         "mark-sweep||PERRY_GEN_GC=0"
         "gen-gc+wb|PERRY_WRITE_BARRIERS=1|PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1"
+        "force-evac+verify|PERRY_WRITE_BARRIERS=1|PERRY_GEN_GC=1 PERRY_WRITE_BARRIERS=1 PERRY_GEN_GC_EVACUATE=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
     )
 
     for spec in "${mode_specs[@]}"; do
@@ -94,7 +98,7 @@ run_test() {
         fi
         if ! env "${compile_env_args[@]+"${compile_env_args[@]}"}" \
             $PERRY compile --no-cache "$ts" -o "$bin" >/dev/null 2>&1; then
-            printf "  FAIL [%-12s] %-40s compile failed\n" "$mode_label" "$(basename "$ts")"
+            printf "  FAIL [%-18s] %-40s compile failed\n" "$mode_label" "$(basename "$ts")"
             FAIL=$((FAIL + 1))
             continue
         fi
@@ -126,7 +130,7 @@ run_test() {
             reason="stdout missing: $expect_substr"
         fi
 
-        printf "  %s [%-12s] %-40s rss=%3dMB / limit=%3dMB %s\n" \
+        printf "  %s [%-18s] %-40s rss=%3dMB / limit=%3dMB %s\n" \
             "$status" "$mode_label" "$(basename "$ts")" \
             "$LAST_RSS_MB" "$rss_limit_mb" "$reason"
 
@@ -136,6 +140,25 @@ run_test() {
             FAIL=$((FAIL + 1))
         fi
     done
+}
+
+run_canary() {
+    local label="$1"
+    shift
+
+    local output_file="$TMPDIR/canary.$$.$RANDOM"
+    local exit_code=0
+
+    "$@" >"$output_file" 2>&1 || exit_code=$?
+
+    if [[ "$exit_code" -eq 0 ]]; then
+        printf "  PASS [canary] %-40s\n" "$label"
+        PASS=$((PASS + 1))
+    else
+        printf "  FAIL [canary] %-40s exit=%d\n" "$label" "$exit_code"
+        sed 's/^/    /' "$output_file"
+        FAIL=$((FAIL + 1))
+    fi
 }
 
 echo "=== Memory-leak regression tests (RSS plateau under sustained alloc) ==="
@@ -150,6 +173,17 @@ echo ""
 echo "=== GC-aggression regression tests (no crash + correct result) ==="
 run_test test-files/test_gc_aggressive_forced.ts    50 "done, acc=8022890"
 run_test test-files/test_gc_deep_recursion.ts       30 "done, result=320400"
+
+echo ""
+echo "=== Forced-evacuation verifier canaries ==="
+run_canary "evacuation verifier surfaces" \
+    cargo test -p perry-runtime --release test_evacuation_verify
+run_canary "barriers inactive force-evac gate" \
+    env PERRY_GC_FORCE_EVACUATE=1 \
+    cargo test -p perry-runtime --release test_forced_evacuation_barriers_inactive_does_not_forward_candidate
+run_canary "old parent remembers young child" \
+    env PERRY_GC_FORCE_EVACUATE=1 \
+    cargo test -p perry-runtime --release test_evacuated_old_parent_re_remembers_young_child_canary
 
 echo ""
 echo "=== Summary ==="
